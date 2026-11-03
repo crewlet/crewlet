@@ -3,6 +3,8 @@ package seat
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,6 +106,50 @@ func TestASlowStatusHookDoesNotHoldThePresenceRenewal(t *testing.T) {
 	// the node's place in the fleet.
 	if profile, ok := placement.FromLease(lease); !ok || profile.ID != "node-a" {
 		t.Errorf("presence was not renewed: %v", lease.Meta)
+	}
+}
+
+// A GIT NODE'S BUDGET RIDES EVERY BEAT, WHATEVER ITS STATUS DOES. It is what
+// every git node places a repository's maintenance by, so a beat whose status
+// hook overran — which publishes no status at all — still says it, and a git
+// node with nothing to give says zero rather than nothing; a node with no git
+// budget to give (no hook: not a git node) writes no key, a node not saying.
+//
+// Mutations: write the budget only once the status hook has answered — the
+// overrun beat says nothing, red; write it only where it is above zero — the
+// git node with nothing to give reads as not saying, red.
+func TestAGitNodesBudgetRidesEveryBeatWhateverItsStatusDoes(t *testing.T) {
+	t.Parallel()
+	const budget = int64(64)<<30 + 12_345
+	f := newFleet(t)
+	overrun := f.newHost("git-large", Config{
+		Seats:         seatsNamed("ceo"),
+		GitBackground: func() int64 { return budget },
+		Status: func(ctx context.Context) (coord.NodeStatus, error) {
+			<-ctx.Done()
+			return coord.NodeStatus{InFlight: 7}, ctx.Err()
+		},
+	})
+	overrun.heartbeat = 5 * time.Millisecond
+	cold := f.newHost("git-cold", Config{Seats: seatsNamed("ceo"), GitBackground: func() int64 { return 0 }})
+	plain := f.newHost("seats-only", Config{Seats: seatsNamed("ceo")})
+	for _, h := range []*Host{overrun, cold, plain} {
+		h.renewNodePresence(f.ctx)
+	}
+
+	large := presenceOf(t, f, "git-large")
+	if _, ok := coord.StatusFromMeta(large.Meta); ok {
+		t.Fatal("the premise: the overrun beat published a status anyway")
+	}
+	for node, want := range map[string]struct {
+		budget int64
+		says   bool
+	}{"git-large": {budget, true}, "git-cold": {0, true}, "seats-only": {0, false}} {
+		got, says := coord.GitBackgroundFromMeta(presenceOf(t, f, node).Meta)
+		if got != want.budget || says != want.says {
+			t.Errorf("%s's row says its git budget is %d (says %v), want %d (says %v)", node, got, says,
+				want.budget, want.says)
+		}
 	}
 }
 
@@ -381,6 +427,47 @@ func TestEveryRoleSaysWhatAFleetWithoutItLoses(t *testing.T) {
 		if unmannedHints[role] == "" {
 			t.Errorf("role %q has no unmanned hint", role)
 		}
+	}
+}
+
+// A ROLE THE COMPANY DOES NOT NEED IS NEVER REPORTED UNMANNED. git serves
+// nothing for a company that hosts no code, so a fleet whose every node
+// declared its roles without git is missing nothing — until the company turns
+// code on, which is said once; and when it turns code off again the role is
+// said to be UNNEEDED, never manned, since no git node came back.
+//
+// Mutation: drop the check's `continue` for an unneeded role, and the first
+// sweep reports git unmanned.
+func TestAnUnneededRoleIsNeverReportedUnmanned(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	var hostsCode atomic.Bool
+	h := f.newHost("node-a", Config{RoleNeeded: func(role placement.NodeRole) bool {
+		return role != placement.RoleGit || hostsCode.Load()
+	}})
+	roles := placement.Roles(placement.RoleData, placement.RoleIngress, placement.RoleSeats,
+		placement.RoleWorkers)
+	live := []placement.NodeProfile{{ID: "node-a", Roles: roles}, {ID: "node-b", Roles: roles}}
+	git := []placement.NodeRole{placement.RoleGit}
+
+	for sweep := range 2 {
+		if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{}) {
+			t.Fatalf("sweep %d, no code hosted: %+v, want nothing said", sweep, got)
+		}
+	}
+	hostsCode.Store(true)
+	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{unmanned: git}) {
+		t.Fatalf("the sweep after code is hosted: %+v, want git unmanned once", got)
+	}
+	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{}) {
+		t.Fatalf("the sweep after that: %+v, want nothing said again", got)
+	}
+	hostsCode.Store(false)
+	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{unneeded: git}) {
+		t.Fatalf("the sweep after code is turned off: %+v, want git unneeded and never manned", got)
+	}
+	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{}) {
+		t.Fatalf("the sweep after that: %+v, want nothing said again", got)
 	}
 }
 

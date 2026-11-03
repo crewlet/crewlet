@@ -1393,6 +1393,15 @@ Code's tool search, OpenCode's Code Mode — and keeps `crewlet` in front of its
 model, which is why the engine's own tools and the seat's MCP servers are served
 apart ([The tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
 
+The value of **`CREWLET_MCP_BRIDGE_URL`** must be an absolute `http://` or
+`https://` URL with a host a URL parser accepts (a name, or an address with no
+zone: an unfilled `<host>` placeholder or a mistyped IPv4 address such as
+`10.0.0.300` is refused), a port from 1 to 65535 if it names one, and no user
+information, query or fragment: anything else refuses the node's boot, naming
+the variable, rather than handing every box an endpoint its harness cannot dial.
+Plain `http://` is accepted; what it costs wherever the URL leaves the box's
+host is in [Code sandbox § Security model](code-sandbox.md#security-model).
+
 What the bridge owes a detached run's calls, each one, is what a phase owes its
 own — less the rounds, the terminator and the per-request budget, which belong
 to a loop the box's harness runs itself and are settled when the run is collected
@@ -4147,9 +4156,29 @@ the fleet's `CREWLET_MCP_BRIDGE_URL` on a node that binds none; a `container`
 or `e2b` box dials `CREWLET_MCP_BRIDGE_URL` alone — unset there, every launch
 on the entry is refused, because a harness with none of the seat's tools
 cannot answer anybody, touch a ticket or submit its work.
+The doctor reads the value exactly as the engine does, so one the engine
+refuses its boot on — not an absolute `http://` or `https://` URL with a
+host — is reported as `tool bridge: refused` with the reason, never
+printed as a working bridge, and is a problem.
 
 An entry no seat's executor launches on reports no executor section,
-rather than reporting what it would need for a run it never makes. The full rules are in the [CLI
+rather than reporting what it would need for a run it never makes.
+
+**The node's box URLs are read whatever its entries are**: both URLs a box
+dials back to the engine — `CREWLET_MCP_BRIDGE_URL` and
+`CREWLET_SANDBOX_OTEL_RECEIVER_URL` — are read exactly as `crewlet run` reads
+them at boot, and a value the engine refuses its boot on is reported first, as
+the node's, and fails the run, because a node that does not boot runs no seat
+at all — a company no seat's executor launches on included. The refusal names
+the variable and never repeats the value:
+
+```
+node          : this process's environment, as `crewlet run` reads it at boot
+problems:
+  - CREWLET_MCP_BRIDGE_URL is not an absolute URL: it does not start with a scheme and a host, and a box dials it as given; write it as https://host[:port][/path], with http or https as its scheme. The engine refuses to boot on this value, so no seat on this node runs: set it to a URL a sandbox can reach, or unset it
+```
+
+The full rules are in the [CLI
 reference](../reference/cli.md#crewlet-llm).
 
 **The measured lines are checks.** `binary`, `version`, `sign-in`,

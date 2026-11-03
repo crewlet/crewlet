@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -136,18 +137,18 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	body, err := worklet.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind},
-		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+		Scope:   statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
 	})
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
 	}
 	// SIGNED UNDER THE FLEET'S KEYRING, as a peer's record is: an unsigned
 	// one is a stranger's, which the applier refuses rather than applies.
-	ring := statelog.Keyring{ActiveID: boot.Secrets.ActiveKeyID}
+	ring := recordseal.Keyring{ActiveID: boot.Secrets.ActiveKeyID}
 	for _, key := range boot.Secrets.Keys {
-		ring.Keys = append(ring.Keys, statelog.Key{ID: key.ID, Material: key.Material})
+		ring.Keys = append(ring.Keys, recordseal.Key{ID: key.ID, Material: key.Material})
 	}
-	signer, err := statelog.NewSigner(worklet.Domain{}.Name(), ring)
+	signer, err := recordseal.NewSigner(worklet.Domain{}.Name(), ring)
 	if err != nil {
 		t.Fatalf("the peer's signer: %v", err)
 	}
@@ -219,7 +220,7 @@ func joinBackends(t *testing.T) (*config.Bootstrap, *config.Company, *engine.Bac
 		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	company := parsedCompany(t, companyDoc)
-	backends, err := engine.OpenBackends(t.Context(), boot, company)
+	backends, err := engine.OpenBackends(t.Context(), boot, company, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

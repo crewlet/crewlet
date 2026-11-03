@@ -376,7 +376,7 @@ func (e *Engine) stopChatRetention() {
 // founder policy edited live, and a duty holding the number it booted with
 // would go on deleting at a horizon an operator had already changed.
 func (e *Engine) chatRetentionPolicy(ctx context.Context) (chatRetentionPolicy, error) {
-	company, err := e.fleetCompany(ctx, e.Company())
+	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
 		return chatRetentionPolicy{}, err
 	}

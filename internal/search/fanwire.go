@@ -120,7 +120,7 @@ func ServeSlices(ctx context.Context, q queue.EventQueue, self string, scan Scan
 	if q == nil || scan == nil {
 		return nil, fmt.Errorf("search: serve slices with no queue or no scanner")
 	}
-	return q.Serve(ctx, SliceSubject, func(ctx context.Context, raw []byte) ([]byte, error) {
+	return q.Serve(ctx, SliceSubject, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req slicePayload
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, fmt.Errorf("search: decode a slice request: %w", err)

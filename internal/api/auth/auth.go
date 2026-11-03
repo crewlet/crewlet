@@ -63,6 +63,30 @@
 // a count on the audit trail's failure row. bearers.go carries the argument,
 // including the curve that was tried and what it cost.
 //
+// # A git client is answered in git's own terms, as a person
+//
+// git is the third person transport beside the dashboard's act route and the
+// operator's MCP (ADR-0085): a person's own token, presented by their git
+// client, pushes as that person where it is bound to their seat and fetches
+// only where it is bound to nobody, and neither /git/ nor /code/ is ever on the
+// public listener. Which requests under /git/ are fetches and which pushes is
+// [GitAccess]'s answer and nobody else's; on a person's git route, and on no
+// other, the token may arrive as a Basic credential's password
+// ([Guard.Credential]); and every refusal the guard writes on a git route is
+// in the one form git prints ([GitText]): the 401 is the challenge git answers
+// with its credential helper ([GitChallenge]), and a resolved credential's 403
+// and a node's identity 503 are the same sentences the API's envelope carries,
+// in one line.
+//
+// A BOX is git's other client, and the code host's third edge a coding box
+// reaches beside /mcp/ and /otlp/: /box/git/ ([BoxGitPrefix]), public and
+// exempt from the guard like them, admitted by the box's own token — an
+// executor's or a check's, a Basic password this guard never reads — and
+// classified by the same [GitAccess]. A check's box reads its commit by object
+// id under /box/code/ ([BoxCodePrefix]), public and exempt on the same terms.
+// Neither transport takes the other's credential: a person's token is no box
+// token, and a box's token is no person's.
+//
 // # And two gates beside it
 //
 // [CSRF] refuses a state change a cross-site page could have caused, and
@@ -110,6 +134,11 @@ var log = logging.Get("api.auth")
 //     credential. Both are reached from INSIDE a sandbox, which is the one
 //     place the API's own token must never go — it reads the whole company,
 //     and the box is running generated code. See internal/runtoken.
+//   - /box/git/: a box's git, for the same reason, with its run's or its
+//     check's signed token as a Basic password rather than in the path,
+//     because git presents a credential no other way ([BoxGitPrefix]); and
+//     /box/code/, a check's box's reads of its commit, with the same
+//     credential its git presents ([BoxCodePrefix]).
 //   - the dashboard shell and its assets: the page that prompts for the token
 //     cannot itself require one. It ships no data — every byte it renders comes
 //     from an authenticated fetch.
@@ -160,10 +189,12 @@ var unguardedPrefixes = slices.Concat(publicPrefixes, []string{
 
 // publicPrefixes are the routes OUTSIDE PARTIES call: a vendor delivering a
 // webhook or returning a browser from its app flow, and a sandbox box exporting
-// telemetry or calling its seat's tools. None of them holds a person's or a
-// deployment's credential, each authenticates by its own (a provider
-// signature, a per-run signed token), and they are the only routes a
-// deployment has to publish beyond the people who run it.
+// telemetry, calling its seat's tools or — a coding box — fetching and pushing
+// its run's repositories, or — a check's box — fetching and reading the one
+// commit its check measures. None of them holds a person's or a deployment's
+// credential, each authenticates by its own (a provider signature, a per-run
+// or per-check signed token), and they are the only routes a deployment has
+// to publish beyond the people who run it.
 //
 // ONE LIST DECIDES THREE THINGS, and that is why it is one list: what the
 // dedicated public listener (Tier A api.public) serves and api.port then
@@ -177,7 +208,7 @@ var unguardedPrefixes = slices.Concat(publicPrefixes, []string{
 // copy: [unguardedPrefixes] is derived from it once, at init, so a slice
 // anybody could append to would move the partition without moving the
 // exemptions, and the guarantee above would stop holding with nothing failing.
-var publicPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix}
+var publicPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, BoxGitPrefix, BoxCodePrefix}
 
 // PublicPrefixes is a copy of the prefixes of the routes outside parties call.
 // See [publicPrefixes].
@@ -542,11 +573,33 @@ const SocketPath = "/ws/stream"
 // constructor — no longer needs it. A browser's handshake carries its session
 // cookie like any other same-origin request, and a script that dials the
 // socket sets the header, which every WebSocket client outside a browser can.
+//
+// AND ON A PERSON'S GIT ROUTE ONLY (under [GitPrefix]), the password of a
+// Basic credential, its user name ignored: a git client has no other way to
+// present a token without configuration — it answers a Basic challenge from
+// its credential helper or a prompt. Basic is accepted nowhere else, because a
+// browser caches a Basic credential it was asked for and replays it to every
+// route of the origin: accepted beyond git, one prompt answered for a clone
+// would be a session on the whole API. The bearer header wins when both are
+// present.
+//
+// NOT ON A BOX'S ([BoxGitPrefix], [BoxCodePrefix]), though [GitAccess]
+// classifies a box's git requests as git: a box's Basic password is its RUN'S
+// or its CHECK'S token, which the code host's box admission reads and
+// verifies, and the rule above is a rule about persons. Read here it would be
+// one more credential this guard looked at — marking the request anonymous on
+// an unguarded route ([Guard.Middleware]) for nothing — and a box's token is
+// no credential of this guard's at all.
 func (g *Guard) Credential(r *http.Request) string {
 	header := r.Header.Get("Authorization")
 	const scheme = "bearer "
 	if len(header) >= len(scheme) && strings.EqualFold(header[:len(scheme)], scheme) {
 		return strings.TrimSpace(header[len(scheme):])
+	}
+	if strings.HasPrefix(r.URL.Path, GitPrefix) {
+		if _, password, ok := r.BasicAuth(); ok {
+			return password
+		}
 	}
 	return ""
 }
@@ -688,6 +741,15 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			log.Info("api_auth_refused_resolved",
 				"route", path, "code", refusal.Code,
 				"detail", refusal.Detail, "remote", g.Client(r))
+			if GitAccess(r) != GitNone {
+				// A GIT CLIENT PRINTS ONLY TEXT: the JSON envelope
+				// reaches a person at a terminal as a bare "returned
+				// error: 403", which says neither that their seat is
+				// gone nor what to do. The detail is the one sentence
+				// the refusal carries, and it is one line.
+				GitText(w, refusal.Status, refusal.Detail)
+				return
+			}
 			refusal.write(w)
 			return
 		}
@@ -702,6 +764,13 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			//nolint:contextcheck // r is the resolved request; see Resolve above
 			log.Log(r.Context(), UnreadLevel(r.Context()), "api_auth_unavailable",
 				"route", path, "remote", g.Client(r))
+			if GitAccess(r) != GitNone {
+				// In git's form, and still saying when to come back:
+				// git does not retry on its own, so the sentence is
+				// what tells a person a retry will do.
+				gitIdentityUnavailable(w)
+				return
+			}
 			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
 				RetryIdentitySeconds)
 			return
@@ -718,7 +787,8 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			//
 			// COUNTED HERE AND ONLY HERE: this is the one arm where a
 			// refused credential decided something. See audit.go.
-			if g.refused(r) {
+			switch {
+			case g.refused(r):
 				log.Warn("api_auth_failed",
 					"route", path,
 					"reason", "credential_refused",
@@ -730,7 +800,16 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 					// proxy, which is the one address that tells an
 					// operator nothing about who is guessing.
 					"remote", g.Client(r))
-			} else {
+			case GitAccess(r) != GitNone:
+				// A GIT CLIENT'S FIRST REQUEST PRESENTS NOTHING BY DESIGN:
+				// git asks its credential helper only once a 401 carrying
+				// a challenge arrives, so every clone and push begins
+				// here. Logged as the challenge it is answered with, at
+				// debug, so an operator reading a git node's log tells
+				// the protocol's first step from a browser signed out.
+				log.Debug("api_auth_challenge", "route", path,
+					"remote", g.Client(r))
+			default:
 				// NOTHING PRESENTED IS NOBODY, NOT A FAILURE: a signed-out
 				// tab, an invitation's page and a probe all ask without
 				// a credential, and a WARN for each was a thousand lines
@@ -746,6 +825,15 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			// code belongs to or where the sentence beside it
 			// comes from. A caller refused here and refused by a
 			// route reads one body.
+			if GitAccess(r) != GitNone {
+				// EXCEPT A GIT CLIENT, which is CHALLENGED: it asks its
+				// credential helper for a token only after a 401 carrying
+				// one, and prints nothing of a JSON body. The protocol's
+				// first request carries no credential by design, which is
+				// why nothing presented is logged at debug above.
+				GitChallenge(w)
+				return
+			}
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}

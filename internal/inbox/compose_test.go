@@ -1,0 +1,352 @@
+package inbox_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/inbox"
+)
+
+// fakeSource is a domain's inbox over a fixed list of notices, newest first
+// in its own order, its cursor the position of the last notice a page took —
+// each page cut below its cursor's position, as a domain's scan is, and never
+// ending inside a position, as [inbox.Source] promises.
+type fakeSource struct {
+	name    string
+	stream  string
+	notices []inbox.Notice
+	asked   []inbox.SourceQuery
+}
+
+func (f *fakeSource) Name() string { return f.name }
+
+func (f *fakeSource) Notices(_ context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
+	f.asked = append(f.asked, q)
+	start := 0
+	if q.Cursor != "" {
+		i := slices.IndexFunc(f.notices, func(n inbox.Notice) bool { return n.Position.String() == q.Cursor })
+		if i < 0 {
+			return inbox.SourcePage{}, fmt.Errorf("%s: no notice at %s", f.name, q.Cursor)
+		}
+		start = i + 1
+		for start < len(f.notices) && f.notices[start].Position == f.notices[i].Position {
+			start++
+		}
+	}
+	end := min(start+q.Limit, len(f.notices))
+	for end > start && end < len(f.notices) && f.notices[end].Position == f.notices[end-1].Position {
+		end++
+	}
+	page := inbox.SourcePage{Notices: slices.Clone(f.notices[start:end]),
+		SeenThrough: inbox.Position{Stream: f.stream, Generation: 1, Seq: 1}}
+	if end < len(f.notices) {
+		page.Next = f.notices[end-1].Position.String()
+	}
+	return page, nil
+}
+
+// noticesAt is a source's notices at the given minutes past base, newest
+// first as given, each at the next position down on stream.
+func noticesAt(name, stream string, base time.Time, minutes ...int) *fakeSource {
+	f := &fakeSource{name: name, stream: stream}
+	for i, m := range minutes {
+		f.notices = append(f.notices, inbox.Notice{RecordID: fmt.Sprintf("%s-%d", name, m),
+			Position: inbox.Position{Stream: stream, Generation: 1, Seq: uint64(100 - i)},
+			At:       base.Add(time.Duration(m) * time.Minute)})
+	}
+	return f
+}
+
+// ids is a page's notices as source-minute.
+func ids(p inbox.Page) []string {
+	var out []string
+	for _, n := range p.Notices {
+		out = append(out, n.RecordID)
+	}
+	return out
+}
+
+var composeBase = time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
+
+// THE INBOX INTERLEAVES BOTH DOMAINS BY WHEN THEY HAPPENED: a tracker notice at
+// 9:50, a code notice at 9:40, a tracker one at 9:30 and a code one at 9:20
+// read in that order, each naming its source; a tie of instants goes by the
+// source's name; and each source is asked the same narrowing.
+//
+// Mutation: append one source's page after the other's — the 9:40 code notice
+// reads after the 9:30 tracker one, red.
+func TestTheInboxInterleavesBothDomainsByWhenTheyHappened(t *testing.T) {
+	t.Parallel()
+	tracker := noticesAt("tracker", "CREWLET_TRACKER_LOG", composeBase, 50, 30, 10)
+	code := noticesAt("code", "CREWLET_CODE_LOG", composeBase, 40, 20, 10)
+	page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Unread: true,
+		Snoozed: inbox.SnoozeExclude, Limit: 10}, []inbox.Source{tracker, code})
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	want := []string{"tracker-50", "code-40", "tracker-30", "code-20", "code-10", "tracker-10"}
+	if got := ids(page); !slices.Equal(got, want) {
+		t.Fatalf("the composed inbox reads %v, want %v", got, want)
+	}
+	for _, n := range page.Notices {
+		if n.Source == "" || n.RecordID[:len(n.Source)] != n.Source {
+			t.Errorf("notice %s names source %q", n.RecordID, n.Source)
+		}
+	}
+	for _, s := range []*fakeSource{tracker, code} {
+		if len(s.asked) != 1 || !s.asked[0].Unread || s.asked[0].Snoozed != inbox.SnoozeExclude ||
+			s.asked[0].Handle != "founder" {
+			t.Errorf("%s was asked %+v, want founder's unread notices, snoozes hidden", s.name, s.asked)
+		}
+	}
+	if page.NextCursor != "" || page.Unread != 6 || len(page.Sources) != 2 {
+		t.Errorf("a page holding both sources whole answers cursor %q, %d unread, sources %+v", page.NextCursor,
+			page.Unread, page.Sources)
+	}
+}
+
+// A CURSOR RESUMES EACH SOURCE: pages of three over a tracker and a code inbox
+// read every notice once, in the composed order, each page's cursor carrying
+// one position per source — the last of that source's notices it showed — and
+// a source read to its end is asked nothing more; a cursor naming a source the
+// inbox does not read is refused.
+//
+// Mutation: resume every source from the page's last notice — the source that
+// did not supply it skips or repeats, red.
+func TestACursorResumesEachSource(t *testing.T) {
+	t.Parallel()
+	tracker := noticesAt("tracker", "CREWLET_TRACKER_LOG", composeBase, 55, 54, 53, 20, 10)
+	code := noticesAt("code", "CREWLET_CODE_LOG", composeBase, 50, 40, 5)
+	var all []string
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatalf("the inbox did not end after %d pages: %v", pages, all)
+		}
+		page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
+			Limit: 3, Cursor: cursor}, []inbox.Source{tracker, code})
+		if err != nil {
+			t.Fatalf("Compose at %q: %v", cursor, err)
+		}
+		all = append(all, ids(page)...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	want := []string{"tracker-55", "tracker-54", "tracker-53", "code-50", "code-40", "tracker-20", "tracker-10",
+		"code-5"}
+	if !slices.Equal(all, want) {
+		t.Fatalf("paging read %v, want %v", all, want)
+	}
+	if _, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
+		Cursor: "pages=X"}, []inbox.Source{tracker, code}); !errors.Is(err, inbox.ErrBadCursor) {
+		t.Errorf("a cursor naming another source answered %v, want ErrBadCursor", err)
+	}
+}
+
+// A PAGE CLOSES BETWEEN TWO POSITIONS OF A SOURCE: one code record told
+// founder about two changes, two notices at one position on the code log.
+// Pages of two read every notice once: the first takes the record's two
+// notices together, running past its limit by the one that shares the
+// position, since a cursor naming that position resumes below it and would
+// never show a notice the page left there.
+//
+// Mutation: take one notice a turn of the merge, and the record's second
+// notice is never read, red.
+func TestAPageClosesBetweenTwoPositionsOfASource(t *testing.T) {
+	t.Parallel()
+	tracker := noticesAt("tracker", "CREWLET_TRACKER_LOG", composeBase, 50, 30)
+	code := noticesAt("code", "CREWLET_CODE_LOG", composeBase, 40, 40, 20)
+	code.notices[0].RecordID, code.notices[1].RecordID = "code-40/one", "code-40/two"
+	code.notices[1].Position = code.notices[0].Position
+	code.notices[2].Position.Seq = code.notices[0].Position.Seq - 1
+	var all []string
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatalf("the inbox did not end after %d pages: %v", pages, all)
+		}
+		page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
+			Limit: 2, Cursor: cursor}, []inbox.Source{tracker, code})
+		if err != nil {
+			t.Fatalf("Compose at %q: %v", cursor, err)
+		}
+		if pages == 0 && !slices.Equal(ids(page), []string{"tracker-50", "code-40/one", "code-40/two"}) {
+			t.Errorf("the first page reads %v, want the record's two notices together", ids(page))
+		}
+		all = append(all, ids(page)...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	want := []string{"tracker-50", "code-40/one", "code-40/two", "tracker-30", "code-20"}
+	if !slices.Equal(all, want) {
+		t.Fatalf("paging read %v, want %v", all, want)
+	}
+}
+
+// pagedSource is a source that answers fixed pages by the cursor it is asked
+// with — what a source that SCANS rows it then leaves out answers: a page
+// whose own cursor lies past its last notice, or a page of none with one.
+type pagedSource struct {
+	name  string
+	pages map[string]inbox.SourcePage
+	asked []string
+}
+
+func (p *pagedSource) Name() string { return p.name }
+
+func (p *pagedSource) Notices(_ context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
+	p.asked = append(p.asked, q.Cursor)
+	page, found := p.pages[q.Cursor]
+	if !found {
+		return inbox.SourcePage{}, fmt.Errorf("%s: no page at %q", p.name, q.Cursor)
+	}
+	page.Notices = slices.Clone(page.Notices)
+	return page, nil
+}
+
+// A SOURCE'S PAGE OF NONE STILL MOVES ITS CURSOR: the code host scanned
+// founder's newest code notices and left every one out — each on a repository
+// deleted and not yet purged — so its first page holds no notice and its own
+// cursor past what it scanned; the next page asks it below that cursor and
+// reaches a notice on a repository founder still reads, and the inbox then
+// ends. Likewise a page whose last rows the source left out resumes below
+// them, never at its last notice.
+//
+// Mutation: keep the cursor a source was asked with where the page took none
+// of its notices — every page asks the code host its first page again, the
+// composed cursor never moves and the notices below are never read, red;
+// resume a page taken whole at its last notice — the left-out rows are asked
+// for again, red.
+func TestASourcesPageOfNoneStillMovesItsCursor(t *testing.T) {
+	t.Parallel()
+	const (
+		scanned = "CREWLET_CODE_LOG@1:50"
+		cut     = "CREWLET_CODE_LOG@1:30"
+	)
+	notice := func(id string, seq uint64, minute int) inbox.Notice {
+		return inbox.Notice{RecordID: id, Position: inbox.Position{Stream: "CREWLET_CODE_LOG", Generation: 1,
+			Seq: seq}, At: composeBase.Add(time.Duration(minute) * time.Minute)}
+	}
+	code := &pagedSource{name: "code", pages: map[string]inbox.SourcePage{
+		"":      {Next: scanned, Complete: true},
+		scanned: {Notices: []inbox.Notice{notice("code-40", 40, 40)}, Next: cut, Complete: true},
+		cut:     {Notices: []inbox.Notice{notice("code-5", 5, 5)}, Complete: true},
+	}}
+	tracker := noticesAt("tracker", "CREWLET_TRACKER_LOG", composeBase, 55, 20)
+	var all []string
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatalf("the inbox did not end after %d pages: %v, the code host asked at %q", pages, all,
+				code.asked)
+		}
+		page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
+			Limit: 3, Cursor: cursor}, []inbox.Source{tracker, code})
+		if err != nil {
+			t.Fatalf("Compose at %q: %v", cursor, err)
+		}
+		all = append(all, ids(page)...)
+		if page.NextCursor == "" {
+			break
+		}
+		if page.NextCursor == cursor {
+			t.Fatalf("a page at %q answered the cursor it was asked with, so no page can move past it: read %v",
+				cursor, all)
+		}
+		cursor = page.NextCursor
+	}
+	if want := []string{"tracker-55", "tracker-20", "code-40", "code-5"}; !slices.Equal(all, want) {
+		t.Errorf("paging read %v, want %v", all, want)
+	}
+	if want := []string{"", scanned, cut}; !slices.Equal(code.asked, want) {
+		t.Errorf("the code host was asked at %q, want each page below the rows the one before scanned, %q",
+			code.asked, want)
+	}
+}
+
+// cardedSource is a fakeSource whose cards draw more than its notices carry:
+// each card is its notice with the excerpt "card", and every call records the
+// notices it was asked the cards of and the page it was handed.
+type cardedSource struct {
+	*fakeSource
+	carded [][]string
+	pages  []inbox.SourcePage
+}
+
+func (c *cardedSource) Cards(_ context.Context, page inbox.SourcePage, notices []inbox.Notice) ([]inbox.Notice,
+	error) {
+	c.pages = append(c.pages, page)
+	var asked []string
+	out := make([]inbox.Notice, 0, len(notices))
+	for _, n := range notices {
+		asked = append(asked, n.RecordID)
+		n.Excerpt = "card"
+		out = append(out, n)
+	}
+	c.carded = append(c.carded, asked)
+	return out, nil
+}
+
+// CARDS ARE READ AFTER THE CUT, AND ONLY WHERE THEY ARE ASKED: a page of three
+// over a tracker's notices at 9:50 and 9:30 and a code host's at 9:40, 9:20
+// and 9:10 takes the code host's 9:40 notice alone, though the code host
+// answered three. Asked for cards, the code host is asked the card of exactly
+// that one, once, handed the page it was read in — and the card stands in its
+// notice's place, its source named; the tracker, which draws none, is asked
+// nothing. Asked for none, the code host is asked no card at all.
+//
+// Mutations: ask a carded source for the cards of its whole page — the 9:20
+// and 9:10 notices the page cut are carded too, red; ask for cards whatever
+// the query says — the bare read asks them, red.
+func TestCardsAreReadAfterTheCutAndOnlyWhereAsked(t *testing.T) {
+	t.Parallel()
+	read := func(cards bool) (inbox.Page, *cardedSource) {
+		t.Helper()
+		tracker := noticesAt("tracker", "CREWLET_TRACKER_LOG", composeBase, 50, 30)
+		code := &cardedSource{fakeSource: noticesAt("code", "CREWLET_CODE_LOG", composeBase, 40, 20, 10)}
+		page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
+			Limit: 3, Cards: cards}, []inbox.Source{tracker, code})
+		if err != nil {
+			t.Fatalf("Compose: %v", err)
+		}
+		if want := []string{"tracker-50", "code-40", "tracker-30"}; !slices.Equal(ids(page), want) {
+			t.Fatalf("the composed page reads %v, want %v", ids(page), want)
+		}
+		return page, code
+	}
+
+	page, code := read(true)
+	if want := [][]string{{"code-40"}}; !slices.EqualFunc(code.carded, want, slices.Equal) {
+		t.Errorf("the code host was asked the cards of %v, want the notice the page took alone, %v", code.carded,
+			want)
+	}
+	if len(code.pages) != 1 || len(code.pages[0].Notices) != 3 {
+		t.Errorf("the code host was handed the pages %+v, want the one its notices were read in", code.pages)
+	}
+	for _, n := range page.Notices {
+		switch {
+		case n.Source == "code" && (n.Excerpt != "card" || n.RecordID != "code-40"):
+			t.Errorf("the page's code notice reads %+v, want its card in its place", n)
+		case n.Source == "tracker" && n.Excerpt != "":
+			t.Errorf("the tracker's notice %s was carded: %+v", n.RecordID, n)
+		}
+	}
+
+	page, code = read(false)
+	if len(code.carded) != 0 {
+		t.Errorf("a read that asks no cards asked the code host the cards of %v", code.carded)
+	}
+	for _, n := range page.Notices {
+		if n.Excerpt != "" {
+			t.Errorf("a read that asks no cards answers the card %+v", n)
+		}
+	}
+}

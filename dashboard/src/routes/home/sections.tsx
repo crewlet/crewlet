@@ -18,6 +18,7 @@ import { greeting } from "~/lib/format.ts";
 import { KPI_IDS, Kpis, kpisShown, type KpiId } from "./Kpis.tsx";
 import { useServicesRun } from "~/lib/services.ts";
 import { Decisions } from "./Decisions.tsx";
+import { CodeWaiting } from "./CodeWaiting.tsx";
 import { LiveNow } from "./LiveNow.tsx";
 import { CompletedChart } from "./CompletedChart.tsx";
 import { TokensByTeam } from "./TokensByTeam.tsx";
@@ -30,6 +31,7 @@ export const SECTION_IDS = [
   "pinned",
   "kpis",
   "decisions",
+  "code",
   "live",
   "completed",
   "tokens",
@@ -140,6 +142,8 @@ export function SectionView({ id, data }: { id: SectionId; data: HomeData }) {
           now={data.now}
         />
       );
+    case "code":
+      return <CodeWaiting />;
     case "live":
       return <LiveNow agents={data.agents} now={data.now} />;
     case "completed":

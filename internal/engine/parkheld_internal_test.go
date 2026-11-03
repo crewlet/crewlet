@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -37,7 +38,7 @@ func TestWhetherAParkHoldsASeatsInboxIsAskedOfItsHolder(t *testing.T) {
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(ctx)) })
 	parkedSeat, freeSeat := uuid.New(), uuid.New()
 	holder := heldParks{owner: "node-a:1", local: func(seat uuid.UUID) bool { return seat == parkedSeat }}
-	stop, err := q.Serve(ctx, topics.HeldPark, func(_ context.Context, raw []byte) ([]byte, error) {
+	stop, err := q.Serve(ctx, topics.HeldPark, queue.ConcurrentAnswers, func(_ context.Context, raw []byte) ([]byte, error) {
 		return holder.answer(raw)
 	})
 	if err != nil {

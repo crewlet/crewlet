@@ -50,11 +50,11 @@
  * its foot. The list is paged; the axis is not.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { choiceKey, urlAction, windowKey } from "~/app/assistant/urlAction.ts";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import {
   Button,
@@ -75,6 +75,7 @@ import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -147,6 +148,11 @@ export const AXIS_UNFILTERED = " · every turn, not only the filtered ones";
 /** The turns that ENDED, one record each — what the axis counts. */
 export const ENDED_TURNS = { type: "agent_turn_completed", suspended: "false" } as const;
 
+/** A page's turns, each turn's id, and the cursor handed back as `before`. */
+const turnsOf = (a: TurnsAnswer) => a.turns ?? [];
+const turnIdOf = (t: TurnRow) => t.turn_id;
+const turnsBefore = (a: TurnsAnswer) => a.next ?? "";
+
 export function Turns() {
   const seatBadge = useSeatBadgeOf();
   const now = useNow();
@@ -189,64 +195,34 @@ export function Turns() {
     }),
     [since, until, sort, seat, failed],
   );
+  // A NEW FILTER OR WINDOW IS A NEW LIST, and its first page is never
+  // followed by the last one's second; one that moves while older pages are
+  // drawn is joined to them by the pager (`lib/usePaged.ts`).
   const list = useQuery("turns", params, { pollMs: 20_000 });
   const series = useQuery(
     "event_series",
     { ...ENDED_TURNS, since, until, bucket, ...(seat ? { seat } : {}) },
     { pollMs: 20_000 },
   );
-
-  // THE OLDER PAGES, keyed on the question they continue — a new filter or
-  // window is a new list, and its first page must not be followed by the
-  // previous list's second.
-  const question = JSON.stringify(params);
-  const [older, setOlder] = useState<{ for: string; pages: TurnsAnswer[] }>({
-    for: "",
-    pages: [],
-  });
-  const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
-  const pages = older.for === question ? older.pages : [];
-  const last = pages.at(-1) ?? list.data;
-
-  const turns = useMemo(() => {
-    // ONE ROW PER TURN across pages: a turn still running when the first page
-    // was answered can be listed again by a later one.
-    const seen = new Set<string>();
-    const out: TurnRow[] = [];
-    for (const t of [...(list.data?.turns ?? []), ...pages.flatMap((p) => p.turns)]) {
-      if (seen.has(t.turn_id)) continue;
-      seen.add(t.turn_id);
-      out.push(t);
-    }
-    return out;
-  }, [list.data, pages]);
-  // THE ENGINE HELD EVERY PAGE TO THE WINDOW, so what came back is the list:
-  // a second filter here was how an answer for the wrong window became an
-  // empty screen rather than a wrong one.
-  const rows = turns;
   // THE CURSOR ALONE SAYS WHETHER THERE IS MORE — and it can be present on a
   // page with no row, when a node stopped before any turn above it could be
   // shown, so "Load older" is offered on an empty page too. It is OPAQUE:
   // handed back as `before` exactly as it came, never built from a row.
-  const more = !!last?.next;
-
-  const loadOlder = useCallback(async () => {
-    if (!last?.next) return;
-    setPaging(true);
-    setPageError(null);
-    try {
-      const page = await socket.query("turns", { ...params, before: last.next });
-      setOlder((prev) => ({
-        for: question,
-        pages: [...(prev.for === question ? prev.pages : []), page],
-      }));
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : "query_failed");
-    } finally {
-      setPaging(false);
-    }
-  }, [socket, params, question, last]);
+  const paged = usePaged(
+    list,
+    params,
+    (before) => socket.query("turns", { ...params, before }),
+    turnsOf,
+    turnIdOf,
+    turnsBefore,
+  );
+  // ONE ROW PER TURN across pages: a turn still running when the first page
+  // was answered can be listed again by a later one. THE ENGINE HELD EVERY
+  // PAGE TO THE WINDOW, so what came back is the list: a second filter here
+  // was how an answer for the wrong window became an empty screen rather than
+  // a wrong one.
+  const rows = paged.items;
+  const { more, paging, pageError } = paged;
 
   const bars = useMemo(() => barsOf(series.data), [series.data]);
   // HOW MANY RUNS EACH TRIGGER GOT, over the rows this list holds. A turn id
@@ -350,7 +326,7 @@ export function Turns() {
       </Card>
 
       <CoverageNote
-        coverage={[series.data?.coverage, list.data?.coverage, ...pages.map((p) => p.coverage)]}
+        coverage={[series.data?.coverage, ...paged.answers.map((p) => p.coverage)]}
         what="this list"
       />
 
@@ -529,14 +505,12 @@ export function Turns() {
       </QueryState>
 
       {(rows.length > 0 || more || pageError) && (
-        <div className="row gap-2">
-          {pageError ? (
-            <QueryState error={pageError} refusal={null} loading={false} />
-          ) : more ? (
+        <div className="row gap-2 wrap">
+          {more ? (
             <Button
               size="small"
               variant="secondary"
-              onClick={() => void loadOlder()}
+              onClick={paged.next}
               disabled={paging}
               loading={paging}
             >
@@ -549,6 +523,8 @@ export function Turns() {
                 : "That is every turn in this window."}
             </span>
           )}
+          {/* BESIDE THE CONTROL, which asks the page again. */}
+          {pageError && <PageFailed error={pageError} />}
           {rows.length > 0 && (
             <span className="t-caption">{plural(rows.length, "turn")} listed</span>
           )}

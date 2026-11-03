@@ -403,7 +403,7 @@ func TestASemanticSearchThatRanNothingIsStillReported(t *testing.T) {
 			var reported []search.Answer
 			fan := &search.FanOut{Self: "n1", Vectors: tc.vectors,
 				Local: &recordingScan{slice: bothHalves("n1", search.Everything())},
-				Report: func(a search.Answer, _ time.Duration) {
+				Report: func(_ search.FanQuery, a search.Answer, _ time.Duration) {
 					reported = append(reported, a)
 				}}
 			if _, err := fan.Search(t.Context(), search.FanQuery{

@@ -24,6 +24,7 @@ import { useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { Badge } from "~/routes/inbox/InboxColumn.tsx";
 import {
+  changeWords,
   noticeRows,
   noticeText,
   noticeTitle,
@@ -43,10 +44,13 @@ import { ROWS, countLabel } from "~/routes/worklet/taskRows.tsx";
 function Updates() {
   const viewer = useViewer();
   const owner = viewer.owner;
+  // THE COMPOSED INBOX, every native domain's notices, as the sidebar counts
+  // them: asked for every reader with a record, each source under its own
+  // permission on the engine's side.
   const read = useQuery(
-    "work_inbox",
+    "inbox",
     owner ? { handle: owner, limit: ROWS, unread: true, primary_only: true } : undefined,
-    { enabled: owner !== "" && viewer.worklet, pollMs: 60_000, refetchOnInboxOf: owner },
+    { enabled: owner !== "", pollMs: 60_000, refetchOnInboxOf: owner },
   );
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -75,6 +79,26 @@ function Updates() {
         >
           <List className="home-tasks">
             {rows.map((row) => {
+              if (row.kind === "change") {
+                const words = changeWords(row.notice);
+                return (
+                  <ListItem
+                    key={row.key}
+                    href={href(["inbox"], { row: row.key })}
+                    leading={<Badge row={row} who={null} size={20} />}
+                    trailing={<span className="home-tasks-when">{shortWhen(row.at, now)}</span>}
+                  >
+                    <span className="home-tasks-stack">
+                      <span className="home-tasks-title">
+                        {`${rowName(row, null)} · ${words.text}`}
+                      </span>
+                      {words.excerpt ? (
+                        <span className="home-tasks-meta">{words.excerpt}</span>
+                      ) : null}
+                    </span>
+                  </ListItem>
+                );
+              }
               if (row.kind !== "notice") return null;
               const who = rowWho(row, index);
               const said = noticeText(row.notice, index);
@@ -121,9 +145,9 @@ export const widgets = defineWidgets([
     hue: "rose",
     size: { w: 4, minW: 3, minH: 8, vertical: true },
     once: true,
-    // THE UPDATES ARE WORKLET'S NOTICES, while the Inbox itself stays
-    // for the conditions that arrive without it.
-    service: () => "tracker",
+    // EVERY NATIVE DOMAIN'S NOTICES, so no one service: a reader on a company
+    // that runs no Worklet still hears about the changes they are asked
+    // to review.
     Component: Updates,
   },
 ]);

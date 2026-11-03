@@ -24,7 +24,7 @@ import (
 func withHistory(t *testing.T, s queries.Sources) (queries.Sources, *store.DB) {
 	t.Helper()
 	db := openStore(t)
-	s.Events, s.Usage = fleetOf(db.Events()), db.Replicated()
+	s.Events, s.Usage = fleetOf(db.Events()), usage.Reader{Estate: db.Replicated()}
 	return s, db
 }
 

@@ -25,10 +25,12 @@ import (
 // row of its table however many objects it is asked about.
 //
 // Mutation: drop either `INDEXED BY` from the spend reads, or from the person
-// guard, and its plan names `_day_idx (day=?)`; drop it from a schedule's fires
-// or their guard, and the plan names `usage_schedule_runs_schedule_idx`; write
-// the schedule guard as an unfiltered correlated MAX and the decorrelation
-// refusal names it.
+// guard, and its plan names `_day_idx (day=?)`; drop it from a repository's
+// readers, and its plan seeks the covering reader index by the repository
+// alone — its every reader on every node and day; drop it from a schedule's
+// fires or their guard, and the plan names `usage_schedule_runs_schedule_idx`;
+// write the schedule guard as an unfiltered correlated MAX and the
+// decorrelation refusal names it.
 func TestEveryObjectStatementSeeksItsKey(t *testing.T) {
 	t.Parallel()
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -41,6 +43,7 @@ func TestEveryObjectStatementSeeksItsKey(t *testing.T) {
 		seat     = "(day=? AND node=? AND agent_id=?)"
 		person   = "(day=? AND node=? AND person=?)"
 		schedule = "(day=? AND node=? AND scope_type=? AND scope_id=? AND name=?)"
+		repo     = "(day=? AND node=? AND repo_id=?)"
 	)
 	for _, c := range []struct {
 		name, query string
@@ -71,6 +74,10 @@ func TestEveryObjectStatementSeeksItsKey(t *testing.T) {
 		{"the apply's clear: a schedule's superseded fires", applyClearSupersededSQL,
 			[]string{schedule}},
 		{"the apply's clear: a person's spend", applyClearPersonSQL, []string{person}},
+		{"what the fleet holds: a repository's day", appliedRepoReadHeadSQL, []string{repo}},
+		{"what the fleet holds: a repository's readers", appliedRepoReadsSQL, []string{repo}},
+		{"the apply's guard: a repository's day", applyRepoReadHeadSQL, []string{repo}},
+		{"the apply's clear: a repository's readers", applyClearRepoReadsSQL, []string{repo}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

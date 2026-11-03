@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/a2a"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -18,7 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -208,6 +208,14 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			// singleton, because each node owns its own copy — see
 			// [maintenance.StatelogJobs].
 			jobs = append(jobs, maintenance.StatelogJobs(core.log.opsLedgers())...)
+			// AND THE CODE LOG'S NOTICES, the core's too: every data node
+			// applies the code log whatever the company runs, and its
+			// applier writes a notice per recipient of every routed record
+			// into a DIVERGENT table — each node's own rows, so each node
+			// sweeps them, a person's at the company's inbox horizon asked
+			// at every sweep as the tracker's is, a seat's at the
+			// turn-detail horizon (code.NoticeJobs).
+			jobs = append(jobs, code.NoticeJobs(e.backends.Store.Replicated(), e.inboxRetention)...)
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its absence
 			// is a consequence rather than an omission. Its three passes
 			// were a change retention, a revision prune and an orphan
@@ -342,16 +350,24 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 // The sweep judges a seat absent from the roster, and a retirement deletes mail
 // that cannot be recovered, so the roster must be the FLEET's current revision
 // rather than whatever this node happens to be running. A node that has not yet
-// applied the pointer's epoch (propagation, a refused apply, a node stuck on an
+// applied the pointer's activation (propagation, a refused apply, a node stuck on an
 // older revision) answers unknown, and the tick stamps and retires nothing. The
 // next holder of the duty, or this node once it catches up, judges instead.
 //
-// The reads are ordered so the company judged is EXACTLY the pointer's: the
-// pointer is read first, and the company this node publishes is accepted only
-// when it was applied from that very activation ([Engine.fleetCompany]).
+// That is the rule every irreversible judgement against the active revision
+// follows, read through its one helper ([Engine.servedFleetRevision]), whose
+// three answers the roster keeps: the seats, nothing activated, or unknown —
+// and an unknown that is only this node still applying the revision, or still
+// starting, is [maintenance.ErrRevisionPropagating], which the sweep judges
+// nothing on without a warning, since every activation and every boot puts
+// every node there for the seconds its apply takes.
 func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
-	company, err := e.fleetCompany(ctx, e.Company())
-	if err != nil {
+	company, err := e.servedFleetRevision(ctx)
+	var behind *errBehindFleet
+	switch {
+	case errors.As(err, &behind) && behind.reconciled():
+		return nil, fmt.Errorf("%w; seats are judged once this node has applied it", err)
+	case err != nil:
 		return nil, err
 	}
 	return company.Seats(), nil
@@ -359,7 +375,7 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 
 // humanSeatHandles is the chat read-state reconcile's roster: every HUMAN seat
 // of the revision the fleet is pointed at, or an error saying why that is
-// unknown ([Engine.fleetCompany]).
+// unknown ([Engine.servedFleetRevision]).
 //
 // HUMAN SEATS, because a read state is kept under the seat a person acts as
 // and only a human seat is ever acted as by a person or a bound machine: a
@@ -370,7 +386,7 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 // from a seat the company still has leaves it to the seat's next holder, as
 // the seat's inbox stays.
 func (e *Engine) humanSeatHandles(ctx context.Context) ([]string, error) {
-	company, err := e.fleetCompany(ctx, e.Company())
+	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -382,72 +398,6 @@ func (e *Engine) humanSeatHandles(ctx context.Context) ([]string, error) {
 	}
 	slices.Sort(handles)
 	return handles, nil
-}
-
-// fleetCompany is c when it is the company of the activation the fleet is
-// pointed at, or an error saying why that is unknown.
-//
-// THE RULE EVERY FLEET DECISION FOLLOWS THAT DESTROYS, BY THE COMPANY
-// DOCUMENT, SOMETHING NO UNDO RESTORES:
-//
-//   - the mailbox sweep, which judges a seat absent and retires its mail;
-//   - the clearing of a removed seat's pause ([Engine.clearRemovedSeatPauses]),
-//     a pause a person placed;
-//   - the forgetting of a removed human seat's chat read state
-//     ([Engine.humanSeatHandles]), every room's cursor the seat held;
-//   - the chat prune ([Engine.chatRetentionPolicy]), which deletes on every
-//     data node each message older than the horizon the document states;
-//   - the assistant's retention purge ([Engine.assistantRetention]), which
-//     purges every conversation left unused for the term the document states.
-//
-// A node applying a revision the fleet has since replaced, or running one the
-// fleet never activated, has neither a seat the newer revision added nor the
-// horizon it states, and would destroy by what it has instead. So each of them
-// acts only on the company this answers and on nothing while it is unknown:
-// what it would have destroyed waits for a node that runs the fleet's
-// revision, which is late rather than wrong.
-//
-// COMPARED ON THE ACTIVATION'S INSTANT, which the pointer publishes strictly
-// later on every activation ([coord.ActivationAt]) and which a company carries
-// from the apply that built it ([Company.ActivatedAt]) — so a re-activation of
-// an unchanged revision, the rotation gesture, is a different activation here
-// too, and a company applied from the pointer's own activation is accepted
-// even while the reconciler is still inside the apply that publishes it. A
-// company no activation has named, whether one handed to [New] in code or an
-// offline command's offer the fleet has not taken, is unknown until this node
-// applies the pointer's revision.
-func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error) {
-	if e.backends == nil || e.backends.Fleet == nil {
-		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
-	}
-	target, found, err := e.backends.Fleet.Target(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("engine: read the activation pointer: %w", err)
-	}
-	if !found {
-		return nil, maintenance.ErrNoActiveRevision
-	}
-	switch {
-	case c == nil:
-		return nil, errors.New("engine: this node publishes no company yet; nothing " +
-			"the company document would destroy is decided here until it does")
-	case c.ActivatedAt.IsZero():
-		// AN OFFER, most likely: what this node runs no activation has
-		// named, so there is no instant of its own to report.
-		return nil, fmt.Errorf("engine: this node serves a company no activation has "+
-			"named (an offline command's choice the fleet has not taken, or one "+
-			"handed to the engine in code) and the fleet is on activation epoch %d "+
-			"of %s; nothing the company document would destroy is decided here "+
-			"until this node has applied it", target.Epoch,
-			target.At.Format(time.RFC3339Nano))
-	case store.EncodeTime(c.ActivatedAt) != store.EncodeTime(target.At):
-		return nil, fmt.Errorf("engine: this node serves the activation of %s and the "+
-			"fleet is on activation epoch %d of %s; nothing the company document would "+
-			"destroy is decided here until this node has applied it",
-			c.ActivatedAt.Format(time.RFC3339Nano), target.Epoch,
-			target.At.Format(time.RFC3339Nano))
-	}
-	return c, nil
 }
 
 // Maintenance exposes the retention sweep.
@@ -478,5 +428,5 @@ func (e *Engine) inboxRetention() time.Duration {
 	if c == nil {
 		return config.DefaultInboxRetentionDays * 24 * time.Hour
 	}
-	return c.Config.Tracker.Worklet.InboxRetention()
+	return c.Config.Inbox.Retention()
 }

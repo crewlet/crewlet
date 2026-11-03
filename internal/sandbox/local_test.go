@@ -56,6 +56,61 @@ func TestContainerModeRefusesToStartWithoutAnImage(t *testing.T) {
 	}
 }
 
+// A HOST THAT CANNOT RUN THE CONTAINER CELL IS REFUSED WHEN ITS PROVIDER IS
+// BUILT, which is when the config is applied, and not at the first executor.
+//
+// NewLocal looks the runtime up, not Create. Were the lookup left to the first
+// box, an engine on a host with neither docker nor podman would apply a
+// `run_in: container` company and fail only once a seat asked for a box,
+// minutes into a turn: the config says yes and the runtime says no, the
+// direction that is hardest to see. So every spelling of the runtime is
+// refused here, as a [LocalError] that says what to change. A direct cell on
+// the same host still builds: it drives no runtime, so refusing it would turn
+// a host without docker away from work that never needed one.
+func TestContainerModeRefusesToStartWithoutARuntimeOnThePath(t *testing.T) {
+	// Not parallel: PATH is how the backend finds its runtime, and this case
+	// empties it, as TestTheRuntimeGetsWhatItsRuntimeEnvDeclares fills it.
+	t.Setenv("PATH", t.TempDir())
+	for _, runtime := range []string{"", "auto", "docker", "podman"} {
+		_, err := NewLocal(LocalOptions{
+			Placement: Container, Image: "img", Runtime: runtime, StateDir: t.TempDir(),
+		})
+		var refusal *LocalError
+		if !errors.As(err, &refusal) {
+			t.Errorf("runtime %q with no container CLI on PATH: NewLocal = %v, want a "+
+				"*LocalError, since a cell built here fails only at its first executor",
+				runtime, err)
+			continue
+		}
+		// What the operator reads. A runtime named outright is a field whose
+		// command is not there; "auto" found neither, in the line the docs'
+		// failure modes quote, and the cell that needs no runtime is the way
+		// out.
+		want := []string{"providers.sandbox.local.runtime is " + strconv.Quote(runtime),
+			"not on the engine host's PATH"}
+		if runtime == "" || runtime == "auto" {
+			want = []string{"neither docker nor podman is on the engine host's PATH",
+				fmt.Sprintf("use run_in %q", Direct)}
+			// AND NOT THE RUNTIME FIELD. Every value it takes is looked up on
+			// this same PATH, and this case refuses each one named outright,
+			// so offering it sends the operator to a change that cannot build
+			// the cell, and to a second refusal after it.
+			if strings.Contains(refusal.Error(), "providers.sandbox.local.runtime") {
+				t.Errorf("runtime %q: the refusal offers providers.sandbox.local.runtime, "+
+					"though no value of it builds this cell on this PATH: %v", runtime, refusal)
+			}
+		}
+		for _, phrase := range want {
+			if !strings.Contains(refusal.Error(), phrase) {
+				t.Errorf("runtime %q: the refusal does not say %q: %v", runtime, phrase, refusal)
+			}
+		}
+	}
+	if _, err := NewLocal(LocalOptions{Placement: Direct, StateDir: t.TempDir()}); err != nil {
+		t.Fatalf("a direct cell drives no runtime, and was refused on a host without one: %v", err)
+	}
+}
+
 func TestAPlacementTheLocalBackendDoesNotServeIsRefused(t *testing.T) {
 	t.Parallel()
 	if _, err := NewLocal(LocalOptions{Placement: E2B, StateDir: t.TempDir()}); err == nil {
@@ -552,7 +607,7 @@ func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
 // into it, which a paused container refuses, so it cannot be read as it is —
 // and Attach reads the runtime's own state rather than unpausing to find out.
 // The fake runtime here logs every call it is handed and answers `inspect` from
-// a file the test writes.
+// a file the test writes, so the log holds only what the engine asked.
 //
 // Mutation: unpause in Attach, and the log shows it.
 func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {

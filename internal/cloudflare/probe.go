@@ -38,7 +38,7 @@ func Probe(httpClient *http.Client) setup.Probe {
 		if token == "" {
 			return setup.Verdict{}, setup.Unusable("Enter the provisioner token to test it.")
 		}
-		if !accountIDPattern.MatchString(account) {
+		if !accountIDPattern().MatchString(account) {
 			return setup.Verdict{}, setup.Unusable("Enter the account ID, 32 hexadecimal " +
 				"characters from your account's overview page: the token is checked against it.")
 		}

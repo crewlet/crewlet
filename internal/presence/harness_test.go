@@ -11,12 +11,12 @@ import (
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fleetRing is the keyring every node of a test fleet holds.
-var fleetRing = statelog.OneKey("k1", "the presence suite's fleet key material")
+var fleetRing = recordseal.OneKey("k1", "the presence suite's fleet key material")
 
 // clock is a settable clock a hub stamps and expires by. Fan-outs are still
 // timed on the real clock, briefly ([testCoalesce]).
@@ -50,7 +50,7 @@ const testCoalesce = 10 * time.Millisecond
 // typing.
 const testLapse = 400 * time.Millisecond
 
-func wireFor(t *testing.T, ring statelog.Keyring) *Wire {
+func wireFor(t *testing.T, ring recordseal.Keyring) *Wire {
 	t.Helper()
 	w, err := signedask.NewOneWay[Frame](Channel, ring)
 	if err != nil {
@@ -201,7 +201,7 @@ var (
 
 // sealedFrom is a frame from a node that is not a hub here, sealed under ring:
 // how a case speaks as a peer, honest or not.
-func sealedFrom(t *testing.T, ring statelog.Keyring, f Frame) []byte {
+func sealedFrom(t *testing.T, ring recordseal.Keyring, f Frame) []byte {
 	t.Helper()
 	sealed, err := wireFor(t, ring).Seal(f)
 	if err != nil {

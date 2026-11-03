@@ -1090,6 +1090,17 @@ func (d *dispatcher) turnOfRoundLocked(round int) *observedTurn {
 	return nil
 }
 
+// roundModelLocked is the model round ran on: the model the harness's record
+// named for that request, else the provider's configured identity — the
+// precedence [Round.Model] records, so the round's record and the model its
+// calls are told ([CallModel]) never differ.
+func (d *dispatcher) roundModelLocked(round int) string {
+	if t := d.turnOfRoundLocked(round); t != nil && t.model != "" {
+		return t.model
+	}
+	return d.cfg.Provider.Model()
+}
+
 // execute runs one admitted call under the PHASE's context, never the MCP
 // request's — with the values its run was served under ([callContext]) — and
 // turns a panic into the phase's end.
@@ -1115,8 +1126,13 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 	if c.run != nil {
 		ctx = newCallContext(c.run.ctx, d.ctx)
 	}
-	// Every call is told the round it runs in ([CallRound]).
-	out, err := c.exec(withCallRound(ctx, c.round), llm.ToolCall{
+	// Every call is told the round it runs in ([CallRound]) and the model
+	// that round ran on ([CallModel]), which a seat's code write names on
+	// its push.
+	d.mu.Lock()
+	model := d.roundModelLocked(c.round)
+	d.mu.Unlock()
+	out, err := c.exec(WithCallModel(withCallRound(ctx, c.round), model), llm.ToolCall{
 		ID: c.id, Name: c.name, Arguments: c.args,
 	})
 	if err != nil {

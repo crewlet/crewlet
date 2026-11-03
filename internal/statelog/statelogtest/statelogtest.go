@@ -17,9 +17,18 @@
 // that must name the node that wrote it and the generation it was decided in,
 // the evictions a domain that claims identity must be able to list — because
 // the trim counts nodes per log, and a log whose evictions nothing reads
-// counts an evicted node for ever — and the node gate that is the domain's
-// own eviction and nothing else, because a write flagged one is excused the
-// fences and the reserve every other write is held to.
+// counts an evicted node for ever — the node gate that is the domain's own
+// eviction and nothing else, because a write flagged one is excused the fences
+// and the reserve every other write is held to — the anchors a trimmed record
+// removes below the trim floor and the zero fence a write to one of their
+// subjects then has to pass, because a log whose anchors nothing removes grows
+// a row for every subject it ever wrote (ADR-0080) — the read index's barrier,
+// which must change no row, because a linearizable read is released on it
+// before its transaction commits — and the domain that gates
+// seat admission, which must replay strictly, because a compacted domain's gap
+// is a coverage number that would otherwise withhold every seat claim on a
+// node. Whether a domain's copy is JUDGED is not a declaration and has no case
+// here: every domain's is (ADR-0079).
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //
@@ -133,8 +142,10 @@ type Candidate struct {
 	// Write performs at least one write through the domain's OWN
 	// production write path — the writer every caller reaches, not a
 	// fixture — over the publisher the suite hands it, which decides from
-	// db. It is how [Stamped] reaches the one builder that can forget the
-	// framework's stamp.
+	// db, and whose records the candidate's Applier applies to db as they
+	// are appended, so a path of several steps decides each from the rows
+	// the steps before it made. It is how [Stamped] reaches the one builder
+	// that can forget the framework's stamp.
 	Write func(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error
 
 	// EncodeGate builds the record that evicts nodeID from this domain's log
@@ -142,6 +153,23 @@ type Candidate struct {
 	// publishes it. Required of a domain that claims identity, whose log the
 	// trim counts nodes on; see [Evictions].
 	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
+
+	// EncodeTrimmed is the domain's own encoder of the trim's trimmed record
+	// (ADR-0080) — the production function the engine hands the trim, never
+	// a fixture. Required exactly when the domain's log arbitrates a kind,
+	// and so writes anchors ([statelog.WritesAnchors]); nil otherwise. See
+	// [TrimmedAnchorsGoAndAZeroWriteIsFenced].
+	EncodeTrimmed func(statelog.Envelope) ([]byte, error)
+
+	// EncodeBarrier is the domain's own encoder of its read index's barrier
+	// — the production function the engine hands [statelog.NewReadIndex],
+	// never a fixture — for a domain whose log serves linearizable reads;
+	// NoBarrier says the log has no read index, and so no barrier. EXACTLY
+	// ONE of the two is stated, as the engine's register states it, so a
+	// candidate that names neither is refused rather than passed unasked.
+	// See [ABarrierWritesNoRow].
+	EncodeBarrier func(statelog.Envelope) ([]byte, error)
+	NoBarrier     bool
 }
 
 // spec is the domain's own stream, which every case runs the candidate on.
@@ -163,12 +191,23 @@ func Run(t *testing.T, new Factory) {
 	t.Run("stamp", func(t *testing.T) { runStamp(t, new) })
 	t.Run("evictions", func(t *testing.T) { runEvictions(t, new) })
 	t.Run("node gates", func(t *testing.T) { runNodeGates(t, new) })
+	t.Run("trimmed anchors", func(t *testing.T) { runTrimmed(t, new) })
+	t.Run("barrier", func(t *testing.T) { runBarrier(t, new) })
 }
 
 // openEstate brings up a replicated estate with the framework's tables and
 // the candidate's own, and answers the handle the runtime would hand the
 // candidate's applier and readers.
 func openEstate(t *testing.T, c Candidate) store.ReplicatedHandle {
+	t.Helper()
+	_, db := openNodeEstate(t, c)
+	return db
+}
+
+// openNodeEstate is [openEstate] answering the node's own store too, for a case
+// that runs the framework's applier — which keeps a verdict about its log in
+// the node's file.
+func openNodeEstate(t *testing.T, c Candidate) (*store.DB, store.ReplicatedHandle) {
 	t.Helper()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
@@ -181,7 +220,7 @@ func openEstate(t *testing.T, c Candidate) store.ReplicatedHandle {
 			t.Fatalf("create %s's tables: %v", c.Domain.Name(), err)
 		}
 	}
-	return db
+	return node, db
 }
 
 // tableContents is what determinism and idempotency are both asserted over:

@@ -1358,13 +1358,13 @@ func TestAWriteAfterARestoredReanchorArbitratesOnTheRecordItsRowsHold(t *testing
 	// THE RESTORED COPY: the subject's own record, and another object's
 	// after it, so the log ends past the subject.
 	kept, _, err := h.log.Append(t.Context(), probePrefix+".object.kept", "op-old",
-		nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"},
+		nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("kept"), statelog.ScopeSet{Paths: []string{"object.kept"}},
 			"op-old", "old")))
 	if err != nil {
 		t.Fatalf("the copy's record for the subject: %v", err)
 	}
 	end, _, err := h.log.Append(t.Context(), probePrefix+".object.other", "op-other",
-		nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"},
+		nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("other"), statelog.ScopeSet{Paths: []string{"object.other"}},
 			"op-other", "other")))
 	if err != nil {
 		t.Fatalf("the copy's later record: %v", err)
@@ -1425,7 +1425,7 @@ func TestARecordTheCheckpointDoesNotCoverIsWaitedFor(t *testing.T) {
 			h := newHarness(t)
 			subject := probeSubject("a")
 			peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op",
-				nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
+				nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")))
 			if err != nil {
 				t.Fatalf("the peer's write: %v", err)
 			}
@@ -1532,6 +1532,7 @@ func TestAReanchoredRunnerFollowsTheAdoptedStream(t *testing.T) {
 func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 	t.Helper()
 	old := h.runner.Committed()
+	stance := h.runner.Stance()
 	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrStreamRecreated) {
 		t.Fatalf("before the reanchor the identity is %v, want the rebuild",
 			h.runner.StreamIdentity())
@@ -1574,7 +1575,7 @@ func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 	// A READING OF THE END TAKEN AGAINST THE OLD CHECKPOINT says nothing
 	// about the new one: the heartbeat that read the runner before the
 	// reanchor and the log after it must not refuse the adopted stream.
-	if established, _ := h.runner.ObserveEnd(old, 0); established {
+	if established, _ := h.runner.ObserveEnd(stance, 0); established {
 		t.Fatal("a reading paired with the pre-reanchor checkpoint established " +
 			"a verdict, which would refuse every write until the adopted log " +
 			"reached a sequence the node will never stand at again")
@@ -2733,12 +2734,13 @@ func TestARestoredCheckpointsRuleTravelsInASnapshot(t *testing.T) {
 
 // A GENERATION'S AUTHOR IS READ ONE WAY FOR EVERY DOMAIN.
 //
-// The seven generation records — the tracker's, the knowledge base's, the
+// The nine generation records — the tracker's, the knowledge base's, the
 // identity estate's, the artifacts log's, the artifact datastore's, the
-// Dashboard Assistant's and chat's — name the party a reanchor's facts name,
-// and the audit feed reads those histories side by side, so the facts are
-// read by one rule ([statelog.GenerationFacts.Author]) rather than seven
-// copies of it.
+// Dashboard Assistant's, chat's, the executor log's and the code log's — name
+// the party a reanchor's facts name, and the audit feed reads those histories side by
+// side, so the facts are read by one rule ([statelog.GenerationFacts.Author])
+// rather than nine copies of it, and each domain's own test holds its record
+// to this one.
 // The kind is an ACTOR kind, the vocabulary the engine's reanchor passes, and
 // one that vocabulary does not hold — a principal's word among them — is an
 // operator; an operator with no credential beside it is a credential acting

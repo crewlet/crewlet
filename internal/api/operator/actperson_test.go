@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -151,7 +152,7 @@ func TestEveryRefusalTheActRouteAnswersIsWordedForAPerson(t *testing.T) {
 		{"an existing record", fmt.Errorf("%w: ENG-9", statelog.ErrExists)},
 		{"an answered question", fmt.Errorf("%w: by @ana", worklet.ErrAlreadyAnswered)},
 		{"a spent hand-off budget", worklet.ErrReassignmentBudget},
-		{"a full inbox", worklet.ErrInboxFull},
+		{"a full inbox", inbox.ErrFull},
 		{"a tag clash", &worklet.TagClash{Project: "ENG", Slug: "bug-fix", Label: "Bug fix",
 			Other: worklet.Tag{Slug: "bugfix", Label: "Bugfix"}}},
 		{"a full tag set", &worklet.TagsFull{Project: "ENG", Slug: "infra"}},

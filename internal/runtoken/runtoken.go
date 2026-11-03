@@ -1,17 +1,22 @@
 // Package runtoken is the signed, self-describing credential a per-run
-// endpoint carries in its own URL path.
+// endpoint carries: in its own URL path, or, at the code host's /box/git/,
+// as git's Basic password.
 //
 // # Why a token in the path at all
 //
-// Two edges of this engine are reachable by something running INSIDE a
-// sandbox: the OTLP receiver a harness exports telemetry to, and the MCP
-// bridge it calls the seat's tools through. Neither can be given the API's own
-// token — that credential reads the whole company, and handing it to a box
-// running generated code is the failure the sandbox exists to prevent. So what
+// Three edges of this engine are reachable by something running INSIDE a
+// sandbox: the OTLP receiver a harness exports telemetry to, the MCP bridge it
+// calls the seat's tools through, and the code host a coding box fetches and
+// pushes its run's repositories at (internal/code/host's BoxTokens, under
+// /box/git/). None can be given the API's own token — that credential reads
+// the whole company, and handing it to a box running generated code is the
+// failure the sandbox exists to prevent. So what
 // authenticates a request there is a credential that is worth nothing outside
-// one run and expires with it, and it rides in the path because the clients
-// are a vendor's OTLP exporter and a vendor's MCP client: neither takes an
-// arbitrary header the engine chooses.
+// one run and expires with it, and it rides in the path because the first two
+// clients are a vendor's OTLP exporter and a vendor's MCP client: neither
+// takes an arbitrary header the engine chooses. git takes none either, and
+// presents a credential only as a Basic password its credential helper
+// answers, which is where the box's rides.
 //
 // # Signed and self-describing, not a key into a map
 //
@@ -78,6 +83,13 @@
 // files that nothing compares. The same rule the webhook-secret format follows
 // (internal/whsec): a grammar that more than one caller must agree on has one
 // definition.
+//
+// The per-key derivation is that rule's too beyond tokens: [DeriveKey] and
+// [KeyTag] also yield an embedded fleet's broker credentials — each route's
+// password, each leaf link's and operator's nkey — under domains of their own
+// (internal/queue/jetstream, ADR-0094), so one rotation runbook moves the
+// tokens, the sessions and the broker together, with no step for any one of
+// them.
 package runtoken
 
 import (
@@ -284,10 +296,13 @@ func (s *Signer) sign(key []byte, payload string) string {
 // KeyTag names one key inside one domain, in a form a URL path or a cookie
 // value can carry.
 //
-// EXPORTED FOR THE SECOND CONSUMER. internal/iam/session mints a bearer of its
+// EXPORTED FOR THE OTHER CONSUMERS. internal/iam/session mints a bearer of its
 // own shape under its own domain, and it must tag the key the same way — a
 // second derivation of "which key signed this" would be this package's own
-// one-implementation rule broken by the package that states it.
+// one-implementation rule broken by the package that states it. The embedded
+// broker is the third (internal/queue/jetstream's FleetAuthFrom): a route
+// presents its key's tag as its username, so a refusal can name the key a
+// peer presented without the peer learning any configured id.
 func KeyTag(domain, id string) string {
 	sum := sha256.Sum256([]byte("tag|" + domain + "|" + id))
 	return base64.RawURLEncoding.EncodeToString(sum[:])[:tagLen]

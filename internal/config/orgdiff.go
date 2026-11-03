@@ -92,6 +92,14 @@ import (
 // change that sets, clears or alters one is listed apart ([OrgChange.Keys]) for
 // admin.
 //
+// NOR IS A GRANT THE ROLE CARRIES ([granting]): `health_tools` admits a seat
+// to the administrator's reads of the deployment (internal/authz's seat
+// grant), so a lead who could set it on a seat in their team would read the
+// fleet's health through that seat — its trail is theirs to read — with no
+// permission of their own. A change that sets, clears or alters one is listed
+// apart ([OrgChange.Grants]) for admin. Clearing one is listed too: whether a
+// seat watches the deployment is the administrator's decision either way.
+//
 // A LEAD NARROWS AN MCP SERVER AND NEVER WIDENS ONE. A seat's or a unit's
 // `mcp_limits` is its own field, written by whoever leads the place it sits,
 // and a limit only holds a server back ([org.MCPLimits]). Lifting or loosening
@@ -191,6 +199,10 @@ type OrgChange struct {
 	// Keys is every field another system finds the object by ([keyed])
 	// that the change sets, clears or alters, by JSON name, sorted.
 	Keys []string
+
+	// Grants is every field carrying a role grant ([granting]) that the
+	// change sets, clears or alters, by JSON name, sorted.
+	Grants []string
 
 	// Touches is every place the change reaches.
 	Touches []OrgTouch
@@ -324,6 +336,9 @@ func diffObject(kind OrgKind, id string, b, a *surveyed) (OrgChange, bool) {
 		if slices.Contains(keyed[kind], field) {
 			change.Keys = append(change.Keys, field)
 		}
+		if slices.Contains(granting[kind], field) {
+			change.Grants = append(change.Grants, field)
+		}
 	}
 	for _, ref := range is.refs {
 		if !slices.Contains(was.refs, ref) {
@@ -340,6 +355,13 @@ func diffObject(kind OrgKind, id string, b, a *surveyed) (OrgChange, bool) {
 var keyed = map[OrgKind][]string{
 	OrgSeat: {"contact", "email", "project", "space"},
 	OrgUnit: {"channel", "project", "space"},
+}
+
+// granting is every field, by JSON name, that carries a ROLE GRANT on an object
+// of each kind — an authority the role holds beyond what the chart's subtree
+// gives its leads, which only admin sets — see the file's header.
+var granting = map[OrgKind][]string{
+	OrgSeat: {"health_tools"},
 }
 
 // surveyed is one document, read for a diff.

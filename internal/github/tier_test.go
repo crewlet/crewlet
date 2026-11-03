@@ -13,29 +13,31 @@ import (
 // runs read-only instead of taking the whole document down. The second result
 // is what lets validation refuse it at the one moment somebody is there to
 // read the complaint.
+//
+// AND IT READS EACH TIER IN ONE SPELLING, as role.code.access is held to: a
+// hyphen, a capital or a space is no spelling of a tier here either, so
+// nothing reads a tier more leniently than the field it comes from admits.
 func TestATierTypoFallsBackAndIsStillReported(t *testing.T) {
 	t.Parallel()
-	for raw, want := range map[string]github.Tier{
-		"":              github.DefaultTier,
-		"read_only":     github.TierReadOnly,
-		"full-access":   github.TierFullAccess,
-		"  Review  ":    github.TierReview,
-		"FULL_ACCESS":   github.TierFullAccess,
-		"administrator": github.DefaultTier,
+	for raw, want := range map[string]struct {
+		tier  github.Tier
+		known bool
+	}{
+		"":              {github.DefaultTier, true},
+		"read_only":     {github.TierReadOnly, true},
+		"review":        {github.TierReview, true},
+		"full_access":   {github.TierFullAccess, true},
+		"full-access":   {github.DefaultTier, false},
+		"read-only":     {github.DefaultTier, false},
+		"  Review  ":    {github.DefaultTier, false},
+		"FULL_ACCESS":   {github.DefaultTier, false},
+		" ":             {github.DefaultTier, false},
+		"administrator": {github.DefaultTier, false},
 	} {
 		got, ok := github.ParseTier(raw)
-		if got != want {
-			t.Errorf("ParseTier(%q) = %q, want %q", raw, got, want)
+		if got != want.tier || ok != want.known {
+			t.Errorf("ParseTier(%q) = %q, %v; want %q, %v", raw, got, ok, want.tier, want.known)
 		}
-		if known := want != github.DefaultTier || raw == "" || got == github.TierReadOnly && raw != "administrator"; !known && ok {
-			t.Errorf("ParseTier(%q) reported a typo as known", raw)
-		}
-	}
-	if _, ok := github.ParseTier("administrator"); ok {
-		t.Error("a tier nobody defined was reported as known")
-	}
-	if _, ok := github.ParseTier(""); !ok {
-		t.Error("silence is not a typo; it is the default")
 	}
 }
 

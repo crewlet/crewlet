@@ -93,13 +93,13 @@ func seatNamed(t *testing.T, c *Company, name string) *org.Role {
 
 // runOn is what seat's executor launches with on the head of its
 // chain, over the given seat environment.
-func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) codingRun {
+func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) executorRun {
 	t.Helper()
 	member, err := c.Models.Head(seat, phase.Execute)
 	if err != nil {
 		t.Fatalf("%s's executor chain: %v", seat.Name, err)
 	}
-	return newCodingRun(member.Provider.(*harness.Provider), runEnv{env: seatEnv})
+	return newExecutorRun(member.Provider.(*harness.Provider), runEnv{env: seatEnv})
 }
 
 // AN API-KEY ENTRY'S BOX IS HANDED THE KEY ITS OWN CALLS USE, RESOLVED.
@@ -394,8 +394,21 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 // It fails in the direction that is hardest to see — the config says yes and
 // the runtime says no — and only for a company that actually runs code, so a
 // boot proves nothing. Hence a test that walks the set.
+//
+// NOT PARALLEL: it puts a stub container runtime first on PATH, and t.Setenv
+// refuses a parallel test.
 func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
-	t.Parallel()
+	// A STUB `docker`, FIRST ON PATH. Building the `container` cell looks
+	// its runtime up there ([sandbox.ResolveContainerRuntime]) — on
+	// purpose, so a host that cannot run the cell is told when the config
+	// is applied rather than at the first executor. Left to the host's
+	// PATH, this case failed on every machine with neither docker nor
+	// podman (a contributor's workstation, a runner with no container CLI)
+	// and passed wherever one was installed, so its verdict was about the
+	// machine; a skip there would leave the property unchecked on exactly
+	// those machines. The stub is only found, never run: building a
+	// provider starts no container.
+	stubVendorHarness(t, "docker")
 	for _, placement := range config.Placements {
 		spec := &config.SandboxProvider{
 			// The one backend with a required credential of its own: the
@@ -405,7 +418,10 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 			E2B: &config.E2BSandbox{APIKey: "e2b_test_key"},
 			// An image, because one of the two local cells needs it and
 			// a backend that cannot be built for `container` is exactly
-			// what this test exists to catch.
+			// what this test exists to catch. That cell needs a runtime
+			// on PATH as well, which the stub above stands in for, so a
+			// failure here means the engine cannot build the cell, never
+			// that this machine has no docker.
 			Local: &config.LocalSandbox{Image: "example.invalid/box:1"},
 		}
 		if !spec.Configured(placement) {
@@ -510,6 +526,7 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	// coordinator refuses to be built without one.
 	e := &Engine{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Answers:  testAnswers(),
 		Audience: noAudience{},
 		Queue:    queue, Pending: store, Manager: manager, Resume: &resumer{engine: e},
@@ -671,6 +688,7 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Answers:  testAnswers(),
 		Audience: noAudience{},
 		Queue:    discardQueue{}, Pending: store, Manager: manager, Resume: resume,
@@ -737,7 +755,7 @@ func dayCap(n int) coord.Caps {
 // claim reverts and the completion is delivered again, and each of those
 // passes collected the same finished job and charged it to both counters: the
 // seat's allowance and the company's shrank by one run per retry.
-func TestARetriedCodingRunIsChargedToTheFleetOnce(t *testing.T) {
+func TestARetriedExecutorIsChargedToTheFleetOnce(t *testing.T) {
 	t.Parallel()
 	rig := newChargeRig(t, 1000, 0, 0, &movedSeat{fails: 2})
 	for attempt := range 2 {
@@ -766,7 +784,7 @@ func TestARetriedCodingRunIsChargedToTheFleetOnce(t *testing.T) {
 // at that moment, and the seat's next round was admitted against room the run
 // had already used. Recorded, the next round is refused against the figure
 // that includes it.
-func TestAnOverCapCodingRunIsRecordedOnBothCounters(t *testing.T) {
+func TestAnOverCapExecutorIsRecordedOnBothCounters(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name            string
@@ -796,7 +814,7 @@ func TestAnOverCapCodingRunIsRecordedOnBothCounters(t *testing.T) {
 // coordinator reads the answer as "recorded" rather than as "refused, offer it
 // again". Read the other way, the one company a cap is binding on is charged
 // for its over-cap run once per completion retry.
-func TestAnOverCapCodingRunIsChargedToTheFleetOnce(t *testing.T) {
+func TestAnOverCapExecutorIsChargedToTheFleetOnce(t *testing.T) {
 	t.Parallel()
 	rig := newChargeRig(t, 1000, 500, 0, &movedSeat{fails: 2})
 	for attempt := range 2 {
@@ -898,6 +916,7 @@ func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	}
 	equipped := &Engine{backends: &Backends{Fleet: fleet}}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Answers:  testAnswers(),
 		Audience: noAudience{},
 		Queue:    &publishRecorder{}, Pending: store, Manager: manager,

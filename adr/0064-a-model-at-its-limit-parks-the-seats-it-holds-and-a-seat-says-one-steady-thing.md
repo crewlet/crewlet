@@ -73,7 +73,7 @@ list that does not move when nothing it shows did.** The Inbox draws "Claude
 Code subscription limit reached. Agents resume at 4:30 PM." (the time in the
 reader's zone; "Resume time unknown." where the vendor did not say; who runs on
 a fallback model where one carries them) from `provider_limit` alone, the CLI
-named through `CLI_PRODUCTS`, one condition per CLI and sign-in kind. **The
+named through `HARNESS_PRODUCTS`, one condition per CLI and sign-in kind. **The
 event carries the CLI and whether it signs in on a plan** (`seat_provider_parked`'s
 `harness` and `subscription`, `provider_fallback`'s `from_harness` and
 `from_subscription`) rather than the reader resolving the entry against the org

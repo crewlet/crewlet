@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/decision"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact"
 )
@@ -27,7 +30,7 @@ func TestADeliveredRefIsRedactedBeforeItIsRecorded(t *testing.T) {
 	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, time.Now())
 	for where, refs := range map[string][]string{
 		"the result": got.DeliveredRefs, "the record": rec.DeliveredRefs,
-		"the run's report": {runReport(got)},
+		"the run's report": {runReport(PendingRun{}, got)},
 	} {
 		if strings.Contains(strings.Join(refs, " "), secret) {
 			t.Errorf("a credential survived in %s: %q", where, refs)
@@ -69,13 +72,95 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 			len(got.DeliveredRefs), got.DeliveredRefsElided)
 	}
 
-	text := runReport(got)
+	text := runReport(PendingRun{}, got)
 	if !strings.Contains(text, fmt.Sprintf("(and %d more its report names", got.DeliveredRefsElided)) {
 		t.Errorf("the run's report does not say the list is short: %.300q", text)
 	}
 	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, time.Now())
 	if rec.DeliveredRefsElided != got.DeliveredRefsElided || len(rec.DeliveredRefs) != len(got.DeliveredRefs) {
 		t.Errorf("the record lists %d and counts %d", len(rec.DeliveredRefs), rec.DeliveredRefsElided)
+	}
+}
+
+// REFS THE RECORD LISTS NONE OF ARE STILL SAID. A ref longer than the bound is
+// past it on its own, so a record can list nothing and count what the run
+// named; the run's report then said nothing of it at all, and the run read to
+// its reviewer as one that delivered nothing, while the record and the
+// dashboard both counted the ref.
+func TestTheRunsReportSaysRefsTheRecordListsNoneOf(t *testing.T) {
+	t.Parallel()
+	long := "https://h/a/b/pull/1?x=" + strings.Repeat("y", MaxDeliveredRefBytes)
+	got := (&Coordinator{}).fitResult(t.Context(), PendingRun{},
+		Result{Success: true, DeliveredRefs: []string{long}})
+	if len(got.DeliveredRefs) != 0 || got.DeliveredRefsElided != 1 {
+		t.Fatalf("listed %d and counted %d more; want none listed and the one ref counted",
+			len(got.DeliveredRefs), got.DeliveredRefsElided)
+	}
+	text := runReport(PendingRun{}, got)
+	if !strings.Contains(text, "Delivered: 1 ref(s) its report names, not listed here") {
+		t.Errorf("the report does not say the ref it does not list: %q", text)
+	}
+
+	// A run that named no ref says none.
+	text = runReport(PendingRun{}, Result{Success: true, Text: "Outcome: succeeded"})
+	if strings.Contains(text, "Delivered:") {
+		t.Errorf("a run that named no ref reports one: %q", text)
+	}
+}
+
+// A REF THE RECORD WOULD RENAME IS COUNTED, NEVER LISTED. Every reader of the
+// refs reads them through JSON — the launch's own record, the run's report —
+// where a byte that is not UTF-8 is replaced: listed, such a ref arrived as
+// another, a URL the run never delivered, and refs that differ only there
+// arrived as one. A URL holds whatever bytes a report puts in it, on a
+// `Delivered:` line or in the host a scrape reads, so it is judged here, where
+// every runner's refs pass.
+func TestADeliveredRefThatIsNotUTF8IsCountedNeverListed(t *testing.T) {
+	t.Parallel()
+	refs := []string{
+		"https://h/a/b/pull/1\xff", // a `Delivered:` line's, as the report wrote it
+		"wip/t1",
+		"https://h\xff/a/b/pull/2",   // a host the scrape read
+		"https://h/a/b/pull/1\xfe",   // another ref, which JSON would make the first: U+FFFD for either byte
+		"https://h/a/b/pull/1\xff",   // the first, named again: still one ref
+		"https://h/a/b/pull/1\uFFFD", // what JSON makes of both, written as UTF-8: a ref of its own
+	}
+	want := []string{"wip/t1", "https://h/a/b/pull/1\uFFFD"}
+	got := (&Coordinator{}).fitResult(t.Context(), PendingRun{}, Result{Success: true, DeliveredRefs: refs})
+	if !slices.Equal(got.DeliveredRefs, want) || got.DeliveredRefsElided != 3 {
+		t.Errorf("listed %q and counted %d more; want %q and the 3 distinct refs that are not UTF-8",
+			got.DeliveredRefs, got.DeliveredRefsElided, want)
+	}
+
+	// WHAT IS LISTED ARRIVES AS ITSELF, on the record a reader decodes.
+	raw, err := json.Marshal(collectedRecord(PendingRun{}, LaunchRecord{}, got, time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec types.ExecutorCollected
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rec.DeliveredRefs, want) || rec.DeliveredRefsElided != 3 {
+		t.Errorf("the record arrives listing %q and counting %d; want %q and 3",
+			rec.DeliveredRefs, rec.DeliveredRefsElided, want)
+	}
+
+	// And the report says the list is short, never naming a ref nobody
+	// delivered.
+	if text := runReport(PendingRun{}, got); !utf8.ValidString(text) ||
+		!strings.Contains(text, "Delivered: wip/t1, https://h/a/b/pull/1\uFFFD (and 3 more its report names") {
+		t.Errorf("the run's report reads %q", text)
+	}
+
+	// A RUN WHOSE ONLY REF IS ONE lists none, and its report still says it
+	// delivered one.
+	alone := (&Coordinator{}).fitResult(t.Context(), PendingRun{},
+		Result{Success: true, DeliveredRefs: []string{"https://h/a/b/pull/1\xff"}})
+	if text := runReport(PendingRun{}, alone); len(alone.DeliveredRefs) != 0 || alone.DeliveredRefsElided != 1 ||
+		!strings.Contains(text, "Delivered: 1 ref(s) its report names, not listed here") {
+		t.Errorf("a run whose only ref is not UTF-8: listed %q, counted %d, its report reads %q",
+			alone.DeliveredRefs, alone.DeliveredRefsElided, text)
 	}
 }
 
@@ -91,8 +176,8 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 func TestTheRecordNamesASessionAndAReleaseOfTheirShapesAlone(t *testing.T) {
 	t.Parallel()
 	const uuid = "9a8b7c6d-0000-4000-8000-000000000001"
-	widestID := strings.Repeat("s", executordomain.SessionIDMaxBytes)
-	widestRelease := strings.Repeat("1", executordomain.HarnessVersionMaxBytes-len(".0.0")) + ".0.0"
+	widestID := strings.Repeat("s", executorkeep.SessionIDMaxBytes)
+	widestRelease := strings.Repeat("1", executorkeep.HarnessVersionMaxBytes-len(".0.0")) + ".0.0"
 	for _, tc := range []struct{ session, release, wantSession, wantRelease string }{
 		{uuid, "2.1.310", uuid, "2.1.310"},
 		{"ses_01J9ZQ3W7K", "2.0.32", "ses_01J9ZQ3W7K", "2.0.32"},
@@ -190,6 +275,16 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 		refs = append(refs, fmt.Sprintf("https://github.com/acme/api/pull/%d?x=%s", i, strings.Repeat("<", 400)))
 	}
 	asking := PendingRun{Question: strings.Repeat("<", decision.MaxQuestion)}
+	// THE PUSH RECORD AT ITS WORST, which is one of two: every ref the record
+	// can list is a name of `<` — each six bytes on the wire — beside its two
+	// whole object ids, the refs the run's own lines leave nothing of; or the
+	// record unread, the reason for it past the bound an error is held to.
+	pushed := make([]PushedRef, MaxPushedRefs)
+	for i := range pushed {
+		pushed[i] = PushedRef{Repo: "web", Ref: fmt.Sprintf("refs/heads/%d/%s", i, strings.Repeat("<", 230)),
+			Old: strings.Repeat("1", 40), New: strings.Repeat("2", 40), Pushes: 1 << 30}
+	}
+	unread := strings.Repeat("<", 1<<20)
 	// THE TWO REASONS FAR PAST THEIR KiB: one line of control bytes a MiB
 	// long, as a box's own agent can make the session record's line the
 	// fall-back reason is read from — and as a runner, or a host of another
@@ -213,11 +308,16 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 			FellBack: reason, Kept: kept, SessionID: reason, HarnessVersion: reason}},
 		"a run that asks": {asking, Result{Text: twice, Transcript: twice, DeliveredRefs: refs,
 			FellBack: reason, Kept: kept, SessionID: reason, HarnessVersion: reason}},
+		"a run that pushed": {PendingRun{}, Result{Text: twice, Error: failure, Transcript: twice, Pushed: pushed,
+			PushedElided: 1 << 30, FellBack: reason, Kept: kept, SessionID: reason, HarnessVersion: reason}},
+		"a run whose pushes are unknown": {PendingRun{}, Result{Text: twice, Error: failure, Transcript: twice,
+			DeliveredRefs: refs, PushedUnread: unread, FellBack: reason, Kept: kept, SessionID: reason,
+			HarnessVersion: reason}},
 	} {
 		fitted := c.fitResult(t.Context(), tc.run, tc.result)
 		rec := collectedRecord(tc.run, LaunchRecord{}, fitted, time.Now())
 		if len(rec.HarnessSessionFellBack) > MaxFellBackBytes ||
-			len(rec.SessionNotKept) > executordomain.UnkeptReasonMaxBytes {
+			len(rec.SessionNotKept) > executorkeep.UnkeptReasonMaxBytes {
 			t.Errorf("%s: the record's reasons are %d and %d bytes, past the KiB each is held to", name,
 				len(rec.HarnessSessionFellBack), len(rec.SessionNotKept))
 		}

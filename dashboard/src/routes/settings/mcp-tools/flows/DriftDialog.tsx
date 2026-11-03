@@ -1,7 +1,8 @@
 /**
  * Review the tools a server changed since their levels were decided: for
- * each, what moved (its description as a text diff, its arguments as a list
- * diff, its hints before and after), and one choice, Accept or Keep blocked.
+ * each, what moved (its title or description as a text diff, its arguments a
+ * line each, the hints that moved keyed by the hint), and one choice, Accept
+ * or Keep blocked.
  *
  * THE ENGINE SAYS WHAT CHANGED AND WHAT IT HOLDS. Each row is the detail's
  * `changes` (the parts that moved, whether it now claims less risk, whether
@@ -12,23 +13,18 @@
  * THE SUSPICIOUS DIRECTION IS SAID: a change whose hints now claim less risk
  * is flagged, because that is how a server would talk its way past an
  * approval.
+ *
+ * EVERY PART IS THE ONE DIFF THE DASHBOARD DRAWS (`components/DiffView.tsx`),
+ * never the package's: its diffs paint a removed line in the danger state's
+ * hue and an added one in the success state's, and here a removed hint is no
+ * failure. The two texts are handed to it whole, so its own line diff
+ * compares them; the hints are keyed, each moved hint its old word removed
+ * and its new one added.
  */
 
-import { useState } from "react";
-import {
-  Button,
-  Callout,
-  DiffList,
-  DiffView,
-  Modal,
-  RailList,
-  Skeleton,
-  Text,
-  collapseDiff,
-  diffLines,
-  useToast,
-  type DiffRow,
-} from "@crewlethq/ui";
+import { useMemo, useState } from "react";
+import { Button, Callout, Modal, RailList, Skeleton, Text, useToast } from "@crewlethq/ui";
+import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import type { McpChangeView, McpMemberServerStatus } from "~/contract/mcp.ts";
 import type { ToolAnnotations } from "~/contract/tools.ts";
 import { plural } from "~/lib/format.ts";
@@ -55,21 +51,45 @@ function argumentLines(schema: Record<string, unknown> | null | undefined): stri
     .join("\n");
 }
 
-/** The hints that moved, a row each, before and after. */
-function hintRows(before: ToolAnnotations, after: ToolAnnotations): DiffRow[] {
+/**
+ * The hints that moved, as a KEYED diff: one hunk a hint, its old word
+ * removed and its new one added under the hint's name, so the diff underlines
+ * what moved. One hunk each, skipping nothing, because the moved hints are the
+ * whole answer rather than runs cut out of a longer text.
+ */
+function hintHunks(before: ToolAnnotations, after: ToolAnnotations): DiffHunk[] {
   return (Object.keys(HINT) as (keyof typeof HINT)[])
     .filter((k) => before[k] !== after[k])
     .map((k) => ({
-      kind: "changed" as const,
-      path: HINT[k],
-      from: hintWord(before[k]),
-      to: hintWord(after[k]),
+      skipped: 0,
+      lines: [
+        {
+          kind: "remove" as const,
+          text: hintWord(before[k]),
+          before: null,
+          after: null,
+          path: HINT[k],
+        },
+        {
+          kind: "add" as const,
+          text: hintWord(after[k]),
+          before: null,
+          after: null,
+          path: HINT[k],
+        },
+      ],
     }));
 }
 
 /** What one change moved, part by part. */
 function ChangeBody({ change }: { change: McpChangeView }) {
   const { before, after, kinds } = change;
+  // BUILT ONCE PER CHANGE: a diff handed new hunks starts its window over, and
+  // the dialog draws again on every answer it sends.
+  const hints = useMemo(
+    () => (before && after ? hintHunks(before.annotations, after.annotations) : []),
+    [before, after],
+  );
   if (kinds.includes("removed")) {
     return (
       <Text as="p" variant="body" tone="secondary">
@@ -105,7 +125,8 @@ function ChangeBody({ change }: { change: McpChangeView }) {
             Title
           </Text>
           <DiffView
-            sections={collapseDiff(diffLines(before?.title ?? "", after?.title ?? ""))}
+            before={before?.title ?? ""}
+            after={after?.title ?? ""}
             aria-label={`${change.tool} title, before and after`}
           />
         </section>
@@ -116,7 +137,8 @@ function ChangeBody({ change }: { change: McpChangeView }) {
             Description
           </Text>
           <DiffView
-            sections={collapseDiff(diffLines(before?.description ?? "", after?.description ?? ""))}
+            before={before?.description ?? ""}
+            after={after?.description ?? ""}
             aria-label={`${change.tool} description, before and after`}
           />
         </section>
@@ -127,9 +149,8 @@ function ChangeBody({ change }: { change: McpChangeView }) {
             Arguments
           </Text>
           <DiffView
-            sections={collapseDiff(
-              diffLines(argumentLines(before?.input_schema), argumentLines(after?.input_schema)),
-            )}
+            before={argumentLines(before?.input_schema)}
+            after={argumentLines(after?.input_schema)}
             aria-label={`${change.tool} arguments, before and after`}
           />
         </section>
@@ -139,7 +160,7 @@ function ChangeBody({ change }: { change: McpChangeView }) {
           <Text as="p" variant="label">
             Hints
           </Text>
-          <DiffList rows={hintRows(before.annotations, after.annotations)} layout="auto" />
+          <DiffView hunks={hints} aria-label={`${change.tool} hints, before and after`} />
         </section>
       ) : null}
     </div>

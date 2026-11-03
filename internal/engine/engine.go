@@ -2,6 +2,7 @@ package engine
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"slices"
 	"time"
@@ -82,6 +83,13 @@ type Company struct {
 	// nil on an epoch built without an engine, whose runs offer none.
 	AskTool runner.RunAsk
 
+	// CheckoutTool is `code_checkout`, the tool an executor's run checks a
+	// repository of the company's own code host out through (ADR-0093):
+	// offered on that run's surface alone ([runner.Config.Checkout]), for
+	// AskTool's reason — it grants to the running job's row, which no other
+	// phase has. Built with the builtins where the epoch's code tools serve
+	// ([Engine.equip]); nil on an epoch whose company hosts no code.
+	CheckoutTool tools.Callable
 	// HoldTool records a call an executor's run makes to a tool at Needs
 	// approval as the question it parks on (ADR-0077), installed on that
 	// run's surface alone ([runner.Config.Hold]). Built with AskTool; nil
@@ -110,6 +118,24 @@ type Company struct {
 	// [Engine.applyChart].
 	ActivatedAt time.Time
 
+	// codeInForce is the code host's settings IN FORCE at this epoch — its
+	// limits and its deleted retention — stamped when it is installed
+	// ([Engine.installEpoch], [carriedCode]): its own `code` block where it
+	// sets `code.native`, and otherwise that of the newest earlier epoch
+	// that did, which a committer and a retention duty still running from
+	// it decide with until a restart. Nil on an epoch never installed, or
+	// one with no hosting epoch before it, which is held to its own
+	// configuration's ([Engine.codeInForce]).
+	codeInForce *config.Code
+
+	// roster is this epoch's chart as the code host reads a seat's grant
+	// ([codeRoster]), built at its first question — stamped when the epoch is
+	// installed ([Engine.installEpoch], [rosterOf]). Nil on an epoch never
+	// installed, which [Engine.codeRoster] answers as no chart: a node that
+	// cannot judge a seat, whose code reads refuse it about themselves so
+	// another node is asked — never a seat that stands nowhere. A function
+	// rather than the value, so an epoch copied whole copies no lock.
+	roster func() codeRoster
 	// catalogue is the sandbox catalogue this epoch was built with
 	// ([buildSandbox]): the cells a launch may place a box in, the runners
 	// it may start, the engine-wide setup steps and the default turn cap.
@@ -259,7 +285,7 @@ func (c *Company) Seats() []placement.Seat {
 // epoch's shared surface as the seat holds it ([grantedSurface]), which is the
 // correct answer for a seat granted no per-role server and for any caller that
 // holds no lease.
-func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) (*runner.Runner, error) {
+func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Registry, in RunnerInput) (*runner.Runner, error) {
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
 		return nil, fmt.Errorf("engine: %q is not an agent seat in this company", handle)
@@ -298,6 +324,14 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 			Withheld: in.Turn.Context.WithholdsContacts,
 			Chatlet:  c.Config.ChatBackendFor() == config.ChatChatlet},
 		Registry: reg,
+		// WHAT THIS SEAT'S SURFACES LEAVE OUT of the epoch's registry: the
+		// builtins the authority table refuses it before any object is
+		// named — the health tools, where its role carries no health grant
+		// — asked of the same decision every call is, so it is offered a
+		// tool exactly where it is admitted to it; and the code writes,
+		// where its code tier writes no repository, so every call of one
+		// would be refused ([Company.withheldFrom]).
+		Withheld: c.withheldFrom(ctx, handle, reg),
 		Models:   c.Models,
 		// THE PROCESS'S, threaded per turn like the publisher: the epoch is
 		// configuration and the session directory is not.
@@ -370,6 +404,9 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		// epoch's builtins: its evidence is checked against the same
 		// tracker and knowledge base a work item's decision is.
 		Ask: c.AskTool,
+		// AND ITS CHECKOUT of the company's own repositories, on the same
+		// surface for the same reason.
+		Checkout: c.CheckoutTool,
 		// AND ITS WAY TO PARK ON A CALL THAT NEEDS APPROVAL, recorded on
 		// the same row through the same desk.
 		Hold: c.HoldTool,

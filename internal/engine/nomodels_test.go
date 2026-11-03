@@ -41,7 +41,7 @@ func TestACompanyWithNoModelsBuildsAnEpochThatCannotTakeATurn(t *testing.T) {
 		t.Errorf("seats = %v, want the one agent seat placed like any other", got)
 	}
 
-	_, err = c.RunnerFor("ceo", nil, engine.RunnerInput{Task: "post it"})
+	_, err = c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Task: "post it"})
 	if !errors.Is(err, phase.ErrNoProviders) {
 		t.Fatalf("RunnerFor = %v, want ErrNoProviders", err)
 	}

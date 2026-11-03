@@ -25,11 +25,11 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/worklet"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -57,6 +57,12 @@ type App struct {
 
 	// runtime is the engine this process runs beside. See NodeRuntime.
 	runtime NodeRuntime
+
+	// git counts the git requests the drain gate let through and has not
+	// seen answered, for [App.DrainGit]; gitGap is how long that wait goes
+	// on listening after the last one ([gitExchangeGap], scaled by a test).
+	git    gitServing
+	gitGap time.Duration
 
 	nodeID       string
 	queueBackend string
@@ -87,6 +93,18 @@ type App struct {
 	// it is a different seam from the one above. Never nil: see
 	// [Options.Nodes].
 	nodes NodeGate
+
+	// code is the engine's git host and its reads, ASKED ON EVERY REQUEST —
+	// see [CodeSurface] — and servesGit whether this node's Tier A roles
+	// name git: a fact known at [New], which decides whether the git routes
+	// are mounted at all (code.go).
+	code      CodeSurface
+	servesGit bool
+
+	// listens tells every MCP client listening on the operator surface that
+	// its tools changed ([OperatorListens]); nil where the app serves no
+	// operator surface.
+	listens *OperatorListens
 
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. On a node that is publishing the verb refuses rather than
@@ -281,8 +299,8 @@ type guardedMounter interface {
 // Runtime, Inbox, Credentials, Sources.Company, Sources.Chart, Sources.Holders,
 // Sources.WithheldContacts, Sources.Events, Sources.NodeID, Sources.Coord, the
 // Inbound edge's Publisher, Claims, Secrets and AppFlow, Config, Secrets,
-// Setup, Retention, Capacity, FleetBroker, Backup, Nodes, AuthEvents and Audit
-// are REQUIRED, and [New] refuses a missing one by name.
+// Setup, Retention, Code, Capacity, FleetBroker, Backup, Nodes, AuthEvents and
+// Audit are REQUIRED, and [New] refuses a missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -290,6 +308,11 @@ type guardedMounter interface {
 // all. So a nil here is a wiring mistake, and a narrower answer built around it
 // (a health body missing the engine's fields, a 503, an unregistered /config)
 // would hide that mistake behind something an operator reads as deliberate.
+//
+// That holds for the code host too: what a real node can lack there is the
+// BACKEND (a company that hosts no code, a node whose first company has not
+// been applied yet), which [CodeSurface] answers per request — never the seam
+// that asks.
 //
 // What stays optional is what a real node can lack: Worklet (a company
 // on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
@@ -394,15 +417,16 @@ type Options struct {
 	// Runtime is the engine this process runs beside.
 	Runtime NodeRuntime
 
-	// Inbox is where this node hears whose inbox a committed tracker
-	// batch moved, which [New] turns into `inbox_changed` frames for the
-	// sockets watching each seat — see [InboxFeed].
+	// Inbox is where this node hears whose inbox a committed batch of a
+	// domain's applier moved, which [New] turns into `inbox_changed` frames
+	// for the sockets watching each seat — see [InboxFeed].
 	//
-	// REQUIRED, like Runtime: every node that serves the API applies the
-	// tracker's log — and relays a peer's movements while its own copy is
-	// out of service — so a node that heard nothing would be a wiring
-	// mistake rather than a narrower node, and the dashboard would go back
-	// to learning about somebody's work a poll interval late.
+	// REQUIRED, like Runtime: every node that serves the API applies every
+	// domain's log — and relays a peer's movements of a domain while its
+	// own copy of it is out of service — so a node that heard nothing
+	// would be a wiring mistake rather than a narrower node, and the
+	// dashboard would go back to learning about somebody's work a poll
+	// interval late.
 	Inbox InboxFeed
 
 	// Credentials is where this node hears whose credentials a committed
@@ -628,6 +652,15 @@ type Options struct {
 	// nobody to attribute the write to.
 	Operator *operator.Server
 
+	// OperatorListens tells every MCP client listening on Operator's
+	// transport that its tools changed ([OperatorListens]): it joins the
+	// fleet's announcements at [App.Start], is told of this node's moves
+	// through [App.OperatorToolsMoved], ends every stream at
+	// [App.EndListens] and leaves the fleet at [App.Stop].
+	// [HumanSurfaces.Mount] is what hands it over, beside Operator. Nil
+	// tells nobody, which is what a suite about something else has.
+	OperatorListens *OperatorListens
+
 	// Retention is the fleet's record of what the log may delete, for the
 	// operator's backup acknowledgement.
 	Retention retentionWriter
@@ -642,6 +675,15 @@ type Options struct {
 	// (ADR-0025) — so every engine this API runs beside holds a gate, and a
 	// nil is a wiring mistake, not a narrower node.
 	Nodes NodeGate
+
+	// Code is the engine's own git host — smart HTTP under /git/ on a node
+	// whose roles name git, and a coding box's under /box/git/ — and the
+	// code domain's reads under /code/ on every node, asked of the engine on
+	// every request, with the box tokens a box route on a node serving no
+	// code host verifies by before it says why: see [CodeSurface]. /git/
+	// and /code/ are never on api.public (ADR-0085); /box/git/ is, admitted
+	// by the run. REQUIRED, for [Options]' reason.
+	Code CodeSurface
 
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
@@ -726,6 +768,7 @@ func New(opts Options) (*App, error) {
 		csrf:         auth.NewCSRF(opts.Bootstrap),
 		state:        state,
 		runtime:      opts.Runtime,
+		gitGap:       gitExchangeGap,
 		nodeID:       opts.Sources.NodeID,
 		queueBackend: opts.QueueBackend,
 		now:          now,
@@ -945,11 +988,25 @@ func New(opts Options) (*App, error) {
 		policy := queries.SignInPolicyOf(opts.Bootstrap.API.Auth)
 		sources.SignIn = &policy
 	}
+	// THE CODE HOST'S ROWS, AS QUESTIONS, read from the one code surface
+	// this app is handed and asked on every question, with why this node
+	// serves none in the read surface's vocabulary — the reason the git
+	// routes answer from that same surface (code.go). Never a caller's own
+	// source beside it: one surface, so a clone and a listing asked of one
+	// node cannot disagree about whether it hosts code.
+	sources.Code = codeQuestions{surface: opts.Code}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit
 	a.objects = opts.Objects
 	a.retention, a.nodes = opts.Retention, opts.Nodes
+	// WHETHER THIS NODE SERVES GIT is its Tier A roles' answer, never the
+	// company's: a node that lists its roles serves git only if it names
+	// it, and an undeclared node has every role. Which company it serves is
+	// asked per request (code.go).
+	a.code = opts.Code
+	a.servesGit = servesGit(opts.Bootstrap)
+	a.listens = opts.OperatorListens
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
 
@@ -967,6 +1024,13 @@ func New(opts Options) (*App, error) {
 	// missing.
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
+	}
+	// The engine's own git host and its reads: git on a node with the git
+	// role — a person's routes each on the verb it is decided by, failing
+	// the boot where a policy is missing, and a coding box's on the table
+	// itself, admitted by its run — and the reads on every node. See code.go.
+	if err := a.mountCode(mux); err != nil {
+		return nil, fmt.Errorf("api: mount the code host's routes: %w", err)
 	}
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer, a.chatLive))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
@@ -1006,7 +1070,9 @@ func New(opts Options) (*App, error) {
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
 	// the same reason: the exporter inside a box holds no API token, and
 	// giving it one would hand a sandbox the credential that reads the
-	// whole company. Its per-run token is in the path instead.
+	// whole company. Its per-run token is in the path instead. So is the
+	// tool bridge's; and a coding box's git, the third edge, is mounted with
+	// the code host's routes above, its run's token its Basic password.
 	mountOTLP(mux, opts.OtelReceiver)
 	mountBridge(mux, opts.Bridge)
 	// The config surface, every route on a grant, reads included:
@@ -1275,6 +1341,7 @@ func (o Options) missing() error {
 		{"Setup", o.Setup == nil},
 		{"Models", o.Models == nil},
 		{"Retention", o.Retention == nil},
+		{"Code", o.Code == nil},
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
 		{"Backup", o.Backup == nil},
@@ -1458,42 +1525,45 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.Serv
 func (a *App) Public() http.Handler { return a.public }
 
 // InboxFeed is where this node hears whose inbox moved: the engine, whose
-// tracker applier says so after every committed batch — and, while this
-// node's own copy is out of service, a sound peer's applier relayed.
+// appliers say so after every committed batch of each domain that keeps a
+// person's inbox — and, while this node's own copy of such a domain is out of
+// service, a sound peer's applier of it relayed.
 //
 // CONSUMER-DEFINED and two methods wide: the movements, and the GAPS between
-// them — the engine switching where its movements come from, after which what
-// moved in between is not replayed. The engine satisfies it with
+// them — the engine switching where one source's movements come from, after
+// which what moved in between is not replayed. The engine satisfies it with
 // [engine.Engine.SetOnInboxMoved] and [engine.Engine.SetOnInboxGap]; a test
 // hands in a feed it fires by hand.
 type InboxFeed interface {
-	SetOnInboxMoved(func([]worklet.InboxMovement))
-	SetOnInboxGap(func())
+	SetOnInboxMoved(func([]inbox.Movement))
+	SetOnInboxGap(func(source string))
 }
 
 // pushInboxMoved turns one committed batch's inbox movements into
-// `inbox_changed` frames, each reaching only the sockets watching that seat.
+// `inbox_changed` frames, each reaching only the sockets watching that seat and
+// naming the domain whose inbox moved.
 //
-// FROM ONE SOURCE AT A TIME, which the engine chooses: every node that serves
-// this API holds the estate — ingress requires the `data` role (ADR-0025) —
-// and applies every tracker record, so while its copy serves it hears every
-// movement from its own applier. A copy out of service keeps the node in
-// rotation and its applier announces nothing it can trust, so for as long as
-// it is out the engine relays a sound peer's movements instead, and says when
-// it switched ([App.pushInboxGap]).
-func (a *App) pushInboxMoved(moved []worklet.InboxMovement) {
+// FROM ONE SOURCE OF EACH DOMAIN AT A TIME, which the engine chooses: every
+// node that serves this API holds the estate — ingress requires the `data`
+// role (ADR-0025) — and applies every record, so while its copy of a domain
+// serves it hears every movement of it from its own applier. A copy out of
+// service keeps the node in rotation and its applier announces nothing it can
+// trust, so for as long as it is out the engine relays a sound peer's
+// movements of that domain instead, and says when it switched
+// ([App.pushInboxGap]).
+func (a *App) pushInboxMoved(moved []inbox.Movement) {
 	for _, m := range moved {
 		a.stream.InboxChanged(stream.InboxChange{
-			Handle: m.Handle, UnreadDelta: m.UnreadDelta,
-			Subject: m.Subject, Reason: string(m.Reason), Stored: m.At,
+			Source: m.Source, Handle: m.Handle, UnreadDelta: m.UnreadDelta,
+			Subject: m.Subject, Reason: m.Reason, Stored: m.At,
 		})
 	}
 }
 
 // pushInboxGap tells every watched inbox to read itself again: the engine
-// switched where this node's movements come from, and what moved in the gap is
-// not replayed — see [stream.Service.InboxReread].
-func (a *App) pushInboxGap() { a.stream.InboxReread() }
+// switched where this node's movements of source come from, and what moved in
+// the gap is not replayed — see [stream.Service.InboxReread].
+func (a *App) pushInboxGap(source string) { a.stream.InboxReread(source) }
 
 // Stream exposes the live channel, for the engine to feed.
 func (a *App) Stream() *stream.Service { return a.stream }
@@ -1528,17 +1598,46 @@ func (a *App) Configured() bool {
 // broadcast subscription is attached, or an event published between the read
 // and the subscribe falls into the gap. This runs before it, so the seed is
 // the caller's (see observe.Seed, wired in cmd/crewlet).
+//
+// IT ALSO JOINS THE FLEET'S ANNOUNCEMENTS of operator tool changes
+// ([OperatorListens.Join]), and takes the first reading of the tools a call is
+// served, so the first move this node is told of is compared with what it
+// served before it.
 func (a *App) Start(ctx context.Context) {
 	a.stream.StartHealthTicks(ctx)
+	a.listens.Join(ctx)
 }
 
-// Stop ends the tick and disconnects every client.
-func (a *App) Stop() {
+// Stop ends the tick, disconnects every client and leaves the fleet's
+// announcements of operator tool changes, waiting for this node's own nudges
+// still in flight — before the engine closes the queue they ride — for at most
+// [fleetTellBudget] and never past ctx, the caller's shutdown grace.
+func (a *App) Stop(ctx context.Context) {
 	for _, stop := range a.stopRooms {
 		stop()
 	}
 	a.stream.Stop()
+	ctx, cancel := context.WithTimeout(ctx, fleetTellBudget)
+	defer cancel()
+	a.listens.Close(ctx)
 }
+
+// OperatorToolsMoved tells every MCP client listening on this node's operator
+// surface, and every other node, that its tools changed — where they did
+// ([OperatorListens.Moved]). The node runs it after every company it publishes
+// and every catalogue change a shared tool server makes, which is where each
+// fact the catalogue is built from moves. Nil-safe: an app serving no operator
+// surface tells nobody.
+func (a *App) OperatorToolsMoved(ctx context.Context) { a.listens.Moved(ctx) }
+
+// EndListens ends every stream an MCP client listens on at this node's
+// operator surface ([OperatorListens.End]). The node registers it on api.port's
+// listener, to run as its graceful shutdown begins: a stream is one request
+// held open, and the shutdown would otherwise wait for every listening
+// assistant until its grace ran out and then cut them, logging
+// api_shutdown_failed — a warning meant for a request that was stuck. Only
+// api.port: the operator routes are never public.
+func (a *App) EndListens() { a.listens.End() }
 
 func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// ALWAYS 200 while the process is alive, INCLUDING through a drain: an
@@ -1724,7 +1823,7 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 		writeQueryError(w, r, what, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, data)
+	writeAnswer(w, r, data)
 }
 
 // writeQueryError maps one failed question onto a status.
@@ -1739,8 +1838,10 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 // one whose refusals carried no sentence, and the code a client branched on
 // was the only thing it had to show.
 func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err error) {
+	var denied *queries.NotPermitted
 	var refusal *queries.Refusal
 	var revision *stream.RevisionError
+	var unserved *stream.Unserved
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeUnknownQuery)
@@ -1752,6 +1853,17 @@ func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err er
 		// up — stated because the mapping is this function's to get right
 		// whatever happens to run in front of it.
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
+	case errors.As(err, &denied):
+		// 403 UNDER THE DOMAIN'S OWN WORD: a grant the question's own domain
+		// derives — a repository's, from the chart — is not the authority
+		// table's, carries no decision for [authz.RefusalFields] to map and no
+		// permission that would admit the caller, and answers with the
+		// domain's sentence: `not_permitted`, the word a refused push prints
+		// for the same refusal. Ahead of the table's arm, and never left to
+		// the default one: it is [queries.ErrUnauthorized] too, which names
+		// no decision.
+		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeNotPermitted,
+			map[string]string{"detail": denied.Detail})
 	case errors.As(err, &refusal):
 		// 403 AND NOT 401, because the caller has already been
 		// identified. This refusal is a GRANT one — the guard in front
@@ -1794,7 +1906,20 @@ func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err er
 		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeUnknownProvider,
 			httpjson.Detail{"detail": err.Error()})
 	case errors.Is(err, queries.ErrNotFound):
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+		// AND WHICH ABSENCE, where the question says: a repository nobody
+		// declared and a company hosting no code are both `not_found`, told
+		// apart by the `reason` a client branches on, since a declaration
+		// is the remedy of one and changes nothing about the other.
+		var missing *queries.NotFound
+		if !errors.As(err, &missing) {
+			httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+			return
+		}
+		said := map[string]string{"detail": missing.Detail}
+		if missing.Reason != "" {
+			said["reason"] = missing.Reason
+		}
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, said)
 	case errors.As(err, &revision):
 		// A REVISION THIS NODE CANNOT OPEN, under the /config route's own
 		// code and words, as the socket's frame carries them: answered by
@@ -1807,19 +1932,21 @@ func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err er
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeArtifactTrashed,
 			map[string]string{"detail": "the artifact is in the trash; its data is not " +
 				"served until it is restored"})
-	case errors.Is(err, stream.ErrNoCompany):
-		// A NATIVE QUESTION ON A NODE WITH NO COMPANY YET, answered as
-		// every surface answers that node — the webhook edge, the human
-		// write surface, the operator's assistant — with the reconcile
-		// poll as the wait, rather than as the state log's `unavailable`,
-		// whose hint is the scale of a node catching up. See native.go.
+	case errors.As(err, &unserved):
+		// A SURFACE THIS NODE SERVES NONE OF NOW, under its own code — a
+		// native question on a node with no company yet
+		// ([stream.ErrNoCompany]), answered as every surface answers that
+		// node, with the reconcile poll as the wait; a code question on a
+		// node applying, or failed to apply, the configuration that hosts
+		// code — rather than as the state log's `unavailable`, whose hint
+		// is the scale of a node catching up. See native.go and code.go.
 		//
 		// THE HINT AND THE WORDS ARE [stream.UnavailableOf]'s, the one
 		// reading the socket's frame is built from too: decided here
 		// alone, the REST route said fifteen seconds and why while the
 		// socket said five and nothing.
 		u := stream.UnavailableOf(err)
-		httpjson.UnavailableWith(w, httpjson.CodeNoActiveRevision, u.RetryAfter,
+		httpjson.UnavailableWith(w, unserved.Code, u.RetryAfter,
 			httpjson.Detail{"detail": u.Detail})
 	case errors.Is(err, queries.ErrUnavailable):
 		// 503, because this node could not serve the question and nothing

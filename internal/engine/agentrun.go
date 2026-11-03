@@ -95,6 +95,11 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 // run over opens the same job's session again ([Engine.reopenAgentRun]), and
 // the token the box already holds reaches it.
 //
+// AND KNOWING THE RUN'S MODEL: the session carries the model the launch
+// points the harness at ([mcpbridge.Session.Model]), so every bridged call
+// is made on it and a seat's code write names it on its push, as a tool loop
+// round's call names its round's.
+//
 // AND WITH THE TURN'S NOTES (ADR-0067). The record the launch opens carries
 // the sealed anchor of the seat the run serves, the notes the brief carries
 // ([runner.AgentRunRequest.Notes]), read by the job the write opens, and — for
@@ -336,7 +341,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		servers = e.boxServers(ctx, company, l.seat, settings)
 	}
 
-	run := newCodingRun(agent, runEnv)
+	run := newExecutorRun(agent, runEnv)
+	// THE RUN'S MODEL ON ITS SESSION, before the session opens: see
+	// [mcpbridge.Session.Model].
+	session.Model = run.model
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       cell,
 		Harness:         agent.Harness(),
@@ -380,6 +388,35 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		return runner.Launched{}, err
 	}
 
+	// THE TURN'S CODE HOLDS GO ON THE ROW THE LAUNCH OPENS, and the set is
+	// SEALED from the moment it is read until that row exists, so no hold is
+	// taken in between that neither the set this read nor the row would carry
+	// ([launchHolds]). The row's writer is attached when the job is named,
+	// before its bridge session opens, so every hold a bridged call of the box
+	// takes is on the row before its request: a run that parks, and a node
+	// that restarts under it, keep what the run's turn named. Sealed last,
+	// past every refusal above, which would otherwise have to unseal it.
+	// THE RUN'S CHECKOUTS: a round carried on keeps its job's ([runner.Continuation]),
+	// so the work it continues — in the asking job's box, or from its branch
+	// in a fresh one — reaches what that job checked out, and nothing more;
+	// any other launch starts with none, and its box checks each repository
+	// out through `code_checkout` as it needs it (ADR-0093).
+	grants, err := carriedGrants(ctx, pending, l.turn.RunID, req.Continue != nil)
+	if err != nil {
+		return runner.Launched{}, err
+	}
+	spec.Repos = grants.Repos
+	// THE BOX'S GIT, on every launch on a node serving the company's code
+	// host: the code host's base, git's configuration through the
+	// environment, and the run's credential, minted for the launch the store
+	// is about to name, so a job a relaunch supersedes is refused at the code
+	// host whatever its token's expiry. It reaches nothing until a checkout
+	// grants a repository on the row, which the code host's box admission
+	// reads on every request. Its environment is the launch's own, over the
+	// run environment just assembled, never the spec's or the row's.
+	boxGit := e.launchBoxGit(l.seat, l.turn.RunID, run.env)
+
+	holds := launchHolds(l.turn.Holding(), pending, l.turn.RunID)
 	var (
 		opened   bool
 		recorded string
@@ -432,6 +469,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		SteerSeat:   e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
 		BriefNotes:  brief,
 		HandedNotes: handed,
+		CodeHolds:   holds.ids,
+		CodeFloor:   grants.CodeFloor,
+		CodeCeiling: grants.CodeCeiling,
+		RunEnv:      boxGit,
 		Recorded: func(launch string) {
 			// THE RECORD HOLDS THE TURN'S NOTES FROM HERE, the box's
 			// included: a note to the turn waits on it, whichever node it
@@ -441,6 +482,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 			hand.recorded()
 		},
 		Opened: func(job sandbox.OpenedJob) (sandbox.Opening, error) {
+			holds.opened(job.LaunchID)
 			opening, openErr := e.openBridge(ctx, session, ledger, inbox, job)
 			opened, bridgeFrom = openErr == nil, job.LastSeq
 			return opening, openErr
@@ -460,6 +502,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// launch is being built either finds the row or is refused here.
 		Fence: req.Fence,
 	})
+	holds.settle(err)
 	if err != nil {
 		if recorded == "" {
 			// NO RECORD WAS WRITTEN: the box's notes are the box's again.
@@ -602,10 +645,13 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 	if err != nil || !found {
 		return true
 	}
+	// DATED AS THE ROW DATES IT ([sandbox.PendingRun.BoxSince]): a box past
+	// [sandbox.KeptBoxMaxAge] is one the launch reclaims, and an undated one
+	// it never continues in, so the floor is the fresh session's there too.
 	prior := sandbox.PriorBox{SandboxID: run.SandboxID, Placement: run.Placement, Harness: run.Harness,
-		Status: run.Status, LaunchNode: run.LaunchNode}
+		Status: run.Status, LaunchNode: run.LaunchNode, Since: run.BoxSince}
 	return prior.ReachableFrom(l.engine.id, manager.DefaultPlacement()) &&
-		prior.ContinuesIn(sandbox.Spec{Placement: cell, Harness: agent.Harness()})
+		prior.ContinuesIn(sandbox.Spec{Placement: cell, Harness: agent.Harness()}, l.engine.now())
 }
 
 // openBridge opens a job's bridge session under the job's own name, with its

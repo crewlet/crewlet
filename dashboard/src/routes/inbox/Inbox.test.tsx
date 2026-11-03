@@ -26,6 +26,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { installScreen } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { fakeTransition } from "~/test/motion.ts";
@@ -87,6 +88,7 @@ const EVERY_TOOL = [
   "answer_executor",
   "update_work_item",
   "mark_inbox",
+  "code_mark_inbox",
   "write_page",
 ];
 
@@ -164,16 +166,173 @@ function notice(id: string, extra: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * A notice as the composed inbox carries it: a code notice (`codeNotice`) as
+ * it is, and any other as Worklet's, its own shape whole in `extra`.
+ */
+function composedOf(n: Record<string, unknown>): Record<string, unknown> {
+  if (n.source === "code") return n;
+  return {
+    source: "tracker",
+    record_id: n.record_id,
+    position: { stream: n.log_stream, generation: n.log_generation, seq: n.log_seq },
+    at: n.at,
+    reason: n.reason,
+    primary: n.primary,
+    addressed: n.addressed,
+    kind: n.kind,
+    subject: { id: n.subject_id, key: n.subject_key },
+    excerpt: n.excerpt,
+    actor: n.actor,
+    actor_kind: n.actor_kind,
+    read: n.read,
+    snoozed: n.snoozed,
+    snoozed_until: n.snoozed_until,
+    extra: n,
+  };
+}
+
+/** A notice the code host routed, as the composed inbox carries it. */
+const CODE_AT = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 40 };
+const HEAD_OID = "f".repeat(40);
+
+/**
+ * web!42's own answers as a gated change: main requires unit and e2e (lint
+ * runs unrequired), and holds `.crewlet/**` to a person's approval, which
+ * waits on `waitsOn`; its head revision touches three paths, one of them
+ * only whitespace and one only comments.
+ */
+function gatedChange({ waitsOn }: { waitsOn: string }) {
+  const check = (name: string, state: string, extra: Record<string, unknown> = {}) => ({
+    repo_id: "id-web",
+    repo: "web",
+    oid: HEAD_OID,
+    target: "refs/heads/main",
+    name,
+    attempt: 1,
+    state,
+    purpose: "head",
+    ...extra,
+  });
+  return {
+    code_change: {
+      change: {
+        id: "change-42",
+        repo_id: "id-web",
+        repo: "web",
+        number: 42,
+        title: "Retry the upload once",
+        state: "open",
+        source_ref: "refs/heads/retry",
+        target_ref: "refs/heads/main",
+        head: HEAD_OID,
+        revision: 2,
+        owner: "cto",
+        owner_kind: "agent",
+        readiness: {
+          met: 1,
+          total: 3,
+          first: "unit failed",
+          preconditions: [
+            {
+              kind: "human_approval",
+              state: "unmet",
+              waits_on: [{ handle: waitsOn, kind: "person" }],
+              detail: `revision 2 touches .crewlet/**, which refs/heads/main holds to a person's approval: it waits on ${waitsOn}`,
+            },
+            { kind: "check", state: "unmet", detail: "unit failed" },
+            { kind: "mergeable", state: "met", detail: "merges cleanly" },
+          ],
+        },
+      },
+      revisions: [
+        {
+          n: 2,
+          head: HEAD_OID,
+          pusher: "cto",
+          pusher_kind: "agent",
+          position: CODE_AT,
+          at: "2026-09-30T11:00:00Z",
+          facts: {
+            target_ref: "refs/heads/main",
+            target_oid: "e".repeat(40),
+            touched: [".crewlet/checks.yaml", "app.go", "util.go"],
+            classes: { whitespace_only: [1], comment_only: [2], complete: true },
+            node: "git-a",
+          },
+        },
+      ],
+      position: CODE_AT,
+      level: "session",
+    },
+    code_checks: {
+      checks: [
+        check("unit", "failed", { required: true, duration_ms: 64_000 }),
+        check("e2e", "running", { required: true }),
+        check("lint", "passed", { duration_ms: 3_000 }),
+      ],
+      position: CODE_AT,
+      level: "session",
+    },
+  };
+}
+
+function codeNotice(id: string, extra: Record<string, unknown> = {}) {
+  const n = {
+    record_id: id,
+    log_seq: Number(id.replace(/\D/g, "")) || 1,
+    log_stream: "CREWLET_CODE_LOG",
+    log_generation: 1,
+    at: new Date(Date.now() - 30_000).toISOString(),
+    reason: "review_requested",
+    primary: true,
+    addressed: true,
+    repo: "web",
+    change_id: "change-42",
+    change_ref: "web!42",
+    excerpt: "Retry the upload once, not twice.",
+    change: { title: "Retry the upload once", state: "open" },
+    read: false,
+    ...extra,
+  };
+  return {
+    source: "code",
+    record_id: id,
+    position: { stream: n.log_stream, generation: n.log_generation, seq: n.log_seq },
+    at: n.at,
+    reason: n.reason,
+    primary: n.primary,
+    addressed: n.addressed,
+    kind: "change",
+    subject: { id: n.change_id, key: n.change_ref, title: n.change.title },
+    excerpt: n.excerpt,
+    read: n.read,
+    snoozed: (n as { snoozed?: boolean }).snoozed,
+    extra: n,
+  };
+}
+
+/** A composed `inbox` page of notices, every source read. */
 function inboxOf(notices: unknown[], extra: Record<string, unknown> = {}) {
-  return { handle: "jane", notices, primary_reasons: [], unread: 0, primary: 0, ...extra };
+  return {
+    handle: "jane",
+    notices: (notices as Record<string, unknown>[]).map(composedOf),
+    sources: [
+      { name: "tracker", primary_reasons: [] },
+      { name: "code", primary_reasons: [] },
+    ],
+    unread: 0,
+    primary: 0,
+    ...extra,
+  };
 }
 
 type Answer = unknown | ((params: Record<string, unknown>) => Promise<unknown>);
 
 const QUIET: Record<string, Answer> = {
   decisions: { handle: "jane", items: [], total: 0, capped: false },
+  inbox: inboxOf([]),
   answered_decisions: { handle: "jane", items: [] },
-  work_inbox: inboxOf([]),
   work_person: {
     handle: "jane",
     version: 1,
@@ -194,14 +353,18 @@ let actAnswers: Record<
   | { outcome: string; receipt: Record<string, unknown> }
   | { refused: number; body: Record<string, unknown> }
 >;
+/** Every address the screen fetched, a REST read's as much as a write's. */
+let fetched: string[];
+/** The code host's REST answers a case serves, by question; any other is 404. */
+let rest: Record<string, unknown>;
 
 /**
  * Midday on the company's clock (the fixture org keeps UTC).
  *
  * Every fixture notice is stamped a minute (an ask twelve) before
  * `Date.now()`, so the time a row draws and the day a snooze preset lands on
- * are the same on every run. Only `Date` is faked: the suite's own waits, and
- * the moment before the next item opens, keep real timers.
+ * are the same on every run. Only `Date` is faked here; the one case about
+ * the moment before the next item opens fakes its timer as well.
  */
 const PINNED_NOW = "2026-09-30T12:00:00Z";
 
@@ -213,9 +376,27 @@ beforeEach(() => {
   asked = [];
   posted = [];
   actAnswers = {};
+  fetched = [];
+  rest = {};
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
+      fetched.push(String(url));
+      // A CODE QUESTION over REST, answered from the case's `rest`, by name —
+      // or, where the case answers it by its URL (a page by its cursor), by
+      // the function it holds there.
+      const query = /\/query\/([a-z_]+)/.exec(String(url))?.[1];
+      if (query) {
+        const found = rest[query];
+        const answer =
+          typeof found === "function"
+            ? (found as (u: URL) => unknown)(new URL(String(url), "http://x"))
+            : found;
+        return new Response(JSON.stringify(answer ?? {}), {
+          status: answer ? 200 : 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
       const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
       posted.push({ tool, args: body.args });
@@ -230,7 +411,13 @@ beforeEach(() => {
         JSON.stringify({
           tool,
           outcome: answer.outcome,
-          position: answer.outcome === "applied" ? "CREWLET_TRACKER_LOG@1:99" : null,
+          // EACH TOOL ANSWERS ON ITS OWN DOMAIN'S LOG, as the engine does.
+          position:
+            answer.outcome !== "applied"
+              ? null
+              : tool === "code_mark_inbox"
+                ? "CREWLET_CODE_LOG@1:99"
+                : "CREWLET_TRACKER_LOG@1:99",
           receipt: answer.receipt,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -293,10 +480,16 @@ function mount({
   return { store, socket };
 }
 
+/**
+ * Lets everything the screen asked land: every read the socket was asked and
+ * every write the act route took, and what their answers drew, including the
+ * reads those renders asked in turn (see `settled`).
+ */
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  await settled(
+    () => asked.length,
+    () => posted.length,
+  );
 }
 
 /** The reason a write control is disabled with, off the kit's described-by. */
@@ -307,7 +500,7 @@ function reasonOf(button: HTMLElement): string {
     .join(" ");
 }
 
-/** A `work_inbox` answer per question: Updates, Snoozed and Earlier ask apart. */
+/** An `inbox` answer per question: Updates, Snoozed and Earlier ask apart. */
 function inboxes({
   unread = [],
   snoozed = [],
@@ -344,7 +537,7 @@ describe("the list", () => {
     mount({
       answers: {
         decisions: decisionsOf(askItem()),
-        work_inbox: inboxes({ unread: [notice("r-1", ASKED), notice("r-2")] }),
+        inbox: inboxes({ unread: [notice("r-1", ASKED), notice("r-2")] }),
       },
     });
     await settle();
@@ -361,7 +554,7 @@ describe("the list", () => {
   test("Snoozed and Earlier are two links at the end, each read when it is opened", async () => {
     mount({
       answers: {
-        work_inbox: inboxes({
+        inbox: inboxes({
           unread: [notice("r-1")],
           snoozed: [notice("r-9", { snoozed: true, snoozed_until: "2030-01-01T09:00:00Z" })],
           all: [notice("r-1"), notice("r-5", { read: true, excerpt: "an old one" })],
@@ -370,7 +563,7 @@ describe("the list", () => {
     });
     await settle();
     expect(screen.queryByRole("radio")).toBeNull();
-    const reads = () => asked.filter((a) => a.kind === "work_inbox").map((a) => a.params);
+    const reads = () => asked.filter((a) => a.kind === "inbox").map((a) => a.params);
     expect(reads().some((p) => p.unread === true && p.snoozed === "exclude")).toBe(true);
     expect(reads().some((p) => p.snoozed === "only")).toBe(true);
     // EARLIER IS NOT READ until somebody opens it.
@@ -395,6 +588,102 @@ describe("the list", () => {
     expect(earlier.queryByText("something about r-1")).toBeNull();
   });
 
+  // CARDS ONLY WHERE A ROW OPENS: Updates, and Snoozed and Earlier once each is
+  // opened, are lists a code notice opens onto its card from, so each asks the
+  // engine for `cards`; the Snoozed link's count draws no row and asks for
+  // none, so a closed list judges nothing. Mutations: drop `cards` from
+  // Updates' read — red; read the Snoozed count with cards — red.
+  test("the lists a row opens from ask for cards, and the Snoozed count asks for none", async () => {
+    mount({
+      answers: {
+        inbox: inboxes({
+          unread: [notice("r-1")],
+          snoozed: [notice("r-9", { snoozed: true, snoozed_until: "2030-01-01T09:00:00Z" })],
+          all: [notice("r-1"), notice("r-5", { read: true, excerpt: "an old one" })],
+        }),
+      },
+    });
+    await settle();
+    const reads = () => asked.filter((a) => a.kind === "inbox").map((a) => a.params);
+    const updates = reads().filter((p) => p.unread === true && p.snoozed === "exclude");
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates.every((p) => p.cards === true)).toBe(true);
+    const counts = reads().filter((p) => p.snoozed === "only");
+    expect(counts.length).toBeGreaterThan(0);
+    expect(counts.some((p) => "cards" in p)).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "1 snoozed" }));
+    await settle();
+    expect(reads().some((p) => p.snoozed === "only" && p.cards === true)).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Earlier updates" }));
+    await settle();
+    const earlier = reads().filter((p) => p.unread === false);
+    expect(earlier.length).toBeGreaterThan(0);
+    expect(earlier.every((p) => p.cards === true)).toBe(true);
+  });
+
+  // FROM "SHOW MORE" THE FIRST PAGE STAYS LIVE, AND NOTHING FALLS OUT: a
+  // poll, an inbox push and a reconnect each ask Earlier's first page again,
+  // and when it has moved under the page loaded after it (a newer notice
+  // pushed one down), the run between the two is read and joined before the
+  // list moves (`lib/usePaged.ts`), so no notice is missing from it and none
+  // is listed twice. Mutation: drop the join, and the notice pushed out of
+  // the first page is in neither page.
+  test("after Show more, a poll, a push and a reconnect leave no row of Earlier missing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let moved = false;
+      const { store } = mount({
+        answers: {
+          inbox: (p: Record<string, unknown>) =>
+            Promise.resolve(
+              p.unread !== false
+                ? inboxOf([])
+                : p.cursor === "e-2"
+                  ? inboxOf([notice("r-1", { read: true, excerpt: "the oldest one" })])
+                  : p.cursor === "e-3"
+                    ? inboxOf([notice("r-2", { read: true, excerpt: "an older one" })], {
+                        next_cursor: "e-2",
+                      })
+                    : moved
+                      ? inboxOf(
+                          [
+                            notice("r-4", { read: true, excerpt: "the newest one" }),
+                            notice("r-3", { read: true, excerpt: "a newer one" }),
+                          ],
+                          { next_cursor: "e-3" },
+                        )
+                      : inboxOf(
+                          [
+                            notice("r-3", { read: true, excerpt: "a newer one" }),
+                            notice("r-2", { read: true, excerpt: "an older one" }),
+                          ],
+                          { next_cursor: "e-2" },
+                        ),
+            ),
+        },
+      });
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Earlier updates" }));
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+      await settle();
+      const earlier = within(screen.getByRole("region", { name: "Earlier updates" }));
+      expect(earlier.getByText("the oldest one")).toBeTruthy();
+      moved = true;
+      await act(async () => void vi.advanceTimersByTime(5 * 30_000));
+      act(() => store.applyInboxChanged({ handle: "jane" }));
+      act(() => store.setConnected(false));
+      act(() => store.setConnected(true));
+      await settle();
+      for (const excerpt of ["the newest one", "a newer one", "an older one", "the oldest one"]) {
+        expect(earlier.getAllByText(excerpt)).toHaveLength(1);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the directory binds
   // to a seat writes AS the seat, so their row draws as the seat, never as the
   // credential they wrote through; a principal bound to none writes under its
@@ -403,7 +692,7 @@ describe("the list", () => {
   test("a row is drawn as the seat a person writes as, and an unbound principal as its login", async () => {
     mount({
       answers: {
-        work_inbox: inboxes({
+        inbox: inboxes({
           unread: [
             notice("r-1", { actor: "maya", actor_kind: "human", operator_id: "pat:t-1" }),
             notice("r-2", { actor: "ci.bot", actor_kind: "operator" }),
@@ -425,7 +714,7 @@ describe("the list", () => {
   test("a sentence the engine wrote names its author as the row does", async () => {
     mount({
       answers: {
-        work_inbox: inboxes({
+        inbox: inboxes({
           unread: [
             notice("r-1", {
               kind: "prioritised",
@@ -453,7 +742,7 @@ describe("the list", () => {
   test("each row names its task, as a link that opens it beside the inbox", async () => {
     mount({
       answers: {
-        work_inbox: inboxes({ unread: [notice("r-1")] }),
+        inbox: inboxes({ unread: [notice("r-1")] }),
         work_items: {
           items: [{ id: "t-91", key: "PROD-91", title: "Ledger export" }],
           total_hint: 1,
@@ -484,7 +773,7 @@ describe("the list", () => {
   test("a row on a key another task claimed first opens and names its own task", async () => {
     mount({
       answers: {
-        work_inbox: inboxes({
+        inbox: inboxes({
           unread: [notice("r-1", { task: "t-dup", subject_key_collision: true })],
         }),
         work_items: {
@@ -507,7 +796,7 @@ describe("the list", () => {
   // THE OPEN ROW WAS DRAWN TWICE: a tint on the row and a rail beside it.
   test("the open row is the one row marked current, with one highlight", async () => {
     location.hash = "#/inbox?row=r-2";
-    mount({ answers: { work_inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) } });
+    mount({ answers: { inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) } });
     await settle();
     const list = screen.getByRole("navigation", { name: "Inbox" });
     const current = list.querySelectorAll("[aria-current]");
@@ -524,7 +813,7 @@ describe("the list", () => {
       location.hash = "#/inbox";
       mount({
         shell: true,
-        answers: { work_inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) },
+        answers: { inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) },
       });
       await settle();
       // The list alone: no row is opened beside it, so no pane is drawn.
@@ -544,7 +833,7 @@ describe("the list", () => {
     location.hash = "#/inbox?row=r-1";
     mount({
       answers: {
-        work_inbox: inboxes({ unread: [notice("r-1"), notice("r-2"), notice("r-3")] }),
+        inbox: inboxes({ unread: [notice("r-1"), notice("r-2"), notice("r-3")] }),
       },
     });
     await settle();
@@ -893,7 +1182,7 @@ describe("the pane", () => {
     mount({
       answers: {
         decisions: decisionsOf(askItem()),
-        work_inbox: inboxes({ unread: [notice("r-1", ASKED)] }),
+        inbox: inboxes({ unread: [notice("r-1", ASKED)] }),
       },
     });
     await settle();
@@ -907,7 +1196,8 @@ describe("the pane", () => {
     expect(posted).toEqual([
       { tool: "comment_on_work_item", args: { item: "LEAD-12", answers: "c-12", choice: "ship" } },
       // AN ANSWERED QUESTION DOES NOT COME BACK AS AN UPDATE.
-      { tool: "mark_inbox", args: { read: ["r-1"] } },
+      // HELD TO THE NOTICE IT MARKS, which the deciding node waits for.
+      { tool: "mark_inbox", args: { read: ["r-1"], seen: "CREWLET_TRACKER_LOG@1:1" } },
     ]);
     expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toBe(
       "Answered Ship anyway",
@@ -1160,9 +1450,7 @@ describe("the pane", () => {
       fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
       await settle();
       expect(screen.getByRole("region", { name: /^Needs you/ })).toBeTruthy();
-      await waitFor(() => expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull(), {
-        timeout: 2_000,
-      });
+      await waitFor(() => expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull());
       expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
     } finally {
       motion.restore();
@@ -1331,11 +1619,15 @@ describe("the pane", () => {
 
   test("Mark as read marks the one update, and turns into its undo", async () => {
     location.hash = "#/inbox?row=r-2";
-    mount({ answers: { work_inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) } });
+    mount({ answers: { inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) } });
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
     await settle();
-    expect(posted).toEqual([{ tool: "mark_inbox", args: { read: ["r-2"] } }]);
+    // ITS OWN POSITION RIDES AS THE FLOOR, as a code notice's does. Mutation:
+    // send `seen` for a code notice alone, red.
+    expect(posted).toEqual([
+      { tool: "mark_inbox", args: { read: ["r-2"], seen: "CREWLET_TRACKER_LOG@1:2" } },
+    ]);
     expect(screen.getByRole("button", { name: "Mark as unread" })).toBeTruthy();
   });
 
@@ -1348,10 +1640,251 @@ describe("the pane", () => {
     expect(screen.queryByRole("button", { name: /Snooze/ })).toBeNull();
   });
 
+  // A CODE NOTICE IS MARKED THROUGH THE CODE HOST'S OWN TOOL: each domain
+  // keeps the marks over its own notices on its own log. Mutation: mark every
+  // update with mark_inbox — the code notice's read lands on Worklet's
+  // record, red.
+  test("a code notice is listed beside Worklet's and marked through its own tool", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    mount({
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      answers: { inbox: inboxes({ unread: [codeNotice("c-5"), notice("r-1")] }) },
+    });
+    await settle();
+    const updates = within(screen.getByRole("region", { name: "Updates" }));
+    expect(updates.getAllByRole("listitem")).toHaveLength(2);
+    expect(updates.getByText("Retry the upload once")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
+    await settle();
+    // ITS OWN POSITION RIDES AS THE FLOOR, which the deciding node waits for.
+    // Mutation: drop `seen` from NoticeActions' code write, red.
+    expect(posted).toEqual([
+      { tool: "code_mark_inbox", args: { read: ["c-5"], seen: "CREWLET_CODE_LOG@1:5" } },
+    ]);
+  });
+
+  // THE INTENT-FIRST CARD: the work item the change implements and its
+  // description lead, then its open agent findings by weight and the one
+  // sentence of where its merge stands, and the diff is one press away —
+  // every word the notice's own. The one card OPEN reads its gate (M5) and
+  // nothing else: the change and its checks, of this change alone, over
+  // REST — never the socket, and never a question per listed card. Mutations:
+  // draw the card without its findings, its readiness or its diff link —
+  // red; read the gate of every listed change, or of another — red.
+  test("a code notice opens as an intent-first card that asks only its own gate", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    mount({
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      answers: {
+        inbox: inboxes({
+          unread: [
+            codeNotice("c-5", {
+              change: {
+                title: "Retry the upload once",
+                state: "open",
+                work_item: { backend: "native", id: "item-7", key: "LEAD-7", project: "LEAD" },
+                body: "Uploads retried twice doubled the storage bill",
+                agent_findings: { nit: 2, blocker: 1 },
+                readiness: { met: 3, total: 5, first: "web!42 waits on 1 standing blocker" },
+              },
+            }),
+          ],
+        }),
+      },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    expect(pane.getByText(/asked for your review/)).toBeTruthy();
+    expect(pane.getByRole("link", { name: /LEAD-7/ })).toBeTruthy();
+    expect(pane.getByText("Uploads retried twice doubled the storage bill")).toBeTruthy();
+    expect(pane.getByText("Open agent findings: Blocker 1 · Nit 2")).toBeTruthy();
+    expect(pane.getByText("web!42 waits on 1 standing blocker")).toBeTruthy();
+    expect(pane.getByRole("link", { name: "Open the diff" }).getAttribute("href")).toBe(
+      "#/code/repos/web/changes/42?tab=files",
+    );
+    expect(asked.filter((a) => a.kind.startsWith("code_"))).toEqual([]);
+    const code = fetched
+      .filter((url) => url.includes("/query/code_"))
+      .map((url) => new URL(url, "http://x"));
+    expect([...new Set(code.map((u) => u.pathname))].sort()).toEqual([
+      "/query/code_change",
+      "/query/code_checks",
+    ]);
+    for (const u of code) {
+      expect(u.searchParams.get("name") ?? u.searchParams.get("repo")).toBe("web");
+      expect(u.searchParams.get("change")).toBe("42");
+    }
+    expect(posted).toEqual([]);
+  });
+
+  // THE GATE ON THE CARD (M5): what the head's required checks measured —
+  // durations, never tokens — the change classes, and the human paths that
+  // asked for THIS reader, each read from the change's own answers. Mutations:
+  // list a check the gate does not require, or the human paths waiting on
+  // another person — red.
+  test("a gated change's card says what its checks measured, its classes and the paths that asked you", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    rest = gatedChange({ waitsOn: "jane" });
+    mount({
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    const measured = await pane.findByRole("list", { name: "What its checks measured" });
+    expect(within(measured).getByText("unit failed in 1m 4s")).toBeTruthy();
+    expect(within(measured).getByText("e2e running")).toBeTruthy();
+    expect(within(measured).queryByText(/lint/)).toBeNull();
+    expect(pane.queryByText(/token/i)).toBeNull();
+    expect(
+      pane.getByText(
+        "Of the 3 paths it touches, 1 change only whitespace, 1 only comments; the rest change code",
+      ),
+    ).toBeTruthy();
+    expect(
+      pane.getByText(
+        /touches \.crewlet\/\*\*, which refs\/heads\/main holds to a person's approval/,
+      ),
+    ).toBeTruthy();
+  });
+
+  // WHAT EACH CHECK STANDS AT, EVERY PAGE OF IT: the card asks the change's
+  // checks at their LATEST attempts, and draws them only once every page has
+  // answered — a required check the engine sends on a later page is measured
+  // too. Mutations: draw the first page alone (no `next` followed) → unit is
+  // missing, red; ask without `latest` → red.
+  test("a gated change's card reads every page of its checks' latest attempts", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    const gated = gatedChange({ waitsOn: "jane" });
+    const [unit, e2e] = gated.code_checks.checks;
+    rest = {
+      ...gated,
+      code_checks: (u: URL) =>
+        u.searchParams.get("cursor") === "unit/1"
+          ? { checks: [unit], position: CODE_AT, level: "session" }
+          : { checks: [e2e], next: "unit/1", position: CODE_AT, level: "session" },
+    };
+    mount({
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    const measured = await pane.findByRole("list", { name: "What its checks measured" });
+    expect(within(measured).getByText("e2e running")).toBeTruthy();
+    expect(await within(measured).findByText("unit failed in 1m 4s")).toBeTruthy();
+    const checks = fetched
+      .filter((url) => url.includes("/query/code_checks"))
+      .map((url) => new URL(url, "http://x"));
+    expect(checks.every((u) => u.searchParams.get("latest") === "true")).toBe(true);
+    expect(checks.map((u) => u.searchParams.get("cursor"))).toContain("unit/1");
+  });
+
+  // THE HUMAN PATHS NAME ONLY THE READER THEY ASK: a person the precondition
+  // waits on sees it, another does not. Mutation: drop the reader's handle
+  // from the test — red.
+  test("the human paths are said only to the person they wait on", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    rest = gatedChange({ waitsOn: "ada" });
+    mount({
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    await pane.findByRole("list", { name: "What its checks measured" });
+    expect(pane.queryByText(/holds to a person's approval/)).toBeNull();
+  });
+
+  // A CHANGE WITH NO GATE says nothing of a gate: no checks, no classes, no
+  // human paths — never "no check measured". Mutation: draw the measured
+  // list whatever the readiness judges — red.
+  test("a change into an ungated branch draws no gate", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    rest = {
+      code_change: {
+        change: {
+          ...gatedChange({ waitsOn: "jane" }).code_change.change,
+          readiness: {
+            met: 1,
+            total: 1,
+            first: "ready",
+            preconditions: [{ kind: "mergeable", state: "met", detail: "merges cleanly" }],
+          },
+        },
+        revisions: [],
+        position: CODE_AT,
+        level: "session",
+      },
+      code_checks: { checks: [], position: CODE_AT, level: "session" },
+    };
+    mount({
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
+    });
+    await settle();
+    await waitFor(() => expect(fetched.some((u) => u.includes("/query/code_checks"))).toBe(true));
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    expect(pane.getByText(/asked for your review/)).toBeTruthy();
+    expect(pane.queryByText("Its gate")).toBeNull();
+    expect(pane.queryByRole("list", { name: "What its checks measured" })).toBeNull();
+  });
+
+  // A CHANGE THAT MERGES NOTHING has no readiness: its card says what became
+  // of it instead. Mutation: draw the state only while a readiness is absent
+  // AND the change is live — the merged change's card says nothing, red.
+  test("a merged change's card says it merged, in place of where its merge stands", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    mount({
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      answers: {
+        inbox: inboxes({
+          unread: [
+            codeNotice("c-5", { change: { title: "Retry the upload once", state: "merged" } }),
+          ],
+        }),
+      },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    expect(pane.getByText("Merged")).toBeTruthy();
+    expect(pane.getByText("No agent finding stands open")).toBeTruthy();
+    // A MERGED CHANGE HAS NO GATE LEFT TO MEET, so its card asks for none.
+    expect(fetched.filter((url) => url.includes("/query/code_"))).toEqual([]);
+  });
+
+  // MARK ALL READ SENDS BOTH: one read-through a source, each at its own
+  // newest notice. Mutation: read every source through the newest notice of
+  // any — the code host is sent a Worklet position, red.
+  test("Mark all read reads each source through its own newest update", async () => {
+    mount({
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      answers: {
+        inbox: inboxes({
+          unread: [codeNotice("c-5"), notice("r-12", { log_seq: 12 }), codeNotice("c-2")],
+        }),
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    await settle();
+    expect(posted).toEqual([
+      {
+        tool: "mark_inbox",
+        args: { read_through: "CREWLET_TRACKER_LOG@1:12", seen: "CREWLET_TRACKER_LOG@1:12" },
+      },
+      {
+        tool: "code_mark_inbox",
+        args: { read_through: "CREWLET_CODE_LOG@1:5", seen: "CREWLET_CODE_LOG@1:5" },
+      },
+    ]);
+  });
+
   test("Mark all read reads through the newest update loaded, not past it", async () => {
     mount({
       answers: {
-        work_inbox: inboxes({
+        inbox: inboxes({
           unread: [
             notice("r-7", { log_seq: 7 }),
             notice("r-12", { log_seq: 12 }),
@@ -1364,7 +1897,10 @@ describe("the pane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
     await settle();
     expect(posted).toEqual([
-      { tool: "mark_inbox", args: { read_through: "CREWLET_TRACKER_LOG@1:12" } },
+      {
+        tool: "mark_inbox",
+        args: { read_through: "CREWLET_TRACKER_LOG@1:12", seen: "CREWLET_TRACKER_LOG@1:12" },
+      },
     ]);
   });
 
@@ -1375,7 +1911,7 @@ describe("the pane", () => {
     location.hash = "#/inbox?row=r-1";
     mount({
       answers: {
-        work_inbox: inboxes({
+        inbox: inboxes({
           unread: [
             notice("r-1", { reason: "mention", primary: true, comment_id: "c-40", excerpt: long }),
           ],
@@ -1397,7 +1933,7 @@ describe("the pane", () => {
     location.hash = "#/inbox?row=r-1";
     mount({
       answers: {
-        work_inbox: inboxes({
+        inbox: inboxes({
           unread: [
             notice("r-1", { reason: "mention", comment_id: "c-40", excerpt: "Can you check…" }),
           ],
@@ -1413,7 +1949,7 @@ describe("the pane", () => {
     location.hash = "#/inbox?row=r-1";
     mount({
       answers: {
-        work_inbox: inboxes({ unread: [notice("r-1", { kind: "status", excerpt: "" })] }),
+        inbox: inboxes({ unread: [notice("r-1", { kind: "status", excerpt: "" })] }),
       },
     });
     await settle();
@@ -2105,7 +2641,7 @@ describe("the pane", () => {
         decisions: decisionsOf(
           askItem({ ...DECISION, inform: { surface: "slack", channel: "leadership" } }),
         ),
-        work_inbox: inboxes({
+        inbox: inboxes({
           unread: [notice("r-1"), notice("r-2", { kind: "status", excerpt: "" })],
           snoozed: [notice("r-9", { snoozed: true, snoozed_until: "2030-01-01T09:00:00Z" })],
         }),
@@ -2138,7 +2674,7 @@ describe("who is looking", () => {
     await settle();
     expect(screen.getByText(/Nobody is signed in/)).toBeTruthy();
     // NO PERSON'S READS: nothing to ask for on nobody's behalf.
-    expect(asked.some((a) => a.kind === "work_inbox" || a.kind === "decisions")).toBe(false);
+    expect(asked.some((a) => a.kind === "inbox" || a.kind === "decisions")).toBe(false);
     const markAll = screen.getByRole("button", { name: "Mark all read" });
     expect(markAll.getAttribute("aria-disabled")).toBe("true");
     expect(reasonOf(markAll)).toContain(WRITE_REASONS.anonymous);
@@ -2152,14 +2688,14 @@ describe("who is looking", () => {
   test("a service account bound to no seat reads the inbox kept under its login", async () => {
     mount({
       viewer: UNBOUND,
-      answers: { viewer: UNBOUND, work_inbox: inboxes({ unread: [notice("r-1")] }) },
+      answers: { viewer: UNBOUND, inbox: inboxes({ unread: [notice("r-1")] }) },
     });
     await settle();
     expect(screen.getByText(/not bound to a seat/)).toBeTruthy();
     // WHAT BINDING WOULD ADD, and the command that does it.
     expect(screen.getByText(/bind this account to an open seat/)).toBeTruthy();
     expect(screen.getByText(/crewlet iam bind ID SEAT/)).toBeTruthy();
-    const reads = asked.filter((a) => a.kind === "work_inbox");
+    const reads = asked.filter((a) => a.kind === "inbox");
     expect(reads.length).toBeGreaterThan(0);
     expect(reads.every((a) => a.params.handle === "svc:ops")).toBe(true);
     const markAll = screen.getByRole("button", { name: "Mark all read" });
@@ -2169,11 +2705,11 @@ describe("who is looking", () => {
   // PUSHED AS WELL AS POLLED: a commit that moves the reader's own record asks
   // Updates and the Snoozed count again at once, rather than a poll later.
   test("a push on the reader's own record asks their updates and snoozed again", async () => {
-    const { store } = mount({ answers: { work_inbox: inboxes({ unread: [notice("r-1")] }) } });
+    const { store } = mount({ answers: { inbox: inboxes({ unread: [notice("r-1")] }) } });
     await settle();
     // THE SCREEN'S OWN READS, not the frame's badge count (`primary_only`).
     const count = (p: (params: Record<string, unknown>) => boolean) =>
-      asked.filter((a) => a.kind === "work_inbox" && p(a.params)).length;
+      asked.filter((a) => a.kind === "inbox" && p(a.params)).length;
     const isUpdates = (p: Record<string, unknown>) => p.unread === true && p.snoozed === "exclude";
     const isSnoozed = (p: Record<string, unknown>) => p.snoozed === "only";
     const updates = count(isUpdates);
@@ -2196,7 +2732,7 @@ describe("who is looking", () => {
       answers: {
         viewer: unserved,
         decisions: decisionsOf(askItem()),
-        work_inbox: inboxes({ unread: [notice("r-1")] }),
+        inbox: inboxes({ unread: [notice("r-1")] }),
       },
     });
     await settle();
@@ -2209,7 +2745,7 @@ describe("who is looking", () => {
     location.hash = "#/inbox?row=r-1";
     mount({
       viewer: unserved,
-      answers: { viewer: unserved, work_inbox: inboxes({ unread: [notice("r-1")] }) },
+      answers: { viewer: unserved, inbox: inboxes({ unread: [notice("r-1")] }) },
     });
     await settle();
     const read = screen.getByRole("button", { name: "Mark as read" });
@@ -2231,7 +2767,7 @@ test("on a Jira company the list and the empty pane say asks and mentions arrive
   expect(screen.getByText("Asks and mentions arrive in Jira")).toBeTruthy();
   expect(screen.queryByText("New updates open here.")).toBeNull();
   // AND THE TRACKER'S NOTICES ARE NEVER ASKED FOR.
-  expect(asked.some((a) => a.kind === "work_inbox")).toBe(false);
+  expect(asked.some((a) => a.kind === "inbox")).toBe(false);
 });
 
 // ONE EMPTY STATE FOR AN EMPTY INBOX: the list says it, and the reading pane
@@ -2269,7 +2805,7 @@ describe("what was answered", () => {
       answers: {
         decisions: decisionsOf(askItem()),
         answered_decisions: { handle: "jane", items: [answeredItem()] },
-        work_inbox: inboxes({ unread: [notice("r-2")] }),
+        inbox: inboxes({ unread: [notice("r-2")] }),
       },
     });
     await settle();

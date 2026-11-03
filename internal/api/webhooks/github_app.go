@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
@@ -41,7 +42,9 @@ import (
 // is published on. Read from the embedded dashboard build rather than copied
 // beside this file, because that build is the one copy of the drawing (see
 // package static), and two copies of one drawing drift silently.
-var brandMark = func() template.URL {
+//
+// Read at the first page that shows it, for [githubAppPage]'s reason.
+var brandMark = sync.OnceValue(func() template.URL {
 	svg, err := fs.ReadFile(static.FS(), "dashboard/crewlet-icon.svg")
 	if err != nil {
 		// The file is embedded into this binary, so a failure is a
@@ -50,11 +53,27 @@ var brandMark = func() template.URL {
 	}
 	// A trusted value: the bytes are this binary's own, never a request's.
 	return template.URL("data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(svg))
-}()
+})
 
-var githubAppPage = template.Must(template.New("github-app").Funcs(template.FuncMap{
-	"mark": func() template.URL { return brandMark },
-}).Parse(`<!doctype html>
+// githubAppPage is the page and its Content-Security-Policy
+// ([githubAppPolicyViews]).
+//
+// BUILT AT THE FIRST REQUEST THAT RENDERS IT, never at package init: every
+// process this binary starts runs every package's init, and one of them is the
+// code host's proc-receive hook — this binary, exec'd once for every push — so
+// parsing this page, hashing its policy and encoding its mark at init were
+// about 2 ms of every push (GODEBUG=inittrace) for a page an operator opens
+// once per app. The text is a constant that this package's tests render, so a
+// template that does not parse fails the build's tests rather than a request.
+var githubAppPage = sync.OnceValues(func() (*template.Template, string) {
+	page := template.Must(template.New("github-app").Funcs(template.FuncMap{
+		"mark": brandMark,
+	}).Parse(githubAppTemplate))
+	return page, pagepolicy.MustForTemplate(page, githubAppPolicyViews...)
+})
+
+// githubAppTemplate is the page's text.
+const githubAppTemplate = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
@@ -226,23 +245,23 @@ var githubAppPage = template.Must(template.New("github-app").Funcs(template.Func
     {{end}}
   </body>
 </html>
-`))
+`
 
-// githubAppPolicy is the page's Content-Security-Policy: its own inline style
-// and script, by hash, and nothing else.
+// githubAppPolicyViews are the views the page's Content-Security-Policy is
+// derived from: its own inline style and script, by hash, and nothing else.
 //
-// Rendered with a view for each branch that holds a block, because only the
-// install arrival carries the script. The page is unauthenticated and renders
-// a seat's handle from the query, and it shares an origin with the dashboard,
-// whose requests carry a signed-in person's session: a hash policy means that
-// even markup the template failed to escape could run nothing.
-var githubAppPolicy = pagepolicy.MustForTemplate(githubAppPage,
+// A view for each branch that holds a block, because only the install arrival
+// carries the script. The page is unauthenticated and renders a seat's handle
+// from the query, and it shares an origin with the dashboard, whose requests
+// carry a signed-in person's session: a hash policy means that even markup the
+// template failed to escape could run nothing.
+var githubAppPolicyViews = []any{
 	githubAppView{Heading: "App not created", Error: "refused"},
 	githubAppView{
 		Heading: "App created for", Seat: "seat", Message: "created",
 		InstallURL: "https://github.invalid/install", InstallDelay: installCountdownSeconds,
 	},
-)
+}
 
 // installCountdownSeconds is how long the created-app page waits before it
 // sends the operator on to the install.
@@ -528,18 +547,19 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	page, policy := githubAppPage()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	pagepolicy.Set(w.Header(), githubAppPolicy)
+	pagepolicy.Set(w.Header(), policy)
 	// NEVER STORED: what this page says is what one request found, and its
 	// address carries a link that is spent the first time it is used, so a
 	// copy a browser kept answered a refresh with a creation's outcome
 	// after the agent's state had moved on.
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	// Rendered straight to the response: the template is parsed at
-	// startup, so the only way this errors is a broken connection, and
-	// there is no second status to write by then.
-	if err := githubAppPage.Execute(w, view); err != nil {
+	// Rendered straight to the response: the template is a constant this
+	// package's tests render, so the only way this errors is a broken
+	// connection, and there is no second status to write by then.
+	if err := page.Execute(w, view); err != nil {
 		log.Warn("github_app_page_failed", "error", err)
 	}
 }

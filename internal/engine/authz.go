@@ -100,6 +100,16 @@ func (c ChartAuthority) MemberOf(ctx context.Context, actor, unitKey string) (bo
 	return chart.MemberOf(ctx, actor, unitKey)
 }
 
+// SeatGranted reports whether actor's seat's role carries grant in the running
+// chart.
+func (c ChartAuthority) SeatGranted(ctx context.Context, actor string, grant authz.SeatGrant) (bool, error) {
+	chart, err := c.chart()
+	if err != nil {
+		return false, err
+	}
+	return chart.SeatGranted(ctx, actor, grant)
+}
+
 // chart is the running company's chart, or why this node cannot answer.
 //
 // ONE PLACE, because every method needs it and the whole point of this type is

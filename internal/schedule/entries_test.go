@@ -240,8 +240,26 @@ func TestDescribeAndTheTickResolveRunnersIdentically(t *testing.T) {
 	t.Parallel()
 	// One implementation, because two — one for firing and one for display —
 	// is how a dashboard comes to show a runner that never receives the task.
+	//
+	// AND AN INHERITED LEAD: a team under Quality naming the lead Normalize
+	// copies down, which no seat of its own holds — the case where the
+	// listing's lead, found through one index of the chart, and the tick's,
+	// found by the chart's own walk, are reached differently.
+	//
+	// Mutation: find the listing's lead in the unit's own subtree alone, and
+	// triage lists no runner while the tick fires it to qa-lead.
 	o := describeOrg()
+	o.Units[0].Children = []*org.Unit{{
+		Name: "Automation", Type: org.UnitTypeTeam, Lead: "qa-lead",
+		Roles: []*org.Role{{Name: "Bot", DeclaredHandle: "bot"}},
+		Schedules: []org.Schedule{
+			{Name: "triage", Cron: "0 8 * * 1-5", Task: "triage", Target: org.TargetLead},
+		},
+	}}
 	rows := rowsByName(t, schedule.Describe(o, schedule.DescribeOptions{}))
+	if got := rows["triage"].Runners; !slices.Equal(got, []string{"qa-lead"}) {
+		t.Errorf("the premise: triage runs as %v, want the inherited lead qa-lead", got)
+	}
 	for _, e := range schedule.Entries(o) {
 		row, ok := rows[e.Schedule.Name]
 		if !ok {

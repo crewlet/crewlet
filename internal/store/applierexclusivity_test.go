@@ -535,6 +535,16 @@ var allowedReplicatedWriter = []allowance{
 			"VACUUM INTO and the manifest — never to write a row.",
 	},
 	{
+		Prefix: "internal/code/codetest/datanode.go", Kind: holder,
+		Why: "THE CODE HOST SUITES' DATA NODE: StartDataNode is the engine's " +
+			"own composition of one data node's code domain, used by both " +
+			"topologies — SoloNode's one node and each member of " +
+			"internal/code/codecluster's fleet. It opens the replicated " +
+			"estate through storetest.OpenEstate and hands the write handle " +
+			"only to the framework's applier and write authority, as " +
+			"internal/engine/statelog.go does. It writes no row of its own.",
+	},
+	{
 		Prefix: "cmd/crewlet/ops.go", Kind: holder,
 		Why: "`crewlet migrate` opens the replicated estate beside the " +
 			"node's own file, which is how an operator's migration reaches " +
@@ -563,6 +573,26 @@ var allowedReplicatedWriter = []allowance{
 			"applies the history horizon from the record's own day, so every " +
 			"delete here is a pure function of a committed record rather than " +
 			"a sweep.",
+	},
+	{
+		Prefix: "internal/code/apply", Kind: mechanism,
+		Why: "The code domain's applier — the record dispatch, a repository's " +
+			"lifecycle and the activation fence, the push with its horizons " +
+			"and the purge's parts, a repository's changes and their " +
+			"conversations among what they take, a change's lifecycle and the " +
+			"revisions and authors a push writes of the changes it moves, a " +
+			"change's conversation — its asks for review, comments, reviews " +
+			"and findings — on the change's own subject, the compaction that " +
+			"retires a repository's packs for the outputs that replace them " +
+			"and the publication that replaces the top of its published layer " +
+			"chain, the sweep of its retired packs past their grace, the " +
+			"notices a change record writes per recipient and a purge removes, " +
+			"its merge queues on its own subject, and its checks on their own " +
+			"subject — each attempt's queue, claim and ending joined into one " +
+			"row with its log and its horizon, the home's dispatch of a " +
+			"change head under its target's checks file (apply_dispatch.go), " +
+			"and a person's marks over their own code notices on their own " +
+			"subject (apply_marks.go).",
 	},
 	{
 		Prefix: "internal/search/apply", Kind: mechanism,
@@ -666,8 +696,8 @@ var allowedReplicatedWriter = []allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// THE EXCEPTIONS. Two writes that are not a record, each because no
-	// record could own what it touches. Read these before adding a third.
+	// THE EXCEPTIONS. Three writes that are not a record, each because no
+	// record could own what it touches. Read these before adding a fourth.
 	// -----------------------------------------------------------------
 	{
 		Prefix: "internal/worklet/duty.go", Kind: exception,
@@ -683,6 +713,15 @@ var allowedReplicatedWriter = []allowance{
 			"the identity claim, because what it holds depends on the " +
 			"epoch's own horizon. Two nodes legitimately hold different " +
 			"rows, so deleting on this node's own authority diverges nothing.",
+	},
+	{
+		Prefix: "internal/code/noticesweep.go", Kind: exception,
+		Why: "NoticeJobs range-deletes `code_notifications` past each " +
+			"recipient kind's horizon, and the table is statelog.Divergent " +
+			"for tracker_notifications' reason: whether a record writes a " +
+			"notice depends on the batch's instant and the epoch's inbox " +
+			"horizon, so two nodes legitimately hold different rows and " +
+			"deleting on this node's own authority diverges nothing.",
 	},
 }
 

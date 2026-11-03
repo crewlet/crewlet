@@ -416,13 +416,31 @@ export interface RestResponse {
   etag: string | null;
   /** Whether the answer carried the engine's mark ([markedByEngine]). */
   marked: boolean;
+  /**
+   * Whether the engine marked the answer as never changing (`Cache-Control:
+   * immutable`, internal/api/httpjson's Immutable): an answer whose bytes are
+   * a function of what its request named, which a caller may keep and answer
+   * the same request from without asking again. The transport keeps nothing
+   * itself (see [request]); a caller that keeps answers reads this.
+   */
+  immutable: boolean;
 }
 
-/** A deadline as a person would say it: seconds under two minutes, else
- *  minutes. */
+/** Whether a response's `Cache-Control` names `immutable` (RFC 8246). */
+function markedImmutable(headers: Headers): boolean {
+  return (headers.get("Cache-Control") ?? "")
+    .split(",")
+    .some((directive) => directive.trim().toLowerCase() === "immutable");
+}
+
+/** A deadline as a person would say it: seconds under two minutes, minutes
+ *  under two hours, else hours — a backup's twelve-hour wait read as "720
+ *  minutes" is a number nobody reads at a glance. */
 function waitWords(ms: number): string {
   const seconds = Math.round(ms / 1000);
-  return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
+  if (seconds < 120) return `${seconds} seconds`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 120 ? `${minutes} minutes` : `${Math.round(minutes / 60)} hours`;
 }
 
 /** Whether a rejection is the caller's own abort rather than a failure. */
@@ -685,6 +703,7 @@ async function attempt(
       body: text,
       etag: response.headers.get("ETag"),
       marked: markedByEngine(response.headers),
+      immutable: markedImmutable(response.headers),
     };
   }
 
@@ -734,6 +753,7 @@ async function attempt(
     body: parsed,
     etag: response.headers.get("ETag"),
     marked: markedByEngine(response.headers),
+    immutable: markedImmutable(response.headers),
   };
 }
 

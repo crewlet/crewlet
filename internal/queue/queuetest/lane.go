@@ -55,6 +55,25 @@ func (s *suite) runLane(t *testing.T) {
 		return out
 	}
 
+	// waitingIs polls a subscription's waiting count until it is want: the
+	// count is allowed to trail a publish or a settlement by a moment.
+	waitingIs := func(t *testing.T, q queue.EventQueue, topic string, want queue.Waiting) {
+		t.Helper()
+		var got queue.Waiting
+		awaitState(t, fmt.Sprintf("the subscription waiting %+v", want), func() bool {
+			w, err := q.Waiting(ctx, topic, "g")
+			if err != nil {
+				t.Errorf("Waiting: %v", err)
+				return true
+			}
+			got = w
+			return got == want
+		})
+		if got != want {
+			t.Fatalf("waiting %+v, want %+v", got, want)
+		}
+	}
+
 	t.Run("a_priority_event_is_taken_before_the_backlog_it_arrived_behind", func(t *testing.T) {
 		t.Parallel()
 		// The failure the lane exists for: a person's message published
@@ -117,12 +136,22 @@ func (s *suite) runLane(t *testing.T) {
 		// both return to the lane and are delivered together again, ahead
 		// of the backlog, rather than the marked one alone to the lane and
 		// the follow-up to the topic's tail.
+		//
+		// PARKED AS THE ENGINE PARKS: the inbox is held before the requeue
+		// (internal/engine's dispatcher pauses a seat's inbox before every
+		// park), and the hold lifts once the copies wait on the lane.
+		// Requeued with no hold, the drain after the handler can ask the
+		// lane before a broker that signals its consumers asynchronously has
+		// counted the copies — a no-wait pull on JetStream answers "no
+		// messages" until it has — and the backlog goes first on a race the
+		// engine never runs.
 		q := s.start(ctx, t)
 		topic := inbox()
 		queueBacklog(ctx, t, q, topic, "g", append(append([]*events.Event{followUp()},
 			backlog(5)...), person())...)
 		batches := newBatchJournal()
 		var once sync.Once
+		requeued := make(chan struct{})
 		handler := func(ctx context.Context, evs []*events.Event) queue.Result {
 			requeue := false
 			if slices.Contains(labelsOf(evs), "person") {
@@ -136,15 +165,28 @@ func (s *suite) runLane(t *testing.T) {
 				t.Errorf("the person's first delivery was %v, want the follow-up the drain "+
 					"took with it", labelsOf(evs))
 			}
+			if err := q.PauseTopic(ctx, topic, "g", holdReason); err != nil {
+				t.Errorf("PauseTopic: %v", err)
+				return queue.Nak(err)
+			}
 			for _, ev := range queue.Together(evs) {
 				if err := q.Publish(ctx, topic, ev); err != nil {
 					t.Errorf("requeue %s: %v", ev.Type, err)
 					return queue.Nak(err)
 				}
 			}
+			close(requeued)
 			return queue.Ack()
 		}
 		subscribeBatch(ctx, t, q, topic, "g", handler, queue.NewBatchOptions(0, 2))
+		awaitSignal(t, requeued, "the person's partition requeued under a hold", nil)
+		// BOTH COPIES ON THE LANE, the backlog untouched on the topic: what
+		// the drain after the hold will see, and the first half of the
+		// claim, since a follow-up requeued apart would wait on the topic.
+		waitingIs(t, q, topic, queue.Waiting{Priority: 2, Background: 5})
+		if err := q.ResumeTopic(ctx, topic, "g", holdReason); err != nil {
+			t.Fatalf("ResumeTopic: %v", err)
+		}
 		batches.await(t, "every event settled exactly once", func(got [][]string) bool {
 			return equalStrings(settled(got), everyLabel(5))
 		})
@@ -154,25 +196,6 @@ func (s *suite) runLane(t *testing.T) {
 				"partition whole, ahead of the backlog", got[0])
 		}
 	})
-
-	// waitingIs polls a subscription's waiting count until it is want: the
-	// count is allowed to trail a publish or a settlement by a moment.
-	waitingIs := func(t *testing.T, q queue.EventQueue, topic string, want queue.Waiting) {
-		t.Helper()
-		var got queue.Waiting
-		awaitState(t, fmt.Sprintf("the subscription waiting %+v", want), func() bool {
-			w, err := q.Waiting(ctx, topic, "g")
-			if err != nil {
-				t.Errorf("Waiting: %v", err)
-				return true
-			}
-			got = w
-			return got == want
-		})
-		if got != want {
-			t.Fatalf("waiting %+v, want %+v", got, want)
-		}
-	}
 
 	t.Run("waiting_counts_both_mailboxes_of_a_subscription", func(t *testing.T) {
 		t.Parallel()

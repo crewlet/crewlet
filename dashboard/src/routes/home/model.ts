@@ -27,6 +27,8 @@ import type {
   WorkFlowPoint,
 } from "~/protocol/index.ts";
 import { plural } from "~/lib/format.ts";
+import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
+import { companyZone } from "~/lib/range.ts";
 import { shownStateOf } from "~/lib/seats.ts";
 
 /** The three windows the screen reads over, and what each is called. */
@@ -179,15 +181,15 @@ export function budgetCaption(week: BudgetWindow, zone: string | undefined): str
 function weekday(at: string, zone: string | undefined): string {
   const t = Date.parse(at);
   if (!Number.isFinite(t)) return "";
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      weekday: "short",
-      timeZone: zone || undefined,
-    }).format(t);
-  } catch {
-    return new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(t);
-  }
+  // ON THE COMPANY'S CLOCK AS EVERY READING OF IT IS (`range.ts`'s
+  // companyZone): UTC for a company with no zone, the engine's own reading of
+  // one, and for a zone this runtime cannot read — so the weekday is the day
+  // Company › Budgets says the week resets on, never the browser's own clock,
+  // which is no reading of the company's.
+  return dateTimeFormat(undefined, companyZone(zone), WEEKDAY).format(t);
 }
+
+const WEEKDAY: DateShape = Object.freeze({ weekday: "short" });
 
 /** What waits on the reader: the engine's count, whether it is a floor, and
  *  when the longest one began. Null while it is not known (nobody signed in,

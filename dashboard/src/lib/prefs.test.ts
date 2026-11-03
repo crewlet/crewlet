@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import {
   CONTRAST_THEME_ID,
   bootTheme,
+  browserZone,
   chosenTheme,
+  pinZoneForTest,
   previewPalette,
   reloadForTest,
   setDensity,
@@ -14,6 +16,10 @@ import {
   useTheme,
 } from "./prefs.ts";
 import { STORAGE_KEYS } from "./storage.ts";
+import { dateTimeFormat, keptFormattersForTest } from "./formatters.ts";
+import { fmtDate } from "./format.ts";
+import { targetLabel } from "./work.ts";
+import { shortWhen } from "~/routes/inbox/model.ts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -191,5 +197,104 @@ describe("the theme", () => {
       window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEYS.recents }));
     });
     expect(reader.result.current[0]).toBe("abyss");
+  });
+});
+
+// THE BROWSER'S ZONE IS READ ONCE AND KEPT, because reading it builds a
+// formatter and every timestamp on a screen asks for it. It can move under an
+// open tab — a laptop opened again across a border, a person changing it in
+// another window — so it is read again when the runtime's offsets say it moved,
+// when the page comes back into view and when it takes the focus.
+describe("the browser's zone", () => {
+  /** Answer `zone` from `Intl` from now on, as a system that moved would. */
+  function systemZone(zone: string): () => void {
+    const real = Intl.DateTimeFormat.prototype.resolvedOptions;
+    const moved = vi
+      .spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions")
+      .mockImplementation(function (this: Intl.DateTimeFormat) {
+        return { ...real.call(this), timeZone: zone };
+      });
+    return () => moved.mockRestore();
+  }
+
+  it("is read once, and again when the page comes back into view", () => {
+    const own = browserZone();
+    const put = systemZone("Asia/Tokyo");
+    try {
+      // KEPT: the answer moved, and nothing has looked since.
+      expect(browserZone()).toBe(own);
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(browserZone()).toBe("Asia/Tokyo");
+    } finally {
+      put();
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    expect(browserZone()).toBe(own);
+  });
+
+  // A PERSON WHO CHANGED IT BY HAND comes back to the tab from the window they
+  // changed it in, and the tab takes the focus: read again there too, which
+  // covers the one move the offsets cannot see.
+  it("is read again when the page takes the focus", () => {
+    const own = browserZone();
+    const put = systemZone("Asia/Tokyo");
+    try {
+      expect(browserZone()).toBe(own);
+      window.dispatchEvent(new Event("focus"));
+      expect(browserZone()).toBe("Asia/Tokyo");
+    } finally {
+      put();
+      window.dispatchEvent(new Event("focus"));
+    }
+    expect(browserZone()).toBe(own);
+  });
+
+  // THE ZONE ALSO MOVES WITH THE TAB IN VIEW, and no event says so. Every date
+  // written after the move is written in the new zone, whichever formatter
+  // writes it and whenever that formatter was built. Moved for real, through
+  // the runtime's own zone: a stubbed answer could not reach a formatter built
+  // before the stub and kept.
+  it("is followed when it moves with the page in view, by every date written after", () => {
+    // Berlin's afternoon of the 10th is Auckland's small hours of the 11th.
+    const at = "2026-03-10T12:00:00Z";
+    const weekLater = Date.parse(at) + 8 * 86_400_000;
+    const before = process.env.TZ;
+    expect(browserZone()).toBe("Europe/Berlin");
+    expect(fmtDate(at)).toBe("Mar 10, 2026");
+    expect(shortWhen(at, weekLater)).toBe("Mar 10");
+    expect(targetLabel("2026-03-10")).toBe("Mar 10, 2026");
+    try {
+      process.env.TZ = "Pacific/Auckland";
+      expect(fmtDate(at)).toBe("Mar 11, 2026");
+      expect(shortWhen(at, weekLater)).toBe("Mar 11");
+      // A DAY IS NO INSTANT: a target is the 10th wherever the reader is.
+      expect(targetLabel("2026-03-10")).toBe("Mar 10, 2026");
+    } finally {
+      process.env.TZ = before;
+    }
+    expect(browserZone()).toBe("Europe/Berlin");
+    expect(fmtDate(at)).toBe("Mar 10, 2026");
+  });
+
+  // A FORMATTER FOR A ZONE NOBODY ASKS FOR is not kept: a pinned zone and a
+  // zone that moved drop them all, and the next ask builds for the zone in use.
+  it("drops every kept formatter when a zone is pinned or moves", () => {
+    dateTimeFormat(undefined, browserZone(), { weekday: "short" });
+    expect(keptFormattersForTest()).toBeGreaterThan(0);
+    pinZoneForTest("UTC");
+    expect(keptFormattersForTest()).toBe(0);
+    pinZoneForTest("");
+
+    dateTimeFormat(undefined, browserZone(), { weekday: "short" });
+    const put = systemZone("Asia/Tokyo");
+    try {
+      window.dispatchEvent(new Event("focus"));
+      expect(keptFormattersForTest()).toBe(0);
+    } finally {
+      put();
+      window.dispatchEvent(new Event("focus"));
+    }
   });
 });

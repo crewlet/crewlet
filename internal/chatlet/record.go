@@ -160,20 +160,22 @@ func (e RecordEnvelope) InstallsGate() bool {
 }
 
 // readByEveryBuild reports a record every build there will ever be must read:
-// a gate ([RecordEnvelope.InstallsGate]), the read index's barrier, and a
-// reanchor's generation.
+// a gate ([RecordEnvelope.InstallsGate]), the read index's barrier, the trim's
+// trimmed record and a reanchor's generation.
 //
-// Each is pinned at [baseRecordVersion] for its own reason, and all three
+// Each is pinned at [baseRecordVersion] for its own reason, and all four
 // reasons are what an older node does with a record it cannot read. A gate it
 // deferred would leave its gate table empty — or its copy of a room holding
 // what every other node erased — while it went on applying every record the
 // gate was meant to govern, with no inverse that repairs it; a barrier it
-// retained is one more deferral row for every linearizable read; a generation
+// retained is one more deferral row for every linearizable read; a trimmed
+// record it retained is every anchor it names kept on that node; a generation
 // it retained is a transition it never makes. So none of them may carry a
 // versioned field, and [Encode] refuses one that does — a field such a record
 // needs is a field that belongs somewhere else.
 func (e RecordEnvelope) readByEveryBuild() bool {
-	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpGeneration
+	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed ||
+		e.Op == OpGeneration
 }
 
 // MutationRecord is one committed mutation: the envelope plus everything a

@@ -44,7 +44,7 @@ func TestSeatsAreClaimedTheMomentTheClaimGateOpens(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
-	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

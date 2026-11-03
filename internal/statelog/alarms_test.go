@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"maps"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -78,10 +82,10 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,
-			statelog.Reading{DeferredAge: 31 * time.Minute, DeferredJudgesCopy: true,
+			statelog.Reading{DeferredAge: 31 * time.Minute,
 				DeferredRecord: "at CREWLET_TRACKER_LOG@1:42"},
 			"(at CREWLET_TRACKER_LOG@1:42) has been held for 31m, past the 30m " +
-				"deferral grace, at which this node stops serving its copy of the estate",
+				"deferral grace, at which this node's copy of this log goes out of service",
 		},
 		"a floor nobody can read": {
 			statelog.KindFloorUnknown,
@@ -92,7 +96,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a slow prefetch": {
 			statelog.KindPrefetchSlow,
 			statelog.Reading{PrefetchP95: time.Second},
-			"context assembly",
+			"the knowledge scans this node ran for turns' prefetches",
 		},
 		"a slow search": {
 			statelog.KindSearchSlow,
@@ -160,10 +164,25 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{StoreVolumeUnmeasured: "measure the free space on /mnt/estate: input/output error"},
 			"/mnt/estate",
 		},
+		// ROOM FOR A SECOND COPY AND ITS TENTH — 5 GiB against 4.4 — IS NOT
+		// ROOM when the copy holds back 2 GiB of log on the same volume.
+		"a volume with room for a second copy and not for the log a copy holds back": {
+			statelog.KindVolumeLow,
+			statelog.Reading{FreeBytes: 5 << 30, StoreBytes: 4 << 30, CopyHeldBytes: 2 << 30,
+				StoreVolume: "/var/lib/crewlet"},
+			"and for the 2.0 GiB of write-ahead log a copy holds back there while it runs",
+		},
 		"a write-ahead log nothing is checkpointing": {
 			statelog.KindWALLarge,
 			statelog.Reading{WALBytes: 2 << 30},
 			"write-ahead log is 2.0 GiB",
+		},
+		"a write-ahead log a copy is holding": {
+			statelog.KindWALLarge,
+			statelog.Reading{WALBytes: 2 << 30, WALFile: "crewlet-replicated.db",
+				WALCopy: "/var/lib/crewlet/snapshots/snapshot.part.db", WALCopyFor: 7 * time.Minute},
+			"the write-ahead log beside crewlet-replicated.db is 2.0 GiB, held there for 7m by a " +
+				"copy to /var/lib/crewlet/snapshots/snapshot.part.db, which folds it back in when it ends",
 		},
 		"a pool every reader queues on": {
 			statelog.KindPoolStarved,
@@ -182,10 +201,72 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{LinearizableReads: 1},
 			"1 linearizable reads a day against the 0 this log was sized for",
 		},
-		"files the object store lost or damaged": {
+		"files the object store lost, damaged or will not answer for": {
 			statelog.KindObjectsMissing,
 			statelog.Reading{ObjectsMissing: 2},
-			"2 file(s) are missing from the object store or damaged in it",
+			"2 file(s) are missing from the object store, damaged in it, or not answered for by it",
+		},
+		"repositories a git node's memory cannot index": {
+			statelog.KindCodeMaintenanceRefused,
+			statelog.Reading{CodeMaintenanceRefused: 2, CodeMaintenanceLargest: 19 << 30,
+				CodeMaintenanceBudget: 1 << 30},
+			"2 repository(ies) on this node are served without a bitmap: the largest's needs about " +
+				"19.0 GiB, and the node can give its background work 1.0 GiB",
+		},
+		"repositories a maintainer has not compacted to under the pack bound": {
+			statelog.KindCodeCompactionBehind,
+			statelog.Reading{CodeCompactionBehind: 2, CodeCompactionBehindLargest: 2_051,
+				CodeCompactionBehindRepo: "web"},
+			"2 repository(ies) this node maintains hold the most live packs a repository may — the most, " +
+				"web, holds 2051",
+		},
+		"proposals a committer could not hold or reach in time": {
+			statelog.KindCodeCommitBusy,
+			statelog.Reading{CodeCommitBusy: 4, CodeCommitBusyRepo: "web", CodeCommitBusyOfRepo: 3,
+				CodeCommitBusyNode: 1, CodeCommitBusyWaited: 2},
+			"4 proposal(s) were refused busy in the last 15m because this node's committer could not hold " +
+				"them or reach them in time — 3 for web alone, 1 at the node's whole bound across its " +
+				"repositories, 2 after waiting in the queue until their asker could wait no longer",
+		},
+		"queued checks past their own timeouts": {
+			statelog.KindCodeChecksBacklog,
+			statelog.Reading{CodeChecksBacklog: 2, CodeChecksBacklogOldest: 2 * time.Hour,
+				CodeChecksBacklogCheck: "web@111111111111 for main: unit (attempt 1)"},
+			"2 queued check attempt(s) have waited for a runner longer than their own timeout — the " +
+				"longest of those counted, web@111111111111 for main: unit (attempt 1), for 2h",
+		},
+		"more queued checks past their own timeouts than a reading counts": {
+			statelog.KindCodeChecksBacklog,
+			statelog.Reading{CodeChecksBacklog: 1024, CodeChecksBacklogMore: true,
+				CodeChecksBacklogOldest: 3 * time.Hour,
+				CodeChecksBacklogCheck:  "web@111111111111 for main: lint (attempt 2)"},
+			"more than 1024 queued check attempt(s) have waited for a runner longer than their own timeout — " +
+				"the longest of those counted, web@111111111111 for main: lint (attempt 2), for 3h",
+		},
+		"merge queues asked past their own capacity": {
+			statelog.KindCodeMergeRateOver,
+			statelog.Reading{CodeMergeRateOver: 1, CodeMergeRateOverTarget: "main of web",
+				CodeMergeRateOverAsked: 140, CodeMergeRateOverCapacity: 96,
+				CodeMergeRateOverRound: 10 * time.Minute, CodeMergeRateWindow: time.Hour},
+			"1 merge queue(s) this node is home to were asked to land more changes in the last 1h than they " +
+				"can land in it — the furthest, main of web, 140 enqueue(s) against 96 at its mean round of 10m",
+		},
+		"repositories setting refs fast enough to reach the bound within the window": {
+			statelog.KindCodeRefsNearLimit,
+			statelog.Reading{CodeRefsNearLimit: 1, CodeRefsNearLimitRepo: "web", CodeRefsNearLimitLive: 60_000,
+				CodeRefsNearLimitRecent: 45_000, CodeRefsLimit: 100_000, CodeRefsWindow: 14 * 24 * time.Hour},
+			"1 repository(ies) set refs so fast that they reach the 100000-ref bound within 14 days unless refs " +
+				"are deleted (the most: web, 60000 live and 45000 set in the last 14 days); a create at the " +
+				"bound is refused repo_refs",
+		},
+		// ONE mirror fires it: the home judged it at the mirror's own
+		// promise, so the rule fires at any count (ADR-0015).
+		"a mirror not brought level within its refresh": {
+			statelog.KindCodeMirrorFailing,
+			statelog.Reading{CodeMirrorFailing: 1, CodeMirrorFailingRepo: "web",
+				CodeMirrorFailingFor: 40 * time.Minute},
+			"1 mirror(s) of repositories this node is home to have not been brought level for longer than " +
+				"their refresh (the longest: web, 40m)",
 		},
 		"a service objective burning its budget": {
 			statelog.KindObjectiveBurn,
@@ -198,6 +279,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.KindObjectsBucketNearCeiling,
 			statelog.Reading{ObjectsBucketBytes: 9 << 30, ObjectsBucketMaxBytes: 10 << 30},
 			"holds 9.0 GiB of its 10.0 GiB reservation",
+		},
+		"a clock further from the fleet's than the deletions assume": {
+			statelog.KindClockSkew,
+			statelog.Reading{ClockSkew: time.Hour + time.Minute, ClockSkewNodes: 3,
+				ClockSkewBound: time.Hour},
+			"this node's clock runs 1h 1m ahead of the fleet's clock (the median of 3 data " +
+				"nodes'), past the 1h",
 		},
 		"a ceiling smaller than the replay window at the measured rate": {
 			statelog.KindLogCeilingShort,
@@ -314,6 +402,77 @@ func TestAZeroReadingRaisesNothing(t *testing.T) {
 	if len(got) != 2 {
 		t.Errorf("a measured zero raised %v, want both fraction alarms", kindsOf(got))
 	}
+}
+
+// EVERY PERCENTILE ALARM IS DECIDED AT A HISTOGRAM BOUNDARY.
+//
+// A percentile in the reading is read off a histogram (the engine's
+// retention.observed), and a histogram's quantile is the upper boundary of the
+// bucket the percentile falls in ([metrics.Snapshot.Quantile]) — a boundary
+// and nothing else. So an alarm that fires on a percentile past its budget is
+// exact only where the budget is a boundary: "the percentile is past the
+// budget" and "the boundary above it is" are then one statement. A budget
+// between two boundaries is decided at the one above it — under twenty-one
+// powers of two, `prefetch_slow`'s 500 ms fired for any p95 past 256 ms and
+// said the p95 was 512 ms.
+//
+// The budgets are FOUND rather than listed: each duration field named for a
+// percentile (…P95) is set alone, and the largest duration at which the table
+// raises nothing is bisected out of the table itself — so a percentile alarm
+// added later, or a budget retuned, is held without a line here, and a
+// percentile no alarm reads fails as one.
+//
+// Mutation: set a budget between two boundaries — PoolWaitAlarm to 150 ms —
+// or take a budget's boundary out of the millisecond scale, and this fails.
+func TestEveryPercentileAlarmIsDecidedAtABoundary(t *testing.T) {
+	t.Parallel()
+	bounds, ok := metrics.Bounds(metrics.UnitMilliseconds)
+	if !ok {
+		t.Fatalf("no histogram boundaries for %q, the unit every percentile here is read in",
+			metrics.UnitMilliseconds)
+	}
+	reading := reflect.TypeFor[statelog.Reading]()
+	var held []string
+	for i := range reading.NumField() {
+		field := reading.Field(i)
+		if !strings.HasSuffix(field.Name, "P95") {
+			continue
+		}
+		if field.Type != reflect.TypeFor[time.Duration]() {
+			t.Errorf("Reading.%s is a %s, want a time.Duration read off a millisecond histogram", field.Name,
+				field.Type)
+			continue
+		}
+		raises := func(d time.Duration) bool {
+			var r statelog.Reading
+			reflect.ValueOf(&r).Elem().Field(i).SetInt(int64(d))
+			return len(statelog.Evaluate(r)) > 0
+		}
+		quiet, loud := time.Duration(0), 24*time.Hour
+		if raises(quiet) || !raises(loud) {
+			t.Errorf("Reading.%s raises %v at zero and %v at %v: a percentile no alarm holds to a budget",
+				field.Name, raises(quiet), raises(loud), loud)
+			continue
+		}
+		for loud-quiet > 1 {
+			if mid := quiet + (loud-quiet)/2; raises(mid) {
+				loud = mid
+			} else {
+				quiet = mid
+			}
+		}
+		budget := float64(quiet) / float64(time.Millisecond)
+		if !slices.Contains(bounds, budget) {
+			t.Errorf("Reading.%s's alarm fires past %v, which is no boundary of the %s histograms it is read "+
+				"from (%v): it fires at the boundary above, for a percentile up to that much under its budget",
+				field.Name, quiet, metrics.UnitMilliseconds, bounds)
+		}
+		held = append(held, field.Name)
+	}
+	if len(held) == 0 {
+		t.Fatal("no percentile field in statelog.Reading: the gate's subject moved")
+	}
+	t.Logf("held %v to the %s boundaries", held, metrics.UnitMilliseconds)
 }
 
 // A NODE THAT HAS NEVER MEASURED ITS RATE DOES NOT ALARM — and that is the
@@ -477,6 +636,369 @@ func TestTheIndexRecallAlarmFiresAtTheEvaluationsFloor(t *testing.T) {
 		_, fired := find(statelog.Evaluate(c.reading), statelog.KindIVFRecallBelowFloor)
 		if fired != c.fires {
 			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+	}
+}
+
+// THE CODE MAINTENANCE ALARM FIRES PAST THE NODE'S OWN BUDGET, never at a
+// number of its own: the budget is what the git cache measured the node's
+// memory to leave its background indexing, and a run AT it starts — so only
+// an estimate past it is a repository refused. A node that serves no git
+// measures nothing and must alarm about nothing, and a node whose lanes leave
+// its maintenance nothing at all is the alarm, not the absence.
+//
+// Mutation: fire at the budget, or on any refused count without comparing,
+// and a case below fails.
+func TestTheCodeMaintenanceAlarmFiresPastTheNodesBudget(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"an estimate at the budget": {statelog.Reading{
+			CodeMaintenanceLargest: 1 << 30, CodeMaintenanceBudget: 1 << 30}, false},
+		"an estimate a byte past it": {statelog.Reading{CodeMaintenanceRefused: 1,
+			CodeMaintenanceLargest: 1<<30 + 1, CodeMaintenanceBudget: 1 << 30}, true},
+		"a node that leaves its maintenance nothing": {statelog.Reading{CodeMaintenanceRefused: 1,
+			CodeMaintenanceLargest: 320}, true},
+		"a budget with nothing refused": {statelog.Reading{CodeMaintenanceBudget: 1 << 30}, false},
+		"a node that serves no git":     {statelog.Reading{}, false},
+	} {
+		_, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeMaintenanceRefused)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+	}
+}
+
+// THE COMPACTION-BEHIND ALARM BORROWS THE PACK BOUND, never a number of its
+// own: the node's compactor counts the repositories it compacts that its
+// listing found AT the bound the push decide refuses at (code.MaxPacksPerRepo,
+// a package this framework does not import), and the rule fires at any count —
+// so a repository the compactor did not count, whatever its live packs, raises
+// nothing here. The largest a reading carries is a figure for the detail, and
+// a rule reading it against a threshold of its own — the pack count a
+// compaction aims for, say — would raise a repository a node merges routinely.
+//
+// Mutation: fire on the largest's count past a threshold of the rule's own
+// (fifty, the target), and the reading that counts nothing raises it.
+func TestTheCompactionBehindAlarmBorrowsThePackBound(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"one repository at the bound": {statelog.Reading{CodeCompactionBehind: 1,
+			CodeCompactionBehindLargest: 2_048, CodeCompactionBehindRepo: "web"}, true},
+		"a largest the compactor counted nothing at": {statelog.Reading{
+			CodeCompactionBehindLargest: 2_047, CodeCompactionBehindRepo: "web"}, false},
+		"a node that compacts nothing": {statelog.Reading{}, false},
+	} {
+		alarm, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeCompactionBehind)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+		if fired && !strings.Contains(alarm.Detail, c.reading.CodeCompactionBehindRepo) {
+			t.Errorf("%s: the detail %q names no repository, and an operator is told the node is behind "+
+				"on nothing they can find", name, alarm.Detail)
+		}
+	}
+}
+
+// THE MERGE-RATE ALARM FIRES AT THE QUEUE'S OWN CAPACITY, never at a rate of
+// its own (ADR-0015, M5-D28): every queue the reading counts was judged by its
+// home against its depth × batch at the rounds it timed (config's
+// LandingCapacity), so one is the alarm, and figures with no queue counted —
+// however many enqueues they name — are nothing.
+//
+// Mutation: fire on the asked figure past a rate of the rule's own (a hundred
+// an hour, say), and the reading that counts no queue raises it — red.
+func TestTheMergeRateAlarmFiresAtTheQueuesCapacity(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"one queue past its capacity": {statelog.Reading{CodeMergeRateOver: 1, CodeMergeRateOverTarget: "main of web",
+			CodeMergeRateOverAsked: 5, CodeMergeRateOverCapacity: 4, CodeMergeRateOverRound: time.Hour,
+			CodeMergeRateWindow: time.Hour}, true},
+		"figures the home counted no queue at": {statelog.Reading{CodeMergeRateOverTarget: "main of web",
+			CodeMergeRateOverAsked: 4_000, CodeMergeRateOverCapacity: 96, CodeMergeRateWindow: time.Hour}, false},
+		"a node home to no queue": {statelog.Reading{}, false},
+	} {
+		alarm, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeMergeRateOver)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+		if fired && !strings.Contains(alarm.Detail, c.reading.CodeMergeRateOverTarget) {
+			t.Errorf("%s: the detail %q names no queue, and an operator is told a queue is behind on "+
+				"nothing they can find", name, alarm.Detail)
+		}
+	}
+}
+
+// THE BUSY ALARM FIRES AT THE COMMITTER'S BOUNDS, never at a number of its
+// own: every proposal the reading counts was refused busy by the committer at
+// a repository's queue — its count, its bytes or the time a proposal may wait
+// in it — or the node's whole bound (code.CommitterInbox, CommitterInboxBytes,
+// CommitterNodeBytes, its asker's attempt less code.CommitBudget and
+// ReplyMargin — a package this framework does not import), so one is the
+// alarm. A repository, a node's share and the proposals that waited out their
+// time are figures for the detail — a repository named with nothing counted
+// is no backlog — and the window the detail names is the trim's tick, the
+// constant the committer borrows (code.CommitBusyWindow), never a copy.
+//
+// Mutations: fire past a count of the rule's own (ten, say), and the single
+// refusal raises nothing; fire on a named repository, and the reading that
+// counts nothing raises it; name another span in the detail (the evaluation's
+// AlarmInterval), and it misstates the window the committer counts over; name
+// the node's share where the detail says how many waited, and the proposals
+// that waited out their time are misstated.
+func TestCodeCommitBusyFiresAtTheCommittersBounds(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"one proposal refused at a repository's queue": {statelog.Reading{CodeCommitBusy: 1,
+			CodeCommitBusyRepo: "web", CodeCommitBusyOfRepo: 1}, true},
+		"proposals refused at the node's whole bound": {statelog.Reading{CodeCommitBusy: 5,
+			CodeCommitBusyRepo: "api", CodeCommitBusyOfRepo: 3, CodeCommitBusyNode: 5}, true},
+		"proposals that waited in the queue until their asker could wait no longer": {statelog.Reading{
+			CodeCommitBusy: 3, CodeCommitBusyRepo: "web", CodeCommitBusyOfRepo: 3, CodeCommitBusyWaited: 3}, true},
+		"a repository named with nothing counted": {statelog.Reading{CodeCommitBusyRepo: "web"}, false},
+		"a node that decides no push":             {statelog.Reading{}, false},
+	} {
+		alarm, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeCommitBusy)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+		if !fired {
+			continue
+		}
+		window := "in the last " + statelog.SpokenForTest(statelog.TrimInterval)
+		if !strings.Contains(alarm.Detail, c.reading.CodeCommitBusyRepo) || !strings.Contains(alarm.Detail, window) {
+			t.Errorf("%s: the detail %q does not name the repository with the most refusals and the window %q",
+				name, alarm.Detail, window)
+		}
+		waited := strconv.Itoa(c.reading.CodeCommitBusyWaited) + " after waiting in the queue"
+		if !strings.Contains(alarm.Detail, waited) {
+			t.Errorf("%s: the detail %q does not say how many waited out their asker's attempt (%q)",
+				name, alarm.Detail, waited)
+		}
+	}
+}
+
+// THE REFS ALARM FIRES AT ANY REPOSITORY ITS READER COUNTED, and at none is
+// silent: the reader judged each one at the bound the push decide refuses a
+// create at and the ref lifecycle's window (internal/code's NearLimit), which
+// this framework does not import, so the rule borrows that judgement whole
+// (ADR-0015) and its detail names the figures and both decisions as the node
+// handed them in. The figures of a repository with nothing counted are no
+// alarm: the count is.
+//
+// Mutation: fire on the worst repository's figures rather than the count — the
+// named repository with none counted fires, red; name the window in spoken's
+// hours — "336h", red.
+func TestCodeRefsNearLimitFiresAtTheBound(t *testing.T) {
+	t.Parallel()
+	const window = 14 * 24 * time.Hour
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"none counted": {statelog.Reading{CodeRefsLimit: 100_000, CodeRefsWindow: window}, false},
+		"figures with none counted": {statelog.Reading{CodeRefsNearLimitRepo: "web", CodeRefsNearLimitLive: 99_000,
+			CodeRefsNearLimitRecent: 99_000, CodeRefsLimit: 100_000, CodeRefsWindow: window}, false},
+		"one counted": {statelog.Reading{CodeRefsNearLimit: 1, CodeRefsNearLimitRepo: "web",
+			CodeRefsNearLimitLive: 50_001, CodeRefsNearLimitRecent: 50_000, CodeRefsLimit: 100_000,
+			CodeRefsWindow: window}, true},
+		"three counted": {statelog.Reading{CodeRefsNearLimit: 3, CodeRefsNearLimitRepo: "api",
+			CodeRefsNearLimitLive: 90_000, CodeRefsNearLimitRecent: 80_000, CodeRefsLimit: 100_000,
+			CodeRefsWindow: window}, true},
+	} {
+		alarm, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeRefsNearLimit)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+		if !fired {
+			continue
+		}
+		r := c.reading
+		want := strconv.Itoa(r.CodeRefsNearLimit) + " repository(ies) set refs so fast that they reach the " +
+			strconv.Itoa(r.CodeRefsLimit) + "-ref bound within 14 days unless refs are deleted (the most: " +
+			r.CodeRefsNearLimitRepo + ", " + strconv.Itoa(r.CodeRefsNearLimitLive) + " live and " +
+			strconv.Itoa(r.CodeRefsNearLimitRecent) + " set in the last 14 days)"
+		if !strings.HasPrefix(alarm.Detail, want) {
+			t.Errorf("%s: the detail %q does not begin %q", name, alarm.Detail, want)
+		}
+	}
+}
+
+// A CLOCK OFF THE FLEET'S BY MORE THAN THE BOUND RAISES `clock_skew`, NAMING
+// WHICH CLOCK — this node's own, or the broker member's leading the position
+// register — and one inside it, or measured against no bound, does not.
+//
+// The bound is the one the deletions were sized against —
+// objstore.AssumedClockSkew, which the node hands in with its measure, since
+// this framework imports neither the object store nor the code host — so the
+// alarm fires exactly where a clock stops being one the collector's grace and
+// the retired-pack sweep hold on, and is silent AT it, as every rule here is
+// silent at its threshold. A node that measured nothing hands in none of the
+// numbers, and a skew with no bound is a measure nothing judges.
+//
+// THE DETAIL NAMES THE CLOCK, because that is the machine an operator has to
+// fix: how far it runs, which way, and against the median of how many data
+// nodes' clocks — with one, that node's own — and never the other clock when
+// only one is past the bound.
+//
+// Mutation: fire at the bound, or on any skew without comparing it, or on a
+// skew past a zero bound, or on one clock while naming the other, or read a
+// clock behind as ahead, and a case below fails.
+func TestAClockOffTheFleetsRaisesClockSkew(t *testing.T) {
+	t.Parallel()
+	const bound = time.Hour
+	past := time.Hour + time.Minute
+	const thisNode, member = "this node's clock", "the clock of the broker member"
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		says    []string // what a firing alarm's detail says
+		never   []string // what it never says
+	}{
+		"this node's clock an hour and a minute ahead": {
+			reading: statelog.Reading{ClockSkew: past, ClockSkewNodes: 3, ClockSkewBound: bound},
+			says: []string{"this node's clock runs 1h 1m ahead of the fleet's clock " +
+				"(the median of 3 data nodes'), past the 1h"},
+			never: []string{member},
+		},
+		"this node's clock an hour and a minute behind": {
+			reading: statelog.Reading{ClockSkew: -past, BrokerClockSkew: time.Minute,
+				ClockSkewNodes: 5, ClockSkewBound: bound},
+			says: []string{"this node's clock runs 1h 1m behind the fleet's clock " +
+				"(the median of 5 data nodes'), past the 1h"},
+			never: []string{member},
+		},
+		"the member's clock an hour and a minute ahead": {
+			reading: statelog.Reading{BrokerClockSkew: past, ClockSkewNodes: 3, ClockSkewBound: bound},
+			says: []string{"the clock of the broker member leading the position register runs " +
+				"1h 1m ahead of the fleet's clock (the median of 3 data nodes'), past the 1h"},
+			never: []string{thisNode},
+		},
+		"both clocks, each past the bound": {
+			reading: statelog.Reading{ClockSkew: 90 * time.Minute, BrokerClockSkew: 90 * time.Minute,
+				ClockSkewNodes: 3, ClockSkewBound: bound},
+			says: []string{"this node's clock runs 1h 30m ahead of the fleet's clock (the median " +
+				"of 3 data nodes'), and the clock of the broker member leading the position " +
+				"register runs 1h 30m ahead of it, past the 1h"},
+		},
+		"the member's clock behind a fleet of one": {
+			reading: statelog.Reading{BrokerClockSkew: -past, ClockSkewNodes: 1, ClockSkewBound: bound},
+			says: []string{"the clock of the broker member leading the position register runs " +
+				"1h 1m behind the fleet's clock (this node's own: the register holds no other " +
+				"data node's recent row)"},
+			never: []string{thisNode},
+		},
+		"fifty-nine minutes off, either clock and either way": {
+			reading: statelog.Reading{ClockSkew: 59 * time.Minute, BrokerClockSkew: -59 * time.Minute,
+				ClockSkewNodes: 3, ClockSkewBound: bound},
+		},
+		"exactly the bound off": {
+			reading: statelog.Reading{ClockSkew: -bound, BrokerClockSkew: bound,
+				ClockSkewNodes: 3, ClockSkewBound: bound},
+		},
+		"clocks in time with the fleet's": {
+			reading: statelog.Reading{ClockSkewNodes: 3, ClockSkewBound: bound},
+		},
+		"a skew with no bound to judge it by": {
+			reading: statelog.Reading{ClockSkew: 2 * time.Hour, BrokerClockSkew: 2 * time.Hour,
+				ClockSkewNodes: 3},
+		},
+		"a node that measured nothing": {},
+	} {
+		alarm, fired := find(statelog.Evaluate(c.reading), statelog.KindClockSkew)
+		if fires := len(c.says) > 0; fired != fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, fires)
+			continue
+		}
+		for _, want := range c.says {
+			if !strings.Contains(alarm.Detail, want) {
+				t.Errorf("%s: the alarm reads %q, want it to say %q", name, alarm.Detail, want)
+			}
+		}
+		for _, not := range c.never {
+			if strings.Contains(alarm.Detail, not) {
+				t.Errorf("%s: the alarm reads %q, naming %q, which is inside the bound",
+					name, alarm.Detail, not)
+			}
+		}
+	}
+}
+
+// THE FLOOR ALARM NAMES ONLY THE LOGS WHOSE READS IT REFUSES, EACH WITH ITS
+// OWN AGE.
+//
+// A log whose floor began failing inside [statelog.FloorCacheStale] is still
+// served from its memo. Read as one longest age beside every failing name, the
+// alarm told an operator that log's reads were refused, with another log's age
+// as the evidence, and its remedy said so of every name it gave. Each log is
+// evaluated on its own measurement, so a log inside the bound is named by no
+// alarm and every log past it carries its own age.
+//
+// Mutation: compare FloorUnknownFor against zero rather than the bound, or
+// hand every log the node's longest age, and a case below fails.
+func TestTheFloorAlarmNamesOnlyTheLogsPastTheBound(t *testing.T) {
+	t.Parallel()
+	past := statelog.FloorCacheStale
+	for name, c := range map[string]struct {
+		unread map[string]time.Duration
+		names  map[string]string // each log the alarm names, and the age it says
+	}{
+		"one log past the bound, one inside it": {
+			unread: map[string]time.Duration{"pages": past + time.Minute, "tracker": time.Second},
+			names:  map[string]string{"pages": "for 2m"},
+		},
+		"three past the bound, each with its own age": {
+			unread: map[string]time.Duration{
+				"tracker": past + 30*time.Second, "pages": past + time.Minute,
+				"usage": past + 2*time.Minute,
+			},
+			names: map[string]string{"tracker": "for 1m 30s", "pages": "for 2m", "usage": "for 3m"},
+		},
+		"every log inside the bound": {
+			unread: map[string]time.Duration{"pages": past, "tracker": time.Second},
+		},
+	} {
+		var domains []statelog.DomainInputs
+		for _, log := range slices.Sorted(maps.Keys(c.unread)) {
+			d := healthyDomain(log, true)
+			d.FloorUnknownFor = c.unread[log]
+			d.FloorUnknownCause = "coordination unreachable"
+			domains = append(domains, d)
+		}
+		rep := statelog.NewReport(statelog.ReportInputs{
+			NodeID: "node-1", At: reportAt, RegisterReadable: true,
+			ReplayWindow: replayWindow, Domains: domains,
+		})
+		got := map[string]string{}
+		for _, a := range rep.Alarms {
+			if a.Kind != statelog.KindFloorUnknown {
+				continue
+			}
+			for _, d := range a.Domains {
+				for _, log := range d.Domains {
+					got[log] = d.Detail
+				}
+			}
+		}
+		if len(got) != len(c.names) {
+			t.Errorf("%s: floor_unknown named %v, want exactly %v", name, got, c.names)
+			continue
+		}
+		for log, age := range c.names {
+			if !strings.Contains(got[log], age) {
+				t.Errorf("%s: the %s log's floor_unknown reads %q, want its own age, %q",
+					name, log, got[log], age)
+			}
 		}
 	}
 }
@@ -898,6 +1420,85 @@ func TestTheStandingAlarmsAreTheLatestEvaluationsOldestFirst(t *testing.T) {
 	}
 }
 
+// A FIRING ALARM IS MARKED SINCE IT WAS RAISED, and the marks are the standing
+// alarms: the same kinds in the same order, so the presence heartbeat every
+// peer reads can never name a different set, or a different longest-standing
+// alarm, from the node's own health card.
+//
+// A kind standing on several logs is dated by its OLDEST log, which a later log
+// joining it does not move and which moves to the oldest log still standing
+// when that one leaves; a kind that stays up keeps its start however its detail
+// changes; and before any evaluation there is nothing to mark, which is not a
+// node with nothing firing.
+//
+// Mutation: date a kind by its newest log, re-date it on every evaluation, mark
+// in the table's order, or answer (nil, true) before an evaluation, and this
+// fails.
+func TestAFiringAlarmIsMarkedSinceItWasRaised(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	clock := t0
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+
+	if marks, known := tracker.Marks(); known || marks != nil {
+		t.Fatalf("before any evaluation Marks = (%v, %v), want (nil, false)", marks, known)
+	}
+
+	lag := func(detail string) statelog.Alarm {
+		return statelog.Alarm{Kind: statelog.KindApplyLag, Detail: detail}
+	}
+	wal := statelog.Alarm{Kind: statelog.KindWALLarge, Detail: "the write-ahead log is 2.0 GiB"}
+	blocked := func(logs ...string) statelog.Alarm {
+		// ONE ENTRY NAMING EVERY LOG, as a report carries logs it measured
+		// in the same words.
+		return statelog.Alarm{Kind: statelog.KindTrimBlocked, Detail: "the trim has not advanced",
+			Domains: []statelog.AlarmDomain{{Domains: logs, Detail: "the trim has not advanced"}}}
+	}
+	marked := func(when string, want []coord.AlarmMark) {
+		t.Helper()
+		marks, known := tracker.Marks()
+		if !known || !slices.Equal(marks, want) {
+			t.Errorf("%s: Marks = (%v, %v), want (%v, true)", when, marks, known, want)
+		}
+		standing, _ := tracker.Standing()
+		kinds := make([]statelog.Kind, 0, len(marks))
+		for _, m := range marks {
+			kinds = append(kinds, statelog.Kind(m.Kind))
+		}
+		if !slices.Equal(kinds, standing) {
+			t.Errorf("%s: the marks name %v and the standing alarms %v", when, kinds, standing)
+		}
+	}
+
+	// The knowledge base's blocked trim is raised first, the WAL alarm two
+	// minutes later, and apply lag (which the table lists ahead of both)
+	// with the tracker's blocked trim three minutes after that.
+	tracker.Observe(t.Context(), []statelog.Alarm{blocked("pages")})
+	clock = t0.Add(2 * time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{blocked("pages"), wal})
+	clock = t0.Add(5 * time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{lag("2m behind"), blocked("tracker", "pages"), wal})
+	marked("with three alarms up", []coord.AlarmMark{
+		{Kind: string(statelog.KindTrimBlocked), Since: t0},
+		{Kind: string(statelog.KindWALLarge), Since: t0.Add(2 * time.Minute)},
+		{Kind: string(statelog.KindApplyLag), Since: t0.Add(5 * time.Minute)},
+	})
+
+	// THE OLDEST LOG LEAVES, and the lag grows: the blocked trim now dates
+	// from the tracker's log, and the lag keeps its start.
+	clock = t0.Add(6 * time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{lag("3m behind"), blocked("tracker"), wal})
+	marked("after the oldest log left", []coord.AlarmMark{
+		{Kind: string(statelog.KindWALLarge), Since: t0.Add(2 * time.Minute)},
+		{Kind: string(statelog.KindApplyLag), Since: t0.Add(5 * time.Minute)},
+		{Kind: string(statelog.KindTrimBlocked), Since: t0.Add(5 * time.Minute)},
+	})
+
+	clock = t0.Add(7 * time.Minute)
+	tracker.Observe(t.Context(), statelog.Evaluate(statelog.Reading{}))
+	marked("after an evaluation that raised nothing", []coord.AlarmMark{})
+}
+
 func find(alarms []statelog.Alarm, kind statelog.Kind) (statelog.Alarm, bool) {
 	for _, a := range alarms {
 		if a.Kind == kind {
@@ -1022,6 +1623,36 @@ func TestALogsCensusIsPerSeat(t *testing.T) {
 	if statelog.LinearizableReadsPerSeatDay*100 != 12_500 {
 		t.Errorf("the per-seat census is %d, and the reference company's 12 500 "+
 			"over its 100 seats is 125", statelog.LinearizableReadsPerSeatDay)
+	}
+}
+
+// A LOG'S CENSUS COUNTS THE READERS ITS OWN SIZING DECLARES, beside the seats
+// and the engine's passes: the code log's git clients — people and their CI,
+// whom no seat count predicts — are a term of their own, so a small company's
+// git traffic is held to what its code log was sized for rather than to 125 a
+// day per agent seat. A negative term adds nothing, like Background.
+//
+// AT THE CODE LOG'S OWN READ MODEL, the reference company's whole rate per
+// seat (the engine's register declares it for the code domain), so the seats'
+// term is the 125 a day per seat the git clients are counted beside.
+func TestTheCensusCountsALogsClients(t *testing.T) {
+	t.Parallel()
+	read := statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay}
+	for _, tc := range []struct {
+		name   string
+		census statelog.Census
+		want   int
+	}{
+		{"five seats, the collector and a thousand git reads",
+			statelog.Census{Reads: read, Seats: 5, Background: 25, Clients: 1000}, 1650},
+		{"clients alone beside no seat", statelog.Census{Reads: read, Clients: 112_788}, 125 + 112_788},
+		{"a negative client term adds nothing", statelog.Census{Reads: read, Seats: 5, Clients: -40}, 625},
+		{"clients on a log no seat's read takes a barrier on",
+			statelog.Census{Seats: 5, Background: 25, Clients: 1000}, 1025},
+	} {
+		if got := tc.census.Expected(); got != tc.want {
+			t.Errorf("%s: %+v expects %d a day, want %d", tc.name, tc.census, got, tc.want)
+		}
 	}
 }
 

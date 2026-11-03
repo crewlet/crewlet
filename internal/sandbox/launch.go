@@ -329,6 +329,37 @@ type LaunchRequest struct {
 	// tells nobody and adds nothing.
 	Opened func(job OpenedJob) (Opening, error)
 
+	// CodeHolds is the turn's code-host hold set as the launch read it
+	// (internal/agent/turnctx's Holds.Seal): every scratch repository the turn
+	// has named, which the row carries from here on ([PendingRun.CodeHolds]) —
+	// written by [PendingStore.BeginLaunch], unioned with what the row
+	// already holds. The launch's caller keeps the turn's set SEALED from
+	// reading it until Opened, so no hold is taken in between that the row
+	// would not carry.
+	CodeHolds []string
+
+	// CodeFloor is the run's first code floor — the furthest position its
+	// repositories were resolved at, as statelog.Position's token — written on
+	// the row with Spec.Repos ([PendingRun.CodeFloor]). Set exactly when
+	// Spec.Repos is.
+	CodeFloor string
+
+	// CodeCeiling is the colleague seat whose ask woke the launching turn,
+	// whose own grant bounds the box's on every repository of Spec.Repos
+	// ([PendingRun.CodeCeiling]); "" for none. Set only where Spec.Repos is.
+	CodeCeiling string
+
+	// RunEnv is the engine's environment for THIS LAUNCH: what a box needs
+	// that is minted for the job itself, such as its access to the engine's
+	// own code host (ADR-0093). Asked ONCE, AFTER the store has minted the
+	// launch id the job's credentials name and before any box exists,
+	// because a credential minted before the store names the job could only
+	// name a job the row does not hold. Its variables win over every other
+	// source of the run
+	// environment for the names they set, and an error abandons the launch
+	// like every failure past the row. Nil adds nothing.
+	RunEnv func(launchID string) (map[string]string, error)
+
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -352,14 +383,14 @@ type OpenedJob struct {
 	// the run's row holds ([PendingRun.LaunchID]).
 	LaunchID string
 
-	// LastSeq is the place of the last bridged call the row keeps from
-	// before this job ([PendingRun.LastBridgeSeq]): zero for a job whose
-	// round starts its log afresh, and the asking job's last call for a job
-	// that continues one which asked a person ([PendingRun.Continues]).
+	// LastSeq is the place of the last bridged call the run's log keeps from
+	// before this job ([BridgeLog.LastSeq]): zero for a job whose round
+	// starts its log afresh, and the asking job's last call for a job that
+	// continues one which asked a person ([PendingRun.Continues]).
 	//
-	// READ OFF THE WRITE THAT OPENED THE JOB, which is the write that kept
-	// those calls, so the job's own are numbered after exactly what the row
-	// holds. Numbered from one instead, a continuation's calls were sorted
+	// READ OFF THE WRITE THAT OPENED THE JOB'S LOG ([PendingRun.OpenedAfter]),
+	// which is the write that kept those calls, so the job's own are
+	// numbered after exactly what the log holds. Numbered from one instead, a continuation's calls were sorted
 	// in among the asking job's by the collection that closes the round,
 	// which reads the round's calls in that order: its record, the log its
 	// reviewer reads, and its submissions, where the last one made wins.
@@ -482,6 +513,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if req.Spec.Harness == "" {
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs the harness it runs")
 	}
+	// THE GRANTS ARE HELD TO THEIR GRAMMAR BEFORE THE ROW IS WRITTEN: the row
+	// is what a box's request to the code host is admitted against, so a
+	// repository it could not carry, or one it names twice, is never on it.
+	if err := checkRepos(req); err != nil {
+		return LaunchResult{}, err
+	}
 	// THE SEAT'S LEASE, which the row is stamped with and every write below
 	// carries — see [CoordinatorOptions.Lease]. A seat this node does not
 	// hold launches nothing: the turn asking is one its lease no longer
@@ -549,7 +586,16 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Steer:       RunSteer{Seat: req.SteerSeat},
 		BriefNotes:  req.BriefNotes,
 		HandedNotes: req.HandedNotes,
-		CreatedAt:   now(),
+		// WHAT THE TURN HOLDS FROM THE CODE HOST'S EXPIRY, on the row before
+		// any box exists: once the turn parks, the row is the only place
+		// the expiry can read it from.
+		CodeHolds: req.CodeHolds,
+		// THE JOB'S GRANTS AND ITS FIRST FLOOR, on the row before any box
+		// exists for the same reason: a box's first request to the code
+		// host is admitted against the row, and it can come before this
+		// launch returns.
+		Repos: req.Spec.Repos, CodeFloor: req.CodeFloor, CodeCeiling: req.CodeCeiling,
+		CreatedAt: now(),
 	}, fence)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
@@ -602,7 +648,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// [Opening.Fresh] — nil where what named the job answered none.
 	var fresh *Wiring
 	if req.Opened != nil {
-		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.LastBridgeSeq()})
+		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.OpenedAfter})
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
@@ -616,6 +662,19 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		skillLoads = named.SkillLoads
 	}
 
+	// THE LAUNCH'S OWN ENVIRONMENT, now that the store has named the job
+	// its credentials are minted for ([LaunchRequest.RunEnv]). It is what
+	// the box is made with, what its setup steps run with and, with the
+	// run's telemetry, what the harness runs with — the clones it runs
+	// once a checkout answers need the job's credential; and it lives in this frame alone: the spec
+	// is never persisted, and a job that continues the run hours later is
+	// launched anew, with credentials of its own.
+	env, err := launchEnv(req, opened.LaunchID)
+	if err != nil {
+		c.abandon(ctx, m, req, fence, "")
+		return LaunchResult{}, fmt.Errorf("sandbox: the run's environment: %w", err)
+	}
+	req.Spec.Env = env
 	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
 	// can tell when no run names it any more ([Spec.TurnID]).
 	req.Spec.TurnID = req.Turn.TurnID
@@ -628,7 +687,6 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		c.abandon(ctx, m, req, fence, "")
 		return LaunchResult{}, err
 	}
-
 	// Attached before the job starts, for the reason above — WITH ITS CELL,
 	// in the same write: a relaunch may run in another cell than the job
 	// before it, and the row is how every later reader reaches the box.
@@ -668,9 +726,15 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if req.Decided != nil {
 		req.Decided(continued.decision())
 	}
-	// THE ENVIRONMENT THE JOB IS STARTED WITH, read once: it is what the job
-	// is handed, and what its session's capture scrubs out ([HandedSecrets]).
-	env := withTelemetry(m, req, box)
+	// THE ENVIRONMENT THE JOB IS STARTED WITH, the launch's own with the
+	// run's telemetry, read once: it is what the job is handed, and what
+	// its session's capture scrubs out ([HandedSecrets]).
+	//
+	// Its TELEMETRY ENDPOINT IS MINTED HERE, at the job's start, rather than
+	// with the launch's environment above: its token lives a fixed span from
+	// its minting ([otelTokenTTL]), and whatever the box's provisioning took
+	// would come off the job's own.
+	jobEnv := withTelemetry(m, req, box)
 	// AND, FOR A RUN THAT CONTINUES A SESSION, HOW ITS BOX IS WIRED WHERE ITS
 	// SCRIPT STARTS ONE OF ITS OWN INSTEAD: the job's other bridge token, so
 	// the token its harness dials is the box's word on which session it
@@ -687,7 +751,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		FreshWiring: freshWiring,
 		Resume:      continued.session,
 		Carried:     continued.carried,
-		Env:         env,
+		Env:         jobEnv,
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -699,15 +763,20 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// WHERE THE JOB'S HARNESS ASKS FOR ITS TURN'S NOTES, as the job's own
 		// opening answered it — see [Opening.Steer].
 		Steer: steer,
+		// THE REPOSITORIES WHOSE PUSHES ARE REPORTED FOR THE RUN, which its
+		// report is told not to name again ([RunRequest.ReportedRepos]).
+		ReportedRepos: repoNames(Pushable(req.Spec.Repos)),
 		// THE SKILLS ITS HARNESS IS HANDED AS ITS OWN, and where it reports
 		// loading one, as the job's own opening answered it — see
 		// [Opening.SkillLoads].
 		Skills:     req.Skills,
 		SkillLoads: skillLoads,
-		// THE CREDIT ON THE JOB'S OWN COMMITS, naming the turn: the run's
+		// THE CREDIT ON THE JOB'S OWN COMMITS, naming the turn — the run's
 		// page is addressed by it, and every job of the turn is that one
-		// run's ([Manager.CommitAttribution]).
-		Attribution: m.CommitAttribution(req.Turn.TurnID),
+		// run's — the seat, and the item the turn is charged to
+		// ([Manager.CommitAttribution]).
+		Attribution: m.CommitAttribution(CommitAttribution{Run: req.Turn.TurnID,
+			Seat: req.Turn.AgentHandle, WorkItem: req.Turn.WorkItem}),
 	})
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
@@ -727,7 +796,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// with what the jobs before it handed this box, where it continues
 		// in it: the box holds them still, and the session it resumes their
 		// lines ([PriorBox.Handed]).
-		Handed: c.sealHanded(ctx, req, env, opened.Prior, reused),
+		Handed: c.sealHanded(ctx, req, jobEnv, opened.Prior, reused),
 		// AND WHICH BRIEF IT WAS HANDED, for the record its collection
 		// publishes beside whether its run did continue the session.
 		Brief: continued.kind,
@@ -800,8 +869,16 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 // CONTINUING KEEPS THE CHECKOUT, which is the expensive half of a run: a turn
 // its reviewer sent back relaunches its executor on the same work, and a job
 // that continues where the last one stopped need not clone, install and set up
-// again. Only the same harness in the same cell, once the last job is over
+// again. Only the same harness in the same cell, once the last job is over, in a
+// box younger than [KeptBoxMaxAge] by this coordinator's clock
 // ([PriorBox.ContinuesIn]).
+//
+// A fresh box is given the operator's setup; a kept box is given nothing,
+// since its provisioning survives with its disk. Neither is given a
+// repository on the engine's code host at launch: the run checks each out as
+// it needs it, running the commands `code_checkout` answers (ADR-0093), so a
+// kept box's checkouts are its own and a repository it lacks is one more
+// checkout away.
 //
 // EVERY OTHER PRIOR BOX IS RECLAIMED HERE, THROUGH ITS OWN CELL, before the
 // fresh box exists. The row is about to name the new box instead — the attach
@@ -831,7 +908,7 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 		prior = PriorBox{}
 	}
 	if prior.SandboxID != "" {
-		if prior.ContinuesIn(req.Spec) {
+		if prior.ContinuesIn(req.Spec, c.now()) {
 			box, runner, err := m.Reconnect(ctx, req.Spec.Placement, prior.SandboxID, req.Spec.Harness)
 			if err == nil {
 				return box, runner, true, nil
@@ -848,6 +925,67 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 		return nil, nil, false, err
 	}
 	return box, runner, false, nil
+}
+
+// checkRepos refuses a launch whose repositories its row could not carry:
+// more than [MaxRunRepos], one that is not an executor's [RunRepo]
+// ([RunRepo.ValidateFor] [CloneCoding]), one named twice — by its name or by
+// its id, since either would give one repository two grants and one checkout
+// directory two clones — or a floor that does not go with them, set exactly
+// when repositories are; or a colleague's ceiling on a run given none, which
+// would bound nothing.
+func checkRepos(req LaunchRequest) error {
+	repos := req.Spec.Repos
+	if len(repos) > MaxRunRepos {
+		return fmt.Errorf("sandbox: a run is given at most %d repositories, not %d", MaxRunRepos, len(repos))
+	}
+	names := make(map[string]bool, len(repos))
+	ids := make(map[string]bool, len(repos))
+	for _, r := range repos {
+		if err := r.ValidateFor(CloneCoding); err != nil {
+			return err
+		}
+		if names[r.Repo] || ids[r.RepoID] {
+			return fmt.Errorf("sandbox: repository %s is given twice: one run works on one branch of a "+
+				"repository", r.Repo)
+		}
+		names[r.Repo], ids[r.RepoID] = true, true
+	}
+	switch {
+	case len(repos) > 0 && req.CodeFloor == "":
+		return fmt.Errorf("sandbox: a run given repositories needs the code floor they were resolved at")
+	case len(repos) == 0 && req.CodeFloor != "":
+		return fmt.Errorf("sandbox: a run given no repositories has no code floor")
+	case len(repos) == 0 && req.CodeCeiling != "":
+		return fmt.Errorf("sandbox: a run given no repositories has no colleague's ceiling on them")
+	}
+	return nil
+}
+
+// launchEnv is the environment of THIS LAUNCH's box: the spec's run
+// environment, and then the engine's own variables for the job
+// ([LaunchRequest.RunEnv]), which win over every other source for the names
+// they set — an operator's value for one of those would break what the engine
+// minted it for, and configuration refuses the names where an operator writes
+// the run environment. The box is made with it and every setup step runs with
+// it; the harness runs with it and the run's telemetry
+// ([withTelemetry]).
+//
+// A COPY, never the spec's own map, which the caller's [Spec] goes on holding:
+// what a box, its setup or its runner does with the map it is handed never
+// reaches the configuration the next launch is built from.
+func launchEnv(req LaunchRequest, launchID string) (map[string]string, error) {
+	var added map[string]string
+	if req.RunEnv != nil {
+		var err error
+		if added, err = req.RunEnv(launchID); err != nil {
+			return nil, err
+		}
+	}
+	out := make(map[string]string, len(req.Spec.Env)+len(added))
+	maps.Copy(out, req.Spec.Env)
+	maps.Copy(out, added)
+	return out, nil
 }
 
 // hostsPrior reports whether this node can reach the turn's previous box: one
@@ -895,9 +1033,13 @@ func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRe
 			"placement", prior.Placement, "error", err.Error())
 		return
 	}
+	// WITH THE BOX'S DATE, the one reason the line could not otherwise show:
+	// a box past [KeptBoxMaxAge] is reclaimed in the very cell, and for the
+	// very CLI, the next job runs in.
 	log.InfoContext(ctx, "sandbox_prior_reclaimed",
 		"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID,
 		"placement", prior.Placement, "harness", prior.Harness,
+		"box_since", prior.Since,
 		"next_placement", string(req.Spec.Placement), "next_harness", req.Spec.Harness)
 }
 
@@ -1009,6 +1151,11 @@ func summarise(brief string) string {
 // THE RUN'S OWN TEXT FIRST, the framing after it: that text is who the model is
 // and what it answers for, and the box and how to ask a person are details of
 // where it is working.
+//
+// The environment lists the operator's steps alone: a repository on the
+// engine's code host is not the box's at launch, and the run is told where
+// each of its checkouts is, and how it pushes, by the `code_checkout` answer
+// that gives it one.
 func buildSystem(req LaunchRequest) string {
 	names := slices.Collect(maps.Keys(req.MCPServers))
 	own := strings.TrimSpace(req.System)
@@ -1044,10 +1191,16 @@ const agentRunNote = "You are running inside a command-line coding tool as one s
 
 // withTelemetry adds the run's OTel environment to the spec's.
 //
-// MERGED HERE rather than in the spec, because the endpoint carries a token
-// scoped to THIS run and minted with a TTL: putting it in the spec would have
-// it persisted with the pending row and re-used by a resume hours later,
-// against a token that expired while the run was parked.
+// MERGED PER LAUNCH, never into the configuration a spec is built from,
+// because the endpoint carries a token scoped to THIS run and minted with a
+// TTL. The spec itself is not persisted — the row keeps what a resume needs,
+// and a resume hours later launches anew — so the launch environment
+// ([launchEnv]) is per-launch for the reason its tokens are, and a resume is
+// never handed a token that expired while the run was parked. And it is
+// merged at the job's START, after the box is provisioned, never with the
+// rest of the launch's environment before it: the token's span runs from its
+// minting, so one minted before the setup steps would spend on them what the
+// job's own export needs, and no setup step reads it.
 //
 // THE OPERATOR'S OWN VALUES WIN. role.sandbox.env is where an operator
 // declares what a box gets, and a deployment that points its harnesses at

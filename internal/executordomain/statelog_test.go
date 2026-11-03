@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -39,6 +40,11 @@ func TestTheExecutorDomainIsACertifiedDomain(t *testing.T) {
 			Rows:       executordomain.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
+			// THE PRODUCTION ENCODER of the read index's barrier, which the
+			// suite holds to writing no row.
+			EncodeBarrier: executordomain.EncodeBarrier,
+			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0080).
+			EncodeTrimmed: executordomain.EncodeTrimmed,
 		}
 	})
 }
@@ -114,7 +120,7 @@ func captureOf(id string, seq int64) executordomain.Capture {
 		Harness: "claude-code", SessionID: "session-" + id, Object: suiteObject,
 		ObjectHash: string(objstore.HashOf([]byte(id))), ObjectSize: 1024,
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 1, CaptureSeq: seq,
-		SeatBudget: executordomain.SealedMaxBytes,
+		SeatBudget: executorkeep.SealedMaxBytes,
 	}
 }
 
@@ -279,8 +285,8 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 		OpID: statelog.NewOpID(time.Now(), "suite"),
 	}, executordomain.NewEnd{
 		Handle: "suite-seat", Turn: uuid.NewString(), ConversationKey: suiteConversation,
-		Ask: "Suite", Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted,
-			Unkept: &executordomain.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "suite: not kept"}},
+		Ask: "Suite", Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+			Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "suite: not kept"}},
 	})
 	return err
 }

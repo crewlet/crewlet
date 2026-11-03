@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/signedask"
 )
 
@@ -51,7 +51,7 @@ func (rl *Relay) Forward(ctx context.Context, w http.ResponseWriter, req *Reques
 		guard: signedask.NewGuard()}
 	// SERVED BEFORE THE OPEN GOES OUT, so the holder's first frame — which
 	// can follow its reply within a microsecond — has an answerer waiting.
-	stop, err := rl.fabric.Serve(ctx, exchangeSubject(rl.name, id), in.answer)
+	stop, err := rl.fabric.Serve(ctx, exchangeSubject(rl.name, id), queue.ConcurrentAnswers, in.answer)
 	if err != nil {
 		return Unanswered, "this node could not serve the exchange's subject: " + err.Error()
 	}
@@ -122,12 +122,12 @@ func (rl *Relay) sendClose(ctx context.Context, node, owner, id string) {
 // ask sends one request to a holder's node subject and waits up to [openWait]
 // for its reply.
 func (rl *Relay) ask(ctx context.Context, node string, q openRequest) (Verdict, bool, string) {
-	q.ID, q.Deadline = signedask.NewID(), rl.now().Add(rl.clock.openWait)
+	q.ID, q.Deadline = signedask.NewID(), rl.time.Now().Add(rl.clock.openWait)
 	sealed, err := rl.opens.SealRequest(q)
 	if err != nil {
 		return "", false, "the open could not be signed: " + err.Error()
 	}
-	askCtx, done := context.WithTimeout(ctx, rl.clock.openWait)
+	askCtx, done := rl.time.WithTimeout(ctx, rl.clock.openWait)
 	defer done()
 	replies, err := rl.fabric.Ask(askCtx, nodeSubject(rl.name, node), sealed, 1)
 	if err != nil {
@@ -182,7 +182,7 @@ type delivery struct {
 
 // answer takes one frame off the exchange's subject.
 func (in *inbound) answer(ctx context.Context, raw []byte) ([]byte, error) {
-	admitted := in.rl.frames.Admit(raw, in.guard, in.rl.now())
+	admitted := in.rl.frames.Admit(raw, in.guard, in.rl.time.Now())
 	if admitted.Disposition != signedask.Admitted {
 		if admitted.Disposition == signedask.Tampered {
 			log.ErrorContext(ctx, "relay_frame_refused", "relay", in.rl.name, "exchange", in.id,
@@ -233,7 +233,7 @@ func (in *inbound) answer(ctx context.Context, raw []byte) ([]byte, error) {
 // client goes, or the holder stops answering. It reports false for a holder
 // lost before it wrote a status, which leaves w untouched.
 func (in *inbound) pump(ctx context.Context, w http.ResponseWriter, closeIt func()) bool {
-	idle := time.NewTimer(in.rl.clock.idle)
+	idle := in.rl.time.NewTimer(in.rl.clock.idle)
 	defer idle.Stop()
 	flush := http.NewResponseController(w)
 	wrote := false
@@ -274,7 +274,7 @@ func (in *inbound) pump(ctx context.Context, w http.ResponseWriter, closeIt func
 		case <-ctx.Done():
 			closeIt()
 			return true
-		case <-idle.C:
+		case <-idle.C():
 			log.WarnContext(ctx, "relay_holder_lost", "relay", in.rl.name, "exchange", in.id,
 				"detail", "no frame arrived for "+in.rl.clock.idle.String()+"; the response is cut")
 			closeIt()

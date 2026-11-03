@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -20,7 +21,7 @@ import (
 // cross. Twelve is twice the six rows a page of five reads: half of it can be
 // the newest six, which a read-then-narrow page drops entirely, and the other
 // half still fills a page of five with one left behind for the cursor to name.
-// Five is the caller's own limit rather than [worklet.MaxInboxRows], which
+// Five is the caller's own limit rather than [inbox.MaxRows], which
 // only clamps one. The cases ran at 120 and 50, which was 360 creates and
 // drains — each a full write and apply — to show what 36 show. At twelve,
 // [crowdedInbox]'s own read is a single page, so paging itself is
@@ -37,7 +38,7 @@ func crowdedInbox(t *testing.T, r *roundTrip, n int) []string {
 	cursor := ""
 	for {
 		page := r.inbox(worklet.InboxQuery{
-			Handle: "bob", Snoozed: worklet.SnoozeInclude,
+			Handle: "bob", Snoozed: inbox.SnoozeInclude,
 			Cursor: cursor,
 		})
 		for _, notice := range page.Notices {
@@ -57,12 +58,12 @@ func crowdedInbox(t *testing.T, r *roundTrip, n int) []string {
 // snoozeAll puts the named notices off until the given instant, in one gesture.
 func snoozeAll(t *testing.T, r *roundTrip, ids []string, until time.Time) {
 	t.Helper()
-	gesture := worklet.InboxGesture{}
+	gesture := inbox.Gesture[worklet.Reason]{}
 	for _, id := range ids {
-		gesture.Snooze = append(gesture.Snooze, worklet.Snooze{RecordID: id, Until: until})
+		gesture.Snooze = append(gesture.Snooze, inbox.Snooze{RecordID: id, Until: until})
 	}
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-snooze-"+itoa(len(ids)),
-		"bob", gesture, worklet.PersonAuthority{}); err != nil {
+		"bob", statelog.Position{}, gesture, worklet.PersonAuthority{}); err != nil {
 
 		t.Fatalf("snooze %d notices: %v", len(ids), err)
 	}
@@ -92,7 +93,7 @@ func TestTheSnoozedScopeReturnsOnlySnoozedNoticesAndAFullPage(t *testing.T) {
 	snoozeAll(t, r, asleep, wednesday.Add(48*time.Hour))
 
 	first := r.inbox(worklet.InboxQuery{
-		Handle: "bob", Snoozed: worklet.SnoozeOnly, Limit: 5,
+		Handle: "bob", Snoozed: inbox.SnoozeOnly, Limit: 5,
 	})
 	if len(first.Notices) != 5 {
 		t.Fatalf("the snoozed scope's first page holds %d notices, want a full "+
@@ -109,7 +110,7 @@ func TestTheSnoozedScopeReturnsOnlySnoozedNoticesAndAFullPage(t *testing.T) {
 		}
 	}
 	second := r.inbox(worklet.InboxQuery{
-		Handle: "bob", Snoozed: worklet.SnoozeOnly, Limit: 5,
+		Handle: "bob", Snoozed: inbox.SnoozeOnly, Limit: 5,
 		Cursor: first.NextCursor,
 	})
 	if len(second.Notices) != 1 || second.NextCursor != "" {
@@ -136,7 +137,7 @@ func TestTheDefaultScopeFillsItsPageDespiteSnoozes(t *testing.T) {
 	snoozeAll(t, r, ids[:6], wednesday.Add(48*time.Hour))
 
 	got := r.inbox(worklet.InboxQuery{
-		Handle: "bob", Snoozed: worklet.SnoozeExclude, Limit: 5,
+		Handle: "bob", Snoozed: inbox.SnoozeExclude, Limit: 5,
 	})
 	if len(got.Notices) != 5 {
 		t.Fatalf("the default scope's page holds %d notices, want a full page "+
@@ -160,8 +161,8 @@ func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	ids := crowdedInbox(t, r, 12)
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob",
-		worklet.InboxGesture{Read: ids[:6]}, worklet.PersonAuthority{}); err != nil {
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob", statelog.Position{},
+		inbox.Gesture[worklet.Reason]{Read: ids[:6]}, worklet.PersonAuthority{}); err != nil {
 
 		t.Fatalf("mark read: %v", err)
 	}
@@ -187,14 +188,14 @@ func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	// unread mark on one of those outranks the position, in the scan as
 	// in the marks.
 	through := positionOf(noticeOf(t, r, ids[9]))
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-through", "bob",
-		worklet.InboxGesture{ReadThrough: through}, worklet.PersonAuthority{}); err != nil {
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-through", "bob", statelog.Position{},
+		inbox.Gesture[worklet.Reason]{ReadThrough: through}, worklet.PersonAuthority{}); err != nil {
 
 		t.Fatalf("read through: %v", err)
 	}
 	r.drain()
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-unread", "bob",
-		worklet.InboxGesture{Unread: []string{ids[10]}}, worklet.PersonAuthority{}); err != nil {
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-unread", "bob", statelog.Position{},
+		inbox.Gesture[worklet.Reason]{Unread: []string{ids[10]}}, worklet.PersonAuthority{}); err != nil {
 
 		t.Fatalf("mark unread: %v", err)
 	}
@@ -221,8 +222,8 @@ func TestADueSnoozeIsNotSnoozed(t *testing.T) {
 	snoozeAll(t, r, []string{notice.RecordID}, until)
 
 	later := until.Add(time.Minute)
-	for scope, want := range map[worklet.SnoozeScope]int{
-		worklet.SnoozeOnly: 0, worklet.SnoozeExclude: 1, worklet.SnoozeInclude: 1,
+	for scope, want := range map[inbox.SnoozeScope]int{
+		inbox.SnoozeOnly: 0, inbox.SnoozeExclude: 1, inbox.SnoozeInclude: 1,
 	} {
 		got, err := r.reader.Inbox(t.Context(), worklet.InboxQuery{
 			Handle: "bob", Level: statelog.ReadStale, Snoozed: scope,
@@ -357,7 +358,7 @@ func TestThePersonAnswerServesTheSnoozeBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Person: %v", err)
 	}
-	if want := int64(worklet.MaxSnoozeAhead / time.Second); got.MaxSnoozeAhead != want {
+	if want := int64(inbox.MaxSnoozeAhead / time.Second); got.MaxSnoozeAhead != want {
 		t.Errorf("max_snooze_ahead is %d seconds, want %d", got.MaxSnoozeAhead, want)
 	}
 }
@@ -376,7 +377,7 @@ func noticeOf(t *testing.T, r *roundTrip, id string) worklet.InboxNotice {
 	cursor := ""
 	for {
 		page := r.inbox(worklet.InboxQuery{
-			Handle: "bob", Snoozed: worklet.SnoozeInclude, Cursor: cursor,
+			Handle: "bob", Snoozed: inbox.SnoozeInclude, Cursor: cursor,
 		})
 		for _, n := range page.Notices {
 			if n.RecordID == id {

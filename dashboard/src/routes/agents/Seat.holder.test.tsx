@@ -9,7 +9,7 @@
  * one, so the seat is stated, never chosen. A read that failed is said.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";
@@ -19,6 +19,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { emptyDay } from "~/test/myWork.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -137,7 +138,7 @@ function engine(failing?: Response) {
 /** What the profile's other questions are answered, in the wire's shapes. */
 const ANSWERS: Record<string, unknown> = {
   work_items: { items: [], total_hint: 0 },
-  work_inbox: { handle: "ana", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+  inbox: { handle: "ana", notices: [], primary_reasons: [], unread: 0, primary: 0 },
   seat_activity: { since: "", until: "", days: 7, seats: [], quantile_resolution: 0.06 },
   turns: { turns: [], next: null },
   work_my_work: emptyDay("ana"),
@@ -169,8 +170,7 @@ async function mount(handle: string, grants: string[], as = "ana") {
       </Router>
     </ClientContext.Provider>,
   );
-  await act(async () => {});
-  await act(async () => {});
+  await afterMicrotasks();
 }
 
 beforeEach(() => {
@@ -204,7 +204,7 @@ test("a vacant seat offers its invitation to an administrator, for this seat", a
     target: { value: "sam@example.com" },
   });
   fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
-  await act(async () => {});
+  await afterMicrotasks();
   const post = sent.find((s) => s.method === "POST");
   expect(post?.body).toEqual({
     email: "sam@example.com",
@@ -233,8 +233,7 @@ test("a vacant seat creates a person on itself, keyed, and shows their first pas
     target: { value: "sam.ito@example.com" },
   });
   fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
-  await act(async () => {});
-  await act(async () => {});
+  await afterMicrotasks();
   const post = sent.find((s) => s.method === "POST");
   expect(post?.path).toBe("/iam/people");
   expect(post?.key).toMatch(
@@ -265,7 +264,7 @@ test("an invited seat names its invitation, and cancelling it frees the seat", a
   const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
   expect(dialog.textContent).toMatch(/The link stops working\./);
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel invitation" }));
-  await act(async () => {});
+  await afterMicrotasks();
   expect(sent.filter((s) => s.method !== "GET").map((s) => [s.method, s.path])).toEqual([
     ["DELETE", "/iam/invitations/inv-7"],
   ]);

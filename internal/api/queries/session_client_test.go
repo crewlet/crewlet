@@ -11,7 +11,7 @@ import (
 )
 
 // EVERY QUESTION THE DASHBOARD READS A WRITE BACK THROUGH TAKES A FLOOR, AND
-// EVERY QUESTION THAT TAKES ONE IS LISTED UNDER THE LOG IT READS.
+// EVERY QUESTION THAT TAKES ONE IS LISTED UNDER EACH LOG IT READS.
 //
 // A write through `/operator/act` answers with where its record landed, and
 // the dashboard raises a per-tab floor for that domain and asks the affected
@@ -36,6 +36,13 @@ import (
 // a bare `session` itself — refused, because a floor it honours is a floor it
 // demands — so a kind added to both lists without the behaviour behind it is
 // red here too.
+//
+// A QUESTION READ FROM SEVERAL LOGS IS LISTED UNDER EACH, as the engine serves
+// it — the company feed under the tracker's and the knowledge base's — so a
+// write to either log asks it again, at the floor of each log the tab wrote
+// (`protocol/session.ts` names one `min_position` per listed domain). Listed
+// under one, the half on the other log is read from before its own write;
+// listed under a log it does not read, its floor there is refused.
 func TestEverySessionQueryTakesAFreshnessFloor(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Literal(clientsource.Tree(t), "SESSION_QUERIES")
@@ -48,7 +55,9 @@ func TestEverySessionQueryTakesAFreshnessFloor(t *testing.T) {
 	}
 	engine := map[string][]string{}
 	for _, q := range sessionQuestions {
-		engine[q.domain] = append(engine[q.domain], q.what)
+		for _, domain := range q.domains {
+			engine[domain] = append(engine[domain], q.what)
+		}
 	}
 	// THE CHAT LOG'S, every one of its reads: each takes the caller's
 	// freshness ([TestTheCallersFreshnessReachesEveryChatRead]).
@@ -116,14 +125,10 @@ func askFloorless(t *testing.T, kind string) (any, error) {
 	if i < 0 {
 		// Reported by the listing check; asked with no arguments so an
 		// unknown kind still gives an answer to report.
-		return askNative(t, queries.Sources{Work: &stubWork{}, Pages: &stubPages{}}, kind,
+		return askNative(t, newStubs(sessionQuestion{}).sources(), kind,
 			map[string]any{"read_level": "session"})
 	}
 	q := sessionQuestions[i]
-	work, pages := &stubWork{}, &stubPages{}
-	if q.ready != nil {
-		q.ready(work, pages)
-	}
 	params := map[string]any{"read_level": "session"}
 	for k, v := range q.args {
 		params[k] = v
@@ -132,5 +137,5 @@ func askFloorless(t *testing.T, kind string) (any, error) {
 	if personalQuestions[kind] {
 		ask = askAsOperator
 	}
-	return ask(t, queries.Sources{Work: work, Pages: pages}, kind, params)
+	return ask(t, newStubs(q).sources(), kind, params)
 }

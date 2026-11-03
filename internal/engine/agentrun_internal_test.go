@@ -238,6 +238,7 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 	// coordinator refuses to be built without one.
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Answers:  testAnswers(),
+		Pushes:   noPushes{},
 		Audience: noAudience{},
 		Queue:    q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
 		Restore: restore,
@@ -596,6 +597,7 @@ func TestASeatThatMovesWhileItsExecutorLaunchesIsHandedOn(t *testing.T) {
 			coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 				Answers: testAnswers(), Audience: noAudience{}, Queue: e.backends.Queue,
 				Pending: pending, Manager: manager, Resume: &resumer{engine: e}, Node: "node-a",
+				Pushes: noPushes{},
 				Lease: func(string) (sandbox.Fence, bool) {
 					return sandbox.Fence{Owner: "node-a:1", Epoch: 3}, tc.held
 				},
@@ -606,6 +608,7 @@ func TestASeatThatMovesWhileItsExecutorLaunchesIsHandedOn(t *testing.T) {
 			successor, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 				Answers: testAnswers(), Audience: noAudience{}, Queue: e.backends.Queue,
 				Pending: pending, Manager: manager, Resume: &resumer{engine: e}, Node: "node-b",
+				Pushes: noPushes{},
 			})
 			if err != nil {
 				t.Fatalf("NewCoordinator: %v", err)

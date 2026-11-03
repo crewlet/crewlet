@@ -22,7 +22,7 @@
 --
 -- # The record kind is RETIRED rather than deleted
 --
--- `goal` joins `sprint` in [tracker.RetiredKinds]. An older peer publishing
+-- `goal` joins `sprint` in [worklet.RetiredKinds]. An older peer publishing
 -- during a rolling upgrade, or a goal record still inside
 -- `stream.tracker_retention`, carries a record version this build reads
 -- perfectly — it is the KIND that is gone — so without the retirement gate it

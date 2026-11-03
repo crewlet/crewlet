@@ -16,8 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -263,6 +265,38 @@ var evictedWriters = map[string]evictedWriter{
 			return chatlet.NewGates(db)
 		},
 	},
+	code.Domain{}.Name(): {
+		write: func(ctx context.Context, t *testing.T, e *Engine, tag string) (
+			statelog.Position, statelog.Outcome, error) {
+			t.Helper()
+			// THE CODE LOG'S OWN PUBLISHER, stamping this node's id — the
+			// one the code host's lifecycle store writes through, built here
+			// because this company hosts no code: the log runs on every data
+			// node whatever the company says, and so does its eviction gate.
+			// The write is an operator's eviction of ANOTHER node, which an
+			// evicted node's gate drops like any record it wrote.
+			s := e.core.Load().log
+			store, err := code.NewStore(code.StoreOptions{
+				Publisher: s.Domain(code.Domain{}.Name()).publisher,
+				DB:        s.estate().Reader(), NodeID: s.nodeID})
+			if err != nil {
+				t.Fatalf("build the code log's store: %v", err)
+			}
+			res, err := store.EvictNode(ctx,
+				code.Actor{ID: "ops-1", Kind: code.ActorOperator, OperatorID: "ops-1"},
+				statelog.NewOpID(time.Now(), "evict-"+tag), "node-other-"+tag)
+			return res.Position, res.Outcome, err
+		},
+		applied: func(t *testing.T, back *Backends, tag string) bool {
+			return rowExists(t, back, "code_evictions", "node_id", "node-other-"+tag)
+		},
+		evictionSubject: func(node string) string { return code.EvictionSubject(node).String() },
+		eviction:        codeEviction,
+		evictions:       "code_evictions",
+		gates: func(db store.ReplicatedReader) statelog.Gates {
+			return code.NewGates(db)
+		},
+	},
 	artifactsdomain.Domain{}.Name(): {
 		write: func(ctx context.Context, t *testing.T, e *Engine, tag string) (
 			statelog.Position, statelog.Outcome, error) {
@@ -346,7 +380,7 @@ var evictedWriters = map[string]evictedWriter{
 			}, executordomain.NewEnd{
 				Handle: "ceo", Turn: uuid.NewSHA1(uuid.NameSpaceOID, []byte("turn-"+tag)).String(),
 				ConversationKey: "chat:evicted-" + tag,
-				Ending:          executordomain.Ending{Outcome: executordomain.OutcomeCompleted},
+				Ending:          executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted},
 			})
 			return res.Position, res.Outcome, err
 		},
@@ -533,6 +567,31 @@ func chatEviction(t *testing.T, node string) []byte {
 			Scope: chatlet.ScopeSet{Subject: true},
 		},
 		Mutation: body, Actor: "operator", ActorKind: chatlet.AuthorOperator,
+		OperatorID: "operator",
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction record: %v", err)
+	}
+	return payload
+}
+
+// codeEviction is the same for the code log.
+func codeEviction(t *testing.T, node string) []byte {
+	t.Helper()
+	at := time.Now().UTC()
+	body, err := json.Marshal(code.Eviction{
+		V: code.GateRecordVersion, NodeID: node, EvictedBy: "operator", EvictedAt: at,
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction: %v", err)
+	}
+	payload, err := code.Encode(code.MutationRecord{
+		RecordEnvelope: code.RecordEnvelope{
+			OpID: "op-evict-" + node, Subject: code.EvictionSubject(node),
+			Op: code.OpEviction, CreatedAt: at, Writer: "node-peer",
+			Scope: code.Scope{code.DomainPath()},
+		},
+		Mutation: body, Actor: "operator", ActorKind: code.ActorOperator,
 		OperatorID: "operator",
 	})
 	if err != nil {

@@ -32,15 +32,15 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 | Budget charge | **Fails closed** — stop the round | Money leaves the building for every token, and a counter that cannot be reached must not un-cap a company. An error is *not* a refusal, though: the caller fails the turn rather than telling an agent it is out of budget. |
 | The activation pointer, on `/config` | **Fails closed** — `503 unavailable` with `Retry-After: 2` | Every config answer and every write's base is the pointer. Answered from the node's own record instead, a node behind its fleet hands out an entity-tag the fleet left, every write built on it loses its compare-and-set, and "the fleet has no company" tells a caller to create a company the fleet already runs. A raft election is over in seconds, which is what the retry waits out. |
 
-**A busy record is not an unreachable one.** A compare-and-swap that loses proves the store answered and that another writer's change landed first, so a count of lost races measures how many peers wrote, not whether the store works. So by default a read-modify-write of the shared state retries a lost race — after a jittered 1 ms, doubling to 32 ms — for as long as the coordination client's request timeout (5 s), never a fixed number of times. That covers the token counter, whose writers nothing bounds; an [executor](code-sandbox.md#durability-completion-and-observability)'s record, which every tool call its box makes writes — from as many as twenty subagents at once — beside its seat's own turns, a peer recovering it and a person's answer or stop, each write a decision the store takes again on the record as it then stands; and beside them a channel's counts, a follow, a custody claim and the object store's backend record. That time decides only whether another attempt starts; one already sent is answered by what the store did with it. *Unknown* therefore means a store that did not answer, or a record written faster than it can serve one key — never one that is merely busy. Where what a write races ends the race of itself, the loop keeps an exact count instead, and running it out is *unknown*, never a refusal, since losing every round says nothing about who holds the record: a lease's contenders are the nodes contending one seat, a head count the placement model bounds (64 rounds); a delivery claim loses a round only to a caller that took the lapsed claim first or released it (3 rounds); and a create loses past its third round only to a writer removing the key again inside its own read-to-write window, which nothing does repeatedly (8 rounds). The activation pointer's one unconditional write — `crewlet run -import-company`, replacing the company from a file — runs until its caller gives up, since each round it loses is another activation landing; every other activation is a compare-and-set against the revision it was built on, or create-only where it read no pointer, and losing is its answer ([Control Plane](control-plane.md#the-design)). The notification valve needs no time at all: every race one of its callers loses is another caller's increment, so it reads a full window within its own limit of them and always answers. `race.go` in `internal/coord/kv` lists every loop of that package and why.
+**A busy record is not an unreachable one.** A compare-and-swap that loses proves the store answered and that another writer's change landed first, so a count of lost races measures how many peers wrote, not whether the store works. So a loop's bound is the **head count** of the writers its key can have, never a guess at how busy the store is. A read-modify-write of a fleet record — the token counter, a channel's counts, a custody or object-store record — is coalesced per key on each node (as [Token budgets are windows](#token-budgets-are-windows) describes for the token counter), so its contenders are the nodes writing it; it and the loops that are no read-modify-write — a delivery claim, a follow, an unfollow — are each carried in up to 256 attempts, twice the 128 nodes a fleet key is bounded for, with a wait between two attempts counted in the round trips this node measures on the bucket. Two records have writers nothing else bounds and are carried in that same bound, each call its own loop, each round a decision the store takes again on the record as it then stands: an [executor](code-sandbox.md#durability-completion-and-observability)'s record, which every tool call its box makes writes — from as many as twenty subagents at once — beside its seat's own turns, a peer recovering it and a person's answer or stop; and a person's chat read state, which every tab and device they read in flushes. An attempt already sent is answered by what the store did with it ([A compare-and-set waits for the leader to decide](#a-compare-and-set-waits-for-the-leader-to-decide)). *Unknown* therefore means a store that did not answer, or a key written faster than the fleet's head count can serve — never one that is merely busy. Where what a write races is a known few, the loop keeps an exact count of its own, and running it out is *unknown*, never a refusal, since losing every round says nothing about who holds the record: a lease's contenders are the nodes contending one seat, a head count the placement model bounds (64 rounds); and a create loses past its third round only to a writer removing the key again inside its own read-to-write window, which nothing does repeatedly (8 rounds). The activation pointer's one unconditional write — `crewlet run -import-company`, replacing the company from a file — runs until its caller gives up, since each round it loses is another activation landing; every other activation is a compare-and-set against the revision it was built on, or create-only where it read no pointer, and losing is its answer ([Control Plane](control-plane.md#the-design)). The notification valve's bound is exact rather than shared: every race one of its callers loses is another caller's increment, so it reads a full window within its own limit of them — its limit and one more attempt — and always answers. The package doc of `internal/coord/kv` lists every loop, and `casline.go` there argues each bound.
 
 **A listing obeys the same rule**, and it is the place it is easiest to lose.
 Reading a whole bucket — the fleet's node statuses, the open channels, every
 node's log position — either answers every key that was live throughout the
 read or answers `unknown`, never a shorter list, on one broker or a cluster of
-them alike; its one bound is a size, the 100,000 keys under one filter spelled
-out below. The alternative is not
-hypothetical: a listing that reports what it managed to read, with no error,
+them alike, and at any size — past the 100,000 keys one answer of the index
+holds, the index is read a page at a time, the pages overlapping (below). The
+alternative is not hypothetical: a listing that reports what it managed to read, with no error,
 hands every caller "there are no more records" when the truth is "the store
 stopped answering". For the trim's published floor that reads as a fleet
 needing nothing, which deletes records a node is still replaying.
@@ -50,12 +50,39 @@ index.** The pass carries each key together with its value — never a name
 list followed by a fetch per name, which is what it was. That shape costs a
 round trip per key on top of an ephemeral consumer created and destroyed per
 call — paid continuously, since several of a node's fifteen-second duty loops
-read a bucket on every tick, and the state-log write fence lists the trim's
-published floors on every write at an expectation of zero, a subject's first
-write among them. That listing is the floors' own key class in the
-`positions` bucket, not the per-node positions beside it: the fence compares
-this node's checkpoint against the higher of the published floor and the log's
-first surviving sequence, which it reads from the stream itself.
+read a bucket on every tick.
+
+**No state-log read, and no write a seat or a person's tool makes, waits on a
+listing of the register.** The
+state-log write fence reads the trim's published floor on every write at an
+expectation of zero, a subject's first write among them, and it reads it
+fresh, after the write's own read of its subject: a floor read before that, or
+remembered from an earlier read, can miss the floor that licensed deleting the
+subject's last record. So the fence reads its own domain's floor **by its
+key** — one `$JS.API.STREAM.MSG.GET` answered by the `positions` stream's
+leader, and no consumer at all — beside its read of the log's ends, and
+compares this node's checkpoint against the higher of that floor and the log's
+first surviving sequence. Every other reader of the floors names the domains
+it asks about too, each domain's key on its own, so the floor class is never
+listed. It used to be: a listing's consumer is created and deleted through the
+metadata group every stream and consumer in the fleet is placed through, and
+on a loaded three-member fleet that create ran past the client's five-second
+API timeout often enough to refuse a page create `floor_unknown` with the
+register perfectly readable. In four runs of the end-to-end fleet at a load
+average of 32 to 65 on four cores, 48 of the 1,467 listings every reader of
+the register made failed so, every one at the consumer's create. After the
+change, ten runs at a lighter load (20 to 40) made 402 key reads for the write
+fence and none failed — a different load and a different population, so the
+two are not one comparison. What one read of each kind costs is
+`BenchmarkAFloorRead`'s (`internal/coord/kv`): measured at a load average of 6
+to 7, one key is one API request and no consumer, 0.09–0.16 ms on a member and
+0.19–0.23 ms through a leaf; the listing it replaced is four requests, two of
+them a consumer's create and delete, 1.04–1.16 ms and 1.41–1.81 ms — on an
+idle member a millisecond, and on a clustered broker two proposals the
+metadata group must agree to. The register's other classes are still listed —
+by the node's own loops on their own clocks, and by the operator's gestures
+(the retention report, a readmission, a backup, a capacity window), each once
+per gesture rather than once per request.
 
 A pass on its own **cannot tell that it is complete**. The marker that ends it
 is the client's guess from a pending count, and every bucket here keeps one
@@ -92,6 +119,55 @@ lease is fenced by its epoch, so what the window can mislead is a decision that
 writes nothing. Closing it would take a read that proves a quorum — a barrier
 append per read, as the state log's linearizable read is — which would turn
 every lease heartbeat's read into a write.
+
+A leader read **nobody answers is asked again**, never waited out. Only the
+leader answers one — a key's last message, the key index, a lease bucket's
+last write and clock — and a member that still believes in a leader its group
+has just lost takes the request and returns without a word, so for the seconds
+before it notices, every read sent through it is dropped rather than refused.
+Sent as one request, such a read waited for its caller's whole budget — the
+client's five seconds where the caller set none — for a reply nobody would
+send; the object collector's first pass on a loaded fleet of three failed on
+its read of the files bucket exactly so. So each read is asked as the engine
+asks a metadata read, the state log's own leader reads among them: presumed
+lost after a second, and **one more request every two seconds for as long as
+none is answered**, every earlier one still outstanding and the first answer
+from any of them taken — a leader behind a backlog answers late rather than
+never, and the late answer is kept. That is so whether a read was dropped or
+is only slow, and the broker processes every request it is sent, so a read
+answered later than two seconds costs it a second request. Measured by
+stepping down and by killing a three-member fleet's leader under a read loop
+on every member: the first read on each other member was never answered at
+all, and the one asked again two seconds later was answered by the new leader,
+at 2.0 to 2.2 seconds — the common case, rather than the bound. An election
+the broker *answers* — a group it already knows has no leader replies
+"temporarily unavailable" at once — is an answer, and the caller treats it as
+a store that did not answer, as it always has. "No responders" is not one:
+a node whose link to the broker is down hears it at once, and its read is
+asked again every second, so a link that comes back inside the read's bound
+is answered rather than failed.
+
+How long a read is asked is the **bound it had as one request**: its
+caller's own deadline, or, where the caller set none, the client's five
+seconds, in which a read nobody answers is asked three times — at none, two
+and four seconds — since every caller of it, a boot's steps and a duty's tick
+among them, was sized against that. And no read is asked for longer than
+**thirty seconds**, whatever its caller set — at most fifteen requests nobody
+answers: past the longest silence the broker keeps — up to nine seconds of
+election, and a leader cut off from its quorum stepping down ten seconds after
+it lost it, at a check made every ten — a group in any state answers, so a
+read still unanswered is asking a broker the node cannot reach. A read of a
+domain log, which a caller with no deadline used to ask for ever, is held to
+those thirty seconds. And a read whose answer is a whole stored message is
+not asked again while that message could still be crossing a link: an
+object's piece, read by a node whose connection to the broker crosses one —
+a leaf, or any node of an external cluster — waits for a piece to cross at
+the object store's floor first, and a state log's record read back by its
+position there waits for the log's largest record, which for a log of
+megabyte records outlasts the thirty seconds, so that read is asked once.
+The read a writer waits on for a subject's newest record keeps the
+two-second cadence, a request dropped across an election being the thing
+it must recover from in seconds.
 
 A **tombstone** the pass delivered is not taken as the key's answer either.
 The pass is served by whichever replica the broker placed its consumer on, so
@@ -147,9 +223,10 @@ half it read, and each key is handed over once, at the newest revision the
 listing read. What a listing may do is **lag** — a key claimed or deleted while
 it ran can be seen late, which is a placement that converges one tick later.
 
-The certification costs one index read — two API requests, run beside the
-pass rather than after it so their round trips overlap — and one leader read
-for each key the pass lost or delivered as a marker. The lost keys are zero
+The certification costs one index read — one API request for each hundred
+thousand keys of the class, run beside the pass rather than after it so their
+round trips overlap — and one leader read for each key the pass lost or
+delivered as a marker. The lost keys are zero
 without concurrent writes and bounded by the keys written while the listing
 ran. The markers are bounded by the [marker sweep](#removal-markers-are-swept):
 a bucket with no age would otherwise keep the marker of every record it ever
@@ -158,11 +235,17 @@ the sweep a listing's cost grew with every record the company had ever
 removed. It is never a read per key, unless the broker stopped delivering a
 pass for a whole five seconds and the rest of it had to be read key by key.
 
-Its one bound is the broker's page size for that index: **100,000 keys under
-one filter**. Past it the client reads the index in pages by offset into a list
-the server re-sorts for every page, so a key removed before a page boundary
-between two page reads shifts a later key across that boundary and leaves it
-uncertified — which loses the key only if the pass lost it too.
+Past the broker's page size for that index, **100,000 keys under one
+filter**, the index is read a page at a time, each page its own leader read,
+asked again on its own while nobody answers it. The leader cuts every page out
+of a list it sorts for that request alone, so a key removed before a page
+boundary between two page reads shifts the next one back across it, into the
+page already read; each later page is therefore asked from one key before
+where the last ended, and must begin at or before the key the last ended on,
+or it is asked again from further back. A key live throughout the read is
+named by some page, so none is left uncertified at any size. What a page
+costs grows with the class, since every page sorts all of it, which is the
+measured figure in `internal/jsapi` (`BenchmarkASubjectListing`).
 
 The batched direct get that would remove even the consumer is deliberately not
 used here: it is served by any replica, so a follower behind an acknowledged
@@ -237,8 +320,10 @@ written read back as absent — and the trim floor, a *minimum* over the positio
 it could not see and delete records a node still needed. So:
 
 - **A key is read with `STREAM.MSG.GET`**, which only the stream leader answers.
-  A member that cannot see a leader answers an error or nothing, which is the
-  third value rather than a stale one.
+  A member that cannot see a leader answers an error, which is the third value
+  rather than a stale one; one that has not yet noticed its leader is gone
+  answers nothing, and the read is asked again until its bound
+  ([above](#the-three-valued-answer)).
 - **A listing is certified against the leader's key index.** The stream's
   per-subject index is read from the leader beside the pass, and every key it
   names that the pass did not deliver live — never delivered, or delivered as
@@ -263,7 +348,9 @@ before the switch fails with `no responders`. A rolling upgrade is exactly
 that — the first upgraded node to flip it would take every coordination read
 away from every node still on the previous build. So the guarantee is the
 reader's, which also makes it hold on a bucket an earlier build created,
-without anybody rewriting it. An operator's own tooling (`nats kv get`) still
+without anybody rewriting it. An operator's own tooling (`nats kv get`, through a
+member's loopback client listener on an embedded fleet —
+[Reaching an embedded fleet's broker with the nats tool](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)) still
 reads through any replica.
 
 ### What a leader read does not promise
@@ -368,7 +455,7 @@ flowchart LR
 | `channels` | Who is asking whom, and whether the ask is still open. The record authorizing an answer is read by the node that owns the *answering* seat — never the one that opened it | [Event System § Agent-to-agent](event-system.md) |
 | `fires` | Has this scheduled dispatch already been claimed, and has anybody claimed this minute at all (the question a restart's catchup pass asks before it records a fire as missed). The scheduler is a singleton *duty*, so it moves, and a successor reading its own database found an empty ledger and gave every company two standups | [Scheduling § At-most-once](scheduling.md#at-most-once) |
 | `rebases` | Which instant a unit of work's tracker, knowledge-base and chat writes are minted at, for the work that began longer ago than the [operation ledger](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted) remembers — a trigger dispatched a month late, a turn resumed a month after it parked. The attempt that finds its work's start past that horizon mints at its own instant and records it here, and every later attempt at the same work — a crash re-run, a retried resume, the next half of the turn — inherits it. Company-wide because the next attempt runs wherever the seat's delivery is taken next: a successor reading its own database found nothing and wrote every write of the attempt before it a second time | [Turn Engine § A turn's two identities](turn-engine.md#a-turns-two-identities) |
-| `sandbox runs` | Every agent seat's executor, one record per turn: its box and, for a local box, the node it runs on (`launch_node`), its turn's parked state, its owner and fencing epoch, a person's answer sealed under the fleet keyring, a stop's decision, and whether its tokens are already charged. A run outlives its turn, its process and sometimes its node, and is recovered by whichever node owns the seat *next*. After the launch creates it, every change is one read-decide-write the store runs: a write another writer beat is decided again on the record as it then stands, for the coordination client's request timeout (5 s) and never for a count of attempts, because one run's record takes every tool call its box makes — from as many as twenty subagents at once — beside its seat's own writes. A node can watch one run's record by its turn id and hear only that run's changes — which the node serving the run's tool bridge does, for the turn's notes: from the run's launch to its turn's end the record carries every note a person sent the turn, each sealed under the fleet keyring and filed by any node with one of those writes ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)) | [Code Sandbox](code-sandbox.md) |
+| `sandbox runs` | Every agent seat's executor, one record per turn: its box and, for a local box, the node it runs on (`launch_node`), its turn's parked state, its owner and fencing epoch, its grants on the code host and the floor its box reads at, a person's answer sealed under the fleet keyring, a stop's decision, and whether its tokens are already charged — and, beside each record under a key of its own, the run's bridged tool log, which no listing reads, which is written only beside a record, and which the record's delete removes with it; and beside it too the secrets the run's launch handed its box, sealed, which only a capture of its session (to scrub them out) and the next launch's opening (to carry them forward into a box it continues in) read, and which the record's delete removes as well. A run outlives its turn, its process and sometimes its node, and is recovered by whichever node owns the seat *next*. After the launch creates it, every change is one read-decide-write the store runs: a write another writer beat is decided again on the record as it then stands, within the bound every fleet key shares ([above](#the-three-valued-answer)), because one run's record takes every tool call its box makes — from as many as twenty subagents at once — beside its seat's own writes. Every flip of the run, every listing and every git request of its box reads the record whole, and never the tool log beside it ([Code Sandbox § The run's record](code-sandbox.md#the-runs-record-and-what-it-costs-to-read)). A node can watch one run's record by its turn id and hear only that run's changes — which the node serving the run's tool bridge does, for the turn's notes: from the run's launch to its turn's end the record carries every note a person sent the turn, each sealed under the fleet keyring and filed by any node with one of those writes ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)) | [Code Sandbox](code-sandbox.md) |
 | `secrets` | The company's credentials, one sealed envelope per `${VAR}` name, and the engine's own sealed rows under names no `${VAR}` reaches (the identity estate's key under `iam/`, and each MCP server's OAuth grant under `mcp/<server>/refresh`, which no operator surface lists, reveals or deletes). Coordination holds bytes it has no key for; the Tier A keyring opens them at the edge. It was the last kind of company-wide state living in a node's own database, so `crewlet secrets set` reached one node and a rotation half-landed | [Secret Store](secret-store.md) |
 | `integrations` | Where each external surface's reconcile pass got to: its phase, its findings, the address it was set up against, and whether a disconnect has been asked for. It is company-wide because the loop is a fleet singleton and moves — a status in a node's own database would be a screen that changed answer depending on which node served the page | [Integration Reconcile](integration-reconcile.md) |
 | `mailboxes` | Which seat mailboxes may exist, and since when a seat has been missing from the active revision. Every node records the seat's id — the one its inbox, control and reflection subjects are named by — before it creates the seat's durable subscriptions, because a removed seat is gone from the org every node derives names from and the retirement's absence stamp and mark have nowhere else to live. A mailbox that escaped the record is found by listing the broker's subscriptions. Every change is a compare-and-set, since a returning seat's registration and the sweep that retires a mailbox write the same record | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
@@ -402,7 +489,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 
 **There is exactly one bucket this engine still writes to after it exists, and it is `duties`.** Its age is a *ceiling* on the TTLs it can honour rather than a preference — a bucket made by a build with a shorter one reaps a live duty lease early, and the fleet then runs that duty on two nodes at once — so a booting node raises it to the longest duty's TTL and never lowers it. That is the whole exception: every other bucket, every other field, and the replica count of the duty bucket itself are adopted as they are found. An age *above* the ceiling is the healthy adopted state (a peer on a build with a longer one made it), so that bucket reports no mismatch.
 
-**Replication is the one adopted difference a node refuses to run with.** Everything else a running bucket can disagree with is *reported* — the lease TTL above is warned about and then honoured — because every other difference changes how the store behaves, and behaviour is visible. A replica count changes nothing until a node is lost, and then it changes everything: raise `stream.replicas` from 1 to 3 on a fleet that already ran and a rolling restart finds every bucket still there at one replica, adopts it, and goes on holding every lease, every fencing epoch and the company's secrets on a single disk while each node reports itself correctly configured for three. So a node that is short refuses to start, naming both counts. Equal or higher passes, so a single-replica development node against a replicated fleet's buckets still runs. Resizing is the same operator gesture as any other bucket change — a bucket *is* a stream, so `nats stream update --replicas=3` covers it.
+**Replication is the one adopted difference a node refuses to run with.** Everything else a running bucket can disagree with is *reported* — the lease TTL above is warned about and then honoured — because every other difference changes how the store behaves, and behaviour is visible. A replica count changes nothing until a node is lost, and then it changes everything: raise `stream.replicas` from 1 to 3 on a fleet that already ran and a rolling restart finds every bucket still there at one replica, adopts it, and goes on holding every lease, every fencing epoch and the company's secrets on a single disk while each node reports itself correctly configured for three. So a node that is short refuses to start, naming both counts. Equal or higher passes, so a single-replica development node against a replicated fleet's buckets still runs. Resizing is the same operator gesture as any other bucket change — a bucket *is* a stream, so `nats stream update --replicas=3` covers it, made on an embedded fleet through one member's client listener with the operator key, BEFORE `stream.replicas` is raised ([Reaching an embedded fleet's broker with the nats tool](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)).
 
 | Bucket | Age | Sized from |
 |---|---|---|
@@ -417,7 +504,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `budgets` | 32 days | The longest calendar window a counter has a slot for is a month — 31 days, and at most an hour of clock change — and every charge rewrites the record, so a record older than that counts nothing a current window can be refused against. The age is **not** the reset: a window's allowance comes back when the window turns over, rolled inside the charge that crosses the boundary (see [Token budgets are windows](#token-budgets-are-windows)) |
 | `fires` | 7 days | Must outlast the scheduler's catchup ceiling, for a sharper reason than the ledger's: a completion that expired early makes a turn re-run, while a claim that expired early makes the catchup pass dispatch a fire the fleet already ran |
 | `rebases` | 30 days | The operation ledger's own retention, a day past the horizon a recorded instant is inherited within: an attempt inherits one only while it lies within that horizon of the attempt's own clock, and the age counts from the write, which is no earlier than the instant recorded — so the bucket forgets a record exactly when no attempt could still inherit it. Forgotten sooner, the next attempt would mint anew and write again what the attempt before it wrote |
-| `sandbox runs` | none | The sharpest version of the channel case: an executor parked on a person's answer waits **days**, and its record is the only thing that knows a billed box exists. Its own pause reaper and its terminal delete are what end it: a run's record is deleted the moment the run settles, done or failed, once its box is reclaimed, and a removed seat's runs are ended when its mailbox is retired. No settled run is left for the completion poll and every seat recovery to read again |
+| `sandbox runs` | none | The sharpest version of the channel case: an executor parked on a person's answer waits **days**, and its record is the only thing that knows a billed box exists. Its own pause reaper and its terminal delete are what end it: a run's record is deleted the moment the run settles, done or failed, once its box is reclaimed, and a removed seat's runs are ended when its mailbox is retired. No settled run is left for the completion poll and every seat recovery to read again. |
 | `channels` | none | A bucket's age cannot tell an **open** channel from a closed one, so a TTL would reap the authorization record of an ask still waiting for its answer. Closing an idle channel and deleting a closed one are decisions instead, taken by the [maintenance duty](seat-ownership.md#singleton-duties) |
 | `secrets` | none | A credential is not short-horizon state, and **an expiring secret is an outage on a timer** — one that arrives at the moment a vendor rejects a token every node believes it still has. A secret leaves when an operator unsets it |
 | `integrations` | none | A status is standing state, not a recent event: it says what the last pass found, and it is true until the next one. One that expired would make a converged surface read as never-reconciled and send the loop to re-provision what is already there. It is bounded by the number of surfaces a company has rather than by a horizon, and a row leaves when its block leaves the company document |
@@ -430,7 +517,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a delivery claim that expired in a second, a fleet view showing a node that died last week.
 
-This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for the aged buckets: the broker expires those records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Every **ageless** bucket is the exception, for the reason its row gives — nothing expires them, so removal is a decision somebody takes, and each names a different somebody. `channels`, `mailboxes` and `chat reads` are the maintenance duty's own decision — closing an idle ask nothing will answer any more, retiring a removed seat's inbox, and forgetting the read state of a human seat the company no longer has; `integrations` is the reconcile loop's, which forgets a surface whose block has left the company document on the tick that notices; `secrets` wait for an operator's unset; the `objects` backend record is removed only by an operator moving the company to another store, and the collector's report beside it is replaced by each pass; a node's own `positions` row is never removed at all — an audited eviction stops the trim counting it, and the row is kept because a readmission is judged by it, so those rows are bounded by the node ids ever configured; a log's published trim floor is never removed either, one row per registered domain that each trim tick replaces; and `sandbox runs` end at their own pause reaper or a terminal delete.
+This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for the aged buckets: the broker expires those records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Every **ageless** bucket is the exception, for the reason its row gives — nothing expires them, so removal is a decision somebody takes, and each names a different somebody. `channels`, `mailboxes` and `chat reads` are the maintenance duty's own decision — closing an idle ask nothing will answer any more, retiring a removed seat's inbox, and forgetting the read state of a human seat the company no longer has; `integrations` is the reconcile loop's, which forgets a surface whose block has left the company document on the tick that notices; `secrets` wait for an operator's unset; the `objects` backend record is removed only by an operator moving the company to another store — in place, or by leaving it out of a [restore into a new bucket](../guides/backup.md#restoring-into-a-new-bucket) — and the collector's report beside it is replaced by each pass; a node's own `positions` row is never removed at all — an audited eviction stops the trim counting it, and the row is kept because a readmission is judged by it, so those rows are bounded by the node ids ever configured; a log's published trim floor is never removed either, one row per registered domain that each trim tick replaces; and `sandbox runs` end at their own pause reaper or a terminal delete.
 
 ### Removal markers are swept
 
@@ -442,7 +529,8 @@ Three hours is not what keeps an answer right. Nothing in the engine takes a mar
 
 The sweep removes only what it saw. It purges each key **through the marker's own revision**, and the broker applies that bound, so a record created again after the sweep's pass saw the marker has a later revision and is untouched. The client library's own sweep (`PurgeDeletes`) purges a key outright, and would take that new record with the marker.
 
----
+
+The same sweep removes a part kept beside an executor's record — its bridged tool log, or the sealed secrets its box was handed — whose run has no record, written before the cutoff: the one value a removal can leave behind, when the node removing a run stops between the record's removal and its parts'. It is found in the same pass of the runs' bucket the marker sweep makes, which already carries every record and every part, so a sweep walks the logs once: a part whose record that pass holds no value for is a candidate, its record is then read from the leader, and the part is removed only as the pass found it, so a run written again under its turn keeps its parts. The removal that ends a run leaves a part alone where a record stands beside it again by then: that is the turn's next run, whose launch opens the log to its own job and writes its own job's handed secrets.
 
 ## The lease TTL bounds seats and presence only
 
@@ -454,7 +542,7 @@ So `leases` holds seats and presence and nothing else, `duties` holds every othe
 
 - **Any lease other than a seat's or a presence lease may ask for any TTL up to three hours** (`coord.MaxDutyTTL`), on every backend, whatever the seat lease TTL is. One that asks for more is refused with an error naming the ceiling, on the in-memory backend as well, so a duty or a claim too long for a fleet fails in a single-node test rather than only in production.
 - **The ceiling is the longest duty's TTL**, and an engine test holds the two equal, so neither can move without the other. Every other lease it bounds is far shorter.
-- **Changing `coordination.lease_ttl_seconds` changes seats and presence only.** A duty's TTL comes from its own cadence and a tracker claim's from its own work, so shortening the lease TTL for faster failover refuses neither, and lengthening it permits neither anything longer.
+- **Changing `coordination.lease_ttl_seconds` changes seats and presence only.** A duty's TTL comes from its own cadence and a tracker claim's from its own work, so shortening the lease TTL for faster failover refuses neither, and lengthening it permits neither anything longer. Beyond the leases it moves one thing: a node whose uploads cross a link to the [fleet's own files bucket](object-store.md#the-fleets-own-bucket--nats-the-default) holds as many of their messages out as a link at the floor carries in one heartbeat, so a renewal queued behind them still lands in time — fewer on a shorter lease, and under 11.25 seconds even one is too many, which `crewlet validate` warns of.
 - **And it cannot be shortened below 15 seconds.** The seat lease TTL is also the threshold at which a node's [watchdog](seat-ownership.md#the-wedged-node-and-why-it-leaves) ends it, so a value of a few seconds let a busy but healthy node end itself — the longest a started engine went without a beat under heavy load was measured at 5.1 s, during a boot step the heartbeat no longer sits out, and 2.0 s between beats. At 15 seconds the heartbeat is 5 seconds, a renew has its full second to land in, a lease rides out a 7-second coordination outage in its worst phase (a coordination bucket's leader election takes 4 to 9), and a dead node's seats move in about 20 seconds. Tier A refuses a value set above 0 and below that, naming the field; 0 still takes the shipped 45.
 - **Neither holds a newer build back.** The [mixed-version gate](seat-ownership.md#mixed-version-fleets) counts presence and seat leases only, so it never reads this bucket. A duty is claimed ungated and can outlive a crashed holder by up to three hours. Counted, it would keep a fleet from placing seats for that long after the last older node died mid-upgrade.
 
@@ -471,17 +559,30 @@ A token budget is a set of ceilings per **calendar window** — the day, the ISO
 - **The roll is the reset.** A slot still labelled with an earlier window is moved onto the current one — spend and refusal cleared — inside the same write that counts the charge. Nothing is scheduled and nothing runs at midnight: the allowance comes back on whichever node charges the scope next, and two nodes racing to roll one slot write the same label. There is no reset command and no reset route; room before a window turns over is made by raising its ceiling.
 - **A slot never rolls back.** A node whose clock trails a peer's across a boundary finds the slot already on the next window and counts there, rather than handing the new window its allowance back. A **read** behind such a slot answers the same way: it states the later window, its spend and its refusal, never the earlier window unspent — every read of the counter (a turn's headroom, the learning gate, `GET /budgets`, the live meter) sees exactly what the next charge would be judged against. That lasts a few seconds behind a peer's clock, and up to a day after the company's `timezone` moves west.
 - **The calendar is the caller's.** Every charge and every read carries the windows it is about; the store holds labels and never reads a clock. A turn charges each round in the windows current when the round is charged, on the clock of the epoch the turn is pinned to; an executor's launch is counted in the windows it is collected in.
-- **A node's writes to one counter go out as one, and a race lost to another node is retried for a time, not a count.** The company's record is written by every round of every seat, every auxiliary call and every collected launch, so it is the busiest key the fleet has, and nothing bounds how many writes to it overlap. A node never races itself for it: its concurrent charges, refusals and post-charges to one counter queue behind the write in flight and go out together as a single compare-and-swap, each judged in the order it queued, on the counter as the ones before it left it — exactly what sending them one at a time would decide, so a ceiling still admits what it holds and nothing more. Between nodes a write still races, and one that loses waits a jittered 1 ms, doubling to 32 ms, and tries again for as long as the coordination client's request timeout (5 s): the wait a round's charge already allows a store that does not answer at all. That time decides only whether another attempt starts; an attempt already sent is answered by what the store did with it, so a write the store applied is never reported as one that did not land. A lost race proves the store answered and another node's write landed, so counting them measures load, not health. Only a counter written faster than it can serve one key runs out of that time, and the round then fails closed as an outage (`coord.ErrUnavailable`), never as a refusal. With sixteen attempts and every write racing on its own, 64 concurrent charges from eight nodes failed in 18 runs of 30 on an idle machine, and on a busy one nearly half of them failed in every run — each a round stopped as an outage, and where the company's write was the one that failed, a billed round recorded nowhere. Combined, none failed in 45 runs, idle or busy.
+- **A node's writes to one counter are one write.** The company's record is written by every round of every seat, every auxiliary call and every collected launch, so it is the busiest key the fleet has, and a compare-and-swap per charge made every round in flight on every node a contender for one key — more than any number of attempts covers, and a round that runs out of them fails closed as an outage while the store is healthy: thirty-two concurrent charges through a node without `data` under load lost every one of sixteen attempts. Each node now **coalesces** the charges, refusals and post-charges it has in flight on one scope: one write is decided at a time, and everything that queued behind it is the next, read once and decided **in arrival order**, each against what the ones before it left — admitted or refused exactly as it would have been alone at that point of a serial order, never as a batch, so a ceiling still admits what it holds and nothing more. A charge whose caller hangs up while it waits is withdrawn, counted nowhere; one whose batch has formed lands with it, and its caller is told what it did. So a counter's contenders are the **nodes** charging it, and every compare-and-swap loop on the fleet's records — the counters, the cooldowns, the channels, the claims, the custody and object-store records, the follows — is bounded by that head count: 256 attempts, twice the 128 nodes a key is bounded for (the rate valve by its own limit and one more where that is larger, since every race it loses is another node's increment), with a wait between two attempts counted in round trips — doubling to 256 of them — of the bucket as this node measures it, every attempt it makes there smoothed into one estimate that no single slow attempt can set, so a leaf or an external cluster spreads its writers by its own latency. A charge whose caller hangs up during that wait is withdrawn too, since nothing it asked for has been sent. Exhausting them is still an outage (`coord.ErrUnavailable`), never a refusal. Measured with every node a leaf of its own and sixty-four charges in a closed loop on each, no batch took more than ten attempts at any size up to 128 nodes; what grows with the fleet is the wait under that saturation — the slowest charges' 99th percentile was about 2 seconds at sixteen nodes and 7 to 11 at 128.
 
 ## What a node says about itself
 
-Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture (absent for a beat on which it could not read the control plane, rather than the `serve` its own readiness probe assumes then), when it started, how far its replicated state has come up, whether it serves admin — and how its MCP servers started:
+Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture (absent for a beat on which it could not read the control plane, rather than the `serve` its own readiness probe assumes then), when it started, how far its replicated state has come up, whether it serves admin, how its MCP servers started — and which alarms are firing on it:
 
 - **`admin`** — the node's own [`api.auth.admin`](identity-and-access.md#access-admin-and-one-permission-per-app): `serve` or `refuse`. The posture is applied at decision time, per node and per request, and nothing is written when it changes, so a fleet mid-rollout legally disagrees about it — and without a row saying so, whether somebody can administer the company would depend on which node a load balancer sent them to, with nothing anywhere saying why. `GET /query/fleet` shows it per node. Absent on a node that serves no API, which is a node not saying rather than one that refuses.
 
 - **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md): whether it is shared, how many of its instances are serving and how many are not, how many tools one serves, and one failure's reason (clipped to 512 bytes, with the seat it belonged to). One row per *server*, not per child, because a per-role template has a child for every seat the node holds and the status is re-sent on every beat. A status with no rows is a node that started none. The counts are the servers' state **as of the beat**, not what their starts concluded: a child that died after starting counts as failed, with what took it down, until the engine has [brought it back](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start), and a shared server whose start failed counts as started once a retry brings it up. What each server's instances *list* is not here: a listing is tens of kilobytes where a row is a few hundred bytes, and re-sent every beat it would be most of the heartbeat. It is a record of its own, written when it changes ([What every server lists](../guides/tools-and-mcp.md#what-every-server-lists)).
 
+- **`alarms`** — every [alarm](../reference/alarms.md) the node's own table has firing as of the beat: one mark per kind, however many logs a kind stands on, carrying the kind and when the node raised it (by its own clock, to the second; for a kind on several logs, the oldest of them), the longest-standing first, which is the order its health envelope takes `worst` from. Only the kind and its start ride the heartbeat, never the measurement, which moves on every evaluation and is the node's own `alarm_raised` line. An alarm is evaluated by the node it describes, and its gauge, its log line and the health envelope each tell only somebody already looking at that node; this is where every node's set is read at once, and it is the set as it stands now, so a clear nobody heard about is read off it rather than lost. `GET /query/fleet` shows it per node. A node that evaluated its table and found nothing publishes an empty list; a node with no table it has evaluated (one running no state log, which is any node without `data`, or one whose first evaluation has not run) publishes no `alarms`, which is a node not saying, never a node with nothing firing.
+
+Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook overruns its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero. A key in the status this build does not know is ignored rather than refused, so a successor sharing the fleet can publish what it adds and this build still reads the rest of that node's status.
 Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook does not answer within its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero. The hook itself reports whether it answered — the beat does not infer it from the clock after the hook returns, which used to discard a complete answer whenever the process was descheduled past the deadline. A key in the status this build does not know is ignored rather than refused, so a successor sharing the fleet can publish what it adds and this build still reads the rest of that node's status.
+
+**Beside the status, never in it**, a node with the `git` role carries `git_background_bytes` on every renewal: the memory its [git cache](code-host.md#the-cache-on-a-git-node) gives its background work — its maintenance budget, the node's memory less what its serving keeps, which every whole-repository step of the cache's is admitted against, read again at every maintenance pass, so a container resized in place says its new figure within a pass and a beat. The git nodes weigh each other by it to choose a repository's **maintainer**, the one git node that does a repository's background work for the whole fleet rather than for its own cache: the first node of the repository's git order — the order its [home](code-host.md#the-home-git-node) heads — whose budget holds the work, and the home where none does. So on a fleet of alike nodes the maintainer is the home, on a fleet with one large git node the repositories only it can hold are maintained there, and no node is asked in turn. Each such question reads one listing of the presence leases — the git nodes and every node's figure together — so no node is ordered by one listing and weighed by the next, and a node that listing does not carry is no candidate, the asking node included: one that has given its presence back to drain is nobody's maintainer from the first listing that leaves it out, its own included. The figure rides outside the status because a status whose hook overran is dropped for that beat, and a placement input dropped with it would leave the node saying nothing of what it can hold until the next beat. Read from memory, the figure has nothing to overrun, so it is written on every beat — zero included, which is a git node saying it has nothing to give: its code host not built yet, or transfers that keep all of its memory. A git node whose row carries no figure at all (a build that writes none) is not saying, never one with nothing to give, and nothing moves past a repository's home on it: where it ranks behind the home it is passed over — a runner-up holds no copy of the repository in the ordinary case, so work placed there on no information would begin with a cold sync of the whole history only to be refused at that node's own admission — and it keeps the repositories it is home to, whose copies it holds. A node without the `git` role writes no figure. Not on `GET /query/fleet`.
+
+## Who is in the fleet, asked per request
+
+A question asked on every request — which data nodes a tool call may go to, which node commits a repository's pushes, which nodes divide a search — is answered from each node's **view** of the presence leases rather than from a listing per call. The view lists the presence leases once a heartbeat (15 s at the default 45 s lease) and trusts a listing for one lease TTL, past which it answers *unknown* rather than an old roster.
+
+Between listings it **watches** them. Every claim, renewal and release reaches it as it lands, and one that disagrees with its last listing — a node it does not name, a node back under a new tenure, a release of a node it names — lists the presence leases again at once, at most once a second. So a node that joins, or leaves cleanly, is in or out of every node's routing within about a second, and a fleet started all at once agrees on its members within about a second of the last node's claim. A renewal agrees with the listing and lists nothing, so the watch costs each node one small message per node per heartbeat.
+
+The listing stays the answer. A node that stops without releasing its presence leaves no write behind, so it leaves every roster at the first listing past its lease's TTL, as it always did. A watch that ends is begun again — after a second, doubling to the heartbeat — and lists as it resumes, for whatever it did not hear; while it is down the roster is the listed one. The node logs `coord_view_watch_failed` when its watch stops hearing and `coord_view_watch_resumed` when it hears again.
 
 ---
 

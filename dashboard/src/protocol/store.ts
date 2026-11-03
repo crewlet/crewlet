@@ -26,7 +26,6 @@ import type {
   ChatReadState,
   FeedRow,
   EventEnvelope,
-  InboxChange,
   LiveCall,
   LiveCallAnswer,
   OrgBudget,
@@ -39,7 +38,7 @@ import type {
 } from "./types.ts";
 // RELATIVE, like every contract import in this directory: it is also built
 // alone as `protocol.js`, where the `~` alias does not exist.
-import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
+import { type InboxChange, LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type { ToolRow } from "../contract/tools.ts";
 import { comparePositions, type LogPosition } from "./session.ts";
@@ -446,7 +445,7 @@ export interface StoreState {
    * How many `inbox_changed` frames this socket has delivered, per seat.
    *
    * A COUNTER, NOT THE INBOX: the frame carries identifiers and a hint rather
-   * than the notices, so what a screen does with it is ask `work_inbox` again
+   * than the notices, so what a screen does with it is ask `inbox` again
    * (see `useQuery`'s `refetchOnInboxOf`), and a count moving is the whole of
    * what it needs to know. Only the seat this socket WATCHES is ever sent
    * one. NOT part of what a snapshot replaces: a reconnect re-asks every query

@@ -45,7 +45,42 @@ export interface Module {
   lang: Lang;
 }
 
-let cached: Module[] | null = null;
+let cached: { modules: Module[]; suites: Module[] } | null = null;
+
+/**
+ * Whether a file is one Vitest runs rather than one the dashboard is built
+ * from: a suite (`.test.`), or a benchmark (`.bench.`), which `vitest bench`
+ * runs as `vitest run` runs a suite. A benchmark ships no more than a suite
+ * does, so a gate over what ships reads neither, and a gate over the suites
+ * reads both: a case in either is the same `test` with the same budgets.
+ */
+const isSuite = (name: string) => name.includes(".test.") || name.includes(".bench.");
+
+/** The one walk: every `.ts` and `.tsx` file under `src/`, modules and suites apart, each sorted by path. */
+function tree(): { modules: Module[]; suites: Module[] } {
+  if (cached) return cached;
+  const modules: Module[] = [];
+  const suites: Module[] = [];
+  (function walk(dir: string): void {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!/\.tsx?$/.test(entry)) continue;
+      const lang: Lang = entry.endsWith(".d.ts") ? "dts" : entry.endsWith(".tsx") ? "tsx" : "ts";
+      (isSuite(entry) ? suites : modules).push({
+        path: relative(SRC, full).split("\\").join("/"),
+        text: readFileSync(full, "utf8"),
+        lang,
+      });
+    }
+  })(SRC);
+  const byPath = (a: Module, b: Module) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  cached = { modules: modules.sort(byPath), suites: suites.sort(byPath) };
+  return cached;
+}
 
 /**
  * Every `.ts` and `.tsx` module under `src/` that is not itself a suite, sorted
@@ -57,27 +92,16 @@ let cached: Module[] | null = null;
  * says so in its own suite rather than here.
  */
 export function modules(): Module[] {
-  if (cached) return cached;
-  const out: Module[] = [];
-  (function walk(dir: string): void {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (!/\.tsx?$/.test(entry) || entry.includes(".test.")) continue;
-      const lang: Lang = entry.endsWith(".d.ts") ? "dts" : entry.endsWith(".tsx") ? "tsx" : "ts";
-      out.push({
-        path: relative(SRC, full).split("\\").join("/"),
-        text: readFileSync(full, "utf8"),
-        lang,
-      });
-    }
-  })(SRC);
-  out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  cached = out;
-  return out;
+  return tree().modules;
+}
+
+/**
+ * Every suite under `src/` — a file whose name carries `.test.`, or `.bench.`
+ * for a benchmark — sorted by path, from the same walk: what a gate over the
+ * suites themselves reads.
+ */
+export function suites(): Module[] {
+  return tree().suites;
 }
 
 /** An ESTree node as `parseAst` returns it. */
@@ -96,23 +120,63 @@ export function isNode(value: unknown): value is Node {
   );
 }
 
-/** Parses one module's text into its `Program`. */
+/**
+ * Every `Program` this worker has parsed, by language and text.
+ *
+ * ONE PARSE OF A MODULE PER SUITE, not one per gate. A suite holding three
+ * gates over the tree parsed all of it three times — `parseAst` hands its tree
+ * across as JSON, and decoding that is most of what a gate costs — and the
+ * gates are CPU-bound work inside the runner's per-test budget, so a gate that
+ * re-parsed the tree was a gate that ran out of time on a loaded machine
+ * (measured as the CPU each case spent, from before its first `beforeEach` to
+ * after its last `afterEach`, over the 411 cases of the 24 suites that parsed
+ * at the time, one run each way in a four-core runner slot with nothing else
+ * running in it: 41.8 s before, 26.2 s after). The key is the text itself, so
+ * a gate parsing its own snippet gets its own tree, and a module that is
+ * edited between runs is a new key. No gate writes to a tree it was handed,
+ * which is what makes sharing one between the gates of a suite sound.
+ */
+const parsed: Record<Lang, Map<string, Node>> = { ts: new Map(), tsx: new Map(), dts: new Map() };
+
+/** Parses one module's text into its `Program`, once per worker. */
 export function parse(text: string, lang: Lang): Node {
-  return parseAst(text, { lang }) as unknown as Node;
+  const known = parsed[lang].get(text);
+  if (known) return known;
+  const program = parseAst(text, { lang }) as unknown as Node;
+  parsed[lang].set(text, program);
+  return program;
 }
 
-/** A node's direct children with the field each is held under, in source order. */
+/**
+ * A node's direct children with the field each is held under, in source order.
+ *
+ * SORTED ONLY WHEN THE FIELDS ARE NOT ALREADY IN ORDER. ESTree lists a node's
+ * fields in the order their text appears for almost every node, so the
+ * children come out in source order as they are read; a node whose fields do
+ * not (a template literal lists all its quasis before all its substitutions,
+ * which interleave in the text) is sorted, stably, which is exactly what
+ * sorting every node did — without paying for the sort on the four hundred
+ * thousand nodes a gate over the tree visits.
+ */
 function fieldsOf(node: Node): { child: Node; key: string }[] {
   const out: { child: Node; key: string }[] = [];
-  for (const [key, value] of Object.entries(node)) {
+  let ordered = true;
+  let last = -Infinity;
+  const take = (child: Node, key: string) => {
+    if (child.start < last) ordered = false;
+    last = child.start;
+    out.push({ child, key });
+  };
+  for (const key in node) {
     if (key === "type" || key === "start" || key === "end") continue;
+    const value = node[key];
     if (Array.isArray(value)) {
-      for (const item of value) if (isNode(item)) out.push({ child: item, key });
+      for (const item of value) if (isNode(item)) take(item, key);
     } else if (isNode(value)) {
-      out.push({ child: value, key });
+      take(value, key);
     }
   }
-  return out.sort((a, b) => a.child.start - b.child.start);
+  return ordered ? out : out.sort((a, b) => a.child.start - b.child.start);
 }
 
 /** A node's direct children, in source order. */
@@ -195,6 +259,16 @@ export function isLocalSource(source: string): boolean {
 export interface ShippedText {
   text: string;
   line: number;
+  /**
+   * Whether the text is ALL its expression shows: a string literal, a
+   * template with nothing substituted, or a run of JSX text that is its
+   * element's only child. A constant part of a template that substitutes
+   * something, and a run of JSX text beside an expression, are not whole:
+   * each is a piece of a sentence whose other pieces are computed, so a gate
+   * that excuses a text by what it is alone (a lone mark) excuses only a
+   * whole one.
+   */
+  whole: boolean;
 }
 
 /**
@@ -211,7 +285,7 @@ export interface ShippedText {
 export function shippedText(module: Module): ShippedText[] {
   const line = lineOf(module.text);
   const out: ShippedText[] = [];
-  walk(parse(module.text, module.lang), (node: Node) => {
+  walk(parse(module.text, module.lang), (node: Node, parent: Node | null) => {
     const text =
       node.type === "Literal"
         ? typeof node.value === "string"
@@ -222,7 +296,26 @@ export function shippedText(module: Module): ShippedText[] {
           : node.type === "JSXText"
             ? String(node.value)
             : "";
-    if (text !== "") out.push({ text, line: line(node.start) });
+    if (text !== "") out.push({ text, line: line(node.start), whole: isWhole(node, parent) });
   });
   return out;
+}
+
+/**
+ * Whether a text node is all its expression shows (`ShippedText.whole`): a
+ * template's part only where the template substitutes nothing, and a run of
+ * JSX text only where its element has no other child.
+ */
+function isWhole(node: Node, parent: Node | null): boolean {
+  switch (node.type) {
+    case "TemplateElement":
+      return parent?.type === "TemplateLiteral" && (parent.expressions as Node[]).length === 0;
+    case "JSXText":
+      return (
+        (parent?.type === "JSXElement" || parent?.type === "JSXFragment") &&
+        (parent.children as Node[]).length === 1
+      );
+    default:
+      return true;
+  }
 }

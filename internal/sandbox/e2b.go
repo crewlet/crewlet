@@ -123,8 +123,8 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 // Kind implements [Provider].
 func (p *E2BProvider) Kind() string { return E2BKind }
 
-// templateFor is the image one run gets: the company's, then the coding
-// agent's own.
+// templateFor is the image one run gets: the company's, then the harness's
+// own.
 //
 // Sizing is a property of the TEMPLATE, so this is also where a box's vCPU,
 // RAM and disk are decided — see providers.sandbox.e2b.template.
@@ -211,8 +211,10 @@ func (p *E2BProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, er
 //
 // It matches the config layer's own default box TTL. The value is repeated
 // rather than imported because this package does not import config — and the
-// waiter refreshes the real TTL on its next tick regardless, so this only has
-// to be long enough to survive the gap between resume and that tick.
+// box's timer is the engine's again at once, so this only has to be long
+// enough to survive the gap until then: the waiter refreshes it on its first
+// tick once the reused box's job runs, which the launch starts at once, since
+// a reused box is given no setup.
 const defaultSandboxTTLSeconds = 900
 
 // Kill implements [Provider].
@@ -416,6 +418,12 @@ func (s *E2BSandbox) OpenFile(ctx context.Context, path string) (io.ReadCloser, 
 // ReadTail implements [Sandbox]: a suffix range on envd's download.
 func (s *E2BSandbox) ReadTail(ctx context.Context, path string, n int) (FileTail, error) {
 	return s.envd.readTail(ctx, path, n)
+}
+
+// OpenTail implements [Sandbox]: a suffix range on envd's download, its body
+// read as it arrives.
+func (s *E2BSandbox) OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
+	return s.envd.openTail(ctx, path, n)
 }
 
 // SetTimeout implements [Sandbox]: the keepalive.

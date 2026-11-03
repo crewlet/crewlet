@@ -107,15 +107,28 @@ const (
 	// — and narrower would trip on an ordinary burst from one push.
 	RateWindow = time.Second
 
-	// MaxRateWindow is the longest window any caller counts a [Counter]
-	// over, and so how long the fleet keeps a window (a few multiples of
-	// it, so a window that just closed is still readable while a straggler
-	// finishes writing to it). One minute: the Dashboard Assistant's turn
-	// rate is a person's questions per MINUTE (internal/assistant), counted
-	// across the fleet, the widest window any caller asks for. A backend
-	// refuses a wider one rather than reap it mid-window, which would
-	// restart its count and pass far more than the caller asked for.
+	// MaxRateWindow is the longest window the fleet counts a [Counter] in
+	// among the valve's seconds, and so how long that store keeps a window (a
+	// few multiples of it, so a window that just closed is still readable
+	// while a straggler finishes writing to it). One minute: the Dashboard
+	// Assistant's turn rate is a person's questions per MINUTE
+	// (internal/assistant), counted across the fleet, the widest of the short
+	// windows. A wider window, up to [MaxCounterWindow], is kept apart in a
+	// store whose age outlasts it: the short store would reap it mid-window,
+	// which would restart its count and pass far more than the caller asked
+	// for.
 	MaxRateWindow = time.Minute
+
+	// MaxCounterWindow is the longest window [Counter.Allow] counts: a DAY,
+	// the window of the remote check cells' box-time cap
+	// (internal/code/checkrun), the longest any caller counts in. A backend
+	// keeps a window's count until the window has closed, and a window up to
+	// a day long is kept beside the valve's seconds in a store whose age
+	// outlasts it — never in theirs, which reaps a second-wide window within
+	// seconds so that a seat's notifications leave one record a second
+	// behind for as long as they last, and never theirs in it. A longer
+	// window is an error: nothing keeps it.
+	MaxCounterWindow = 24 * time.Hour
 
 	// ClaimTTL is how long an inbound delivery stays claimed.
 	//
@@ -335,19 +348,19 @@ const (
 )
 
 // Counter is the fleet's shared fixed-window counter, behind the notification
-// valve.
+// valve (a second wide) and the remote check cells' box-time cap (a day wide).
 //
 // A FIXED window, not a sliding one: the operator's number reads as "N per
-// seat per second", and the arithmetic a fixed window needs is one increment
-// against one key — which is the only shape that stays correct when four
-// nodes increment it at once.
+// seat per second" or "N box-hours a day", and the arithmetic a fixed window
+// needs is one increment against one key — which is the only shape that stays
+// correct when four nodes increment it at once. A window is now truncated to a
+// multiple of its width from the zero time, which is UTC: a day's window runs
+// from one UTC midnight to the next.
 type Counter interface {
 	// Allow increments the bucket's count for the window containing now
-	// and reports whether it stayed within limit.
-	//
-	// A window wider than [MaxRateWindow] is an ERROR, never counted: the
-	// fleet does not keep a window that long, so its count would restart
-	// before the window closed.
+	// and reports whether it stayed within limit. A window longer than
+	// [MaxCounterWindow] is an error, since no backend keeps its count
+	// until it closes.
 	//
 	// THREE ANSWERS: within the limit, over it, and — as an error — the
 	// store could not say, whatever the bool beside it. CONTENTION IS
@@ -1200,9 +1213,9 @@ type SandboxRunUpdate struct {
 // whose executor is launching, running, parked, answered or being collected.
 //
 // THE ONE CONTRACT HERE WHOSE VALUE IS OPAQUE, and the reason is that its
-// record has fields of which coordination understands none: the suspended
-// executor conversation, the box and command ids, the brief, the question a
-// person is being asked. Every decision taken on those fields —
+// record has fields of which coordination understands none: the box and
+// command ids, the brief, the question a person is being asked, the bridged
+// tool calls in its log. Every decision taken on those fields —
 // the at-most-once tail claim, the epoch fence, the conditional pause expiry —
 // is sandbox's, lives in internal/sandbox where its suite is, and would be
 // nothing but duplication here. So this holds bytes and a version, and every
@@ -1223,21 +1236,21 @@ type SandboxRunUpdate struct {
 // the work again and abandons a box, and a store that could not be read must
 // never be able to say that.
 //
-// # A lost race is decided again, for the store's patience
+// # A lost race is decided again, within the bound every fleet key shares
 //
 // Every change after the create is a read-decide-write the STORE runs: it
 // reads the record, hands it to the caller's decision, and writes what that
 // decision chose at the version read. A write another writer beat is never
 // sent again as it was — the condition it evaluated may no longer hold — but
-// decided again on the record as it now stands, for as long as the store's
-// patience allows, as every race the fleet store loses is (internal/coord/kv's
-// race.go). Never for a count of attempts, because the writers are many and
-// nothing bounds how many overlap: one run's record takes every tool call its
-// box makes over the bridge — from as many as twenty subagents at once, Claude
+// decided again on the record as it now stands, within the attempts every
+// race the fleet store loses is carried in (internal/coord/kv's casline.go):
+// a bound counted in the NODES writing a key, never in the calls, each lost
+// attempt followed by a window of the round trips the node measures on the
+// bucket. The calls are many: one run's record takes every tool call its box
+// makes over the bridge — from as many as twenty subagents at once, Claude
 // Code's default — beside its seat's own turns, a peer recovering it, a
-// person's answer and a person's stop. A count of lost races measures how many
-// of them wrote, and a bound on it answers a busy record as one that kept
-// changing.
+// person's answer and a person's stop, and a bound sized for the calls
+// answered a busy record as one that kept changing.
 //
 // # A run's record is watched by its key
 //
@@ -1245,11 +1258,43 @@ type SandboxRunUpdate struct {
 // a run's record as it changes — rather than reading it again on every call it
 // serves — is told of that run's writes and of no other run's, however busy
 // the fleet.
+//
+// # A record has its PARTS beside it
+//
+// The record keeps what a reader decides on; what a job can make large is a
+// PART kept beside it under a key of its own ([SandboxRuns.SandboxRunPart],
+// one of [RunParts]), never on it. The record is what every reader decides
+// on: every flip of a run is a read-decide-write of it whole, every listing
+// reads every record whole, and every git request of a coding box reads its
+// run's record and every ref answer past its floor writes it. Two parts:
+//
+//   - [RunLog], the run's bridged tool log — every tool call its box makes
+//     over the bridge, each with its arguments and output, up to
+//     internal/sandbox's bound of two hundred. Measured on a full log, the
+//     record with the log on it was half a megabyte, and every one of those
+//     moved it through the bucket's stream leader; kept beside it, the
+//     record is a few kilobytes and only the log's own readers and its
+//     appends move the log.
+//   - [RunHanded], the secrets a job's box was handed, sealed — up to
+//     internal/sandbox's bound of 64 KiB before sealing, which on the record
+//     would have put a launch whose environment holds a large file on every
+//     one of those reads, though only a capture of the job's session and the
+//     next launch's opening read it.
+//
+// A PART LIVES AND DIES WITH ITS RECORD, and the store, not its caller, is
+// what holds that: a part is written only beside a run that has a record
+// ([SandboxRuns.MutateSandboxRunPart] undoes a write that raced the record's
+// removal), and a delete of the record removes every part with it
+// ([SandboxRuns.MutateSandboxRun]). So a part never outlives its run by
+// anything a write does; a node that stops between the record's removal and
+// a part's leaves the part, and [Markers.SweepMarkers] removes it with the
+// record's marker.
 type SandboxRuns interface {
 	// SandboxRun reads one run's record.
 	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)
 
-	// SandboxRuns returns every record, by turn id.
+	// SandboxRuns returns every record, by turn id — the records ALONE,
+	// never a part beside one.
 	//
 	// Every listing this serves — the seat's busy check, the boot recovery
 	// pass, the pause reaper, the clarification match — filters on fields
@@ -1271,8 +1316,8 @@ type SandboxRuns interface {
 	// answers the change to make ([SandboxRunChange]), whose zero value makes
 	// none. The store writes the change only where the record still stands
 	// at the version decide was handed; where it does not, it reads the
-	// record AGAIN and asks decide again, for as long as its patience
-	// allows. So decide may be called more than once, each time with the
+	// record AGAIN and asks decide again, within the attempts the store
+	// carries a write in. So decide may be called more than once, each time with the
 	// record as it then stands, and must decide from that record alone:
 	// anything it keeps for its caller is the last call's. It is called
 	// holding nothing of the store's, so it may itself read or write the
@@ -1283,13 +1328,22 @@ type SandboxRuns interface {
 	// non-answer as a decision that changed nothing, never an error. An
 	// error decide returns is returned AS IT IS, with nothing written, so a
 	// caller's own refusal reaches it in its own vocabulary. A write that
-	// still lost when the patience ran out is [ErrUnavailable]: the store
+	// still lost at its last attempt is [ErrUnavailable]: the store
 	// answered every attempt, and another writer changed the record first
 	// each time.
 	//
 	// With true it answers the record as written for a Put — the new value
 	// at its new version — and the record it removed for a Delete; with
 	// false, the record as the last decision read it.
+	//
+	// A DELETE TAKES THE RUN'S PARTS WITH IT: the record goes first, at the
+	// version decided on, and then each part, so no reader ever finds a
+	// record whose part was removed under it. Never a part a record stands
+	// beside again by then — the turn launched anew in between, whose launch
+	// writes its own job's parts — so a new run's part is not taken by the
+	// removal of the run before it. A part that could not be removed once the
+	// record went is still a landed delete — the decision did what it
+	// decided — and is left to the sweep (see the type's doc).
 	MutateSandboxRun(ctx context.Context, turnID string,
 		decide func(current Record) (SandboxRunChange, error)) (Record, bool, error)
 
@@ -1312,7 +1366,65 @@ type SandboxRuns interface {
 	// last knew and watches again, and the new watch's first update is the
 	// state then, so a change made while nobody listened is not lost.
 	WatchSandboxRun(ctx context.Context, turnID string) (<-chan SandboxRunUpdate, error)
+
+	// SandboxRunPart reads the part kept beside turnID's run, as the store's
+	// newest write left it: a log appended a moment ago is in the answer.
+	// Record.Key is the turn id. False is a run with no such part — one
+	// whose record has none written yet, or one that is gone. A part that is
+	// not one of [RunParts] is an error.
+	SandboxRunPart(ctx context.Context, turnID string, part RunPart) (Record, bool, error)
+
+	// MutateSandboxRunPart changes the part beside turnID's run by a
+	// decision taken on the part as it stands, answering the part as the
+	// change left it and whether a change landed —
+	// [SandboxRuns.MutateSandboxRun]'s read-decide-write, on the part's own
+	// key.
+	//
+	// decide is handed the part read and whether there is one, and answers
+	// the part's next value whole; an empty answer writes nothing. A write
+	// lands only where the part still stands as decide read it — absent, or
+	// at the version decide was handed — and is otherwise decided again on
+	// the part as it then stands, within the store's patience, an error
+	// decide returns coming back as it is. The decision never reads the
+	// record: a caller whose condition is on the record keeps the facts it
+	// decides by in the part it writes, so one compare-and-swap of one key
+	// holds the condition and the write together.
+	//
+	// ONLY BESIDE A RECORD. A part is written for a run that has a record
+	// and for no other: a write that finds, once it has landed, that the
+	// record was removed under it removes what it wrote and answers
+	// (Record{}, false, nil), as a run that is gone answers
+	// MutateSandboxRun. So a write racing the run's end never leaves a part
+	// behind it.
+	//
+	// What a write does not do is read the record on an UPDATE: a part a
+	// removal left behind — its node stopped between the record's removal
+	// and the part's, which a store that removes both in one step never
+	// leaves — still takes an update until the sweep removes it. Nothing is
+	// lost by that: every reader of a part comes to it through a record, and
+	// each part names the job it was written for, which a run's next launch
+	// replaces.
+	MutateSandboxRunPart(ctx context.Context, turnID string, part RunPart,
+		decide func(current Record, found bool) ([]byte, error)) (Record, bool, error)
 }
+
+// RunPart names one part kept beside a sandbox run's record — see
+// [SandboxRuns].
+type RunPart string
+
+const (
+	// RunLog is the run's bridged tool log.
+	RunLog RunPart = "log"
+	// RunHanded is the secrets the run's job's box was handed, sealed.
+	RunHanded RunPart = "handed"
+)
+
+// RunParts is every part a run's record can have beside it: what a delete of
+// the record removes, and what the sweep looks for.
+func RunParts() []RunPart { return []RunPart{RunLog, RunHanded} }
+
+// Valid reports whether p is one of [RunParts].
+func (p RunPart) Valid() bool { return p == RunLog || p == RunHanded }
 
 // SecretRecord is one stored credential, as coordination holds it.
 //
@@ -1651,6 +1763,13 @@ type Markers interface {
 	// SweepMarkers removes every marker written before cutoff from the
 	// record families no clock ages, reporting how many went. A failure
 	// part-way reports the markers already removed beside the error.
+	//
+	// AND A PART BESIDE A SANDBOX RUN WHOSE RECORD IS GONE — its log, its
+	// handed set ([RunParts]) — written before cutoff: the one value a
+	// removal can leave behind when its node stops between the record's
+	// removal and the part's ([SandboxRuns]). Whether the run has a record
+	// is read after the part is found, so a record written under the turn
+	// again keeps its parts, and a part is removed only as it was found.
 	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
 }
 

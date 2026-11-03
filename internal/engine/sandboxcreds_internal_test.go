@@ -187,7 +187,7 @@ func TestTheRemedyFollowsTheEntrysAuthMode(t *testing.T) {
 // key the seat brings in role.sandbox.env passes, and so does an inherit-env
 // entry once the engine's environment holds a variable it forwards — the
 // refusal's advice has to be advice that works. Judged on the environment the
-// launch judges, the one [newCodingRun] lays: the seat's own, with the entry's
+// launch judges, the one [newExecutorRun] lays: the seat's own, with the entry's
 // sign-in underneath.
 func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
@@ -512,7 +512,7 @@ roles:
 	if err != nil {
 		t.Fatalf("executor chain: %v", err)
 	}
-	run := newCodingRun(member.Provider.(*harness.Provider), runEnv{env: map[string]string{}, defaults: map[string]string{
+	run := newExecutorRun(member.Provider.(*harness.Provider), runEnv{env: map[string]string{}, defaults: map[string]string{
 		"CLOUD_REGION": "fr-par", "CLAUDE_CODE_USE_VERTEX": "1",
 		"ANTHROPIC_API_KEY": "sk-ant-integration", "CLI_ZONE": "fr-par-1",
 	}})
@@ -543,7 +543,7 @@ func TestACredentialShapedDefaultNeverSignsAHarnessIn(t *testing.T) {
 		t.Fatalf("executor chain: %v", err)
 	}
 	const file = "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"
-	run := newCodingRun(member.Provider.(*harness.Provider),
+	run := newExecutorRun(member.Provider.(*harness.Provider),
 		runEnv{defaults: map[string]string{file: "/home/user/.config/crewlet/gcloud-token"}})
 	if run.env[file] == "" {
 		t.Fatalf("the default did not reach the box: %v", run.env)

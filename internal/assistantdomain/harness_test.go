@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -84,7 +85,7 @@ type node struct {
 	counts    *counter
 	applier   *assistantdomain.Applier
 	waiter    *testWaiter
-	verifier  *statelog.Verifier
+	verifier  *recordseal.Verifier
 
 	mu       sync.Mutex
 	consumed uint64
@@ -163,11 +164,11 @@ func newNode(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle, nodeID 
 	if err != nil {
 		t.Fatalf("build the gate reserve: %v", err)
 	}
-	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -190,7 +191,7 @@ func newNode(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle, nodeID 
 	if err != nil {
 		t.Fatalf("build the writer: %v", err)
 	}
-	authority, err := statelogtest.LocalReader(d, db, waiter.Committed())
+	authority, err := statelogtest.LocalReader(d, db, waiter.Reached())
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
@@ -229,7 +230,7 @@ func (n *node) drain() {
 			continue
 		}
 		body, verdict := n.verifier.Open(payload)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			n.t.Fatalf("record %d did not verify: %s", seq, verdict)
 		}
 		n.applyBody(spec, seq, body, storedAt)
@@ -308,7 +309,11 @@ func (w *testWaiter) reach(p statelog.Position) {
 	}
 }
 
-func (w *testWaiter) Committed() statelog.Position {
+// Committed is the checkpoint the fence and the reader are wired to: this
+// harness commits every record it reaches, so it is [testWaiter.Reached].
+func (w *testWaiter) Committed() statelog.Position { return w.Reached() }
+
+func (w *testWaiter) Reached() statelog.Position {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.at
@@ -318,9 +323,9 @@ func (w *testWaiter) StreamIdentity() error                         { return nil
 func (w *testWaiter) Truncated() error                              { return nil }
 func (w *testWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
-func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *testWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
-		if w.Committed().Packed() >= p.Packed() {
+		if w.Reached().Packed() >= p.Packed() {
 			return nil
 		}
 		w.mu.Lock()
@@ -333,7 +338,7 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 			return context.DeadlineExceeded
 		}
 		advance()
-		if w.Committed().Packed() >= p.Packed() {
+		if w.Reached().Packed() >= p.Packed() {
 			return nil
 		}
 		select {
@@ -345,7 +350,7 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 }
 
 func (w *testWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statelog.Position) error {
-	return w.WaitCommitted(ctx, p)
+	return w.WaitReached(ctx, p)
 }
 
 // ---- fixtures ----------------------------------------------------------- //

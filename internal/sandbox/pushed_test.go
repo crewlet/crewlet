@@ -1,0 +1,529 @@
+package sandbox
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+)
+
+// spyRecordAt is the position on the code log every push record a pushSpy
+// answers was read at, as the token the package carries.
+var spyRecordAt = topics.CodeLogStream + "@1:41"
+
+// pushSpy is a [RunPushes] answering what a case scripts and recording every
+// run it was asked about.
+type pushSpy struct {
+	mu    sync.Mutex
+	refs  []PushedRef
+	more  int
+	err   error
+	asked []PendingRun
+	// held, when set, holds every read until the context it runs under ends,
+	// and is closed by the first read to arrive.
+	held chan struct{}
+	// changes, set, answers every Changes call; unset, Changes names nothing
+	// and opens nothing. changed records whether each call was asked to open,
+	// and records the push record each was handed.
+	changes func(run PendingRun, pushed []PushedRef, open bool) ([]PushedRef, []OpenedChange, error)
+	changed []bool
+	records []PushRecord
+}
+
+func (s *pushSpy) Changes(_ context.Context, run PendingRun, record PushRecord,
+	open bool) ([]PushedRef, []OpenedChange, error) {
+
+	s.mu.Lock()
+	s.changed = append(s.changed, open)
+	s.records = append(s.records, record)
+	changes := s.changes
+	s.mu.Unlock()
+	if changes == nil {
+		return record.Refs, nil, nil
+	}
+	return changes(run, record.Refs, open)
+}
+
+// opens is whether each Changes call was asked to open, in order.
+func (s *pushSpy) opens() []bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.changed)
+}
+
+// handed is the push record each Changes call was handed, in order.
+func (s *pushSpy) handed() []PushRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.records)
+}
+
+func (s *pushSpy) Pushed(ctx context.Context, run PendingRun) (PushRecord, error) {
+	s.mu.Lock()
+	s.asked = append(s.asked, run)
+	refs, more, err, held := s.refs, s.more, s.err, s.held
+	s.held = nil
+	s.mu.Unlock()
+	if held != nil {
+		// THE READ OUTLASTS ITS CALLER: answered only once the context the
+		// collection runs under is ended.
+		close(held)
+		<-ctx.Done()
+		return PushRecord{}, ctx.Err()
+	}
+	if err != nil {
+		return PushRecord{}, err
+	}
+	return PushRecord{Refs: refs, More: more, At: spyRecordAt}, nil
+}
+
+// answer scripts what every later read answers.
+func (s *pushSpy) answer(refs []PushedRef, more int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refs, s.more, s.err = refs, more, err
+}
+
+// runs is every run the spy was asked about, in order.
+func (s *pushSpy) runs() []PendingRun {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.asked)
+}
+
+// Object ids the cases' pushes move refs between.
+var (
+	oidA = strings.Repeat("a", 40)
+	oidB = strings.Repeat("b", 40)
+	oidC = strings.Repeat("c", 40)
+	oidD = strings.Repeat("d", 40)
+)
+
+// withNative gives a rig run web and api to push to and docs to read, at a
+// launch floor on the code log.
+func withNative(r *PendingRun) {
+	r.Repos = []RunRepo{
+		{Repo: "web", RepoID: webRepoID, Branch: "seats/swe/ENG-1", Access: RepoWrite},
+		{Repo: "api", RepoID: apiRepoID, Branch: "seats/swe/ENG-1", Access: RepoWrite, Paths: []string{"src"}},
+		{Repo: "docs", RepoID: "0190d8f0-0000-7000-8000-00000000000c", Branch: "seats/swe/ENG-1",
+			Access: RepoRead},
+	}
+	r.CodeFloor = "CREWLET_CODE_LOG@1:40"
+}
+
+// completeRun finishes the rig's run t1 with result and collects it, as the
+// completion poll's signal does.
+func completeRun(t *testing.T, rig *coordRig, result Result) error {
+	t.Helper()
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(result)
+	payload, ev := rig.completion("t1")
+	return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+}
+
+// A COLLECTED RUN'S REPORT SAYS WHAT IT PUSHED, by the push record rather than
+// the run's own words: the refs the engine read under its launch — created,
+// moved and deleted, each as it ended, with how many pushes moved it — follow
+// the run's own `Delivered:` line in its report, and ride the resume and the
+// launch's own record whole. The record is read once a collection, for the
+// run as its row stands.
+//
+// Mutations: leave the pushed lines out of runReport — red; skip the read in
+// collect — red; leave the refs off the launch's record — red.
+func TestACollectedRunsReportSaysWhatItPushed(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	launched := rig.launchWith("t1", withNative)
+	rig.pushes.answer([]PushedRef{
+		{Repo: "web", Ref: "refs/heads/seats/swe/ENG-1", Old: oidA, New: oidB, Pushes: 3},
+		{Repo: "web", Ref: "refs/heads/seats/swe/spike", Old: gitref.ZeroOID, New: oidC, Pushes: 1},
+		{Repo: "api", Ref: "refs/heads/seats/swe/old", Old: oidD, New: gitref.ZeroOID, Pushes: 1},
+	}, 0, nil)
+
+	if err := completeRun(t, rig, Result{Success: true, Text: "fixed the flake",
+		DeliveredRefs: []string{"https://github.com/acme/site/pull/7"}}); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 {
+		t.Fatalf("resumed %d times, want once", len(calls))
+	}
+	want := "Delivered: https://github.com/acme/site/pull/7\n" +
+		"Pushed to this company's code host (its push record):\n" +
+		"- web refs/heads/seats/swe/ENG-1 aaaaaaaaaaaa → bbbbbbbbbbbb (3 pushes)\n" +
+		"- web refs/heads/seats/swe/spike created at cccccccccccc\n" +
+		"- api refs/heads/seats/swe/old deleted (it was dddddddddddd)\n"
+	if !strings.Contains(calls[0].Answer, want) {
+		t.Errorf("the run's report reads:\n%s\nwant it to carry:\n%s", calls[0].Answer, want)
+	}
+	if len(calls[0].Pushed) != 3 || calls[0].PushedElided != 0 || calls[0].PushedUnread != "" {
+		t.Errorf("the resume carries %+v, %d more, unread %q; want the three refs", calls[0].Pushed,
+			calls[0].PushedElided, calls[0].PushedUnread)
+	}
+
+	asked := rig.pushes.runs()
+	if len(asked) != 1 || asked[0].LaunchID != launched.LaunchID || len(asked[0].Repos) != 3 ||
+		asked[0].CodeLaunch != "CREWLET_CODE_LOG@1:40" {
+		t.Fatalf("the record was read for %+v, want once for the collected run as its row stands", asked)
+	}
+
+	recs := rig.collected()
+	if len(recs) != 1 {
+		t.Fatalf("published %d launch records, want the run's own", len(recs))
+	}
+	wantRecs := []types.PushedRefRecord{
+		{Repo: "web", Ref: "refs/heads/seats/swe/ENG-1", Old: oidA, New: oidB, Pushes: 3},
+		{Repo: "web", Ref: "refs/heads/seats/swe/spike", Old: gitref.ZeroOID, New: oidC, Pushes: 1},
+		{Repo: "api", Ref: "refs/heads/seats/swe/old", Old: oidD, New: gitref.ZeroOID, Pushes: 1},
+	}
+	if !slices.Equal(recs[0].PushedRefs, wantRecs) || recs[0].PushedRefsElided != 0 ||
+		recs[0].PushedRefsUnread != "" {
+		t.Errorf("the run's record lists %+v, want the whole ids of %+v", recs[0].PushedRefs, wantRecs)
+	}
+}
+
+// A COLLECTED RUN'S REPORT SAYS THE CHANGES IT DELIVERED TO (M4-decisions
+// D33): the engine names each ref the run pushed by the live change its branch
+// heads, read at the push record's position so the collection pays its one
+// barrier alone, and opens the change the run asked to open — asked to open
+// only for a run that finished its work, succeeded and asked nothing — and
+// the run's report says both: each ref beside its change, and what became of
+// each ask, opened or why not; the run's record carries each ref's change. A run that
+// stopped on a question opens none, the job that carries it on opening the
+// change, and one that did not succeed says it opened none; a run that pushed
+// nothing and asked nothing says nothing more.
+//
+// Mutations: ask the engine to open for a run that did not succeed — the
+// open flag, red; leave the opened lines out of runReport — red; leave the
+// change off the launch's record — red; hand Changes the refs without the
+// record's position — red.
+func TestACollectedRunsReportSaysTheChangesItDeliveredTo(t *testing.T) {
+	t.Parallel()
+	opening := func(r *PendingRun) {
+		withNative(r)
+		r.Repos[0].Open = &OpenChange{Target: "refs/heads/main"}
+	}
+	pushed := []PushedRef{{Repo: "web", Ref: "refs/heads/seats/swe/ENG-1", Old: gitref.ZeroOID, New: oidB,
+		Pushes: 2}}
+	opened := func(run PendingRun, refs []PushedRef, open bool) ([]PushedRef, []OpenedChange, error) {
+		named := slices.Clone(refs)
+		named[0].Change = "web!7"
+		if !open {
+			return named, nil, nil
+		}
+		return named, []OpenedChange{{Repo: "web", Branch: "seats/swe/ENG-1", Change: "web!7", Opened: true}}, nil
+	}
+
+	rig := newCoordRig(t)
+	rig.launchWith("t1", opening)
+	rig.pushes.answer(pushed, 0, nil)
+	rig.pushes.changes = opened
+	if err := completeRun(t, rig, Result{Success: true, Text: "fixed the flake"}); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := rig.pushes.opens(); !slices.Equal(got, []bool{true}) {
+		t.Fatalf("the engine was asked to open %v, want once, for a run that finished", got)
+	}
+	// READ AT THE RECORD'S POSITION: the changes are asked of the record as
+	// it was read, its one barrier's position with it.
+	if got := rig.pushes.handed(); len(got) != 1 || got[0].At != spyRecordAt ||
+		!slices.EqualFunc(got[0].Refs, pushed, func(a, b PushedRef) bool { return a == b }) {
+		t.Fatalf("the changes were asked of %+v, want the record read at %s", got, spyRecordAt)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 {
+		t.Fatalf("resumed %d times, want once", len(calls))
+	}
+	want := "- web refs/heads/seats/swe/ENG-1 created at bbbbbbbbbbbb (2 pushes), change web!7\n" +
+		"Changes on this company's code host (opened at the run's collection):\n" +
+		"- web!7 opened from seats/swe/ENG-1 for review\n"
+	if !strings.Contains(calls[0].Answer, want) {
+		t.Errorf("the run's report reads:\n%s\nwant it to carry:\n%s", calls[0].Answer, want)
+	}
+	if recs := rig.collected(); len(recs) != 1 || len(recs[0].PushedRefs) != 1 || recs[0].PushedRefs[0].Change != "web!7" {
+		t.Errorf("the run's record = %+v, want its ref naming web!7", recs)
+	}
+
+	// A RUN THAT DID NOT SUCCEED has its refs named and opens nothing, and
+	// its report says why.
+	failed := newCoordRig(t)
+	failed.launchWith("t1", opening)
+	failed.pushes.answer(pushed, 0, nil)
+	failed.pushes.changes = opened
+	if err := completeRun(t, failed, Result{Success: false, Error: "the tests still fail"}); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := failed.pushes.opens(); !slices.Equal(got, []bool{false}) {
+		t.Fatalf("the engine was asked to open %v for a run that failed, want named and never opened", got)
+	}
+	says := "- web: no change opened from seats/swe/ENG-1 — the run did not succeed"
+	if calls := failed.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, says) ||
+		!strings.Contains(calls[0].Answer, ", change web!7") {
+		t.Errorf("a run that failed resumed with %+v, want it to say %q and name web!7", calls, says)
+	}
+
+	// A RUN THAT STOPPED ON A QUESTION opens nothing either: the job that
+	// carries its work on asks again. Asked as a job asks, through the store
+	// under the launch the row holds, before the job ends.
+	parked := newCoordRig(t)
+	parked.launchWith("t1", opening)
+	parked.pushes.answer(pushed, 0, nil)
+	parked.pushes.changes = opened
+	if _, err := parked.pending.RecordAsk(t.Context(), "t1", parked.get("t1").LaunchID,
+		Ask{Question: "which flag?", To: AskToRequester}); err != nil {
+		t.Fatalf("RecordAsk: %v", err)
+	}
+	if err := completeRun(t, parked, Result{Success: true}); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := parked.pushes.opens(); !slices.Equal(got, []bool{false}) {
+		t.Fatalf("the engine was asked to open %v for a run that asked a question, want never", got)
+	}
+}
+
+// A PUSH RECORD THAT CANNOT BE READ IS SAID, NOT HIDDEN: the run is still
+// collected and resumed — a collection held until the code host answers would
+// hold a finished run's seat for as long as the host is down — and its report
+// says its pushes are UNKNOWN, why, and which branches it worked on, never a
+// silence its reviewer would read as "nothing pushed". The run's record says
+// so too, and the log names the run.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+//
+// Mutations: omit the unknown sentence — red; fail the collection on the read's
+// error — no resume, red.
+func TestAnUnreadPushRecordIsSaidNotHidden(t *testing.T) {
+	logs := captureLogs(t)
+	rig := newCoordRig(t)
+	rig.launchWith("t1", withNative)
+	rig.pushes.answer(nil, 0, errors.New("code: this node is not serving the code host"))
+
+	if err := completeRun(t, rig, Result{Success: true, Text: "done"}); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 {
+		t.Fatalf("resumed %d times, want the collection resumed whatever the record said", len(calls))
+	}
+	want := "Pushed to this company's code host: unknown — its push record could not be read (code: this " +
+		"node is not serving the code host); the branches it worked on are web: seats/swe/ENG-1; api: " +
+		"seats/swe/ENG-1."
+	if !strings.Contains(calls[0].Answer, want) {
+		t.Errorf("the run's report reads:\n%s\nwant:\n%s", calls[0].Answer, want)
+	}
+	if calls[0].PushedUnread == "" || len(calls[0].Pushed) != 0 {
+		t.Errorf("the resume carries %+v, unread %q; want the reason and no refs", calls[0].Pushed,
+			calls[0].PushedUnread)
+	}
+	if recs := rig.collected(); len(recs) != 1 || !strings.Contains(recs[0].PushedRefsUnread, "not serving") {
+		t.Errorf("the run's record = %+v, want it to say why its pushes are unknown", recs)
+	}
+	if line := logs.String(); !strings.Contains(line, "sandbox_pushes_unread") || !strings.Contains(line, "t1") {
+		t.Errorf("the log does not say the record was unread:\n%s", line)
+	}
+}
+
+// A READ THIS NODE ITSELF CANCELLED IS THE COLLECTION INTERRUPTED: a drain or
+// a moving seat says nothing about the record, so the claim is handed back
+// uncounted and the completion collects again — rather than resuming the run
+// with its pushes "unknown" and publishing its record, once, saying so.
+//
+// Mutation: say the cancelled read as unread — the run resumes, red.
+func TestAPushReadThisNodeCancelledHandsTheCollectionBack(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launchWith("t1", withNative)
+	reading := make(chan struct{})
+	rig.pushes.mu.Lock()
+	rig.pushes.held = reading
+	rig.pushes.mu.Unlock()
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	payload, ev := rig.completion("t1")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- rig.coordinator.OnCompleted(ctx, payload, ev) }()
+	// The collection reaches the read, which waits on its context.
+	select {
+	case <-reading:
+	case err := <-done:
+		t.Fatalf("the collection ended before it read the record: %v", err)
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("an interrupted collection was acked")
+	}
+	if calls := rig.resumer.calls(); len(calls) != 0 {
+		t.Fatalf("an interrupted collection resumed the run: %+v", calls)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning || got.Launch.CollectFailures != 0 {
+		t.Fatalf("the run is %s with %d collection failures, want it running again and uncounted",
+			got.Status, got.Launch.CollectFailures)
+	}
+	if recs := rig.collected(); len(recs) != 0 {
+		t.Fatalf("an interrupted collection published %d records", len(recs))
+	}
+}
+
+// A RUN THAT PUSHED NOTHING SAYS SO — and only a run that could have: one given
+// a repository to push to and whose record names no push says "nothing"; one
+// given its repositories only to read says it could push none, with no read of
+// a record that cannot hold any; one given no repository on the code host says
+// nothing of it.
+//
+// Mutations: drop the "nothing" sentence — red; read the record of a run given
+// only repositories to read — red.
+func TestARunThatPushedNothingSaysSo(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launchWith("t1", withNative)
+	if err := completeRun(t, rig, Result{Success: true, Text: "looked around"}); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer,
+		"Pushed to this company's code host: nothing — no push of this run was recorded.") {
+		t.Errorf("a run that pushed nothing reports %+v", calls)
+	}
+
+	read := PendingRun{Repos: []RunRepo{{Repo: "docs", Access: RepoRead}}}
+	if text := runReport(read, Result{Success: true}); !strings.Contains(text,
+		"Pushed to this company's code host: nothing — it was given its repositories there to read, not to "+
+			"push to.") {
+		t.Errorf("a run given repositories to read reports:\n%s", text)
+	}
+	reader := newCoordRig(t)
+	reader.launchWith("t1", func(r *PendingRun) {
+		withNative(r)
+		r.Repos = r.Repos[2:]
+	})
+	if err := completeRun(t, reader, Result{Success: true}); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if asked := reader.pushes.runs(); len(asked) != 0 {
+		t.Errorf("the record of a run given repositories only to read was read %d times", len(asked))
+	}
+
+	if text := runReport(PendingRun{}, Result{Success: true}); strings.Contains(text, "Pushed to") {
+		t.Errorf("a run given no repository on the code host reports its pushes:\n%s", text)
+	}
+}
+
+// THE PUSHED REFS SHARE THE REFS' ONE BOUND: what the run's own lines leave
+// of MaxDeliveredRefBytes is what the push record's are listed in, counted by
+// the lines they render to; the list stops at the first that does not fit,
+// and the rest are counted with what the read had no room to hold and said in
+// the run's report. A ref's names are redacted before they are measured.
+//
+// Mutations: give the pushed refs a budget of their own — red; skip a long
+// ref for a shorter one after it — red; drop the reader's count — red.
+func TestPushedRefsShareTheRefsBound(t *testing.T) {
+	t.Parallel()
+	ref := func(i int) PushedRef {
+		return PushedRef{Repo: "web", Ref: fmt.Sprintf("refs/heads/seats/swe/%04d", i), Old: oidA, New: oidB,
+			Pushes: 1}
+	}
+	var pushed []PushedRef
+	for i := range 400 {
+		pushed = append(pushed, ref(i))
+	}
+	// A long ref among them, past what the first hundred leave: the list
+	// stops there, whatever fits after it.
+	long := PushedRef{Repo: "web", Ref: "refs/heads/" + strings.Repeat("x", 240), Old: oidA, New: oidB, Pushes: 1}
+	pushed = append(pushed[:100], append([]PushedRef{long}, pushed[100:]...)...)
+	left := 100*len(ref(0).line()) + len(long.line())/2
+	delivered := []string{"https://h/" + strings.Repeat("d", MaxDeliveredRefBytes-left-len("https://h/"))}
+
+	got := (&Coordinator{}).fitResult(t.Context(), PendingRun{}, Result{
+		Success: true, DeliveredRefs: delivered, Pushed: pushed, PushedElided: 7,
+	})
+	size := len(delivered[0])
+	for _, p := range got.Pushed {
+		size += len(p.line())
+	}
+	if size > MaxDeliveredRefBytes {
+		t.Errorf("the refs take %d bytes, past the %d they share", size, MaxDeliveredRefBytes)
+	}
+	if len(got.Pushed) != 100 || got.Pushed[99] != ref(99) {
+		t.Fatalf("listed %d pushed refs, want the 100 before the one that does not fit", len(got.Pushed))
+	}
+	if got.PushedElided != 7+len(pushed)-100 {
+		t.Errorf("counted %d more, want the reader's 7 and the %d not listed", got.PushedElided, len(pushed)-100)
+	}
+	run := PendingRun{Repos: []RunRepo{{Repo: "web", Access: RepoWrite}}}
+	if text := runReport(run, got); !strings.Contains(text,
+		fmt.Sprintf("- and %d more ref(s) its push record names, not listed here", got.PushedElided)) {
+		t.Errorf("the run's report does not say the list is short:\n%.400s", text)
+	}
+
+	// WITH NO OWN LINES, THE PUSH RECORD HAS THE WHOLE BOUND, and what it
+	// lists is redacted.
+	secret := "ghp_" + strings.Repeat("A", 36)
+	alone := (&Coordinator{}).fitResult(t.Context(), PendingRun{}, Result{Pushed: []PushedRef{
+		{Repo: "web", Ref: "refs/heads/" + secret, Old: gitref.ZeroOID, New: oidC, Pushes: 1},
+	}})
+	if len(alone.Pushed) != 1 || strings.Contains(alone.Pushed[0].Ref, secret) || alone.PushedElided != 0 {
+		t.Errorf("a ref naming a credential is listed as %+v", alone.Pushed)
+	}
+}
+
+// EVERY PUSHED LINE IS AT LEAST ITS FLOOR, at its shortest — a one-letter
+// repository and the shortest ref the code host takes — in every shape a ref
+// can end in, so no list of MaxDeliveredRefBytes holds more than
+// MaxPushedRefs and a reader that holds that many holds every candidate.
+func TestEveryPushedLineIsAtLeastItsFloor(t *testing.T) {
+	t.Parallel()
+	for _, p := range []PushedRef{
+		{Old: gitref.ZeroOID, New: oidA},
+		{Old: oidA, New: gitref.ZeroOID},
+		{Old: gitref.ZeroOID, New: gitref.ZeroOID},
+		{Old: oidA, New: oidA},
+		{Old: oidA, New: oidB},
+	} {
+		p.Repo, p.Ref, p.Pushes = "a", "refs/x/y", 1
+		if !gitref.ValidRef(p.Ref) {
+			t.Fatalf("%q is no ref the code host takes, so it is not the shortest one", p.Ref)
+		}
+		if line := p.line(); len(line) < minPushedLineBytes {
+			t.Errorf("%q is %d bytes, under the %d MaxPushedRefs is derived from", line, len(line),
+				minPushedLineBytes)
+		}
+	}
+}
+
+// A RUN IS TOLD WHICH OF ITS PUSHES ARE REPORTED FOR IT: the repositories it
+// was given to push to on the code host reach its runner, which names them in
+// the report instruction; one given to read is not among them, and a run given
+// none is told of none.
+//
+// Mutation: hand the runner every repository the run was given — docs among
+// them, red.
+func TestARunIsToldWhichOfItsPushesAreReported(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	read := granted("docs", "0190d8f0-0000-7000-8000-00000000000c")
+	read.Access = RepoRead
+	req := withRepos(t, launchReq("t1"), granted("web", webRepoID), read, granted("api", apiRepoID))
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	started := rig.runner.Started()
+	if len(started) != 1 || !slices.Equal(started[0].ReportedRepos, []string{"web", "api"}) {
+		t.Fatalf("the runner was handed %+v, want web and api reported", started)
+	}
+
+	plain := newWaiterRig(t)
+	if _, err := plain.launchVia(t.Context(), plain.manager, launchReq("t2")); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if started := plain.runner.Started(); len(started) != 1 || started[0].ReportedRepos != nil {
+		t.Fatalf("a run given no repository on the code host reports %+v", started)
+	}
+}

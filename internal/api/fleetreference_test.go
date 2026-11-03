@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"os"
@@ -56,6 +57,10 @@ func TestTheFleetReferenceExampleCarriesEveryFieldTheAnswerDoes(t *testing.T) {
 		coord.StatusKey: coord.NodeStatus{
 			InFlight: 1, Posture: "serve", StartedAt: at.Add(-12 * time.Minute),
 			AppliersReady: logs, AppliersTotal: logs, AdminPosture: iam.AdminServe,
+			// AN EVALUATED TABLE WITH ONE ALARM FIRING, the half a node
+			// that has not evaluated its table yet leaves out.
+			AlarmsEvaluated: true,
+			Alarms:          []coord.AlarmMark{{Kind: "backup_age", Since: at.Add(-4 * time.Minute)}},
 		}.Meta(),
 	})
 	claim(coord.SeatResource(uuid.New()), "core-1:8f2a", nil)
@@ -80,7 +85,7 @@ func TestTheFleetReferenceExampleCarriesEveryFieldTheAnswerDoes(t *testing.T) {
 
 	registry := queries.NewRegistry()
 	queries.Register(registry, queries.Sources{
-		Coord: backend, Plane: plane, Objects: plane, NodeID: "core-1",
+		Coord: backend, Plane: plane, Objects: agreedNATS{plane}, NodeID: "core-1",
 		Now: func() time.Time { return at },
 	})
 	// ASKED AS A CREDENTIAL HOLDING ADMIN, which the fleet view takes: this
@@ -159,4 +164,13 @@ func holdFields(t *testing.T, what string, documented, rendered map[string]any) 
 				"does not carry it", key, what)
 		}
 	}
+}
+
+// agreedNATS is the fleet's object-store record as a node that agreed the
+// default `nats` store at boot reads it — [engine.Backends.ObjectCollection]'s
+// reading, which only a node's backends hold the agreed identity for.
+type agreedNATS struct{ records engine.CollectionRecords }
+
+func (a agreedNATS) ObjectCollection(ctx context.Context) (engine.CollectionReport, bool, error) {
+	return engine.ObjectCollection(ctx, a.records, "nats")
 }

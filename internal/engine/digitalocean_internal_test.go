@@ -175,17 +175,17 @@ func TestASeatsToolCredentialInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
 		if !agent.SignsInThroughEnv() {
 			t.Fatalf("%s: the entry is not OpenCode, so this case tests nothing", tc.name)
 		}
-		coding := newCodingRun(agent, run)
-		if coding.env[tc.env] != "fake-seat-tool-token" {
-			t.Errorf("%s: the tool's token did not reach the box: %v", tc.name, coding.env)
+		executor := newExecutorRun(agent, run)
+		if executor.env[tc.env] != "fake-seat-tool-token" {
+			t.Errorf("%s: the tool's token did not reach the box: %v", tc.name, executor.env)
 		}
-		if _, present := coding.signIn[tc.env]; present {
+		if _, present := executor.signIn[tc.env]; present {
 			t.Errorf("%s: the agent's tool token is judged as part of the run's sign-in", tc.name)
 		}
-		if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, coding.env); err != nil {
+		if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, executor.env); err != nil {
 			t.Fatalf("%s: the token is not credential-named, so this case tests nothing: %v", tc.name, err)
 		}
-		if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, coding.signIn); err == nil {
+		if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, executor.signIn); err == nil {
 			t.Errorf("%s: the agent's tool token signed OpenCode in to a remote box", tc.name)
 		}
 	}

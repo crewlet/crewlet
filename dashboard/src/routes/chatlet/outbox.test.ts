@@ -53,6 +53,7 @@ const refusal = (code: "conflict" | "unavailable", retryable: boolean): ActResul
   sentence: "The room is archived.",
   detail: "",
   hint: "",
+  hostRefusal: "",
   grants: [],
   reason: "",
   retryable,

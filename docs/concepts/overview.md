@@ -15,7 +15,7 @@ The framework models the same structures found in real companies:
 - **Organizational hierarchy** — departments, teams, and individual roles; seats are held by AI agents or [human teammates](humans-in-the-org.md)
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
 - **Task management**: Worklet, the engine's own work tracker, by default (items, threads, hand-offs, a board and an MCP surface), or an external PM tool it deliberately mirrors none of (Jira, GitHub/GitLab issues); see [The Tracker](task-engine.md)
-- **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code in their own checkout, as their executor's run in the [code sandbox](code-sandbox.md)
+- **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code in their own checkout, as their executor's run in the [code sandbox](code-sandbox.md); beside those, a company can host its git repositories in the engine itself (`code.native`) — repositories declared in its configuration or made by a seat's tools, kept as replicated rows with each push's bytes in the object store, which seats read on the server and change in their own names — a branch through an engine-built commit landed as a push, a repository or a change through one record on the code log and no push — and which a seat's coding box clones and pushes over git as one more git user, with its run's own credential, every push recorded under the run that made it — see [Code Host](code-host.md)
 - **Knowledge**: a shared knowledge base behind one seam, either Doclet, the engine's own pages (keyword over a BM25 index this node holds, semantic over embeddings the fleet derives once, or the two fused by reciprocal rank fusion, `hybrid` being the default), or a live Confluence search, plus a per-agent private diary (vector similarity computed by the database, with hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
 
@@ -62,13 +62,13 @@ flowchart TB
         direction TB
         API["<b>ingress — API + dashboard</b><br/>webhook routes · REST · /config · /secrets<br/>/ws/stream · OTLP ingest · /health · /ready"]
         SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Post-turn reflection, where the seat's memory is held<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models, each a harness"]
-        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · maintenance sweep · learning passes<br/>log trim · embeddings · identity sweep · object collector<br/>chat prune · trash reaper · integration reconcile"]
+        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · maintenance sweep · learning passes<br/>log trim · embeddings · identity sweep · object collector<br/>chat prune · trash reaper · integration reconcile · code retention"]
         CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · observability edge · chat hub<br/>usage publisher, on a data node"]
     end
 
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.SEAT-ID.inbox · .control · .reflect<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
     KV[("<b>Coordination KV</b><br/><i>on the stream's own broker</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
-    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history, the artifacts,<br/>their datastores, Ask Crewlet's conversations, chat,<br/>the seats' executor sessions")]
+    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history, the artifacts,<br/>their datastores, Ask Crewlet's conversations, chat,<br/>the seats' executor sessions, the code host's repositories")]
 
     EXT -->|"webhooks / websocket"| API
     API -->|"verify · claim once per fleet · publish"| STREAM
@@ -94,7 +94,7 @@ appears.
 
 **Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is two local files it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own files. OpenTelemetry for distributed tracing.
 
-**One node type**: `crewlet run` is the node, and what it does is a config value: `node.roles` picks from `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (run agents), and `workers` (the company-wide singleton duties). The default is all four: one process holding the company's records, serving the API and the dashboard and running every agent, which is the whole stack. Giving the API nodes of its own is the same command with `-roles data,ingress`: an engine that serves the API and claims no seats, so both topologies are the same code path rather than two wirings that have to be kept in step. And an agent host can hold **no data at all** — `-roles seats` on a scratch store, joined to the fleet as a leaf — which keeps it small and disposable while its seats read and write through a node that holds the data ([ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md)).
+**One node type**: `crewlet run` is the node, and what it does is a config value: `node.roles` picks from `data` (hold the company's durable state), `git` (serve the company's git repositories, where it hosts them), `ingress` (serve the HTTP API and its webhooks), `seats` (run agents), and `workers` (the company-wide singleton duties). The default is all five: one process holding the company's records, serving the API, the dashboard and its repositories and running every agent, which is the whole stack. Giving the API nodes of its own is the same command with `-roles data,ingress`: an engine that serves the API and claims no seats, so both topologies are the same code path rather than two wirings that have to be kept in step. And an agent host can hold **no data at all** — `-roles seats` on a scratch store, joined to the fleet as a leaf — which keeps it small and disposable while its seats read and write through a node that holds the data ([ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md)).
 
 **One node is enough, and more than one is supported.** Agents are stateful seats, not interchangeable workers, so which node runs which seat is decided by a lease — see [Seat ownership](seat-ownership.md). Scale up (a bigger host, a higher `node.max_concurrent`) before scaling out: a single engine handles many concurrent turns, and one node is the design's degenerate case rather than a lesser path. Run a fleet when a node's failure is not acceptable downtime, when traffic has to terminate separately from the agents, or when some seats must run somewhere specific — [Running a Fleet](../guides/fleet.md) covers all three, and [Scaling Out](scaling.md) is the model underneath them.
 
@@ -215,6 +215,33 @@ internal/
 ├── executordomain/       # Each seat's executor sessions, statelog's tenth
 │                         #   domain: a row per turn naming the sealed object
 │                         #   its harness's session is kept in
+├── code/                 # The code host — statelog's eleventh domain:
+│                         #   a repository's settings, refs and packs as rows,
+│                         #   one subject a repository, the committer that
+│                         #   group-commits its pushes, the activation fence
+│                         #   and the paced purge. gitproc/ is the one git subprocess
+│                         #   wrapper — a built environment, an allowlisted
+│                         #   configuration, slot lanes, process groups and
+│                         #   deadlines — and gitproc/gittest/ the client git
+│                         #   every test drives. cache/ is the node's
+│                         #   disposable bare repositories, derived from rows.
+│                         #   query/ answers a repository's content by object
+│                         #   id — trees, files' lines, diffs, comparisons —
+│                         #   over that cache, in half its read lane.
+│                         #   codefault/ names the fault points of the push
+│                         #   and sync paths, in the order a push reaches them.
+│                         #   host/ is smart HTTP for persons and for
+│                         #   coding boxes, each box admitted by its run's
+│                         #   row: the receive
+│                         #   pipeline in a scratch, the hook relay, and `ok`
+│                         #   told only from a push's applied row — and the
+│                         #   engine-built commit a seat's or a person's
+│                         #   tool asks for, built over the trees it
+│                         #   touches and landed as that same push. codetest/
+│                         #   is the one suite every code-host topology
+│                         #   passes — Run on one data node (SoloNode), and
+│                         #   RunFleet on the three-member fleet codecluster/
+│                         #   stands up, routing through the estate router
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   data node at query time, with coverage on every
 │                         #   answer
@@ -230,9 +257,16 @@ internal/
 ├── seat/                 # Which seats this node runs, and the watchdog
 ├── store/                # The two local files: this node's own estate, and
 │                         #   the replicated one a state log's applier writes
+├── flock/                # The one exclusive cross-process lock on a file,
+│                         #   released by the kernel however its holder
+│                         #   exits — what keeps a second process off the
+│                         #   store's file, the broker's stream directory, a
+│                         #   harness's shared login and a git node's
+│                         #   cache directory
 ├── estate/               # The replicated estate ROUTED: one router on every
 │                         #   node, answering in-process where this node's
-│                         #   copy serves and asking a data node otherwise
+│                         #   copy of the operation's domain serves and
+│                         #   asking a data node otherwise
 ├── objstore/             # The object store: one object per upload, under a
 │                         #   key minted for it and never reused, in one store
 │                         #   the fleet shares — natsobj/ (the default) or
@@ -286,7 +320,8 @@ internal/
 ├── jsinflight/           # A compare-and-set the leader answers "another write
 │                         #   is still in flight" is waited out until the
 │                         #   leader decides it, never read as a lost race
-├── httpx/ textcut/       # The shared HTTP transport; rune-safe shortening
+├── httpx/ textcut/        # The shared HTTP transport and the one
+│                         #   public-address rule; rune-safe shortening
 ├── plainjson/            # JSON read as text: `<`, `>` and `&` as themselves,
 │                         #   for every record and answer a person or a model
 │                         #   reads
@@ -300,12 +335,13 @@ internal/
 │                         #   page does
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
-│                         #   auth/, httpjson/, mcpbridge/, operator/ (ONE
-│                         #   operator catalogue: MCP at /operator/mcp, the
-│                         #   dashboard's /operator/act, and the audit row
-│                         #   every call that is not a read leaves), and
-│                         #   pagepolicy/: the security headers every
-│                         #   response carries
+│                         #   auth/, httpjson/, paced/ (the per-mebibyte pace
+│                         #   a client's connection is held to, both ways),
+│                         #   mcpbridge/, operator/ (ONE operator catalogue:
+│                         #   MCP at /operator/mcp, the dashboard's
+│                         #   /operator/act, and the audit row every call
+│                         #   that is not a read leaves), and pagepolicy/:
+│                         #   the security headers every response carries
 ├── observe/              # The observability edge (store row + live push)
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
 │                         #   the bridge to the envelope's trace fields
@@ -325,7 +361,9 @@ internal/
 │                         #   every one lives in dashboard/src/contract/
 ├── sourcetree/           # What is this repository's tree: the module root,
 │                         #   a walk that never reads a nested checkout, and
-│                         #   what a gate may skip unread
+│                         #   what a gate may skip unread — plus decltype/, a
+│                         #   value's type read from the declarations it
+│                         #   reaches, for the gates that judge by type
 ├── e2e/                  # The end-to-end company, and the dashboard replay
 ├── period/               # The company calendar: the day, ISO week and month a
 │                         #   moment falls in, named by a label every node

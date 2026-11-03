@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -314,6 +315,75 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.WriteArtifactDataTool: true,
 		builtin.SetArtifactSchemaTool: true,
 
+		// THE CODE HOST'S READS, every one a proven read: a worker may be
+		// handed any of them.
+		builtin.CodeListReposTool: false,
+		builtin.CodeGetRepoTool:   false,
+		builtin.CodeResolveTool:   false,
+		builtin.CodeReadTool:      false,
+		builtin.CodeDiffTool:      false,
+		builtin.CodeCompareTool:   false,
+		builtin.CodeLandedInTool:  false,
+		builtin.CodeLogTool:       false,
+		builtin.CodeBlameTool:     false,
+		// A repository's changes are read the same way: a worker handed a
+		// change's findings to weigh reads them as its parent would.
+		builtin.CodeListChangesTool: false,
+		builtin.CodeGetChangeTool:   false,
+
+		// AND ITS WRITES, every one a branch or a repository every colleague
+		// reads: a worker writing one would write with its parent's grant.
+		builtin.CodeCommitFilesTool:   true,
+		builtin.CodeRevertTool:        true,
+		builtin.CodeCherryPickTool:    true,
+		builtin.CodeCreateBranchTool:  true,
+		builtin.CodeDeleteBranchTool:  true,
+		builtin.CodeCreateRepoTool:    true,
+		builtin.CodeUpdateRepoTool:    true,
+		builtin.CodeDeleteRepoTool:    true,
+		builtin.CodeRestoreRepoTool:   true,
+		builtin.CodeProtectBranchTool: true,
+		// A CHANGE'S WRITES, a change every colleague reads and whose
+		// reviewers are woken: a worker opening or closing one would steer
+		// it with its parent's grant.
+		builtin.CodeOpenChangeTool:   true,
+		builtin.CodeUpdateChangeTool: true,
+		builtin.CodeCloseChangeTool:  true,
+		// AND ITS CONVERSATION, which wakes the change's people: a worker
+		// reviewing or dismissing a finding would judge under its parent's
+		// name.
+		builtin.CodeRequestReviewTool:   true,
+		builtin.CodeReviewChangeTool:    true,
+		builtin.CodeCommentOnChangeTool: true,
+		builtin.CodeResolveFindingTool:  true,
+		// AND ITS SUGGESTIONS APPLIED, a commit onto its branch, and ITS
+		// REBASE, a forced push of it.
+		builtin.CodeApplySuggestionsTool: true,
+		builtin.CodeRebaseChangeTool:     true,
+		// AND ITS MERGE, which moves its target, and ITS DEQUEUE.
+		builtin.CodeMergeChangeTool:   true,
+		builtin.CodeDequeueChangeTool: true,
+		builtin.CodeRevertChangeTool:  true,
+		// A COMMIT'S CHECKS: what one said is a read a worker may be handed;
+		// a rerun queues an attempt every colleague's change readiness reads,
+		// and a report is a check result on the same rows — neither a
+		// worker's to make under its parent's grant.
+		builtin.CodeGetCheckFailuresTool: false,
+		// A SEARCH OF THE COMPANY'S CODE: a read, and a worker's to make.
+		builtin.CodeSearchTool:      false,
+		builtin.CodeRerunChecksTool: true,
+		builtin.CodeReportCheckTool: true,
+		// A REPOSITORY'S PURGE: a request every reader of the repository's
+		// history loses objects to.
+		builtin.CodePurgeUnreachableTool: true,
+		// A REPOSITORY IMPORTED: a new project every colleague reads,
+		// filled from another host.
+		builtin.CodeImportRepoTool: true,
+
+		// THE DEPLOYMENT'S HEALTH: two reads of what the fleet already
+		// publishes, which a worker of a granted seat may be handed.
+		builtin.FleetHealthTool: false,
+		builtin.CodeStatusTool:  false,
 		// CHATLET. Its reads are reads; saying something and
 		// reacting are words on somebody else's screen; joining and
 		// leaving move only where this seat listens, which is its own.
@@ -1044,6 +1114,19 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND THE DATASTORE BESIDE IT, which the four data tools take
 		// with the artifacts half.
 		ArtifactData: artifactDataDeps(newFakeData()),
+		// AND THE CODE HOST, whose twelve read tools register only over a
+		// code host and the requester ceiling's halves beside it, and whose
+		// writes only where its writes are wired too: left out, every walk over
+		// this fixture met their authority rows as rules no registered tool
+		// answers.
+		Code: writeDeps(newCodeHost(), &codeWrites{}),
+		// AND THE HEALTH TOOLS, over a lease table and the git nodes' status
+		// scatter, each with the requester ceiling's halves beside it —
+		// fleet_health's its own, code_status's code half wired as the code
+		// reads are: left out, their two rows read as rules no registered
+		// tool answers.
+		Health: builtin.HealthDeps{Leases: coordmem.New(), Requesters: codeRequesters(),
+			Chart: chartLeads, Status: &statusAsker{}, Code: codeDeps(newCodeHost())},
 		// AND CHATLET, all three halves: left out, its nine tools
 		// were classified by nothing in the table below.
 		Chat: chatDeps(newFakeChat()),

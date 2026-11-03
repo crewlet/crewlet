@@ -60,6 +60,7 @@ import (
 type PendingRuns interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
 	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
+	BridgeLog(ctx context.Context, run sandbox.PendingRun) (sandbox.BridgeLog, error)
 }
 
 // ExecutorTails answers a running executor's live output from the node that
@@ -241,9 +242,28 @@ func (s Sources) executorRows(ctx context.Context, p Params) (any, error) {
 		if filtered && !putTo(run, who) {
 			continue
 		}
-		out = append(out, serialiseRun(run, reach(run), s.opened(run)))
+		r := reach(run)
+		calls, err := s.runCalls(ctx, run, r)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, serialiseRun(run, calls, r, s.opened(run)))
 	}
 	return map[string]any{"runs": out}, nil
+}
+
+// runCalls is the log of a run's bridged calls as reader r is shown it.
+//
+// READ ONLY FOR A READER SHOWN THE CALLS: the log is kept beside the row
+// ([sandbox.BridgeLog]) and is up to two hundred calls with their arguments and
+// output, so an answer to a reader the run's body is withheld from never reads
+// one, and the zero log it answers then is never drawn. A log that cannot be
+// read fails the answer rather than drawing a run that called nothing.
+func (s Sources) runCalls(ctx context.Context, run sandbox.PendingRun, r livestate.Reach) (sandbox.BridgeLog, error) {
+	if !r.Body {
+		return sandbox.BridgeLog{}, nil
+	}
+	return s.Sandbox.BridgeLog(ctx, run)
 }
 
 // runReach is what the asking principal may read of each executor: its
@@ -407,8 +427,13 @@ var runKeys = map[string]runShown{
 //
 // A KEY THE TABLE DOES NOT NAME IS WITHHELD, which the walk keeps unreachable:
 // left out is the direction a mistake here has to fail in.
-func serialiseRun(run sandbox.PendingRun, r livestate.Reach, opened runOpened) map[string]any {
-	row := runRow(run, opened)
+//
+// calls is the run's log as [PendingRuns.BridgeLog] read it, and the zero
+// value for a reader shown no body, whose answer never carries a call.
+func serialiseRun(run sandbox.PendingRun, calls sandbox.BridgeLog, r livestate.Reach,
+	opened runOpened) map[string]any {
+
+	row := runRow(run, calls, opened)
 	asked := r.Record != "" && slices.Contains(run.AudienceHandles, r.Record)
 	for key := range row {
 		switch runKeys[key] {
@@ -467,10 +492,10 @@ func (s Sources) heldArguments(run sandbox.PendingRun) map[string]any {
 	return args
 }
 
-// runRow is every fact an executor's row carries, whoever reads it — see
-// [serialiseRun] for what each reader is shown of it. opened is what its
-// seals open to ([Sources.opened]).
-func runRow(run sandbox.PendingRun, opened runOpened) map[string]any {
+// runRow is every fact an executor's row carries, with the calls of the log
+// kept beside it, whoever reads it — see [serialiseRun] for what each reader is
+// shown of it. opened is what its seals open to ([Sources.opened]).
+func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) map[string]any {
 	answeredBy := opened.answeredBy
 	// HELD, NOT STAMPED. A box parked on a question is being paid for
 	// whether or not the pause instant reached the row, and drawing the raw
@@ -576,16 +601,16 @@ func runRow(run sandbox.PendingRun, opened runOpened) map[string]any {
 		"reply": run.Reply,
 		// THE BRIDGE'S OWN TOOL LOG. Every run's calls are made by a
 		// process outside the engine, over its bridge, minutes or hours
-		// apart and possibly across a restart, so this row is the only
-		// copy there is. `bridge_calls_elided` says how many were cut from the
+		// apart and possibly across a restart, so the log beside the row is
+		// the only copy there is. `bridge_calls_elided` says how many were cut from the
 		// middle, because a log that silently skips is a log that lies
 		// about what the run did.
 		// ALWAYS AN ARRAY on a row the store answered: every run is
 		// bridged, so an empty log is a run that has called nothing — a
 		// fact the run's page states — and never "not known", which a
 		// reader is told only by the key being absent (a withheld body).
-		"bridge_calls":        nonNil(run.BridgeCalls),
-		"bridge_calls_elided": run.BridgeCallsElided,
+		"bridge_calls":        nonNil(calls.Calls),
+		"bridge_calls_elided": calls.Elided,
 		// THE THREE IDENTIFIERS a person needs to find this run in
 		// somebody else's system: the harness's own session, the
 		// command the engine launched, and the chain of asks that led

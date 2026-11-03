@@ -124,7 +124,7 @@ type StepEvent struct {
 }
 
 // StepRequest is a step's request: the method and the path it was sent to,
-// wildcards filled in (`/query/knowledge`, `/work/ENG-42`), never the query
+// wildcards filled in (`/query/knowledge`, `/worklet/ENG-42`), never the query
 // values or the body.
 type StepRequest struct {
 	Method string `json:"method"`

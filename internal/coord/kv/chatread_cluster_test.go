@@ -28,10 +28,11 @@ import (
 // so a flush that was dropped is a cursor missing from the record.
 //
 // Every round one of them loses is a write another of them won, the loop races
-// for the store's patience rather than a count ([FleetStore.retryRaces]), and
-// the bucket handle waits out the in-flight answer inside the write
-// (settle.go) — so all of them land, and every refusal a flush's own code met
-// was one the leader DECIDED. race_test.go holds the patience
+// within the bound every fleet key shares ([casRetry], [fleetCASAttempts]) —
+// four times the flushes here, each lost round followed by a window of round
+// trips — and the bucket handle waits out the in-flight answer inside the
+// write (settle.go) — so all of them land, and every refusal a flush's own
+// code met was one the leader DECIDED. race_test.go holds the bound
 // deterministically, since a cluster stages its race only sometimes.
 func TestSixtyFourFlushesForOnePersonOnAReplicatedBucketAllLand(t *testing.T) {
 	t.Parallel()

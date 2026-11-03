@@ -71,7 +71,7 @@ func TestAServerTurnedOffIsNotHeldBackForItsCredentials(t *testing.T) {
 	}
 }
 
-// A CODING AGENT'S BOX IS NOT GIVEN A SERVER TURNED OFF, though the seat's box
+// AN EXECUTOR'S BOX IS NOT GIVEN A SERVER TURNED OFF, though the seat's box
 // block still lists it: the listing is kept for the day the server is turned
 // back on. Nothing is withheld for its credentials either, since a server
 // nobody runs needs none.

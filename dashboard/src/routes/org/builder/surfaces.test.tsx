@@ -343,7 +343,7 @@ test("every opening of the editor builds its own node's form", async () => {
 // check: the open editor lost its node for that moment and came back empty.
 test("a colleague's save leaves an open editor and its typed form, which then applies", async () => {
   const engine = new Engine(company());
-  const { store } = mountBuilder({
+  const { store, checkChange } = mountBuilder({
     engine,
     org: { name: "Acme", roles: [], units: [] },
     surfaces: builderSurfaces,
@@ -371,6 +371,7 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
   expect(location.hash).toContain("seat=ceo");
 
   fireEvent.click(within(editor).getByRole("button", { name: "Apply" }));
+  await checkChange();
   await waitFor(() => {
     const last = engine.checks().at(-1)!;
     expect(last.headers["If-Match"]).toBe('"r2"');

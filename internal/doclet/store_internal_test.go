@@ -113,14 +113,14 @@ func TestARefusalThisPackageHasNoWordForTravelsUnchanged(t *testing.T) {
 // words, which the tool surface does not branch on.
 //
 // Mutation: translate whatever the subject's kind and the log's own rows go
-// red; translate nothing and the edited rows do; declare a seventh kind and
+// red; translate nothing and the edited rows do; declare an eighth kind and
 // it is named.
 func TestARefusalOnTheLogsOwnSubjectsIsTheFrameworks(t *testing.T) {
 	t.Parallel()
 	// edited is whether a person edits a kind's objects, for every kind.
 	edited := map[ObjectKind]bool{
 		KindContainer: true, KindPage: true, KindTitle: true,
-		KindEviction: false, KindGeneration: false, KindBarrier: false,
+		KindEviction: false, KindGeneration: false, KindBarrier: false, KindTrimmed: false,
 	}
 	for kind := range edited {
 		if !kind.Valid() {

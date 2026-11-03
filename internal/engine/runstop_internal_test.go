@@ -186,7 +186,7 @@ func TestAStoppedTurnsCloseIsTheSameRecordsEveryTime(t *testing.T) {
 	before := len(q.History())
 
 	for range 2 {
-		if _, err := e.closeStoppedTurn(t.Context(), row); err != nil {
+		if _, err := e.closeStoppedTurn(t.Context(), row, sandbox.RunCalls{}); err != nil {
 			t.Fatalf("closeStoppedTurn: %v", err)
 		}
 	}

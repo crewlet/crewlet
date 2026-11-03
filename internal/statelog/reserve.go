@@ -145,6 +145,21 @@ const appendOverhead = 4 << 10
 // server's setting on the broker the engine configures itself.
 const MaxTransportRecordBytes = queue.MaxPayloadBytes - appendOverhead
 
+// MaxDeliveryBytes is the most one stored record of ANY log is counted at when
+// the broker delivers it: the largest message the transport carries
+// ([queue.MaxPayloadBytes], a record's payload and headers together) and what a
+// delivery counts beside it against a pull's byte bound — the record's subject
+// and the acknowledgement subject, a few hundred bytes, which [appendOverhead]
+// holds with room to spare.
+//
+// THE TRANSPORT'S, NOT A LOG'S ([StreamSpec.MaxAppendBytes]): a reader that
+// pulls one record at a time from a log it did not provision — the backup's
+// replay window — cannot know the declaration the log was made under, only
+// that the broker admitted nothing past the transport. A pull bounded below
+// this is refused a record at that ceiling with nothing delivered, on every
+// pull, so a reader sized by the payload alone stopped at that record for ever.
+const MaxDeliveryBytes = queue.MaxPayloadBytes + appendOverhead
+
 // MaxAppendBytes is the most one append to this log is counted at: its
 // largest record ([StreamSpec.MaxRecordBytes]) and what a stored record
 // carries beside it.

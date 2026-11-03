@@ -64,7 +64,11 @@ func RuntimeAddress(contract string, runtime []byte) string {
 // tree holds is the publish pipeline's reading of the same directories
 // (internal/artifactupload's ReleasesIn), which resolves a version's pin to one
 // of them; this side only ever serves a name of that shape.
-var versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var versionPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)
+})
 
 // cacheForever is a versioned public file's Cache-Control: the name is the
 // version, so the bytes behind it never change, `public` because the file is in
@@ -115,7 +119,7 @@ func newPublicFiles(tree fs.FS) *publicFiles {
 // other name in a contract's directory is revalidated on every use.
 func (p *publicFiles) serve(w http.ResponseWriter, r *http.Request, kind, rest string, secure bool) bool {
 	version, file, ok := strings.Cut(rest, "/")
-	if !ok || !versionPattern.MatchString(version) || file == "" {
+	if !ok || !versionPattern().MatchString(version) || file == "" {
 		return false
 	}
 	cache := cacheForever
@@ -156,7 +160,7 @@ func (p *publicFiles) serve(w http.ResponseWriter, r *http.Request, kind, rest s
 // this binary holds it ([RuntimeAddress]), or false for a contract it does
 // not hold.
 func (p *publicFiles) runtimeAddress(contract string) (string, bool) {
-	if !versionPattern.MatchString(contract) {
+	if !versionPattern().MatchString(contract) {
 		return "", false
 	}
 	typ, _ := mediatype.For(RuntimeScript)

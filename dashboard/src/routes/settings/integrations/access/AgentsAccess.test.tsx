@@ -14,6 +14,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
 import { pick } from "~/testing.tsx";
 import { AgentsAccess } from "./AgentsAccess.tsx";
@@ -139,8 +140,13 @@ afterEach(cleanup);
 function draw(data: AccessAnswer, over: { held?: string; readOnly?: string; only?: string } = {}) {
   const reload = vi.fn();
   const onAnswer = vi.fn();
+  // THE APP'S LIVE REGION, as the frame mounts it: the kit's selection bar
+  // over the unsaved changes says its count ("One change not saved") through
+  // it, and a sentence said with no region mounted is a warning the console
+  // gate fails.
   const ui = (answer: AccessAnswer) => (
     <LayerHost>
+      <AppAnnouncer />
       <AgentsAccess
         kind={answer.kind}
         name={laneWords(answer.options[0]!.lane).name}

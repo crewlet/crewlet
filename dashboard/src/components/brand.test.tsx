@@ -20,6 +20,7 @@ import { BRAND_KIT_FACES, BRAND_SYSTEM_STACKS } from "~/contract/brand.ts";
 import { faceDrawing } from "~/lib/brand/brand.ts";
 import { fmtDate } from "~/lib/format.ts";
 import type { BrandFace } from "~/protocol/types.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { AdoptedBrandScope, BrandAgentNote, BrandFact, BrandMakeChip } from "./brand.tsx";
 
 class InertWebSocket {
@@ -122,7 +123,9 @@ test("with no brand, an administrator is offered the setup and anyone else nothi
     null,
   );
   await screen.findByText("drawn");
-  await new Promise((r) => setTimeout(r, 0));
+  // AN ABSENCE, read once the viewer and the brand have answered and what
+  // they drew has landed: both reads are stubs, so that is a task boundary.
+  await afterMicrotasks();
   expect(screen.queryByRole("link")).toBeNull();
 });
 
@@ -194,7 +197,9 @@ test("a deck says the brand it was made with, and the day", async () => {
 
 test("a sheet and a brand kit carry no Brand fact", async () => {
   fact("sheet", ADOPTED);
-  await new Promise((r) => setTimeout(r, 0));
+  // AN ABSENCE, read once every stubbed read the fact could make (the brand,
+  // the version, the deck over HTTP) has answered and its render has landed.
+  await afterMicrotasks();
   expect(screen.queryByText("Brand")).toBeNull();
 });
 

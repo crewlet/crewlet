@@ -14,14 +14,14 @@
  * alone would still be a fact nobody can name.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import { WorkSearch } from "./WorkSearch.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store, type WorkRanked } from "~/protocol/index.ts";
 import { BugGlyph } from "@crewlethq/icons/glyphs";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 
@@ -54,19 +54,28 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-const hit = (over: Record<string, unknown>) => ({
+/**
+ * One hit AS THE ENGINE SENDS IT (`worklet.Ranked`), typed so a fixture that
+ * drifts from the wire fails the typecheck: this one had lost the id, the
+ * project and the priority and still carried the `score` the answer dropped,
+ * so every row the grid drew had no key — its `rowKey` is the id — and React
+ * warned on every case with two hits. The id follows the key, one per item.
+ */
+const hit = (over: Partial<WorkRanked>): WorkRanked => ({
+  id: `0196f2a0-0000-7000-8000-${(over.key ?? "ENG-1").replace(/\D/g, "").padStart(12, "0")}`,
   key: "ENG-1",
   title: "Authentication rework",
+  project: "ENG",
   type: "bug",
   status: "in_progress",
+  priority: "medium",
   rank: 1,
-  score: 1,
   snippet: "",
   ...over,
 });
 
 function mount(
-  hits: unknown[],
+  hits: WorkRanked[],
   outcome: Record<string, unknown> = {},
   asked: Record<string, unknown>[] = [],
 ) {
@@ -201,4 +210,29 @@ test("a hit's snippet is drawn as prose, without its markdown marks", async () =
   const row = rowOf("Authentication rework");
   expect(row.textContent).toContain("Repro: run make soak on a #cold node");
   expect(row.textContent).not.toContain("**");
+});
+
+// A PRESS OF SEARCH IS A STEP BACK TAKES, and the box follows the address
+// when it moves under the open screen: a box seeded once, on mount, showed
+// the old phrase over the new hits after Back, and sent it on the next press.
+test("a search pressed is a history entry, and the box follows the address", async () => {
+  const asked: Record<string, unknown>[] = [];
+  mount([hit({})], {}, asked);
+  const box = screen.getByRole("searchbox", {
+    name: "Search the company’s work",
+  }) as HTMLInputElement;
+  expect(box.value).toBe("auth");
+
+  const before = history.length;
+  fireEvent.change(box, { target: { value: "billing" } });
+  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  await waitFor(() => expect(asked.at(-1)?.q).toBe("billing"));
+  expect(history.length).toBe(before + 1);
+
+  act(() => {
+    history.pushState(null, "", "#/worklet/search?q=deploys");
+    window.dispatchEvent(new Event("crewlet:route"));
+  });
+  await waitFor(() => expect(asked.at(-1)?.q).toBe("deploys"));
+  expect(box.value).toBe("deploys");
 });

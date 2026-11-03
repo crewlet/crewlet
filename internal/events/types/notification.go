@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Messages reaching the org from outside it, and the bookkeeping around what
@@ -17,6 +18,32 @@ func init() {
 	events.Register[TurnTriggerSkipped]()
 	events.Register[NotificationsCoalesced]()
 	events.Register[NotificationSkipped]()
+}
+
+// NotificationWriter is who wrote the record a FIRST-PARTY notification
+// announces — a change on Worklet or Doclet — as that
+// record names them.
+//
+// STATED BY THE PRODUCER, because nothing downstream can resolve it. A vendor
+// names its sender by an id in its own namespace (ExternalNotification.Sender),
+// which the party registry maps to a seat where it knows one, and a sender it
+// cannot map is somebody the company does not know. A first-party record has
+// no such namespace: its actor is a seat's handle, a credential's login or a
+// node's name (iam.ActorFor), and which of the three is the record's actor
+// kind, never the spelling. Read as vendor ids, none of them resolved, so a
+// turn a colleague's comment on a work item woke was a stranger's turn, and so
+// was one the engine's own repair woke.
+//
+// Nil on every vendor's notification, and on one an older build published.
+type NotificationWriter struct {
+	// Kind is how the writer acted: a seat (`agent`), a person as the seat
+	// they hold (`human`), a credential acting as no seat (`operator`), or
+	// the engine itself (`system`).
+	Kind iam.ActorKind `json:"kind"`
+
+	// Seat is the writer's seat handle, for a seat's write and a person's,
+	// and empty for the other two kinds.
+	Seat string `json:"seat"`
 }
 
 // CoalescedMessage is one constituent inbound message inside a coalesced
@@ -53,6 +80,10 @@ type CoalescedMessage struct {
 	// one direct mention in a burst from the four broadcasts around it.
 	Addressed bool `json:"addressed,omitempty"`
 
+	// Writer is this constituent's own writer, on a first-party source
+	// ([NotificationWriter]): five comments merged into one trigger can be
+	// five people, and the merged event's flat Writer is the latest's alone.
+	Writer *NotificationWriter `json:"writer,omitempty"`
 	// Origin is this constituent's OWN origin ([ExternalNotification.Origin]):
 	// the message it was, under the reason it reached the seat. The merged
 	// event's flat Origin is the latest constituent's, so without this copy
@@ -129,6 +160,11 @@ type ExternalNotification struct {
 	// surface: absent decodes as nothing owed, like Addressed.
 	Owes string `json:"owes,omitempty"`
 
+	// Writer is who wrote the record a first-party notification announces
+	// ([NotificationWriter]), and nil on a vendor's. On a coalesced event it
+	// is the latest constituent's, as Sender is, and each constituent keeps
+	// its own in Messages.
+	Writer *NotificationWriter `json:"writer,omitempty"`
 	// Origin is what this notification is about and why it reached its
 	// seat ([TriggerOrigin]): a first-party source states it (a chat
 	// message and its routing reason, a work item and the tracker's

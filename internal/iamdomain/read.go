@@ -62,9 +62,9 @@ import (
 type Reader struct {
 	db store.ReplicatedReader
 
-	committed func() statelog.Position
-	lag       func() time.Duration
-	await     func(context.Context, statelog.Position) error
+	reached func() statelog.Position
+	lag     func() time.Duration
+	await   func(context.Context, statelog.Position) error
 }
 
 // ReaderOptions is what a reader is built from.
@@ -72,9 +72,16 @@ type ReaderOptions struct {
 	// DB is the replicated estate. REQUIRED.
 	DB store.ReplicatedReader
 
-	// Committed is this node's applied position and Lag how far behind the
-	// log it is. Each is nil-safe and answers the zero value, which is what
-	// a reader with no runner behind it honestly has.
+	// Reached is the position this node's rows are current through — its
+	// applier's reached position ([statelog.Runner.Reached]), every record
+	// at or below it committed or a barrier that writes no row — and Lag how
+	// far behind the log it is. Each is nil-safe and answers the zero value,
+	// which is what a reader with no runner behind it honestly has.
+	//
+	// THE REACHED POSITION, NEVER THE COMMITTED CHECKPOINT, as every read of
+	// the rows takes it: a barrier whose checkpoint has not committed changes
+	// no row here, and a session's start or a token's binding is a record
+	// that writes one, so it is reached only once committed either way.
 	//
 	// WHETHER A RECORD THIS NODE RETAINED IS ABOUT SOMEBODY is not an
 	// option: it is read out of the deferral index inside the snapshot the
@@ -83,15 +90,15 @@ type ReaderOptions struct {
 	// it — carried no scope at all, so no retained record was ever about
 	// anybody and every "this node cannot vouch for this person" answer
 	// the session table and a token's binding turn on was dead.
-	Committed func() statelog.Position
-	Lag       func() time.Duration
+	Reached func() statelog.Position
+	Lag     func() time.Duration
 
-	// Await blocks until this node's applier has committed through a
-	// position — the runner's own wait. NIL ANSWERS AN ERROR rather than
-	// nil, for the other two's reason read the other way round: a reader
-	// with no runner behind it will never reach a position, and a wait
-	// that reported arrival would send a caller to decide on rows that are
-	// not there.
+	// Await blocks until this node's applier has reached a position — the
+	// runner's own wait ([statelog.Runner.WaitReached]). NIL ANSWERS AN
+	// ERROR rather than nil, for the other two's reason read the other way
+	// round: a reader with no runner behind it will never reach a position,
+	// and a wait that reported arrival would send a caller to decide on rows
+	// that are not there.
 	Await func(context.Context, statelog.Position) error
 }
 
@@ -101,9 +108,9 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 		return nil, errors.New("iamdomain: a reader needs the replicated estate")
 	}
 	r := &Reader{db: opts.DB,
-		committed: opts.Committed, lag: opts.Lag, await: opts.Await}
-	if r.committed == nil {
-		r.committed = func() statelog.Position { return statelog.Position{} }
+		reached: opts.Reached, lag: opts.Lag, await: opts.Await}
+	if r.reached == nil {
+		r.reached = func() statelog.Position { return statelog.Position{} }
 	}
 	if r.lag == nil {
 		r.lag = func() time.Duration { return 0 }
@@ -112,14 +119,14 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 }
 
 // At is the position this node's rows were derived through.
-func (r *Reader) At() statelog.Position { return r.committed() }
+func (r *Reader) At() statelog.Position { return r.reached() }
 
 // errNoApplier is a wait asked of a reader with no runner behind it.
 var errNoApplier = errors.New("iamdomain: this reader has no applier to wait " +
 	"on, so no position will ever be reached here")
 
-// AwaitApplied blocks until this node's applier has committed through a packed
-// position, or ctx ends.
+// AwaitApplied blocks until this node's applier has reached a packed position,
+// or ctx ends.
 //
 // PACKED, because that is the form a session bearer carries its start in, and
 // the one caller is the request guard waiting for exactly that position — see
@@ -155,7 +162,7 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 	session.Identity, error) {
 
 	out := session.Identity{
-		Applied: uint64(r.committed().Packed()),
+		Applied: uint64(r.reached().Packed()),
 		Lag:     r.lag(),
 	}
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
@@ -393,10 +400,12 @@ func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) err
 // node holds them now, the owner's current epoch, the company's current
 // session generation, and how far this node can vouch.
 //
-// It satisfies the request guard's consumer-defined seam, and it is the
-// token's [Reader.Resolve]: a revocation landing between a credential read
-// and an owner read would produce a verdict that never existed at any instant.
-// WHAT THE ROWS MEAN is [credential.CheckToken]'s, over the value returned.
+// It is what the request guard's machine-token arm reads on a data node, and
+// what a data node answers a node holding no identity rows with — narrowed by
+// internal/estate, which withholds the verifier — and it is the token's
+// [Reader.Resolve]: a revocation landing between a credential read and an
+// owner read would produce a verdict that never existed at any instant. WHAT
+// THE ROWS MEAN is [credential.CheckToken]'s, over the value returned.
 //
 // ONE KEYED READ OF ONE ROW, never a scan, because the token carries its own
 // id in the clear — which is what a credential presented on every request a
@@ -406,7 +415,7 @@ func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) err
 // peer's, and answering it as "no such token" would tell a pipeline its
 // credential is broken for the length of an upgrade.
 func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenRow, error) {
-	out := credential.TokenRow{Applied: uint64(r.committed().Packed())}
+	out := credential.TokenRow{Applied: uint64(r.reached().Packed())}
 	var owner string
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		var (
@@ -1355,23 +1364,117 @@ type SeatHolder struct {
 	Removed bool
 }
 
-// The two statements [Reader.SeatHolders] reads in its one snapshot: every
+// SeatHolder is who holds ONE seat — the [Reader.SeatHolders] answer for that
+// seat alone, read in one snapshot — and whether anybody does.
+//
+// THE SAME ANSWER, by the same rule: the person bound to the seat, the lowest
+// id first where the rows name more than one (the first [Reader.SeatHolders]
+// lists); else the removal that released it and that no bind has stamped
+// since, the lowest person id first, marked [SeatHolder.Removed]; else nobody
+// (false), a seat the chart alone speaks for.
+//
+// # What it costs
+//
+// Two seeks at most, whatever the size of the directory: the binding by
+// `iam_people_seat_lookup_idx`, and — only where no row binds the seat — the
+// removal by `iam_removed_seat_idx` (replicated migration 0122), whose order
+// is the person's id. It is what a seat's turn composes the person it acts for
+// from, on every call of a tool that reads or writes for somebody — a cost
+// that must not grow with the people the company has hired or has ever
+// removed.
+//
+// Three-valued, as [Reader.SeatHolders] is: an error is UNKNOWN, never
+// nobody. A seat named by no handle is refused: every unbound person's row
+// holds the empty seat, and none of them holds one.
+func (r *Reader) SeatHolder(ctx context.Context, seat string) (SeatHolder, bool, error) {
+	if seat == "" {
+		return SeatHolder{}, false, fmt.Errorf("%w: a seat holder is asked of no seat",
+			ErrInvalid)
+	}
+	var (
+		out  SeatHolder
+		held bool
+	)
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		out, held = SeatHolder{}, false
+		// EVERY ROW ON THE SEAT, AND THE LOWEST ID KEPT HERE rather than by
+		// an ORDER BY id: asked to order by the primary key under a LIMIT,
+		// the driver walks the primary key's index over every person
+		// (measured: `SCAN iam_people USING INDEX sqlite_autoindex_…`), where
+		// the bare equality seeks the seat's lookup index. A seat is bound to
+		// one row; a second is a retained record's residue.
+		rows, err := tx.QueryContext(ctx, seatBindingStatement, seat)
+		if err != nil {
+			return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
+		}
+		for rows.Next() {
+			var person, stage string
+			if err = rows.Scan(&person, &stage); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
+			}
+			if !held || person < out.Person {
+				out, held = SeatHolder{Seat: seat, Person: person, Stage: iam.Stage(stage)}, true
+			}
+		}
+		if err = rows.Close(); err != nil {
+			return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
+		}
+		if err = rows.Err(); err != nil {
+			return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
+		}
+		if held {
+			return nil
+		}
+		// A REMOVAL'S SEAT, UNTIL IT IS BOUND AGAIN: [Reader.SeatHolders]'
+		// rule, read only where no current holder speaks for the seat.
+		var person string
+		err = tx.QueryRowContext(ctx, seatRemovedHolderStatement, seat).Scan(&person)
+		switch {
+		case err == nil:
+			out, held = SeatHolder{Seat: seat, Person: person, Removed: true}, true
+			return nil
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		}
+		return fmt.Errorf("iamdomain: read seat %s's removed holder: %w", seat, err)
+	})
+	if err != nil {
+		return SeatHolder{}, false, err
+	}
+	return out, held, nil
+}
+
+// The statements [Reader.SeatHolders] reads in its one snapshot — every
 // binding, in seat order, and every removal whose seat no bind since has taken
-// and no current holder holds.
+// and no current holder holds — and the two [Reader.SeatHolder] seeks for one
+// seat: its bindings by `iam_people_seat_lookup_idx`, and its removal no bind
+// has stamped by `iam_removed_seat_idx`, the lowest person id first in that
+// index's own order.
+//
+// THE REMOVAL'S SEAT IS ITS OWN COLUMN (`iam_removed.seat_id`, replicated
+// migration 0122), written by the removal's apply and re-derived from the
+// tombstone's claims ([Applier.Rederive]), never pulled out of the claims here:
+// a json_extract is a value no index reaches, and the tombstones are
+// permanent.
 const (
 	seatHoldersStatement = `
 		SELECT seat_id, id, stage FROM iam_people
 		 WHERE seat_id != ''
 		 ORDER BY seat_id, id`
 	removedHoldersStatement = `
-		SELECT json_extract(r.claims_json, '$.seat_id') AS seat, r.person_id
+		SELECT r.seat_id, r.person_id
 		  FROM iam_removed r
-		 WHERE COALESCE(json_extract(r.claims_json, '$.seat_id'), '') != ''
+		 WHERE r.seat_id != ''
 		   AND r.seat_rebound_by = ''
 		   AND NOT EXISTS (
-		       SELECT 1 FROM iam_people p
-		        WHERE p.seat_id = json_extract(r.claims_json, '$.seat_id'))
-		 ORDER BY seat, r.person_id`
+		       SELECT 1 FROM iam_people p WHERE p.seat_id = r.seat_id)
+		 ORDER BY r.seat_id, r.person_id`
+	seatBindingStatement       = `SELECT id, stage FROM iam_people WHERE seat_id = ?`
+	seatRemovedHolderStatement = `
+		SELECT person_id FROM iam_removed
+		 WHERE seat_id = ? AND seat_rebound_by = ''
+		 ORDER BY person_id LIMIT 1`
 )
 
 // SeatHolders is every seat binding this node's directory holds, read in ONE
@@ -1389,9 +1492,9 @@ const (
 //
 // The current bindings are an index range over the seat index; the removals
 // are one row per person the company has ever removed, because a tombstone is
-// permanent and records its seat inside the identifiers it released.
-// Both are read whole, because the one caller rebuilds a registry whole — see
-// [Applier]'s directory listener for why that is not a diff.
+// permanent. Both are read whole, because the one caller rebuilds a registry
+// whole — see [Applier]'s directory listener for why that is not a diff. A
+// question about ONE seat is [Reader.SeatHolder], which seeks it.
 func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 	var out []SeatHolder
 	err := r.withTx(ctx, func(tx *sql.Tx) error {

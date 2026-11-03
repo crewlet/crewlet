@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/httprelay"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // RelayName scopes the bridge's relay on the broker: its subjects are
@@ -47,7 +47,7 @@ type FleetOptions struct {
 
 	// Keyring is the fleet's: every relayed request and frame is signed
 	// under it.
-	Keyring statelog.Keyring
+	Keyring recordseal.Keyring
 
 	// HolderWait bounds how long a box's call waits for a node that can
 	// answer it: through a takeover, the old holder's lease running out

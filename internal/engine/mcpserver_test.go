@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/mcprelay"
 )
@@ -91,6 +92,12 @@ const (
 var thisLaunch int
 
 func TestMain(m *testing.M) {
+	// THE CODE HOST'S HOOK FIRST: an engine test that pushes for real names
+	// this binary as its proc-receive hook (codetest.HookCommand), and git
+	// starts it inside the push.
+	if status, ok := codetest.RunHookIfAsked(); ok {
+		os.Exit(status)
+	}
 	// FIRST: a phase serves its tools to its harness through `<this binary>
 	// mcp-relay <socket>`, and under `go test` this binary is the engine.
 	mcprelay.DispatchIfRelay()

@@ -34,6 +34,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Errors a query surface reports precisely. Everything else a query returns is
@@ -223,6 +224,53 @@ func (r *Refusal) Error() string {
 // already maps.
 func (r *Refusal) Unwrap() error { return ErrUnauthorized }
 
+// NotPermitted is a question refused by a GRANT ITS OWN DOMAIN DERIVES for the
+// record it named — the code host's on a repository, from the chart
+// (code.GrantOf, ADR-0088) — rather than by the authority table, which
+// admitted the question and decides nothing a repository's grant does. It is
+// [ErrUnauthorized] to [errors.Is].
+//
+// A TYPE OF ITS OWN BESIDE [Refusal], because it carries none of what a
+// Refusal does: no authority-table reason, and no permission that would admit
+// the caller — a repository's grant is derived, never granted. What it
+// carries is the domain's own sentence (who asked, which record, why they are
+// shut out and who does read it), which is the whole of what the caller can
+// act on; a REST route answers it `403 not_permitted` with that sentence, the
+// word a refused push prints for the same refusal.
+type NotPermitted struct {
+	// Detail is the domain's sentence, written for the caller.
+	Detail string
+}
+
+// Error renders the refusal for a log.
+func (r *NotPermitted) Error() string { return "queries: not permitted: " + r.Detail }
+
+// Unwrap makes it [ErrUnauthorized], a refusal of the caller.
+func (r *NotPermitted) Unwrap() error { return ErrUnauthorized }
+
+// NotFound is [ErrNotFound] saying WHICH absence it is: a Reason a client
+// branches on and the sentence a person reads, for a surface whose absences
+// are remedied differently — a code question's repository nobody declared
+// (`not_declared`, declared in code.repos) and its company hosting no code
+// (`not_hosted`, which declaring a repository changes nothing about until
+// code.native is set). A REST route carries both, as `reason` and `detail`;
+// the socket's frame carries codes and not prose, and answers `not_found`.
+type NotFound struct {
+	// Reason is which absence: a word a client switches on, never prose.
+	Reason string
+
+	// Detail is the sentence, written for the caller.
+	Detail string
+}
+
+// Error renders the absence for a log.
+func (e *NotFound) Error() string {
+	return "queries: no such record (" + e.Reason + "): " + e.Detail
+}
+
+// Unwrap makes it [ErrNotFound].
+func (e *NotFound) Unwrap() error { return ErrNotFound }
+
 // Params are one query's arguments.
 //
 // It exists so a single answer function can be fed from both transports: a
@@ -251,10 +299,21 @@ func (p Params) Values() map[string]any {
 // Repeated keys take the FIRST value. A query string can carry a key twice and
 // a JSON object cannot, so taking the last would make the two transports
 // disagree about a request only one of them can even express.
+//
+// EXCEPT THE KEYS THAT REPEAT BY DESIGN ([worklet.RepeatedKeys]), which keep
+// every value: `min_position` names one floor per log, and a JSON object
+// expresses the same request as an array ([Params.List]), so here the two
+// transports agree by keeping the whole list rather than by dropping all but
+// one floor — which would serve the answer's other log from before the write
+// that floor named.
 func FromQuery(q url.Values) Params {
 	values := make(map[string]any, len(q))
 	for key, list := range q {
-		if len(list) > 0 {
+		switch {
+		case len(list) == 0:
+		case slices.Contains(worklet.RepeatedKeys, key):
+			values[key] = slices.Clone(list)
+		default:
 			values[key] = list[0]
 		}
 	}
@@ -291,6 +350,13 @@ func (p Params) String(key string) string {
 	}
 	return ""
 }
+
+// List reads a parameter that may repeat ([worklet.RepeatedKeys]): every value
+// a query string gave it ([FromQuery] keeps them), every string of a socket
+// frame's JSON array, and a plain string as a list of one — by the grammar's
+// own reading of a list ([worklet.ListOf]), so a socket frame and a query
+// string name the same floors.
+func (p Params) List(key string) ([]string, bool) { return worklet.ListOf(p.values[key]) }
 
 // Int reads an integer parameter, falling back to def.
 //
@@ -702,7 +768,7 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 			Grants: []iam.Grant{e.posture.grant}})
 	}
 	data, err := e.answer(ctx, p)
-	return data, classifyFailure(err)
+	return data, ClassifyFailure(err)
 }
 
 // unresolved is the refusal for a question asked on a context whose principal
@@ -734,7 +800,7 @@ func unresolved(ctx context.Context, what string) error {
 		"read identity: %w", ErrUnavailable, what, why)
 }
 
-// classifyFailure sorts a failed answer into this registry's own vocabulary: a
+// ClassifyFailure sorts a failed answer into this registry's own vocabulary: a
 // read THIS NODE could not serve becomes [ErrUnavailable], a read whose request
 // named another log's position becomes [ErrBadParams], and every other failure
 // is left alone.
@@ -764,7 +830,13 @@ func unresolved(ctx context.Context, what string) error {
 // becomes the caller's. A floor was a `wrong_stream` refusal, answered
 // `unavailable`: a 503 telling a client to ask another node, which refused it
 // identically, and a dashboard telling a person an operator had to act.
-func classifyFailure(err error) error {
+//
+// EXPORTED for the code host's verify routes (internal/api/code.go), which
+// answer outside the registry — an operation on THIS node's copy, not a
+// question — and in its vocabulary: their "not yet" and their misnamed
+// position are this classification, never a second list of what clears by
+// waiting.
+func ClassifyFailure(err error) error {
 	switch {
 	case err == nil,
 		errors.Is(err, ErrUnavailable),

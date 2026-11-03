@@ -31,6 +31,7 @@ import type {
 import { EVERY_QUESTION, session as floors } from "~/protocol/session.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { settled } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 // EVERY ROW A LIST KEEPS IN ITS VIEW, recorded: jsdom lays nothing out, so
@@ -310,7 +311,7 @@ const DEFAULTS: Record<string, unknown> = {
     }),
   turns: { turns: [], next: null },
   agent: { llm_history: [], next: "" },
-  work_inbox: { handle: "", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+  inbox: { handle: "", notices: [], primary_reasons: [], unread: 0, primary: 0 },
   work_my_work: emptyDay("swe"),
   tokens: {
     since: "2026-09-15T00:00:00Z",
@@ -420,9 +421,14 @@ function mount(
   return { store };
 }
 
-/** Let every settled promise land, and the renders they cause. */
+/**
+ * Lets every read the screen asked land, and the renders they cause, until a
+ * pass asks nothing more: every answer is a stub, so a read asked again would
+ * move the count across a boundary. What a case says was NOT asked is read
+ * here.
+ */
 async function settle() {
-  for (let i = 0; i < 6; i++) await act(async () => Promise.resolve());
+  await settled(() => asked.length);
 }
 
 const tabNames = () => screen.getAllByRole("tab").map((t) => t.textContent);
@@ -504,11 +510,16 @@ const WORKING: Partial<AgentRow> = {
 // A PERSON RUNS NO TURN: the engine never spawns one, so their profile asks
 // nothing a runtime answers — every one of those reads would be a question
 // about a thing that cannot exist, and the tabs that draw them are absent.
-test("a person's profile has three tabs and asks nothing a runtime answers", async () => {
+test("a person's profile has four tabs and asks nothing a runtime answers", async () => {
   // A BOOKMARK NAMING AN AGENT'S TAB lands on Overview rather than a blank.
   mount("#/company/org/seats/jane?tab=turns", { answers: { viewer: OPERATOR, config: DOCUMENT } });
   await settle();
-  expect(tabNames().map((n) => n?.replace(/\d+$/, ""))).toEqual(["Overview", "Work", "Settings"]);
+  expect(tabNames().map((n) => n?.replace(/\d+$/, ""))).toEqual([
+    "Overview",
+    "Work",
+    "Code",
+    "Settings",
+  ]);
   const selected = screen
     .getAllByRole("tab")
     .find((t) => t.getAttribute("aria-selected") === "true");
@@ -534,9 +545,11 @@ test("an agent's profile has seven tabs, and Work counts the engine's total rath
   mount("#/company/org/seats/swe", {
     answers: {
       work_items: {
+        // EACH WITH ITS ID, as the engine sends every task: the list is keyed
+        // by it, and rows without one drew React's missing-key warning.
         items: [
-          { key: "ENG-412", title: "Retry PXE boot", status: "in_progress" },
-          { key: "ENG-401", title: "Migrate scheduler state", status: "todo" },
+          { id: "t-412", key: "ENG-412", title: "Retry PXE boot", status: "in_progress" },
+          { id: "t-401", key: "ENG-401", title: "Migrate scheduler state", status: "todo" },
         ],
         total_hint: 7,
       },
@@ -546,6 +559,7 @@ test("an agent's profile has seven tabs, and Work counts the engine's total rath
   expect(tabNames().map((n) => n?.replace(/\d+$/, ""))).toEqual([
     "Overview",
     "Work",
+    "Code",
     "Turns",
     "Memory",
     "Schedules",
@@ -598,7 +612,10 @@ test("a reader who may not act sees every action held, with the reason", async (
 // asked once there is a hand-off for it to be the reason for. The hand-off is
 // conditional on the version a read of the chosen task returned.
 test("Assign task finds a task, then asks why, and hands it over against the version read", async () => {
+  // Each hit with its id, as the engine sends one: the picker's options are
+  // keyed by it.
   const hits = Array.from({ length: 8 }, (_, i) => ({
+    id: `t-${20 + i}`,
     key: `ENG-${20 + i}`,
     title: `PXE task ${i}`,
     assignee: i === 0 ? "cto" : "",
@@ -607,10 +624,15 @@ test("Assign task finds a task, then asks why, and hands it over against the ver
     answers: {
       viewer: { ...OPERATOR, acts: EVERY_ACT },
       work_search: { hits, available: true, mode: "hybrid" },
-      work_item: (p: Record<string, unknown>) => ({
-        task: { key: p.id, version: 4, title: "PXE task 0", assignee: "cto" },
-        complete: true,
-      }),
+      // THE TASK ASKED FOR, by the id a Worklet task is asked by, answered as
+      // the engine answers it: its id and key both.
+      work_item: (p: Record<string, unknown>) => {
+        const hit = hits.find((h) => h.id === p.id || h.key === p.id)!;
+        return {
+          task: { id: hit.id, key: hit.key, version: 4, title: hit.title, assignee: "cto" },
+          complete: true,
+        };
+      },
     },
     agents: [WORKING],
   });
@@ -650,14 +672,16 @@ test("Assign task finds a task, then asks why, and hands it over against the ver
 // why, and the search asks for a page wide enough that eight movable tasks
 // still fill the list.
 test("Assign task lists the tasks it can hand over first, and the seat's own as disabled", async () => {
+  // Each with its id, as the engine sends one: the options are keyed by it.
   const hits = [
     ...Array.from({ length: 7 }, (_, i) => ({
+      id: `t-${10 + i}`,
       key: `ENG-${10 + i}`,
       title: `retry ${i}`,
       assignee: "swe",
     })),
-    { key: "ENG-30", title: "retry elsewhere", assignee: "cto" },
-    { key: "ENG-31", title: "retry unowned", assignee: "" },
+    { id: "t-30", key: "ENG-30", title: "retry elsewhere", assignee: "cto" },
+    { id: "t-31", key: "ENG-31", title: "retry unowned", assignee: "" },
   ];
   mount("#/company/org/seats/swe", {
     answers: {
@@ -1272,7 +1296,7 @@ test("the current turn names its round against the granted cap, its calls and th
       // asked of the seat, with no priority. Its title comes from reading the
       // turn's own item, never from that list.
       work_items: {
-        items: [{ key: "ENG-7", title: "Something else entirely", status: "todo" }],
+        items: [{ id: "t-7", key: "ENG-7", title: "Something else entirely", status: "todo" }],
         total_hint: 1,
       },
       // A WORKLET TASK IS ASKED FOR BY ITS ID: its key may be one another task
@@ -1463,7 +1487,7 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
         name: "Jane Founder",
         acts: [],
       },
-      work_inbox: inboxPage(50, true),
+      inbox: inboxPage(50, true),
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
   });
@@ -1473,7 +1497,7 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
   const row = within(nav).getByRole("link", { name: /Inbox/ });
   expect(row.textContent).toContain("50+");
   // ONE READING: the frame's, never a second read of the same inbox.
-  expect(askedFor("work_inbox")).toHaveLength(1);
+  expect(askedFor("inbox")).toHaveLength(1);
   expect(screen.getByText("Your day")).toBeTruthy();
   const day = screen.getByText("Your day").closest(".prof-day-head") as HTMLElement;
   expect(within(day).getByRole("link", { name: "Inbox" }).getAttribute("href")).toBe("#/inbox");
@@ -1518,13 +1542,13 @@ test("an operator reading a colleague's day asks that colleague's inbox", async 
         owner: "cto",
         acts: [],
       },
-      work_inbox: (p: Record<string, unknown>) =>
+      inbox: (p: Record<string, unknown>) =>
         p.handle === "jane" ? inboxPage(7, false) : inboxPage(0, false),
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
   });
   await waitFor(() => expect(tile("Unread").textContent).toContain("7"));
-  expect(askedFor("work_inbox").map((a) => a.params.handle)).toContain("jane");
+  expect(askedFor("inbox").map((a) => a.params.handle)).toContain("jane");
   expect(screen.getByText("Their day")).toBeTruthy();
   expect(tile("Unread").textContent).toContain("waiting on them");
 });
@@ -1903,6 +1927,34 @@ test("the turns list says it holds a page, and loads the one before it", async (
   expect(card.querySelector(".crewlet-card__header")?.textContent).toContain("52");
   expect(card.querySelector(".crewlet-card__header")?.textContent).not.toContain("52+");
   expect(within(card).queryByRole("button", { name: "Load older turns" })).toBeNull();
+});
+
+// AN OLDER PAGE OF TURNS THAT FAILS LEAVES THE CONTROL THAT ASKS IT AGAIN,
+// its failure said beside it, never in its place. Mutation: draw the failure
+// in the control's place again, and there is no Load older turns to press.
+test("an older page of turns that fails keeps Load older turns, which asks it again", async () => {
+  let failures = 1;
+  mount("#/company/org/seats/swe?tab=turns", {
+    answers: {
+      turns: (p: Record<string, unknown>) =>
+        p.before
+          ? failures-- > 0
+            ? Promise.reject(new Error("unavailable"))
+            : { turns: [turnRow(50)], next: null }
+          : { turns: Array.from({ length: 50 }, (_, i) => turnRow(i)), next: "t-49" },
+    },
+  });
+  await settle();
+  const card = screen
+    .getByRole("heading", { name: "Turns" })
+    .closest(".crewlet-card") as HTMLElement;
+  fireEvent.click(within(card).getByRole("button", { name: "Load older turns" }));
+  expect(
+    await within(card).findByText("Could not read the next page (unavailable). Try again."),
+  ).toBeTruthy();
+  fireEvent.click(within(card).getByRole("button", { name: "Load older turns" }));
+  await within(card).findByText("did thing 50");
+  expect(within(card).queryByText(/Could not read the next page/)).toBeNull();
 });
 
 // A KEYLESS ITEM IS NAMED SHORT, whole on its title: `<backend>:<uuid>` took

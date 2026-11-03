@@ -14,8 +14,8 @@ import (
 
 // Applier is the usage domain's deterministic state machine: the ONLY writer of
 // `usage_turns`, `usage_tokens`, `usage_reads`, `usage_tool_calls`,
-// `usage_schedule_runs`, `usage_schedule_superseded` and
-// `usage_person_tokens`, on every data node.
+// `usage_schedule_runs`, `usage_schedule_superseded`, `usage_person_tokens`,
+// `usage_repo_read_days` and `usage_repo_reads`, on every data node.
 //
 // # An apply REPLACES
 //
@@ -31,8 +31,9 @@ import (
 // monotone and a pure function of the record, so a redelivery, or an older
 // message replayed after a newer one was applied, is a no-op by arithmetic.
 // A seat's guard lives on its head row in `usage_turns`, which every seat
-// record writes; a schedule and a person have no head row, so each one's guard
-// is the newest version among its own rows.
+// record writes, and a unit repository's day on its own in
+// `usage_repo_read_days`; a schedule and a person have no head row, so each
+// one's guard is the newest version among its own rows.
 //
 // # The horizon is applied here, by the record
 //
@@ -91,6 +92,12 @@ const (
 		 WHERE day = ? AND node = ? AND person = ?`
 	applyClearPersonSQL = `
 		DELETE FROM usage_person_tokens WHERE day = ? AND node = ? AND person = ?`
+	applyRepoReadHeadSQL = `
+		SELECT version
+		  FROM usage_repo_read_days INDEXED BY sqlite_autoindex_usage_repo_read_days_1
+		 WHERE day = ? AND node = ? AND repo_id = ?`
+	applyClearRepoReadsSQL = `
+		DELETE FROM usage_repo_reads WHERE day = ? AND node = ? AND repo_id = ?`
 )
 
 // HorizonDays is [History] in whole days, which is what the apply subtracts
@@ -119,6 +126,8 @@ func (a Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, opt
 		wrote, err = a.schedule(ctx, tx, r, rec.Position, opts.MaxVariables)
 	case KindPerson:
 		wrote, err = a.person(ctx, tx, r, rec.Position, opts.MaxVariables)
+	case KindRepoRead:
+		wrote, err = a.repoRead(ctx, tx, r, rec.Position, opts.MaxVariables)
 	default:
 		// UNREACHABLE past Decode, which refuses an unknown kind — kept so
 		// a kind added to the enum without an apply is a failure here
@@ -139,7 +148,7 @@ func (a Applier) expire(ctx context.Context, tx *sql.Tx, day string) (int, error
 	var n int
 	for _, table := range []string{"usage_tokens", "usage_reads", "usage_tool_calls",
 		"usage_turns", "usage_schedule_runs", "usage_schedule_superseded",
-		"usage_person_tokens"} {
+		"usage_person_tokens", "usage_repo_reads", "usage_repo_read_days"} {
 		res, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE day < ?`, cutoff)
 		if err != nil {
 			return 0, fmt.Errorf("usage: expire %s below %s: %w", table, cutoff, err)
@@ -185,28 +194,42 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 	if !r.Turns.LastEndedAt.IsZero() {
 		lastEnded = store.EncodeTime(r.Turns.LastEndedAt)
 	}
+	// A DAY WITH NO CHANGE OR REVIEW carries no code day and writes zeros:
+	// the record REPLACES the seat's day, so a figure an earlier record of
+	// it held and this one does not is gone, never kept.
+	var code CodeDay
+	if r.Code != nil {
+		code = *r.Code
+	}
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO usage_turns
 			(day, node, agent_id, handle, role, turns, failed, reviewed,
 			 first_pass, sent_back, duration_hist, last_ended_at, reads_elided,
-			 tools_elided, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 tools_elided, changes_opened, reviews_given, findings_received, checks_failed,
+			 ejections, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (day, node, agent_id) DO UPDATE SET
-			handle        = excluded.handle,
-			role          = excluded.role,
-			turns         = excluded.turns,
-			failed        = excluded.failed,
-			reviewed      = excluded.reviewed,
-			first_pass    = excluded.first_pass,
-			sent_back     = excluded.sent_back,
-			duration_hist = excluded.duration_hist,
-			last_ended_at = excluded.last_ended_at,
-			reads_elided  = excluded.reads_elided,
-			tools_elided  = excluded.tools_elided,
-			version       = excluded.version`,
+			handle            = excluded.handle,
+			role              = excluded.role,
+			turns             = excluded.turns,
+			failed            = excluded.failed,
+			reviewed          = excluded.reviewed,
+			first_pass        = excluded.first_pass,
+			sent_back         = excluded.sent_back,
+			duration_hist     = excluded.duration_hist,
+			last_ended_at     = excluded.last_ended_at,
+			reads_elided      = excluded.reads_elided,
+			tools_elided      = excluded.tools_elided,
+			changes_opened    = excluded.changes_opened,
+			reviews_given     = excluded.reviews_given,
+			findings_received = excluded.findings_received,
+			checks_failed     = excluded.checks_failed,
+			ejections         = excluded.ejections,
+			version           = excluded.version`,
 		s.Day, s.Node, s.Seat, r.Handle, r.Role, r.Turns.Count, r.Turns.Failed,
 		r.Turns.Reviewed, r.Turns.FirstPass, r.Turns.SentBack, string(hist),
-		lastEnded, r.ReadsElided, r.ToolsElided, version); err != nil {
+		lastEnded, r.ReadsElided, r.ToolsElided, code.ChangesOpened, code.ReviewsGiven,
+		code.FindingsReceived, code.ChecksFailed, code.Ejections, version); err != nil {
 		return 0, fmt.Errorf("usage: write the head of %s: %w", s, err)
 	}
 	rows := 1
@@ -347,6 +370,55 @@ func (a Applier) person(ctx context.Context, tx *sql.Tx, r Record, at statelog.P
 		return 0, fmt.Errorf("usage: write the spend of %s: %w", s, err)
 	}
 	return n, nil
+}
+
+// repoRead replaces one unit repository's day of readers.
+//
+// THE HEAD ROW IS THE GUARD, as a seat's is: every repo_read record writes
+// one, so its version is the newest record applied for the day, and a record
+// at or below it — a redelivery, an older message replayed after a newer —
+// writes nothing. Its readers are cleared and written whole beneath it.
+func (a Applier) repoRead(ctx context.Context, tx *sql.Tx, r Record, at statelog.Position, maxVars int) (int, error) {
+	s := r.Subject
+	version := at.Packed()
+	var held int64
+	switch err := tx.QueryRowContext(ctx, applyRepoReadHeadSQL, s.Day, s.Node, s.Repo).Scan(&held); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return 0, fmt.Errorf("usage: read the head of %s: %w", s, err)
+	case held >= version:
+		return 0, nil
+	}
+	if _, err := tx.ExecContext(ctx, applyClearRepoReadsSQL, s.Day, s.Node, s.Repo); err != nil {
+		return 0, fmt.Errorf("usage: clear the readers of %s: %w", s, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO usage_repo_read_days (day, node, repo_id, repo_name, readers_elided, version)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (day, node, repo_id) DO UPDATE SET
+			repo_name      = excluded.repo_name,
+			readers_elided = excluded.readers_elided,
+			version        = excluded.version`,
+		s.Day, s.Node, s.Repo, r.RepoName, r.RepoReadersElided, version); err != nil {
+		return 0, fmt.Errorf("usage: write the head of %s: %w", s, err)
+	}
+	n, err := store.InsertRows(ctx, tx, maxVars, `
+		INSERT INTO usage_repo_reads
+			(day, node, repo_id, principal_kind, principal, via, seat, reads, bytes, last_at) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``, len(r.RepoReads),
+		func(i int) []any {
+			rd := r.RepoReads[i]
+			var last int64
+			if !rd.LastAt.IsZero() {
+				last = store.EncodeTime(rd.LastAt)
+			}
+			return []any{s.Day, s.Node, s.Repo, rd.PrincipalKind, rd.Principal, rd.Via, rd.Seat,
+				rd.Reads, rd.Bytes, last}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("usage: write the readers of %s: %w", s, err)
+	}
+	return 1 + n, nil
 }
 
 // Gated reports whether this record must produce no rows. NOTHING GATES A

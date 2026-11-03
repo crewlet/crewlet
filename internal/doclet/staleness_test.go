@@ -115,7 +115,7 @@ func TestAPageReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 	}
 	// NOT DRAINED: this node has not applied the save, so a read that
 	// honours the floor cannot be served from what it holds.
-	ask := statelog.Freshness{Level: statelog.ReadStale, MinPosition: saved.Outcome.Position}
+	ask := statelog.FloorAt(statelog.ReadStale, saved.Outcome.Position)
 	_, err = reader.Get(t.Context(), page.Page.ID, ask)
 	var refusal *statelog.Refused
 	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBehind {

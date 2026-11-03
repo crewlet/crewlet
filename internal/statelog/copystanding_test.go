@@ -40,9 +40,10 @@ func standOn(t *testing.T, h *harness, node string, evicts bool) uint64 {
 	if evicts {
 		body, opID = "evict", "op-evict-"+node
 	}
+	standing := standingDomain{}.EvictionSubject(node)
 	seq, _, err := h.log.Append(t.Context(), probePrefix+".evict."+node, opID+body, nil,
 		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-ops"},
-			opID, body)))
+			standing, statelog.ScopeSet{Paths: []string{standing.String()}}, opID, body)))
 	if err != nil {
 		t.Fatalf("land %s's standing: %v", node, err)
 	}
@@ -64,7 +65,9 @@ func landCopy(t *testing.T, h *harness, writer, opID string) statelog.Position {
 	h.applier.auto = false
 	h.applier.mu.Unlock()
 	seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", opID, nil,
-		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: writer}, opID, "the peer's")))
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: writer},
+			probeSubject("a"), statelog.ScopeSet{Paths: []string{probeSubject("a").String()}},
+			opID, "the peer's")))
 	if err != nil {
 		t.Fatalf("land %s's copy: %v", writer, err)
 	}

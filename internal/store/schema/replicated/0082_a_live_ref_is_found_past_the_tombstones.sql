@@ -1,0 +1,40 @@
+-- A live ref is found past the tombstones.
+--
+-- The push decide refuses a create beside a directory of its own name
+-- (code.RefusalRefConflict): refs/heads/feature beside refs/heads/feature/x,
+-- which no client can hold both of. For each create it asks whether a LIVE ref
+-- lies under it — the first live row of code_refs keyed between ref + '/' and
+-- ref + '0' — and stops at the first. Over the primary key, that range holds
+-- every TOMBSTONE under the ref as well (a row with an empty target, kept
+-- code.RefTombstoneHorizon so a delta learns of a deletion), and the target is
+-- not in the key, so the seek stepped over each one with a lookup of its row
+-- before it could stop. Each tombstone was stepped over once for every create
+-- above it: a push of the 118 nested creates refs/heads/a, refs/heads/a/a, …
+-- over code.MaxTombstonesPerRepo tombstones under the deepest of them cost
+-- 7.7–9.9 s a round (internal/code's BenchmarkDecideABatch, buried arm, on
+-- four vCPUs under a load average of 3–7), and 7–15 ms read through this
+-- index — a round the repository's one committer runs again on every
+-- compare-and-set retry, holding a reader of the replicated estate, inside a
+-- 30 s budget — and any principal that may create and delete refs can build
+-- that repository.
+--
+-- PARTIAL, ON THE PREDICATE THE TWO STATEMENTS REPEAT VERBATIM (target != ''),
+-- so a probe seeks the first live ref of its range and nothing else: one seek
+-- whatever the range holds. An index on (repo_id, ref, target) would have let
+-- the seek read the target without a lookup, but still stepped over every
+-- tombstone — the cost was the rows visited, not the lookup alone.
+--
+-- Nor a table of the tombstones beside code_refs, which would spare the index
+-- but move a row between two tables at every deletion and every create again,
+-- and turn the delta read — one walk of a repository's changed refs in
+-- position order, deletions among them (code_refs_changed_idx) — into a merge
+-- of two.
+--
+-- What it costs is the push apply's: every live ref a record writes is one
+-- entry more, and a deletion or a creation moves a ref out of it or into it —
+-- about 5 µs a created ref, 20 ms on the record of the most creations one
+-- carries, measured interleaved with the build before it. internal/code's doc
+-- (# Measured) records both sides.
+--
+-- Class: code_refs is unchanged; an index carries no rows of its own.
+CREATE INDEX code_refs_live_idx ON code_refs (repo_id, ref) WHERE target != '';    -- the push decide's ref_conflict probe: the first live ref under a create

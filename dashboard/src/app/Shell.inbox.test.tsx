@@ -14,6 +14,7 @@ import { Shell } from "./Shell.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -61,7 +62,7 @@ function shellAs(grants: string[]) {
           name: "Ana Lee",
           kind: "human",
         });
-      case "work_inbox":
+      case "inbox":
         asks.inbox++;
         return Promise.resolve({
           handle: "ana",
@@ -89,7 +90,7 @@ function shellAs(grants: string[]) {
 
 test("the shell watches the viewer's seat and asks for their inbox again when it moves", async () => {
   const { store, view, watched, asks } = shellAs(["worklet"]);
-  await act(async () => {});
+  await afterMicrotasks();
   expect(watched).toEqual(["ana"]);
   const before = asks.inbox;
   expect(before).toBeGreaterThan(0);
@@ -110,15 +111,16 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
   expect(watched).toEqual(["ana", ""]);
 });
 
-// THE INBOX IS WORKLET'S: a reader without Worklet is watched for nothing
-// and asked no inbox — the engine would refuse both. Mutation: watch whatever
-// the viewer holds and the seat is watched.
-test("a reader without Worklet is watched for nothing and asked no inbox", async () => {
+// THE INBOX IS EVERY SIGNED-IN PERSON'S: it is composed from every native
+// domain's notices, each read under its own permission on the engine's side,
+// so a reader without Worklet is watched and asked their inbox all the same.
+// Mutation: gate the watch on Worklet again and the seat is not watched.
+test("a reader without Worklet is watched and asked their inbox", async () => {
   const { watched, asks } = shellAs(["doclet"]);
-  await act(async () => {});
+  await afterMicrotasks();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  expect(watched.filter(Boolean)).toEqual([]);
-  expect(asks.inbox).toBe(0);
+  expect(watched.filter(Boolean)).toEqual(["ana"]);
+  expect(asks.inbox).toBeGreaterThan(0);
 });

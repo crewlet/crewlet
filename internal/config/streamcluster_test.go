@@ -113,8 +113,9 @@ func TestAnExternalStreamRefusesTheEmbeddedClusterBlock(t *testing.T) {
 			// without the block ever having been looked at.
 			b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 			b.Stream = config.Stream{
-				Type: config.StreamNATS,
-				URL:  "nats://broker.example.com:4222",
+				Type:        config.StreamNATS,
+				URL:         "nats://broker.example.com:4222",
+				Credentials: "/etc/crewlet/engine.creds",
 				// Replicas, because an external cluster's own membership
 				// is not in this file: the count is the operator's to
 				// state and is not what is under test here.
@@ -157,9 +158,10 @@ func TestAnExternalStreamIsNotJudgedByTheClusterBlocksPeerCount(t *testing.T) {
 	b := config.RunnableBootstrap()
 	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 	b.Stream = config.Stream{
-		Type:    config.StreamNATS,
-		URL:     "nats://broker.example.com:4222",
-		Cluster: config.StreamCluster{Name: "crewlet", Peers: []string{"nats://node-b.internal:6222"}},
+		Type:        config.StreamNATS,
+		URL:         "nats://broker.example.com:4222",
+		Credentials: "/etc/crewlet/engine.creds",
+		Cluster:     config.StreamCluster{Name: "crewlet", Peers: []string{"nats://node-b.internal:6222"}},
 	}
 
 	err := b.Validate()

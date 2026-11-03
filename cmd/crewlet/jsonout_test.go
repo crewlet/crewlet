@@ -56,6 +56,12 @@ func serveMarkup(t *testing.T) *httptest.Server {
 	fleet := markupAnswer(t, func(m map[string]any) any {
 		return map[string]any{"nodes": []any{}, "objects": m}
 	})
+	// A verification the node finished before it answered, so the command
+	// prints it with no poll.
+	verified := markupAnswer(t, func(m map[string]any) any {
+		m["id"], m["repo"], m["state"] = "v-1", "web", "done"
+		return m
+	})
 	mux := http.NewServeMux()
 	answer := func(body []byte) http.HandlerFunc {
 		return func(w http.ResponseWriter, _ *http.Request) {
@@ -67,6 +73,10 @@ func serveMarkup(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /fleet/broker", answer(whole))
 	mux.HandleFunc("GET /fleet", answer(fleet))
 	mux.HandleFunc("POST /objects/migrate", answer(whole))
+	// One page of the code listing, with no next page, for both `code
+	// status` and the listing `code verify` reads its floor from.
+	mux.HandleFunc("GET /code/repos", answer(whole))
+	mux.HandleFunc("POST /code/repos/web/verify", answer(verified))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -107,6 +117,10 @@ func jsonOutputs(t *testing.T) map[string]struct {
 		"objectsMigrate": {args: []string{"objects", "migrate", "-to", "s3",
 			"-target", "/etc/crewlet/s3.yaml", "-json", node},
 			want: []string{markupText}, node: true},
+		"codeStatus": {args: []string{"code", "status", "-json", node},
+			want: []string{markupText}, node: true},
+		"codeVerify": {args: []string{"code", "verify", "-repo", "web", "-json", node},
+			want: []string{markupText}, node: true},
 	}
 }
 
@@ -118,8 +132,9 @@ func jsonOutputs(t *testing.T) map[string]struct {
 // field this build does not know and every number digit for digit, which
 // copying it as it came used to buy and a typed decode would lose.
 //
-// Mutations, each red: printing with json.MarshalIndent; fleet or either
-// objects command back to copying the node's bytes; dropping UseNumber from the decode, which turns
+// Mutations, each red: printing with json.MarshalIndent; fleet, either
+// objects command, or `code status` or `code verify` back to copying the
+// node's bytes; dropping UseNumber from the decode, which turns
 // the 19-digit number into another.
 func TestEveryJSONOutputSpellsItsTextAsWritten(t *testing.T) {
 	t.Parallel()

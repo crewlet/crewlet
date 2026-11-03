@@ -1112,7 +1112,7 @@ func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
 	t.Parallel()
 	q := newQueueWith(t, Config{
 		ServerName: "member", LeafHost: "127.0.0.1", LeafPort: AnyPort,
-		StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes,
+		StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: testFleetAuth(),
 	})
 	if err := q.EnsureDomainStream(t.Context(), DomainStream{
 		Name: "CREWLET_LATER_LOG", Subjects: []string{"crewlet.later.log.>"},
@@ -1397,6 +1397,127 @@ func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
 		t.Fatal("a pull whose consumer was deleted under it went on waiting " +
 			"for its whole expiry")
 	}
+}
+
+// A PULL THAT FAILS HANDS BACK WHAT IT HELD, never to the fetch after it.
+//
+// The applier reads a failed fetch as the moment from which the log may be
+// another history — a broker restored under a running node ends its pulls —
+// and gives back every record it holds from before it. A record the pull's
+// own buffer kept across the failure reached the applier after it, as though
+// the broker delivered it then. Here one is delivered to a request still
+// standing after the fetch that sent it returned, the consumer is deleted under
+// that request, and created again at the start as a restored broker's would
+// be: once the pull has been told of the failure, the fetch reports it, and the
+// first record the handle hands over after it is the new consumer's first
+// delivery, never the buffered one from before.
+//
+// Mutations: let the failed fetch leave what it held for the fetch after —
+// that fetch hands over the record from before, red; record no failure from a
+// refusing status — the pull is never told, red.
+func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
+	t.Parallel()
+	const stream = "CREWLET_HANDBACK_LOG"
+	q, log := openDomain(t, stream, "crewlet.handback.log")
+	cons, err := q.DomainConsumer(t.Context(), stream, "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	appendOne := func(i int) {
+		t.Helper()
+		if _, _, err := log.Append(t.Context(), "crewlet.handback.log.task."+id(i),
+			"", nil, []byte(`{"n":`+itoa(i)+`}`)); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+
+	// THE FIRST RECORD, taken by a fetch whose request stands on after it
+	// returns, with room for nine more.
+	appendOne(1)
+	got, err := cons.Fetch(t.Context(), 10, 1<<20, 10*time.Second)
+	if err != nil || len(got) != 1 || seqOf(got) != 1 {
+		t.Fatalf("the first fetch returned %d record(s) from %d (%v), want 1 from 1",
+			len(got), seqOf(got), err)
+	}
+	// THE SECOND, delivered to that standing request with no fetch running:
+	// the pull's buffer holds it.
+	appendOne(2)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		info, err := consumerInfo(t, cons)
+		if err != nil {
+			t.Fatalf("consumer info: %v", err)
+		}
+		if info.NumAckPending == 2 && info.NumWaiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the second record never reached the standing request: %d "+
+				"in flight, %d waiting", info.NumAckPending, info.NumWaiting)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// THE FAILURE: the consumer goes under the standing request — and the
+	// case waits for the PULL to be told, not for the delete to return. The
+	// server answers the deletion twice, with a `409` on the pull's inbox and
+	// with the reply the delete waits on, and the client dispatches the two
+	// on two subscriptions' own goroutines, so nothing orders them: a fetch
+	// made as the delete returns could find the record and no failure yet,
+	// and hand the record over — rightly, since it was delivered before the
+	// failure and the applier gives it back when the next fetch reports one.
+	// In the pull's inbox the record comes before the status, so a pull told
+	// of its failure holds the record still.
+	if err := q.JetStream().DeleteConsumer(t.Context(), stream, cons.Name()); err != nil {
+		t.Fatalf("delete the consumer: %v", err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		failed, held := pullFailure(cons)
+		if failed {
+			if held != 1 {
+				t.Fatalf("the pull was told of its failure holding %d record(s), "+
+					"want the one delivered before it", held)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the pull was never told its consumer went")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := cons.Fetch(t.Context(), 10, 1<<20, 5*time.Second); !errors.Is(err, errPullRefused) {
+		t.Fatalf("the fetch after the consumer went returned %v, want the refusal", err)
+	}
+
+	// THE BROKER AS IT NOW IS: the consumer again, from the start.
+	if _, err := q.JetStream().CreateConsumer(t.Context(), stream,
+		domainConsumerConfig(cons.Name(), 0)); err != nil {
+		t.Fatalf("create the consumer again: %v", err)
+	}
+	got, err = cons.Fetch(t.Context(), 10, 1<<20, 5*time.Second)
+	if err != nil {
+		t.Fatalf("the fetch after the consumer came back: %v", err)
+	}
+	if seqOf(got) != 1 {
+		t.Fatalf("the first record handed over after the failure is %d, want the new "+
+			"consumer's first delivery, 1 — a record the pull held across its failure "+
+			"reached the reader as though delivered after it", seqOf(got))
+	}
+}
+
+// pullFailure is whether c's standing pull has been told of a failure no fetch
+// has reported yet, and how many records its buffer holds.
+func pullFailure(c *DomainConsumer) (failed bool, held int) {
+	c.mu.Lock()
+	p := c.pull
+	c.mu.Unlock()
+	if p == nil {
+		return false, 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failure != nil, len(p.buffered)
 }
 
 // BenchmarkAnIdlePull is what one pull of an empty log costs, B/op being the

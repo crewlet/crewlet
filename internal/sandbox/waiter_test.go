@@ -167,9 +167,19 @@ func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 	return r.launchingAs(turnID, lease, func(*PendingRun) {})
 }
 
+// launchWith is [waiterRig.launch] of a run the case edits before it is
+// written — given repositories on the code host, say, as a launch writes them.
+func (r *waiterRig) launchWith(turnID string, edit func(*PendingRun)) PendingRun {
+	r.t.Helper()
+	r.launchingAs(turnID, rigLease, edit)
+	r.suspend(turnID)
+	return r.get(turnID)
+}
+
 // launchingAs is [waiterRig.launchingUnder] for a row the case shapes before
 // the write that opens it — a turn a colleague's ask woke, say, whose row the
-// launch writes the ask onto.
+// launch writes the ask onto, or one given repositories on the code host, as
+// a launch writes them.
 func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingRun)) PendingRun {
 	r.t.Helper()
 	ctx := r.t.Context()
@@ -239,8 +249,8 @@ var rigItem = types.WorkItem{Backend: types.WorkWorklet, ID: "task-1", Key: "ENG
 // carried one in place of the other shows.
 const rigWorkKey = "0123456789abcdef0123456789abcdef"
 
-// suspend writes the execute_state a real suspending turn would have written,
-// which is what opens the run to the completion poll.
+// suspend writes the suspended conversation a real suspending turn would have
+// written, which is what opens the run to the completion poll.
 func (r *waiterRig) suspend(turnID string) {
 	r.t.Helper()
 	r.suspendIn(r.t.Context(), turnID)
@@ -295,6 +305,17 @@ func (r *waiterRig) getIn(ctx context.Context, turnID string) PendingRun {
 		r.t.Fatalf("Get %s = %v, %v", turnID, ok, err)
 	}
 	return run
+}
+
+// callsIn is the bridged tool log of turnID's run, read from inside a call the
+// coordinator made, under that call's context.
+func (r *waiterRig) callsIn(ctx context.Context, turnID string) BridgeLog {
+	r.t.Helper()
+	log, err := r.pending.BridgeLog(ctx, r.getIn(ctx, turnID))
+	if err != nil {
+		r.t.Fatalf("BridgeLog %s = %v", turnID, err)
+	}
+	return log
 }
 
 // finished asserts that a run ended: its record is deleted, which is the

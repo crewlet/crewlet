@@ -11,7 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -109,6 +111,17 @@ var nativeDomains = map[string]nativeDomain{
 		// direct conversation IS its participants, so the `to` that
 		// names them is the object a failed send_dm or open_dm points at.
 		objects: []string{"channel", "message_id", "to"},
+	},
+	code.Domain{}.Name(): {
+		class:    codeClass,
+		sentence: code.Sentence,
+		// A repository is named by `repo` — its name, which a rename
+		// redirects — on every code write but the create, and a change by
+		// `change`, its number within that repository. code_create_repo
+		// names the repository it makes by `name`, which on the other
+		// domains' tools is a person's or a project's text rather than an
+		// object, so it is not declared (objectargs_test names why).
+		objects: []string{"repo", "change"},
 	},
 }
 
@@ -251,7 +264,7 @@ func trackerClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalAlreadyAnswered, true
 	case errors.Is(err, worklet.ErrTaken):
 		return tools.RefusalExists, true
-	case errors.Is(err, worklet.ErrInboxFull):
+	case errors.Is(err, inbox.ErrFull):
 		return tools.RefusalInboxFull, true
 	case errors.Is(err, worklet.ErrReassignmentBudget):
 		return tools.RefusalReassignmentBudget, true

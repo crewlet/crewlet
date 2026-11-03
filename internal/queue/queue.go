@@ -118,28 +118,40 @@ var ErrTooLarge = errors.New("queue: event too large for the transport")
 // in-flight event and not a disk number.
 const MaxPayloadBytes = 8 << 20
 
-// MaxConcurrentAnswers is how many requests one [EventQueue.Serve]
-// registration answers at once.
+// ConcurrentAnswers is how many requests an [EventQueue.Serve] registration
+// answers at once when what it answers is work it does NOW.
 //
 // SIXTY-FOUR, which is twice the default `node.max_concurrent`: every turn a
 // node runs can be inside one tool call that asks a peer, so a registration
 // answering one node's full complement of turns and a second node's beside it
 // never queues a request behind another. The cap bounds goroutines and
 // buffered payloads rather than throughput — a request past it waits for a
-// slot, it is never dropped. What it costs in memory is sixty-four of the
-// largest answer THAT registration serves, and most answer in a few
+// slot rather than failing, as far as its backend buffers it
+// ([EventQueue.Serve] says how far). What it costs in memory is sixty-four
+// of the largest answer THAT registration serves, and most answer in a few
 // kilobytes (a steer, a sandbox tail, the fleet broker's member exchange).
-// Three fill an answer up to [MaxPayloadBytes]: the estate
-// router's gather batches (internal/estate), the fleet turn-detail scatter
-// (internal/eventfan) and the memory read (internal/learning/memread). One of
-// those at the cap, every answer at the ceiling, is 512 MiB held at once — a
-// bound nothing here reaches in practice, because an answer that large is a
-// dashboard or a seat reading a whole window and sixty-four of them in flight
-// on one registration is sixty-four such readers at the same instant, and the
-// estate's batches are each queried under the node's CPU budget first
-// (internal/estate/cpus.go). Past the cap a request waits for a slot like any
-// other, which is back-pressure on the asker rather than a failure.
-const MaxConcurrentAnswers = 64
+// Four can fill an answer up to [MaxPayloadBytes]: the fleet turn-detail
+// scatter (internal/eventfan), the memory read (internal/learning/memread),
+// a box's read back by its host (internal/engine's sandbox host, whose result
+// is cut to the first of the carries the broker takes) and the estate
+// router's answers (internal/estate) — whose paged usage reads are cut at a
+// quarter of the message, so one reaches the cap only by one oversized
+// record. One of those at the cap, every answer at the ceiling, is
+// 512 MiB held at once — a bound nothing here reaches in practice, because an
+// answer that large is a dashboard or a seat reading a whole window and
+// sixty-four of them in flight on one registration is sixty-four such readers
+// at the same instant. Past the cap a request waits for a slot like any
+// other, which is back-pressure on the asker rather than a failure: work done
+// now frees its slots in the time its answers take, long before a backend's
+// buffer fills.
+//
+// A REGISTRATION WHOSE ANSWERS WAIT — in a queue of their own, for as long as
+// their askers' attempts, as a push proposal waits behind its repository's
+// earlier pushes — passes the bound of that queue instead, and is a
+// registration of its own: a slot held through such a wait is one every other
+// request of its registration waits behind, so sixty-four of them on a
+// registration shared with work done now would hold every slot it has.
+const ConcurrentAnswers = 64
 
 // MaxLingerSeconds is the hard ceiling on a batch linger window.
 //
@@ -685,12 +697,36 @@ type EventQueue interface {
 	// server that did not answer, which is the same fact as a server that
 	// was not running — see AnswerFunc.
 	//
-	// ANSWERS RUN CONCURRENTLY, up to [MaxConcurrentAnswers] per
-	// registration, and a request beyond that waits for a slot rather
-	// than being dropped. One slow answer must never hold the next
-	// request behind it: an answerer serves every asker in the fleet, and
-	// a registration that answered one at a time made each of them wait
+	// ANSWERS RUN CONCURRENTLY, up to answers of them at once, and a
+	// request beyond that waits for a slot rather than failing, as far as
+	// its backend buffers it (below). One slow answer must never hold the
+	// next request behind it: an answerer serves every asker in the fleet,
+	// and a registration that answered one at a time made each of them wait
 	// for the sum of everybody else's latency.
+	//
+	// A WAITING REQUEST IS HELD IN A BUFFER ITS BACKEND BOUNDS, and dropped
+	// past it. The real backend's NATS client holds a subscription's
+	// pending requests to 64 MiB and 500 000 messages (nats.go's defaults,
+	// which this package leaves as they are) and drops a request past them
+	// as a slow consumer: logged on the serving node, naming no subject,
+	// and heard by its asker as no answer at all, at its deadline. The
+	// in-memory twin holds every one. Work done now drains its slots long
+	// before that bound; a registration whose requests are LARGE and whose
+	// answers hold their slots through long waits does not, so it bounds
+	// its own backlog — it answers a request past what it holds AT ONCE,
+	// in its own words for "not now", and never leaves it to wait where it
+	// can be dropped unheard (internal/estate's engine writes' lane).
+	//
+	// THE BOUND IS THE REGISTRATION'S OWN, and so are its slots: a
+	// request waiting for one waits only behind its own registration's
+	// answers, never another's. Only the answerer knows what an answer
+	// waits on — [ConcurrentAnswers] for one that does its work now, the
+	// bound of its own queue for one that waits in it — and a slot held
+	// through a wait is one every other request of the registration
+	// waits behind, so work that waits and work that does not are served
+	// on registrations of their own. A bound below one is refused
+	// ([ErrAnswerBound]): a registration that may answer nothing would
+	// hold every request it is sent until its askers gave up.
 	//
 	// The returned Unsubscribe cancels the answerer's context and then
 	// WAITS for the answers in flight, bounded by the context it is given
@@ -704,7 +740,7 @@ type EventQueue interface {
 	// it as one that did not answer — the same honest fact a scatter reports
 	// about a node that has not started. Nothing that needs every answerer
 	// may assume it from Serve's return; it asks, and reads who answered.
-	Serve(ctx context.Context, subject string, h AnswerFunc) (Unsubscribe, error)
+	Serve(ctx context.Context, subject string, answers int, h AnswerFunc) (Unsubscribe, error)
 
 	// Broadcast hands payload to every process listening on a pattern
 	// that matches subject, and returns.

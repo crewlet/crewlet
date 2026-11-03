@@ -15,7 +15,8 @@ import { CommandPalette } from "./Palette.tsx";
 import { AssistantControlContext, type AssistantControl } from "../assistant/control.ts";
 import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
-import { ANSWER_IDLE_MS, destinationHits } from "./hits.ts";
+import { ANSWER_IDLE_MS, CODE_HITS, destinationHits } from "./hits.ts";
+import { QUIET_MS } from "~/lib/useQuiet.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { Router, href } from "../router.tsx";
@@ -32,6 +33,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+import { settled } from "~/test/settle.ts";
 
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -227,6 +229,11 @@ function mount({
     closed,
     keys,
     input,
+    // EVERY GESTURE IS AN AWAITED ACT, and React's act returns only once a
+    // check of its queue at a task boundary finds it empty: whatever the
+    // gesture's microtasks did (the stubbed act route answering, the palette
+    // drawing the answer) has been drawn, so a case reads the page straight
+    // after one. A case that clicks wraps the click in one the same way.
     type: async (value: string) => {
       await act(async () => {
         fireEvent.change(input, { target: { value } });
@@ -307,13 +314,14 @@ test.each([
 });
 
 describe("scopes and sigils", () => {
-  test("the six scopes are tabs, All first", () => {
+  test("the seven scopes are tabs, All first", () => {
     mount();
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
       "All",
       "Tasks",
       "Pages",
       "Artifacts",
+      "Code",
       "Agents",
       "Actions",
     ]);
@@ -709,7 +717,6 @@ describe("the knowledge answer", () => {
     await act(async () => {
       vi.advanceTimersByTime(ms);
     });
-    await act(async () => {});
   };
 
   test("is asked once per settled question, and drawn with its sources and tokens", async () => {
@@ -879,7 +886,9 @@ describe("the knowledge answer", () => {
       answers: {
         work_search: async () => ({
           ...OUTCOME,
-          hits: [HIT, { ...HIT, key: "ENG-421" }, { ...HIT, key: "ENG-422" }],
+          // EACH TASK ITS OWN ID, as the engine sends one: the rows are keyed
+          // by it, and three hits sharing HIT's drew three rows under one key.
+          hits: [HIT, { ...HIT, id: "t2", key: "ENG-421" }, { ...HIT, id: "t3", key: "ENG-422" }],
           available: true,
         }),
         knowledge: async () => ({
@@ -929,6 +938,21 @@ describe("the knowledge answer", () => {
 });
 
 describe("the actions, made as the person", () => {
+  // THE ANSWER'S CLOCK IS HELD for every case here. "rotate the join timeout"
+  // and "swe cluster join" read as questions, so typing one arms the answer's
+  // ANSWER_IDLE_MS pause on a real timer, and a case that took longer than
+  // that between typing and its press — any case, on a loaded machine — had
+  // `answer_knowledge` sent through the same act route as the write it is
+  // about: the route below answers every tool with the write's receipt, the
+  // palette drew that receipt as an answer and threw on its missing sources,
+  // and `posted` held two calls where the case counts one. These cases are
+  // about the writes; the answer's own cases, above, move this clock by hand.
+  // Only setTimeout is held: React's scheduler and the fetch the writes go
+  // through run as they always do.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+
   const TASKS: Answers = {
     work_search: async () => ({ ...OUTCOME, hits: [HIT], available: true }),
     colleague: async (params) =>
@@ -965,7 +989,6 @@ describe("the actions, made as the person", () => {
     await act(async () => {
       fireEvent.click(p.row(/Create task/));
     });
-    await act(async () => {});
     expect(posted.map((x) => [x.tool, x.body.args])).toEqual([
       ["create_work_item", { title: "rotate the join timeout", project: "ENG" }],
     ]);
@@ -996,7 +1019,6 @@ describe("the actions, made as the person", () => {
     await act(async () => {
       fireEvent.click(ask);
     });
-    await act(async () => {});
     expect(posted.map((x) => [x.tool, x.body.args])).toEqual([
       [
         "create_work_item",
@@ -1024,7 +1046,6 @@ describe("the actions, made as the person", () => {
     await act(async () => {
       fireEvent.click(p.row("SWE"));
     });
-    await act(async () => {});
     expect(posted[0]!.body.args).toMatchObject({ title: "cluster join", ask: "swe" });
   });
 
@@ -1039,12 +1060,10 @@ describe("the actions, made as the person", () => {
     await act(async () => {
       fireEvent.click(assign);
     });
-    await act(async () => {});
     expect(screen.getByText("Suggested")).toBeDefined();
     await act(async () => {
       fireEvent.click(within(screen.getByRole("group", { name: "Suggested" })).getByText("SWE"));
     });
-    await act(async () => {});
     expect(posted.map((x) => [x.tool, x.body.args])).toEqual([
       ["update_work_item", { item: "ENG-420", assignee: "swe", if_match: 7 }],
     ]);
@@ -1068,7 +1087,6 @@ describe("the actions, made as the person", () => {
     await act(async () => {
       fireEvent.click(p.row(/Create task/));
     });
-    await act(async () => {});
     expect(p.closed).not.toHaveBeenCalled();
     expect(document.querySelector(".is-refused")).not.toBeNull();
   });
@@ -1152,7 +1170,6 @@ describe("the actions, made as the person", () => {
         within(screen.getByRole("group", { name: "Projects" })).getByText("Operations"),
       );
     });
-    await act(async () => {});
     expect(posted.map((x) => [x.tool, x.body.args])).toEqual([
       ["create_work_item", { title: "cluster join", project: "OPS" }],
     ]);
@@ -1177,7 +1194,6 @@ describe("the actions, made as the person", () => {
         within(screen.getByRole("group", { name: "Suggested" })).getByText("Core platform"),
       );
     });
-    await act(async () => {});
     expect(posted.map((x) => x.body.args)).toEqual([
       { title: "cluster join", assignee: "swe", ask: "swe", project: "ENG" },
     ]);
@@ -1205,7 +1221,6 @@ describe("the actions, made as the person", () => {
     });
     await p.type("cluster join");
     await p.press("a", { code: "KeyA", altKey: true });
-    await act(async () => {});
     expect(p.row("SWE").textContent).toContain("holds it");
     expect(p.row("SRE").textContent).not.toContain("holds it");
   });
@@ -1236,7 +1251,6 @@ describe("a notice beside the answer", () => {
     await act(async () => {
       vi.advanceTimersByTime(ANSWER_IDLE_MS);
     });
-    await act(async () => {});
     await p.press("Enter", { ctrlKey: true });
     expect(screen.getByText("It flakes under packet loss.")).toBeDefined();
     expect(screen.getByText(WRITE_REASONS.not_served, { selector: "p" })).toBeDefined();
@@ -1275,7 +1289,6 @@ describe("the search bound", () => {
     await act(async () => {
       vi.advanceTimersByTime(ANSWER_IDLE_MS * 2);
     });
-    await act(async () => {});
     expect(searches()).toEqual([]);
     expect(posted).toEqual([]);
     expect(
@@ -1435,7 +1448,6 @@ describe("projects, the switcher and the full search", () => {
 
   test("a term ranks the projects as the switcher does, each going to its page", async () => {
     const p = mount({ answers: { work_projects: listing } });
-    await act(async () => Promise.resolve());
     await p.type("o");
     const group = screen.getByRole("group", { name: "Projects" });
     const rows = within(group).getAllByRole("option");
@@ -1545,6 +1557,7 @@ describe("a screen found by what it holds", () => {
     const hits = destinationHits("s", nav, Infinity, null, {
       tracker: true,
       knowledge: true,
+      code: true,
       chat: true,
     }).map((h) => h.label);
     // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
@@ -1563,7 +1576,7 @@ describe("a screen found by what it holds", () => {
   test("a reader holding only Worklet opens Settings on Models, unlocked", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
-    const runs = { tracker: true, knowledge: true, chat: true };
+    const runs = { tracker: true, knowledge: true, chat: true, code: true };
     const settings = destinationHits(
       "settings",
       nav,
@@ -1591,12 +1604,147 @@ describe("a screen found by what it holds", () => {
     expect(to).toHaveBeenLastCalledWith(["settings", "models"]);
   });
 
+  // A WORKSPACE'S ENTRY IS OFFERED WHERE ITS ROW IS: My work's landing
+  // section is Worklet's, but the row is offered wherever Worklet or the
+  // code host runs, so a company on another tracker that hosts its code
+  // here finds My work in the palette, and it opens on Reviews — and one
+  // hosting neither finds no entry for it. Mutation: filter the workspace's
+  // entry by its landing section's service, and the first lookup is empty.
+  test("My work is offered where only the code host runs, and opens on Reviews", () => {
+    const to = vi.fn();
+    const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
+    const mine = (code: boolean) =>
+      destinationHits(
+        "work",
+        nav,
+        Infinity,
+        { anonymous: false, grants: ["worklet"] },
+        {
+          tracker: false,
+          knowledge: true,
+          chat: true,
+          code,
+        },
+      ).find((h) => h.id === "nav-me");
+    const entry = mine(true);
+    expect(entry).toBeDefined();
+    entry!.go();
+    expect(to).toHaveBeenCalledWith(["me", "reviews"]);
+    expect(mine(false)).toBeUndefined();
+  });
+
+  // AND IT IS LOCKED AS ITS ROW IS: where the engine hosts no code its
+  // Reviews is offered nowhere, so a reader without Worklet is told what
+  // would open My work rather than sent to the Queue's refusal; where it
+  // hosts code, Reviews is theirs and the entry says nothing of access.
+  // Mutation: weigh every section's grants whatever the company runs, and the
+  // first hint names no access.
+  test("My work's entry needs Worklet exactly where its Reviews is not offered", () => {
+    const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
+    const hint = (code: boolean) =>
+      destinationHits(
+        "my work",
+        nav,
+        Infinity,
+        { anonymous: false, grants: [] },
+        { tracker: true, knowledge: true, chat: true, code },
+      ).find((h) => h.id === "nav-me")?.hint;
+    expect(hint(false)).toMatch(/needs Worklet access$/);
+    expect(hint(true)).toBeDefined();
+    expect(hint(true)).not.toMatch(/needs/);
+  });
+
   // THE HINT IS PROSE AND IS NEVER SEARCHED: Service accounts' mentions
   // "machine principals", and it is no answer to "principals".
   test("a word only a hint's prose holds finds nothing", async () => {
     const p = mount();
     await p.type("principals");
     expect(screen.queryByRole("option", { name: /^Service accounts/ })).toBeNull();
+  });
+});
+
+// CODE IS ASKED IN ITS OWN SCOPE ONLY, once the term has rested: a code
+// search is a signed request to every git node holding a repository the
+// reader reads, so All's every pause sends none. A line opens its file AT THE
+// COMMIT ITS REPOSITORY WAS SEARCHED AT, with the line picked, as Code ›
+// Search's lines do. Mutations: ask in every scope, and All's pause sends a
+// search; open the branch rather than the searched commit, and the address
+// loses its ref.
+describe("code", () => {
+  const TIP = "c".repeat(40);
+  const none = { count: 0, names: [] };
+  function codeEngine(): URL[] {
+    const asked: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.href);
+        asked.push(url);
+        if (url.pathname !== "/query/code_search") return new Promise<Response>(() => {});
+        return Promise.resolve(
+          json({
+            hits: [
+              {
+                repo: "web",
+                path: "src/app.ts",
+                line: 7,
+                text: "const needle = 1;",
+                blob: "1".repeat(40),
+              },
+            ],
+            tips: { web: TIP },
+            coverage: {
+              searched: 1,
+              not_indexed: none,
+              building: none,
+              not_answering: null,
+              not_permitted: none,
+              grep_not_named: none,
+              stale: none,
+              no_ref: none,
+              past_limit: none,
+              skipped_files: 0,
+              truncated: false,
+            },
+          }),
+        );
+      }),
+    );
+    return asked;
+  }
+  const searched = (asked: URL[]) => asked.filter((u) => u.pathname === "/query/code_search");
+
+  test("Code asks the search once the term rests, and a line opens its file at the searched commit", async () => {
+    const asked = codeEngine();
+    const p = mount();
+    // A PAUSE IN ALL ASKS NOTHING OF THE CODE HOST, ON A FAKED CLOCK moved
+    // past the quiet the term waits out, so the absence is asserted where the
+    // question would have gone out, never after a guess at the machine's load.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await p.type("needle");
+      act(() => {
+        vi.advanceTimersByTime(QUIET_MS);
+      });
+      await settled(() => searched(asked).length);
+      expect(searched(asked)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    });
+    expect(p.tab()).toBe("Code");
+    const line = await screen.findByText("web:src/app.ts:7");
+    const [search] = searched(asked);
+    expect(search?.searchParams.get("q")).toBe("needle");
+    expect(search?.searchParams.get("limit")).toBe(String(CODE_HITS));
+    await act(async () => {
+      fireEvent.click(line.closest('[role="option"]')!);
+    });
+    expect(location.hash).toBe(
+      href(["code", "repos", "web"], { tab: "files", ref: TIP, path: "src/app.ts", lines: "7" }),
+    );
   });
 });
 

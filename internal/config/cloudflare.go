@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/words"
@@ -79,12 +80,21 @@ func (c *Cloudflare) ZoneNames() []string {
 }
 
 // cloudflareAccountID is the shape Cloudflare gives every account identifier.
-var cloudflareAccountID = regexp.MustCompile(`^[0-9a-f]{32}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go); the
+// bounded repeat compiles to a program holding every count, about 13 KB.
+var cloudflareAccountID = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[0-9a-f]{32}$`)
+})
 
 // cloudflareZoneName is a DNS name as Cloudflare lists a zone: labels of
 // letters, digits and hyphens, at least two of them.
-var cloudflareZoneName = regexp.MustCompile(
-	`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+// Compiled at first use, not at init, for the same reason: its two {0,61}
+// repeats are about 87 KB at init, a third of a package's whole budget there.
+var cloudflareZoneName = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(
+		`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+})
 
 // CloudflareZoneKey is a zone name as Cloudflare matches it: trimmed and
 // lowercased, without a trailing dot.
@@ -112,7 +122,7 @@ func (c *Cloudflare) validate(path Path) error {
 				"account's overview page in the Cloudflare dashboard")
 	case envref.Has(id):
 		// Resolved and checked where the client is built.
-	case !cloudflareAccountID.MatchString(id):
+	case !cloudflareAccountID().MatchString(id):
 		p.add(at(path, "provisioning.account_id"), ErrUnknownValue,
 			"%q is not a Cloudflare account ID, which is 32 lowercase hexadecimal "+
 				"characters", prov.AccountID)
@@ -129,7 +139,7 @@ func (c *Cloudflare) validate(path Path) error {
 		case key == "":
 			p.add(idx(at(path, "provisioning.zones"), i), ErrMissing,
 				"a zone name is empty; remove the entry or name the zone")
-		case !cloudflareZoneName.MatchString(key):
+		case !cloudflareZoneName().MatchString(key):
 			p.add(idx(at(path, "provisioning.zones"), i), ErrUnknownValue,
 				"%q is not a zone name: give the domain as Cloudflare lists it, "+
 					"such as example.com, with no scheme or path", zone)

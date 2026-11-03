@@ -16,6 +16,40 @@ import (
 
 const testSeat = "agent:11111111-1111-1111-1111-111111111111"
 
+// ContendedCharges is how many charges the contention cases put on one counter
+// through EACH node's handle at once, released together, across
+// [ContendingNodes] of them.
+//
+// TEN TIMES THE CONTENTION THE STORE BEFORE IT FAILED AT. coord/kv bounded a
+// charge's compare-and-swap at sixteen attempts with a wait doubling to a
+// 32 ms ceiling, and thirty-two concurrent charges through a leaf under load
+// lost every one of them — a healthy round failed closed as an outage. At
+// this figure a backend fails these cases with an attempt bound near the
+// charges in flight, or a backoff whose spread was tuned to one topology's
+// round trip rather than the one it meets.
+//
+// WHAT THE CASES CANNOT TELL is HOW a backend survives. Measured on coord/kv
+// with every charge made a compare-and-swap contender of its own — its
+// coalescing off, its 256 attempts and its round-trip window kept — the
+// contended cases passed through one handle, on a member and through a leaf,
+// and on three handles on a member, as a store that coalesces does: enough
+// attempts and a spread wait carry this many charges. What tells the two
+// apart is the backend's own count of what reaches its store
+// (coord/kv's TestANodesChargesOnOneScopeAreOneContender), and production is
+// where the difference binds: a counter's writers are every round in flight
+// on every node, which no attempt bound can be sized for, or the nodes, which
+// one can.
+const ContendedCharges = 320
+
+// ContendingNodes is how many nodes the contention cases spread their charges
+// across ([fleetHarness.nodes]): enough that one node's batch is raced by more
+// than one other, so a store certified here has met the contention a fleet's
+// hottest key has once each node's charges are one write — the NODES racing.
+// A backend that opens each node on a connection of its own (or a leaf of its
+// own) certifies the topology it runs on; one whose store is its handle hands
+// back the same handle every time.
+const ContendingNodes = 4
+
 // windows is the suite's current windows: the day, week and month of the
 // harness's fixed instant, in UTC.
 func (h *fleetHarness) windows() coord.Windows {
@@ -916,16 +950,20 @@ var budgetCases = []fleetCase{{
 		// The property a compare-and-swap buys and a read-modify-write
 		// does not. Without it N concurrent rounds count as one, and
 		// the cap is whatever the last writer happened to see.
-		// Thirty-two callers ACROSS FOUR NODES, so the store's own
-		// arbitration between writers is what is certified: a backend
-		// that combines one node's writes must still count each, and
-		// every race between the nodes must settle.
-		const callers = 32
-		nodes := h.nodes(4)
+		// [ContendedCharges] callers through EACH of [ContendingNodes]
+		// nodes at once, so the store's own arbitration between writers
+		// is what is certified as well as a node's own contention: a
+		// backend that coalesces one node's writes must still count
+		// each, and every race between the nodes must settle. See
+		// [ContendedCharges] for what the figure does and does not tell.
+		nodes := h.nodes(ContendingNodes)
+		callers := ContendedCharges * len(nodes)
 		var wg sync.WaitGroup
+		start := make(chan struct{})
 		errs := make(chan error, callers)
 		for i := range callers {
 			wg.Go(func() {
+				<-start
 				if _, err := nodes[i%len(nodes)].Charge(h.ctx, coord.ChargeRequest{
 					Seat: testSeat, Tokens: 10, Windows: h.windows(),
 				}); err != nil {
@@ -933,6 +971,7 @@ var budgetCases = []fleetCase{{
 				}
 			})
 		}
+		close(start)
 		wg.Wait()
 		close(errs)
 		for err := range errs {
@@ -949,18 +988,21 @@ var budgetCases = []fleetCase{{
 		// The gate's half of the same property: a check and an increment
 		// that were two steps would let every racing caller see room. What
 		// is ADMITTED is what the ceiling holds, exactly; what is COUNTED is
-		// every round, because every one of them was spent. Across four
-		// nodes, for the case above's reason: a node that judges its own
-		// writes in order proves nothing about a ceiling two nodes race.
-		const callers = 32
-		nodes := h.nodes(4)
+		// every round, because every one of them was spent. Across
+		// [ContendingNodes] nodes, for the case above's reason: a node
+		// that judges its own writes in order proves nothing about a
+		// ceiling two nodes race.
+		nodes := h.nodes(ContendingNodes)
+		callers := ContendedCharges * len(nodes)
 		var (
 			wg       sync.WaitGroup
 			admitted atomic.Int32
 		)
+		start := make(chan struct{})
 		errs := make(chan error, callers)
 		for i := range callers {
 			wg.Go(func() {
+				<-start
 				got, err := nodes[i%len(nodes)].Charge(h.ctx, coord.ChargeRequest{
 					Seat: testSeat, Tokens: 10, Windows: h.windows(), OrgCaps: day(100),
 				})
@@ -972,6 +1014,7 @@ var budgetCases = []fleetCase{{
 				}
 			})
 		}
+		close(start)
 		wg.Wait()
 		close(errs)
 		for err := range errs {

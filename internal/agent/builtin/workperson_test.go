@@ -8,7 +8,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
@@ -156,7 +158,8 @@ type personSpy struct {
 	priorities []string
 	ifMatch    *uint64
 	authority  worklet.PersonAuthority
-	inbox      worklet.InboxGesture
+	inbox      inbox.Gesture[worklet.Reason]
+	seen       statelog.Position
 	pins       worklet.PinGesture
 
 	// actor is who the surface resolved the writer FOR, which is the other
@@ -186,11 +189,11 @@ func (p *personSpy) WritePins(_ context.Context, opID, handle string,
 	return worklet.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
-func (p *personSpy) MarkInbox(_ context.Context, opID, handle string,
-	gesture worklet.InboxGesture, authority worklet.PersonAuthority) (
+func (p *personSpy) MarkInbox(_ context.Context, opID, handle string, seen statelog.Position,
+	gesture inbox.Gesture[worklet.Reason], authority worklet.PersonAuthority) (
 	worklet.WriteResult, error) {
 
-	p.handle, p.opID, p.inbox, p.authority = handle, opID, gesture, authority
+	p.handle, p.opID, p.inbox, p.seen, p.authority = handle, opID, gesture, seen, authority
 	return worklet.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
@@ -227,6 +230,50 @@ func TestMarkInboxCarriesThePrimarySplit(t *testing.T) {
 	if want := "The reasons are: " + words.And(worklet.Reasons) + "."; !strings.Contains(bad.Output, want) {
 		t.Fatalf("the refusal does not name the reasons that exist as %q: %q",
 			want, bad.Output)
+	}
+}
+
+// TestAMarkCarriesTheCallersFloor holds `mark_inbox`'s `seen` to the writer:
+// a mark is decided by whichever data node the router reaches, which may be
+// behind the one the inbox page was read from, so the position the caller read
+// to has to reach the decide or a notice the person was shown is refused as no
+// change the company recorded. None is the zero position, which waits for
+// nothing; a malformed one, or one on another log, is refused before anything
+// is asked.
+func TestAMarkCarriesTheCallersFloor(t *testing.T) {
+	t.Parallel()
+	person := &personSpy{}
+	reg := personRegistry(t, person)
+
+	floor := statelog.Position{Stream: topics.TrackerLogStream, Generation: 1, Seq: 12}
+	if got := callWork(t, reg, worklet.MarkInboxTool, map[string]any{
+		"read": []any{"r-1"}, "seen": floor.String(),
+	}); got.Failed {
+		t.Fatalf("a mark carrying its floor failed: %q", got.Output)
+	}
+	if person.seen != floor {
+		t.Fatalf("the mark seen at %s reached the writer seen at %s", floor, person.seen)
+	}
+	if got := callWork(t, reg, worklet.MarkInboxTool, map[string]any{
+		"read": []any{"r-2"},
+	}); got.Failed {
+		t.Fatalf("a mark carrying no floor failed: %q", got.Output)
+	}
+	if !person.seen.IsZero() {
+		t.Fatalf("the mark naming no floor reached the writer seen at %s, want the zero position",
+			person.seen)
+	}
+	for _, bad := range []string{"not-a-position", topics.CodeLogStream + "@1:12"} {
+		person.opID = ""
+		refused := callWork(t, reg, worklet.MarkInboxTool, map[string]any{
+			"read": []any{"r-3"}, "seen": bad,
+		})
+		if !refused.Failed || tools.RefusalOf(refused) != tools.RefusalInvalid {
+			t.Errorf("a mark seen at %q answered %+v, want it refused invalid", bad, refused)
+		}
+		if person.opID != "" {
+			t.Errorf("a mark seen at %q reached the writer", bad)
+		}
 	}
 }
 
@@ -429,13 +476,13 @@ func TestThePersonToolSchemasTakeGestures(t *testing.T) {
 		return entry.Tool.Parameters()["properties"].(map[string]any)
 	}
 
-	inbox := props(worklet.MarkInboxTool)
+	marks := props(worklet.MarkInboxTool)
 	var names []string
-	for name := range inbox {
+	for name := range marks {
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	if want := []string{"op_id", "primary_reasons", "read", "read_through", "snooze",
+	if want := []string{"op_id", "primary_reasons", "read", "read_through", "seen", "snooze",
 		"unread", "unsnooze"}; !slices.Equal(names, want) {
 		t.Errorf("mark_inbox takes %v, want %v", names, want)
 	}
@@ -559,16 +606,16 @@ func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
 	}); got.Failed {
 		t.Fatalf("work_inbox failed: %q", got.Output)
 	}
-	if trk.inboxQuery.Snoozed != worklet.SnoozeExclude {
+	if trk.inboxQuery.Snoozed != inbox.SnoozeExclude {
 		t.Errorf("no `snoozed` reached the reader as %q, want %q",
-			trk.inboxQuery.Snoozed, worklet.SnoozeExclude)
+			trk.inboxQuery.Snoozed, inbox.SnoozeExclude)
 	}
 	if got := callPlain(t, reg, worklet.WorkInboxTool, map[string]any{
 		"handle": "alice", "snoozed": "only",
 	}); got.Failed {
 		t.Fatalf("work_inbox failed: %q", got.Output)
 	}
-	if trk.inboxQuery.Snoozed != worklet.SnoozeOnly {
+	if trk.inboxQuery.Snoozed != inbox.SnoozeOnly {
 		t.Errorf("snoozed=only reached the reader as %q", trk.inboxQuery.Snoozed)
 	}
 	bad := callPlain(t, reg, worklet.WorkInboxTool, map[string]any{

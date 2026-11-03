@@ -27,6 +27,8 @@ import {
   refusal,
 } from "./testkit.tsx";
 import { withDerived } from "~/test/org.ts";
+import { CHECK_BACKOFF_BASE_MS, CHECK_DEBOUNCE_MS } from "./model/scheduler.ts";
+import { settled } from "~/test/settle.ts";
 import {
   applyPageAction,
   pageSnapshot,
@@ -124,11 +126,13 @@ describe("the posture table", () => {
 
   test("no active revision while the org names a company is a node that has not caught up", async () => {
     const engine = new Engine(null);
-    mountBuilder({ engine, org: named });
+    const { clock } = mountBuilder({ engine, org: named });
     expect(await screen.findByText("This node is still catching up")).toBeDefined();
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
-    // Never create mode: nothing is checked, let alone written.
-    await new Promise((r) => setTimeout(r, 50));
+    // Never create mode: nothing is checked, let alone written — nothing the
+    // builder asked is still out, and no check is armed on its clock.
+    await settled(() => engine.requests.length);
+    expect(clock.pending).toBe(0);
     expect(engine.checks()).toHaveLength(0);
   });
 
@@ -136,8 +140,9 @@ describe("the posture table", () => {
   // offer create mode on a node the fleet runs a company without.
   test("create mode waits for the org snapshot, not the socket opening, before deciding", async () => {
     const engine = new Engine(null);
-    const { store } = mountBuilder({ engine, org: null });
-    await new Promise((r) => setTimeout(r, 50));
+    const { store, clock } = mountBuilder({ engine, org: null });
+    await settled(() => engine.requests.length);
+    expect(clock.pending).toBe(0);
     expect(engine.checks()).toHaveLength(0);
     act(() => store.applyOrg(named));
     expect(await screen.findByText("This node is still catching up")).toBeDefined();
@@ -268,7 +273,10 @@ describe("the views the builder hosts", () => {
     const handle = { focusNode: vi.fn(), expandAll: vi.fn(), collapseAll: vi.fn() };
     const count = { n: 0 };
     const engine = new Engine(company());
-    mountBuilder({ engine, surfaces: { ...fakeSurfaces, canvas: registering(handle, count) } });
+    const { checkChange } = mountBuilder({
+      engine,
+      surfaces: { ...fakeSurfaces, canvas: registering(handle, count) },
+    });
     await screen.findByText("No problems");
     const registered = count.n;
 
@@ -279,6 +287,7 @@ describe("the views the builder hosts", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(handle.focusNode).toHaveBeenCalledWith("seat:ceo"));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
     // An edit and its answer changed the state twice, and the view was not
@@ -443,9 +452,10 @@ describe("the views the builder hosts", () => {
 describe("checking the draft", () => {
   test("an edit is checked as the merge patch a save would send", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { checkChange } = mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     const patch = engine.checks()[1]!.body as { roles: { name: string; goal: string }[] };
     expect(Object.keys(patch)).toEqual(["roles"]);
@@ -465,9 +475,10 @@ describe("checking the draft", () => {
             },
           ])
         : null;
-    mountBuilder({ engine });
+    const { checkChange } = mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
     expect(await screen.findByText("1 problem")).toBeDefined();
     expect(screen.getByTestId("problems Designer").textContent).toBe("1");
     expect(screen.getByTestId("problems CEO").textContent).toBe("0");
@@ -475,36 +486,52 @@ describe("checking the draft", () => {
 
   test("the live region says what an edit did, and undo from the keyboard reverts it", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { checkChange } = mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     const region = liveRegion;
     await waitFor(() => expect(region().textContent).toBe("Edited CEO: goal."));
+    await checkChange();
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    expect(JSON.stringify(engine.checks()[1]!.body)).toContain("Lead and more");
     // Ctrl or Command with Z, from anywhere in the page that is not a text
     // field. The region says the edit was undone: the bare sentence would
-    // tell a screen reader it was just made.
+    // tell a screen reader it was just made. Each step is checked on its own,
+    // so the undo's check is told from the load's, which also sent `{}`.
     fireEvent.keyDown(document.body, { key: "z", code: "KeyZ", ctrlKey: true });
     await waitFor(() => expect(region().textContent).toBe("Undone: Edited CEO: goal."));
-    await waitFor(() => expect(engine.checks().at(-1)!.body).toEqual({}));
+    await checkChange();
+    await waitFor(() => expect(engine.checks()).toHaveLength(3));
+    expect(engine.checks()[2]!.body).toEqual({});
     // And Shift with it redoes, saying so.
     fireEvent.keyDown(document.body, { key: "Z", code: "KeyZ", ctrlKey: true, shiftKey: true });
     await waitFor(() => expect(region().textContent).toBe("Redone: Edited CEO: goal."));
-    await waitFor(() =>
-      expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
-    );
+    await checkChange();
+    await waitFor(() => expect(engine.checks()).toHaveLength(4));
+    expect(JSON.stringify(engine.checks()[3]!.body)).toContain("Lead and more");
   });
 
   test("undo is left to a text field that has focus", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { advance, checkChange, clock } = mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    // The edit's check is SENT, and its answer drawn a render later; the case
+    // reads that answer last, so it waits for it here, where nothing else is
+    // outstanding, rather than racing it to the end.
+    await screen.findByText("No problems");
     const field = document.createElement("input");
     document.querySelector(".org-builder")!.appendChild(field);
     fireEvent.keyDown(field, { key: "z", code: "KeyZ", metaKey: true });
-    await new Promise((r) => setTimeout(r, 400));
+    // An undo the builder took would have changed the draft while the key
+    // was handled, arming the check's debounce: none is armed, and running
+    // the debounce out sends nothing.
+    expect(clock.pending).toBe(0);
+    advance(CHECK_DEBOUNCE_MS);
     expect(engine.checks()).toHaveLength(2);
+    expect(screen.getByText("No problems")).toBeDefined();
     field.remove();
   });
 });
@@ -517,11 +544,12 @@ describe("checking the draft", () => {
 describe("what an org push re-checks", () => {
   test("the snapshot's first org is not an apply, and the draft is checked once", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine, org: null });
+    const { store, clock } = mountBuilder({ engine, org: null });
     await screen.findByText("No problems");
     expect(engine.checks()).toHaveLength(1);
     act(() => store.applySnapshot({ org: named }));
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(() => engine.requests.length);
+    expect(clock.pending).toBe(0);
     expect(engine.checks()).toHaveLength(1);
 
     act(() => store.applyOrg({ ...named }));
@@ -632,7 +660,7 @@ describe("the selection in the URL", () => {
   // its principles are offered.
   test("the company stays selected, and the toolbar offers the company's actions", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { checkChange } = mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Select the company" }));
     const actions = await screen.findByRole("button", { name: "Actions for Acme, selected" });
@@ -651,6 +679,7 @@ describe("the selection in the URL", () => {
     // And it survives the next answer about the draft, which is what a
     // locate-based reading of the selection did not.
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
     expect(screen.getByRole("button", { name: "Actions for Acme, selected" })).toBeDefined();
@@ -738,10 +767,11 @@ describe("the selection in the URL", () => {
     ],
   ])("a check met by %s is labelled as what happened", async (_, fail, label) => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { checkChange } = mountBuilder({ engine });
     await screen.findByText("No problems");
     engine.script = (r) => (r.query.get("dry_run") === "true" ? fail() : null);
     fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
+    await checkChange();
     await screen.findByText(label);
   });
 
@@ -750,11 +780,12 @@ describe("the selection in the URL", () => {
   // not have; its reports, like any seat's, can still be edited.
   test("a seat added in the draft is offered no screen, and its reports can be edited", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { advance, checkChange } = mountBuilder({ engine });
     await screen.findByText("No problems");
     // First with no answer about the new seat, so no handle is known for it.
     engine.script = (r) => (r.query.get("dry_run") === "true" ? json({ error: "bad" }, 502) : null);
     fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
+    await checkChange();
     await screen.findByText("The engine failed to check");
     fireEvent.click(screen.getByRole("button", { name: "Select Analyst" }));
     const actionsFor = async () => {
@@ -768,8 +799,10 @@ describe("the selection in the URL", () => {
     fireEvent.keyDown(menu, { key: "Escape" });
 
     // Then once a check has derived its handle: the URL names it, and there
-    // is still no screen to open.
+    // is still no screen to open. The refused check is asked again after the
+    // backoff's first wait.
     engine.script = () => null;
+    advance(CHECK_BACKOFF_BASE_MS);
     expect(await screen.findByText("No problems")).toBeDefined();
     await waitFor(() => expect(location.hash).toContain("seat=analyst"));
     menu = await actionsFor();
@@ -823,9 +856,10 @@ describe("a revision saved by somebody else", () => {
 
   test("a draft with work is not moved: the change is offered as an update", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine, org: named });
+    const { store, checkChange } = mountBuilder({ engine, org: named });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
     engine.document = company();
@@ -843,9 +877,10 @@ describe("somebody else signing in mid-edit", () => {
   test("keeps the draft, reads the configuration again and checks for the new reader", async () => {
     let who: unknown = EDITOR;
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine, viewer: () => who });
+    const { store, checkChange } = mountBuilder({ engine, viewer: () => who });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     const reads = engine.sent("GET").length;
 
@@ -860,9 +895,10 @@ describe("somebody else signing in mid-edit", () => {
   test("a dry run refused for the new reader pauses editing while the configuration still reads", async () => {
     let who: unknown = EDITOR;
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine, viewer: () => who });
+    const { store, checkChange } = mountBuilder({ engine, viewer: () => who });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
 
     // The new reader holds Admin as the node answering `viewer` and the read
@@ -882,9 +918,10 @@ describe("somebody else signing in mid-edit", () => {
   test("nobody signed in pauses editing without discarding the draft", async () => {
     let who: unknown = EDITOR;
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine, viewer: () => who });
+    const { store, checkChange } = mountBuilder({ engine, viewer: () => who });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
 
     engine.script = () => (who === EDITOR ? null : json({ error: "unauthorized" }, 401));
@@ -924,7 +961,7 @@ describe("a step-up the person declined", () => {
 
   test("is worded as a confirmation, keeps the draft, and checks again on asking", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine, viewer: () => EDITOR });
+    const { checkChange } = mountBuilder({ engine, viewer: () => EDITOR });
     await screen.findByText("No problems");
 
     let confirmed = false;
@@ -934,6 +971,7 @@ describe("a step-up the person declined", () => {
         : null;
     // No confirmer is installed, so the transport's question is declined.
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
 
     expect(await screen.findByText("Needs confirmation")).toBeDefined();
     expect(screen.queryByText("Needs Admin access")).toBeNull();

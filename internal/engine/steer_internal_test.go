@@ -17,18 +17,19 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // steerRing is the keyring every node of a steer case's fleet holds.
-var steerRing = statelog.OneKey("k1", "the steer cases' fleet key material")
+var steerRing = recordseal.OneKey("k1", "the steer cases' fleet key material")
 
 // mustSteerDesk is a desk over ring.
-func mustSteerDesk(t *testing.T, ring statelog.Keyring) *steerDesk {
+func mustSteerDesk(t *testing.T, ring recordseal.Keyring) *steerDesk {
 	t.Helper()
 	d, err := newSteerDesk("node-steer", ring)
 	if err != nil {
@@ -84,7 +85,7 @@ func ask(t *testing.T, q interface {
 // steerServing serves desk on q's broker for the length of the case.
 func steerServing(t *testing.T, q *memory.Queue, desk *steerDesk) {
 	t.Helper()
-	stop, err := q.Serve(t.Context(), topics.SeatSteer, desk.answer)
+	stop, err := q.Serve(t.Context(), topics.SeatSteer, queue.ConcurrentAnswers, desk.answer)
 	if err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
@@ -188,7 +189,7 @@ func TestANoteThatMissedTheTurnIsReportedExpired(t *testing.T) {
 	e.steers = desk
 	company := e.Company()
 	seat := company.Org.AgentSeatByHandle("swe")
-	r, err := company.RunnerFor("swe", nil, RunnerInput{
+	r, err := company.RunnerFor(t.Context(), "swe", nil, RunnerInput{
 		Reply: turn.NoReply(), Launcher: launcherStub{}, Sessions: e.sessions, Publisher: p,
 		Turn: runner.Turn{RunID: "run-1", WorkKey: "wk-1",
 			Context: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: company.Org}},
@@ -269,7 +270,7 @@ func TestAProbeNamesTheTurnsSeatAndTakesNothing(t *testing.T) {
 
 // ONLY A NOTE THE FLEET SIGNED REACHES A TURN. The running node offers a note
 // as the person it names, on the asking node's decision that they may steer
-// the turn — so a note anybody who can reach the broker could write would put
+// the turn — so a note anything the broker admitted could write would put
 // words in front of a running agent under anybody's name. Three ways to try —
 // no signature, a signature under the fleet's key id with somebody else's
 // material, and the fleet's signature over a note altered after it was made —
@@ -285,7 +286,7 @@ func TestOnlyANoteTheFleetSignedReachesATurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, outsider := sealedNote(t, mustSteerDesk(t,
-		statelog.OneKey("k1", "not the fleet's material")).wire, founderNote("run-1"))
+		recordseal.OneKey("k1", "not the fleet's material")).wire, founderNote("run-1"))
 	_, altered := sealedNote(t, d.wire, founderNote("run-1"))
 	altered = bytes.Replace(altered, []byte(`"by":"founder"`), []byte(`"by":"ceo"`), 1)
 	if !bytes.Contains(altered, []byte(`"by":"ceo"`)) {
@@ -328,7 +329,7 @@ func TestAReplayedNoteIsAnsweredByNobody(t *testing.T) {
 // any note not its own.
 func TestANoteUnderAnUnheldKeyIsAnsweredUnverified(t *testing.T) {
 	t.Parallel()
-	rotated := statelog.Keyring{ActiveID: "k2", Keys: []statelog.Key{
+	rotated := recordseal.Keyring{ActiveID: "k2", Keys: []recordseal.Key{
 		steerRing.Keys[0], {ID: "k2", Material: "the key the fleet is rotating to"},
 	}}
 	clients := steerClients(t, 3)

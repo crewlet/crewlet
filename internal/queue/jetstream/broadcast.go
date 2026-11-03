@@ -67,16 +67,23 @@ func (q *Queue) Listen(ctx context.Context, pattern string, h queue.ListenFunc) 
 		return nil, ErrClosed
 	}
 
-	// THE LISTENER'S OWN LIFETIME, for the reason Serve keeps one: a core
-	// callback carries no context, and the caller's is a registration scope.
-	serving, retire := context.WithCancel(context.WithoutCancel(ctx))
 	// stopped and the gate together are what make the withdrawal's promise
 	// true: a message can already be in the client's callback path when the
 	// caller unsubscribes, so stopped refuses one that has not started, and
 	// the gate is waited on for one that has. The gate is the scatter's
-	// ([queue.AnswerGate]), shared by both backends for the same rule.
+	// ([queue.AnswerGate]), shared by both backends for the same rule, and
+	// bounded at ONE ANSWER, the bound the subscription's delivery already
+	// has: the client runs this callback one message at a time, so the gate
+	// counts at most the one in hand, and a wider bound would state a
+	// concurrency this registration never has.
+	gate, err := queue.NewAnswerGate(1)
+	if err != nil {
+		return nil, fmt.Errorf("listen %s: %w", pattern, err)
+	}
 	var stopped atomic.Bool
-	gate := queue.NewAnswerGate()
+	// THE LISTENER'S OWN LIFETIME, for the reason Serve keeps one: a core
+	// callback carries no context, and the caller's is a registration scope.
+	serving, retire := context.WithCancel(context.WithoutCancel(ctx))
 	// THE CLIENT'S OWN GOROUTINE RUNS THE HANDLER, one message at a time,
 	// which is the contract's ordering: an async subscription delivers on
 	// one goroutine per subscription. Unlike Serve's answers there is

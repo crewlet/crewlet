@@ -27,7 +27,7 @@ import (
 // [trashreap.Source] here.
 //
 // The work tracker hands it none, and that is the tracker's own promise rather
-// than a gap: a removed work item is restorable AT ANY AGE (the work-tracker
+// than a gap: a removed work item is restorable AT ANY AGE (the Worklet
 // guide), because a removal is how a board is tidied, and the one step that
 // destroys an item is a purge somebody asks for. Reaping removed items after a
 // term would delete what that promise says is still there.

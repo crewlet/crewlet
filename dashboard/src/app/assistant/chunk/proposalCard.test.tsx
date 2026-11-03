@@ -297,10 +297,13 @@ test("a change to a page's body reads as a line diff, like its History", () => {
     ],
   });
   const diff = screen.getByRole("group", { name: "Page" });
-  const removed = diff.querySelectorAll(".crewlet-diff-view__line--remove");
-  const added = [...diff.querySelectorAll(".crewlet-diff-view__line--add")].map(
-    (line) => line.querySelector(".crewlet-diff-view__text")?.textContent,
+  const removed = diff.querySelectorAll('.diff-view__line[data-kind="remove"]');
+  const added = [...diff.querySelectorAll('.diff-view__line[data-kind="add"]')].map(
+    (line) => line.querySelector(".diff-view__text")?.textContent?.trim() ?? "",
   );
   expect(removed).toHaveLength(0);
-  expect(added.map((text) => text?.trim())).toEqual(["## TL;DR", "- One owner", ""]);
+  // Three lines added, the blank one among them: which of the two blank lines
+  // around the insertion the shortest edit calls new is the line diff's to say.
+  expect(added).toHaveLength(3);
+  expect(added.filter((text) => text !== "")).toEqual(["## TL;DR", "- One owner"]);
 });

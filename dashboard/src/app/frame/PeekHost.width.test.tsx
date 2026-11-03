@@ -91,7 +91,12 @@ test("a width the reader dragged wins over the screen's resting width", async ()
 test("a resize is drawn at once and kept under the frame's storage key", async () => {
   await host();
   const grip = screen.getByRole("separator", { name: "Resize the detail panel" });
-  fireEvent.keyDown(grip, { key: "End" });
+  // IN AN ASYNC ACT, for the reason `host` gives: the resize draws the rail
+  // again, and a peek body that suspends on its lazy chunk inside a sync act
+  // leaves the act unawaited.
+  await act(async () => {
+    fireEvent.keyDown(grip, { key: "End" });
+  });
   expect(railWidth()).toBe(`${PEEK_MAX}px`);
   expect(localStorage.getItem(STORAGE_KEYS.peekWidth)).toBe(String(PEEK_MAX));
 });

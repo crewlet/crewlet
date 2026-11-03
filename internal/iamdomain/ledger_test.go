@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -393,7 +394,7 @@ func (r *writeRig) envelopeOf(op string) iamdomain.RecordEnvelope {
 		r.t.Fatalf("read the record at %d: %v (held %t)", packed, err, ok)
 	}
 	body, verdict := r.verifier.Open(framed)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		r.t.Fatalf("the record at %d did not verify: %s", packed, verdict)
 	}
 	env, err := iamdomain.DecodeEnvelope(body)

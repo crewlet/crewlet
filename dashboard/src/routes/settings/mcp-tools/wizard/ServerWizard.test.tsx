@@ -3,13 +3,14 @@
  * order a save writes, and where the engine's answers land.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import type { McpCatalogueEntry, McpCheckAnswer, McpCheckedTool } from "~/contract/mcp.ts";
 import { Router } from "~/app/router.tsx";
 import { Store } from "~/protocol/index.ts";
 import { TestClient } from "~/test/client.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { createEntity, dryRunCreate, dryRunEntity, putEntity } from "~/protocol/configWrite.ts";
 import { readCatalogue, storeValue, testDraft } from "../api.ts";
 import type { AccessAnswer } from "~/contract/access.ts";
@@ -201,11 +202,8 @@ function mount(
   );
 }
 
-async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
-}
+/** Every stub's answer has landed, and what it drew (`test/settle.ts`). */
+const settle = afterMicrotasks;
 
 const press = async (name: string) => {
   fireEvent.click(screen.getByRole("button", { name }));

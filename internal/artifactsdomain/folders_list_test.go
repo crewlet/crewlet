@@ -431,3 +431,6 @@ func (listingChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 func (listingChart) MemberOf(_ context.Context, actor, unit string) (bool, error) {
 	return actor == "bob" && unit == "ENG", nil
 }
+func (listingChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
+}

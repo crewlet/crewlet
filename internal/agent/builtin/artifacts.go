@@ -20,7 +20,6 @@ import (
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // THE ARTIFACTS TOOLS: one tool per action, each named for its authority
@@ -190,14 +189,6 @@ var ErrNoWorkspace = errors.New("builtin: the box's workspace is gone from it")
 // read is not the build, so it is refused rather than published short.
 var ErrListIncomplete = errors.New("builtin: the executor's box could not list all of the directory")
 
-// ArtifactRequesters composes the principal a seat's turn is acting for.
-type ArtifactRequesters interface {
-	// Requester is the seat handle's principal as the authority table
-	// decides it: the person bound to a human seat, or the agent seat
-	// itself. An error is UNKNOWN, never "nobody".
-	Requester(ctx context.Context, handle string) (iam.Principal, error)
-}
-
 // ArtifactDeps are what the artifacts tools act through. The zero value
 // serves none of them, which is what a node built without the artifacts
 // domain has.
@@ -210,8 +201,9 @@ type ArtifactDeps struct {
 	// valued, read per call ([authz.Chart]).
 	Chart authz.Chart
 
-	// Requesters composes who a turn is acting for (the requester ceiling).
-	Requesters ArtifactRequesters
+	// Requesters composes who a turn is acting for (the requester ceiling,
+	// [ceilingOf]).
+	Requesters Requesters
 
 	// Limits are the Tier A quotas this node stamps into every write.
 	Limits func() artifacts.Limits
@@ -261,11 +253,13 @@ type ArtifactDeps struct {
 	// looping turn bury the company's tree.
 	FolderTurns *FolderTurns
 
-	// Set by [Register] and [OperatorTools] from the deps around them.
-	work             WorkDeps
-	compact          *compact.Compactor
-	authorize        Authorizer
-	callerOperations bool
+	// Set by [Register] and [OperatorTools] from the deps around them; ops,
+	// the one operation rule every family of write tools takes
+	// ([operations]), by [OperatorTools] alone.
+	work      WorkDeps
+	compact   *compact.Compactor
+	authorize Authorizer
+	ops       operations
 }
 
 // serves reports whether every half the tools act through is wired. They are
@@ -333,10 +327,6 @@ func artifactCandidates(deps Deps) []candidate {
 func artifactOperatorCandidates(deps OperatorDeps) []candidate {
 	a := deps.Artifacts
 	a.work, a.authorize = deps.Work, deps.Authorize
-	// A CALL HERE HOLDS ITS OWN OPERATION, as the tracker's do: there is no
-	// turn to derive one from, so a write answers with its `op_id` and a
-	// call bringing it back is that operation again.
-	a.callerOperations = true
 	if a.Org == nil {
 		a.Org = deps.Org
 	}
@@ -469,31 +459,22 @@ func (d ArtifactDeps) caller(ctx context.Context, turn *turnctx.Turn, tool strin
 	return c, nil
 }
 
-// ceilingFor is who a seat's turn is acting for: nobody beyond the agent for a
-// turn nobody woke and for any caller who is not a seat (a person acting
-// through their own credential is no deputy), the requester a known principal
-// woke it as, or a stranger.
+// ceilingFor is who a seat's turn is acting for ([ceilingOf]), and nobody
+// beyond the caller for any caller who is not a seat: a person acting through
+// their own credential is no deputy.
 func (d ArtifactDeps) ceilingFor(ctx context.Context, turn *turnctx.Turn,
 	p iam.Principal) (authz.Ceiling, error) {
 
-	if p.Kind != iam.KindSeat || turn == nil {
+	if p.Kind != iam.KindSeat {
 		return authz.Ceiling{Kind: authz.CeilingNone}, nil
 	}
-	if handle := strings.TrimSpace(turn.Requester); handle != "" && handle != p.Seat {
-		requester, err := d.Requesters.Requester(ctx, handle)
-		if err != nil {
-			return authz.Ceiling{}, fmt.Errorf("builtin: compose requester %s: %w", handle, err)
-		}
-		return authz.Ceiling{Kind: authz.CeilingRequester, Principal: requester}, nil
-	}
-	if len(turn.Senders) > 0 {
-		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
-	}
-	return authz.Ceiling{Kind: authz.CeilingNone}, nil
+	return ceilingOf(ctx, turn, p.Seat, d.Requesters)
 }
 
 // operation settles the operation key a write's records derive from, the
-// `op_id` its answer carries, or the refusal of one brought back.
+// `op_id` its answer carries, or the refusal of one brought back — by the one
+// rule every family of write tools takes ([operations.bind]), seeded where the
+// call already carries its key ([ArtifactDeps.carriedKey]):
 //
 //   - IN A TURN, the call's key ([callOpKey], the one derivation every
 //     domain's writes take), so a re-run turn's publish is the first run's
@@ -504,65 +485,30 @@ func (d ArtifactDeps) ceilingFor(ctx context.Context, turn *turnctx.Turn,
 func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool string,
 	args map[string]any) (key, opID, refusal string) {
 
-	raw, brought := args[opIDArg]
-	if text, _ := argval.String(raw); text == "" {
-		brought = false
-	}
-	if turnKey(turn) != "" {
-		if brought {
-			return "", "", fmt.Sprintf("%s takes no `op_id` in a turn: the turn "+
-				"names the operation, so the same call made again is already the "+
-				"same publish. Leave it out.", tool)
-		}
-		return callOpKey(turn, tool, nil, args, ""), "", ""
-	}
-	if d.CallerKey != nil {
-		if k := d.CallerKey(ctx); k != "" {
-			if brought {
-				return "", "", fmt.Sprintf("%s takes no `op_id` beside the request's "+
-					"own operation key: send the same request again to repeat it.", tool)
-			}
-			return k, "", ""
-		}
-	}
-	if !d.callerOperations {
-		if brought {
-			return "", "", fmt.Sprintf("%s takes no `op_id` here. Leave it out.", tool)
-		}
-		return "", "", ""
-	}
-	call := callName(tool, args)
-	if !brought {
-		op := statelog.NewOpID(d.now(), call)
-		return op, op, ""
-	}
-	op, _ := argval.String(raw)
-	if err := statelog.CheckCallerOpID(op); err != nil {
-		return "", "", fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
-	}
-	if !statelog.OpNamed(op, call) {
-		return "", "", fmt.Sprintf("%s refused that `op_id`, and nothing was written: "+
-			"it was answered for another call, another tool or this one with other "+
-			"arguments. To finish that call, send its arguments unchanged with it; to "+
-			"make this one, leave `op_id` out.", tool)
+	key = d.carriedKey(ctx, turn, tool, args)
+	op, refusal := d.ops.bind(tool, args, key != "")
+	switch {
+	case refusal != "":
+		return "", "", refusal
+	case key != "":
+		return key, "", ""
 	}
 	return op, op, ""
 }
 
-// writeParams adds the operator surface's `op_id` to a write tool's schema,
-// on the surface whose callers bring one back and nowhere else.
-func (d ArtifactDeps) writeParams(schema map[string]any) map[string]any {
-	if !d.callerOperations {
-		return schema
+// carriedKey is the operation key a call derives from what it carries — its
+// turn's ([callOpKey], the one derivation every domain's writes take), or its
+// transport's key as it was sent — or "" where it carries neither.
+func (d ArtifactDeps) carriedKey(ctx context.Context, turn *turnctx.Turn, tool string,
+	args map[string]any) string {
+
+	if turnKey(turn) != "" {
+		return callOpKey(turn, tool, nil, args, "")
 	}
-	props, _ := schema["properties"].(map[string]any)
-	props[opIDArg] = map[string]any{
-		"type": "string",
-		"description": "Leave it out for a new write. To finish one an earlier " +
-			"answer from this tool left `unknown`, send back the `op_id` that " +
-			"answer carried, unchanged, with exactly the same arguments.",
+	if d.CallerKey != nil {
+		return d.CallerKey(ctx)
 	}
-	return schema
+	return ""
 }
 
 // objectOf is a stored artifact as the authority table decides it.

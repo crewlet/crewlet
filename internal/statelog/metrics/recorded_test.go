@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/regexlit"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -124,10 +125,10 @@ var selector = regexp.MustCompile(`\bmetrics\.([A-Z]\w*)\b`)
 // opens with `\b`, which leaves the regexp package no prefix to jump to, so
 // over every non-test file it ran at the race detector's megabyte a second;
 // a file without `metrics.` holds no reference and is not handed to it (see
-// [sourcetree.Required]). A prefilter that skipped a file holding one would
+// [regexlit.Required]). A prefilter that skipped a file holding one would
 // fail this gate rather than pass it — an instrument would read as unused —
 // so the gate's own verdict covers it.
-var selectorNeeds = sourcetree.Required(selector)
+var selectorNeeds = regexlit.Required(selector)
 
 // identifiersReferencedInTheTree is every metrics identifier named by
 // non-test code outside this package.

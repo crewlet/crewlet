@@ -27,7 +27,7 @@ func TestTheApplierRefusesAFileThatIsNotItsSubject(t *testing.T) {
 		"a removal":     {Project: "ENG", Path: "a/b.md", RemovedAt: &removed},
 		"an empty file": {Project: "ENG", Path: "a/b.md", Hash: objstore.HashOf(nil), Object: key},
 	} {
-		if err := fileMatches(applyContext{}, id, f); err != nil {
+		if err := fileMatches(id, f); err != nil {
 			t.Errorf("%s was refused: %v", name, err)
 		}
 	}
@@ -44,7 +44,7 @@ func TestTheApplierRefusesAFileThatIsNotItsSubject(t *testing.T) {
 		"a live file naming no object":   {Project: "ENG", Path: "a/b.md", Hash: h, Size: 7},
 		"a live, empty file naming none": {Project: "ENG", Path: "a/b.md"},
 	} {
-		if err := fileMatches(applyContext{}, id, f); err == nil {
+		if err := fileMatches(id, f); err == nil {
 			t.Errorf("%s was applied", name)
 		}
 	}

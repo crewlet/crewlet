@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
@@ -58,11 +60,19 @@ func TestEveryNativeSourceNamesItsSendersByHandle(t *testing.T) {
 	t.Parallel()
 	o := firstPartyChart(t)
 	e := &Engine{}
-	e.remote.Store(&remoteNative{tracker: true, wiki: true, chat: true})
-	parsers, _ := e.nativeParsers(&Company{Org: o})
-	if len(parsers) != 3 {
-		t.Fatalf("a company running every half natively registered %d parsers, "+
-			"want the tracker's, the knowledge base's and chat's", len(parsers))
+	e.remote.Store(&remoteNative{tracker: true, wiki: true, chat: true,
+		built: builtWith{code: true}})
+	registered, _ := e.nativeParsers(&Company{Org: o})
+	// THE ALARMS' PARSER IS NO HALF, and names no sender at all: a node's
+	// alarm transition is routed by the health grant alone, with no actor
+	// (internal/alarmwake), so nobody on it is a person to resolve.
+	parsers := slices.DeleteFunc(slices.Clone(registered), func(p notify.Parser) bool {
+		return p.Source() == alarmwake.Source
+	})
+	if len(parsers) != 4 {
+		t.Fatalf("a company running every half natively registered %d parsers beside "+
+			"the alarms', want Worklet's, Doclet's, Chatlet's and the code host's",
+			len(parsers))
 	}
 	reg := partyRegistry(o, nil)
 	for _, p := range parsers {

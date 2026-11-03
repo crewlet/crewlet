@@ -35,6 +35,8 @@ import {
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, readerDay } from "~/lib/format.ts";
+import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
+import { zone } from "~/lib/prefs.ts";
 import type { ChatChannel, ChatMessageView } from "~/protocol/index.ts";
 
 import { dayOf, daysBetween, timeOf } from "./days.ts";
@@ -51,14 +53,16 @@ const GROUP_FACES = 4;
 /** Names an event line spells out before it counts the rest. */
 const EVENT_NAMES = 2;
 
-/** "today", "yesterday", or "on October 27". */
+const MONTH_DAY: DateShape = Object.freeze({ month: "long", day: "numeric" });
+
+/** "today", "yesterday", or "on October 27", in the reader's zone. */
 function madeWhen(createdAt: string, today: string): string {
   const days = daysBetween(dayOf(createdAt), today);
   if (days === 0) return "today";
   if (days === 1) return "yesterday";
   const at = Date.parse(createdAt);
   return Number.isFinite(at)
-    ? `on ${new Date(at).toLocaleDateString(undefined, { month: "long", day: "numeric" })}`
+    ? `on ${dateTimeFormat(undefined, zone(), MONTH_DAY).format(new Date(at))}`
     : "";
 }
 

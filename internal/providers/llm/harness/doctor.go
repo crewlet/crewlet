@@ -338,11 +338,20 @@ type DiagnoseOptions struct {
 	// other box dials BridgeURL.
 	Cell string
 
-	// BridgeURL is CREWLET_MCP_BRIDGE_URL as this process sees it. Empty
-	// means a launch whose box cannot dial a listener of its own node's is
+	// BridgeURL is CREWLET_MCP_BRIDGE_URL as the engine would read it:
+	// parsed by the one grammar every URL a box dials shares
+	// (sandbox.ParseBoxURL), never the raw variable. Empty means unset, and
+	// a launch whose box cannot dial a listener of its own node's is
 	// refused.
 	BridgeURL string
 
+	// BridgeRefused is that grammar's refusal of a value that is set and
+	// unusable, which names the variable and never the value. Non-empty, it
+	// is what the report says about the bridge, whatever BridgeURL holds:
+	// the engine refuses to BOOT on such a value, so a report that printed
+	// it as the bridge would tell a deploy script the opposite of what the
+	// next boot does.
+	BridgeRefused string
 	// HostHome is the directory a login this machine already holds is looked
 	// for under ([Provider.HostLogin]); empty is the user's own home, which is
 	// what an operator's `crewlet llm doctor` reads. A suite names an empty
@@ -797,6 +806,15 @@ func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 	}
 	lines = append(lines, fmt.Sprintf("runner: %q is registered", p.harness))
 	switch {
+	case opts.BridgeRefused != "":
+		// FIRST, whatever the cell: the engine refuses to boot on this
+		// value, so a direct box's loopback listener is never served either.
+		lines = append(lines, "tool bridge: refused — "+opts.BridgeRefused)
+		problems = append(problems, fmt.Sprintf(
+			"%s. The engine refuses to boot on this value, so no seat runs at "+
+				"all, on this entry or any other: set it to a URL a box can "+
+				"reach, or unset it",
+			opts.BridgeRefused))
 	case opts.Cell == directCell:
 		// ON THE HOST, so on a node that binds a listener the box reaches
 		// on loopback — api.port, on every interface or on loopback, which
@@ -820,8 +838,8 @@ func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 		problems = append(problems, fmt.Sprintf(
 			"a seat's executor reaches its tools over an MCP bridge, and a box in "+
 				"the %s cell is not on the node's host, so it dials %s alone — which "+
-				"is unset, so every launch on providers.llm.%s is refused: a coding "+
-				"agent with none of the seat's tools cannot answer anybody or submit "+
+				"is unset, so every launch on providers.llm.%s is refused: a harness "+
+				"with none of the seat's tools cannot answer anybody or submit "+
 				"its work. Set it to a URL that box reaches the node at",
 			orNone(opts.Cell), bridgeURLVar, p.key))
 	}

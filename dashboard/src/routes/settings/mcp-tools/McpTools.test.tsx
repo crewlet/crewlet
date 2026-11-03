@@ -4,11 +4,12 @@
  * in an administrator's reading and a member's.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { TestClient } from "~/test/client.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 import type { RestResult } from "~/lib/useRest.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import type { ServerDetail } from "./api.ts";
@@ -166,10 +167,9 @@ test("an administrator meets the controls and the flows at the same addresses", 
   detail = LINEAR_DETAIL;
   for (const address of ADDRESSES) {
     mountAt(address);
-    // An edit opens once the entry it edits is read.
-    await act(async () => {
-      for (let i = 0; i < 6; i++) await Promise.resolve();
-    });
+    // An edit opens once the entry it edits is read: every stub has answered,
+    // and what it drew, at the task boundary.
+    await afterMicrotasks();
     expect(writeControls().length, address.hash).toBeGreaterThan(0);
     cleanup();
   }
@@ -344,9 +344,7 @@ test("a waiting call's alarm opens the calls held on its server", async () => {
   expect(screen.getByText("Waiting on you")).toBeDefined();
   expect(screen.getByText("1 call to approve")).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Answer it" }));
-  await act(async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getByText("A call is waiting")).toBeDefined();
   expect(within(dialog).getByRole("button", { name: "Allow once" })).toBeDefined();
@@ -377,8 +375,6 @@ test("a changed-tools alarm opens their review, and counts as waiting", async ()
   mountAt({ hash: "#/settings/mcp-tools" });
   expect(screen.getByText("changed tools on 1 server")).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
-  await act(async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
   expect(within(screen.getByRole("dialog")).getByText("No changes to review")).toBeDefined();
 });
