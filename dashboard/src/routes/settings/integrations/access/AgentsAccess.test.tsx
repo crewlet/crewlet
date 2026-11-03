@@ -1228,20 +1228,23 @@ test("an agent's details read an issued token, the engine's wait and the files C
 });
 
 // AN AWS SEAT IS AN IAM ROLE WITH CREDENTIALS NOBODY HOLDS: the details name
-// the role, the level, a credential issued at use, and the two files Crewlet
-// puts in the box for the CLI's crewlet profile. Nothing rotates.
-test("an AWS seat's details name its role, its issued credentials and the CLI's files", () => {
+// the role, the level, credentials issued for 15 minutes at use, and the two
+// files Crewlet puts in the box for the CLI's crewlet profile. Nothing rotates.
+test("an AWS seat's details name its role, 15-minute credentials and the CLI's crewlet profile", () => {
   draw(awsAnswer());
   details("SRE", "AWS");
   const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on AWS"]')!);
   expect(facts.getByText("crewlet/gophrase/seat/crewlet-sre-7c2e")).toBeTruthy();
   expect(facts.getByText("Permissions policies")).toBeTruthy();
   expect(facts.getByText("Operate")).toBeTruthy();
-  expect(facts.getByText("AWS_CREDENTIALS_SRE").parentElement!.textContent).toMatch(
-    /^AWS_CREDENTIALS_SRE, issued for .+ at a time, at use$/,
+  expect(facts.getByText("AWS_CREDENTIALS_SRE").parentElement!.textContent).toBe(
+    "AWS_CREDENTIALS_SRE, issued for 15 minutes at a time, at use",
   );
   expect(facts.getByText("Live, AWS MCP Server, one per agent")).toBeTruthy();
-  expect(facts.getByText(".config/crewlet/aws-credentials.json and .aws/config")).toBeTruthy();
+  const box = facts.getByText(".config/crewlet/aws-credentials.json and .aws/config");
+  expect(box.parentElement!.textContent).toBe(
+    ".config/crewlet/aws-credentials.json and .aws/config. AWS CLI configuration provided in ~/.aws/config as the profile crewlet, so commands use --profile crewlet; the AWS CLI v2 must be in the box image",
+  );
   expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
 });
 

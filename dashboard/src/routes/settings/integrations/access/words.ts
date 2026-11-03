@@ -232,6 +232,9 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate:
       "AWS issues the agent's credentials for 15 minutes at a time, so there is nothing to rotate.",
     tool: "AWS MCP Server, one per agent",
+    issued: "15 minutes",
+    boxNote:
+      "AWS CLI configuration provided in ~/.aws/config as the profile crewlet, so commands use --profile crewlet; the AWS CLI v2 must be in the box image",
   },
 };
 
