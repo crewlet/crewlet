@@ -29,7 +29,6 @@ package agentaccess
 import (
 	"context"
 	"fmt"
-	"github.com/crewlet/crewlet/internal/org"
 	"slices"
 	"strings"
 	"time"
@@ -39,6 +38,7 @@ import (
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 

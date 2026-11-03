@@ -2,7 +2,6 @@ package engine
 
 import (
 	"errors"
-	"github.com/crewlet/crewlet/internal/seataccess"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // An executor run's own environment, held to the rule a tool server's values
