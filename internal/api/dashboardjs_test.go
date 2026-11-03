@@ -1815,7 +1815,24 @@ const (
 	// Merged again with it, main's +6,031 bytes came to 6,032 bytes on the
 	// merged tree, taking it from 5486.9 KiB (5,618,606 bytes) to 5492.8 KiB
 	// (5,624,638 bytes). It moved by main's own 6 KiB, from 5487 KiB: 5493 KiB.
-	treeBudget = 5<<20 + 373<<10
+	// A schedule's next fire continuing the session its last fire left — the
+	// Sessions view's words for the launch that continues a fire's session
+	// (`continued_by: next_fire`), a schedule's conversation key printed with
+	// its parts decoded by a conversation label that moved out of
+	// lib/format.ts, which the shell loads first, into lib/conversationKey.ts,
+	// which only the screens that print a key load, and a fire's turn naming
+	// its schedule's conversation as one on the Turn page's rail and a phase
+	// card's footer, saying whether a key is the external conversation the
+	// turn served or the schedule the turn was a fire of — took it from 5492.8
+	// KiB (5,624,638 bytes) to 5493.4 KiB (5,625,266 bytes), +628 bytes: the
+	// phases chunk the phase card and the Memory tab share +457, the agents
+	// chunk +233, the live and settled chunks that print a key +32 and +30,
+	// and 14 across the chunks whose imports the bundler renamed, less the 138
+	// the label took out of the shared chunk the shell loads. The initial load
+	// (the entry, what the page preloads and the page itself) is 134 bytes
+	// lighter raw. 434 bytes past 5493 KiB, it moved to the measured size's
+	// next KiB: 5494 KiB.
+	treeBudget = 5<<20 + 374<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
