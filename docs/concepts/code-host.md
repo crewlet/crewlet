@@ -805,9 +805,13 @@ HTTPS alone. The node resolves the host itself and refuses it when any address
 it resolves to is not on the public internet — unless Tier A's
 [`git.import_allow_private`](configuration.md#git) lets it
 reach the node's own network — and hands git exactly the addresses it judged, so
-git never asks DNS again; redirects are not followed. The proxy and the
-certificate authorities are the process's own (`HTTPS_PROXY`, `NO_PROXY`,
-`SSL_CERT_FILE`), as [Deployment](../guides/deployment.md#reaching-other-forges) says.
+git never asks DNS again; redirects are not followed. Through a proxy — the
+process's own, the one `HTTPS_PROXY` names for the URL less what `NO_PROXY`
+exempts — the node resolves nothing: the proxy resolves and dials the host, so
+the address rule is the proxy's to hold and `git.import_allow_private` changes
+nothing. The certificate authorities are the process's own too
+(`SSL_CERT_FILE`, `SSL_CERT_DIR`), as
+[Deployment](../guides/deployment.md#reaching-other-forges) says.
 A `credential` is always one whole `${VAR}` reference, kept as the reference
 on every data node and in every backup and resolved from the secret store,
 then the node's environment, each time the node dials — and only where the
