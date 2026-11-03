@@ -195,6 +195,7 @@ export const INTEGRATION_TOOLS = {
   gitlab: ["gitlab"],
   datadog: ["datadog"],
   cloudflare: ["cloudflare"],
+  expo: ["expo"],
 } as const;
 
 /**

@@ -195,7 +195,8 @@ export type Tool =
   | "confluence"
   | "datadog"
   | "atlassian"
-  | "cloudflare";
+  | "cloudflare"
+  | "expo";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -208,6 +209,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   datadog: "Datadog",
   atlassian: "Atlassian",
   cloudflare: "Cloudflare",
+  expo: "Expo",
 };
 
 /**
@@ -430,6 +432,9 @@ const VENDOR_LANES = {
  * decommission an account that does not exist.
  *
  * NOTHING FOR CLOUDFLARE: a seat's token is all it has there, and the engine
+ * deletes it once the seat is off or gone, so nothing is left to decommission.
+ *
+ * NOTHING FOR EXPO: a seat's robot user is all it has there, and the engine
  * deletes it once the seat is off or gone, so nothing is left to decommission.
  */
 export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {

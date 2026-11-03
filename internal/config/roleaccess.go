@@ -31,7 +31,7 @@ func SeatAccessOn(enabled *bool) bool { return enabled != nil && *enabled }
 // SeatAccessLanes is every per-seat block, by its key under
 // `roles[].integrations`.
 func SeatAccessLanes() []string {
-	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare"}
+	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo"}
 }
 
 // seatEnabled is a seat's `enabled` for lane, and whether the block is there.
@@ -69,6 +69,10 @@ func (r *Role) seatEnabled(lane string) (*bool, bool) {
 	case "cloudflare":
 		if in.Cloudflare != nil {
 			return in.Cloudflare.Enabled, true
+		}
+	case "expo":
+		if in.Expo != nil {
+			return in.Expo.Enabled, true
 		}
 	}
 	return nil, false

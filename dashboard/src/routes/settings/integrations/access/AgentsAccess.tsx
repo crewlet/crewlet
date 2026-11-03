@@ -67,6 +67,7 @@ import {
   MANAGED_OUTSIDE,
   levelsHeading,
   levelSummary,
+  noToolRemedy,
   offSentence,
   permissionCount,
   permissionWords,
@@ -514,7 +515,7 @@ export function AgentsAccess({
           variant="warning"
           title={`No ${name} tool for ${only ? "this agent" : "its agents"}`}
         >
-          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: the company declares no ${laneWords(lanes[0]!.key).server} tool server. Add it under Settings › MCP & tools as one instance per agent, and each agent's own credential is sent with it.`}
+          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: ${noToolRemedy(lanes[0]!.key)}`}
         </Callout>
       )}
 

@@ -84,6 +84,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&mattermostPass{engine: e},
 		&datadogPass{engine: e},
 		&cloudflarePass{engine: e},
+		&expoPass{engine: e},
 		&atlassianPass{engine: e},
 	}
 }

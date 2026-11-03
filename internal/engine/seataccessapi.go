@@ -302,7 +302,7 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 		d := want[lane]
 		sa.Lanes[lane] = seataccess.LaneAnswer{
 			Desired: d, Observed: observed, Sync: lr.Sync, Plan: nonNilSteps(steps[lane]),
-			Tool:        seataccess.ToolStateOf(q.Company, lane, d, observed),
+			Tool:        seataccess.ToolStateOf(q.Company, ref.Handle, lane, d, observed),
 			Administers: seataccess.Administers(offers[lane], d),
 		}
 	}

@@ -7,7 +7,7 @@ description: >
   when someone wants to set up, design, extend, or restructure a Crewlet
   AI agent company, add or remove a seat or team, wire in an integration
   (Jira, Confluence, Mattermost, Slack, GitLab, GitHub, Datadog,
-  Cloudflare, the code sandbox), or
+  Cloudflare, Expo, the code sandbox), or
   when they hand you a company.yaml to review, fix, or explain.
 ---
 
@@ -360,7 +360,8 @@ and writing the masked value back keeps the stored one.
 seat on with `roles[].integrations.<kind>.enabled: true` and its access in
 the vendor's own terms (a Datadog role id, GitLab's `access_level`,
 Mattermost's `roles` and `channels`, Cloudflare's `read` or `operate`
-level, and so on), or on the integration's
+level, Expo's `viewer`, `runner`, `developer` or `release_manager` level,
+and so on), or on the integration's
 Agents tab. The engine creates the account and seals its token under a name
 it derives for the seat, `<KIND>_<FIELD>_<HANDLE>` (for example
 `MATTERMOST_BOT_TOKEN_CEO`), and binds it to the seat's tools itself. Do not
