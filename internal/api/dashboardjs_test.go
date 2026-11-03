@@ -1602,7 +1602,11 @@ const (
 	// the settings chunk +1134 bytes, the integrations model chunk +485 bytes
 	// and its sheet +179 bytes, the kit's chunks +313 bytes net, the Problems
 	// chunk +66 bytes, and 72 bytes across the rest. 5444 KiB.
-	treeBudget = 5<<20 + 324<<10
+	// The kit's move to 0.91.0 (the Scaleway and DigitalOcean marks) took it
+	// from 5443.7 KiB to 5444.6 KiB (+0.9 KiB, 967 bytes): the icons chunk
+	// +1409 bytes for the two marks, less 442 bytes net across the kit's
+	// renamed chunks, the shell page and the stylesheet. 5445 KiB.
+	treeBudget = 5<<20 + 325<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
