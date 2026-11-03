@@ -196,7 +196,8 @@ roles:
     backstory: "Experienced founder who balances speed with quality"
     manages: [cto, pm]
     # A zero-integration way to see your first agent turn: a scheduled task.
-    # Delete this once real work arrives, from you or an integration.
+    # Delete this once real work arrives, from you or an integration: every
+    # fire continues, and pays for, the session the last one left.
     schedules:
       - name: hello-crewlet
         cron: "*/5 * * * *"
@@ -623,7 +624,11 @@ shows the turn as it runs — Execute (Claude Code's own run in a box, shown liv
 while it works and recorded as one round with the calls it made to the seat's
 tools, beside the run's own card with its activity and tokens), then Review,
 each phase listing the rounds it took, the tools each round called, and the
-prompts the model actually saw.
+prompts the model actually saw. Five minutes later it fires again, and that
+turn continues the session the first one left, told how it ended, rather than
+starting over: a schedule is a conversation of the seat that runs it
+([Scheduling](../concepts/scheduling.md#each-fire-continues-the-last-fires-session)),
+which is also why every fire pays for the whole of that session.
 A turn has those two phases: Execute both decides and acts, because the frame
 that works out what to do is the frame that does it, and Review then judges
 what the round actually landed. On a seat's very first turn one more runs
