@@ -62,6 +62,7 @@ import {
   accessWords,
   availableActions,
   boxSettings,
+  credentialNote,
   emptyScopeHint,
   handoffOf,
   joinLevels,
@@ -1135,9 +1136,7 @@ function Details({
               o.credential ? (
                 <span key="credential">
                   <span className="mono">{o.credential.variable}</span>
-                  {providedExternally(lane, o)
-                    ? ", provided externally"
-                    : `, minted ${relTime(o.credential.minted_at, now)}`}
+                  {credentialNote(lane, o, now)}
                 </span>
               ) : providedExternally(lane, o) ? (
                 "Provided externally"

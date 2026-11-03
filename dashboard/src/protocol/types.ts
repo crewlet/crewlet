@@ -5100,6 +5100,12 @@ export interface SetupRequirement {
   check_with?: string[];
   mintable?: boolean;
   /**
+   * What a person may see of a value the engine minted, rendered by the
+   * engine (Google Cloud's Cloud Shell block, holding the federation key's
+   * public half). Never the secret itself, which no route returns.
+   */
+  public?: { text: string; language: string };
+  /**
    * Written without being asked for.
    *
    * The `enabled` toggle on every inbound app: connecting an integration and
