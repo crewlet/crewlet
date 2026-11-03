@@ -472,13 +472,18 @@ func (r boxPollRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) 
 	return box.Job(ctx, handle.CommandID)
 }
 
-// beating reports whether the file a job's script rewrites every 50 ms
-// changes within a window several beats long.
-func beating(path string) bool {
+// awaitBeat waits, within the bound the case gives every start, for the file
+// a job's script rewrites every 50 ms to change from what it holds now: the
+// script working. A beat is a fork and a write in the container's shell,
+// which a loaded runner delays and never fakes, so the wait is as long as a
+// beat needs rather than a window one has to land in.
+func awaitBeat(t *testing.T, path, what string) {
+	t.Helper()
 	before, _ := os.ReadFile(path) //nolint:gosec // the case's own file
-	time.Sleep(300 * time.Millisecond)
-	after, _ := os.ReadFile(path) //nolint:gosec // the case's own file
-	return len(after) > 0 && string(before) != string(after)
+	waitFor(t, 10*time.Second, func() bool {
+		now, _ := os.ReadFile(path) //nolint:gosec // the case's own file
+		return len(now) > 0 && string(now) != string(before)
+	}, what)
 }
 
 // A CONTAINER JOB WITH NO GROUP RECORDED IS READ OVER ONLY ONCE IT IS. The read
@@ -488,6 +493,13 @@ func beating(path string) bool {
 // group its exec leads, its script gone with its wrapper; or, where no exec
 // leads its group, signalled nothing, read as still running and taken as it
 // stands, not final — while its script works on, as the log says.
+//
+// THE SCRIPT IS READ BY WHAT EACH CLAIM NEEDS. That it works on is a beat
+// awaited within the bound every start is given ([awaitBeat]): read over one
+// fixed window instead, a runner that scheduled no beat in it failed the case
+// though the script ran (CI run 41714027577). That it is gone is the group
+// its exec leads holding no living process: a window with no beat in it is no
+// evidence of that, and the same runner would pass a script that still runs.
 //
 // Mutation: kill a job with no group recorded by its first process alone, and
 // the read takes the job for over, final, while its script still runs.
@@ -502,12 +514,16 @@ func TestAContainerJobWithNoGroupRecordedIsReadOverOnlyOnceItIs(t *testing.T) {
 			wrapper := "sh -c " + shQuote("while :; do date +%s%N > "+shQuote(beat)+"; sleep 0.05; done") +
 				"; echo $? > " + shQuote(done)
 			var handle string
+			group := 0
 			if ownGroup {
 				handle, _ = startJobInOwnGroup(t, rig, wrapper)
 			} else {
-				handle, _ = startJobWithNoGroupRecorded(t, rig, "sh -c "+shQuote(wrapper))
+				handle, group = startJobWithNoGroupRecorded(t, rig, "sh -c "+shQuote(wrapper))
+				// THE GROUP HOLDS THE JOB, the wrapper and its script, so
+				// the group's being empty after the read is the job's end.
+				awaitMembers(t, group, 2)
 			}
-			waitFor(t, 10*time.Second, func() bool { return beating(beat) }, "the job's script never beat")
+			awaitBeat(t, beat, "the job's script never beat")
 
 			runner := boxPollRunner{FakeRunner: NewFakeRunner("older"), done: done}
 			runner.Unheard = true
@@ -521,9 +537,7 @@ func TestAContainerJobWithNoGroupRecordedIsReadOverOnlyOnceItIs(t *testing.T) {
 					t.Fatalf("a job its kill signalled nothing of read over %v, its capture final %v and packed "+
 						"now %v; want it still running, taken as it stands", over, at.final, at.pack)
 				}
-				if !beating(beat) {
-					t.Fatal("the premise: the job's script stopped working though nothing of it was signalled")
-				}
+				awaitBeat(t, beat, "the premise: the job's script stopped working though nothing of it was signalled")
 				for _, line := range []string{"sandbox_job_ungrouped", "sandbox_job_unended"} {
 					if !strings.Contains(logs.String(), line) {
 						t.Errorf("the read did not say %s:\n%s", line, logs.String())
@@ -534,9 +548,10 @@ func TestAContainerJobWithNoGroupRecordedIsReadOverOnlyOnceItIs(t *testing.T) {
 			if !over || !at.final {
 				t.Fatalf("a job killed whole read over %v, its capture final %v; want both", over, at.final)
 			}
-			if beating(beat) {
-				t.Fatal("the read took the job for over while its script still works")
-			}
+			waitFor(t, 10*time.Second, func() bool {
+				living, readable := livingIn(group)
+				return readable && len(living) == 0
+			}, "the read took the job for over while a process of it, its script's or its wrapper's, still runs")
 		})
 	}
 }
