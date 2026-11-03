@@ -356,8 +356,10 @@ executor sessions are kept per seat and conversation
 schedule are one conversation of that seat, and the schedule's next fire there
 is that conversation's next turn:
 
-- its dispatch reads the newest session the schedule's fires left on the seat,
-  and its first launch continues that session in a box of its own, led by
+- its dispatch reads the session the schedule's last fire left on the seat —
+  the conversation's head, of the fires that ended with a kept session the one
+  that read the conversation last — and its first launch continues that
+  session in a box of its own, led by
   `## A new fire of this schedule begins here`;
 - every brief of the fire carries `## How this schedule's earlier fires ended`
   above `## Task` — how each earlier fire ended, its reviewer's last word, what
@@ -425,6 +427,20 @@ question the schedule's last fire parked on, and a fire's run that parks on a
 question is answered by its turn
 ([Answering a parked run](code-sandbox.md#answering-a-parked-run)), never in
 chat.
+
+**A fire parked on a question holds nothing up.** A run that parks on a
+person's question frees its seat, and no fire is its answer, so the schedule's
+next fires run beside it, each continuing the session the one before it left.
+When the parked fire is answered or stopped and ends after them, it does not
+take the line over: a conversation's head is the turn that read it last
+([Read once, frozen, held](conversation-sessions.md#read-once-frozen-held)), so
+the next fire continues the session the last of those fires left, is told how
+the parked one ended, and its end absorbs the parked fire's session with the
+rest. The person's answer is in that session alone, so no later fire reads it;
+what the parked fire did with it is told in its ending. And the schedule never
+waits for the answer: it fires whatever its last run is doing, as a failing or
+timed-out run never blocks its next tick
+([Hard wall-clock timeout](#hard-wall-clock-timeout)).
 
 ### Fires that wait for a seat's mailbox
 

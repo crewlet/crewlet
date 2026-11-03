@@ -46,8 +46,10 @@ import (
 //     in some registered plan, the collector's object index through the
 //     statements the object store builds from [SessionObjectReferences].
 //
-// Mutation: drop `executor_sessions_ended_idx` and the budget's release sorts
-// a seat's ended sessions inside the apply; order the endings by `end_seq DESC,
+// Mutation: drop `executor_sessions_release_idx` and the budget's release sorts
+// a seat's ended sessions inside the apply; order the head by `read_through
+// DESC, end_seq ASC`, which its index serves in neither direction, and the
+// head sorts a conversation's ended turns; order the endings by `end_seq DESC,
 // turn_id DESC` with no index to serve the second column and the head's
 // endings sort; page by `version` again and the inventory names
 // `executor_sessions_seat_idx` as reached by nothing; drop the bases' partial
@@ -156,8 +158,9 @@ type executorIndexed struct {
 	ordered bool
 }
 
-// The indexes the reads are held to, beside the five the statements name
-// themselves (sessionKey, conversationIdx, endedIdx, seatIdx, heldIdx).
+// The indexes the reads are held to, beside the six the statements name
+// themselves (sessionKey, conversationIdx, lineIdx, releaseIdx, seatIdx,
+// heldIdx).
 const (
 	tombKey       = "sqlite_autoindex_executor_session_tombs_1"
 	removalKey    = "sqlite_autoindex_executor_seat_removals_1"
@@ -218,17 +221,17 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 			indexes:         []string{sessionKey, conversationIdx},
 		},
 
-		// A REMOVED SEAT'S LIVE TURNS, in the order of their key.
-		"a removed seat's live turns": {
-			executorPlanned: executorPlanned{seatLiveStatement, []any{seat}},
-			indexes:         []string{sessionKey, endedIdx},
-		},
+		// A REMOVED SEAT'S LIVE TURNS, through the key whose order they are
+		// read in.
+		"a removed seat's live turns": seek(sessionKey, seatLiveStatement, seat),
 
-		// THE BUDGET'S RELEASE, the oldest end first, inside the apply.
-		"the seat's ended sessions": inOrder(endedIdx, seatReleasableStatement, seat, turn),
+		// THE BUDGET'S RELEASE, the oldest read first and the oldest end among
+		// equals, inside the apply.
+		"the seat's ended sessions": inOrder(releaseIdx, seatReleasableStatement, seat, turn),
 
-		// A LAUNCH'S READ of its conversation: the head and its endings.
-		"a conversation's head":    inOrder(conversationIdx, headStatement, seat, key),
+		// A LAUNCH'S READ of its conversation: the head, the newest read and
+		// the newest end among equals, and its endings, the newest end first.
+		"a conversation's head":    inOrder(lineIdx, headStatement, seat, key),
 		"a conversation's endings": inOrder(conversationIdx, endingsStatement, seat, key, turn, MaxEndings),
 
 		// A SEAT'S PAGE, the latest begun first.

@@ -2016,7 +2016,8 @@ continued, the endings it was told and the sessions it was offered beside it
 shown (one that ended beside it, or one past the sixteen endings a launch is
 told) stays, and the next turn is shown it. Past a seat's
 `turn_engine.conversation_session.max_bytes_per_seat` (64 MiB by default) a
-capture releases the seat's oldest ended sessions, keeping how each turn ended
+capture releases the seat's oldest ended sessions, by when each turn read its
+conversation, so a conversation's head goes last, keeping how each turn ended
 and dropping only its object. The trash reaper deletes a row untouched for the
 company's `turn_engine.conversation_session.retention_days`, 30 days by
 default, ended or not, never while its turn's run is live — and takes the

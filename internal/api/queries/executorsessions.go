@@ -98,8 +98,8 @@ import (
 // a relaunch would follow, and — where the turn has kept no session of its own
 // — the session its first launch was handed, which a relaunch in a box of its
 // own continues instead. AN ENDED ROW: whether it is its conversation's HEAD,
-// the newest ended turn of the conversation that left a session, which the
-// read that answered the row names from the same snapshot
+// of the conversation's ended turns that left a session the one that read it
+// last, which the read that answered the row names from the same snapshot
 // (executordomain.Page.Heads, SessionRead.Head) — only the head is continued,
 // and a row that is not names the head the next turn is handed; a row that
 // names no session says why, of three reasons. And for either, the member the

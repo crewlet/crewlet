@@ -971,7 +971,7 @@ func TestAScheduleRowSaysWhetherItsNextFireContinuesIt(t *testing.T) {
 	}
 	if got := rows[older.Turn]; got.ContinuedBy != sandbox.ContinuedByNextFire || got.Continuable == nil ||
 		*got.Continuable || !strings.Contains(got.NotContinuable,
-		"the schedule's next fire is handed fire "+head.Turn+"'s session, the newest the schedule left") {
+		"the schedule's next fire is handed fire "+head.Turn+"'s session, the newest in the schedule's line") {
 		t.Errorf("an older fire's session is %s by %q, want its next fire's, naming the fire it is handed",
 			decided(got), got.ContinuedBy)
 	}

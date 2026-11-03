@@ -233,6 +233,24 @@ func scanSession(row rowScanner) (Session, error) {
 
 // Head is what a conversation's next turn launches from.
 //
+// # The head is the turn that read the conversation last
+//
+// Every turn's first launch continues the head its read named, so a
+// conversation's sessions are a LINE, each continuing the one before, and the
+// newest point of it is the ended turn whose READ is newest: what every later
+// read built on. Never simply the newest END. Two turns of one conversation run
+// beside each other whenever one parks on a person's question, which frees its
+// seat — and every time for a schedule, whose next fire is never taken as that
+// question's answer — so a turn that read the conversation early can end after
+// turns that read it later and continued each other. Taken as the head for
+// ending last, it would be continued while their line, which its read never
+// saw, was told and then absorbed by the next end. So the head is the ended
+// turn that read the conversation last, the newest end among turns that read
+// it at one position; and a turn that read nothing — its read failed, so it
+// continued nothing and absorbs nothing — sorts before every turn that did. A
+// turn that read early and ended late is told and offered beside the head, as
+// every other ended turn is, and absorbed by the next end.
+//
 // # What is left of a conversation is what no ended turn was shown
 //
 // A turn's end absorbs exactly the turns its first launch's read handed out
@@ -240,13 +258,14 @@ func scanSession(row rowScanner) (Session, error) {
 // still holds is one no ended turn was shown: a turn that ended beside the
 // head, after it, or before it but past the bound of the read that showed the
 // head's turn the rest. So the next turn is shown ALL of them — never only the
-// ones newer than the head, which would leave a turn that ended beside a turn
-// parked on a person (and so older than the head when the parked turn ended)
-// shown to nobody, and then absorbed by the next end as though it had been.
+// ones that ended after the head, which would leave a turn that ended before
+// it, beside a turn parked on a person, shown to nobody, and then absorbed by
+// the next end as though it had been.
 type Head struct {
-	// Session is the conversation's HEAD: its newest ended turn that left a
-	// session, which the next turn continues. Nil where none did, and the
-	// launch starts fresh.
+	// Session is the conversation's HEAD: of its ended turns that left a
+	// session, the one that read the conversation last, which the next turn
+	// continues (see above). Nil where none left one, and the launch starts
+	// fresh.
 	Session *Session
 
 	// Endings are the conversation's other ended turns, session or not: how
@@ -295,13 +314,17 @@ func (h Head) Absorbs() []string {
 
 // The statements a launch's reads run.
 const (
-	// headStatement is a conversation's newest ended turn that names a
-	// session.
+	// headStatement is a conversation's HEAD: of its ended turns that name a
+	// session, the one that read the conversation last — the newest end
+	// among turns that read it at one position, and a turn that read none
+	// (its read failed) after every turn that did ([Head.Session]). AN END'S
+	// POSITION IS UNIQUE among the rows that hold one, so the pair is a total
+	// order, and the conversation's line index serves it without a sort.
 	headStatement = `SELECT ` + sessionColumns + `
-		FROM executor_sessions INDEXED BY ` + conversationIdx + `
+		FROM executor_sessions INDEXED BY ` + lineIdx + `
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
 		  AND object IS NOT NULL
-		ORDER BY end_seq DESC LIMIT 1`
+		ORDER BY read_through DESC, end_seq DESC LIMIT 1`
 
 	// endingsStatement is a conversation's other ended turns, the newest
 	// first, and endingsCountStatement how many there are. AN END'S
@@ -522,7 +545,7 @@ func (r *Reader) Session(ctx context.Context, handle, turn string,
 // conversation names none, and is not keyed.
 //
 // ONE SEEK PER CONVERSATION, in the caller's transaction, after its rows are
-// read: never the newest ended row among the rows in hand, since the head of a
+// read: never a head chosen among the rows in hand, since the head of a
 // conversation a page shows one turn of may be on no page at all.
 func headsOf(ctx context.Context, tx *sql.Tx, handle string, sessions []Session) (map[string]string, error) {
 	var out map[string]string

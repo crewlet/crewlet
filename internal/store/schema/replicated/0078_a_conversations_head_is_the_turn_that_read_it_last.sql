@@ -1,0 +1,45 @@
+-- A conversation's head is the turn that read it last, and the seat budget
+-- releases in the same order: the executor domain's LINE ORDER
+-- (internal/executordomain; ADR-0073's amendment "a schedule is a conversation
+-- of each seat that runs it").
+--
+-- WHO HAS TO AGREE ON IT: every data node, identically, derived from the
+-- CREWLET_EXECUTOR_LOG stream by its one applier, as 0073 states for the rest
+-- of executor_sessions. Indexes only, over columns every node already writes
+-- from the same records, so no row changes and the identity claim is untouched.
+--
+-- # Why the end was the wrong order
+--
+-- A conversation's head was the newest END among its turns that left a
+-- session, and a turn's end absorbs only what its own first read handed out.
+-- Two turns of one conversation run beside each other whenever one parks on a
+-- person's question, which frees its seat — and every time for a schedule,
+-- whose next fire is never taken as that question's answer. A turn that read
+-- the conversation early and ended late then became the head: the turn after
+-- it continued the old session, and the turns that read after it, each
+-- continuing the one before, were told and then absorbed rather than
+-- continued. The head is now the ended turn whose READ is newest — the newest
+-- point of the conversation's line, which every later read built on — and,
+-- among turns that read at one position, the newest end; a turn that read no
+-- conversation (its read failed) sorts before every turn that did.
+--
+-- # The budget releases in the same order
+--
+-- The seat budget released the oldest END first, which kept each
+-- conversation's head, then its newest end, for last. With the head the newest
+-- read, a turn that read early and ended late would outlive the head and
+-- become it once the budget had released the head, so the budget walks the
+-- line order too: the oldest read first, a turn that read nothing before any
+-- that did, and the oldest end among turns that read alike. So a
+-- conversation's head is the last of its sessions released.
+--
+-- # executor_sessions_ended_idx goes
+--
+-- It served the budget's walk, and only the walk named it. A removed seat's
+-- live turns, the one other statement it could serve, are read through the
+-- table's key in the key's own order, once per removal, rather than kept in
+-- an index every apply writes.
+
+CREATE INDEX executor_sessions_line_idx ON executor_sessions (agent_handle, conversation_key, read_through, end_seq); -- a conversation's head: the newest read, the newest end among equals
+CREATE INDEX executor_sessions_release_idx ON executor_sessions (agent_handle, read_through, end_seq);              -- the seat budget's release: the oldest read first, the oldest end among equals
+DROP INDEX IF EXISTS executor_sessions_ended_idx;

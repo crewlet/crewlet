@@ -72,6 +72,94 @@ func TestAHeadShowsEveryTurnNoEndedTurnWasShown(t *testing.T) {
 	}
 }
 
+// A CONVERSATION'S HEAD IS THE TURN THAT READ IT LAST, never simply the one
+// that ended last. A turn parked on a person's question frees its seat, and a
+// schedule's next fire is never that question's answer, so a turn that read
+// the conversation later runs beside it and ends first; the parked one, which
+// read the conversation before that turn did and continued none of what it
+// left, then ends after it — and is told and offered beside the head, never
+// continued, and absorbed by the next end. Among turns that read the
+// conversation at one position the one that ended last is the head; and a turn
+// that read nothing (its read failed) is never the head while a turn that read
+// the conversation has a session, however late it ended.
+//
+// Mutation: order the head by its end alone, by where its turn first wrote, or
+// by its read with the older end first among turns that read alike, and a
+// check goes red.
+func TestAConversationsHeadIsTheTurnThatReadItLast(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	const fires = "schedule/role/0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11/health-check"
+	earlier, parked, beside, next := newTurn(), newTurn(), newTurn(), newTurn()
+	e.capture(capturing("ana", fires, earlier, 1, 1, 100, budget))
+	e.end(ending("ana", fires, earlier, "", Ending{Outcome: OutcomeCompleted}))
+
+	// THE PARKED TURN reads the head, captures and waits on a person; THE
+	// TURN BESIDE IT reads after it, continues the same head and ends; and
+	// the parked one is answered and ends last.
+	first := e.head("ana", fires)
+	e.capture(launching(first, capturing("ana", fires, parked, 1, 1, 100, budget)))
+	second := e.head("ana", fires)
+	if second.Position.Seq <= first.Position.Seq {
+		t.Fatalf("the premise: the second read at %s is not past the first at %s",
+			second.Position, first.Position)
+	}
+	e.capture(launching(second, capturing("ana", fires, beside, 1, 1, 100, budget)))
+	e.end(ending("ana", fires, beside, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, parked, "", Ending{Outcome: OutcomeCompleted}))
+
+	h := e.head("ana", fires)
+	if h.Session == nil || h.Session.Turn != beside {
+		t.Fatalf("the head is %+v, want the turn that read the conversation last, not the one "+
+			"that ended last", h.Session)
+	}
+	if !slices.Equal(turnsOf(h.Endings), []string{parked}) ||
+		!slices.Equal(turnsOf(h.Siblings), []string{parked}) {
+		t.Fatalf("the next turn is told %v and offered %v, want the parked turn told and offered "+
+			"beside the head", turnsOf(h.Endings), turnsOf(h.Siblings))
+	}
+	page, err := e.reader().Sessions(t.Context(), "ana", "", 10, stale)
+	if err != nil {
+		t.Fatalf("read the seat's page: %v", err)
+	}
+	if got := page.Heads[fires]; got != beside {
+		t.Errorf("a page of the seat names %q its conversation's head, want %q, as the read does",
+			got, beside)
+	}
+	e.capture(launching(h, capturing("ana", fires, next, 1, 1, 100, budget)))
+	e.end(ending("ana", fires, next, "", Ending{Outcome: OutcomeCompleted}))
+	for _, gone := range []string{beside, parked} {
+		if _, found := e.session("ana", gone); found {
+			t.Errorf("turn %s was handed to the next turn and survived its end", gone)
+		}
+	}
+
+	// TWO TURNS READ AT ONE POSITION: the one that ended last is the head.
+	now := e.head("ana", fires)
+	early, late := newTurn(), newTurn()
+	e.capture(launching(now, capturing("ana", fires, early, 1, 1, 100, budget)))
+	e.capture(launching(now, capturing("ana", fires, late, 1, 1, 100, budget)))
+	e.end(ending("ana", fires, early, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, late, "", Ending{Outcome: OutcomeCompleted}))
+	if tie := e.head("ana", fires); tie.Session == nil || tie.Session.Turn != late {
+		t.Fatalf("of two turns that read the conversation alike the head is %+v, want the one "+
+			"that ended last", tie.Session)
+	}
+
+	// A TURN THAT READ NOTHING ends last, and the head stays the turn that read.
+	blind := newTurn()
+	e.capture(capturing("ana", fires, blind, 1, 1, 100, budget))
+	e.end(ending("ana", fires, blind, "", Ending{Outcome: OutcomeCompleted}))
+	h = e.head("ana", fires)
+	if h.Session == nil || h.Session.Turn != late {
+		t.Fatalf("the head is %+v, want the turn that read the conversation, not one that read "+
+			"nothing and ended after it", h.Session)
+	}
+	if !slices.Contains(turnsOf(h.Siblings), blind) {
+		t.Errorf("the turn that read nothing is not offered beside the head: %v", turnsOf(h.Siblings))
+	}
+}
+
 // A HEAD BOUNDS WHAT IT HANDS OUT, AND WHAT IT LEAVES OUT STAYS: past
 // MaxEndings the oldest endings are counted rather than shown, past
 // MaxSiblings the oldest sessions beside the head are told rather than

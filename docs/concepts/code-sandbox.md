@@ -625,7 +625,9 @@ A continued run sends its session's whole context again before it reads a word o
 
 ## A conversation's next turn continues its last turn's session
 
-A turn that serves a conversation — the thread, the issue, the pull request or the work item its trigger names — **continues the session its conversation's last turn left**: its first launch restores the conversation's **head**, the newest ended turn of the conversation whose row on the executor log still names a kept session, into a box of its own, and its run takes that session up, told where the new turn begins. What the earlier turn did and said is in that session; what no transcript holds — how each earlier turn ended — the engine tells it.
+A turn that serves a conversation — the thread, the issue, the pull request or the work item its trigger names — **continues the session its conversation's last turn left**: its first launch restores the conversation's **head** into a box of its own, and its run takes that session up, told where the new turn begins. What the earlier turn did and said is in that session; what no transcript holds — how each earlier turn ended — the engine tells it.
+
+**The head is the turn that read the conversation last.** Of the conversation's ended turns whose rows on the executor log still name a kept session, it is the one whose own first launch read the conversation latest — the newest end among turns that read it at one position, and a turn whose read failed after every turn that read — never simply the one that ended last. Every first launch continues the head its read named, so a conversation's sessions are a line, each continuing the one before, and a turn that read the conversation early can end after turns that read it later: one parked on a person's question frees its seat, and the conversation's next message, offered to it as the answer first, runs beside it only where it is not taken; a schedule's next fire, never an answer, runs beside a parked fire every time. Such a turn continued none of what those later turns left, so it is told and offered beside the head, never continued, and the next turn's end absorbs it. The seat's session budget releases in the same order, the oldest read first, so a conversation's head is the last of its sessions to go.
 
 **A schedule's fires are one conversation.** The scheduler stamps every fire with its schedule's conversation, so a schedule is a conversation of each seat that runs it and its next fire there is that conversation's next turn, read, frozen, held, continued and absorbed exactly as below, and told in the schedule's words: **How this schedule's earlier fires ended**, and a lead that says a new fire of the schedule begins and that the schedule firing again, not a message, woke it ([Scheduling](scheduling.md#each-fire-continues-the-last-fires-session)).
 
@@ -1404,8 +1406,11 @@ lands in and its runner:
   session](#a-conversations-next-turn-continues-its-last-turns-session)).
 - **An ended turn's session, by its conversation's next turn** (`next_turn`):
   the decision that turn's first launch takes of the head its dispatch reads.
-  Only the conversation's **head** is continued — its newest ended turn whose
-  row still names a session, which the read that answered the row names from
+  Only the conversation's **head** is continued — of its ended turns whose rows
+  still name a session, the one that read the conversation last ([A
+  conversation's next turn continues its last turn's
+  session](#a-conversations-next-turn-continues-its-last-turns-session)), which
+  the read that answered the row names from
   the same snapshot, so a row's standing is the one its page's `read_level`
   states — `any_box`, where the member restores it, and in a box of the next
   turn's own. A row that is not the head names the turn whose session the next

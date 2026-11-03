@@ -9432,9 +9432,10 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   ([A relaunch continues the turn's
   session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session))
   — over the row as a relaunch reads it. **The next turn** decides it as that
-  turn's first launch does of its conversation's head: only the head — the
-  newest ended turn of the conversation whose row still names a session, which
-  the same read names from its own snapshot — is continued, where that runner
+  turn's first launch does of its conversation's head: only the head — of the
+  conversation's ended turns whose rows still name a session, the one that read
+  the conversation last, which the same read names from its own snapshot — is
+  continued, where that runner
   restores it ([A conversation's next turn continues its last turn's
   session](../concepts/code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)).
   **The member is the one the node holding the seat would pick**, which sits

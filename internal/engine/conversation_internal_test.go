@@ -34,11 +34,13 @@ import (
 // headLog is ONE executor log as these cases play it: the head a turn's dispatch
 // reads off it, the rows its launches restore from and record on, and every
 // object's archive. It keeps the domain's rules these cases turn on and no
-// others — a turn's first landed record keeps its read, a begin holds its base
-// where the base's row still names the session the read saw, a live row that
-// landed no capture holds its base against an end's absorption, and only a turn
-// that landed a capture absorbs what its read handed out — which the domain's
-// own suite holds on the real log (internal/executordomain's
+// others — the head is the ended turn that read the conversation last, a turn's
+// first landed record keeps its read, a begin holds its base where the base's
+// row still names the session the read saw, a live row that landed no capture
+// holds its base against an end's absorption, and only a turn that landed a
+// capture absorbs what its read handed out — which the domain's own suite holds
+// on the real log (internal/executordomain's
+// TestAConversationsHeadIsTheTurnThatReadItLast and
 // TestNoReleaseTakesAHeldBase).
 type headLog struct {
 	mu       sync.Mutex
@@ -137,13 +139,18 @@ func (l *headLog) Head(_ context.Context, handle, conversationKey string,
 		return cmp.Compare(a.EndedAtPosition.Seq, b.EndedAtPosition.Seq)
 	})
 	var out executordomain.Head
-	for i := len(ended) - 1; i >= 0; i-- {
-		if ended[i].HasObject() {
-			head := ended[i]
-			out.Session = &head
-			ended = slices.Delete(ended, i, i+1)
-			break
+	// THE HEAD IS THE TURN THAT READ THE CONVERSATION LAST, the newest end
+	// among turns that read alike, as the domain's head statement orders it.
+	head := -1
+	for i, row := range ended {
+		if row.HasObject() && (head < 0 || lineAfter(row, ended[head])) {
+			head = i
 		}
+	}
+	if head >= 0 {
+		chosen := ended[head]
+		out.Session = &chosen
+		ended = slices.Delete(ended, head, head+1)
 	}
 	if len(ended) > executordomain.MaxEndings {
 		out.EndingsOmitted = len(ended) - executordomain.MaxEndings
@@ -158,6 +165,15 @@ func (l *headLog) Head(_ context.Context, handle, conversationKey string,
 	slices.Reverse(out.Siblings)
 	out.Position = statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Seq: l.seq}
 	return out, nil
+}
+
+// lineAfter reports whether a comes after b in their conversation's line: it
+// read the conversation later, or at the same position and ended later.
+func lineAfter(a, b executordomain.Session) bool {
+	if ra, rb := a.ReadThrough.Packed(), b.ReadThrough.Packed(); ra != rb {
+		return ra > rb
+	}
+	return a.EndedAtPosition.Packed() > b.EndedAtPosition.Packed()
 }
 
 func (l *headLog) Begin(_ context.Context, _ executordomain.Call,

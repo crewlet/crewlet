@@ -379,7 +379,10 @@ func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
 
 // THE SEAT'S BUDGET RELEASES THE OLDEST ENDED SESSIONS FIRST, keeping their
 // endings, and never a live turn's: and a capture that cannot fit even with
-// every ended session released writes nothing and releases nothing.
+// every ended session released writes nothing and releases nothing. These turns
+// read no conversation, so their ends alone order them;
+// TestTheSeatBudgetReleasesAConversationsHeadLast holds the order of turns that
+// read one.
 //
 // A row a turn's begin wrote needs no case here: it names no object, so the
 // budget, which counts and releases only rows that name one, can neither count
@@ -424,6 +427,58 @@ func TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst(t *testing.T) {
 	}
 	if l, _ := e.session("ana", live); !l.HasObject() {
 		t.Error("a live turn's session was released")
+	}
+}
+
+// THE SEAT'S BUDGET RELEASES A CONVERSATION'S HEAD LAST. It walks the seat's
+// ended sessions in the order its conversations' lines run: the oldest read
+// first — a turn that read no conversation before any turn that did — and the
+// oldest end among turns that read alike. So a turn parked on a person's
+// question, which read its conversation before a turn that ran beside it and
+// ended after that turn, goes before the head the later turn left, rather than
+// outliving it to become the head its conversation's next turn continues.
+//
+// Mutation: release the oldest end first, or the newest read first, or put a
+// turn that read nothing after the turns that read, and a check goes red.
+func TestTheSeatBudgetReleasesAConversationsHeadLast(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	const (
+		tight = 100
+		room  = "chat:room"
+	)
+	earlier, parked, beside, wake, next := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
+	e.capture(capturing("ana", room, earlier, 1, 1, 20, tight))
+	e.end(ending("ana", room, earlier, "", Ending{Outcome: OutcomeCompleted}))
+	first := e.head("ana", room)
+	e.capture(launching(first, capturing("ana", room, parked, 1, 1, 30, tight)))
+	second := e.head("ana", room)
+	e.capture(launching(second, capturing("ana", room, beside, 1, 1, 30, tight)))
+	e.end(ending("ana", room, beside, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", room, parked, "", Ending{Outcome: OutcomeCompleted}))
+	// A COLLEAGUE'S ASK, which serves no conversation, ends last of all.
+	e.capture(capturing("ana", "", wake, 1, 1, 20, tight))
+	e.end(ending("ana", "", wake, "", Ending{Outcome: OutcomeCompleted}))
+	if _, found := e.session("ana", earlier); found {
+		t.Fatal("the premise: the turn beside the parked one did not absorb the head it continued")
+	}
+
+	// 80 bytes held and 50 to capture: two releases make room, and the head
+	// is the last of the three in line.
+	if _, n := e.capture(capturing("ana", "chat:other", next, 1, 1, 50, tight)); n == 0 {
+		t.Fatal("a capture the budget holds once two sessions are released wrote nothing")
+	}
+	for _, gone := range []string{wake, parked} {
+		if s, _ := e.session("ana", gone); s.HasObject() || !s.Ended() {
+			t.Errorf("turn %s is %+v, want its session released and its ending kept", gone, s)
+		}
+	}
+	if head, _ := e.session("ana", beside); !head.HasObject() {
+		t.Error("the conversation's head was released before a turn that read it earlier")
+	}
+	if h := e.head("ana", room); h.Session == nil || h.Session.Turn != beside {
+		t.Errorf("the conversation's head is %+v once the budget has released, want the turn "+
+			"that read it last", h.Session)
 	}
 }
 

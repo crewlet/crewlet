@@ -126,9 +126,11 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   continues: every fire starts fresh
     max_bytes_per_seat: 67108864        # object-store bytes one seat's captured executor
                                         #   sessions may hold (33 MiB..64 GiB); past it a
-                                        #   capture releases the seat's oldest ENDED
-                                        #   turns' sessions, keeping how each ended, never
-                                        #   one a live turn was handed to continue
+                                        #   capture releases the seat's ENDED turns'
+                                        #   sessions, keeping how each ended, the oldest
+                                        #   first by when each turn read its conversation
+                                        #   (a conversation's head last), never one a
+                                        #   live turn was handed to continue
 
 learning:                               # optional — agent-learning subsystem
                                         #   Every pass here calls the seat's auxiliary

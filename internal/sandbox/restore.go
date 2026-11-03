@@ -303,10 +303,11 @@ const (
 
 	// ContinuedByNextFire is [ContinuedByNextTurn] of a schedule's
 	// conversation: the schedule's next fire, which continues the session
-	// only where it is the newest the schedule's fires left on the seat — a
-	// schedule is a conversation of each seat that runs it, every fire a turn
-	// of it (internal/notify's ScheduleConversation). The same decision,
-	// told in the schedule's words.
+	// only where it is the schedule's head on the seat — of the fires that
+	// ended with a session, the one that read the schedule's conversation
+	// last — a schedule is a conversation of each seat that runs it, every
+	// fire a turn of it (internal/notify's ScheduleConversation). The same
+	// decision, told in the schedule's words.
 	ContinuedByNextFire ContinuedBy = "next_fire"
 )
 
@@ -560,10 +561,10 @@ func nextTurnContinuity(row executordomain.Session, head string, target Relaunch
 		// so a read that names none did not say which session the next turn
 		// is handed, which is no reason to say it is not this one.
 		return ReadContinuity{By: later.by, Why: "the read of this session did not say which of its " +
-			later.whole + "'s sessions is the newest; ask again shortly"}
+			later.whole + "'s sessions is the newest in its line; ask again shortly"}
 	case head != row.Turn:
-		return not(fmt.Sprintf("%s is handed %s %s's session, the newest the %s left, and is told how "+
-			"this one ended where its brief has room", later.launch(), later.turn, head, later.whole))
+		return not(fmt.Sprintf("%s is handed %s %s's session, the newest in the %s's line, and is told "+
+			"how this one ended where its brief has room", later.launch(), later.turn, head, later.whole))
 	case target.Undecided:
 		return ReadContinuity{By: later.by, Why: target.Why}
 	case target.NoKept != "":
@@ -590,7 +591,7 @@ func endingContinuity(row executordomain.Session, run *PendingRun, later laterLa
 	}
 	return ReadContinuity{By: later.by, Why: over + ", and its end is not on the executor log as this " +
 		"session was read; once it is, " + later.launch() + " continues the session this row names if it " +
-		"is the newest the " + later.whole + " left"}
+		"is then the newest in the " + later.whole + "'s line"}
 }
 
 // relaunchContinuity is [ReadContinuityOf] of a live turn's row whose run is

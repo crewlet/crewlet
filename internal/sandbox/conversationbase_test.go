@@ -199,16 +199,26 @@ func (l *conversationLog) row(turn string) (executordomain.Session, bool) {
 	return row, ok
 }
 
-// head is the conversation's head: its newest ended row that names a session.
+// head is the conversation's head, as the domain's head statement orders it:
+// of its ended rows that name a session, the one whose turn read the
+// conversation last, the newest end among turns that read it alike.
 func (l *conversationLog) head(conversationKey string) string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	var head executordomain.Session
+	var head *executordomain.Session
 	for _, row := range l.rows {
-		if row.ConversationKey == conversationKey && row.Ended() && row.HasObject() &&
-			row.EndedAtPosition.Seq > head.EndedAtPosition.Seq {
-			head = row
+		if row.ConversationKey != conversationKey || !row.Ended() || !row.HasObject() {
+			continue
 		}
+		if head == nil || row.ReadThrough.Packed() > head.ReadThrough.Packed() ||
+			(row.ReadThrough.Packed() == head.ReadThrough.Packed() &&
+				row.EndedAtPosition.Packed() > head.EndedAtPosition.Packed()) {
+			chosen := row
+			head = &chosen
+		}
+	}
+	if head == nil {
+		return ""
 	}
 	return head.Turn
 }

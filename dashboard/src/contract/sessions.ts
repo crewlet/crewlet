@@ -42,10 +42,10 @@ export type SessionContinuesIn = "any_box" | "parked_box";
  * Which launch would continue a turn's session (`sandbox.ContinuedBys`): a
  * relaunch of the turn, while it is live; or its conversation's next turn, once
  * it has ended — or is ending, its end not yet on the log — which continues only
- * the conversation's newest session; or, for a turn of a schedule's
- * conversation, the schedule's next fire, the same launch told in the
- * schedule's words — a schedule is a conversation of each seat that runs it,
- * every fire a turn of it.
+ * the conversation's head, the newest session in its line; or, for a turn of a
+ * schedule's conversation, the schedule's next fire, the same launch told in
+ * the schedule's words — a schedule is a conversation of each seat that runs
+ * it, every fire a turn of it.
  */
 export type SessionContinuedBy = "relaunch" | "next_turn" | "next_fire";
 
@@ -133,17 +133,17 @@ export interface ExecutorSessionRow {
    * member the node holding the seat would launch it on now — a relaunch of a
    * live turn on the turn's own revision; an ended turn's conversation's next
    * turn (a schedule's next fire), which continues only the conversation's
-   * newest session, on the revision live when it comes. Whether the box a
-   * launch gets takes the session up, and whether the seat's budget can carry
-   * it, are the launch's to find out. Null where it cannot be decided now — a
-   * run record or a log row that could not be read, a job still working or
-   * being collected, a capture still being kept, what the launch is launched
-   * on not to be said (every member of the seat's chain sitting out its plan,
-   * no node holding the seat, the node holding it not answering), a relaunch
-   * only the resume of its job's collection decides, a turn whose end is not
-   * on the log yet — which `not_continuable` then says: an unknown is never
-   * sent as a no. A transcript's later page leaves it null, its first page
-   * having said it.
+   * head, the newest session in its line, on the revision live when it comes.
+   * Whether the box a launch gets takes the session up, and whether the seat's
+   * budget can carry it, are the launch's to find out. Null where it cannot be
+   * decided now — a run record or a log row that could not be read, a job still
+   * working or being collected, a capture still being kept, what the launch is
+   * launched on not to be said (every member of the seat's chain sitting out
+   * its plan, no node holding the seat, the node holding it not answering), a
+   * relaunch only the resume of its job's collection decides, a turn whose end
+   * is not on the log yet — which `not_continuable` then says: an unknown is
+   * never sent as a no. A transcript's later page leaves it null, its first
+   * page having said it.
    */
   continuable: boolean | null;
   /** Where the launch would continue it; present only where it would. */

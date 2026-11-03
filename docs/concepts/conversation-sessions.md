@@ -23,7 +23,7 @@ schedule that fired it.
 | Launch | Continues |
 |---|---|
 | A relaunch of a turn whose job before left a kept capture | That capture, in any box ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
-| A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, its newest ended turn whose row still names a kept session, restored into a box of the launch's own |
+| A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, the ended turn whose row still names a kept session and whose read of the conversation was the latest ([Read once, frozen, held](#read-once-frozen-held)), restored into a box of the launch's own |
 | A relaunch of a turn that has kept no session of its own — its first job lost with its box, its capture refused or unanswered — in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation |
 | A schedule's **next fire** | The session the schedule's last fire left on the seat: a schedule is a conversation of each seat that runs it ([Schedules](#schedules)) |
 | Anything else | A session of its own, the reason logged as `executor_session_not_continued` |
@@ -119,6 +119,20 @@ end, **no release takes the base**: not the seat's session budget, not a
 sibling turn's end, not the retention. A turn whose run is gone with no end
 recorded is ended `lost` a day after its last record, which lifts its hold; a
 first launch abandoned once its record was written ends its turn at once.
+
+**The head is the turn that read the conversation last.** Every first launch
+continues the head its read named, so a conversation's sessions are a line,
+each continuing the one before. Two turns of a conversation can run beside each
+other — a turn parked on a person's question frees its seat, and a message that
+is not taken as its answer runs beside it — so a turn that read the
+conversation early can end after turns that read it later and continued each
+other. It continued none of what they left, so the head is never simply the
+turn that ended last: it is the ended turn with a kept session whose read was
+the latest, the last to end among turns that read at one position, and a turn
+whose read failed comes after every turn that read. A turn that read early and
+ended late is told and offered beside the head, never continued, and the next
+turn's end absorbs it. A schedule's fires run beside a parked fire every time
+([Schedules](#schedules)).
 
 **A turn's end absorbs what its brief told.** Once a turn of the conversation
 that kept a session of its own ends, the turns its brief told — the head it
@@ -224,6 +238,12 @@ waited in a seat's inbox together run once, on that one key.
 - **Nobody replies into it.** Every fire carries the key and nothing a person
   writes does, so a fire is never taken as the answer to the question the last
   fire's run parked on; such a run is answered by its turn.
+- **A fire parked on a question holds nothing up.** The schedule's next fires
+  run beside it, each continuing the one before; when the parked fire is
+  answered or stopped and ends after them, the next fire still continues the
+  last of them — the head is the turn that read the conversation last — and is
+  told how the parked one ended
+  ([Read once, frozen, held](#read-once-frozen-held)).
 
 [Scheduling](scheduling.md#each-fire-continues-the-last-fires-session) has the
 whole of it.
@@ -293,8 +313,10 @@ fires come further apart than the retention starts every fire fresh
 ([Schedules](#schedules)).
 
 **`max_bytes_per_seat`** is the most one seat's sessions may hold: past it a
-capture releases the seat's oldest ended sessions first, keeping how each turn
-ended, and a capture the seat's live turns leave no room for is refused, so
+capture releases the seat's ended sessions, keeping how each turn ended, the
+oldest first by when each turn read its conversation (a turn that read none
+before any that did), so a conversation's head is the last of its sessions to
+go; and a capture the seat's live turns leave no room for is refused, so
 that turn's next launch starts fresh. A session a live turn's first launch was
 handed is held until that turn keeps a session of its own or ends, so it
 counts beside the seat's live turns for as long. The default, 64 MiB, holds a

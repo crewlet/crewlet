@@ -63,12 +63,17 @@ const (
 	sessionKey = "sqlite_autoindex_executor_sessions_1"
 
 	// conversationIdx is a conversation's rows in the order they ended: its
-	// head, its endings and an end's dedupe.
+	// endings, and an end's dedupe and absorption.
 	conversationIdx = "executor_sessions_conversation_idx"
 
-	// endedIdx is a seat's rows in the order they ended: the budget's
-	// release, oldest first.
-	endedIdx = "executor_sessions_ended_idx"
+	// lineIdx is a conversation's rows in its LINE's order — by where each
+	// turn read the conversation, then by its end: its head, the newest of
+	// them ([Head.Session]).
+	lineIdx = "executor_sessions_line_idx"
+
+	// releaseIdx is a seat's rows in the same order across its
+	// conversations: the budget's release, the oldest first.
+	releaseIdx = "executor_sessions_release_idx"
 
 	// seatIdx is a seat's rows in the order they began: its page.
 	seatIdx = "executor_sessions_seat_idx"
@@ -112,14 +117,19 @@ const (
 		WHERE agent_handle = ? AND object IS NOT NULL AND turn_id <> ?`
 
 	// seatReleasableStatement is a seat's ended sessions in the order the
-	// budget releases them: the oldest end first. AN END'S POSITION IS
-	// UNIQUE among the rows that hold one, so it alone is a total order, and
-	// the seat's index on it serves the order without a sort.
+	// budget releases them: its conversations' LINE order, the oldest read
+	// first — a turn that read no conversation before any that did — and the
+	// oldest end among turns that read at one position. So each
+	// conversation's head, the turn that read it last ([Head.Session]), is
+	// the last of its sessions released, and a turn that read it early and
+	// ended late never outlives the head to become it. AN END'S POSITION IS
+	// UNIQUE among the rows that hold one, so the pair is a total order, and
+	// the seat's release index serves it without a sort.
 	seatReleasableStatement = `
-		SELECT turn_id, object_size FROM executor_sessions INDEXED BY ` + endedIdx + `
+		SELECT turn_id, object_size FROM executor_sessions INDEXED BY ` + releaseIdx + `
 		WHERE agent_handle = ? AND end_seq IS NOT NULL AND object IS NOT NULL
 		  AND turn_id <> ?
-		ORDER BY end_seq`
+		ORDER BY read_through, end_seq`
 
 	// heldStatement is whether a live turn of the seat other than one holds
 	// an ended turn as its base: one point read of the bases' index.
@@ -245,9 +255,10 @@ const (
 		DELETE FROM executor_session_tombs WHERE agent_handle = ? AND turn_id = ?`
 
 	// seatLiveStatement is a removed seat's turns that had not ended, in
-	// the order of their key.
+	// the order of their key, read through the key: once per removal, so no
+	// index every apply writes is kept for it.
 	seatLiveStatement = `
-		SELECT turn_id, conversation_key FROM executor_sessions
+		SELECT turn_id, conversation_key FROM executor_sessions INDEXED BY ` + sessionKey + `
 		WHERE agent_handle = ? AND end_seq IS NULL ORDER BY turn_id`
 
 	// seatRowsStatement deletes every row a removed seat holds.
@@ -412,7 +423,10 @@ func splitAbsorbs(column string) []string {
 // seatPlan is which ended turns' sessions a capture of size bytes on turn must
 // release for the seat to hold budget, and whether it fits at all.
 //
-// THE OLDEST ENDINGS GO FIRST, by the position each ended at, and never a live
+// THE OLDEST GO FIRST, in the seat's conversations' line order — by where each
+// turn read its conversation, a turn that read none first, then by where it
+// ended ([seatReleasableStatement]) — so each conversation's head is the last
+// of its sessions to go; and never a live
 // turn's session or this turn's own: a live turn's is the one its next launch
 // continues, and this turn's is being replaced. NOR A BASE ANOTHER LIVE TURN
 // HOLDS ([heldBases], read once for the whole walk): that turn's relaunch is
@@ -424,7 +438,8 @@ func splitAbsorbs(column string) []string {
 // first capture at all.
 //
 // The release is a total order of the rows (an end's position is unique among
-// them), so every node releases the same sessions. Nothing is chosen when even
+// those that hold one, and breaks every tie of the read), so every node
+// releases the same sessions. Nothing is chosen when even
 // every releasable session released would not make room: the seat's live turns
 // and the bases they hold already fill the budget, and the capture is refused
 // whole rather than releasing what does not help.
@@ -618,7 +633,7 @@ func flag(b bool) int {
 func (c applyContext) on(subject Subject) bool { return c.record.Subject == subject }
 
 // applyCapture names a new object for a live turn, releasing the seat's
-// oldest ended sessions first where its budget needs the room.
+// oldest ended sessions first where its budget needs the room ([seatPlan]).
 //
 // A CAPTURE THAT WOULD NAME WHAT NO READER CAN PARSE WRITES NOTHING: an object
 // key or digest the store does not spell, or a list of absorbed turns that is

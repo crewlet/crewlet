@@ -243,8 +243,10 @@ type ConversationSession struct {
 
 	// MaxBytesPerSeat is the most object-store bytes one seat's captured
 	// executor sessions may hold (internal/executordomain): past it a new
-	// capture releases the seat's oldest ENDED turns' sessions, keeping how
-	// each ended, and a capture the seat's live turns leave no room for is
+	// capture releases the seat's ENDED turns' sessions, keeping how each
+	// ended, the oldest first by when each turn read its conversation — so
+	// a conversation's head, the session its next turn continues, goes
+	// last — and a capture the seat's live turns leave no room for is
 	// refused, so that turn's next launch starts fresh. A session a live
 	// turn's first launch was handed to continue is HELD, and no release
 	// takes it, until that turn keeps a session of its own or ends — so it
@@ -253,7 +255,7 @@ type ConversationSession struct {
 	// SIXTY-FOUR MEBIBYTES BY DEFAULT ([DefaultSessionBytesPerSeat]), which
 	// says why. The engine reads it off the revision the fleet runs, and
 	// every node applies the one number a capture carries.
-	MaxBytesPerSeat int64 `yaml:"max_bytes_per_seat,omitempty" json:"max_bytes_per_seat,omitempty" js:"min=34603008;max=68719476736" desc:"Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released (default 64 MiB, 33 MiB..64 GiB)."`
+	MaxBytesPerSeat int64 `yaml:"max_bytes_per_seat,omitempty" json:"max_bytes_per_seat,omitempty" js:"min=34603008;max=68719476736" desc:"Object-store bytes one seat's captured executor sessions may hold; past it the ended turns' sessions are released, the oldest first by when each turn read its conversation (default 64 MiB, 33 MiB..64 GiB)."`
 }
 
 // The per-seat session budget's default and bounds.

@@ -271,7 +271,7 @@ func TestAScheduleRowIsToldItsNextFire(t *testing.T) {
 	older := ReadContinuityOf(fire, "t-newer", nil, restores, ContinuedByNextFire, now)
 	if older.By != ContinuedByNextFire || !older.Decided || older.Continues ||
 		!strings.Contains(older.Why, "the schedule's next fire is handed fire t-newer's session, the newest "+
-			"the schedule left") {
+			"in the schedule's line") {
 		t.Errorf("an older fire's session reads %+v, want its next fire's, naming the fire it is handed", older)
 	}
 	ending := fire
