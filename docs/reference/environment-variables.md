@@ -310,7 +310,7 @@ A run's harness is that of the `providers.llm` entry its launch picks — the fi
 
 ### Set by the engine inside a box
 
-A run given [repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host) is also handed its access to it, in that launch's environment alone — minted for the launch, never written on the run's record and never read from your configuration. The two `CREWLET_GIT_*` names below are **reserved**: `role.sandbox.env`, a seat's setup steps' `env` and `providers.sandbox.setup`'s `env` are refused naming one. Nothing in the engine reads any of them back.
+Every launch on a node that serves [this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host) with `CREWLET_BOX_GIT_URL` set is handed the run's access to it, in that launch's environment alone, before the run has checked any repository out — minted for the launch, never written on the run's record and never read from your configuration. The two `CREWLET_GIT_*` names below are **reserved**: `role.sandbox.env`, a seat's setup steps' `env`, `providers.sandbox.setup`'s `env` and `code.checks.env` are refused naming one. Nothing in the engine reads any of them back.
 
 | Variable | What it is |
 |----------|------------|

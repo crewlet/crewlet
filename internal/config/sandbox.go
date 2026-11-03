@@ -788,9 +788,10 @@ var reservedSandboxEnvReasons = map[string]string{
 	"CREWLET_CHECK_SUMMARY": "it is the file a check's command writes its summary to, read back when the " +
 		"check ends, and a value here would have the summary written where it is never read",
 	"CREWLET_GIT_TOKEN": "it is the run's own credential on this company's code host, minted for each " +
-		"launch of a run that names repositories, and a value here would break its clones and pushes",
-	"CREWLET_GIT_URL": "it is the base a run that names repositories clones and pushes them from " +
-		"(CREWLET_BOX_GIT_URL on the launching node), and a value here would send its git elsewhere",
+		"of its launches on a node that serves it, and a value here would break its clones and pushes",
+	"CREWLET_GIT_URL": "it is the base a run clones this company's code host's repositories from and " +
+		"pushes them to (CREWLET_BOX_GIT_URL on the launching node), and a value here would send its git " +
+		"elsewhere",
 }
 
 // validateReservedSandboxEnv refuses a [ReservedSandboxEnv] name as a key of
