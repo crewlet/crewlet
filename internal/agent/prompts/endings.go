@@ -17,7 +17,7 @@ import (
 // and said, never how it ended: whether the reply it wrote reached the party
 // waiting, what its reviewer decided, who stopped it and why, what failed. The
 // engine recorded those on the executor log as the turn's ending
-// (internal/executordomain's Ending), and this block tells them — every ended
+// (internal/executorkeep's Ending), and this block tells them — every ended
 // turn of the conversation no ended turn was shown, each whole, the newest
 // first while they fit [EndingsMaxBytes], the rest counted. A session of the
 // run's own is told the same block: it is the conversation's account that no
@@ -41,7 +41,7 @@ import (
 // round of the prior-work ledger, and a small fraction of any model this
 // engine targets.
 // One ending's accounts are bounded where they are recorded
-// (internal/executordomain's CompletedWorkMaxBytes and the rest), so an ending
+// (internal/executorkeep's CompletedWorkMaxBytes and the rest), so an ending
 // whose every account is at its bound renders in about thirteen kilobytes, and
 // ordinary endings in a few hundred bytes: the block always holds the head
 // whole and, beside it, the conversation's last several turns. It is also what
@@ -121,7 +121,7 @@ func endingWordsFor(fires bool) endingWords {
 }
 
 // TurnEnding is one ended turn of a conversation as the engine recorded its end
-// (internal/executordomain's Ending and the turn's row).
+// (internal/executorkeep's Ending and the turn's row).
 //
 // The ENGINE'S WORDS are its own: Outcome, Decision, Answer, DeliveredTo and the
 // delivery facts. Everything else is SOMEBODY ELSE'S, and the block fences it
