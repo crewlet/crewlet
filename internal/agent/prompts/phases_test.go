@@ -222,7 +222,7 @@ func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 		PriorWork:       "### Iteration 1\nExecute called:\n- post_message(...) → success",
 	}).Text
 	if !strings.HasPrefix(withPrior, "## Task\npost the summary") {
-		t.Error("the ask must lead when there is no conversation history")
+		t.Error("the ask must lead when no earlier turn's ending is told")
 	}
 	// The rule that actually prevents the double-post.
 	contains(t, withPrior, "Already done earlier in this turn", "### Iteration 1", "ALREADY RAN")

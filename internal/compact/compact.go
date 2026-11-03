@@ -30,9 +30,10 @@
 // genuinely unbounded AND has to be read in one piece.
 //
 // WHAT TO DO WHEN A REWRITE CANNOT BE HAD is the caller's too, because the
-// honest fallback differs: a conversation block can still drop its oldest
-// entries whole and say how many, an argument value can be named by its size,
-// and a document can be skipped with a note. What no caller may do is fall
+// honest fallback differs: a chat thread can still leave out the messages
+// between its root and its newest whole and say how many, an argument value
+// can be named by its size, and a document can be skipped with a note. What
+// no caller may do is fall
 // back to the cut this package replaced. [Compactor.Fit] therefore returns an
 // error rather than a degraded string, and the error says which of three
 // things happened — no model ([ErrUnavailable]), a model that could not get
@@ -210,9 +211,6 @@ var (
 type Kind string
 
 const (
-	// KindConversation is the earlier part of a conversation an agent had:
-	// what it was asked, what it called, what it replied.
-	KindConversation Kind = "conversation"
 	// KindThread is the earlier messages of a chat thread.
 	KindThread Kind = "thread"
 	// KindArgument is one argument value of a tool call already made — a
@@ -239,7 +237,7 @@ const (
 )
 
 // Kinds is every kind this build has instructions for.
-var Kinds = []Kind{KindConversation, KindThread, KindArgument, KindToolError,
+var Kinds = []Kind{KindThread, KindArgument, KindToolError,
 	KindProduced, KindSource, KindTask, KindAnswer, KindOutcome, KindReport}
 
 // Valid reports whether this build knows the kind.

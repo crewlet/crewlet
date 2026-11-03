@@ -29,10 +29,10 @@ import (
 //   - PartitionKey says which other events this one is handled WITH: the
 //     broker's inbox partition and the coalescer's merge unit.
 //   - ConversationIdentity says which ongoing conversation it is part of: the
-//     conversation ledger's key, the turn telemetry's conversation_key tag,
-//     the episodes column, and the value a parked executor matches a
-//     person's answer against — they answer on the conversation, not into
-//     the batch.
+//     key a seat's sessions are kept under on the executor log, the turn
+//     telemetry's conversation_key tag, the episodes column, and the value a
+//     parked executor matches a person's answer against — they answer on the
+//     conversation, not into the batch.
 //   - WakesActor says whether a notification reaches the party who caused it.
 //   - DigestBody is the supersede rule when several of them merge.
 //

@@ -32,10 +32,9 @@ import (
 // EndingsMaxBytes bounds the block, its heading and the count of what it left
 // out included.
 //
-// TWENTY-FOUR THOUSAND BYTES, about six thousand tokens: the bound the
-// conversation's block of the seat's own earlier replies held before it
-// (internal/agent/ledger's InjectedMaxChars) — the order of one round of the
-// prior-work ledger, and a small fraction of any model this engine targets.
+// TWENTY-FOUR THOUSAND BYTES, about six thousand tokens: the order of one
+// round of the prior-work ledger, and a small fraction of any model this
+// engine targets.
 // One ending's accounts are bounded where they are recorded
 // (internal/executordomain's CompletedWorkMaxBytes and the rest), so an ending
 // whose every account is at its bound renders in about thirteen kilobytes, and

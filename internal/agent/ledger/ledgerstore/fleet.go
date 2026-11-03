@@ -1,32 +1,27 @@
-// Package ledgerstore persists the turn engine's two cross-turn ledgers.
+// Package ledgerstore persists the turn engine's completion ledger: whether a
+// trigger has already been worked.
 //
 // A subpackage rather than more files in ledger, so ledger keeps the property
 // its own doc claims: it imports nothing from crewlet but a standard-library
-// leaf. The turn context, the prompt builder and the API layer all hold ledger
-// VALUES, and a package that dragged a database behind it would be held by all
-// three.
+// leaf. The turn loop, the runner and the parked state all hold ledger VALUES,
+// and a package that dragged the coordination store behind it would be held
+// by all three.
 //
-// THE TWO LEDGERS LIVE IN DIFFERENT PLACES, and the split is what each is
-// for:
+// THE LEDGER IS THE FLEET'S. "Has this trigger already been worked?" is only
+// useful if every node gives the same answer, so the durable one is
+// [FleetCompletions] over the coordination store. On the node's own database,
+// a redelivery that landed on a peer found an empty ledger and the turn ran
+// twice.
 //
-//   - Completions must be agreed across the FLEET — "has this trigger already
-//     been worked?" is only useful if every node gives the same answer — so
-//     the durable one is [FleetCompletions] over the coordination store. On
-//     the node's own database, a redelivery that landed on a peer found an
-//     empty ledger and the turn ran twice.
-//   - Conversations are a seat's own thread history, read only by the node
-//     running that seat, so they stay on the local database where a long
-//     thread costs nothing to replicate.
+// IT FAILS OPEN IN BOTH DIRECTIONS. Not knowing whether work was done has one
+// safe answer and it is the pre-ledger one — do the work. A read that failed
+// closed would make a store blip look like a company that had already
+// answered everything.
 //
-// THEIR FAILURE POLARITIES ALSO DIFFER, and both are deliberate:
-//
-//   - Completions fail OPEN in both directions. Not knowing whether work was
-//     done has one safe answer and it is the pre-ledger one — do the work. A
-//     read that failed closed would make a store blip look like a company
-//     that had already answered everything.
-//   - Conversations SPLIT: writes fail open, reads RAISE. Swallowing a read
-//     failure made "unreadable" and "nothing said yet" one answer, and a
-//     screen drew a database outage as a silent seat.
+// What a conversation's next turn is told of its earlier turns is not kept
+// here, nor on any one node: it is the executor log's (internal/executordomain),
+// a replicated domain every data node holds identically, whose rows record how
+// each turn ended and name the session it kept in the fleet's object store.
 package ledgerstore
 
 import (

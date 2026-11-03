@@ -2,9 +2,8 @@ package ledger
 
 import "strconv"
 
-// Payload budgets, applied ONLY to the cross-round and cross-turn ledgers —
-// never to Review's single-iteration evidence log, which stays verbatim by
-// contract.
+// Payload budgets, applied ONLY to the cross-round ledger — never to Review's
+// single-iteration evidence log, which stays verbatim by contract.
 //
 // ONE principle decides every number: BUDGET PAYLOADS, NEVER STRUCTURE. A
 // payload (a message body, page HTML, a diff, an error document) is

@@ -1,0 +1,25 @@
+-- The per-conversation table of what a seat said leaves the node.
+--
+-- `conversation_sessions` (0005) kept, per seat and conversation, an entry for
+-- every turn — what it was asked, what it called, what it replied — and the
+-- next turn of the conversation was handed the newest entries as a block of
+-- its prompt. A conversation's next turn now CONTINUES the session its last
+-- turn left, transcript and all, and is told how the conversation's earlier
+-- turns ended from their rows on the executor log (internal/executordomain):
+-- a replicated domain every data node holds identically, whose rows name each
+-- turn's session in the fleet's object store. Two histories of one
+-- conversation — the transcript and a second account of it beside — are two
+-- answers to "what did this seat already do here", free to disagree, so the
+-- table goes rather than standing beside the log as something a reader would
+-- take for authoritative.
+--
+-- NOTHING IS CARRIED ACROSS. An entry is a rendered account, not a session
+-- any harness can continue, and no release ever wrote one, so a
+-- conversation's first turn on this build starts a fresh session and its
+-- later turns continue that.
+--
+-- IF EXISTS, as the earlier drops of node tables are (0010, 0044). The
+-- table's four indexes — its work-key dedupe, its lookup, its creation-time
+-- sweep and its entry identity (0005, 0017) — go with it.
+
+DROP TABLE IF EXISTS conversation_sessions;

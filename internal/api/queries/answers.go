@@ -243,9 +243,9 @@ type Sources struct {
 	FleetBroker BrokerLister
 
 	// Memory is a seat's memory — its diary, episodes, the skills it drafted
-	// and what it learned about the people it works with — and its
-	// conversation ledger, each ANSWERED BY THE NODE HOLDING THE SEAT
-	// (internal/learning/memread). Every node keeps a copy of every seat it
+	// and what it learned about the people it works with — ANSWERED BY THE
+	// NODE HOLDING THE SEAT (internal/learning/memread). Every node keeps a
+	// copy of every seat it
 	// ever ran and only the holder keeps it current, so a read of whichever
 	// node served the request described the seat as of the last time that
 	// node ran it.
@@ -254,7 +254,7 @@ type Sources struct {
 	// resolved here from the org the answer is made of — the reader never
 	// resolves a handle itself, because the node that answers may hold a
 	// different org from the node that asked. Nil leaves `agent_memory`,
-	// `memory_overview` and `conversations` unregistered.
+	// `agent_episode` and `memory_overview` unregistered.
 	Memory SeatMemory
 
 	// Channels is the fleet's agent-to-agent authorization record. A
@@ -1019,8 +1019,9 @@ func Register(r *Registry, s Sources) {
 		// BY THE HOLDER, and saying which node that was (see
 		// [Sources.Memory]). Decided per seat by
 		// [authz.ActionSeatTrailRead] — the seat, its lead, or an admin —
-		// the one verb all four ask, so the halves of what a seat has said
-		// and remembered cannot answer one reader differently.
+		// the one verb these and a seat's executor sessions ask, so the
+		// halves of what a seat has said and remembered cannot answer one
+		// reader differently.
 		r.Register("agent_memory", DecidedBy(authz.ActionSeatTrailRead), s.agentMemory)
 		// ONE EPISODE WHOLE, which the listing carries the openings of —
 		// a page of fifty whole asks could be more than the transport
@@ -1033,9 +1034,6 @@ func Register(r *Registry, s Sources) {
 		// Decided per seat too, so the list holds the seats the caller's
 		// trail reaches and no others.
 		r.Register("memory_overview", DecidedBy(authz.ActionSeatTrailRead), s.memoryOverview)
-		// An absent handle is the caller's own seat; see
-		// [Sources.trailSeat].
-		r.Register("conversations", DecidedBy(authz.ActionSeatTrailRead), s.conversations)
 	}
 	if s.Channels != nil {
 		// EVERY SEAT'S ASKS OF EVERY OTHER: the company-wide trail, so
@@ -1172,7 +1170,7 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 // reach is what the asking principal may see of the live state of the seat
 // with handle: its body where the authority table's `audit.seat.read` admits
 // them to the seat — an admin, or its lead — through the SAME decision the
-// seat's turns, memory and conversations are read under, never a second copy
+// seat's turns, memory and sessions are read under, never a second copy
 // of who that is; the work item it is on where they hold Worklet; the
 // company's configuration (which entries served a run, a failure's own text)
 // where they are an admin; and their own record, to which an executor's

@@ -575,7 +575,7 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{})
 	for _, what := range []string{
-		"fleet", "schedules", "integrations", "conversations",
+		"fleet", "schedules", "integrations", "executor_sessions",
 		"agent_memory", "config", "config_audit", "config_diff",
 	} {
 		if _, err := r.Answer(everyGrant(t), what, nil); err == nil {

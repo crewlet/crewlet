@@ -46,10 +46,6 @@ Never add anything that is not in the original. Never comment on the text or on 
 
 // kindBriefs says, per kind, what the text is and what in it matters most.
 var kindBriefs = map[Kind]string{
-	KindConversation: "The text is the EARLIER part of a conversation an AI agent had: for each " +
-		"turn, what it was asked, which tools it called with what, and what it replied. " +
-		"Keep every delivery — what was posted, sent, created or changed, and where — and " +
-		"every reply the agent sent, so a later turn never repeats one. Keep the turns in order.",
 	KindThread: "The text is the EARLIER messages of a chat thread, oldest first, each " +
 		"prefixed with who wrote it. Keep who said what, in order; keep every question " +
 		"asked and whether it was answered.",

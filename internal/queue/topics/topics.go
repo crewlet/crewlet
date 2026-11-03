@@ -215,9 +215,9 @@ const (
 	SeatSteer = SteerPrefix + "note"
 
 	// HeldPrefix prefixes the subjects a question only a seat's HOLDER can
-	// answer truthfully crosses — a seat's memory and its conversation
-	// ledger, which every node keeps a copy of and only the holder keeps
-	// current (internal/learning/memread), and what a launch of its turns —
+	// answer truthfully crosses — a seat's memory, which every node keeps a
+	// copy of and only the holder keeps current
+	// (internal/learning/memread), and what a launch of its turns —
 	// a relaunch, or a conversation's next turn — would be launched on, which
 	// the holder's own bench of spent plans decides (internal/engine,
 	// relaunchtarget.go).

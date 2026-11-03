@@ -336,8 +336,10 @@ type Result struct {
 	//
 	// A `done` round appends no ledger entry — it ends the turn instead —
 	// so without these two the last round is invisible to everything after
-	// the loop, and the conversation ledger written at turn end recorded a
-	// reply with no account of what produced it.
+	// the loop, and the turn's end on the executor log (the engine's
+	// endingOf) would say what the turn decided with no account of what
+	// landed or what blocked it: the reviewer's word on the work completed,
+	// and the evidence of a blocked round.
 	LastReview *Review
 	LastWork   *Work
 
@@ -387,14 +389,13 @@ type Result struct {
 	//
 	// It exists for the record of how the turn ENDED, kept on the turn's row
 	// of the executor log beside the session the turn kept: the log's end
-	// (internal/executordomain's Ending.Delivered), and
-	// the conversation ledger it replaces, which files the turn's artifact
-	// as the seat's own "You replied". Neither can ask the session: a
-	// transcript in which the seat was about to reply does not say whether
-	// the reply went. On a turn that delivered nothing the ledger once wrote
-	// a reply that never happened into the one record the next turn reads
-	// back — so the failure sealed itself, and a follow-up asking "did you
-	// do it?" was answered against a fiction.
+	// (internal/executordomain's Ending.Delivered), which the conversation's
+	// next turn is told. It cannot ask the session: a transcript in which the
+	// seat was about to reply does not say whether the reply went. On a turn
+	// that delivered nothing, a record of the turn's own artifact as the
+	// seat's reply once wrote a reply that never happened into the one
+	// record the next turn read back — so the failure sealed itself, and a
+	// follow-up asking "did you do it?" was answered against a fiction.
 	Delivered bool
 
 	// WorkedThrough are completion-ledger keys for EARLIER triggers this

@@ -236,22 +236,20 @@ func TestARoutingReadWithNoRecordIsRefusedNamingTheParameter(t *testing.T) {
 	}
 }
 
-// ---- a seat's memory and its conversation ledger ------------------------ //
+// ---- a seat's memory ---------------------------------------------------- //
 
 // stubMemory records what it was asked and answers fixtures: the holder's
 // routing and the pages are memread's, and what is asserted here is only what
 // this surface hands it and hands back.
 type stubMemory struct {
-	memory  memread.Memory
-	threads memread.Threads
-	err     error
+	memory memread.Memory
+	err    error
 
-	seat         memread.Seat
-	conversation string
-	episode      string
-	limit        int
-	skills       learning.SkillOrder
-	seats        []memread.Seat
+	seat    memread.Seat
+	episode string
+	limit   int
+	skills  learning.SkillOrder
+	seats   []memread.Seat
 }
 
 func (s *stubMemory) Memory(_ context.Context, seat memread.Seat, q memread.MemoryQuery) (memread.Memory, error) {
@@ -262,13 +260,6 @@ func (s *stubMemory) Memory(_ context.Context, seat memread.Seat, q memread.Memo
 func (s *stubMemory) Episode(_ context.Context, seat memread.Seat, id string) (memread.EpisodeDetail, error) {
 	s.seat, s.episode = seat, id
 	return memread.EpisodeDetail{Handle: seat.Handle}, s.err
-}
-
-func (s *stubMemory) Threads(_ context.Context, seat memread.Seat, conversation string, limit int) (
-	memread.Threads, error) {
-
-	s.seat, s.conversation, s.limit = seat, conversation, limit
-	return s.threads, s.err
 }
 
 func (s *stubMemory) Overview(_ context.Context, seats []memread.Seat) (memread.Overview, error) {
@@ -314,9 +305,9 @@ func trailSources(t *testing.T, memory *stubMemory) queries.Sources {
 // admin — and by nobody else, whatever apps they hold: a lead steers, pauses
 // and answers for their agents and could do none of it well blind, while
 // somebody who merely shares the company does not read every prompt an agent
-// was given. Its rows, over both halves of the trail:
+// was given. Its rows, over a seat's memory (its sessions, the other half,
+// are held to the same rows by TestASeatsSessionsAreItsTrail):
 //
-//   - no handle is the caller's own seat, as on every personal question;
 //   - an admin with no relation to the seat reads it;
 //   - a lead holding NO permission reads the seat they lead, since a seat's
 //     trail belongs to no app;
@@ -328,16 +319,8 @@ func trailSources(t *testing.T, memory *stubMemory) queries.Sources {
 // refused rows do.
 func TestALeadReadsTheirSeatsTrailAndNoOneElses(t *testing.T) {
 	t.Parallel()
-	own := &stubMemory{}
-	if _, err := askAsSeat(t, trailSources(t, own), "ana", "conversations", nil); err != nil {
-		t.Fatalf("a seat's own threads: %v", err)
-	}
-	if own.seat.Handle != "ana" {
-		t.Errorf("no handle asked the holder about %q, want the caller's own seat",
-			own.seat.Handle)
-	}
 	for _, question := range []struct{ what, param string }{
-		{"conversations", "handle"}, {"agent_memory", "id"},
+		{"agent_memory", "id"},
 	} {
 		admin := &stubMemory{}
 		if _, err := askHolding(t, trailSources(t, admin), "pat", question.what,
@@ -395,35 +378,19 @@ func TestALeadReadsTheirSeatsTrailAndNoOneElses(t *testing.T) {
 	}
 }
 
-// THE NAMED THREAD AND THE PAGE REACH THE HOLDER AS ASKED. The clamp is the
-// reader's (memread.ThreadPage), applied where the answer is built — on the
-// node that holds the seat — so this surface passes the page through rather
-// than clamping it twice.
-func TestTheNamedThreadAndThePageReachTheHolder(t *testing.T) {
-	t.Parallel()
-	memory := &stubMemory{}
-	s := trailSources(t, memory)
-	if _, err := askAsSeat(t, s, "ana", "conversations",
-		map[string]any{"conversation": " slack:C1 ", "limit": 7}); err != nil {
-		t.Fatalf("conversations: %v", err)
-	}
-	if memory.conversation != "slack:C1" || memory.limit != 7 {
-		t.Errorf("asked for %q at %d, want slack:C1 at 7", memory.conversation, memory.limit)
-	}
-}
-
 // A HOLDER THAT COULD NOT ANSWER IS UNAVAILABLE, which a client retries —
 // never an empty memory and never a failure it reports as a bug. Its lease
 // unreadable, its node silent, or the seat still arriving on it: each clears
 // by waiting.
+//
+// Mutation: map memread.ErrUnavailable to a plain error in agent_memory and
+// this goes red.
 func TestAMemoryReadTheHolderCouldNotAnswerIsUnavailable(t *testing.T) {
 	t.Parallel()
 	s := trailSources(t, &stubMemory{err: fmt.Errorf("%w: node-b holds ana and did not answer",
 		memread.ErrUnavailable)})
-	for _, what := range []string{"agent_memory", "conversations"} {
-		_, err := askAsSeat(t, s, "ana", what, map[string]any{"id": "ana"})
-		if !errors.Is(err, queries.ErrUnavailable) {
-			t.Errorf("%s answered %v, want ErrUnavailable", what, err)
-		}
+	_, err := askAsSeat(t, s, "ana", "agent_memory", map[string]any{"id": "ana"})
+	if !errors.Is(err, queries.ErrUnavailable) {
+		t.Errorf("agent_memory answered %v, want ErrUnavailable", err)
 	}
 }

@@ -196,8 +196,7 @@ func (s auxiliarySeam) seatOf(role *org.Role, stage types.AuxStage) auxspend.Sea
 //
 // THE GATE IS ASKED BEFORE THE CALL, and is the caller's: for the reflection
 // stage, [Engine.reflectionRoom], asked by the pass through
-// [Engine.learningBudget] and by a conversation entry's rewrites through
-// [Dispatcher.ReflectionRoom]; for a person's question, the answer's own; and
+// [Engine.learningBudget]; for a person's question, the answer's own; and
 // for a call a TURN makes, the turn's own meter ([auxspend.Use.Budget]), asked here because
 // this is the one frame every in-turn call passes. That meter holds every
 // window the turn has seen full, its own auxiliary calls' included, so a call

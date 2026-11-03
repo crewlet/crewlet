@@ -330,10 +330,9 @@ func TestAHandleNoSeatHoldsIsStillRead(t *testing.T) {
 // whether the caller may read a person record.
 //
 // They are the same class today, so the answers agree; what a shared verb
-// would cost is the day they stop agreeing. `conversations` is the case that
-// proved it: it asked the person-record verb for a seat's trail, and a reader
-// of every seat's trail was refused one seat's threads — see
-// TestALeadReadsTheirSeatsTrailAndNoOneElses.
+// would cost is the day they stop agreeing. A seat's trail is the case that
+// proved it: read under the person-record verb, a reader of every seat's trail
+// was refused one seat's — see TestALeadReadsTheirSeatsTrailAndNoOneElses.
 func TestEachPersonalQuestionAsksItsOwnVerb(t *testing.T) {
 	t.Parallel()
 	for what, verb := range map[string]authz.Action{
@@ -576,19 +575,22 @@ func TestALoginThatNamesNobodyIsNotARosterForAQuestion(t *testing.T) {
 	}
 }
 
-// A SEAT'S TRAIL IS STILL THE SEAT'S. The threads a seat said things in are
+// A SEAT'S TRAIL IS STILL THE SEAT'S. The sessions a seat's turns kept are
 // the seat's, not a person record, so a caller bound to no seat who names none
 // is refused for want of a handle — and the refusal names the remedy where it
 // lives: a row in the identity directory, bound with `crewlet iam bind` to a
 // HUMAN seat, the one kind the directory binds anybody to, because the org
 // chart it used to point at has no field that binds a credential any more.
+//
+// Mutation: have [Sources.trailSeat] refuse a seatless caller's absent handle
+// as unauthorized, and the bad_params check goes red.
 func TestAnUnbindableCallerHasNoSeatTrailOfItsOwn(t *testing.T) {
 	t.Parallel()
 	s := viewerSources(t, &stubWork{})
-	s.Memory = &stubMemory{}
+	s.ExecutorSessions = &stubSessions{}
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	_, err := r.Answer(everyGrant(t), "conversations", nil)
+	_, err := r.Answer(everyGrant(t), "executor_sessions", nil)
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("a seatless caller naming no seat = %v, want bad_params", err)
 	}

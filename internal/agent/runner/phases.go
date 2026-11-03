@@ -734,12 +734,11 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		// AND NO SUMMARY. The executor gave no account of itself, and the
 		// engine must not write one for it: Summary is the INTENT line —
 		// rendered whole, as "set out to", to every later round and to the
-		// reviewer, and kept whole in the conversation ledger — where its
-		// prose is already carried as Text, tail-elided at render and
-		// sized for what a transcript is. Copying the transcript into the
-		// intent line put a whole run's output into the one slot nothing
-		// bounds, twice per round, and under a heading that called it the
-		// executor's own account.
+		// reviewer — where its prose is already carried as Text,
+		// tail-elided at render and sized for what a transcript is.
+		// Copying the transcript into the intent line put a whole run's
+		// output into the one slot nothing bounds, twice per round, and
+		// under a heading that called it the executor's own account.
 		log.WarnContext(phaseCtx, "work_never_submitted", "round", round)
 		payload = workPayload{Outcome: string(turn.OutcomeIncomplete)}
 	}

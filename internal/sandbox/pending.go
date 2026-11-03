@@ -941,9 +941,10 @@ type PendingRun struct {
 	PartitionKey string `json:"partition_key,omitempty"`
 
 	// ConversationKey is the durable conversation this run belongs
-	// to: what the resumed turn's ledger entry is filed under, and — since
-	// a person answers on the conversation rather than into the batch —
-	// what admits an arriving delivery as its answer.
+	// to: what the turn's rows on the executor log are keyed by — its
+	// captures and its end, which its conversation's next turn reads — and,
+	// since a person answers on the conversation rather than into the
+	// batch, what admits an arriving delivery as its answer.
 	//
 	// The two were one field, and its doc said so — "where to report back
 	// AND what matches a person's answer". They are different questions

@@ -90,11 +90,11 @@ type DutyFunc func(ctx context.Context) (bool, error)
 // It was `PerNode bool`, and a bool has a zero value that is a valid SETTING
 // rather than an absence — so a job that never mentioned it was silently a
 // fleet job, which is the wrong answer for every table a node owns its own
-// copy of. Six of the seven local sweeps in [StoreJobs], [LearningJobs],
-// [CounterpartyJobs], [ScheduleJobs] and [LedgerJobs] took that default by
-// omission: `crewlet_events`, `chat_thread_follows`, `agent_diary`,
-// `counterparty_profiles`, `scheduled_runs` and `conversation_sessions` were
-// swept only on the node holding the duty and grew for ever on every peer.
+// copy of. The local sweeps in [StoreJobs], [LearningJobs],
+// [CounterpartyJobs] and [ScheduleJobs] took that default by omission:
+// `crewlet_events`, `chat_thread_follows`, `agent_diary`,
+// `counterparty_profiles` and `scheduled_runs` were swept only on the node
+// holding the duty and grew for ever on every peer.
 // The audit log was among them, so the event retention an operator configured
 // applied on one node of the fleet.
 //
@@ -190,20 +190,19 @@ type Job struct {
 // Horizon answers how far back a job keeps rows. The worker asks it at EVERY
 // sweep, never once.
 //
-// A FUNCTION RATHER THAN A DURATION, because two of the horizons are the
-// COMPANY's (the conversation ledger's
-// `turn_engine.conversation_session.retention_days` and the inbox's
-// `tracker.worklet.inbox_retention_days`), and every apply replaces the
-// company under a running engine. Read once when the sweep was built, they held it to
-// the revision the node booted on: a revision shortening either was honoured
-// by everything else at once and by the sweep only after a restart, so rows the
-// company had asked to forget were kept for as long as the node stayed up, and
-// a lengthened horizon deleted rows the company had just asked to keep. The
-// other horizons are this build's own and never move; they take [Fixed].
+// A FUNCTION RATHER THAN A DURATION, because a horizon can be the COMPANY's
+// (the inbox's `tracker.worklet.inbox_retention_days`), and every apply
+// replaces the company under a running engine. Read once when the sweep was
+// built, it held the sweep to the revision the node booted on: a revision
+// shortening it was honoured by everything else at once and by the sweep only
+// after a restart, so rows the company had asked to forget were kept for as
+// long as the node stayed up, and a lengthened horizon deleted rows the
+// company had just asked to keep. The other horizons are this build's own and
+// never move; they take [Fixed].
 //
 // An answer of zero or less is REFUSED for that sweep rather than used: the
 // cutoff it makes is now, which deletes every row the table holds. A horizon
-// with a floor applies it inside the function — see [LedgerJobs].
+// with a floor applies it inside the function.
 type Horizon func() time.Duration
 
 // Fixed is a horizon that never moves: a retention this build decides.

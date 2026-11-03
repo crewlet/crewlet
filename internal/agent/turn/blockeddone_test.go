@@ -52,8 +52,9 @@ func TestATurnBlockedOnSomebodyAlreadyAskedEndsDone(t *testing.T) {
 		t.Errorf("rounds = %d, want 1: the turn looped rather than ending", res.Rounds)
 	}
 	// The executor's account has to survive the loop, because two readers
-	// downstream have nothing else: the conversation entry the seat's next
-	// turn opens on, and the A2A answer on a turn that produced no prose.
+	// downstream have nothing else: the turn's end on the executor log, which
+	// the conversation's next turn is told, and the A2A answer on a turn
+	// that produced no prose.
 	if res.LastWork == nil {
 		t.Fatal("the executor's round did not survive the turn")
 	}

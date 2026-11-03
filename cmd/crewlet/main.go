@@ -2356,11 +2356,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// The object collector's last report, read from the store
 			// every node reads it from, for the fleet view's card.
 			Objects: e.Backends().Fleet,
-			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
-			// the node HOLDING the seat. The ENGINE's reader, because
-			// the answerer it registered on every node is the other
-			// half of the same protocol, and a node serving no API may
-			// be the one holding the seat.
+			// A SEAT'S MEMORY, answered by the node HOLDING the seat.
+			// The ENGINE's reader, because the answerer it registered on
+			// every node is the other half of the same protocol, and a
+			// node serving no API may be the one holding the seat.
 			Memory: memoryReads(e),
 			// The fleet's agent-to-agent authorization record. The
 			// FLEET's, not this node's: a channel is opened by whichever
@@ -3598,7 +3597,7 @@ func retentionSource(ctx context.Context, e *engine.Engine) func(context.Context
 
 // memoryReads is the engine's memory reader as the read surface's seam, or nil
 // when the engine has none — a typed nil in the interface would register
-// `agent_memory` and `conversations` over a reader that cannot answer.
+// `agent_memory` over a reader that cannot answer.
 func memoryReads(e *engine.Engine) queries.SeatMemory {
 	if r := e.MemoryReads(); r != nil {
 		return r

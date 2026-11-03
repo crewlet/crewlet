@@ -432,7 +432,7 @@ func TestAVerifiedDeliveryWakesTheSeat(t *testing.T) {
 		t.Fatalf("the broker would partition this on %q", got)
 	}
 	if got := notify.ConversationIdentityOf(envelope); got != "stub:C1:p1" {
-		t.Fatalf("the ledger would key this turn on %q", got)
+		t.Fatalf("the turn's conversation would be keyed %q", got)
 	}
 	// ONCE, which the read above cannot say: it returned as the first wake
 	// arrived.

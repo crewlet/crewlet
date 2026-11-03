@@ -134,22 +134,25 @@ func TestTheAskIsInCharactersOfTheTextsOwnWeight(t *testing.T) {
 	}
 }
 
-// A FIRST-PASS PIECE IS NOT HELD TO ITS SHARE. A conversation of 145 KiB held
-// to 6000 bytes is read in three pieces, each asked for its share; a model that
+// A FIRST-PASS PIECE IS NOT HELD TO ITS SHARE. A thread of 145 KiB held to
+// 6000 bytes is read in three pieces, each asked for its share; a model that
 // answers every piece somewhat over that share used to fail the whole
-// compaction, cancelling its siblings, which left a live seat's older turns
-// uncondensed on every turn. The pieces are joined and fitted again, so a
-// piece over its share is progress, and the result fits.
-func TestALargeConversationFitsWhenEveryPieceOvershootsItsShare(t *testing.T) {
+// compaction, cancelling its siblings, which left a long thread's middle
+// uncondensed on every turn woken in it. The pieces are joined and fitted
+// again, so a piece over its share is progress, and the result fits.
+//
+// Mutation: hold each first-pass piece to its share again, failing the
+// compaction on the first that overshoots, and this goes red.
+func TestALargeThreadFitsWhenEveryPieceOvershootsItsShare(t *testing.T) {
 	t.Parallel()
 	m := &overshooting{ratio: steady(1.5), r: 'a'}
 	c := compact.New(models{provider: m}, compact.NewCache())
-	text := strings.Repeat("turn: the agent posted the release notes to #eng and opened PR 42.\n", 2200)
+	text := strings.Repeat("ana: the agent posted the release notes to #eng and opened PR 42.\n", 2200)
 	if len(text) <= 2*compact.ChunkBytes {
 		t.Fatalf("the input must need three pieces: %d bytes", len(text))
 	}
 	got, err := c.Fit(context.Background(), compact.Request{
-		Seat: seat(), Kind: compact.KindConversation, Text: text, Budget: 6000,
+		Seat: seat(), Kind: compact.KindThread, Text: text, Budget: 6000,
 	})
 	if err != nil {
 		t.Fatal(err)

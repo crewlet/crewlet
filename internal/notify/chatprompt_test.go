@@ -439,9 +439,9 @@ func TestADirectConversationIsOneIdentityHoweverItIsThreaded(t *testing.T) {
 
 // THE PARTITION REFINES THE IDENTITY, on every chat shape: a partition key is
 // the identity itself or the identity plus a finer anchor. That is what makes
-// one ledger entry per turn well-defined — a turn is a partition, its entry is
-// written once, and constituents disagreeing about the identity would make the
-// ledger key depend on which event sorted first.
+// a turn's conversation well-defined — a turn is a partition, its rows on the
+// executor log are keyed once, and constituents disagreeing about the identity
+// would make that key depend on which event sorted first.
 //
 // The DM burst is the case that decides it: its three constituents partition
 // on the bare channel while carrying three different ts values, so an identity
