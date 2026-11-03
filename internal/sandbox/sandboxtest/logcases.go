@@ -237,7 +237,13 @@ func testAnApprovedCallReachesItsRoundsLogPastAnAppendThatFailed(t *testing.T, r
 	}
 	turnLog := func(what string) sandbox.BridgeLog {
 		t.Helper()
-		log, err := s.TurnLog(ctx, mustGet(t, s, turn))
+		// The row is read here rather than through mustGet, which takes the
+		// test's own context: one reader reads a row and its log under one.
+		row, found, err := s.Get(ctx, turn)
+		if err != nil || !found {
+			t.Fatalf("the row of %s %s: found %v, %v", turn, what, found, err)
+		}
+		log, err := s.TurnLog(ctx, row)
 		if err != nil {
 			t.Fatalf("TurnLog %s: %v", what, err)
 		}
