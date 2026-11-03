@@ -946,6 +946,8 @@ func LaneName(lane Lane) string {
 		return "Slack"
 	case LaneMattermost:
 		return "Mattermost"
+	case LaneCloudflare:
+		return "Cloudflare"
 	default:
 		return string(lane)
 	}

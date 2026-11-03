@@ -364,6 +364,15 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 				"route_to":   in.Datadog.RouteTo,
 			})
 	}
+	if in.Cloudflare != nil {
+		// PROVISIONING ALONE, like the organization below: nothing arrives
+		// from Cloudflare in this build, so there is no delivery secret.
+		detail := map[string]any{}
+		if p := in.Cloudflare.Provisioning; p != nil {
+			detail["account_id"], detail["zones"] = p.AccountID, p.Zones
+		}
+		add("cloudflare", in.Cloudflare.Enabled, nil, detail)
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product. Jira and Confluence are
 		// sites this engine reads as an account; this is where the account

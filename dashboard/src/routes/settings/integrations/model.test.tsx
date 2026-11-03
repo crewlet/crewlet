@@ -19,7 +19,7 @@ import type {
 } from "~/contract/integrations.ts";
 import type { SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import { CATALOG, FindingSubjects } from "./catalogue.tsx";
-import { deriveTool, type ToolInputs } from "./model.ts";
+import { STORIES, deriveTool, type ToolInputs } from "./model.ts";
 import { IssueRow } from "./parts.tsx";
 
 afterEach(cleanup);
@@ -63,6 +63,19 @@ function inputs(over: Partial<ToolInputs>): ToolInputs {
     ...over,
   };
 }
+
+// EVERY APP SAYS WHAT CONNECTING IT GIVES. A card with no story opens on an
+// empty "Your agents can" and an empty "Each agent", which reads as an app
+// that does nothing. Mutation: drop Cloudflare's story and this goes red.
+test("every app in the catalogue says what agents do there and how each gets in", () => {
+  for (const { key } of CATALOG) {
+    const story = STORIES[key];
+    expect(story, key).toBeDefined();
+    expect(story!.does.length, key).toBeGreaterThan(0);
+    expect(story!.identity, key).not.toBe("");
+  }
+  expect(deriveTool(entry("cloudflare"), inputs({})).story).toBe(STORIES.cloudflare);
+});
 
 // A WORKING TOOL RAISES NOTHING. Two surfaces at ready, the roll-up connected:
 // a page that found something to say here would be reporting the weather.

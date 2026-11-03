@@ -1573,18 +1573,20 @@ const (
 	// 5437.3 KiB (+0.9 KiB, 970 bytes): the Executors chunk +0.7 KiB, the
 	// inbox chunk +0.2 KiB, and 44 bytes of the home, live and entry scripts.
 	// 5438 KiB.
+	// The Cloudflare integration (its catalogue entry, story and Agents tab
+	// lane words, and the org builder reading a seat's vendor accounts from
+	// its access blocks) took it from 5437.3 KiB to 5438.6 KiB (+1.3 KiB,
+	// 1300 bytes): the integrations model chunk +1.0 KiB, the catalogue chunk
+	// +0.2 KiB and the settings chunk 72 bytes. 5439 KiB.
 	// A session's row saying whether, and where, a relaunch would continue it
 	// (the sentence under its account for a session continued in any box,
-	// only in the box its run parked in, not at all, or not decidable now)
-	// took it from 5437.3 KiB to 5438.0 KiB (+0.7 KiB, 700 bytes), all of it
-	// the agents chunk the view loads in (+255 bytes gzipped): 3 bytes past
-	// 5438 KiB. The initial load did not grow. 5439 KiB.
-	// That sentence keyed by the engine's set of places a relaunch continues
-	// a session in (SessionContinuesIn), so a place the engine adds is a
-	// typecheck failure in the view, took it from 5438.0 KiB to 5438.1 KiB
-	// (+60 bytes), all of it the agents chunk (+33 bytes gzipped). The
-	// initial load did not grow. 5439 KiB.
-	treeBudget = 5<<20 + 319<<10
+	// only in the box its run parked in, not at all, or not decidable now,
+	// keyed by the engine's set of places a relaunch continues a session in,
+	// SessionContinuesIn, so a place the engine adds is a typecheck failure in
+	// the view) took it from 5438.6 KiB to 5439.3 KiB (+0.7 KiB, 760 bytes),
+	// all of it the agents chunk the view loads in (+281 bytes gzipped): 339
+	// bytes past 5439 KiB. The initial load did not grow. 5440 KiB.
+	treeBudget = 5<<20 + 320<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
