@@ -554,8 +554,8 @@ export function expoRetiredAnswer(labels: string[] = ["9f3c1a…"]): AccessAnswe
 /** What a Scaleway seat's box holds: the person's two lines, then the engine's settings. */
 const scalewayBox = (handle: string): AccessBox => ({
   env: [
-    { name: "SCW_ACCESS_KEY", value: `\${SCALEWAY_ACCESS_KEY_${handle}}`, by: "you" },
     { name: "SCW_SECRET_KEY", value: `\${SCALEWAY_SECRET_KEY_${handle}}`, by: "you" },
+    { name: "SCW_ACCESS_KEY", value: `\${SCALEWAY_ACCESS_KEY_${handle}}`, by: "you" },
     {
       name: "SCW_DEFAULT_ORGANIZATION_ID",
       value: "33333333-3333-4333-8333-333333333333",
