@@ -3,17 +3,21 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/a2a"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -144,6 +148,89 @@ func TestAQuietChannelItCannotJudgeIsAnError(t *testing.T) {
 				t.Fatalf("err = %v, want %v", err, tc.cause)
 			}
 		})
+	}
+}
+
+// AN ASK BEHIND A PARK IS OWED ON WHICHEVER NODE THE SWEEP RUNS. The idle sweep
+// runs once across the fleet, under the maintenance duty, seldom on the node
+// holding the seat it judges. The Lead's holder parked its inbox below the
+// floor its first launch needs to continue its conversation's session, in a
+// window with room for the static floor, which a recount of the shared counters
+// finds: a duty node judging by its own parks read the ask behind that park as
+// not owed, and closed its channel under the answer still coming. It asks the
+// holder instead, and the ask is owed; a holder that does not say is no answer,
+// and the channel is spared for the tick. And a seat whose models are all
+// limited, which no counter records, holds its asks as surely: its provider
+// park is a park too.
+//
+// Mutation: judge a seat by the judging node's own parks, read a silent holder
+// as a seat in no park, or count only the budget's parks, and a case goes red.
+func TestAnAskBehindAParkIsOwedOnWhicheverNodeTheSweepRuns(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	holder := newFlooredParkRig(t, "100", "30")
+	holder.mu.Lock()
+	holder.turnFn = func() (turn.Result, error) {
+		// FIFTY LEFT: room for the static floor of thirty, and none for a
+		// launch whose session's last request carried fifty beside a brief
+		// of ten.
+		holder.spend(t, 50)
+		return turn.Result{}, executorHeadroom(ctx, staticRemaining{left: 50},
+			launchFloor{static: 30}.continuing(50, 10))
+	}
+	holder.mu.Unlock()
+	holder.deliver(t)
+	if !slices.Contains(holder.holds(), pauseReasonBudget) {
+		t.Fatalf("setup: the holder did not park the Lead: holds %v", holder.holds())
+	}
+	// THE DUTY NODE: the same company, counters and clock, and no park.
+	duty := newFlooredParkRig(t, "100", "30")
+	duty.e.backends.Fleet = holder.fleet
+	duty.e.adoptSeatPauses(ctx, nil)
+	q := memory.New()
+	if err := q.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(ctx)) })
+	answerer := heldParks{owner: "node-a:1", local: holder.e.inboxParkedHere}
+	stop, err := q.Serve(ctx, topics.HeldPark, func(_ context.Context, raw []byte) ([]byte, error) {
+		return answerer.answer(raw)
+	})
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	t.Cleanup(func() { _ = stop(context.WithoutCancel(ctx)) })
+	heldBy := func(owner string, budget time.Duration) colleagueOwed {
+		return colleagueOwed{engine: duty.e, runs: fakeSeatRuns{}, parks: heldParks{owner: "node-b:1",
+			queue: q, leases: leaseTable{lease: &coord.Lease{Owner: owner, ExpiresAt: time.Now().Add(time.Minute)}},
+			local: duty.e.inboxParkedHere, budget: budget, now: time.Now}}
+	}
+
+	alone := colleagueOwed{engine: duty.e, runs: fakeSeatRuns{}}
+	if owed, err := alone.AnswerOwed(ctx, quietAsk); err != nil || owed {
+		t.Fatalf("setup: the duty node judging by its own parks reads the ask owed = %v (%v), so the case "+
+			"shows nothing", owed, err)
+	}
+	if owed, err := heldBy("node-a:1", 2*time.Second).AnswerOwed(ctx, quietAsk); err != nil || !owed {
+		t.Errorf("the duty node asking the holder reads the ask behind its park owed = %v (%v), want owed",
+			owed, err)
+	}
+	if owed, err := heldBy("node-c:1", 200*time.Millisecond).AnswerOwed(ctx, quietAsk); err == nil {
+		t.Errorf("a holder that did not say read as owed = %v with no error, want the channel spared", owed)
+	}
+
+	// A SEAT WHOSE MODELS ARE ALL LIMITED, parked by the node judging it.
+	model := &limitedModel{reset: parkedAt.Add(14 * time.Minute)}
+	limited := newLimitedRig(t, chain.Member{Key: "default", Provider: model})
+	model.now = limited.clock
+	limited.send(t)
+	if !slices.Contains(limited.holds(), pauseReasonProvider) {
+		t.Fatalf("setup: the Lead was not parked on its models' limit: holds %v", limited.holds())
+	}
+	limited.e.adoptSeatPauses(ctx, nil)
+	behindLimit := colleagueOwed{engine: limited.e, runs: fakeSeatRuns{}}
+	if owed, err := behindLimit.AnswerOwed(ctx, quietAsk); err != nil || !owed {
+		t.Errorf("an ask behind a park on the seat's models' limit reads owed = %v (%v), want owed", owed, err)
 	}
 }
 

@@ -529,10 +529,12 @@ func TestALaunchRefusedBelowTheFloorParksTheSeat(t *testing.T) {
 // between the two, the delivery is parked — never NAKed into the same refusal —
 // on the floor the launch was refused below, where a window with room for the
 // static floor alone is not a window with room. And a colleague's ask waiting
-// behind the park is still owed: the park is judged on its own floor.
+// behind the park is still owed, though a recount of the counters on the
+// static floor finds room: the park holds the inbox, and the node holding it
+// says so (on another node, [TestAnAskBehindAParkIsOwedOnWhicheverNodeTheSweepRuns]).
 //
-// Mutation: park on the static floor, or judge an ask behind the park on it,
-// and a check goes red.
+// Mutation: park on the static floor, or judge an ask behind the park by the
+// static recount alone, and a check goes red.
 func TestAFirstLaunchHeldBelowItsContinuedFloorParksTheSeatOnThatFloor(t *testing.T) {
 	t.Parallel()
 	r := newFlooredParkRig(t, "100", "30")
@@ -554,10 +556,11 @@ func TestAFirstLaunchHeldBelowItsContinuedFloorParksTheSeatOnThatFloor(t *testin
 		t.Fatalf("a first launch refused below its continued floor: runs %d, handed %d, holds %v; want the "+
 			"seat parked", r.runs(), handed, r.holds())
 	}
-	parked, err := r.e.budgetParked(t.Context(), r.e.Company(), "lead")
-	if err != nil || !parked {
-		t.Fatalf("an ask behind the park reads the seat parked = %v (%v), want parked on the launch's floor",
-			parked, err)
+	r.e.adoptSeatPauses(t.Context(), nil)
+	owed, err := colleagueOwed{engine: r.e, runs: fakeSeatRuns{}}.AnswerOwed(t.Context(), quietAsk)
+	if err != nil || !owed {
+		t.Fatalf("an ask behind the park reads owed = %v (%v), want owed while the park holds the inbox",
+			owed, err)
 	}
 }
 

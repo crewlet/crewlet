@@ -1024,6 +1024,10 @@ type Engine struct {
 	// of a seat it holds would be launched on. See relaunchtarget.go.
 	stopRelaunchServe queue.Unsubscribe
 
+	// stopHeldParkServe withdraws this node as an answerer of whether one of
+	// its parks holds the inbox of a seat it holds. See parkheld.go.
+	stopHeldParkServe queue.Unsubscribe
+
 	// boxReads asks a box's host to read it back and answers for the boxes
 	// on this node's host; stopBoxReadServe and stopNudgeListen withdraw this
 	// node as an answerer of those reads and a listener for the nudges its
@@ -2154,6 +2158,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armRelaunchTargets(ctx); err != nil {
 		return nil, err
 	}
+	// AND WHETHER ONE OF ITS PARKS HOLDS THE INBOX OF A SEAT IT HOLDS, which
+	// only its own process knows — see parkheld.go.
+	if err = e.armHeldParks(ctx); err != nil {
+		return nil, err
+	}
 	// AND THE BOXES ON ITS HOST, which no other node can reach — see
 	// sandboxhost.go.
 	if err = e.armSandboxHost(ctx); err != nil {
@@ -2958,6 +2967,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And what a relaunch of a seat it holds would be launched on, which it
 	// is about to stop holding.
 	e.stopRelaunchTargets(ctx)
+	// And whether one of its parks holds a seat's inbox, which it is about
+	// to stop holding.
+	e.stopHeldParks(ctx)
 	e.stopSandboxHost(ctx)
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.

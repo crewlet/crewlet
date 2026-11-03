@@ -172,14 +172,16 @@ func (e *Engine) relaunchTargets() relaunchTargets {
 	return r
 }
 
-// relaunchAsker scatters one question — the half of the broker a reader needs.
-type relaunchAsker interface {
+// holderAsker scatters one question for the node holding a seat — the half of
+// the broker a reader needs: of what a relaunch is launched on, here, and of
+// whether a park holds the seat's inbox (parkheld.go).
+type holderAsker interface {
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
 }
 
-// relaunchLeases reads which incarnation holds a seat — the half of the
-// coordination store a reader needs.
-type relaunchLeases interface {
+// holderLeases reads which incarnation holds a seat — the half of the
+// coordination store a reader needs, for the same two questions.
+type holderLeases interface {
 	Get(ctx context.Context, resource string) (*coord.Lease, error)
 }
 
@@ -189,8 +191,8 @@ type relaunchLeases interface {
 // leases nil, a node that answers every question itself.
 type relaunchTargets struct {
 	owner  string
-	queue  relaunchAsker
-	leases relaunchLeases
+	queue  holderAsker
+	leases holderLeases
 	local  func(handle, turn string) sandbox.RelaunchTarget
 	budget time.Duration
 	now    func() time.Time

@@ -90,20 +90,14 @@ var budgetParkSpec = parkSpec{
 }
 
 // budgetParks is every seat inbox this node holds for want of budget, by the
-// seat's id, each with what it was decided under.
-type budgetParks = seatParks[budgetHeld]
-
-// budgetHeld is what one budget park was decided under: the ceilings and the
-// clock the seat's spend is judged by (basis), which a change of the company
-// releases the park on, and the floor its delivery's launch needs (floor) —
-// the static floor, or the larger one a launch that continues its
-// conversation's session was refused below — which the park waits for room
-// for, and which an ask waiting behind the park is judged by
-// ([Engine.budgetParked]).
-type budgetHeld struct {
-	basis budgetBasis
-	floor launchFloor
-}
+// seat's id, each with the ceilings it was decided under, which a change of
+// the company releases it on. The floor it waits for room for — the static
+// floor, or the larger one a launch that continues its conversation's session
+// was refused below — is the refusal's, read again on the delivery the park
+// hands back, and no reader asks it of the park: an ask waiting behind the park
+// is owed for as long as the park holds, which its holder answers
+// (parkheld.go).
+type budgetParks = seatParks[budgetBasis]
 
 // budgetPark is the dispatcher's budget stage: it parks handle's seat when one
 // of its capped windows is refusing, or leaves less room than the delivery's
@@ -145,8 +139,8 @@ func (e *Engine) budgetPark(ctx context.Context, handle string, refused error) (
 	// THE RACE WITH THE RELEASE is closed by ordering, as the no-model
 	// pause closes its own: the hold is taken and recorded under the lock
 	// ([seatParks.take]), and the basis is read again after that.
-	if err := e.budgetParks.take(ctx, e, budgetParkSpec, seat, handle, budgetHeld{basis: m.basis, floor: floor},
-		r.Window.End, "the window turned over"); err != nil {
+	if err := e.budgetParks.take(ctx, e, budgetParkSpec, seat, handle, m.basis, r.Window.End,
+		"the window turned over"); err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its budget: %w", handle, err)
 	}
 	reason := refusingReason(r)
@@ -298,8 +292,8 @@ func (e *Engine) releaseBudgetPark(ctx context.Context, seat uuid.UUID, why stri
 // cost of one delivery, which is cheaper than deciding here what only the
 // counters know.
 func (e *Engine) reconcileBudgetParks(ctx context.Context, next *Company) {
-	for _, seat := range e.budgetParks.changed(func(seat uuid.UUID, held budgetHeld) bool {
-		return budgetBasisOf(next, seat).equal(held.basis)
+	for _, seat := range e.budgetParks.changed(func(seat uuid.UUID, basis budgetBasis) bool {
+		return budgetBasisOf(next, seat).equal(basis)
 	}) {
 		e.releaseBudgetPark(ctx, seat, "a change of the company moved the ceilings it parked on")
 	}

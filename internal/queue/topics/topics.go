@@ -217,10 +217,11 @@ const (
 	// HeldPrefix prefixes the subjects a question only a seat's HOLDER can
 	// answer truthfully crosses — a seat's memory, which every node keeps a
 	// copy of and only the holder keeps current
-	// (internal/learning/memread), and what a launch of its turns —
-	// a relaunch, or a conversation's next turn — would be launched on, which
+	// (internal/learning/memread); what a launch of its turns — a
+	// relaunch, or a conversation's next turn — would be launched on, which
 	// the holder's own bench of spent plans decides (internal/engine,
-	// relaunchtarget.go).
+	// relaunchtarget.go); and whether a park holds its inbox, which lives in
+	// the holder's process alone (internal/engine, parkheld.go).
 	//
 	// NOT EVENTS, for SearchPrefix's reason: a read is the ephemeral
 	// request and reply of [queue.EventQueue.Ask]. And NOT under
@@ -235,6 +236,12 @@ const (
 	// launched on now. Every node serves it and only the incarnation the
 	// seat's lease names answers.
 	HeldRelaunch = HeldPrefix + "relaunch"
+	// HeldPark is where the idle sweep asks whether one of the holder's
+	// parks holds a seat's inbox — its budget's on whatever floor, or its
+	// models' limit — before it closes a channel whose ask may wait there.
+	// Every node serves it and only the incarnation the seat's lease names
+	// answers.
+	HeldPark = HeldPrefix + "park"
 
 	// RelayPrefix prefixes the subjects a data node RELAYS what its own
 	// appliers announced on, to a peer whose own copy is out of service
