@@ -486,10 +486,10 @@ func TestAPartitionKeyAlwaysRefinesTheConversationIdentity(t *testing.T) {
 
 // ONE ANCHOR, THREE READERS. The working indicator raises its spinner on
 // [notify.ConversationOf]'s channel+anchor, Build tells the agent to reply
-// under that same ts, and the ledger keys on the identity — and nothing
-// compares the three derivations. Where they disagree, the spinner a person
-// watches, the thread the reply lands in and the history the seat reads name
-// different threads.
+// under that same ts, and the executor log keys the turn on the identity — and
+// nothing compares the three derivations. Where they disagree, the spinner a
+// person watches, the thread the reply lands in and the conversation the seat's
+// next turn continues name different threads.
 func TestTheChatIdentityIsTheAnchorTheIndicatorAndTheReplyUse(t *testing.T) {
 	for _, meta := range []map[string]string{
 		{"channel": "C1", "channel_type": "O", "ts": "p1", "transport": "chat"},
@@ -501,7 +501,8 @@ func TestTheChatIdentityIsTheAnchorTheIndicatorAndTheReplyUse(t *testing.T) {
 		}
 		if got, want := chatPrompt.ConversationIdentity(meta, ""),
 			conv.Channel+":"+conv.Thread; got != want {
-			t.Errorf("%v: the ledger keys on %q and the indicator raises on %q", meta, got, want)
+			t.Errorf("%v: the executor log keys the turn on %q and the indicator raises on %q", meta,
+				got, want)
 		}
 	}
 }

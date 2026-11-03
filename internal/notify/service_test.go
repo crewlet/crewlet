@@ -330,7 +330,7 @@ func TestTheWakeEnvelopeCarriesBothKeys(t *testing.T) {
 	}
 	if _, present := woken[0].Payload[notify.ConversationField]; !present {
 		t.Error("the identity is not on the envelope: the wake names no " +
-			"conversation for the ledger to file it under")
+			"conversation for the turn's rows on the executor log to be keyed under")
 	}
 }
 

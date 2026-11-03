@@ -66,8 +66,9 @@ func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 // answers on one item promising two different surfaces, merged, would lose one
 // of the promises. The partition key cuts the conversation by the surface owed
 // while the conversation identity stays the task's (`task:<id>`, never its
-// key: see [worklet.Prompt.ConversationIdentity]), so the ledger still files
-// every wake about the task in one thread.
+// key: see [worklet.Prompt.ConversationIdentity]), so every wake about the
+// task is a turn of one conversation, whose next turn reads how the others
+// ended and continues the session the last one left.
 func TestAnOwedWakeIsItsOwnPartitionOfTheTask(t *testing.T) {
 	t.Parallel()
 	meta := func(via worklet.Reason, inform string) map[string]string {
