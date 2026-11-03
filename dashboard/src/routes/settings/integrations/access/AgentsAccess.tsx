@@ -140,14 +140,19 @@ const UNSAVED_WORDS = {
 function levelOptions(lane: Lane): SelectOption[] {
   // WHERE THE LIST COMES FROM is the menu's own heading; the empty level
   // (product access only) carries the vendor's note on what it then sees. A
-  // multi-select has no empty row: choosing nothing is that level.
+  // multi-select has no empty row: choosing nothing is that level. A level the
+  // connection cannot grant yet is offered disabled, saying why.
   const group = levelsHeading(lane);
   return lane.levels
     .filter((l) => !(lane.multiple && l.id === ""))
     .map((l) => ({
       value: l.id,
       label: l.custom ? `${l.name} (custom)` : l.name,
-      ...(l.note ? { description: l.note } : {}),
+      ...(l.unavailable
+        ? { description: l.unavailable, disabled: true }
+        : l.note
+          ? { description: l.note }
+          : {}),
       group,
     }));
 }
