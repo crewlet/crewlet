@@ -397,15 +397,15 @@ type runEnv struct {
 // defaults are returned apart (runEnv.defaults), for the launch to lay beneath
 // the entry's env as well ([newExecutorRun]).
 //
-// BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0093): a run given repositories on
-// it is given ACCESS TO THAT SURFACE — the run's own credential and the box's
-// git configuration ([Engine.boxGitEnv]), as an executor's run is given the
-// tool bridge's endpoint — a credential the box acts AS, scoped to the run and
-// dying with it. Added to the LAUNCH's environment once the store has named
-// the job, never here: this environment is the spec's, and the credential
-// names the launch. Every OTHER host's credential is still the operator's to
-// declare, and config refuses the engine's own names in any env it writes
-// (config.ReservedSandboxEnv).
+// BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0093): every launch on a node that
+// serves it is given ACCESS TO THAT SURFACE — the run's own credential and
+// the box's git configuration ([Engine.boxGitEnv]), as an executor's run is
+// given the tool bridge's endpoint — a credential the box acts AS, scoped to
+// the run and dying with it. Added to the LAUNCH's environment once the store
+// has named the job, never here: this environment is the spec's, and the
+// credential names the launch. Every OTHER host's credential is still the
+// operator's to declare, and config refuses the engine's own names in any env
+// it writes (config.ReservedSandboxEnv).
 //
 // RESOLVED EXACTLY ONCE, here, at launch — not at load. These values are
 // where an operator declares a code-host token, and Tier B stores its
