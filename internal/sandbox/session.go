@@ -1355,6 +1355,10 @@ func (c *Coordinator) recordCapture(ctx context.Context, handle, turn, conversat
 		ContentKey: stamp.ContentKey, ArchiveFormat: stamp.ArchiveFormat,
 		LaunchSeq: stamp.LaunchSeq, CaptureSeq: stamp.CaptureSeq,
 		Home: stamp.Home, Workspace: stamp.Workspace, SeatBudget: stamp.SeatBudget,
+		// WHAT ONLY THIS ROW KNEW OF THE SESSION, carried onto the log's row,
+		// which outlives it: a launch continuing the session after its turn
+		// ended has no run record to read them from.
+		ContextTokens: stamp.ContextTokens, Interrupted: stamp.Interrupted,
 	}
 	call := executordomain.Call{By: sessionAuthor,
 		OpID: executordomain.CaptureOpID(stamp.Minted, handle, turn, stamp.Launch, stamp.CaptureSeq)}

@@ -36,9 +36,13 @@ import (
 // would hold it to nothing. And a read is never the engine's: the engine's
 // reads are ordinary ones, which a surface may hold.
 //
-// Mutation: drop byEngine() from executor.capture, or put it on a tracker
-// write, and the operation is named; the planted table makes each of those
-// moves and a read declared the engine's beside them.
+// A TURN'S BEGIN IS ONE OF THEM: the record of a turn's first read and the
+// base it holds is the engine's account of what its launch read, which nobody
+// asks of it, and is held to the class like every other write on the log.
+//
+// Mutation: drop byEngine() from executor.capture or executor.begin, or put it
+// on a tracker write, and the operation is named; the planted table makes each
+// of those moves and a read declared the engine's beside them.
 func TestEveryExecutorWriteIsTheEngines(t *testing.T) {
 	t.Parallel()
 	for _, violation := range engineClassViolations(registry) {
@@ -57,9 +61,15 @@ func TestEveryExecutorWriteIsTheEngines(t *testing.T) {
 		t.Fatalf("%d operations are the engine's and %d write the executor log: the class holds "+
 			"nothing, so this gate certifies nothing", engine, executorWrites)
 	}
+	if spec, ok := registry["executor.begin"]; !ok || spec.class != opIdempotentWrite ||
+		spec.domain != executorDomain || spec.origin != originEngine {
+		t.Errorf("executor.begin is registered %v as %+v, want the engine's idempotent write on the "+
+			"executor log", ok, spec)
+	}
 
 	planted := map[string]*opSpec{
 		"executor.capture":    {class: opIdempotentWrite, domain: executorDomain},
+		"executor.begin":      {class: opIdempotentWrite, domain: executorDomain},
 		"executor.peek":       {class: opRead, domain: executorDomain, origin: originEngine},
 		"tracker.repair":      {class: opIdempotentWrite, domain: trackerDomain, origin: originEngine},
 		"executor.end":        {class: opIdempotentWrite, domain: executorDomain, origin: originEngine},
@@ -71,7 +81,8 @@ func TestEveryExecutorWriteIsTheEngines(t *testing.T) {
 	for _, v := range violations {
 		named = append(named, strings.Fields(v)[0])
 	}
-	if want := []string{"executor.capture", "executor.peek", "tracker.repair"}; !slices.Equal(named, want) {
+	want := []string{"executor.begin", "executor.capture", "executor.peek", "tracker.repair"}
+	if !slices.Equal(named, want) {
 		t.Errorf("the planted table's violations name %v, want %v:\n%s", named, want,
 			strings.Join(violations, "\n"))
 	}

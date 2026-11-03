@@ -120,19 +120,22 @@ const (
 	DefaultPageSize = 25
 )
 
-// LostAfter is how long after its last capture a turn that never ended, and of
-// which the fleet holds no live run, is taken for one whose end was lost, and
-// ended `lost` by the retention duty ([Writer.EndLost]).
+// LostAfter is how long after its last record — its newest capture, or the
+// begin of a turn that captured nothing — a turn that never ended, and of which
+// the fleet holds no live run, is taken for one whose end was lost, and ended
+// `lost` by the retention duty ([Writer.EndLost]).
 //
 // A DAY. A turn's run record is held for as long as its executor runs or is
 // parked on a person's answer, and once the run is collected the turn's review
-// ends it within minutes; so a day past its last capture with no run left is a
+// ends it within minutes; so a day past its last record with no run left is a
 // turn whose end was never recorded — its process lost between the run and
 // the record, or an end that answered unknown and was never asked again. Until
 // it is ended its session holds the seat's byte budget, which releases only
 // ended turns', and two such sessions near the archive's bound fill the default
-// budget: so a day bounds how long a lost end can keep a seat from capturing,
-// where waiting for the retention would be the whole conversation retention.
+// budget; and a turn that captured nothing holds the base its begin named
+// against every release: so a day bounds how long a lost end can keep a seat
+// from capturing, or a base from going, where waiting for the retention would
+// be the whole conversation retention.
 const LostAfter = 24 * time.Hour
 
 // SealedMaxBytes is the largest object a session is stored as: an archive of
