@@ -168,6 +168,7 @@ flowchart LR
 | Datadog | the account address, `crewlet-<handle>@{email_domain}` | — |
 | Cloudflare | the account API token's name, `crewlet-<company>-<handle>` with the company name slugified, beside the token ID the engine records when it mints it | Nothing |
 | Expo | the robot user's name, `crewlet-<company>-<handle>`, which a person gives the robot at Expo, beside the robot ID the engine records from the first token pasted for the seat | Nothing |
+| AWS | the IAM role's name, `crewlet-<short name>-<seat>` under the path `/crewlet/<short name>/seat/`, beside the role ID the engine records when it creates the role; a role of that name the engine has no record of is refused, never adopted | Nothing |
 | Atlassian | the marker inside the display name, `{role} (crewlet:<handle>)` | the `{role}` label in front of the marker |
 
 ## What the loop does, and what it leaves alone

@@ -4190,14 +4190,15 @@ link, so the dashboard asks the begin route above for one and submits a form.
 
 Every integration the engine manages an account or a credential per agent on
 (Slack, Mattermost, Atlassian for Jira and Confluence, GitHub, GitLab, Datadog,
-Cloudflare and Expo) has an Agents tab, and these routes are what it reads and
+Cloudflare, Expo and AWS) has an Agents tab, and these routes are what it reads and
 writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
 Datadog role id, a GitLab access level, a Jira project role id; Cloudflare's
 `read`, `operate` or `configure`, each a fixed set of permission groups;
 Expo's `viewer`, `runner`, `developer` or `release_manager`, each a fixed set
-of Expo permissions), GitHub's permissions, and the scope it is narrowed to.
+of Expo permissions; AWS's `read`, `operate` or `administer`, each a set of
+Crewlet's customer managed policies), GitHub's permissions, and the scope it is narrowed to.
 A lane is the block's key:
 `atlassian` has two, `jira` and `confluence`, over one account per agent, and
 every other integration has one named after itself. Jira and Confluence asked
@@ -12809,7 +12810,7 @@ trace anywhere except the provider's own delivery UI.
 
 `tools` is **one roll-up per tool** this build serves (`slack`, `mattermost`,
 `atlassian` for the organization, Confluence, Jira and the Forge relay,
-`github`, `gitlab`, `datadog`, `cloudflare`, `expo`), whether or not the company configured it, so a
+`github`, `gitlab`, `datadog`, `cloudflare`, `expo`, `aws`), whether or not the company configured it, so a
 reader never invents a state for a missing one. `state` is `attention` (a
 person has to act), `not_connected` (configured and not working yet, with
 nobody owing anything — or this node could not read the status),

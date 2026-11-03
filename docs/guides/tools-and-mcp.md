@@ -1703,6 +1703,7 @@ or without egress. `GET /mcp-catalogue` serves it (see the
 | `stripe` | Stripe's remote server | OAuth, or an agent API key header |
 | `cloudflare` | The Cloudflare API server | the Cloudflare integration (each agent's own scoped token), OAuth, or an API token header |
 | `expo` | Expo's hosted server | OAuth, as the person who signs it in. Each agent's own robot token signs in the EAS CLI instead, through its `sandbox.env` (see [Expo](../integrations/expo.md#the-agents-expo-tools)) |
+| `aws` | AWS's MCP Server, one per agent | the AWS integration: the engine signs each request as the agent's own IAM role, so no credential is entered or sent (see [AWS](../integrations/aws.md#the-agents-tools)) |
 | `gitlab` | `glab mcp serve`, one per agent | the GitLab integration |
 | `slack` | `slack-mcp-server` 1.3.0, one per agent | the Slack integration |
 | `mattermost` | `mcp-server-mattermost` 0.6.1, one per agent | the Mattermost integration |
@@ -2488,7 +2489,7 @@ When the engine launches a per-role MCP server instance, it merges the base serv
 ### Seat credentials the engine binds
 
 For an integration the engine manages an account or a credential on
-(Atlassian, Cloudflare, Datadog, Expo, GitHub, GitLab, Mattermost, Slack), a
+(Atlassian, AWS, Cloudflare, Datadog, Expo, GitHub, GitLab, Mattermost, Slack), a
 seat's own credential is never named in
 `mcp_env`. The engine seals it under a name it derives from the handle and
 binds it to every per-seat server (`shared: false`) that reads that
