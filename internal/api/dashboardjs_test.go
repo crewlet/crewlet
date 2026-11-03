@@ -1804,6 +1804,22 @@ const (
 	// (5,623,824 bytes, +6,031 bytes): the integrations model chunk +5,666
 	// bytes, the catalogue chunk +241 and the org nodes chunk +92, the
 	// initial load unchanged. The measured size's next KiB: 5493 KiB.
+	// A schedule's next fire continuing the session its last fire left — the
+	// Sessions view's words for the launch that continues a fire's session
+	// (`continued_by: next_fire`), a schedule's conversation key printed with
+	// its parts decoded by a conversation label that moved out of
+	// lib/format.ts, which the shell loads first, into lib/conversationKey.ts,
+	// which only the screens that print a key load, and a fire's turn naming
+	// its schedule's conversation as one on the Turn page's rail and a phase
+	// card's footer, saying whether a key is the external conversation the
+	// turn served or the schedule the turn was a fire of — took it from 5492.0
+	// KiB (5,623,824 bytes) to 5492.6 KiB (5,624,454 bytes), +630 bytes: the
+	// phases chunk the phase card and the Memory tab share +457, the agents
+	// chunk +233, the live and settled chunks that print a key +32 and +30,
+	// and 16 across the chunks whose imports the bundler renamed, less the 138
+	// the label took out of the shared chunk the shell loads. The initial load
+	// (the entry, what the page preloads and the page itself) is 134 bytes
+	// lighter raw. It stays at 5493 KiB, the measured size's next KiB.
 	treeBudget = 5<<20 + 373<<10
 )
 
