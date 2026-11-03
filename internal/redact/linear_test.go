@@ -177,6 +177,63 @@ func keysAfter(group string, lineBytes int) string {
 	return b.String()
 }
 
+// A VALUE OF MANY ESCAPED BREAKS COSTS WHAT ITS BYTES COST, however long it
+// runs without a space: a password's value written in pieces between escaped
+// breaks, in one run of 128 KiB, costs what the same pieces cost in runs of
+// 1 KiB. Whether a value runs on across a break turns on whether a letter or a
+// digit follows the break before the next space ([wordAfter]), and that was
+// answered by reading to the space at every break, so a run cost its breaks
+// times its length: 64 KiB took 0.7 s and every doubling four times as long,
+// days for the 32 MiB a box's file is read whole up to — a launch's report, or
+// the session record its reason for starting anew is read from. A key after
+// every break, `pwd=x\npwd=x\n…`, cost the same, every key's value reading to
+// the run's end. Read up to its first letter or digit, a break's read never
+// passes the next break's `n`, and the run is read once.
+//
+// Timed as the tests above are ([withinFactor]), through [Secrets] and
+// [Settled] both, the text ending in a line break so Settled reads its values.
+// Read once, the one run costs what the runs do, or less, since each run
+// opens with a key the one run has once; read to the space at every break, it
+// costs fifty to a hundred and twenty times as much. Three times is allowed.
+//
+// Mutation: read to the next space at every break, and every group fails.
+func TestAValueOfManyEscapedBreaksIsLinear(t *testing.T) {
+	t.Parallel()
+	read := func(text string) {
+		_ = Secrets(text)
+		_ = Settled(text)
+	}
+	for name, group := range map[string]struct{ key, piece string }{
+		"a password in pieces":                   {"pwd=", `x\n`},
+		"a password in pieces, its CRLF escaped": {"pwd=", `x\r\n`},
+		"a password in pieces after punctuation": {"pwd=", `x\n-`},
+		"a key after every break, over and over": {"", `pwd=x\n`},
+	} {
+		short, long := runsOf(group.key, group.piece, 1<<10), runsOf(group.key, group.piece, 128<<10)
+		if ok, shortCost, longCost := withinFactor(read, short, long, 3); !ok {
+			t.Errorf("%s: %v in one run of 128 KiB against %v in runs of 1 KiB — every break reads "+
+				"the rest of its run again", name, longCost, shortCost)
+		}
+	}
+}
+
+// runsOf is 128 KiB of runs of up to runBytes, each key and then piece written
+// over and over, a space after each run and a line break at the end.
+func runsOf(key, piece string, runBytes int) string {
+	const size = 128 << 10
+	var b strings.Builder
+	for b.Len()+len(key)+len(piece)+1 <= size {
+		run := b.Len()
+		b.WriteString(key)
+		for b.Len()+len(piece)+1 <= size && b.Len()-run+len(piece) <= runBytes {
+			b.WriteString(piece)
+		}
+		b.WriteByte(' ')
+	}
+	b.WriteByte('\n')
+	return b.String()
+}
+
 // A LIVE VIEW OF MANY PASSWORD KEYS COSTS ONE READ OF THEM: [Settled] over
 // lines of password keys, each line's last decided by the line after it,
 // costs what its bytes cost. Read again in each prefix a hold cut the text at,

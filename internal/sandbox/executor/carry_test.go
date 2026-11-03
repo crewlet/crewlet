@@ -781,10 +781,12 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 // read off what `--version` printed; a capture the box holds is described for
 // the record's session. Only a record's first line of each key is its own,
 // since the release is written last as the harness printed it and may run on, and
-// an id no harness mints is no id.
+// an id no harness mints is no id — the record's, or one the harness reported,
+// whose output is as much the box's as the record is.
 //
 // Mutation: read the last line of a key, take the record's id over the harness's
-// own, or drop the reason, and a case goes red.
+// own, take the harness's whatever it is, drop the reason, or read a release
+// of any length, and a case goes red.
 func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -819,6 +821,18 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 		t.Errorf("the run reads session %q (%v), want its harness's own", res.SessionID, err)
 	}
 
+	// BUT ONLY ONE A HARNESS MINTS: a word the harness's output names that is
+	// no session id gives way to the record's.
+	for _, named := range []string{"../../.credentials.json", strings.Repeat("s", 129)} {
+		b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"`+
+			named+`"}`)
+		if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil ||
+			res.SessionID != "9a8b7c6d-0000-4000-8000-000000000001" {
+			t.Errorf("a harness that named %.40q (%d bytes) as its session read as %.40q (%v), want the record's",
+				named, len(named), res.SessionID, err)
+		}
+	}
+
 	// AN ID NO HARNESS MINTS is no id, and a capture is described for none.
 	b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"done"}`)
 	b.Put(p.SessionRecord(), "id ../../.credentials.json\ncontinued yes\nrelease 2.1.310 (Claude Code)\n")
@@ -836,6 +850,20 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 		res.FellBack != why {
 		t.Errorf("a run that started anew reads continued %v, fell back %q (%v); want %q", res.Continued,
 			res.FellBack, err, why)
+	}
+
+	// A RELEASE PAST WHAT THE EXECUTOR LOG RECORDS is none, on the run and on
+	// the capture it describes, which names its release for the log.
+	b.Put(p.SessionRecord(), "id 9a8b7c6d-0000-4000-8000-000000000001\ncontinued yes\nwhy \nrelease "+
+		strings.Repeat("2", 1<<10)+".1.310 (Claude Code)\n")
+	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil || res.HarnessVersion != "" ||
+		res.Captured == nil || res.Captured.Version != "" {
+		described := -1
+		if res.Captured != nil {
+			described = len(res.Captured.Version)
+		}
+		t.Errorf("a release a KiB long reads as %d bytes, and %d on the capture (%v); want none on either",
+			len(res.HarnessVersion), described, err)
 	}
 
 	// NO CAPTURE, NONE DESCRIBED — and none streamed.
