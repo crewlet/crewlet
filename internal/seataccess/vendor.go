@@ -285,6 +285,12 @@ type LaneSpec struct {
 	// Scoped is whether the lane narrows by scope.
 	Scoped bool
 
+	// ScopeRequired is a Scoped lane whose agent, once on, must name at least
+	// one scope entry: one with none would reach nothing. The access routes,
+	// the sync and the document's rules refuse it alike
+	// (config.SeatScopeRequired restates it, held equal by a test).
+	ScopeRequired bool
+
 	// CreatedBy and EnabledBy are who makes the account and who turns it
 	// back on: [ByYou] for a GitHub App's creation and a Slack install.
 	CreatedBy StepActor
@@ -362,6 +368,22 @@ type Options struct {
 	// no project list), where any entry the vendor accepts is within it.
 	Scope     []string `json:"scope,omitempty"`
 	ScopeOpen bool     `json:"scope_open,omitempty"`
+
+	// Scoped is [LaneSpec.Scoped], set whatever Scope holds, so a lane whose
+	// scope is open or unread is still a scoped lane.
+	Scoped bool `json:"scoped,omitempty"`
+
+	// ScopeNames is each Scope entry's name where the vendor names one apart
+	// from its id, for the pickers; nil where the entry is its own name.
+	ScopeNames map[string]string `json:"scope_names,omitempty"`
+
+	// ScopeLive is whether Scope and ScopeOpen were answered by the vendor's
+	// session just now; false where it could not be read, so an empty Scope
+	// then says nothing about the company's reach.
+	ScopeLive bool `json:"scope_live,omitempty"`
+
+	// ScopeRequired is [LaneSpec.ScopeRequired].
+	ScopeRequired bool `json:"scope_required,omitempty"`
 
 	// Rotatable is whether a person can ask for a seat's credential on this
 	// lane to be rotated ([LaneSpec.Rotatable]).

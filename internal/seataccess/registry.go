@@ -51,6 +51,10 @@ func Register(v Vendor) {
 		panic(fmt.Sprintf("seataccess: the %s vendor's catalog names no credential field", kind))
 	}
 	for _, spec := range cat.Lanes {
+		if spec.ScopeRequired && !spec.Scoped {
+			panic(fmt.Sprintf("seataccess: the %s vendor's %s lane requires a scope it does not have",
+				kind, spec.Lane))
+		}
 		envs := map[string]bool{}
 		for _, b := range spec.BoxEnv {
 			if !slices.Contains(cat.Credentials, b.Field) || strings.TrimSpace(b.Env) == "" || envs[b.Env] {

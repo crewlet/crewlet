@@ -874,7 +874,10 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, company *config.Co
 // A LEVEL IS JUDGED ON WHAT IS LISTED: a fixed set always, and a live-listed
 // one only when it was read live just now. A live-listed lane the vendor did
 // not answer for holds no list to judge by, and an id it does not hold is the
-// document rules' and the sync's finding rather than a refusal on a guess.
+// document rules' and the sync's finding rather than a refusal on a guess. A
+// scope entry is judged the same way, only where the scope was read
+// ([seataccess.Options.ScopeLive]); an empty scope where the lane requires one
+// is refused whatever was read.
 func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Options,
 	under string, want seataccess.Desired) httpjson.Detail {
 
@@ -915,10 +918,19 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 				"or not at all", o.Permissions[i].Name)}
 		}
 	}
-	for _, entry := range want.Scope {
-		if !o.Reaches(entry) {
-			return httpjson.Detail{"detail": fmt.Sprintf("%q is outside what the "+
-				"company's connection reaches", entry), "offered": o.Scope}
+	if o.ScopeRequired && want.Enabled && len(want.Scope) == 0 {
+		return httpjson.Detail{"detail": fmt.Sprintf("an agent turned on at %s must have at least "+
+			"one scope entry chosen, since one with none can reach nothing", seataccess.LaneName(lane))}
+	}
+	if o.ScopeLive {
+		// A SCOPE IS JUDGED ON WHAT WAS READ, as a live-listed level is: an
+		// unread list holds nothing to judge by, and the sync judges the
+		// entry against the vendor instead of a refusal on a guess.
+		for _, entry := range want.Scope {
+			if !o.Reaches(entry) {
+				return httpjson.Detail{"detail": fmt.Sprintf("%q is outside what the "+
+					"company's connection reaches", entry), "offered": o.Scope}
+			}
 		}
 	}
 	if o.ScopeOpen && under != "" {

@@ -14,7 +14,7 @@ import (
 func TestADraftIsJudgedAsTheVendorJudgesIt(t *testing.T) {
 	t.Parallel()
 	jira := seataccess.Options{Lane: seataccess.LaneJira, Live: true, Scope: []string{"ENG"},
-		Levels: []seataccess.Level{{ID: "10101", Name: "Developers"}}}
+		Scoped: true, ScopeLive: true, Levels: []seataccess.Level{{ID: "10101", Name: "Developers"}}}
 	if refusal := notOffered(integration.KindAtlassian, seataccess.LaneJira, jira, "",
 		seataccess.Desired{Enabled: true, Level: "10101", Scope: []string{"eng"}}); refusal != nil {
 		t.Fatalf("a lower-case key was refused: %v", refusal)
@@ -38,6 +38,34 @@ func TestADraftIsJudgedAsTheVendorJudgesIt(t *testing.T) {
 		if refusal := notOffered(integration.KindAtlassian, seataccess.LaneConfluence, conf, "",
 			seataccess.Desired{Enabled: true, Level: level}); refusal != nil {
 			t.Fatalf("%q was refused: %v", level, refusal)
+		}
+	}
+}
+
+// A SCOPE IS JUDGED ON WHAT WAS READ, and an empty one is refused where the lane
+// requires one whatever was read. Mutation: judge an unread list, and every
+// entry is "outside reach" while the vendor is down.
+func TestAScopeIsJudgedOnWhatWasRead(t *testing.T) {
+	t.Parallel()
+	unread := seataccess.Options{Lane: seataccess.LaneJira, Scoped: true,
+		Levels: []seataccess.Level{{ID: "10101", Name: "Developers"}}}
+	if refusal := notOffered(integration.KindAtlassian, seataccess.LaneJira, unread, "",
+		seataccess.Desired{Enabled: true, Level: "10101", Scope: []string{"web"}}); refusal != nil {
+		t.Fatalf("an entry was judged against a list nobody read: %v", refusal)
+	}
+	required := unread
+	required.ScopeRequired = true
+	refusal := notOffered(integration.KindAtlassian, seataccess.LaneJira, required, "",
+		seataccess.Desired{Enabled: true, Level: "10101"})
+	if refusal == nil || !strings.Contains(refusal["detail"].(string), "can reach nothing") {
+		t.Fatalf("an agent on with no scope = %v, want it refused", refusal)
+	}
+	for name, want := range map[string]seataccess.Desired{
+		"off":           {Level: "10101"},
+		"with an entry": {Enabled: true, Level: "10101", Scope: []string{"ENG"}},
+	} {
+		if refusal := notOffered(integration.KindAtlassian, seataccess.LaneJira, required, "", want); refusal != nil {
+			t.Errorf("%s: refused: %v", name, refusal)
 		}
 	}
 }
