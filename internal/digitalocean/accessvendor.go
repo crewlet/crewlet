@@ -232,7 +232,9 @@ func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seatac
 		out = append(out, seataccess.Level{ID: id, Name: LevelName(id), Note: LevelNote(id),
 			Administers: Administers(id), Grants: Grants(id)})
 	}
-	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true, ActionURL: NewTokenURL,
+	// THE TOKEN LIST, where every row's Regenerate Token is and Generate New
+	// Token is one click away; a wait for a new token links its form itself.
+	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true, ActionURL: TokensURL,
 		Refused: Refused(), Unneeded: Unneeded(), VendorAccount: s.team}, nil
 }
 

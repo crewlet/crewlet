@@ -33,6 +33,7 @@ func TestTheDashboardReadsAccessAsTheEngineWritesIt(t *testing.T) {
 		{"AccessSeat", reflect.TypeFor[seataccess.SeatAnswer]()},
 		{"AccessSeatLane", reflect.TypeFor[seataccess.LaneAnswer]()},
 		{"AccessBox", reflect.TypeFor[seataccess.Box]()},
+		{"AccessHandIn", reflect.TypeFor[seataccess.HandIn]()},
 		{"AccessBoxLine", reflect.TypeFor[seataccess.BoxLine]()},
 		{"AccessDesired", reflect.TypeFor[seataccess.Desired]()},
 		{"AccessObserved", reflect.TypeFor[seataccess.Observed]()},
