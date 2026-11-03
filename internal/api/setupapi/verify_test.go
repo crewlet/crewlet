@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,7 @@ type seenCheck struct {
 	field    string
 	values   map[string]string
 	declared atlassianhost.Deployment
+	zones    []string
 }
 
 // recordingProbe answers a fixed verdict and remembers every check.
@@ -52,7 +54,8 @@ type recordingProbe struct {
 }
 
 func (p *recordingProbe) probe(_ context.Context, check setup.Check) (setup.Verdict, error) {
-	seen := seenCheck{field: check.Field, values: map[string]string{}, declared: check.Declared}
+	seen := seenCheck{field: check.Field, values: map[string]string{}, declared: check.Declared,
+		zones: check.Zones}
 	for _, field := range append([]string{check.Field}, p.read...) {
 		seen.values[field] = check.Value(field)
 	}
@@ -380,6 +383,35 @@ func TestAVerifyCarriesTheDeclaredAtlassianDeployment(t *testing.T) {
 	}
 	seen := probe.seen(t)
 	if seen.declared != atlassianhost.DataCenter || seen.values["url"] != "https://jira.acme.internal" {
+		t.Errorf("the probe was handed %+v", seen)
+	}
+}
+
+// THE COMPANY'S CLOUDFLARE ZONES TRAVEL WITH THE CHECK: a document field with
+// no form field, which the probe checks against the account.
+func TestAVerifyCarriesTheCloudflareZones(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedDocument(t, `{
+  "name": "Acme",
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "integrations": {
+    "cloudflare": {"enabled": true, "provisioning": {
+      "account_id": "0123456789abcdef0123456789abcdef", "api_token": "${CLOUDFLARE_API_TOKEN}",
+      "zones": ["example.com", "example.org"]}}
+  },
+  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
+}`)
+	probe := &recordingProbe{verdict: setup.Works("Works."), read: []string{"account_id"}}
+	s.withProbe(t, integration.KindCloudflare, probe.probe)
+	res := s.do(t, http.MethodPost, "/setup/integrations/cloudflare/verify",
+		verifyBody("api_token", "a-fake-token", ""), nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	seen := probe.seen(t)
+	if !slices.Equal(seen.zones, []string{"example.com", "example.org"}) ||
+		seen.values["account_id"] != "0123456789abcdef0123456789abcdef" {
 		t.Errorf("the probe was handed %+v", seen)
 	}
 }

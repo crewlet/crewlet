@@ -226,6 +226,71 @@
         "null"
       ]
     },
+    "Cloudflare": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "provisioning": {
+          "$ref": "#/$defs/CloudflareProvisioning",
+          "description": "The Cloudflare account and the provisioner token the engine mints each agent's token with. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CloudflareProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "description": "Cloudflare account ID (32 hexadecimal characters) the agents' tokens are created in.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "api_token": {
+          "description": "Account API token with Account API Tokens Write, Account Settings Read, Zone Read and every permission an agent level grants.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "zones": {
+          "description": "Zone names the agents' tokens are scoped to. Empty means every zone in the account.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "CompanyArtifacts": {
       "additionalProperties": false,
       "properties": {
@@ -1137,6 +1202,10 @@
             "integer",
             "null"
           ]
+        },
+        "cloudflare": {
+          "$ref": "#/$defs/Cloudflare",
+          "description": "Cloudflare account and provisioner token, used to mint one account API token per agent. Absent = disabled."
         },
         "confluence": {
           "$ref": "#/$defs/Confluence",
@@ -2766,6 +2835,33 @@
         "null"
       ]
     },
+    "RoleCloudflare": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has its own Cloudflare token. Off deletes the token.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): zone, DNS, cache, firewall, SSL and analytics reads. operate: read plus cache purge and cache settings edits.",
+          "enum": [
+            "read",
+            "operate",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleConfluence": {
       "additionalProperties": false,
       "properties": {
@@ -2991,6 +3087,10 @@
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
+        "cloudflare": {
+          "$ref": "#/$defs/RoleCloudflare",
+          "description": "This seat's own Cloudflare account API token: whether it is on and its level."
+        },
         "confluence": {
           "$ref": "#/$defs/RoleConfluence",
           "description": "This seat's Confluence access: whether it is on, its space role and its spaces."
@@ -3651,6 +3751,7 @@
           "description": "Integration whose per-seat credential this server reads.",
           "enum": [
             "atlassian",
+            "cloudflare",
             "datadog",
             "github",
             "gitlab",

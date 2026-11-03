@@ -2,6 +2,7 @@ package engine
 
 import (
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
@@ -30,6 +31,7 @@ import (
 func SetupProbes() map[integration.Kind]setup.Probe {
 	return map[integration.Kind]setup.Probe{
 		integration.KindAtlassian:  atlassian.Probe(atlassian.ClientOptions{}),
+		integration.KindCloudflare: cloudflare.Probe(nil),
 		integration.KindConfluence: confluence.Probe(nil),
 		integration.KindDatadog:    datadog.Probe(nil),
 		integration.KindGitHub:     github.Probe(nil),

@@ -1,8 +1,9 @@
 /**
  * Per-seat access answers as the engine sends them, for the Agents tab's
  * suites: GoPhrase's Datadog (SRE on the Datadog Admin Role, its tool live,
- * the rest off) and its GitHub (every agent on, with the app permissions its
- * old tier registered), built from the fields a case names.
+ * the rest off), its GitHub (every agent on, with the app permissions its
+ * old tier registered) and its Cloudflare (SRE able to purge, the rest off),
+ * built from the fields a case names.
  *
  * Times are relative to the moment the fixture is built, so "1d ago" reads
  * the same on every run.
@@ -53,6 +54,17 @@ const MATTERMOST_OPTIONS: AccessOptions = {
   scope: ["town-square", "incidents", "releases"],
 };
 
+/** Cloudflare's two fixed levels, each a set of permission groups the engine resolves. */
+const CLOUDFLARE_OPTIONS: AccessOptions = {
+  lane: "cloudflare",
+  live: false,
+  rotatable: true,
+  levels: [
+    { id: "read", name: "Read" },
+    { id: "operate", name: "Operate" },
+  ],
+};
+
 const laneOf = (options: AccessOptions): Lane =>
   lanesOf({ kind: options.lane, revision: "", syncing: false, options: [options], seats: [] })[0]!;
 
@@ -99,6 +111,7 @@ export const JIRA_LANE = laneOf(JIRA_OPTIONS);
 export const CONFLUENCE_LANE = laneOf(CONFLUENCE_OPTIONS);
 export const GITHUB_LANE = laneOf(GITHUB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
+export const CLOUDFLARE_LANE = laneOf(CLOUDFLARE_OPTIONS);
 
 /** A lane that is on and in sync, holding what `over` says. */
 export function onLane(over: Partial<AccessSeatLane> & { variable: string }): AccessSeatLane {
@@ -257,6 +270,33 @@ export function jiraAnswer(): AccessAnswer {
         jira: onLane({
           variable: "ATLASSIAN_TOKEN_QA",
           desired: { enabled: true, level: "10003", scope: ["ENG"] },
+        }),
+      }),
+    ],
+  };
+}
+
+/** Cloudflare with SRE's token on Operate and its tool live, PM off at the default level. */
+export function cloudflareAnswer(): AccessAnswer {
+  return {
+    kind: "cloudflare",
+    revision: "rev-7",
+    syncing: false,
+    last_sync_at: ago(4 * MIN),
+    options: [CLOUDFLARE_OPTIONS],
+    seats: [
+      seat("pm", "PM", { cloudflare: offLane("read") }),
+      seat("sre", "SRE", {
+        cloudflare: onLane({
+          variable: "CLOUDFLARE_API_TOKEN_SRE",
+          desired: { enabled: true, level: "operate" },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet-gophrase-sre",
+            level: "operate",
+            credential: { variable: "CLOUDFLARE_API_TOKEN_SRE", minted_at: ago(DAY) },
+          },
         }),
       }),
     ],
