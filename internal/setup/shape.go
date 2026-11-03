@@ -2,6 +2,7 @@ package setup
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 
 	"github.com/crewlet/crewlet/internal/whsec"
@@ -31,13 +32,42 @@ const (
 	// and underscores alone, such as a Cloudflare API token: a pasted value
 	// holding any other character is not one the vendor issued.
 	ShapeOpaqueToken Shape = "opaque_token"
+
+	// ShapeUUID is a vendor identifier or secret written as a UUID, such as
+	// a Scaleway Organization ID or secret key: 32 hexadecimal digits in
+	// groups of 8, 4, 4, 4 and 12, joined by hyphens.
+	ShapeUUID Shape = "uuid"
+
+	// ShapeScalewayAccessKey is a Scaleway API key's access key: SCW
+	// followed by 17 capital letters or digits.
+	ShapeScalewayAccessKey Shape = "scaleway_access_key"
+)
+
+// The patterns the identifier shapes hold a value to.
+var (
+	uuidShape              = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	scalewayAccessKeyShape = regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
 )
 
 // Problem is the sentence for a pasted value this shape refuses, "" for one it
 // takes. noun names the field's value ("provisioner token"). It never quotes
 // the value, only where the characters it refuses are.
 func (s Shape) Problem(noun, value string) string {
-	if s != ShapeOpaqueToken {
+	switch s {
+	case ShapeUUID:
+		if uuidShape.MatchString(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not a UUID: it is 32 hexadecimal digits in groups of 8, 4, 4, 4 "+
+			"and 12, joined by hyphens. Paste only the value, from the page that shows it.", noun)
+	case ShapeScalewayAccessKey:
+		if scalewayAccessKeyShape.MatchString(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not a Scaleway access key: it is SCW followed by 17 capital "+
+			"letters or digits, 20 characters in all. Paste the access key shown beside the secret key.", noun)
+	case ShapeOpaqueToken:
+	default:
 		return ""
 	}
 	var at []int
@@ -68,9 +98,17 @@ func opaqueTokenRune(r rune) bool {
 // `token` is crypto/rand's own text encoding: 26 base32 characters over 128
 // bits of entropy, URL-safe and safe to paste into a third-party app's header
 // field, which is where a shared token ends up.
+//
+// A VENDOR-ISSUED IDENTIFIER IS NEVER MINTED: a value of [ShapeUUID] or
+// [ShapeScalewayAccessKey] names something the vendor made, and one Crewlet
+// made up would name nothing.
 func (s Shape) Mint(token func() string) (string, error) {
-	if s == ShapeSigningKey {
+	switch s {
+	case ShapeSigningKey:
 		return whsec.Mint()
+	case ShapeUUID, ShapeScalewayAccessKey:
+		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
+	default:
+		return token(), nil
 	}
-	return token(), nil
 }
