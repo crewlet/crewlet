@@ -578,7 +578,7 @@ func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID
 }
 
 // ruleSource is who set one rule and when, as code_protections holds it
-// (set_by, set_by_kind, set_at; replicated 0141): the decider of the record
+// (set_by, set_by_kind, set_at; replicated 0143): the decider of the record
 // that last CHANGED the rule, as its envelope names it — a seat's handle, a
 // person's human seat or an unbound credential's login, and nobody for the
 // reconcile of code.repos — and that record's broker instant, encoded as the

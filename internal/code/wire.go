@@ -2594,13 +2594,13 @@ type RepoDetail struct {
 // RuleSource is who set one of a repository's rules and when, named by the
 // rule's pattern: the decider of the record that last CHANGED the rule — its
 // push controls or its gate — and that record's instant (code_protections,
-// replicated 0141). A record that carries the rule unchanged, as every
+// replicated 0143). A record that carries the rule unchanged, as every
 // settings change carries every rule, leaves its source as it was
 // ([rulesSourced]).
 //
 // A READ'S ANSWER, never a record's field: the columns are derived from what
 // every record already carries, its envelope's decider and its broker
-// instant, so none of it takes a versionedFields row (0141 states the
+// instant, so none of it takes a versionedFields row (0143 states the
 // condition the derivation holds under).
 type RuleSource struct {
 	Pattern string `json:"pattern"`
