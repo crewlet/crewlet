@@ -286,6 +286,29 @@ describe("credentials", () => {
     expect(vendorIdentities(state, sre.node)).toEqual([]);
   });
 
+  // AN AWS ROLE OUTLIVES ITS SEAT: the engine denies it everything when the
+  // seat goes and deletes it only when somebody removes it, so a seat enrolled
+  // at AWS names it, and one not enrolled names nothing.
+  test("an AWS seat names its IAM role to decommission", () => {
+    const doc = fixtureCompany();
+    doc.integrations = {
+      ...doc.integrations,
+      aws: { enabled: true, provisioning: { region: "us-east-2" } },
+    };
+    const role = doc.units![0]!.children![0]!.roles![0]!;
+    role.integrations = { aws: { enabled: true, level: "read" } };
+    const on = keyedState(doc);
+    const sre = locate(on.draft, "seat:sre");
+    if (sre?.kind !== "seat") throw new Error("seat:sre");
+    expect(TOOL_NAMES.aws).toBe("AWS");
+    expect(vendorIdentities(on, sre.node)).toEqual(["its AWS IAM role"]);
+    role.integrations = { aws: { enabled: false, level: "read" } };
+    const off = keyedState(doc);
+    const offSeat = locate(off.draft, "seat:sre");
+    if (offSeat?.kind !== "seat") throw new Error("seat:sre");
+    expect(vendorIdentities(off, offSeat.node)).toEqual([]);
+  });
+
   // The labels are a map, which the fact once printed as "[object Object]".
   test("a placement reads as the node it pins and the labels a node must carry", () => {
     expect(placementSummary({ node: "node-a" })).toBe("Pinned to node node-a");
