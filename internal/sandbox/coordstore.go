@@ -349,16 +349,30 @@ func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, 
 // THROUGH THE WRITE EVERY STATE TAKES ([CoordStore.mutateAny]), as a bridged
 // call's append is: a capture is a fact about what left the box, and a stop's is
 // stamped once its ending is decided.
+//
+// A STAMP THE ROW ALREADY HOLDS IS ANSWERED TAKEN, writing nothing: decided on
+// the row as it stands, in the same read-decide-write, so its asker learns the
+// place is its own where the store applied an earlier ask and its answer never
+// came back.
 func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
 	if capture.LaunchSeq <= 0 || capture.CaptureSeq <= 0 || !capture.State.Valid() {
 		return false, fmt.Errorf("sandbox: a capture of run %s is placed at (%d, %d) in state %q, and "+
 			"every capture is placed from (1, 1) in one of %s", turnID, capture.LaunchSeq,
 			capture.CaptureSeq, capture.State, words.Or(CaptureStates))
 	}
-	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+	// SET ON EVERY ASK OF decide, which runs again on a lost race: the last
+	// one is the row the answer is about — where the last attempt found one
+	// at all, which a record removed under an earlier attempt's decision is
+	// not ([CoordStore.writeFound]).
+	var held bool
+	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		held = holdsStamp(*run, capture)
 		return stampOnto(run, capture)
 	})
-	return won, err
+	if err != nil {
+		return false, err
+	}
+	return won || (found && held), nil
 }
 
 // OweEnd records the end the run's turn owes the executor log. See the contract

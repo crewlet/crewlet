@@ -1084,12 +1084,19 @@ func TestACompanyThatKeepsNoSessionContinuesNoneItKeptBefore(t *testing.T) {
 
 // silentStamps is a run store whose stamps of a capture are never answered, as
 // a coordination store in an outage does: each waits out its caller's context.
+// Where only is set, only stamps in that state go unanswered, and every other
+// is the store's: a reservation the store never answers, say, and the settle
+// of its place after it.
 type silentStamps struct {
 	PendingStore
+	only  CaptureState
 	asked atomic.Int32
 }
 
-func (s *silentStamps) StampCapture(ctx context.Context, _ string, _ SessionCapture) (bool, error) {
+func (s *silentStamps) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	if s.only != "" && stamp.State != s.only {
+		return s.PendingStore.StampCapture(ctx, turnID, stamp)
+	}
 	s.asked.Add(1)
 	<-ctx.Done()
 	return false, ctx.Err()
@@ -1127,7 +1134,9 @@ func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
 		t.Parallel()
 		rig, _, _ := keepingRig(t)
 		run := rig.launchKept(t, "t1")
-		silent := &silentStamps{PendingStore: rig.coordinator.pending}
+		// SILENT ON THE RESERVATION ALONE: the settle of the place after it is
+		// answered, so the take's time is the reservation's to spend.
+		silent := &silentStamps{PendingStore: rig.coordinator.pending, only: CaptureBegun}
 		rig.coordinator.pending, rig.coordinator.recordBudget = silent, time.Minute
 		// A READ WITH A DEADLINE, whose take ends two seconds from now and
 		// whose by a pause's grace after that.
@@ -1143,6 +1152,9 @@ func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
 		if spooled != nil || silent.asked.Load() == 0 {
 			t.Errorf("the take spooled %+v after %d reservations, want none spooled, the place asked for",
 				spooled, silent.asked.Load())
+		}
+		if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
+			t.Errorf("the place the take asked for stands %+v, want it settled refused", c)
 		}
 	})
 }

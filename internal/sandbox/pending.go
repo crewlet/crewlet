@@ -1612,11 +1612,20 @@ type PendingStore interface {
 	// the row's newest is taken, whatever its state — that is how a capture
 	// reserves its place before its archive leaves the box, so two reads of
 	// one run at once never take the same one. A capture at the newest's own
-	// place is taken only where it moves that capture on — begun to an
-	// outcome, unresolved to an answer — so a late write never takes an
-	// answer back. Anything older is refused. And a capture that LANDED is
-	// the turn's kept one wherever it is newer than the kept one, so an
+	// place is taken only where it is the same take's — its job, and the
+	// instant the take stamped it at ([SessionCapture.At]) — and moves that
+	// capture on — begun to an outcome, unresolved to an answer — so a late
+	// write never takes an answer back, and no read settles a place another
+	// read holds. Anything older is refused. And a capture that LANDED is the
+	// turn's kept one wherever it is newer than the kept one, so an
 	// unresolved capture answered after a newer one began still counts.
+	//
+	// A STAMP THE ROW ALREADY HOLDS, the same take's in the same state, is
+	// answered taken, and nothing is written: a store that applied an earlier
+	// ask and whose answer never came back leaves the place its asker's, and
+	// asked again the asker learns so, rather than reading its own
+	// reservation as another read's and leaving it begun with nobody to
+	// settle it.
 	//
 	// ON A ROW IN ANY STATE, its ending decided included: a stop's capture is
 	// taken after the stop is decided and before the box is reclaimed, and
