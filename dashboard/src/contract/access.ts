@@ -224,6 +224,23 @@ interface AccessSync {
  *  `server_off`: every tool server reading the credential is turned off. */
 type AccessToolState = "live" | "builtin" | "waiting" | "no_server" | "server_off" | "off";
 
+/**
+ * One variable in a seat's executor box: a line a person adds, set to the
+ * seat's own sealed name (`${EXPO_TOKEN_QA}`), or a non-secret setting the
+ * engine supplies itself.
+ */
+export interface AccessBoxLine {
+  name: string;
+  value: string;
+  by: AccessActor;
+}
+
+/** What a seat's executor box holds for a CLI there to use the lane. */
+export interface AccessBox {
+  /** A person's lines first, then the engine's. */
+  env: AccessBoxLine[];
+}
+
 export interface AccessSeatLane {
   desired: AccessDesired;
   observed: AccessObserved;
@@ -233,6 +250,8 @@ export interface AccessSeatLane {
   tool: AccessToolState;
   /** The desired setting is an administration grant. */
   administers?: boolean;
+  /** Where the lane's tool is a CLI in the seat's own box (Expo's EAS CLI), what that box holds for it. */
+  box?: AccessBox;
 }
 
 export interface AccessSeat {

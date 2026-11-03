@@ -37,12 +37,6 @@ export interface LaneWords {
   tool: string;
   /** The `mcp_servers` entry a seat's tool is started from, as the warning names it. */
   server: string;
-  /**
-   * Where a seat's tool runs in its own box rather than as a tool server
-   * (Expo's EAS CLI): the line its `sandbox.env` sets to hand the tool its
-   * credential. A seat without it is told to add that line, never to declare a server.
-   */
-  boxEnv?: { name: string; value: string };
   /** Where a person approves a seat's install at the vendor through a fresh link, its button label. */
   install?: string;
 }
@@ -180,9 +174,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Expo deletes the agent's robot when it is turned off, so removing only stops Crewlet tracking it.",
     rotate:
       "Crewlet creates a new access token for the robot, seals it, then deletes the old one. Anything still using the old token stops working.",
-    tool: "EAS CLI in its box, as EXPO_TOKEN",
+    tool: "EAS CLI in its box",
     server: "expo",
-    boxEnv: { name: "EXPO_TOKEN", value: "${EXPO_TOKEN_<HANDLE>}" },
   },
 };
 
