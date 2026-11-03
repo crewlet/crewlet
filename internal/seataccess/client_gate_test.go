@@ -32,6 +32,8 @@ func TestTheDashboardReadsAccessAsTheEngineWritesIt(t *testing.T) {
 		{"AccessPermission", reflect.TypeFor[seataccess.PermissionSpec]()},
 		{"AccessSeat", reflect.TypeFor[seataccess.SeatAnswer]()},
 		{"AccessSeatLane", reflect.TypeFor[seataccess.LaneAnswer]()},
+		{"AccessBox", reflect.TypeFor[seataccess.Box]()},
+		{"AccessBoxLine", reflect.TypeFor[seataccess.BoxLine]()},
 		{"AccessDesired", reflect.TypeFor[seataccess.Desired]()},
 		{"AccessObserved", reflect.TypeFor[seataccess.Observed]()},
 		{"AccessCredential", reflect.TypeFor[seataccess.Credential]()},

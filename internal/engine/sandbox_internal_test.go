@@ -173,7 +173,7 @@ roles:
 		{"CLAUDE_CODE_USE_BEDROCK": "1"},
 	} {
 		run := runOn(t, c, seat,
-			e.runEnvironment(t.Context(), nil, seat, &org.RoleSandbox{Env: own}, nil).env)
+			e.runEnvironment(t.Context(), nil, seat, &org.RoleSandbox{Env: own}, nil, nil).env)
 		for name, value := range own {
 			if run.env[name] != value {
 				t.Errorf("%v: %s = %q, want the seat's own", own, name, run.env[name])
@@ -187,7 +187,7 @@ roles:
 	// A seat that brings no sign-in still gets the entry's, or this would
 	// just be an entry whose key never travels.
 	run := runOn(t, c, seat,
-		e.runEnvironment(t.Context(), nil, seat, &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp_x"}}, nil).env)
+		e.runEnvironment(t.Context(), nil, seat, &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp_x"}}, nil, nil).env)
 	if run.env["ANTHROPIC_API_KEY"] != "sk-ant-company" || run.env["GITHUB_TOKEN"] != "ghp_x" {
 		t.Errorf("a seat with no sign-in of its own: run environment %v", run.env)
 	}

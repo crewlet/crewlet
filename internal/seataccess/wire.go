@@ -34,6 +34,26 @@ type LaneAnswer struct {
 	// Administers is whether the lane's setting is an administration grant
 	// (D10), for the review's warning.
 	Administers bool `json:"administers,omitempty"`
+
+	// Box is what the seat's executor box holds for a CLI there to use the
+	// lane ([BoxOf]); nil where the lane's tool is a server.
+	Box *Box `json:"box,omitempty"`
+}
+
+// Box is a seat's executor box as one lane needs it.
+type Box struct {
+	// Env is each variable: the lines a person adds to the seat's box
+	// settings ([ByYou]), then those the engine supplies itself ([ByCrewlet]).
+	Env []BoxLine `json:"env"`
+}
+
+// BoxLine is one variable in a seat's box: Name set to Value. A person's line
+// holds the seat's sealed name as a whole reference (`${EXPO_TOKEN_QA}`); the
+// engine's holds a non-secret setting as configured, a literal or a reference.
+type BoxLine struct {
+	Name  string    `json:"name"`
+	Value string    `json:"value"`
+	By    StepActor `json:"by"`
 }
 
 // SeatAnswer is one seat on the access route.

@@ -30,7 +30,7 @@ func TestTheExpoCatalog(t *testing.T) {
 	spec, ok := cat.Lane(seataccess.LaneExpo)
 	if !ok || !spec.Levels || spec.LiveLevels || spec.Scoped || !spec.Rotatable ||
 		spec.CreatedBy != seataccess.ByCrewlet || spec.EnabledBy != seataccess.ByCrewlet ||
-		spec.BoxEnv != "EXPO_TOKEN" {
+		!slices.Equal(spec.BoxEnv, []seataccess.BoxVar{{Field: expo.TokenField, Env: "EXPO_TOKEN"}}) {
 		t.Fatalf("lane spec = %+v", spec)
 	}
 	if !slices.Equal(cat.Credentials, []string{expo.TokenField}) {
@@ -38,6 +38,10 @@ func TestTheExpoCatalog(t *testing.T) {
 	}
 	if got := seataccess.SinkName(integration.KindExpo, expo.TokenField, "qa"); got != "EXPO_TOKEN_QA" {
 		t.Fatalf("sink = %q", got)
+	}
+	if got, want := seataccess.BoxLines(integration.KindExpo, seataccess.LaneExpo, "qa"),
+		[]seataccess.BoxLine{{Name: "EXPO_TOKEN", Value: "${EXPO_TOKEN_QA}", By: seataccess.ByYou}}; !slices.Equal(got, want) {
+		t.Fatalf("box lines = %v, want %v", got, want)
 	}
 	if !slices.Equal(config.SeatSealedFields("expo"), cat.Credentials) {
 		t.Fatalf("config restates %v, the catalog %v", config.SeatSealedFields("expo"), cat.Credentials)
