@@ -8,12 +8,15 @@ import { describe, expect, test } from "vitest";
 import {
   CONFLUENCE_LANE,
   DATADOG_LANE,
+  DIGITALOCEAN_LANE,
   EXPO_LANE,
   JIRA_LANE,
   GITHUB_LANE,
   MATTERMOST_LANE,
   NEUTRAL_LANE,
   datadogAnswer,
+  digitaloceanAnswer,
+  digitaloceanWaitingAnswer,
   expoAnswer,
   expoWaitingAnswer,
   neutralAnswer,
@@ -27,6 +30,7 @@ import {
   emptyScopeHint,
   handoffOf,
   rotateHandoffOf,
+  scopeGuide,
   joinLevels,
   levelName,
   boxSettings,
@@ -319,7 +323,9 @@ describe("a handoff", () => {
       url: "https://expo.dev/accounts/gophrase/settings/access-tokens",
       said: "Add a robot named crewlet-gophrase-pm with the Runner role at Expo",
       account: "crewlet-gophrase-pm",
+      name: "crewlet-gophrase-pm",
       role: { name: "Runner", note: "View all projects and perform low-risk actions on them" },
+      level: "runner",
       current: undefined,
       renew: false,
       rotating: false,
@@ -340,9 +346,9 @@ describe("a handoff", () => {
 
   test("the robot is named only as the engine named it", () => {
     for (const step of ["create", "mint"] as const) {
-      expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer(step, { named: false })))?.account).toBe(
-        undefined,
-      );
+      const handoff = handoffOf(EXPO_LANE, pm(expoWaitingAnswer(step, { named: false })));
+      expect(handoff?.account).toBe(undefined);
+      expect(handoff?.name).toBe(undefined);
     }
   });
 
@@ -378,6 +384,91 @@ describe("a handoff", () => {
       handoffOf(EXPO_LANE, { ...lane, sync: { ...lane.sync!, outcome: "ok" } }),
     ).toBeUndefined();
     expect(handoffOf(DATADOG_LANE, lane)).toBeUndefined();
+  });
+
+  // A DIGITALOCEAN TOKEN IS NAMED BY THE ENGINE, NEVER BY WHOSE IT IS: every
+  // token there acts as the person who made it, so the observed account
+  // ("Miles on gophrase") is no name to type. Mutation: fall back to the
+  // observed account and a new token is offered its owner's name.
+  test("a DigitalOcean token is named by hand_in alone, never by its owner", () => {
+    const pm = (answer: ReturnType<typeof digitaloceanWaitingAnswer>) =>
+      answer.seats[0]!.lanes.digitalocean!;
+    expect(handoffOf(DIGITALOCEAN_LANE, pm(digitaloceanWaitingAnswer("create")))).toMatchObject({
+      step: "create",
+      url: "https://cloud.digitalocean.com/account/api/tokens",
+      name: "crewlet-gophrase-pm-operate",
+      level: "operate",
+      renew: false,
+    });
+    const renewed = handoffOf(
+      DIGITALOCEAN_LANE,
+      pm(digitaloceanWaitingAnswer("mint", { named: false })),
+    );
+    expect(renewed).toMatchObject({ account: "Miles on gophrase", renew: true });
+    expect(renewed?.name).toBeUndefined();
+    const sre = digitaloceanAnswer().seats[1]!.lanes.digitalocean!;
+    expect(rotateHandoffOf(DIGITALOCEAN_LANE, sre)).toMatchObject({
+      name: "crewlet-gophrase-sre-operate",
+      rotating: true,
+    });
+  });
+});
+
+// A LEVEL'S SCOPES ARE TICKED FROM THE ENGINE'S LISTS: every read at once,
+// the reads it must not hold unticked, then its writes section by section,
+// the whole section where that takes fewer clicks. Nothing is listed here.
+describe("a scope guide", () => {
+  // Mutation: count a higher level's grants as unneeded rather than refused,
+  // or drop the section's own extras, and the Operate guide changes.
+  test("Operate unticks the refused and unneeded reads, then ticks its writes by section", () => {
+    expect(scopeGuide(DIGITALOCEAN_LANE, "operate")).toEqual({
+      refused: ["billing:read", "security:read"],
+      unneeded: ["genai:read"],
+      sections: [
+        { resource: "droplet", tick: [], untick: ["droplet:admin"] },
+        { resource: "firewall", tick: [], untick: [] },
+        { resource: "kubernetes", tick: [], untick: ["kubernetes:access_cluster"] },
+        { resource: "project", tick: ["project:assign_resource"], untick: [] },
+        { resource: "snapshot", tick: [], untick: [] },
+      ],
+    });
+  });
+
+  test("Administer keeps its own scopes, and Read ticks no section", () => {
+    expect(scopeGuide(DIGITALOCEAN_LANE, "administer")?.sections).toEqual([
+      { resource: "droplet", tick: [], untick: [] },
+      { resource: "firewall", tick: [], untick: [] },
+      { resource: "kubernetes", tick: [], untick: [] },
+      { resource: "project", tick: ["project:assign_resource"], untick: [] },
+      { resource: "snapshot", tick: [], untick: [] },
+    ]);
+    expect(scopeGuide(DIGITALOCEAN_LANE, "read")).toEqual({
+      refused: ["billing:read", "security:read"],
+      unneeded: ["genai:read"],
+      sections: [],
+    });
+  });
+
+  // A READ ONLY A HIGHER LEVEL GRANTS is ticked by the bulk select too, and the
+  // paste refuses it below that level, so it is unticked with the refused.
+  // Mutation: leave higher levels' grants out of the refused list.
+  test("a read only a higher level grants is unticked below it", () => {
+    const lane: Lane = {
+      ...DIGITALOCEAN_LANE,
+      levels: [
+        { id: "low", name: "Low", grants: ["droplet:read"] },
+        { id: "high", name: "High", grants: ["droplet:read", "database:read"] },
+      ],
+      refused: [],
+      unneeded: [],
+    };
+    expect(scopeGuide(lane, "low")?.refused).toEqual(["database:read"]);
+    expect(scopeGuide(lane, "high")?.refused).toEqual([]);
+  });
+
+  test("a level that names no scopes has no guide", () => {
+    expect(scopeGuide(EXPO_LANE, "runner")).toBeUndefined();
+    expect(scopeGuide(DIGITALOCEAN_LANE, undefined)).toBeUndefined();
   });
 });
 
@@ -585,4 +676,17 @@ test("a tool waiting with the engine's reason says the reason", () => {
     "Waiting for the credential, Its tool server, one per agent",
   );
   expect(statusOf(NEUTRAL_LANE, waiting, false, false).label).toBe("In sync");
+});
+
+// DIGITALOCEAN'S TOOL IS ITS MCP SERVER OR DOCTL IN THE BOX, and the variable
+// names the box's route, never the server's. Mutation: put doctl first in the
+// words and "as DIGITALOCEAN_ACCESS_TOKEN" reads as the server's.
+test("a DigitalOcean agent's tool names the MCP server, then doctl with its variable", () => {
+  const sre = digitaloceanAnswer().seats[1]!.lanes.digitalocean!;
+  expect(toolWords(DIGITALOCEAN_LANE, sre)).toBe(
+    "Live, the DigitalOcean MCP server, or doctl in its box, as DIGITALOCEAN_ACCESS_TOKEN",
+  );
+  expect(toolWords(DIGITALOCEAN_LANE, { ...sre, tool: "no_server" })).toBe(
+    "Not set up: no digitalocean tool server is declared, and its sandbox env does not set DIGITALOCEAN_ACCESS_TOKEN",
+  );
 });

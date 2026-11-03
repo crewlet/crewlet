@@ -29,7 +29,7 @@ var goPackages = map[string]bool{
 	"confluence": true, "coord": true,
 	"coordtest": true, "costlimit": true, "credential": true, "cron": true,
 	"dashspec": true, "datadog": true, "datasetsapi": true, "decision": true, "decltype": true,
-	"docindex": true, "doclet": true, "docsgate": true, "e2e": true, "embeddings": true,
+	"digitalocean": true, "docindex": true, "doclet": true, "docsgate": true, "e2e": true, "embeddings": true,
 	"engine": true, "envfile": true, "envref": true, "estate": true, "executordomain": true, "executorkeep": true,
 	"eventfan": true, "eventfantest": true, "events": true, "execstate": true, "expo": true,
 	"extension": true, "externaltest": true, "fleetsecrets": true, "flock": true,

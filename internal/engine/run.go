@@ -1616,8 +1616,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// and a bridge URL mounted a bridge whose every minted endpoint failed,
 	// so every executor run's tool calls failed and the run was rescued as
 	// incomplete — each silently, inside a box the engine never hears from
-	// again — and a code host's base would hand every run given repositories
-	// a clone that dials nowhere.
+	// again — and a code host's base would hand every checkout a clone that
+	// dials nowhere.
 	boxURLs := ReadBoxURLs(getenv(environ))
 	if err = boxURLs.Refusal(); err != nil {
 		return nil, fmt.Errorf("engine: a URL a box dials back to the engine: %w", err)

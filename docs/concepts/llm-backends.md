@@ -3401,8 +3401,17 @@ own run, and a launch passes over a `hermes` or `pi` member of a seat's chain;
 a seat whose chain holds no `claude-code` or `opencode` entry is
 [refused](code-sandbox.md#failure-modes). A
 key given in the seat's `role.sandbox.env` is counted by the remote-box check as
-well. A harness that does not read its key from the environment — `kimi-code` reads
-its metered key only from `config.toml` in the credential directory — does not
+well, except the seat's own credential for a tool: a line that hands a box CLI
+one of the agent's integration credentials, such as doctl's
+`DIGITALOCEAN_ACCESS_TOKEN: "${DIGITALOCEAN_TOKEN_SRE}"` or glab's
+`GITLAB_TOKEN: "${GITLAB_TOKEN_SRE}"`, is never counted as a sign-in, although
+`opencode` reads both names as provider keys. Such a line under a name the
+seat's executor entry signs in by (an `opencode` entry on DigitalOcean's models
+with `DIGITALOCEAN_ACCESS_TOKEN` in its `env`) is
+[refused](code-sandbox.md#credentials-and-the-run-environment), since the
+harness would make its model calls with the agent's tool credential.
+A harness that does not read its key from the environment (`kimi-code` reads
+its metered key only from `config.toml` in the credential directory) does not
 declare `env_sign_in`, and a key in its `env` is not counted.
 
 ### 7. A cloud provider or gateway (`auth.mode: env`)

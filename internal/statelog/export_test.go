@@ -15,6 +15,16 @@ import (
 // only by rendering the constant the same way.
 func SpokenForTest(d time.Duration) string { return spoken(d) }
 
+// WaitWithinFrom is [WaitWithin] with the clock read at now ([waitWithin]).
+//
+// EXPORTED FOR A TEST because the bound has to survive a stall between
+// reading the clock and arming the wait, and no case can stall a goroutine
+// between two statements: a reading from before now is that stall.
+func WaitWithinFrom(ctx context.Context, budget time.Duration, now time.Time) (
+	context.Context, context.CancelFunc, WaitBound) {
+	return waitWithin(ctx, budget, now)
+}
+
 // RankOffersForTest is [collectOffers]' ordering, over offers already
 // collected.
 //

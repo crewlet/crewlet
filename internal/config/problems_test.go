@@ -230,6 +230,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"integrations.confluence", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.cloudflare", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.expo", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.digitalocean", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 
