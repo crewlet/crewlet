@@ -85,6 +85,9 @@ type Backend struct {
 	mu    sync.Mutex
 	rows  map[string]*record
 	shift time.Duration
+	// watchers is every running [Backend.WatchLive], each told of every
+	// write to its class while mu is held — see watch.go.
+	watchers map[*leaseWatch]struct{}
 	// minted is the in-process counter Epochs stands in for when nil.
 	minted map[string]int64
 	// claims numbers the claims in flight, so a claim gives back or
@@ -364,6 +367,7 @@ func (b *Backend) write(row *record, opts coord.AcquireOptions, now time.Time) {
 	if len(opts.Meta) > 0 {
 		row.meta = copyMeta(opts.Meta)
 	}
+	b.wrote(row)
 }
 
 // Renew extends a lease the caller still holds at this epoch.
@@ -387,6 +391,7 @@ func (b *Backend) Renew(ctx context.Context, resource, owner string, epoch int64
 		return false, nil
 	}
 	row.expiresAt = now.Add(ttl)
+	b.wrote(row)
 	return true, nil
 }
 
@@ -427,6 +432,7 @@ func (b *Backend) release(resource, owner string, epoch int64) bool {
 	// resource back to the node whose caches and MCP children are warm.
 	row.owner = ""
 	row.expiresAt = b.now()
+	b.wrote(row)
 	return true
 }
 

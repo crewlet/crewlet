@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -176,7 +177,7 @@ func TestAnAskIsResolvedAndRoutes(t *testing.T) {
 		t.Fatalf("the wake carries no ask, so `asked` routes to nobody: %+v", wake)
 	}
 	if !slices.ContainsFunc(worklet.Candidates(wake),
-		func(c worklet.Candidate) bool {
+		func(c routing.Candidate[worklet.Reason]) bool {
 			return c.Handle == "pm" && c.Reason == worklet.ReasonAsked && c.Addressed
 		}) {
 		t.Errorf("the asked party is not an ADDRESSED candidate: %+v",

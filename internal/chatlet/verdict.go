@@ -234,10 +234,12 @@ type Decisions interface {
 	Decided(ctx context.Context, opID string, at statelog.Position) (v Verdict, ok bool, err error)
 }
 
-// CommitWaiter is the half of this node's applier [NodeDecisions] asks.
+// CommitWaiter is the half of this node's applier [NodeDecisions] asks: what
+// a READER waits for (statelog.Runner's Reached), since a verdict is read
+// from rows the applier wrote, never what is durable.
 type CommitWaiter interface {
-	Committed() statelog.Position
-	WaitCommitted(ctx context.Context, p statelog.Position) error
+	Reached() statelog.Position
+	WaitReached(ctx context.Context, p statelog.Position) error
 }
 
 // DecisionWait is how long the feed waits for this node's applier to reach a
@@ -283,14 +285,14 @@ func (d NodeDecisions) Decided(ctx context.Context, opID string, at statelog.Pos
 		return "", false, errors.New("chatlet: the feed was given no applier to ask " +
 			"whether it has decided a record")
 	}
-	committed := d.Applied.Committed()
+	committed := d.Applied.Reached()
 	if committed.Stream == at.Stream && committed.Generation == at.Generation &&
 		at.Seq > committed.Seq+uint64(DecisionLagRecords) {
 		return "", false, nil
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, DecisionWait)
 	defer cancel()
-	if err := d.Applied.WaitCommitted(waitCtx, at); err != nil {
+	if err := d.Applied.WaitReached(waitCtx, at); err != nil {
 		if ctx.Err() != nil {
 			return "", false, ctx.Err()
 		}

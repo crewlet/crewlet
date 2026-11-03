@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -139,8 +139,8 @@ func (e *Engine) closeStopped(ctx context.Context, tel turnTelemetry, stop error
 // closeStoppedTurn ends the turn of a run a person stopped — the coordinator's
 // [sandbox.CoordinatorOptions.CloseStopped] — and answers how it ended, for the
 // executor log: stopped, by whom and why, whether its reply had reached anybody
-// as the turn's own calls say, and what the engine told the colleague whose ask
-// the turn took up.
+// as the turn's own calls say ([sandbox.RunCalls]), and what the engine told
+// the colleague whose ask the turn took up.
 //
 // A TURN THAT PARKED ON THE RUN IS CLOSED ON THE RECORD FIRST ([Engine.closeParkedTurn]).
 // One that did not — a launch stopped before its turn could park, the turn
@@ -157,15 +157,17 @@ func (e *Engine) closeStopped(ctx context.Context, tel turnTelemetry, stop error
 // logged, and the turn still ends: its colleague is answered and its end
 // owed, since neither reads the parked state. Refusing the ending over a turn
 // record would keep a person's stopped run in the store for good.
-func (e *Engine) closeStoppedTurn(ctx context.Context, run sandbox.PendingRun) (executordomain.Ending, error) {
+func (e *Engine) closeStoppedTurn(ctx context.Context, run sandbox.PendingRun,
+	bridged sandbox.RunCalls) (executorkeep.Ending, error) {
+
 	if run.Ending == nil || run.Stop == nil {
-		return executordomain.Ending{}, fmt.Errorf("engine: run %s's ending is no stop", run.TurnID)
+		return executorkeep.Ending{}, fmt.Errorf("engine: run %s's ending is no stop", run.TurnID)
 	}
 	company := e.Company()
 	stop := &stopError{pause: pauseOfStop(*run.Stop), handle: run.AgentHandle}
 	if len(run.ExecuteState) > 0 {
 		if err := e.closeParkedTurn(ctx, company, run, stop); err != nil {
-			return executordomain.Ending{}, err
+			return executorkeep.Ending{}, err
 		}
 	}
 	// AND THE COLLEAGUE WHOSE ASK THE TURN TOOK UP, told it was stopped: this
@@ -175,7 +177,7 @@ func (e *Engine) closeStoppedTurn(ctx context.Context, run sandbox.PendingRun) (
 	// once: the end this answers is owed on the row, and a repeat of the
 	// ending finds it there.
 	answered := e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, stop)
-	return e.runEnding(company, run, answered), nil
+	return e.runEnding(company, run, bridged, answered), nil
 }
 
 // closeParkedTurn closes ON THE RECORD the turn that was parked on a run a
@@ -206,7 +208,7 @@ func (e *Engine) closeParkedTurn(ctx context.Context, company *Company, run sand
 	seat := company.Org.AgentSeatByHandle(run.AgentHandle)
 	in := resumeInput{
 		Company: company, Run: run, State: state,
-		Turn:        resumedTurn(run, seat, company.Org),
+		Turn:        resumedTurn(run, seat, company.Org, e.rowHolds(run)),
 		InputTokens: run.Stop.InputTokens, OutputTokens: run.Stop.OutputTokens,
 		CacheRead: run.Stop.CacheReadTokens, CacheWrite: run.Stop.CacheWriteTokens,
 		Engine: run.Launch.Bridged.Plus(sandbox.EngineSpend{Aux: run.Stop.Condensed}),

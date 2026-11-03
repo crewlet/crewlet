@@ -15,7 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
 // THE ONE PROPERTY: a call that takes a run out of the set of things that will
@@ -291,7 +291,7 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "the end a turn's frame decided, owed on its run's record",
 		call: func(t *testing.T, rig *coordRig) {
 			if _, err := rig.coordinator.OweEnd(t.Context(), "t1",
-				executordomain.Ending{Outcome: executordomain.OutcomeCompleted}); err != nil {
+				executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}); err != nil {
 				t.Logf("OweEnd: %v", err)
 			}
 		},
@@ -304,7 +304,7 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "the end of a turn whose frame found no run's record",
 		call: func(t *testing.T, rig *coordRig) {
 			if err := rig.coordinator.EndTurn(t.Context(), TurnEnd{Handle: "swe", TurnID: "t1",
-				Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+				Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
 				t.Logf("EndTurn: %v", err)
 			}
 		},
@@ -930,6 +930,27 @@ func (s *refusingStore) MarkSuspended(ctx context.Context, turnID string, state 
 	return s.inner.MarkSuspended(ctx, turnID, state)
 }
 
+func (s *refusingStore) TurnLog(ctx context.Context, run PendingRun) (BridgeLog, error) {
+	if s.called("TurnLog") {
+		return BridgeLog{}, errRefusedCall
+	}
+	return s.inner.TurnLog(ctx, run)
+}
+
+func (s *refusingStore) BridgeLog(ctx context.Context, run PendingRun) (BridgeLog, error) {
+	if s.called("BridgeLog") {
+		return BridgeLog{}, errRefusedCall
+	}
+	return s.inner.BridgeLog(ctx, run)
+}
+
+func (s *refusingStore) Handed(ctx context.Context, run PendingRun) (string, error) {
+	if s.called("Handed") {
+		return "", errRefusedCall
+	}
+	return s.inner.Handed(ctx, run)
+}
+
 func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
 	if s.called("AppendBridgeCall") {
 		return false, errRefusedCall
@@ -949,6 +970,37 @@ func (s *refusingStore) ListActive(ctx context.Context) ([]PendingRun, error) {
 		return nil, errRefusedCall
 	}
 	return s.inner.ListActive(ctx)
+}
+
+func (s *refusingStore) ListRuns(ctx context.Context) ([]PendingRun, error) {
+	if s.called("ListRuns") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ListRuns(ctx)
+}
+
+func (s *refusingStore) AddCodeHolds(ctx context.Context, turnID string, keys []string) (bool, error) {
+	if s.called("AddCodeHolds") {
+		return false, errRefusedCall
+	}
+	return s.inner.AddCodeHolds(ctx, turnID, keys)
+}
+
+func (s *refusingStore) RaiseCodeFloor(ctx context.Context, turnID, launchID string,
+	raise func(current string) (string, bool),
+) (bool, error) {
+	if s.called("RaiseCodeFloor") {
+		return false, errRefusedCall
+	}
+	return s.inner.RaiseCodeFloor(ctx, turnID, launchID, raise)
+}
+
+func (s *refusingStore) GrantRepo(ctx context.Context, turnID, launchID string, g RepoGrant,
+) (RunRepo, GrantOutcome, error) {
+	if s.called("GrantRepo") {
+		return RunRepo{}, "", errRefusedCall
+	}
+	return s.inner.GrantRepo(ctx, turnID, launchID, g)
 }
 
 func (s *refusingStore) ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error) {

@@ -389,7 +389,10 @@ than through the seat's own app.
 
 GitHub has no roles for an app. It has permissions, each at **No access**,
 **Read-only** or **Read and write**, so that is what a seat stores and what the
-Agents tab offers, under GitHub's names:
+Agents tab offers, under GitHub's names. A seat's `code.access`
+(`role.code.access`) is not one of them and reaches nothing here: it caps what
+the seat may do on the engine's own [code host](../concepts/code-host.md#who-may-read-and-push)
+alone, and what the seat may do on GitHub is this list:
 
 | Permission (key) | Levels offered | What it is for |
 |---|---|---|
@@ -479,6 +482,8 @@ agents keeps ten separate records:
 ```yaml
 roles:
   - name: Senior Engineer
+    code:
+      access: review              # the app's permission set: read_only (default) | review | full_access
     integrations:
       github:
         enabled: true             # off until turned on; off suspends the installation
@@ -966,8 +971,9 @@ prompt renders differently.
 ### The one event addressed to its own actor
 
 A seat is never told about its own actions — with one exception on GitHub (the
-self-hosted host's failed pipeline and Worklet's notice that a task the
-actor unblocked is now workable are the engine's others). A **failed workflow
+self-hosted host's failed pipeline is another, and Worklet's `unblocked`,
+news that a task of yours became workable, reaches you even on a record you
+wrote). A **failed workflow
 run** names the person whose push triggered it, and when it goes red they are
 the only one who can fix it. A build runs asynchronously, minutes after the
 push, and reports a result nobody could have predicted, so suppressing it

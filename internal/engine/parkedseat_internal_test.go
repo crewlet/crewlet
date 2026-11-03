@@ -117,7 +117,7 @@ func gatedSpyRuntime(t *testing.T, e *Engine) (*sandbox.Coordinator, *resumeSpy,
 	var asked atomic.Int32
 	gate := e.turnGate()
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
+		Pushes: noPushes{}, Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer, Lease: e.launchFence,
 		Gate: func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {

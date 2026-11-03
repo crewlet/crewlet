@@ -210,8 +210,8 @@ func TestALiveGroupWithAnotherStartTimeIsNotCurrent(t *testing.T) {
 
 // A group whose leader has exited while a member runs on is still the group it
 // was recorded for: the kernel does not reissue a pid a live group carries. A
-// launcher that forks its worker and exits is the ordinary shape of a coding
-// job, and reading its group as gone would leave the worker unsignalled.
+// launcher that forks its worker and exits is the ordinary shape of an executor's
+// launch, and reading its group as gone would leave the worker unsignalled.
 func TestAGroupOutlivingItsLeaderIsStillCurrent(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "sleep 300 >/dev/null 2>&1 & echo $!")
 	Set(cmd)

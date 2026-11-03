@@ -135,17 +135,9 @@ func startStatelessPairSpec(t *testing.T, spec pairSpec) statelessPair {
 	dataLn := bridgeListener(t, "")
 	data, dataBoot := bootDataMember(t, cfg, model, env, dataLn, ring, spec.dataBoot)
 	data.app, data.server = serveAPI(t, data.engine, dataBoot, data.chat.Hub(), dataLn, nil)
-	port := dataBoot.Stream.Leaf.Port
 
 	agentDir := t.TempDir()
-	agentBoot := config.DefaultBootstrap()
-	agentBoot.Node.ID = "agent-1"
-	agentBoot.Node.Roles = []string{"seats"}
-	agentBoot.Store.Path = filepath.Join(agentDir, "crewlet.db")
-	agentBoot.Store.Scratch = true
-	agentBoot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}
-	agentBoot.Coordination.Type = config.CoordinationEmbeddedKV
-	ring.hold(&agentBoot)
+	agentBoot := statelessBootstrap(agentDir, dataBoot, ring)
 	agentEnv := maps.Clone(env)
 	if agentEnv == nil {
 		agentEnv = map[string]string{}
@@ -171,6 +163,22 @@ func startStatelessPairSpec(t *testing.T, spec pairSpec) statelessPair {
 	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
 }
 
+// statelessBootstrap is the pair's stateless node, `agent-1`: the seats role
+// alone, a scratch store in dir, and a leaf link to the data member data
+// boots — on the pair's keyring, since a node keyed apart from its data member
+// has every request it makes of the estate refused.
+func statelessBootstrap(dir string, data *config.Bootstrap, ring keyring) config.Bootstrap {
+	boot := config.DefaultBootstrap()
+	boot.Node.ID = "agent-1"
+	boot.Node.Roles = []string{"seats"}
+	boot.Store.Path = filepath.Join(dir, "crewlet.db")
+	boot.Store.Scratch = true
+	boot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", data.Stream.Leaf.Port)}
+	boot.Coordination.Type = config.CoordinationEmbeddedKV
+	ring.hold(&boot)
+	return boot
+}
+
 // dataMemberBootstrap is the pair's data member: a node holding the data, with
 // a leaf listener on port for the stateless node to join through — on the
 // pair's keyring, serving the fixture's credential ([withCredential]).
@@ -182,6 +190,7 @@ func dataMemberBootstrap(t *testing.T, port int, ring keyring) *config.Bootstrap
 	boot.Node.ID = "data-a"
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.CodeCacheIn(&boot.Git)
 	boot.Stream.Leaf.Host, boot.Stream.Leaf.Port = "127.0.0.1", port
 	boot.Coordination.Type = config.CoordinationEmbeddedKV
 	return &boot
@@ -832,6 +841,7 @@ func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
 			boot.Node.Roles = tc.roles
 			boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 			brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.CodeCacheIn(&boot.Git)
 			boot.Coordination.Type = config.CoordinationEmbeddedKV
 			withKeyring(t, &boot)
 			n := bootNodeWith(t, engine.Options{

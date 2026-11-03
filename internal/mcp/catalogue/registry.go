@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -327,12 +328,12 @@ func offerPage(body []byte) (Found, error) {
 
 // listingName is the registry's own pattern for a server's name: a namespace
 // the registry verified for the publisher, a slash, and the server's name.
-var listingName = regexp.MustCompile(`^[a-zA-Z0-9.-]+/[a-zA-Z0-9._-]+$`)
+var listingName = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-zA-Z0-9.-]+/[a-zA-Z0-9._-]+$`) })
 
 // offer drafts one listing as an entry, or false where it is not one this
 // build can offer whole.
 func offer(s serverJSON, updated *time.Time) (Entry, bool) {
-	if len(s.Name) < 3 || len(s.Name) > maxName || !listingName.MatchString(s.Name) {
+	if len(s.Name) < 3 || len(s.Name) > maxName || !listingName().MatchString(s.Name) {
 		return Entry{}, false
 	}
 	description, ok := line(s.Description, maxDescription)
@@ -388,7 +389,7 @@ func offerRemote(e *Entry, remote remoteJSON) bool {
 	if address == "" || strings.ContainsAny(address, "{}") {
 		return false
 	}
-	headers, ok := inputs(remote.Headers, httpToken.MatchString)
+	headers, ok := inputs(remote.Headers, httpToken().MatchString)
 	if !ok {
 		return false
 	}
@@ -419,24 +420,34 @@ func offerRemote(e *Entry, remote remoteJSON) bool {
 
 // The runners a listing's package is launched through, by registry type, with
 // the public registry each fetches from by default.
-var runners = map[string]struct {
+//
+// BUILT AT FIRST USE, as every pattern of this file is, because compiling them
+// at init is a cost every process of the binary pays, a git hook's on each push
+// included, and only a registry search reads them (cmd/crewlet,
+// TestTheHookPaysLittleForTheEnginesInit).
+var runners = sync.OnceValue(func() map[string]packageRunner {
+	return map[string]packageRunner{
+		"npm": {"https://registry.npmjs.org", "npx",
+			func(id, v string) []string { return []string{"-y", id + "@" + v} },
+			regexp.MustCompile(`^(@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]{0,213}$`)},
+		"pypi": {"https://pypi.org", "uvx",
+			func(id, v string) []string { return []string{id + "==" + v} },
+			regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$`)},
+	}
+})
+
+// packageRunner is how one registry type's package is launched.
+type packageRunner struct {
 	base    string
 	command string
 	args    func(identifier, version string) []string
 	name    *regexp.Regexp
-}{
-	"npm": {"https://registry.npmjs.org", "npx",
-		func(id, v string) []string { return []string{"-y", id + "@" + v} },
-		regexp.MustCompile(`^(@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]{0,213}$`)},
-	"pypi": {"https://pypi.org", "uvx",
-		func(id, v string) []string { return []string{id + "==" + v} },
-		regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$`)},
 }
 
 // exactVersion is a release a runner fetches as written: it starts with a
 // letter or digit, so it can never be read as a flag, and holds no range or
 // wildcard.
-var exactVersion = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+!_-]{0,63}$`)
+var exactVersion = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+!_-]{0,63}$`) })
 
 // offerPackage drafts a stdio package from the public npm or PyPI registry at
 // its exact release, or false.
@@ -446,7 +457,7 @@ var exactVersion = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+!_-]{0,63}$`)
 // `--index-url`, `-p other`) in words a person reading the launch line would
 // not recognise as a different package. A listing that needs one is left out.
 func offerPackage(e *Entry, pkg packageJSON) bool {
-	run, known := runners[pkg.RegistryType]
+	run, known := runners()[pkg.RegistryType]
 	switch {
 	case !known, pkg.Transport.Type != "stdio", len(pkg.RuntimeArguments) > 0:
 		return false
@@ -454,7 +465,7 @@ func offerPackage(e *Entry, pkg packageJSON) bool {
 		return false
 	case !run.name.MatchString(pkg.Identifier):
 		return false
-	case !exactVersion.MatchString(pkg.Version) || strings.EqualFold(pkg.Version, "latest"):
+	case !exactVersion().MatchString(pkg.Version) || strings.EqualFold(pkg.Version, "latest"):
 		return false
 	}
 	args := run.args(pkg.Identifier, pkg.Version)
@@ -470,7 +481,7 @@ func offerPackage(e *Entry, pkg packageJSON) bool {
 			args = append(args, word)
 		}
 	}
-	env, ok := inputs(pkg.EnvironmentVariables, envName.MatchString)
+	env, ok := inputs(pkg.EnvironmentVariables, envName().MatchString)
 	if !ok {
 		return false
 	}
@@ -481,7 +492,7 @@ func offerPackage(e *Entry, pkg packageJSON) bool {
 }
 
 // flagName is a named argument's flag, dashes included.
-var flagName = regexp.MustCompile(`^--?[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+var flagName = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^--?[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`) })
 
 // argument is one package argument as one word of the launch, "" for one whose
 // value a person gives (left out of the draft for them to add), or false for
@@ -495,7 +506,7 @@ func argument(a argumentJSON) (string, bool) {
 		// A value the listing leaves to the person running it, flag or
 		// positional alike: a flag written without its value would read
 		// the next word as one.
-		return "", a.Type == "positional" || (a.Type == "named" && flagName.MatchString(a.Name))
+		return "", a.Type == "positional" || (a.Type == "named" && flagName().MatchString(a.Name))
 	}
 	switch a.Type {
 	case "positional":
@@ -506,7 +517,7 @@ func argument(a argumentJSON) (string, bool) {
 		}
 		return value, true
 	case "named":
-		if !flagName.MatchString(a.Name) {
+		if !flagName().MatchString(a.Name) {
 			return "", false
 		}
 		return a.Name + "=" + value, true
@@ -515,10 +526,10 @@ func argument(a argumentJSON) (string, bool) {
 }
 
 // httpToken is an http header name: RFC 9110's token.
-var httpToken = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$")
+var httpToken = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$") })
 
 // envName is an environment variable's name.
-var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+var envName = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`) })
 
 // inputs reads a listing's headers or variables, names held to valid, or false
 // when one is not a key a server can read or there are more than a server

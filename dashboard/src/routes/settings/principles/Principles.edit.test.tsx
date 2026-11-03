@@ -14,6 +14,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
@@ -27,6 +28,7 @@ import { InertWebSocket } from "~/test/client.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { Principles } from "./Principles.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 const ACME = {
   name: "Acme",
@@ -69,6 +71,7 @@ function mount(grants: string[] = ["admin"], org: Record<string, unknown> = ACME
       <SessionReading>
         <ViewerProvider>
           <ToastProvider>
+            <AppAnnouncer />
             <Router>
               <Principles />
             </Router>
@@ -135,6 +138,26 @@ test("a policy moved with its button is saved in its new place", async () => {
     ACME.policies[2],
     ACME.policies[1],
   ]);
+});
+
+// THE NOTE IS THE CARD'S CAPTION, ONE PARAGRAPH: the card draws the caption
+// under its body, so a note that brought a paragraph of its own was a <p>
+// inside the card's <p>, which HTML does not allow (a browser parsing it
+// closes the outer one first) and React warns of. Mutation: hand the card the
+// note as `<Text as="p">` and the sentence's paragraph sits inside another.
+test("a save this node has not applied yet is noted under the card in one paragraph", async () => {
+  mount();
+  await open("standing policies");
+  fireEvent.click(
+    within(card("Standing policies")).getByRole("button", { name: "Move policy 3 of 3 up" }),
+  );
+  saveKey(policyBox(1, 3));
+  await screen.findByText("Standing policies saved");
+  const note = within(card("Standing policies")).getByText(
+    "Saved. This page shows it as soon as this node applies the new revision.",
+  );
+  expect(note.tagName).toBe("P");
+  expect(note.parentElement?.closest("p")).toBeNull();
 });
 
 // A REMOVED RULE IS NOT READ BY ANYBODY FROM THE NEXT TURN, and the company's
@@ -221,7 +244,7 @@ test("a mission is held to the engine's bound in characters before anything is s
   fireEvent.change(mission, { target: { value: "😀".repeat(MISSION_MAX_CHARS + 1) } });
   expect(mission.getAttribute("aria-invalid")).toBe("true");
   saveKey(mission);
-  await act(async () => {});
+  await afterMicrotasks();
   expect(engine.puts).toEqual([]);
   expect(document.activeElement).toBe(mission);
   fireEvent.change(mission, { target: { value: "😀".repeat(MISSION_MAX_CHARS) } });
@@ -303,11 +326,12 @@ test("the browser asks before closing a tab with unsaved writing, and not otherw
   fireEvent.change(mission, { target: { value: "Half a thought" } });
   expect(unload()).toBe(true);
   saveKey(mission);
+  // WAITED FOR, NOT READ OFF THE TOAST. The toast is drawn in the commit that
+  // clears the writing, but the page stops listening for an unload in that
+  // commit's passive effect, which React runs in a task of its own once a busy
+  // machine has run its render past the scheduler's slice; a find hands back
+  // on the toast and a zero-delay timer, which can come first.
   await screen.findByText("Mission saved");
-  // WAITED FOR, not read at once: the editor lets go of the browser's prompt in
-  // an effect that runs after the render that shows the toast, so a read the
-  // moment the toast is in the document can land between the two. Under a busy
-  // runner it did, and the guard read as still held for writing already saved.
   await waitFor(() => expect(unload()).toBe(false));
 });
 

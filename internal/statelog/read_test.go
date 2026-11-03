@@ -63,9 +63,9 @@ type stubWaiter struct {
 	err    error
 }
 
-func (w *stubWaiter) Committed() statelog.Position { return w.at }
+func (w *stubWaiter) Reached() statelog.Position { return w.at }
 
-func (w *stubWaiter) WaitCommitted(_ context.Context, p statelog.Position) error {
+func (w *stubWaiter) WaitReached(_ context.Context, p statelog.Position) error {
 	w.waited.Add(1)
 	w.last.Store(p.Packed())
 	return w.err
@@ -99,13 +99,19 @@ func newReader(t *testing.T, db interface {
 		DB:     db,
 		Index:  index,
 		Waiter: waiter,
-		Health: h,
+		Health: readable(h),
 		Drain:  func() float64 { return 2000 },
 	})
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
 	return r
+}
+
+// readable is a health provider that always manages to read the health it
+// reports — every case here but the one about a health nobody could read.
+func readable(h func() statelog.Health) func() (statelog.Health, error) {
+	return func() (statelog.Health, error) { return h(), nil }
 }
 
 func pointQuery(level statelog.ReadLevel) statelog.Query {
@@ -180,7 +186,7 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			var appends atomic.Int64
 			h := newHarness(t)
 			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-				&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+				&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
 			}
@@ -229,7 +235,7 @@ func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 	var appends atomic.Int64
 	h := newHarness(t)
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+		&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -284,7 +290,7 @@ func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 func TestAStallBelowTheFloorServesNoRead(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -357,9 +363,7 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	t.Run("the broker's own answer", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		assertFullLogRead(t, h, refusingAppender{err: &jetstream.APIError{
-			Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}},
-			noCeiling(t))
+		assertFullLogRead(t, h, fullLog(), noCeiling(t))
 	})
 
 	t.Run("a real log at its ceiling", func(t *testing.T) {
@@ -395,7 +399,7 @@ func assertFullLogRead(t *testing.T, h *harness, log statelog.Appender,
 	admission statelog.Admission) {
 	t.Helper()
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), log,
-		testSigner(t, probeDomain{}),
+		members(1), testSigner(t, probeDomain{}),
 		admission, probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -434,7 +438,8 @@ func assertFullLogRead(t *testing.T, h *harness, log statelog.Appender,
 // and it will answer the same to the next barrier. Read as `no_quorum` — which
 // is where every refusal the read index did not recognise went — it carried an
 // election's retry hint to a caller the node will refuse identically. And a
-// barrier nobody answered IS the missed quorum, which the control holds.
+// barrier nobody answered IS the missed quorum — on a log several members
+// store, which the control holds.
 func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 	t.Parallel()
 	//
@@ -444,36 +449,57 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 	// the transport's own and every surface sends a refusal's detail to the
 	// caller. `words` is what the detail must say and `absent` what it must
 	// not.
+	//
+	// AND THE MEMBERS: what an unconfirmed barrier is turns on how many store
+	// the log. On three it is a majority that did not agree, or no leader
+	// that answered; on one there is no majority, so it is never `no_quorum`
+	// — a broker that did not answer, or, where its time ran out, the
+	// member's own write that stalled. What the broker NAMED is the same
+	// refusal at any count.
+	timedOut := fmt.Errorf("append: %w", context.DeadlineExceeded)
 	for _, c := range []struct {
-		name   string
-		err    error
-		want   statelog.ReadRefusal
-		words  string
-		absent string
+		name    string
+		members int
+		err     error
+		want    statelog.ReadRefusal
+		words   string
+		absent  string
 	}{
-		{"a sealed stream", &jetstream.APIError{Code: 400, ErrorCode: 10109,
+		{"a sealed stream", 3, &jetstream.APIError{Code: 400, ErrorCode: 10109,
+			Description: "invalid operation on sealed stream"}, statelog.RefuseBrokerRefused,
+			"invalid operation on sealed stream", ""},
+		{"a sealed stream, on one member", 1, &jetstream.APIError{Code: 400, ErrorCode: 10109,
 			Description: "invalid operation on sealed stream"}, statelog.RefuseBrokerRefused,
 			"invalid operation on sealed stream", ""},
 		// A BARRIER THE CLIENT REFUSED AS TOO LARGE is a server whose
 		// max_payload refuses every record, and the client's decision, so
 		// it is the broker's refusal too — never an unanswered append.
-		{"a barrier past the server's max_payload",
+		{"a barrier past the server's max_payload", 3,
 			fmt.Errorf("append: %w", nats.ErrMaxPayload), statelog.RefuseBrokerRefused,
 			"max_payload", ""},
-		{"nobody answered", errors.New("nats: timeout dialling 10.0.0.7:4222"),
+		{"nobody answered", 3, errors.New("nats: timeout dialling 10.0.0.7:4222"),
 			statelog.RefuseNoQuorum, "was not confirmed", "10.0.0.7"},
+		{"nobody answered, on one member", 1, errors.New("nats: timeout dialling 10.0.0.7:4222"),
+			statelog.RefuseBrokerUnreachable, "did not answer its append", "10.0.0.7"},
+		{"the barrier's time ran out", 3, timedOut,
+			statelog.RefuseNoQuorum, "a majority of its members did not agree", "deadline"},
+		{"the barrier's time ran out, on one member", 1, timedOut,
+			statelog.RefuseBrokerStalled, "its own write is stalled", "deadline"},
 		// A STORE THAT CLOSED UNDER THE BARRIER is a stream restarting:
 		// the broker answered, and what it said is that the entry may
-		// yet land — which clears exactly as a missed quorum does.
-		{"a store closed under it", &jetstream.APIError{Code: 503, ErrorCode: 10077,
+		// yet land — which clears exactly as an unanswered append does.
+		{"a store closed under it", 3, &jetstream.APIError{Code: 503, ErrorCode: 10077,
 			Description: "store is closed"}, statelog.RefuseNoQuorum,
+			"was not confirmed", "store is closed"},
+		{"a store closed under it, on one member", 1, &jetstream.APIError{Code: 503, ErrorCode: 10077,
+			Description: "store is closed"}, statelog.RefuseBrokerUnreachable,
 			"was not confirmed", "store is closed"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
 			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), refusingAppender{err: c.err},
-				testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+				members(c.members), testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
 			}
@@ -495,8 +521,9 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 				t.Errorf("the refusal carries the transport's own words to the "+
 					"caller: %q", err)
 			}
-			if c.want == statelog.RefuseNoQuorum &&
-				!strings.Contains(refusal.Detail, probePrefix+"."+statelog.BarrierKind) {
+			unconfirmed := c.want == statelog.RefuseNoQuorum ||
+				c.want == statelog.RefuseBrokerStalled || c.want == statelog.RefuseBrokerUnreachable
+			if unconfirmed && !strings.Contains(refusal.Detail, probePrefix+"."+statelog.BarrierKind) {
 				t.Errorf("detail = %q, want it to name the barrier's subject",
 					refusal.Detail)
 			}
@@ -524,7 +551,7 @@ func TestACallerThatGaveUpIsNotARefusal(t *testing.T) {
 		release := make(chan struct{})
 		t.Cleanup(func() { close(release) })
 		index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), blockingAppender{release: release},
-			testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
+			members(1), testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 		if err != nil {
 			t.Fatalf("NewReadIndex: %v", err)
 		}
@@ -582,6 +609,13 @@ func (ctxStore) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 // refusingAppender is a broker that answers every append with err.
 type refusingAppender struct{ err error }
 
+// fullLog is a broker whose stream is at its byte ceiling: every append is
+// answered what JetStream answers one past it.
+func fullLog() refusingAppender {
+	return refusingAppender{err: &jetstream.APIError{
+		Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}}
+}
+
 func (a refusingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
 	return 0, false, a.err
 }
@@ -600,7 +634,7 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 	h := newHarness(t)
 	var appends atomic.Int64
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+		&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -635,28 +669,164 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 	}
 }
 
-// A LINEARIZABLE READ WAITS FOR ITS OWN BARRIER.
-func TestALinearizableReadWaitsForThePositionItsBarrierEstablished(t *testing.T) {
+// A LINEARIZABLE READ WAITS FOR THE RECORD BEFORE ITS BARRIER, never for the
+// barrier itself: a barrier writes no row on any node, so its own commit is a
+// checkpoint and an fsync that change nothing the read reads. A read handed the
+// barrier by a node asked before it waits for that same record and appends
+// nothing, and a refusal still carries the BARRIER as what the read paid for —
+// so every node a walk asks derives the one position from the one index.
+func TestALinearizableReadWaitsForTheRecordBeforeItsBarrier(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+	var appends atomic.Int64
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
+		&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}),
+		noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
-	w := &stubWaiter{at: healthy().Position}
-	r := newReader(t, newStubStore(t), healthy, w, index)
+	estate := newStubStore(t)
+	// lastBarrier is the barrier the reads have appended so far: nothing else
+	// appends to this log.
+	lastBarrier := func() statelog.Position {
+		t.Helper()
+		_, last, err := h.log.Bounds(t.Context())
+		if err != nil {
+			t.Fatalf("read the log's end: %v", err)
+		}
+		return statelog.Position{Stream: probeStream, Generation: h.gen.Load(), Seq: last}
+	}
+	before := func(p statelog.Position) statelog.Position { return p.At(p.Seq - 1) }
+	read := func(ctx context.Context, w *stubWaiter) error {
+		_, err := newReader(t, estate, healthy, w, index).Read(ctx,
+			pointQuery(statelog.ReadLinearizable), func(*sql.Tx) error { return nil })
+		return err
+	}
 
-	if _, err := r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
-		func(*sql.Tx) error { return nil }); err != nil {
+	own := &stubWaiter{at: healthy().Position}
+	if err := read(t.Context(), own); err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if got := w.waited.Load(); got != 1 {
-		t.Fatalf("a linearizable read waited %d time(s), want exactly 1 — a "+
-			"barrier creates a record this node has not applied, so it ALWAYS "+
-			"waits for one", got)
+	barrier := lastBarrier()
+	if got := appends.Load(); got != 1 {
+		t.Fatalf("the read appended %d barrier(s), want 1", got)
 	}
-	if w.last.Load() == 0 {
-		t.Fatal("the read waited for the zero position")
+	if got, want := own.last.Load(), before(barrier).Packed(); got != want {
+		t.Fatalf("the read waited for packed %d, want the record before its barrier "+
+			"at %s (packed %d) — the barrier itself writes no row, and waiting for "+
+			"its commit is waiting for an fsync that changes nothing the read reads",
+			got, barrier, want)
+	}
+
+	// HANDED THE BARRIER, a node waits for the same record and appends nothing.
+	handed := statelog.WithSpent(t.Context(), statelog.Spent{Index: []statelog.Position{barrier}})
+	peer := &stubWaiter{at: healthy().Position}
+	if err := read(handed, peer); err != nil {
+		t.Fatalf("a read handed the barrier: %v", err)
+	}
+	if got := appends.Load(); got != 1 {
+		t.Fatalf("a read handed the barrier appended one of its own (%d appends)", got)
+	}
+	if got, want := peer.last.Load(), before(barrier).Packed(); got != want {
+		t.Fatalf("a read handed the barrier at %s waited for packed %d, want %d — "+
+			"every node derives one position from one read index", barrier, got, want)
+	}
+
+	// AND A REFUSAL STILL CARRIES THE BARRIER as what the read paid for, beside
+	// the record it waited its whole bound for.
+	behind := &stubWaiter{at: healthy().Position, err: context.DeadlineExceeded}
+	err = read(t.Context(), behind)
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBehind {
+		t.Fatalf("a read whose wait ran out = %v, want refused %s", err, statelog.RefuseBehind)
+	}
+	refused := lastBarrier()
+	if !slices.Equal(refusal.Spent.Index, []statelog.Position{refused}) {
+		t.Errorf("the refusal carries the read index %v, want the barrier %s — a node "+
+			"asked next derives its own wait from the barrier", refusal.Spent.Index, refused)
+	}
+	if !slices.Equal(refusal.Spent.Waited, []statelog.Position{before(refused)}) {
+		t.Errorf("the refusal says it waited for %v, want the record before its "+
+			"barrier, %s", refusal.Spent.Waited, before(refused))
+	}
+	if !strings.Contains(refusal.Detail, before(refused).String()) ||
+		!strings.Contains(refusal.Detail, refused.String()) {
+		t.Errorf("the refusal's detail %q names neither the record the read waited "+
+			"for nor the barrier it appended", refusal.Detail)
+	}
+}
+
+// A BARRIER AT THE START OF A LOG STILL TAKES THE WAIT'S PATH. The code log's
+// first record is @0:1, so a read whose barrier lands there has the zero
+// position before it — and the path after the wait is where an answer is
+// stamped from this node's applier and its staleness bound held to a health read
+// AFTER the wait, whatever the barrier's sequence. Keyed on the target being
+// non-zero, that read was stamped from the health read before it and never
+// bounded at all.
+func TestALinearizableReadAtTheStartOfALogIsStampedAndBounded(t *testing.T) {
+	t.Parallel()
+	// The waiter's position, which the health's is not, so an answer stamped
+	// from the health read before the wait is told apart.
+	stamped := statelog.Position{Stream: probeStream, Seq: 7}
+	for name, tc := range map[string]struct {
+		maxLagSeq uint64
+		refused   bool
+	}{
+		"served, stamped from the applier":           {},
+		"bounded, against the health after the wait": {maxLagSeq: 100, refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.gen.Store(0)
+			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log,
+				h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+			if err != nil {
+				t.Fatalf("NewReadIndex: %v", err)
+			}
+			// LEVEL BEFORE THE WAIT AND FIVE HUNDRED BEHIND AFTER IT: the
+			// log ran on while this node caught up.
+			var healths atomic.Int64
+			health := func() statelog.Health {
+				hl := healthy()
+				hl.Position = statelog.Position{Stream: probeStream}
+				if healths.Add(1) > 1 {
+					lag := uint64(500)
+					hl.Lag = &lag
+				}
+				return hl
+			}
+			w := &stubWaiter{at: stamped}
+			q := pointQuery(statelog.ReadLinearizable)
+			q.MaxLagSeq = tc.maxLagSeq
+			answer, err := newReader(t, newStubStore(t), health, w, index).Read(t.Context(), q,
+				func(*sql.Tx) error { return nil })
+			if _, last, berr := h.log.Bounds(t.Context()); berr != nil || last != 1 {
+				t.Fatalf("the read's barrier is at %d (%v), want the log's first record", last, berr)
+			}
+			if got := w.waited.Load(); got != 1 {
+				t.Fatalf("the read waited %d time(s), want 1 — for the zero position "+
+					"before its barrier, which is the step that stamps and bounds it", got)
+			}
+			if tc.refused {
+				var refusal *statelog.Refused
+				if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseTooStale {
+					t.Fatalf("a read bounded at %d records over a health 500 behind after "+
+						"its wait = %v, want refused %s", tc.maxLagSeq, err, statelog.RefuseTooStale)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			if answer.Position != stamped {
+				t.Errorf("the answer is stamped %s, want the applier's %s — not the "+
+					"position the health read before the wait reported", answer.Position, stamped)
+			}
+			if answer.Lag == nil || *answer.Lag != 500 {
+				t.Errorf("the answer reports lag %v, want the 500 read after the wait", answer.Lag)
+			}
+		})
 	}
 }
 
@@ -727,6 +897,49 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 	}
 	if statelog.ReadRefusal("made_up").Valid() {
 		t.Error("an unknown refusal code reports itself valid")
+	}
+}
+
+// EVERY REFUSAL ABOUT THIS NODE IS ONE ANOTHER NODE MAY SERVE, and only the
+// four that are facts about the whole fleet are not: a full log refuses every
+// node's barrier, and so does a broker that refused to store one for a reason
+// of its own (a sealed stream, a store out of resources), since every node
+// appends to the one stream; a log one member stores takes every node's
+// barrier through that member's one write, so its stall holds every node; and
+// a capacity window holds every node. Each code
+// is named here, so a code added to the set is a decision this table has to make —
+// and a code from a newer build, which nobody here can judge, is final.
+func TestOnlyAFleetWideRefusalIsFinalForEveryNode(t *testing.T) {
+	t.Parallel()
+	want := map[statelog.ReadRefusal]bool{
+		statelog.RefuseBehind:               true,
+		statelog.RefuseDeferred:             true,
+		statelog.RefuseDeferredScopeUnknown: true,
+		statelog.RefuseStalled:              true,
+		statelog.RefuseBelowFloor:           true,
+		statelog.RefuseFloorUnknown:         true,
+		statelog.RefuseEvicted:              true,
+		statelog.RefuseBrokerUnreachable:    true,
+		statelog.RefuseNoQuorum:             true,
+		statelog.RefuseWrongStream:          true,
+		statelog.RefuseTooStale:             true,
+		statelog.RefuseLogFull:              false,
+		statelog.RefuseBrokerRefused:        false,
+		statelog.RefuseBrokerStalled:        false,
+		statelog.RefuseMaintenance:          false,
+	}
+	for _, code := range statelog.ReadRefusals {
+		elsewhere, judged := want[code]
+		if !judged {
+			t.Errorf("%q is a refusal this table does not judge: say whether another node may serve it", code)
+			continue
+		}
+		if got := code.Elsewhere(); got != elsewhere {
+			t.Errorf("%q says another node may serve it: %v, want %v", code, got, elsewhere)
+		}
+	}
+	if statelog.ReadRefusal("made_up").Elsewhere() {
+		t.Error("a refusal code this build does not know says another node may serve it")
 	}
 }
 
@@ -948,7 +1161,7 @@ func TestADeferredScopeRefusesAPointReadAndUncertifiesASetRead(t *testing.T) {
 	var appends atomic.Int64
 	broker := newHarness(t)
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: broker.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, broker.gen.Load, nil)
+		&countingAppends{inner: broker.log, n: &appends}, broker.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, broker.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -1065,6 +1278,71 @@ func TestAStaleReadRefusesPastTheBoundItAsksFor(t *testing.T) {
 	}
 }
 
+// A READINESS NOBODY COULD READ REFUSES `broker_unreachable`, NAMING WHY — at
+// every level, and after a wait as well as before one.
+//
+// The provider's failure is its own return rather than a sentence in
+// [statelog.Health.Err]: folded into a zero health, the zero floor beside it
+// was refused first, and a stream leader that stopped answering the log's ends
+// reached a caller as "the published trim floor has never been read on this
+// node" — the wrong code and a false sentence, sending an operator to
+// coordination.
+func TestAnUnreadableReadinessRefusesBrokerUnreachable(t *testing.T) {
+	t.Parallel()
+	const why = "the stream's leader does not answer"
+	refusedFor := func(t *testing.T, err error, level statelog.ReadLevel) {
+		t.Helper()
+		var refusal *statelog.Refused
+		if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBrokerUnreachable ||
+			!strings.Contains(refusal.Detail, why) {
+			t.Fatalf("a %s read over an unreadable readiness = %v, want %q naming %q",
+				level, err, statelog.RefuseBrokerUnreachable, why)
+		}
+	}
+	unread := func() (statelog.Health, error) { return statelog.Health{}, errors.New(why) }
+	db := newStubStore(t)
+	r, err := statelog.NewReader(statelog.ReaderDeps{
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Mode: statelog.ModeNormal,
+		DB: db, Waiter: &stubWaiter{at: healthy().Position}, Health: unread,
+		Drain: func() float64 { return 2000 },
+	})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	for _, level := range statelog.ReadLevels {
+		_, err := r.Read(t.Context(), pointQuery(level), func(*sql.Tx) error { return nil })
+		refusedFor(t, err, level)
+	}
+	if got := db.reads.Load(); got != 0 {
+		t.Fatalf("reads over an unreadable readiness opened %d transaction(s)", got)
+	}
+
+	// AFTER A WAIT: the readiness answered before it and not after.
+	var asked atomic.Int64
+	waited := func() (statelog.Health, error) {
+		if asked.Add(1) == 1 {
+			return healthy(), nil
+		}
+		return unread()
+	}
+	w := &stubWaiter{at: healthy().Position}
+	r, err = statelog.NewReader(statelog.ReaderDeps{
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Mode: statelog.ModeNormal,
+		DB: db, Waiter: w, Health: waited, Drain: func() float64 { return 2000 },
+	})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	q := pointQuery(statelog.ReadSession)
+	q.Session = statelog.Position{Stream: probeStream, Generation: 1, Seq: 42}
+	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+	if w.waited.Load() != 1 {
+		t.Fatalf("the session read waited %d time(s), want once — the case is "+
+			"about a readiness read after a wait", w.waited.Load())
+	}
+	refusedFor(t, err, statelog.ReadSession)
+}
+
 // EVERY READ LEVEL IS ONE THIS BUILD KNOWS, and consistent-prefix is never a
 // default.
 //
@@ -1152,7 +1430,7 @@ func (l *landsBetween) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 // THE CALLER'S FLOOR IS HONOURED AT EVERY LEVEL, not only at `session`.
 //
 // A write answers with the position its record landed at, and a caller that
-// hands it back as [statelog.Query.MinPosition] is served nothing from before
+// hands it back as [statelog.Query.Floors] is served nothing from before
 // it — whatever else it asked for. It used to reach the reader at `session`
 // only: a `stale` read carrying a floor waited for nothing and served rows
 // from before the write the caller had just been told about, and a
@@ -1163,7 +1441,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	h := newHarness(t)
 	var appends atomic.Int64
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+		&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -1180,7 +1458,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 		w := &stubWaiter{at: healthy().Position}
 		r := newReader(t, db, healthy, w, index)
 		q := pointQuery(level)
-		q.MinPosition = floor
+		q.Floors = []statelog.Position{floor}
 		if _, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil }); err != nil {
 			t.Fatalf("%s read with a floor: %v", level, err)
 		}
@@ -1203,7 +1481,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	w := &stubWaiter{at: healthy().Position}
 	r := newReader(t, db, healthy, w, index)
 	q := pointQuery(statelog.ReadStale)
-	q.MinPosition = statelog.Position{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 5}
+	q.Floors = []statelog.Position{{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 5}}
 	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 	if !errors.Is(err, statelog.ErrForeignPosition) {
 		t.Fatalf("a stale read with a floor on another stream = %v, want %v",
@@ -1241,7 +1519,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -1266,7 +1544,7 @@ func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 				w := &stubWaiter{at: healthy().Position}
 				r := newReader(t, db, health.fn, w, index)
 				q := pointQuery(level)
-				q.MinPosition = floor
+				q.Floors = []statelog.Position{floor}
 				_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 				if !errors.Is(err, statelog.ErrForeignPosition) {
 					t.Errorf("a %s read floored at %s on a node that is %s "+
@@ -1291,7 +1569,7 @@ func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	// evicted node answers it with its own refusal.
 	r := newReader(t, &stubStore{}, evicted, &stubWaiter{at: healthy().Position}, index)
 	q := pointQuery(statelog.ReadStale)
-	q.MinPosition = statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}
+	q.Floors = []statelog.Position{{Stream: probeStream, Generation: 1, Seq: 1}}
 	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 	var refusal *statelog.Refused
 	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseEvicted {
@@ -1326,7 +1604,7 @@ func TestAStalenessBoundIsRecheckedAfterTheFloorWait(t *testing.T) {
 	r := newReader(t, newStubStore(t), drifting, w, nil)
 
 	q := pointQuery(statelog.ReadStale)
-	q.MinPosition = statelog.Position{Stream: probeStream, Generation: 1, Seq: 42}
+	q.Floors = []statelog.Position{{Stream: probeStream, Generation: 1, Seq: 42}}
 	q.MaxLagSeq = 250
 	_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 	var refusal *statelog.Refused
@@ -1344,7 +1622,7 @@ func TestAStalenessBoundIsRecheckedAfterTheFloorWait(t *testing.T) {
 	// figure beside the rows describes the moment they were read.
 	reads.Store(0)
 	within := pointQuery(statelog.ReadStale)
-	within.MinPosition = q.MinPosition
+	within.Floors = q.Floors
 	answer, err := r.Read(t.Context(), within, func(*sql.Tx) error { return nil })
 	if err != nil {
 		t.Fatalf("an unbounded floored read: %v", err)
@@ -1363,11 +1641,11 @@ type landingWaiter struct {
 	land func()
 }
 
-func (w *landingWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *landingWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	if w.land != nil {
 		w.land()
 	}
-	return w.stubWaiter.WaitCommitted(ctx, p)
+	return w.stubWaiter.WaitReached(ctx, p)
 }
 
 // A DEFERRAL LANDING DURING THE WAIT IS CAUGHT EVEN WHEN NOTHING WAS DEFERRED
@@ -1400,10 +1678,10 @@ func TestADeferralLandingDuringTheWaitIsCaughtWhenNoneWasDeferredBefore(t *testi
 			// pass and leaves the answer's transaction as the only door.
 			r := newReader(t, h.estate, healthy, waiter, nil)
 			q := statelog.Query{
-				Level:       statelog.ReadSession,
-				Scope:       statelog.ScopeSet{Paths: []string{"project/ENG/object/b"}},
-				MinPosition: healthy().Position,
-				Set:         set,
+				Level:  statelog.ReadSession,
+				Scope:  statelog.ScopeSet{Paths: []string{"project/ENG/object/b"}},
+				Floors: []statelog.Position{healthy().Position},
+				Set:    set,
 			}
 			answer, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 			if waiter.waited.Load() == 0 {
@@ -1515,7 +1793,7 @@ func TestANodeThatPublishesNothingAppendsNoBarrier(t *testing.T) {
 	h := newHarness(t)
 	var appends atomic.Int64
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t),
+		&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t),
 		probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -1524,7 +1802,7 @@ func TestANodeThatPublishesNothingAppendsNoBarrier(t *testing.T) {
 	deps := func(mode statelog.MaintenanceMode, index *statelog.ReadIndex) statelog.ReaderDeps {
 		return statelog.ReaderDeps{
 			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Mode: mode,
-			DB: newStubStore(t), Index: index, Health: healthy,
+			DB: newStubStore(t), Index: index, Health: readable(healthy),
 			Waiter: &stubWaiter{at: healthy().Position},
 		}
 	}

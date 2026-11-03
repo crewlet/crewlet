@@ -73,6 +73,7 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.CodeCacheIn(&boot.Git)
 	withServingTierA(t, &boot)
 	withSignIn(&boot)
 

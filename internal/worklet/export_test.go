@@ -31,7 +31,7 @@ func (w *Writer) Hold(ctx context.Context, resource string) (func(), error) {
 func (w *Writer) FileTaskAt(ctx context.Context, opID string, task Task,
 	n uint64) (WriteResult, error) {
 
-	return w.fileTask(ctx, opID, task, nil, n, settledCreate{}, nil)
+	return w.fileTask(ctx, opID, task, task, nil, n, settledCreate{}, nil)
 }
 
 // The turn's moved-task refusal and the bound on reading again after one, for

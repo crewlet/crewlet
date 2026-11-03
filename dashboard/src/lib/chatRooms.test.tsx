@@ -18,6 +18,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { ChatChannelsAnswer } from "~/protocol/index.ts";
 import { ADA, mountChat, NATIVE_SERVICES } from "~/test/chat.tsx";
+import { settled } from "~/test/settle.ts";
 import { LIVE_REFETCH_MS } from "./chatLive.ts";
 import {
   BADGE_REFETCH_MS,
@@ -178,10 +179,8 @@ describe("the frame's one reading", () => {
   });
 
   test("is asked for the badge only of a reader who holds Chatlet", async () => {
-    const { asked, view } = mount(<Badge />, { viewer: { ...ADA, grants: [] } });
-    await act(async () => {
-      for (let i = 0; i < 5; i++) await Promise.resolve();
-    });
+    const { asked, socket, view } = mount(<Badge />, { viewer: { ...ADA, grants: [] } });
+    await settled(() => socket.query.mock.calls.length);
     expect(asked()).toHaveLength(0);
     expect(view.getByLabelText("badge").textContent).toBe("");
   });
@@ -195,10 +194,10 @@ describe("the frame's one reading", () => {
   });
 
   test("is never asked for a credential acting as no seat", async () => {
-    const { asked } = mount(<Rooms />, { viewer: { ...ADA, handle: "", owner: "token:ops" } });
-    await act(async () => {
-      for (let i = 0; i < 5; i++) await Promise.resolve();
+    const { asked, socket } = mount(<Rooms />, {
+      viewer: { ...ADA, handle: "", owner: "token:ops" },
     });
+    await settled(() => socket.query.mock.calls.length);
     expect(asked()).toHaveLength(0);
   });
 

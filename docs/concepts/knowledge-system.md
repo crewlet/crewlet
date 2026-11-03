@@ -308,7 +308,12 @@ search path a node cannot recompute on its own. So it is not done per node and
 not on the write path — a page save would otherwise carry a third-party HTTP
 round trip inside its own transaction. One **fleet-singleton duty** embeds each
 source once and publishes a record; every data node applies it. The company
-pays the bill once and every data node holds the answer.
+pays the bill once and every data node holds the answer. A node whose copy of
+the vectors, Worklet or Doclet is out of service does not hold the duty, since
+what it publishes and withdraws would be decided from rows it has stopped
+serving. It gives the duty back if it holds it, and a node whose copies serve
+takes it at its next tick
+([singleton duties](seat-ownership.md#singleton-duties)).
 
 The duty ticks **every minute** and embeds at most **1 024 sources in at most
 32 provider requests** per tick, 128 sources a request at most — so a tick on a
@@ -327,7 +332,16 @@ core** trains on it, as it always did, and with searches always in flight on
 that core the same training is about three and a half minutes of reading and
 seven and a half of arithmetic. The training renews the duty's lease as it
 runs, and stops publishing — handing its cores back within a fraction of a
-second — the moment it cannot. And a tick is cut off once it has gone **five
+second — the moment a renewal answers that another node holds the duty, or
+once no renewal has confirmed it for two and a quarter minutes (its
+three-minute lease less one of the four renewals it makes in a lease). It
+stops the same way at the first renewal after this node's copy of the vectors,
+the tracker or the knowledge base goes out of service — renewing nothing, and
+giving the duty back once it has stopped. A
+renewal the coordination store refuses, or holds on to while its leader moves,
+costs it nothing, since none waits longer than one renewal for its answer. And
+a tick is
+cut off once it has gone **five
 minutes without progress**, never after five minutes of running: every request
 answered, every vector published or withdrawn, every 1 024 rows a training reads
 and the end of its k-means and filing are progress, so a wedged tick never holds
@@ -680,7 +694,9 @@ Two properties differ from the vendor path and both are visible:
   is a recorded `knowledge_read`, and the replicated `usage` domain keeps it
   per company day, so `page_reads` names each seat, how the page reached it
   and in which turn — the same answer on every node, a departed node's reads
-  included. Backlinks are this node's: the lexical indexer extracts every
+  included. Backlinks are the answering data node's — one whose copies of
+  both Doclet and Worklet serve, since the links are read
+  from both: the lexical indexer extracts every
   page id a body links to (`doclet.Links`: `/doclet/pages/<id>` or the dashboard's
   `#/doclet/pages/<id>`, outside code) into `page_links` in the node
   estate, beside the index it is derived with, and a task links a page either
@@ -940,9 +956,10 @@ sequenceDiagram
   ([ADR-0064](https://github.com/crewlet/crewlet/blob/main/adr/0064-a-model-at-its-limit-parks-the-seats-it-holds-and-a-seat-says-one-steady-thing.md)).
 - **Cached at a corpus position.** Each node keeps 256 answers, keyed on the
   question (case and spacing folded) and where its tracker, pages and vector
-  logs are applied through. Any write that could change an answer moves the
-  position and retires every answer cached at the old one; a repeat spends
-  nothing and says `cached: true`. A company on Confluence has no position to
+  rows last changed. Any write that could change an answer moves the position
+  and retires every answer cached at the old one, while a read — even a
+  linearizable one, which appends a barrier to its log — moves nothing; a
+  repeat spends nothing and says `cached: true`. A company on Confluence has no position to
   key on — the wiki changes without the node hearing — so its answers are never
   cached.
 
@@ -982,6 +999,9 @@ every seat's turn. It is also how [tool skills](tool-skills.md) are seeded
 on Doclet: a file with a `trigger:` in its frontmatter belongs in
 the skills container, where it is injected into a phase as an instruction
 rather than read as knowledge, and every other file belongs anywhere else.
+Which containers those are is read from the running company at each write, so
+a revision that moves `knowledge.skills_container` or `knowledge.root_space`
+moves what each write is held to with it, with no restart.
 
 ### On Confluence: the import CLI
 

@@ -51,7 +51,7 @@ func (t *shareArtifact) Parameters() map[string]any {
 	for _, r := range artifacts.ShareableRoles {
 		roles = append(roles, string(r))
 	}
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"artifact": artifactParam(),
@@ -133,7 +133,7 @@ func (t *unshareArtifact) Description() string {
 }
 
 func (t *unshareArtifact) Parameters() map[string]any {
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"artifact": artifactParam(),
@@ -257,7 +257,7 @@ func (t *uploadArtifactAsset) Description() string {
 }
 
 func (t *uploadArtifactAsset) Parameters() map[string]any {
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"artifact": artifactParam(),

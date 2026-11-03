@@ -124,10 +124,18 @@ func (q *Queue) Listen(ctx context.Context, pattern string, h queue.ListenFunc) 
 	if pattern == "" {
 		return nil, ErrEmptySubject
 	}
+	// ONE ANSWER AT A TIME, the bound a listener's delivery already has: run
+	// takes its inbox one message at a time, so the gate counts at most the
+	// one in hand for the withdrawal to wait on, and a wider bound would
+	// state a concurrency this registration never has.
+	gate, err := queue.NewAnswerGate(1)
+	if err != nil {
+		return nil, fmt.Errorf("memory: listen on %s: %w", pattern, err)
+	}
 	serving, retire := context.WithCancel(context.WithoutCancel(ctx))
 	l := &listenSub{owner: q, pattern: pattern, handler: h,
 		inbox: make(chan broadcastMsg, listenerBacklog), serving: serving, retire: retire,
-		gate: queue.NewAnswerGate(), done: make(chan struct{})}
+		gate: gate, done: make(chan struct{})}
 	q.broker.mu.Lock()
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()

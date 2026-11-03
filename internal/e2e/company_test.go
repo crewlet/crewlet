@@ -17,12 +17,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -266,6 +268,22 @@ type node struct {
 	// bootstrap would be a second place to decide where they go.
 	snapshotDir string
 
+	// metrics is the recorder this node's engine writes its measurements to
+	// ([engine.Options.Metrics]), as `crewlet run` hands every engine one. A
+	// fleet member's, so a case can say WHICH member did what only the doer
+	// measures — the code committer's batches among it; nil on a single
+	// node, where there is only one member to have done it.
+	metrics *metrics.Recorder
+
+	// stop takes the node down — its API, then its engine — ONCE, however
+	// many times it is called: the test's own cleanup calls it too, so a
+	// case that replaces its node part way
+	// ([TestARestoredNodeServesEveryRefWhole]) stops it in the order a
+	// fleet's teardown does ([stopAll]) and the end of the test finds
+	// nothing left to stop. Nil on a fleet member, whose teardown is the
+	// fleet's.
+	stop func()
+
 	// chat is the node's chat hub, attached to its engine as `crewlet run`
 	// attaches one ([newEngine]) — on every node, an API or none, because a
 	// seat raises its working indicator wherever its turn runs, as its
@@ -294,7 +312,11 @@ type nodeSpec struct {
 	// company amends the golden company document.
 	company func(doc string) string
 	// boot amends the operator's half of the configuration, for the cases
-	// that need it — the sign-in a person's browser uses ([withSignIn]).
+	// that need it — the sign-in a person's browser uses ([withSignIn]), or
+	// the paths, the coordination and the object store a restored node runs
+	// on. It runs after the fresh store and stream paths are set, so a path
+	// it names wins, and before the store is seeded, which leaves a file
+	// already there as it is.
 	boot func(*config.Bootstrap)
 	// env is what the node's `${VAR}` references resolve to beyond the
 	// harness's own ([nodeEnvironment]).
@@ -338,6 +360,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.CodeCacheIn(&boot.Git)
 	withServingTierA(t, &boot)
 	// AFTER THE HARNESS'S OWN SETTINGS AND BEFORE THE SEED AND THE ENGINE, so
 	// an amendment can override a path or the credential as well as add to
@@ -349,19 +372,42 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	seedStore(t, &boot)
 
 	ln := bridgeListener(t, "")
-	e, chatLive := bootEngine(t, engine.Options{
+	e, chatLive, engineStops, err := newEngine(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(spec.env), SandboxPollInterval: runPollInterval,
 		BoxHostURL: listenerURL(ln),
+		// THIS TEST BINARY IS THE HOOK a node hosting code execs as its
+		// proc-receive (TestMain answers it), because the binary is not
+		// `crewlet`. Handed to every node, as `crewlet run` hands its own
+		// path to every node: one whose company hosts no code builds no
+		// host and never reads it.
+		GitHook: codetest.HookCommand(t),
 	})
+	// ONE TEARDOWN, registered before anything can fail, so a Start or an
+	// API that fails halfway still stops what came up: the API in front of
+	// the engine, then the chat hub and the engine in [newEngine]'s order. A
+	// case may call it early; the cleanup then finds it done.
+	var apiStops []func()
+	stop := sync.OnceFunc(func() {
+		stopInReverse(apiStops)
+		stopInReverse(engineStops)
+	})
+	t.Cleanup(stop)
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv := serveAPI(t, e, &boot, chatLive.Hub(), ln, nil)
+	app, srv, stops, err := wireAPI(t.Context(), e, &boot, chatLive.Hub(), ln, nil)
+	apiStops = stops
+	if err != nil {
+		t.Fatalf("api: %v", err)
+	}
 
 	return &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID(),
-		chat: chatLive}
+		chat: chatLive, stop: stop}
 }
 
 // newEngine builds a node's engine as `crewlet run` builds it: [engine.New],
@@ -865,10 +911,6 @@ func (m *scriptedModel) sawRequest(phase string, req modelRequest) {
 func (m *scriptedModel) misrouted() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.channels) != len(m.calls) {
-		// [scriptedModel.saw] records a phase alone.
-		return []string{"this model recorded calls without their channels"}
-	}
 	var bad []string
 	for i, phase := range m.calls {
 		want := ""

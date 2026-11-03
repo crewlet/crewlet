@@ -67,18 +67,26 @@ type ObjectStore interface {
 	Open(ctx context.Context, o objstore.Object) (io.ReadCloser, error)
 }
 
-// servesFiles reports whether these halves hold the byte routes' whole
-// surface: the tracker's file rows, the project read an upload is refused on
-// before a byte is read, the file writer and the object store.
-func (h Halves) servesFiles() bool {
-	_, projects := h.Work.Reader.(builtin.ProjectReader)
-	return projects && h.Work.Files != nil && h.Work.FileWriter != nil &&
-		h.Objects != nil
+// servesFileReads reports whether these halves hold what a DOWNLOAD reads: the
+// tracker's file rows and the object store.
+//
+// TWO PREDICATES, because a download is a read. A node serves its reads
+// wherever it runs the tracker and its writes only where it also hands out the
+// tracker's writer — never in a maintenance mode, which hands no writer to any
+// surface (the engine's OperatorWorkWriter). One predicate over both halves was
+// met only where both were, so a node in a maintenance window listed a
+// project's files (`work_files`, a read) and answered every download of them
+// as a route it does not serve.
+func (h Halves) servesFileReads() bool {
+	return h.Work.Files != nil && h.Objects != nil
 }
 
-// onFiles mounts a byte route.
-func (s *Service) onFiles(h servedHandler) http.HandlerFunc {
-	return s.on(Halves.servesFiles, h)
+// servesFileWrites reports whether these halves hold what an upload and a
+// removal write through: the tracker's file rows, the project read an upload
+// is refused on before a byte is read, the file writer and the object store.
+func (h Halves) servesFileWrites() bool {
+	_, projects := h.Work.Reader.(builtin.ProjectReader)
+	return projects && h.servesFileReads() && h.Work.FileWriter != nil
 }
 
 // fileRoutes mounts the byte routes.
@@ -90,7 +98,11 @@ func (s *Service) onFiles(h servedHandler) http.HandlerFunc {
 // file tools ask the same rows of the same object.
 func (s *Service) fileRoutes(mount mounter) {
 	route := func(pattern string, p authz.Policy, h servedHandler) {
-		mount(pattern, p, s.onFiles(h))
+		serves := Halves.servesFileWrites
+		if strings.HasPrefix(pattern, http.MethodGet+" ") {
+			serves = Halves.servesFileReads
+		}
+		mount(pattern, p, s.on(serves, h))
 	}
 	project := func(a authz.Action) authz.Policy {
 		return authz.Policy{Action: a, Object: func(r *http.Request) authz.Object {
@@ -406,13 +418,16 @@ func fileReadFailed(w http.ResponseWriter, r *http.Request, err error) {
 // bytesFailed answers an upload whose bytes did not reach the store: a body
 // that stopped arriving is the CLIENT'S (400, never a 503 telling it to retry
 // a request whose own connection failed), one over the cap is the one
-// spelling of a 413 every JSON surface answers, and a store that did not take
-// them is a CONDITION in its own words and under its own hint
-// ([operator.AnswerCondition]): a full one is `503` with no Retry-After and
-// says who makes room ([objstore.ErrFull]), one that did not answer is `503`
-// under an election's wait ([objstore.ErrUnanswered]), and the upload ran out
-// of its pace or was abandoned the same way. Anything else is a FAULT of this
-// node, `500`, its words the log's.
+// spelling of a 413 every JSON surface answers, a store with no room for them
+// ([objstore.Full]) is a 507 naming the room an operator makes, in the store's
+// own words for it, since no wait makes it, and any other store that did not
+// take them is a CONDITION in its own words and under its own hint
+// ([operator.AnswerCondition]): a full one that names no room
+// ([objstore.ErrFull] alone) is `503` with no Retry-After and says who makes
+// room, one that did not answer is `503` under an election's wait
+// ([objstore.ErrUnanswered]), and the upload ran out of its pace or was
+// abandoned the same way. Anything else is a FAULT of this node, `500`, its
+// words the log's.
 //
 // THE FIRST TWO IN A PERSON'S WORDS ([paced.Unread], [fileTooLarge]), never the
 // error's: it opens with the store's or the reader's package words
@@ -424,6 +439,7 @@ func fileReadFailed(w http.ResponseWriter, r *http.Request, err error) {
 // way, because the store classifies them once: an unclassified failure was a
 // 503 inviting a retry here and a 500 there.
 func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) {
+	var full *objstore.Full
 	switch {
 	case errors.Is(err, paced.ErrBody):
 		log.InfoContext(r.Context(), "api_file_body_unread", "op_id", key,
@@ -433,6 +449,20 @@ func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) 
 	case errors.Is(err, objstore.ErrTooLarge):
 		httpjson.FailWith(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
 			map[string]string{"detail": fileTooLarge})
+	case errors.As(err, &full):
+		// NO ROOM, WHICH NO RETRY MAKES: the store refuses the same upload
+		// the same way until an operator makes room, so HTTP's own status
+		// for a server that cannot store what the request needs, with no
+		// Retry-After — a 503 asked for the same body again. The store's
+		// own words name its bucket, which is the log's.
+		log.WarnContext(r.Context(), "api_file_store_full", "op_id", key, "error", err.Error())
+		httpjson.FailWithFields(w, http.StatusInsufficientStorage, httpjson.CodeStoreFull,
+			httpjson.Detail{
+				"detail": "the object store has no room for the file's content, and " +
+					"nothing was stored or recorded",
+				"hint":  "the same upload is refused the same until " + full.Remedy,
+				"op_id": key,
+			})
 	case operator.AnswerCondition(r.Context(), w, log, "api_file_store_unavailable", err, nil,
 		"op_id", key):
 		// A CONDITION, under its own words and hint.

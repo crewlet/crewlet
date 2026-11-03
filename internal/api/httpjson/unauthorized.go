@@ -109,6 +109,11 @@ var refusals = map[string]authority{
 		"share it with you at a higher one.", grantCures: true, shareClears: true},
 	"ceiling": {said: "The person this agent is working for can't do this, so " +
 		"the agent can't either."},
+	// A ROLE GRANT the seat's role does not carry (authz.SeatGrant): no
+	// permission changes it, because the role is what is given the grant,
+	// in the document an administrator writes.
+	"not_granted": {said: "This agent's role isn't given this. A role's grants " +
+		"are set in the company document."},
 	// THE DASHBOARD ASSISTANT'S TWO, which no permission changes either: a
 	// verb it never takes stays with the person whatever they approve, and
 	// one its grant's scope does not reach is a change it can only propose

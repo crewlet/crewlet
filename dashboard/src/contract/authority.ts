@@ -36,6 +36,10 @@
  * shows the engine's own words for a refusal it met — and their rows are kept,
  * like `not_shared`'s, because the keys are the engine's whole set.
  *
+ * THE ROLE GRANT. `not_granted` is an agent on a verb its role's grant in the
+ * org chart (`seat_grant`, an admission) does not give it, which the chart
+ * decides: no access a person holds widens what a role is given.
+ *
  * NULL FOR AN ADMISSION, which no refusal carries: the rule admitted the
  * caller, and there is nothing to say.
  *
@@ -64,6 +68,8 @@ export const REFUSAL_SENTENCES: Readonly<Record<string, string | null>> = {
   everybody: null,
   asked: null,
   seat_only: "Only an agent can do this.",
+  seat_grant: null,
+  not_granted: "This agent’s role isn’t given that, and no access a person holds changes it.",
   unseated:
     "This is done as a seat, and this account has none. Ask an admin to bind it to a human seat (crewlet iam bind).",
   shared: null,

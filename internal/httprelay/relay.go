@@ -10,8 +10,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var log = logging.Get("httprelay")
@@ -21,7 +21,7 @@ var log = logging.Get("httprelay")
 // client has gone.
 type Fabric interface {
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
-	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
+	Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
 // Options configure [New].
@@ -41,7 +41,7 @@ type Options struct {
 	Owner string
 
 	// Keyring is the fleet's, every message is signed under.
-	Keyring statelog.Keyring
+	Keyring recordseal.Keyring
 
 	// Admit is what this process can do for a request addressed to it,
 	// asked before its handler runs: [Serve] runs it, and the other two
@@ -51,9 +51,6 @@ type Options struct {
 	// Handler answers an admitted request, exactly as it would one handed
 	// to it directly.
 	Handler http.Handler
-
-	// Now is the clock. Nil takes wall-clock time.
-	Now func() time.Time
 }
 
 // Relay is one process's end of a relay: the holder of what it serves, and the
@@ -65,8 +62,10 @@ type Relay struct {
 	owner   string
 	admit   func(*http.Request) Verdict
 	handler http.Handler
-	now     func() time.Time
-	clock   clocks
+	// time is the clock every instant and timer of the relay is read from
+	// ([timeSource]), and clock the durations it runs ([clocks]).
+	time  timeSource
+	clock clocks
 
 	opens  *signedask.Channel[openRequest, openReply]
 	frames *signedask.Channel[frameRequest, frameReply]
@@ -102,13 +101,9 @@ func New(opts Options) (*Relay, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httprelay: %w", err)
 	}
-	now := opts.Now
-	if now == nil {
-		now = time.Now
-	}
 	return &Relay{
 		fabric: opts.Fabric, name: opts.Name, node: opts.Node, owner: opts.Owner,
-		admit: opts.Admit, handler: opts.Handler, now: now, clock: defaultClocks,
+		admit: opts.Admit, handler: opts.Handler, time: wallTime{}, clock: defaultClocks,
 		opens: opens, frames: frames, taken: signedask.NewGuard(),
 		served: map[string]*exchange{}, ended: map[string]time.Time{},
 	}, nil
@@ -134,7 +129,9 @@ func (rl *Relay) Serve(ctx context.Context) (queue.Unsubscribe, error) {
 	rl.mu.Lock()
 	rl.serving = serving
 	rl.mu.Unlock()
-	stop, err := rl.fabric.Serve(ctx, nodeSubject(rl.name, rl.node), rl.answer)
+	// WORK DONE NOW: an OPEN or a CLOSE is answered as it comes, the
+	// exchange it opens running on a subject of its own.
+	stop, err := rl.fabric.Serve(ctx, nodeSubject(rl.name, rl.node), queue.ConcurrentAnswers, rl.answer)
 	if err != nil {
 		stopAll()
 		return nil, fmt.Errorf("httprelay: serve %s: %w", rl.node, err)
@@ -148,7 +145,7 @@ func (rl *Relay) Serve(ctx context.Context) (queue.Unsubscribe, error) {
 
 // answer is the holder's side of the node subject.
 func (rl *Relay) answer(ctx context.Context, raw []byte) ([]byte, error) {
-	admitted := rl.opens.Admit(raw, rl.taken, rl.now())
+	admitted := rl.opens.Admit(raw, rl.taken, rl.time.Now())
 	switch admitted.Disposition {
 	case signedask.Admitted:
 	case signedask.KeyUnknown:
@@ -225,7 +222,7 @@ func (rl *Relay) known(id string) bool {
 // an entry repeats its OPEN for [openTries] × [openWait] at most, and a
 // finished exchange is remembered for [Idle], far past that.
 func (rl *Relay) forgetLocked() {
-	cutoff := rl.now().Add(-rl.clock.idle)
+	cutoff := rl.time.Now().Add(-rl.clock.idle)
 	for id, at := range rl.ended {
 		if at.Before(cutoff) {
 			delete(rl.ended, id)
@@ -270,7 +267,7 @@ func (rl *Relay) cancel(id string) {
 	if ex == nil {
 		rl.forgetLocked()
 		if _, done := rl.ended[id]; !done {
-			rl.ended[id] = rl.now()
+			rl.ended[id] = rl.time.Now()
 		}
 	}
 	rl.mu.Unlock()
@@ -330,10 +327,10 @@ func (rl *Relay) start(id string, req *http.Request, cancel context.CancelFunc) 
 func (rl *Relay) push(ctx context.Context, ex *exchange) {
 	defer rl.finish(ex)
 	subject := exchangeSubject(rl.name, ex.id)
-	heard := rl.now()
+	heard := rl.time.Now()
 	sentHeader := false
 	for seq := 1; ; seq++ {
-		f, ok := ex.w.next(ctx, rl.clock.heartbeat, !sentHeader)
+		f, ok := ex.w.next(ctx, rl.time, rl.clock.heartbeat, !sentHeader)
 		if !ok {
 			return
 		}
@@ -343,13 +340,13 @@ func (rl *Relay) push(ctx context.Context, ex *exchange) {
 			var answered bool
 			ack, answered = rl.pushOnce(ctx, subject, f)
 			if answered {
-				heard = rl.now()
+				heard = rl.time.Now()
 				break
 			}
 			if ctx.Err() != nil {
 				return
 			}
-			if rl.now().Sub(heard) > rl.clock.idle {
+			if rl.time.Now().Sub(heard) > rl.clock.idle {
 				// THE ENTRY IS GONE — a node down, a partition — and
 				// nothing will read the rest of this response.
 				log.WarnContext(ctx, "relay_entry_lost", "relay", rl.name, "exchange", ex.id,
@@ -374,13 +371,13 @@ func (rl *Relay) push(ctx context.Context, ex *exchange) {
 // pushOnce pushes one frame and waits up to [pushWait] for its
 // acknowledgement.
 func (rl *Relay) pushOnce(ctx context.Context, subject string, f frameRequest) (frameReply, bool) {
-	f.ID, f.Deadline = signedask.NewID(), rl.now().Add(rl.clock.pushWait)
+	f.ID, f.Deadline = signedask.NewID(), rl.time.Now().Add(rl.clock.pushWait)
 	sealed, err := rl.frames.SealRequest(f)
 	if err != nil {
 		log.ErrorContext(ctx, "relay_frame_unsealed", "relay", rl.name, "error", err.Error())
 		return frameReply{}, false
 	}
-	askCtx, done := context.WithTimeout(ctx, rl.clock.pushWait)
+	askCtx, done := rl.time.WithTimeout(ctx, rl.clock.pushWait)
 	defer done()
 	replies, err := rl.fabric.Ask(askCtx, subject, sealed, 1)
 	if err != nil {
@@ -404,6 +401,6 @@ func (rl *Relay) finish(ex *exchange) {
 	ex.cancel()
 	rl.mu.Lock()
 	delete(rl.served, ex.id)
-	rl.ended[ex.id] = rl.now()
+	rl.ended[ex.id] = rl.time.Now()
 	rl.mu.Unlock()
 }

@@ -81,6 +81,21 @@ var refusalSamples = map[string]caveat.Refusal{
 	"TokenBudgetSpent (a person's assistant)": caveat.TokenBudgetSpent(
 		caveat.AssistantTokenBudget()),
 	"DatastoreQuotaReached": caveat.DatastoreQuotaReached(),
+	"MergeGateUnmet": caveat.MergeGateUnmet([]caveat.GateCondition{
+		{Kind: "approval", WaitsOn: []string{"cto"}},
+		{Kind: "check", WaitsOn: []string{"backend-engineer", "cto"}},
+		{Kind: "a kind a newer code host judges"},
+	}),
+	"MergeGateUnmet (each kind)": caveat.MergeGateUnmet([]caveat.GateCondition{
+		{Kind: "draft"}, {Kind: "facts"}, {Kind: "approval"}, {Kind: "human_approval"},
+		{Kind: "owners_approval"}, {Kind: "blocker"}, {Kind: "check"}, {Kind: "mergeable"},
+		{Kind: "merge_authority"}, {Kind: "queue"},
+	}),
+	"MergeGateUnmet (nothing named)": caveat.MergeGateUnmet(nil),
+	"MergeWouldDeleteAKeptBranch":    caveat.MergeWouldDeleteAKeptBranch(),
+	"RepositoryFull":                 caveat.RepositoryFull(),
+	"MergeAskedForSomebodyWhoMayNot": caveat.MergeAskedForSomebodyWhoMayNot(),
+	"QueueEntryNotYours":             caveat.QueueEntryNotYours(),
 }
 
 // EVERY CAVEAT A PERSON CAN BE SHOWN IS WORDED FOR A PERSON.

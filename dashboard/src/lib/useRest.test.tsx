@@ -260,6 +260,49 @@ describe("what makes it read again", () => {
   });
 });
 
+// A READ THAT ASKS AGAIN ONLY WHAT NEVER ARRIVED: a code search, whose answer
+// names what it was read at and whose every ask is a scatter to the git
+// nodes, is not repeated on a reconnect — but one the dropped connection cut
+// off is the reader's search, never asked, and the socket's return asks it.
+describe("a read that re-reads only what never reached the engine", () => {
+  const mounted = () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(ClientContext.Provider, { value: { store, socket } }, children);
+    const { read, calls } = scripted<string>();
+    renderHook(() => useRest("/search", read, { refetchOnReconnect: "unreached" }), { wrapper });
+    return { store, read, calls };
+  };
+
+  test("an answered read is not read again when the socket comes back", async () => {
+    const { store, read, calls } = mounted();
+    await act(async () => calls[0]!.resolve("hits"));
+    act(() => store.setConnected(true));
+    act(() => store.setConnected(false));
+    act(() => store.setConnected(true));
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  test("a read that never arrived is read again when the socket comes back", async () => {
+    const { store, read, calls } = mounted();
+    act(() => store.setConnected(true));
+    await act(async () => calls[0]!.reject(refused(0)));
+    act(() => store.setConnected(false));
+    act(() => store.setConnected(true));
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  test("a refused read is not read again when the socket comes back", async () => {
+    const { store, read, calls } = mounted();
+    act(() => store.setConnected(true));
+    await act(async () => calls[0]!.reject(refused(500)));
+    act(() => store.setConnected(false));
+    act(() => store.setConnected(true));
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("the code a refusal renders as", () => {
   test.each([
     [401, null, "unauthorized"],

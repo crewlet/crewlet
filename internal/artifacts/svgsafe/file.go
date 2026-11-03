@@ -316,7 +316,7 @@ func (f *fileReader) attrKey(elem string, a xml.Attr, bad func(string, ...any)) 
 		return "", false
 	}
 	key := strings.ToLower(local)
-	if canonical, ok := attributes[key]; ok && canonical != local {
+	if canonical, ok := attributes()[key]; ok && canonical != local {
 		bad("<%s %s>: write %s, as SVG spells it", elem, local, canonical)
 		return "", false
 	}

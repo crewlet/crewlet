@@ -44,7 +44,7 @@ type RunAskDeps struct {
 	// decision is checked ([worklet.ValidateDecision]): a task resolves
 	// to its id and a page must exist. Either nil refuses evidence of its
 	// kind, telling the run to cite it as a url, which is what a company
-	// that runs neither Crewlet Works nor Doclet has.
+	// that runs neither Worklet nor Doclet has.
 	Work  WorkDeps
 	Pages PageReader
 }

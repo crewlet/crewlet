@@ -36,7 +36,9 @@
  *   client is present, a reconnect re-reads quietly, for the reason
  *   `useQuery` re-asks on one — and it is what makes the `closed` sentence a
  *   REST refusal renders true. A sign-in re-dials the socket, so a screen
- *   that was refused before it is read again once it lands.
+ *   that was refused before it is read again once it lands. A read whose
+ *   answer names what it was read at, and is costly to ask again, re-reads
+ *   only what never reached the engine (`refetchOnReconnect: "unreached"`).
  */
 
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
@@ -71,8 +73,15 @@ export interface RestOptions {
    * second answer would redo work rather than correct it: a gallery
    * preview's ticket, read again, reloads the page already drawn in its
    * frame.
+   *
+   * `"unreached"` re-reads only a read that never reached the engine
+   * (status 0, which says nothing about the answer): for a read whose answer
+   * names what it was read at and is costly to ask, such as a code search —
+   * a scatter to every git node, answered at the commits it names — where a
+   * reconnect re-asking every open tab's search at once, as a rolling
+   * restart reconnects every socket, would only repeat the work.
    */
-  refetchOnReconnect?: boolean;
+  refetchOnReconnect?: boolean | "unreached";
 }
 
 export interface RestResult<T> {
@@ -293,9 +302,10 @@ export function useRest<T>(
     // never reached the engine, in which case the socket arriving is the
     // first sign that it can.
     let seen = was;
+    const onlyUnreached = refetchOnReconnect === "unreached";
     return store.subscribe(["health"], () => {
       const now = store.state.connected;
-      if (now && !was && (seen || unreached.current)) void run(true);
+      if (now && !was && ((seen && !onlyUnreached) || unreached.current)) void run(true);
       if (now) seen = true;
       was = now;
     });

@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -52,9 +53,12 @@ func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 	publisher, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: e.backends.Store,
 		Log:   running.publisher,
-		// RESOLVED ON EVERY READ ([Engine.UsageEstate]): an adoption
-		// replaces the file under the handle this node booted with.
-		Estate: e.UsageEstate(),
+		// RESOLVED ON EVERY READ ([Engine.usageEstate]): an adoption
+		// replaces the file under the handle this node booted with. THIS
+		// NODE'S OWN COPY, never the router's: the rows a day is joined
+		// with are the ones this node's applier wrote, which
+		// [stateLog.usageCaught] is the readiness of.
+		Estate: e.usageEstate(),
 		NodeID: s.nodeID,
 		// WHETHER THIS NODE'S USAGE APPLIER HAS REACHED THE END OF ITS LOG
 		// ([stateLog.usageCaught]).
@@ -171,8 +175,9 @@ func (s *stateLog) usageCaught() bool {
 // bounded by [usage.FinalFlushBudget]).
 //
 // ORDERED BY THE TEARDOWN after every writer of a row this node's day counts —
-// the learning passes, the scheduler, the auxiliary-spend ledger's last flush,
-// the custody keeper leaving its group — and before the
+// the learning passes, the scheduler, the code host and the reads of unit
+// repositories it serves, the auxiliary-spend ledger's last flush, the custody
+// keeper leaving its group — and before the
 // trim and long before the core's logs (TestTheDutiesStopBeforeTheirLeasesAndTheLogs).
 // Both halves are what that last flush needs: the day it derives is the
 // node's last, with nothing written after it, and the usage log it publishes
@@ -206,16 +211,24 @@ func (e *Engine) seatHandle(agentID string) (string, bool) {
 	return seat.Handle(), true
 }
 
-// UsageEstate is the replicated estate as a reader of the usage domain's rows
-// needs it — the spend answers' source (ADR-0020).
+// UsageReads is the usage domain's reads as the operator's surfaces reach them
+// — the spend, activity and skill-reader answers' source (ADR-0020) — through
+// this node's estate router, as its tracker and knowledge-base reads are
+// ([OperatorWork]): a data node whose usage copy is in service answers from
+// it, and one whose copy is out of service answers from a peer's rather than
+// from the copy it stopped serving (ADR-0079).
+func (e *Engine) UsageReads() estate.Usage { return e.router.Usage() }
+
+// usageEstate is the replicated estate as this node's own reader of the usage
+// domain's rows needs it — the backend its router answers from in-process, and
+// the rows its own publisher joins a day with.
 //
 // RESOLVED ON EVERY READ through the node handle, never captured: an adoption
 // closes the file and reopens it, and a reader holding the handle it booted
 // with would answer every named spend window from a file no longer at that
-// name. An estate that is not open here — a node without `data` holds none —
-// answers [store.ErrNoEstate], which the query surface reports as "not
-// available yet".
-func (e *Engine) UsageEstate() usage.Estate {
+// name. An estate that is not open here answers [store.ErrNoEstate], which
+// the query surface reports as "not available yet".
+func (e *Engine) usageEstate() usage.Estate {
 	if e.backends == nil || e.backends.Store == nil {
 		return store.ReplicatedReader{}
 	}

@@ -80,7 +80,7 @@ func TestTheSchedulesRecentRunsSayWhatBecameOfEachFire(t *testing.T) {
 	db := scheduleHistory(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, company(t)),
-		Usage:   db.Replicated(),
+		Usage:   usage.Reader{Estate: db.Replicated()},
 	}, "schedules", nil))
 
 	runs := outcomesOf(t, body["recent_runs"])
@@ -122,7 +122,7 @@ func TestTheSchedulesRecentRunsSayWhatBecameOfEachFire(t *testing.T) {
 func TestOneSchedulesRunsSayWhatBecameOfEachFire(t *testing.T) {
 	t.Parallel()
 	db := scheduleHistory(t)
-	body := asMap(t, answer(t, queries.Sources{Usage: db.Replicated()}, "schedule_runs",
+	body := asMap(t, answer(t, queries.Sources{Usage: usage.Reader{Estate: db.Replicated()}}, "schedule_runs",
 		map[string]any{"scope_type": "role", "scope_id": "ceo", "name": "standup"}))
 
 	runs := outcomesOf(t, body["runs"])
@@ -167,7 +167,7 @@ func TestOneSchedulesHistorySaysWhenItWasCut(t *testing.T) {
 					TraceID: fmt.Sprintf("trace-%d", i)})
 			}
 			applyUsage(t, db, r, 1)
-			body := asMap(t, answer(t, queries.Sources{Usage: db.Replicated()}, "schedule_runs",
+			body := asMap(t, answer(t, queries.Sources{Usage: usage.Reader{Estate: db.Replicated()}}, "schedule_runs",
 				map[string]any{"scope_type": "role", "scope_id": "ceo", "name": "heartbeat"}))
 			if got := len(rows(t, body["runs"])); got != queries.MaxScheduleRuns {
 				t.Errorf("%d runs, want a page of %d", got, queries.MaxScheduleRuns)
@@ -194,7 +194,7 @@ func TestAnUnreadableHistoryDoesNotBlankTheSchedules(t *testing.T) {
 	t.Parallel()
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, company(t)),
-		Usage:   unreadable{},
+		Usage:   usage.Reader{Estate: unreadable{}},
 	}, "schedules", nil))
 
 	if rows, _ := body["schedules"].([]any); len(rows) != 1 {
@@ -211,7 +211,7 @@ func TestAnUnreadableHistoryDoesNotBlankTheSchedules(t *testing.T) {
 // nothing.
 func TestAScheduleRunsReadStatesWhatItIsMissing(t *testing.T) {
 	t.Parallel()
-	src := queries.Sources{Usage: openStore(t).Replicated()}
+	src := queries.Sources{Usage: usage.Reader{Estate: openStore(t).Replicated()}}
 	for _, params := range []map[string]any{
 		{"scope_id": "ceo", "name": "standup"},
 		{"scope_type": "role", "name": "standup"},

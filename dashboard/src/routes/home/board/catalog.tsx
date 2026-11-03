@@ -140,6 +140,8 @@ export const shippedBoard = (): Board => ({
     section("kpis", 12),
     section("decisions", 8),
     section("live", 4),
+    // HIDDEN, and the row closes up over it, where the company hosts no code.
+    section("code", 12),
     section("completed", 4),
     section("tokens", 4),
     section("projects", 4),

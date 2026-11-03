@@ -1215,6 +1215,9 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.SandboxID = rec.Run.SandboxID
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
 		ev.DeliveredRefsElided = rec.Run.RefsElided
+		ev.PushedRefs = rec.Run.Pushed
+		ev.PushedRefsElided = rec.Run.PushedElided
+		ev.PushedRefsUnread = rec.Run.PushedUnread
 		ev.LaunchID = rec.Run.LaunchID
 	}
 	if rec.Err != nil {

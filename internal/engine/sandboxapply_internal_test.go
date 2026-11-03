@@ -378,16 +378,31 @@ func sandboxNode(t *testing.T, company *config.Company) *Engine {
 
 // newSandboxNode is [sandboxNode] before its Start, for a case that has to be
 // listening before the node takes a seat.
-func newSandboxNode(t *testing.T, company *config.Company) *Engine {
+func newSandboxNode(t testing.TB, company *config.Company) *Engine {
+	t.Helper()
+	return newSandboxNodeIn(t, company, nil)
+}
+
+// newSandboxNodeIn is [newSandboxNode] booted with environment, for a case
+// whose subject is a variable the node reads at boot; nil is none.
+func newSandboxNodeIn(t testing.TB, company *config.Company, environment config.Source) *Engine {
 	t.Helper()
 	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
+	brokertest.CodeCacheIn(&b.Git)
 	SeedStore(t, &b)
+	RequireNodeGit(t, &b, company)
+	// ACTIVATED, as the revision `crewlet run` boots on always is: a company
+	// no activation has named reconciles nothing it declares at boot — no
+	// project, no container, no repository of code.repos — and leaves it to
+	// its first activation ([Engine.applyCodeRepos]).
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: company,
+		ActivatedAt:         time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
 		SandboxPollInterval: 50 * time.Millisecond,
+		Environment:         environment,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -427,7 +442,7 @@ func sandboxDoc(extra string) string {
 	return fmt.Sprintf(sandboxCompanyDoc, extra)
 }
 
-func parseCompany(t *testing.T, doc string) *config.Company {
+func parseCompany(t testing.TB, doc string) *config.Company {
 	t.Helper()
 	c, err := config.ParseCompany([]byte(doc))
 	if err != nil {

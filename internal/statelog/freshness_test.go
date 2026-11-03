@@ -2,6 +2,7 @@ package statelog_test
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,14 @@ func (b freshnessBag) Int(key string, def int) int {
 }
 
 func (b freshnessBag) Has(key string) bool { _, ok := b[key]; return ok }
+
+func (b freshnessBag) List(key string) ([]string, bool) {
+	raw, ok := b[key]
+	if !ok {
+		return nil, true
+	}
+	return []string{raw}, true
+}
 
 // EVERY REFUSAL NAMES THE PARAMETER TO CHANGE, AND NO PACKAGE.
 //
@@ -85,9 +94,9 @@ func TestFreshnessCarriesEverythingItAccepts(t *testing.T) {
 		"min_position": "CREWLET_CHAT_LOG@1:7",
 	})
 	want := statelog.Freshness{Level: statelog.ReadStale, MaxLag: 30 * time.Second,
-		MaxLagSeq: 250, MinPosition: statelog.Position{Stream: "CREWLET_CHAT_LOG",
-			Generation: 1, Seq: 7}}
-	if err != nil || got != want {
+		MaxLagSeq: 250, Floors: []statelog.Position{{Stream: "CREWLET_CHAT_LOG",
+			Generation: 1, Seq: 7}}}
+	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("parsed %+v (%v), want %+v", got, err, want)
 	}
 }

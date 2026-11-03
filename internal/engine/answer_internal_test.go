@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -10,10 +11,14 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // answerEngine is an engine holding one epoch and an in-memory fleet, which is
@@ -193,6 +198,76 @@ func TestWithNoFleetThereIsNoAnswerBudget(t *testing.T) {
 	if AnswerBudget(&Engine{backends: &Backends{}}) != nil {
 		t.Fatal("an answer budget was built with no counter behind it")
 	}
+}
+
+// THE KNOWLEDGE CORPUS MOVES WITH A WRITE AND WITH NO READ, on a real node.
+//
+// The answer cache keys an answer on where Worklet's, Doclet's and the
+// vectors' rows last changed. A linearizable read on a log appends a barrier
+// there, which every data node applies and which changes no row: keyed on how
+// far the logs were applied, every read anywhere in the fleet retired every
+// cached answer — an answer's own reads of its sources the key it was stored
+// under — and a repeated question paid the answering model again. A page
+// written moves it.
+func TestTheKnowledgeCorpusMovesWithAWriteAndWithNoRead(t *testing.T) {
+	t.Parallel()
+	e := newSandboxNode(t, parseCompany(t, trashCompanyDoc))
+	kb := e.PagesStore()
+	if kb == nil || e.DocletSearcher() == nil {
+		t.Fatal("the premise: the node writes and searches Doclet")
+	}
+	jane := doclet.Actor{Handle: "jane", Kind: doclet.AuthorHuman}
+	createEventually(t, kb, jane, doclet.NewPage{
+		Container: "DOCS", Title: "Runbook", Body: "the steps",
+	})
+	s := e.core.Load().log
+	logs := []*runningLog{
+		s.Domain(worklet.Domain{}.Name()), s.Domain(doclet.Domain{}.Name()),
+		s.Domain(search.Domain{}.Name()),
+	}
+	// AT REST: every log applied through its end, the page's write and the
+	// boot's included.
+	caughtUp := func() bool {
+		for _, running := range logs {
+			stats, err := running.log.Stats(t.Context())
+			if err != nil || running.runner.Committed().Seq < stats.LastSeq {
+				return false
+			}
+		}
+		return true
+	}
+	waitUntil(t, 20*time.Second, "the node's logs to be applied through their ends", caughtUp)
+	corpus := func() string {
+		t.Helper()
+		at, ok := e.KnowledgeCorpus()
+		if !ok {
+			t.Fatal("a node running Doclet names no corpus")
+		}
+		return at
+	}
+	before := corpus()
+
+	for _, running := range logs[:2] {
+		if _, err := running.reader.Read(t.Context(), statelog.Query{
+			Level: statelog.ReadLinearizable,
+			Scope: statelog.ScopeSet{Paths: []string{"t"}},
+		}, func(*sql.Tx) error { return nil }); err != nil {
+			t.Fatalf("a linearizable read on %s: %v", running.domain.Name(), err)
+		}
+	}
+	waitUntil(t, 20*time.Second, "the reads' barriers applied", caughtUp)
+	if after := corpus(); after != before {
+		t.Fatalf("linearizable reads on Worklet's and Doclet's logs moved the "+
+			"corpus from %q to %q — every read in the fleet retires every cached answer",
+			before, after)
+	}
+
+	createEventually(t, kb, jane, doclet.NewPage{
+		Container: "DOCS", Title: "Second runbook", Body: "more steps",
+	})
+	waitUntil(t, 20*time.Second, "a page written to move the corpus", func() bool {
+		return corpus() != before
+	})
 }
 
 // A COMPANY WITHOUT DOCLET HAS NO CORPUS POSITION, so its answers

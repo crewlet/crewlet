@@ -105,6 +105,10 @@ export const AUTHORITY_REMEDIES: Readonly<Record<string, RuleRemedy | null>> = {
   role: { action: "try_again", grantsCure: false },
   // An agent acting for somebody who may not: nothing a reader holds changes it.
   ceiling: { action: null, grantsCure: false },
+  // The org chart's grant to an agent's role: an admission, and its refusal is
+  // the chart's to change, which nothing a reader holds or does here clears.
+  seat_grant: null,
+  not_granted: { action: null, grantsCure: false },
   // A request the Dashboard Assistant made: its person takes the gesture
   // themselves, or approves the change it proposes, in its panel, so no grant
   // clears either and its refusal card asks an admin for nothing. A screen's

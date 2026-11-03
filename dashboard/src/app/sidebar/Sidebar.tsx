@@ -6,7 +6,8 @@
  * The WORKSPACES, from `nav.ts`'s one table, in its groups (`SIDEBAR_GROUPS`):
  * the three that are about you (Home, Inbox, My work), then Company
  * (Principles, Brand, Org chart, Schedules, Integrations, Budgets), then
- * Workspace (Worklet, Chatlet, Doclet, Artifacts, Live), and Settings at the foot.
+ * Workspace (Worklet, Code, Chatlet, Doclet, Artifacts, Live), and Settings at
+ * the foot.
  * Then three LIVE SHORTCUTS, each a real object with its own path: the views
  * this reader pinned, the pages they starred, and the turns running now.
  * Nothing else. A workspace's own sections are tabs in its page header and its
@@ -42,18 +43,22 @@
  * # A lock goes where the closed thing is, and a row is hidden only for a service
  *
  * A ROW THAT READS A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Worklet
- * and My work where it runs no Worklet, Doclet where it runs no Doclet
- * (`nav.ts`'s `serviceShown`, over `lib/services.ts`). There is
+ * where it runs no Worklet, My work where it runs neither that nor the code
+ * host (its Reviews is the code host's), Doclet where it runs no Doclet,
+ * Chatlet where it runs no Chatlet, Code where the engine hosts none of its
+ * code (`nav.ts`'s `workspaceShown`, over `lib/services.ts`). There is
  * nothing to ask anybody for, and a locked row would say there was.
  *
  * A ROW IS LOCKED ONLY WHEN NOTHING IN ITS WORKSPACE IS OPEN to the reader
- * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`), and stays: a
- * row that vanished when access is absent is indistinguishable from one that
- * does not exist. Its title names what would open it — the access a reader
- * would ask an admin for: Inbox, My work and Worklet say Worklet, Doclet says
- * Doclet, Chatlet says Chatlet. A workspace only PART of which is closed is not
- * locked as a whole: Settings draws its locks per section, in its column, and
- * is open to every reader through Spend's readings.
+ * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`, counting only
+ * the sections the company runs), and stays: a row that vanished when access
+ * is absent is indistinguishable from one that does not exist. Its title
+ * names what would open it — the access a reader would ask an admin for:
+ * Inbox and Worklet say Worklet, and so does My work where the engine hosts
+ * no code (where it does, its Reviews is open to everybody), Doclet says
+ * Doclet, Chatlet says Chatlet. A workspace only PART of which is closed is
+ * not locked as a whole: Settings draws its locks per section, in its column,
+ * and is open to every reader through Spend's readings.
  *
  * AND WHAT A LOCKED ROW WOULD SHOW IS NOT ASKED FOR: the Inbox's badge, My
  * work's count and the pinned views are Worklet's answers, so a reader without
@@ -104,8 +109,8 @@ import {
   WORKSPACES,
   landingPath,
   pathShown,
-  serviceShown,
   settingsSectionOpen,
+  workspaceShown,
   workspaceMissing,
   workspaceOf,
   type WorkspaceRow,
@@ -188,7 +193,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const known = useServicesKnown();
   const needsYou = useNeedsYouCount(viewer.owner !== "" && known && !runs.tracker);
   const shown = (place: WorkspaceRow["place"]) =>
-    WORKSPACES.filter((ws) => ws.place === place && serviceShown(ws, runs));
+    WORKSPACES.filter((ws) => ws.place === place && workspaceShown(ws, runs));
   const here = workspaceOf(route.path);
   const at = route.path.join("/");
 
@@ -297,7 +302,8 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       stars.some((s) => samePath(route.path, s.path)) ||
       running.shown.some((row) => samePath(route.path, watchLink(turnIdOf(row)).path)));
 
-  const lockOf = (ws: WorkspaceRow) => lockReason(held === null ? [] : workspaceMissing(ws, held));
+  const lockOf = (ws: WorkspaceRow) =>
+    lockReason(held === null ? [] : workspaceMissing(ws, held, runs));
   // ONE PLACE, AS EVERY SHAPE DRAWS IT: the full row, the compact tile and a
   // folded group's flyout link all spread this, so the two shapes cannot list
   // a place with a different link, lock or figure.

@@ -20,7 +20,7 @@ import { useSearchTarget } from "./searchTarget.ts";
 import { useFillScreen } from "./fill.tsx";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
-import { loadChunk } from "./lazyScreen.ts";
+import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { Router, buildHash } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
@@ -37,6 +37,7 @@ import { healthFrame } from "~/test/health.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -79,15 +80,18 @@ const INCOMPLETE: CoverageFacts = {
   },
 };
 
-// THE NEW TASK SHEET'S CODE AND THE PALETTE'S ARE IN BEFORE A CASE STARTS.
-// Each is a chunk loaded on first open, and what these cases assert is that
-// the frame opens it, not how long a cold `import()` of that chunk takes
-// under a test transformer, which a `waitFor` would otherwise be measuring
-// (the same reason `App.test.tsx` loads every chunk first). Left to the first
-// case that opened it, the palette was in only for the cases after that one,
-// so a case run alone found no dialog.
+// EVERY CHUNK THE FRAME DRAWS FROM IS IN BEFORE A CASE STARTS, as in
+// `App.test.tsx`. The frame draws lazy parts of its own — the New task sheet
+// (the Worklet chunk's), the palette (a chunk of its own), and each peek out
+// of its workspace's chunk — and what these cases assert is what the frame
+// draws and asks, not how long a cold `import()` takes under a test
+// transformer, which a `waitFor` would otherwise be measuring. Loading the
+// Worklet chunk alone left a peek of another workspace to suspend inside an
+// act the case never awaited, which React says in the console, and left the
+// palette in only for the cases after the first that opened it, so a case run
+// alone found no dialog. The loading path is `lazy.test.tsx`'s.
 beforeAll(async () => {
-  await Promise.all([loadChunk("worklet"), loadChunk("palette")]);
+  await Promise.all(CHUNKS.map((chunk) => loadChunk(chunk)));
 });
 
 beforeEach(() => {
@@ -100,6 +104,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   location.hash = "#/";
 });
 
@@ -185,6 +190,8 @@ describe("the state bar's coverage", () => {
   // the route: React flushes a child's effects before its parent's, so a
   // Shell-level reset would run after the new screen had already published.
   test("a screen that publishes its own replaces it rather than losing it", async () => {
+    // ON A FAKED CLOCK, so a reset deferred by any timer at all can be run.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const { show } = frame(<Covered coverage={INCOMPLETE} />);
     show(
       <AlsoCovered
@@ -194,8 +201,10 @@ describe("the state bar's coverage", () => {
     // FLUSHED, because a reset that lands LATE is the failure being excluded:
     // a deferred one — a microtask, a timeout, a parent effect — runs after
     // the incoming screen has already published and blanks it, and a
-    // synchronous assertion cannot see that happen.
-    await act(async () => {});
+    // synchronous assertion cannot see that happen. Every timer the swap
+    // armed runs here, and every microtask around them, so whatever the
+    // outgoing screen left to happen later has happened.
+    await act(() => vi.runOnlyPendingTimersAsync());
     expect(screen.getByText(/applied through 4 of 9/)).toBeDefined();
     expect(screen.queryByText(/applied through 41 of 88/)).toBeNull();
     expect(
@@ -212,7 +221,7 @@ describe("the state bar's coverage", () => {
  * sends.
  */
 const EMPTY: Record<string, unknown> = {
-  work_inbox: { handle: "ada", notices: [], primary_reasons: [] },
+  inbox: { handle: "ada", notices: [], primary_reasons: [], sources: [] },
   work_views: { complete: true, views: [] },
   work_saved_views: { complete: true, views: [] },
   work_projects: { projects: [] },
@@ -221,6 +230,9 @@ const EMPTY: Record<string, unknown> = {
   retention: { domains: [], nodes: [], snapshots: [], alarms: [], register_readable: true },
   integrations: { integrations: [], tools: [], traffic_known: true, traffic_since: null },
 };
+
+/** How many reads every [answering] socket of the file has been asked. */
+let queried = 0;
 
 /** A socket answering a bound viewer and whatever else a case supplies. */
 function answering(
@@ -239,6 +251,7 @@ function answering(
     }
   ).query = (what: string, params?: Record<string, unknown>) => {
     asked.push({ what, params });
+    queried += 1;
     if (what === "viewer") {
       return Promise.resolve(
         answers.viewer ?? {
@@ -266,11 +279,12 @@ function mountShell(store: Store, socket: LiveSocket, child: ReactNode = <Bare /
   );
 }
 
-/** Let the queries the first render made answer, and the renders they cause land. */
+/**
+ * Let the queries the first render made answer, and the renders they cause
+ * land, including the reads those renders asked in turn (see `settled`).
+ */
 async function settle(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-  });
+  await settled(() => queried);
 }
 
 function notice(reason: string, n: number) {
@@ -297,13 +311,23 @@ describe("the Inbox badge", () => {
   test("asks the engine for unread primary notices, and counts what it answers", async () => {
     const asked: { what: string; params?: Record<string, unknown> }[] = [];
     const { store, socket } = answering(
-      { work_inbox: { handle: "ada", notices: [notice("assignee", 1)], primary_reasons: [] } },
+      {
+        inbox: {
+          handle: "ada",
+          notices: [notice("assignee", 1)],
+          primary_reasons: [],
+          sources: [],
+        },
+      },
       asked,
     );
     mountShell(store, socket);
     await settle();
-    const inbox = asked.find((a) => a.what === "work_inbox");
+    const inbox = asked.find((a) => a.what === "inbox");
     expect(inbox?.params).toMatchObject({ handle: "ada", unread: true, primary_only: true });
+    // A COUNT DRAWS NO CARD, so it asks the engine to judge none: the badge's
+    // read runs behind every screen of every tab.
+    expect(inbox?.params).not.toHaveProperty("cards");
     const row = screen.getByRole("link", { name: /^Inbox/ });
     expect(row.textContent).toContain("1");
   });
@@ -311,10 +335,11 @@ describe("the Inbox badge", () => {
   // A PAGE THE ENGINE HAD MORE THAN is a floor, and says so.
   test("a page with more behind it is drawn as a floor", async () => {
     const { store, socket } = answering({
-      work_inbox: {
+      inbox: {
         handle: "ada",
         notices: [notice("assignee", 1), notice("mention", 2)],
         primary_reasons: [],
+        sources: [],
         next_cursor: "c-2",
       },
     });
@@ -327,7 +352,7 @@ describe("the Inbox badge", () => {
   // reader checks, and it would be there permanently on a quiet company.
   test("nothing waiting draws no figure", async () => {
     const { store, socket } = answering({
-      work_inbox: { handle: "ada", notices: [], primary_reasons: [] },
+      inbox: { handle: "ada", notices: [], primary_reasons: [], sources: [] },
     });
     mountShell(store, socket);
     await settle();
@@ -750,9 +775,9 @@ describe("the sidebar's figures", () => {
     mountShell(store, socket, child);
     await settle();
     expect(asked.filter((a) => a.what === "viewer")).toHaveLength(1);
-    expect(
-      asked.filter((a) => a.what === "work_inbox" && a.params?.primary_only === true),
-    ).toHaveLength(1);
+    expect(asked.filter((a) => a.what === "inbox" && a.params?.primary_only === true)).toHaveLength(
+      1,
+    );
   });
 
   // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, not

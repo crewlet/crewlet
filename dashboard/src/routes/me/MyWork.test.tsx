@@ -39,6 +39,7 @@ import { QueueCountProvider, queueCountParams } from "~/lib/useQueueCount.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 import { applyPageAction, resetPageContextForTest } from "~/app/assistant/context.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
@@ -867,7 +868,7 @@ test("an ask on somebody else's day is written about them and cannot be answered
   expect(accept.getAttribute("title")).toContain("Viewing Rui Santos’s day. Read-only.");
   expect(screen.getByRole("button", { name: "Change" }).getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(accept);
-  await new Promise((r) => setTimeout(r, 20));
+  await settled(() => posted.length);
   expect(posted).toEqual([]);
 });
 
@@ -1517,7 +1518,7 @@ describe("somebody else's day", () => {
     );
     expect(rowOf("ENG-5").getAttribute("draggable")).toBeNull();
     fireEvent.keyDown(rowOf("ENG-5"), { key: "ArrowDown", altKey: true });
-    await new Promise((r) => setTimeout(r, 20));
+    await settled(() => posted.length);
     expect(posted).toEqual([]);
   });
 });
@@ -1572,7 +1573,92 @@ test("what reached somebody is the Inbox, and is not drawn here", async () => {
   mount();
   await counts();
   expect(screen.queryByText("Reached you")).toBeNull();
-  expect(query.mock.calls.map((c) => c[0])).not.toContain("work_inbox");
+  expect(query.mock.calls.map((c) => c[0])).not.toContain("inbox");
   // And the way to it is a link rather than a copy.
   expect(screen.getByText("Inbox →")).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// Reviews: the code host's claims
+// ---------------------------------------------------------------------------
+
+// REVIEWS IS THE CODE HOST'S CLAIMS ON THE PERSON WHOSE DAY IT IS: the changes
+// asking THEIR review and their own changes waiting on THEIR fix, each the
+// engine's own listing over REST — and, for a reader the tracker does not
+// answer, no tracker question at all, so no refusal is drawn over the code
+// host's answer. Mutation: ask needs=review without the reviewer, the fix
+// listing by reviewer, or keep the tracker's reads on for a reader without
+// Tracker, and this fails.
+test("Reviews lists the changes waiting on their review and their fix, and asks the tracker nothing without Tracker", async () => {
+  const asked: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      asked.push(url);
+      return new Response(
+        JSON.stringify({
+          position: { stream: "CREWLET_CODE_LOG", generation: 1, seq: 1 },
+          level: "session",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }),
+  );
+  const query = serving(
+    { viewer: { ...ada, grants: [] } },
+    {
+      ...flatOrg,
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+    },
+  );
+  mount("reviews");
+
+  await waitFor(() =>
+    expect(asked.filter((u) => u.pathname === "/query/code_changes").length).toBe(2),
+  );
+  const lists = asked
+    .filter((u) => u.pathname === "/query/code_changes")
+    .map((u) => Object.fromEntries(u.searchParams));
+  expect(lists).toContainEqual(expect.objectContaining({ needs: "review", reviewer: "ada" }));
+  expect(lists).toContainEqual(expect.objectContaining({ needs: "fix", owner: "ada" }));
+  expect(await screen.findByText("No review waiting")).toBeTruthy();
+  const tracker = query.mock.calls.map((c) => c[0]).filter((w) => w.startsWith("work_"));
+  expect(tracker).toEqual([]);
+});
+
+// AN UNBOUND READER'S OWN REVIEWS ARE A SEAT'S, AND THEY HOLD NONE: a review
+// is asked of a seat and a change is owned by one, and the login their day is
+// kept under is neither — the engine refuses it as a reviewer and as an owner.
+// So their Reviews says why it lists nothing and asks the code host nothing,
+// rather than drawing the engine's refusal of a login as a handle. Mutation:
+// list an unbound reader's own day by their login, and the code host is asked
+// and the sentence is gone.
+test("an unbound reader's own Reviews asks the code host nothing, and says why", async () => {
+  const asked: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      asked.push(new URL(String(input), "http://localhost"));
+      return new Response(
+        JSON.stringify({
+          position: { stream: "CREWLET_CODE_LOG", generation: 1, seq: 1 },
+          level: "session",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }),
+  );
+  serving(
+    { viewer: unbound, work_my_work: { ...emptyDay, handle: "token:ops-7" }, work_items: noWork },
+    {
+      ...flatOrg,
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+    },
+  );
+  mount("reviews");
+
+  expect(await screen.findByText("No review is asked of a login")).toBeTruthy();
+  await settled(() => asked.length);
+  expect(asked.filter((u) => u.pathname.startsWith("/query/code_"))).toEqual([]);
 });

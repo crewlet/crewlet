@@ -554,6 +554,21 @@ func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, p Policy, d Decisio
 	httpjson.FailWithFields(w, status, code, detail)
 }
 
+// RefusalCode is the status and the code any decision the router did not
+// admit is answered with, an unknown included: 503 `unavailable` for a
+// decision this node could not reach, and [RefusalFields]' own status and
+// code for every refusal. It is for a surface that renders a refusal in a form
+// of its own — a git route's one line of text — so that surface and a JSON
+// route say the same status under the same code: it READS the one mapping
+// rather than spelling a second, and the unknown arm is [EnvelopeRefusal]'s.
+func RefusalCode(d Decision) (int, httpjson.Code) {
+	if d.Unknown() {
+		return http.StatusServiceUnavailable, httpjson.CodeUnavailable
+	}
+	status, code, _ := RefusalFields(d)
+	return status, code
+}
+
 // Handle mounts one guarded route.
 //
 // It REFUSES at mount time rather than at request time: an empty action, an

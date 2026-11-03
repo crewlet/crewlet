@@ -1,0 +1,1 @@
+var e=`#/doclet/pages/`;export{e as t};

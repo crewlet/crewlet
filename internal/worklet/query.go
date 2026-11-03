@@ -466,10 +466,12 @@ type Query struct {
 	// same answer.
 	Session statelog.Position
 
-	// MinPosition is the floor a caller named with `min_position` — the
+	// Floors are the floors a caller named with `min_position` — the
 	// position a wake carried, or one its own previous write returned —
-	// and the answer is served from no earlier than it at every level.
-	MinPosition statelog.Position
+	// and the answer is served from no earlier than the one on this log,
+	// at every level. A floor on another log is refused by the read
+	// ([statelog.Query.Floors]), never dropped.
+	Floors []statelog.Position
 
 	Limit  int
 	Cursor string
@@ -477,7 +479,7 @@ type Query struct {
 
 // Params is the request's own parameters, as this parser reads them.
 //
-// DECLARED HERE, BY THE CONSUMER, and kept to the five methods the grammar
+// DECLARED HERE, BY THE CONSUMER, and kept to the six methods the grammar
 // actually calls. The concrete bag lives with the API surface that fills it
 // from a query string or a socket frame — and a parser that imported that
 // surface would be the tracker depending on the transport it is read through,
@@ -485,6 +487,13 @@ type Query struct {
 type Params interface {
 	// String is one value, empty when absent.
 	String(key string) string
+
+	// List is every value a key that may REPEAT was given ([RepeatedKeys]),
+	// in order: each of a query string's values, each string of a JSON
+	// array, and one value given plainly as a list of one. False is a value
+	// that is neither a string nor a list of strings, which the grammar
+	// refuses by the key's name rather than reading as absent.
+	List(key string) ([]string, bool)
 
 	// Int and Bool take a default, because "absent" and "zero" are
 	// different answers for both: `limit=0` is a caller asking for
@@ -531,6 +540,16 @@ var QueryKeys = []string{
 	"subtasks", "tag", "totals", "type", "unit", "updated", "view",
 	"watcher",
 }
+
+// RepeatedKeys are the parameters a request may carry MORE THAN ONCE, read as
+// every value given ([Params.List]): `min_position`, one floor per log an
+// answer is read from ([statelog.ParseFreshness]).
+//
+// A LIST, and only these, because every other key is one value: a transport
+// that carries a key twice hands a scalar reader the first, and a key that
+// meant something repeated would read as its first value there, silently. So
+// a transport keeps every value of exactly these.
+var RepeatedKeys = []string{"min_position"}
 
 // FieldKeyPrefix is what makes a parameter a custom-field filter.
 const FieldKeyPrefix = "f."
@@ -1286,7 +1305,7 @@ func (q *Query) parseLevel(p Params) error {
 		return fmt.Errorf("worklet: %w", err)
 	}
 	q.Level, q.MaxLag, q.MaxLagSeq = got.Level, got.MaxLag, got.MaxLagSeq
-	q.MinPosition = got.MinPosition
+	q.Floors = got.Floors
 	return nil
 }
 
@@ -1379,6 +1398,40 @@ func (m MapParams) String(key string) string {
 		return strconv.Itoa(v)
 	}
 	return fmt.Sprint(m[key])
+}
+
+// List is every value given for a key that may repeat ([RepeatedKeys]) — see
+// [ListOf].
+func (m MapParams) List(key string) ([]string, bool) { return ListOf(m[key]) }
+
+// ListOf is one parameter's value read as a list, the ONE reading every bag
+// this grammar is parsed from takes of a key that may repeat ([RepeatedKeys]):
+// a string is a list of one, and a list — a JSON array off a socket frame, or
+// the strings a query string repeated, which reach a data node across the
+// estate as that array — is each of its strings. Absent is an empty list.
+// Anything else is false: a number where a position belongs is a request the
+// grammar refuses by the key's name, never one it reads as having named
+// nothing.
+func ListOf(value any) ([]string, bool) {
+	switch v := value.(type) {
+	case nil:
+		return nil, true
+	case string:
+		return []string{v}, true
+	case []string:
+		return slices.Clone(v), true
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // Int is one value as a number, or def when it is absent OR unparsable.

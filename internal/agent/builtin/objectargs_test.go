@@ -72,6 +72,15 @@ func TestEveryWriteNamesTheObjectItWrites(t *testing.T) {
 		chatlet.MarkChatReadTool: "records the caller's own read state in the " +
 			"coordination store — no record of any domain's, and the caller is " +
 			"its only object",
+		builtin.CodeMarkInboxTool: "moves the caller's own code inbox, naming notices " +
+			"by their record ids — the caller's marks are its only object",
+		builtin.CodeCreateRepoTool: "makes a new repository, named by the `name` it " +
+			"will be listed under — on the other domains' tools a name is text, not " +
+			"an object, so it is not declared",
+		builtin.CodeImportRepoTool: "makes a new repository filled from another " +
+			"host's, a create as code_create_repo's is, named by the `name` it will " +
+			"be listed under — its `url` and `credential` are the source's, no " +
+			"object of the company's records",
 	}
 	catalogue := operatorArguments(t)
 	objects := builtin.ObjectArgs()
@@ -123,6 +132,10 @@ func operatorArguments(t *testing.T) map[string]map[string]any {
 	out := map[string]map[string]any{}
 	talk := full.Chat
 	talk.Cursors = fakeCursors{}
+	// AND THE CODE HOST'S, writes included, which name what they write by
+	// `repo` and `change`.
+	code := writeDeps(newCodeHost(), &codeWrites{})
+	code.Actor = builtin.PrincipalActor
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: full.Work, Pages: full.Pages, Knowledge: full.Knowledge, Chat: talk,
 		Org:  func() *org.Organization { return company },
@@ -134,6 +147,7 @@ func operatorArguments(t *testing.T) map[string]map[string]any {
 
 		// AND THE ARTIFACTS' TOOLS, which name what they write by `artifact`.
 		Artifacts: full.Artifacts, ArtifactData: full.ArtifactData,
+		Code: code,
 	}) {
 		props, _ := tool.Parameters()["properties"].(map[string]any)
 		out[tool.Name()] = props

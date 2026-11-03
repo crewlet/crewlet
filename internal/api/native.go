@@ -75,10 +75,13 @@ var errNoCompanyYet = fmt.Errorf("%w: %w", queries.ErrUnavailable, stream.ErrNoC
 // data node's while it does not. Read off this node's copy directly, a data
 // node whose copy was out of service — wrong rather than behind, or its file
 // shut — went on drawing its operator's board from rows it would not vouch for
-// to its own seats. The links between pages are the exception, and
-// deliberately: they are this node's own lexical index, which no peer answers
-// for. And a person's read cursors are the fleet's coordination record, which
-// every node reads directly.
+// to its own seats. The links between pages too ([estate.Pages.LinkedFrom]):
+// they are a data node's own lexical index, named from its copies of Doclet
+// AND Worklet, so they are answered by a data node whose copies of both serve
+// (ADR-0079) — read off this node's index, a node whose pages or tracker copy
+// had stopped serving listed links derived from rows it no longer answered
+// for, beside a page a peer had answered. And a person's read cursors are the
+// fleet's coordination record, which every node reads directly.
 type NativeReads struct {
 	Work       queries.WorkReader
 	Pages      queries.PageReader
@@ -430,17 +433,19 @@ func (l livePages) Revision(ctx context.Context, pageID string, version int,
 //
 // ITS OWN SOURCE, and a native-half one: the links are an index the engine
 // keeps over Doclet's pages, which comes up with the node's first company
-// and is absent for a company whose wiki is a vendor's.
+// and is absent for a company whose wiki is a vendor's. Read through Doclet's
+// routed reader, as [livePages] is, so the data node that answers is one whose
+// copies of both domains the links are named from serve — see [NativeReads].
 type liveBacklinks struct{ engine *engine.Engine }
 
 func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
 	search.Backlinks, error) {
 	started := l.engine.NativeStarted()
-	x := l.engine.Backlinks()
-	if x == nil {
+	p, ok := engine.OperatorPages(l.engine)
+	if !ok {
 		return search.Backlinks{}, nativeAbsent(started, "Doclet")
 	}
-	return x.LinkedFrom(ctx, pageID)
+	return p.LinkedFrom(ctx, pageID)
 }
 
 // liveWorkSearch is ranked item search, resolved per question.
@@ -602,6 +607,17 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		}
 		halves.Artifacts = engine.ArtifactToolDeps(e)
 		halves.ArtifactData = engine.ArtifactDataToolDeps(e)
+		// THE CODE READ TOOLS, where this node's running runtime serves the
+		// code host NOW — read per call, as the other halves are, so the
+		// call after a runtime starts serving code is offered them, and on
+		// exactly the terms this node's `/code/` reads are.
+		halves.Code = engine.CodeToolDeps(e)
+		// AND WHO READ A UNIT'S REPOSITORY, beside them and on their terms.
+		halves.Readers = engine.CodeReaderDeps(e)
+		// AND THE HEALTH TOOLS, read per call on the deps a seat's registry
+		// takes: the fleet's presence and, where the code host is served, the
+		// git nodes' status.
+		halves.Health = engine.HealthToolDeps(e)
 		if c := e.Company(); c != nil && c.Config != nil {
 			halves.Company = c.Config.Name
 		}

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"golang.org/x/net/html"
@@ -151,8 +152,12 @@ var (
 	textHolder = []string{"h1", "h2", "h3", "p", "li", "th", "td", "a", "b", "i", "u", "span"}
 	markTags   = []string{"b", "i", "u", "a", "span"}
 	headings   = []string{"h1", "h2", "h3"}
-	idRE       = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 )
+
+// idRE is a slide's id, compiled at first use (the package doc says why).
+var idRE = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+})
 
 // imageEssences are the image types an `<img>` may show.
 var imageEssences = []string{"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
@@ -346,7 +351,7 @@ func (p *parser) open(tok html.Token, selfClosing bool, line, start int) bool {
 		p.skipOver(tok, selfClosing, line)
 		return true
 	}
-	if hint, refused := refusedTags[tag]; refused && parent != nil || refused && tag != "section" {
+	if hint, refused := refusedTags()[tag]; refused && parent != nil || refused && tag != "section" {
 		p.bad(RuleElement, line, "<%s> is not in the slide subset: %s", tag, hint)
 		p.skipOver(tok, selfClosing, line)
 		return true
@@ -410,43 +415,46 @@ func (p *parser) open(tok html.Token, selfClosing bool, line, start int) bool {
 }
 
 // refusedTags are elements Claude's format or HTML has that a Crewlet slide
-// does not, each with what to write instead.
-var refusedTags = map[string]string{
-	"script":        "a slide runs no code",
-	"style":         "every style is inline, in the element's style attribute",
-	"link":          "a typeface is a face in deck.json",
-	"iframe":        "a slide embeds no page",
-	"x-embed":       "a slide embeds no live page in this release; show a picture of it as an <img>",
-	"x-connector":   "draw the line in an inline <svg>",
-	"object":        "show a picture as an <img> of a file in the version",
-	"embed":         "show a picture as an <img> of a file in the version",
-	"canvas":        "draw it in an inline <svg>",
-	"video":         "a slide shows no video in this release; show a still as an <img>",
-	"audio":         "a slide plays no sound",
-	"form":          "a slide takes no input",
-	"input":         "a slide takes no input",
-	"button":        "a slide takes no input",
-	"textarea":      "a slide takes no input",
-	"select":        "a slide takes no input",
-	"foreignobject": "a drawing holds no HTML",
-	"html":          "a slide file is its <section> alone",
-	"head":          "a slide file is its <section> alone",
-	"body":          "a slide file is its <section> alone",
-	"title":         "the deck's title is deck.json's title",
-	"meta":          "a slide file is its <section> alone",
-	"thead":         "a table is <tr>s directly; a first row of <th> is the header",
-	"tbody":         "a table is <tr>s directly",
-	"tfoot":         "a table is <tr>s directly",
-	"h4":            "use <h3> with a smaller font-size",
-	"h5":            "use <h3> with a smaller font-size",
-	"h6":            "use <h3> with a smaller font-size",
-	"em":            "use <i>",
-	"strong":        "use <b>",
-	"blockquote":    "use a <p> or a painted <div>",
-	"pre":           "use a <p> with font-family:monospace",
-	"code":          "use a <span> in a <p> with font-family:monospace",
-	"section":       "a slide is one <section>; group with a <div>",
-}
+// does not, each with what to write instead, built at first use (the package
+// doc says why).
+var refusedTags = sync.OnceValue(func() map[string]string {
+	return map[string]string{
+		"script":        "a slide runs no code",
+		"style":         "every style is inline, in the element's style attribute",
+		"link":          "a typeface is a face in deck.json",
+		"iframe":        "a slide embeds no page",
+		"x-embed":       "a slide embeds no live page in this release; show a picture of it as an <img>",
+		"x-connector":   "draw the line in an inline <svg>",
+		"object":        "show a picture as an <img> of a file in the version",
+		"embed":         "show a picture as an <img> of a file in the version",
+		"canvas":        "draw it in an inline <svg>",
+		"video":         "a slide shows no video in this release; show a still as an <img>",
+		"audio":         "a slide plays no sound",
+		"form":          "a slide takes no input",
+		"input":         "a slide takes no input",
+		"button":        "a slide takes no input",
+		"textarea":      "a slide takes no input",
+		"select":        "a slide takes no input",
+		"foreignobject": "a drawing holds no HTML",
+		"html":          "a slide file is its <section> alone",
+		"head":          "a slide file is its <section> alone",
+		"body":          "a slide file is its <section> alone",
+		"title":         "the deck's title is deck.json's title",
+		"meta":          "a slide file is its <section> alone",
+		"thead":         "a table is <tr>s directly; a first row of <th> is the header",
+		"tbody":         "a table is <tr>s directly",
+		"tfoot":         "a table is <tr>s directly",
+		"h4":            "use <h3> with a smaller font-size",
+		"h5":            "use <h3> with a smaller font-size",
+		"h6":            "use <h3> with a smaller font-size",
+		"em":            "use <i>",
+		"strong":        "use <b>",
+		"blockquote":    "use a <p> or a painted <div>",
+		"pre":           "use a <p> with font-family:monospace",
+		"code":          "use a <span> in a <p> with font-family:monospace",
+		"section":       "a slide is one <section>; group with a <div>",
+	}
+})
 
 // skipOver steps over a refused element: its content is read to its end, so
 // the rest of the file is checked, and none of it is drawn.
@@ -829,8 +837,9 @@ func Elements() []string {
 // StyleProperties are every inline style property a slide may declare,
 // sorted.
 func StyleProperties() []string {
-	out := make([]string, 0, len(properties))
-	for p := range properties {
+	props := properties()
+	out := make([]string, 0, len(props))
+	for p := range props {
 		out = append(out, p)
 	}
 	slices.Sort(out)

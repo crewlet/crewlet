@@ -115,6 +115,7 @@ func TestARestoredLogWrittenPastTheCheckpointIsNeverApplied(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
 	at := h.runner.Committed()
+	stance := h.runner.Stance()
 
 	// ONE LOOP, RUNNING ACROSS THE RESTORE: its start verified the checkpoint
 	// against a log that was still its own history, so nothing but the
@@ -130,14 +131,14 @@ func TestARestoredLogWrittenPastTheCheckpointIsNeverApplied(t *testing.T) {
 
 	// THE RESTORE: the log ends at 2, below the checkpoint.
 	h.fetch.endAt(2)
-	if established, _ := h.runner.ObserveEnd(at, 2); !established {
+	if established, _ := h.runner.ObserveEnd(stance, 2); !established {
 		t.Fatal("a log ending below the checkpoint established nothing")
 	}
 	// AND THE WRITE PAST IT, by a node whose rows were at 2: another record
 	// at 3, and one at 4.
 	h.fetch.rewrite(3, otherHistory)
 	h.fetch.endAt(4)
-	if _, reached := h.runner.ObserveEnd(at, 4); !reached {
+	if _, reached := h.runner.ObserveEnd(stance, 4); !reached {
 		t.Fatal("the end reaching the checkpoint did not clear the end's verdict")
 	}
 	h.fetch.offerStored(4, otherHistory.Add(time.Second), env(4, "edit", "4", "op-other-4", 1))
@@ -173,7 +174,7 @@ func TestARestoredLogWrittenPastTheCheckpointIsNeverApplied(t *testing.T) {
 	// rows stops at once — even one whose own reading of the log comes from
 	// a member that does not reach the checkpoint, and so could not find the
 	// divergence again for itself.
-	h.runner.ObserveEnd(at, 10)
+	h.runner.ObserveEnd(stance, 10)
 	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrLogDiverged) {
 		t.Fatal("a later reading of the end cleared the divergence")
 	}
@@ -196,7 +197,7 @@ func TestARestoredLogWrittenPastTheCheckpointIsNeverApplied(t *testing.T) {
 func TestAStaleEndThatCatchesUpOnTheSameRecordResumes(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
-	at := h.runner.Committed()
+	at := h.runner.Stance()
 	if established, _ := h.runner.ObserveEnd(at, 2); !established {
 		t.Fatal("a stale end established nothing")
 	}

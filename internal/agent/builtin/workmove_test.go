@@ -53,6 +53,11 @@ func (leadsOneProject) MemberOf(context.Context, string, string) (bool, error) {
 	return false, nil
 }
 
+// SeatGranted answers that no role carries a grant: a move names none.
+func (leadsOneProject) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
+}
+
 // moveRegistry is a seat's registry with the move wired, decided by chart.
 func moveRegistry(t *testing.T, trk *fakeTracker, chart authz.Chart) *tools.Registry {
 	t.Helper()

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -29,7 +30,7 @@ type screen struct {
 	noun string
 	// id, where set, is the grammar this screen's `{id}` is held to in place
 	// of a uuid: a task is named by its key as well as its id.
-	id *regexp.Regexp
+	id func() *regexp.Regexp
 }
 
 // links is the link table: every screen the assistant may link to, by the
@@ -86,24 +87,33 @@ var links = map[string]screen{
 // key passed where a project key goes would resolve to the task.
 type placeholder struct {
 	param string
-	value *regexp.Regexp
+	// value compiles its grammar at first use ([lazyGrammar]).
+	value func() *regexp.Regexp
 }
 
 // placeholders are every placeholder the link table writes.
 var placeholders = map[string]placeholder{
-	"{KEY}":       {"key", regexp.MustCompile(`^[A-Z][A-Z0-9]{0,15}$`)},
-	"{CONTAINER}": {"key", regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)},
+	"{KEY}":       {"key", lazyGrammar(`^[A-Z][A-Z0-9]{0,15}$`)},
+	"{CONTAINER}": {"key", lazyGrammar(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)},
 	"{id}":        {"id", uuidName},
 	"{turn_id}":   {"id", uuidName},
-	"{handle}":    {"handle", regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)},
-	"{unit}":      {"unit", regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)},
+	"{handle}":    {"handle", lazyGrammar(`^[a-z0-9][a-z0-9_-]{0,63}$`)},
+	"{unit}":      {"unit", lazyGrammar(`^[a-z0-9][a-z0-9_-]{0,63}$`)},
+}
+
+// lazyGrammar is pattern compiled at its first use, not at init: a bounded
+// repeat compiles to a program holding every count, and the code host's push
+// hook is this binary, which pays every package's init on every push
+// (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit).
+func lazyGrammar(pattern string) func() *regexp.Regexp {
+	return sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(pattern) })
 }
 
 // The two id grammars: a record's uuid, and a task's key or its uuid (a key a
 // collision gave to another task is linked by the id instead).
 var (
-	uuidName = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	taskName = regexp.MustCompile(`^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-` +
+	uuidName = lazyGrammar(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	taskName = lazyGrammar(`^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-` +
 		`[0-9a-f]{12}|[A-Z][A-Z0-9]{0,15}-[0-9]{1,9})$`)
 )
 
@@ -150,9 +160,9 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 		if !ok {
 			continue
 		}
-		v, grammar := params[p.param], p.value
+		v, grammar := params[p.param], p.value()
 		if segment == "{id}" && s.id != nil {
-			grammar = s.id
+			grammar = s.id()
 		}
 		if !grammar.MatchString(v) {
 			return wire.Link{}, fmt.Errorf("%w: %s takes %s as %s, and %q is not one",
@@ -210,9 +220,9 @@ func ScreenOf(address string) (string, map[string]string, bool) {
 				continue
 			}
 			value, err := url.PathUnescape(segments[i])
-			grammar := p.value
+			grammar := p.value()
 			if part == "{id}" && links[name].id != nil {
-				grammar = links[name].id
+				grammar = links[name].id()
 			}
 			if err != nil || !grammar.MatchString(value) {
 				matched = false

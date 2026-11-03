@@ -29,68 +29,82 @@ import (
 //
 // # How this process reaches its own system account
 //
-// Every client of the embedded broker is anonymous and lands in the global
-// account; nothing could reach the system account at all. So a CLUSTERED
-// member declares the system account with one user on it, an NKEY USER whose
-// key pair is minted at start and whose private half never leaves this
-// process: the server is given only the public key, and this process signs the
-// server's nonce with the other. No file, no log line and no peer ever holds
-// anything that authenticates as it. With exactly the global and the system
-// account declared, nats-server binds every connection that presents no
-// credentials to the global account through a no-auth user it adds itself
-// (server/server.go, configureAccounts) — so every other client, a leaf's link
-// included, connects exactly as before.
+// Every connection to the embedded broker presents a key, and the broker's one
+// authenticator ([brokerAuth]) decides which account each is bound to: this
+// process's own clients to the global account, a fleet member's routes to
+// none, a leaf's link and an operator's tool to the global account. So a
+// CLUSTERED member declares the system account and the authenticator admits
+// ONE key to it: a key pair this process mints at start, whose private half
+// never leaves it, and which it accepts only over the in-memory pipe — never
+// over a socket. No file, no log line and no peer ever holds anything that
+// authenticates as it.
 //
-// AN NKEY RATHER THAN A PASSWORD, because the server warns on every start that
-// declares a plaintext one ("Plaintext passwords detected"), and a warning on
-// every clustered member's boot about a credential no operator configured
-// would be a false alarm read by every operator. A bcrypt hash would silence
-// it too, and hand the server a secret where a public key hands it none.
+// NO USER LIST BESIDE IT. The server's own user table could hold the system
+// key as well, but it is consulted only where no custom authenticator is set,
+// so an entry there would be a second list that nothing reads. And the no-auth
+// user nats-server adds to the global account when exactly the global and the
+// system account are declared (server/server.go, configureAccounts) — which is
+// how every anonymous client used to land in the global account — is still
+// added and is unreachable: with a custom authenticator the server never
+// consults it, and a client is bound to the global account it starts in only
+// until the authenticator binds or refuses it.
+//
+// AN NKEY RATHER THAN A PASSWORD: what the pipe carries is a public key and a
+// signature over the server's nonce, so the server is handed no secret, and
+// nothing about it warns on every start the way a plaintext password does
+// ("Plaintext passwords detected").
 //
 // THE SYSTEM ACCOUNT KEEPS ITS DEFAULT NAME, `$SYS`. The metadata group's own
 // state is stored under the system account's name, so a member that renamed
 // it would come back from an upgrade having forgotten which streams exist.
 //
-// A SOLO MEMBER DECLARES NOTHING. It has no metadata group to read or change,
-// and its broker keeps the posture it has always had.
+// A SOLO MEMBER DECLARES NOTHING. It has no metadata group to read or change.
 
-// systemUser is the identity that reaches this member's system account: its
-// public key, which the server is given, and the key pair that signs for it,
-// which nothing outside this process ever sees.
-type systemUser struct {
+// processUser is an identity this process alone holds on its own broker: its
+// public key, which the authenticator accepts, and the key pair that signs for
+// it, which nothing outside this process ever sees. The engine's own clients
+// carry one ([brokerAuth.engine]) and the membership code another
+// ([brokerAuth.system]).
+type processUser struct {
 	public string
 	keys   nkeys.KeyPair
 }
 
-// newSystemUser mints the system account's identity for one broker start.
-func newSystemUser() (systemUser, error) {
+// newProcessUser mints one identity for one broker start; role names it in
+// the error a failed mint reports.
+func newProcessUser(role string) (processUser, error) {
 	keys, err := nkeys.CreateUser()
 	if err != nil {
-		return systemUser{}, fmt.Errorf("jetstream: mint the system account's key: %w", err)
+		return processUser{}, fmt.Errorf("jetstream: mint the %s's key: %w", role, err)
 	}
 	public, err := keys.PublicKey()
 	if err != nil {
-		return systemUser{}, fmt.Errorf("jetstream: read the system account's key: %w", err)
+		return processUser{}, fmt.Errorf("jetstream: read the %s's key: %w", role, err)
 	}
-	return systemUser{public: public, keys: keys}, nil
+	return processUser{public: public, keys: keys}, nil
 }
 
-// declared reports whether this member declared a system user at all.
-func (u systemUser) declared() bool { return u.keys != nil }
+// declared reports whether this identity was minted at all: a member that
+// declares no system account mints no key for it.
+func (u processUser) declared() bool { return u.keys != nil }
 
-// declare puts the system account and its one user into a clustered member's
-// options.
-func (u systemUser) declare(opts *server.Options) {
-	sys := server.NewAccount(server.DEFAULT_SYSTEM_ACCOUNT)
-	opts.Accounts = append(opts.Accounts, sys)
+// sign signs the server's nonce with this identity's key.
+func (u processUser) sign(nonce []byte) ([]byte, error) { return u.keys.Sign(nonce) }
+
+// option presents this identity on a connection.
+func (u processUser) option() nats.Option { return nats.Nkey(u.public, u.sign) }
+
+// declareSystemAccount puts the system account into a clustered member's
+// options. It declares no user: the authenticator decides who reaches it.
+func declareSystemAccount(opts *server.Options) {
+	opts.Accounts = append(opts.Accounts, server.NewAccount(server.DEFAULT_SYSTEM_ACCOUNT))
 	opts.SystemAccount = server.DEFAULT_SYSTEM_ACCOUNT
-	opts.Nkeys = append(opts.Nkeys, &server.NkeyUser{Nkey: u.public, Account: sys})
 }
 
-// connect opens an in-process connection on the system account.
-func (u systemUser) connect(ns *server.Server) (*nats.Conn, error) {
-	return nats.Connect("", nats.InProcessServer(ns),
-		nats.Nkey(u.public, func(nonce []byte) ([]byte, error) { return u.keys.Sign(nonce) }),
+// connect opens an in-process connection on the system account, as this
+// identity — the system one, which the authenticator binds there.
+func (u processUser) connect(ns *server.Server) (*nats.Conn, error) {
+	return nats.Connect("", nats.InProcessServer(ns), u.option(),
 		nats.Name("crewlet-membership"))
 }
 
@@ -379,7 +393,7 @@ const appliedPoll = removeResend / 10
 // the leader has proposed it, the group commits it without anybody listening.
 func (s *Server) RemovePeer(ctx context.Context, peer string) error {
 	e := s.embedded
-	if e == nil || e.leaf || !e.clustered || !e.system.declared() {
+	if e == nil || e.leaf || !e.clustered || e.auth == nil || !e.auth.system.declared() {
 		return ErrNoMetaGroup
 	}
 	if !ValidPeerID(peer) {
@@ -395,7 +409,7 @@ func (s *Server) RemovePeer(ctx context.Context, peer string) error {
 	if err != nil {
 		return err
 	}
-	nc, err := e.system.connect(e.ns)
+	nc, err := e.auth.system.connect(e.ns)
 	if err != nil {
 		return fmt.Errorf("jetstream: connect to this member's system account: %w", err)
 	}

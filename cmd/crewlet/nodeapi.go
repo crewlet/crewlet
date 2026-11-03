@@ -76,7 +76,7 @@ const opIDFlagName = "op-id"
 // finishes.
 //
 // ONE SPELLING, for [nodeAPIFlag]'s reason: `iam` took the same id as
-// `-idempotency-key` while `seats`, `work purge` and the retention gestures
+// `-idempotency-key` while `seats`, `worklet purge` and the retention gestures
 // took `-op-id`, so one operator retrying two unknown writes typed two flags
 // for one thing. `-op-id` is the name kept, because more commands took it and
 // it names what goes in it — the op id every one of those answers prints —

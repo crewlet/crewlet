@@ -9,6 +9,7 @@ import (
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -243,9 +244,9 @@ func TestADepartedNodesSpendIsStillAnswered(t *testing.T) {
 // the fleet would refuse one at a time, on every node, for ever. The key is a
 // fixture: what these cases are about is what the domain writes, and the
 // signature's own rules are certified in [statelog].
-func testSigner(t *testing.T) *statelog.Signer {
+func testSigner(t *testing.T) *recordseal.Signer {
 	t.Helper()
-	signer, err := statelog.NewSigner(usage.Domain{}.Name(), statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(usage.Domain{}.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -253,9 +254,9 @@ func testSigner(t *testing.T) *statelog.Signer {
 }
 
 // testVerifier opens what [testSigner] sealed.
-func testVerifier(t *testing.T) *statelog.Verifier {
+func testVerifier(t *testing.T) *recordseal.Verifier {
 	t.Helper()
-	verifier, err := statelog.NewVerifier(usage.Domain{}.Name(), statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(usage.Domain{}.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

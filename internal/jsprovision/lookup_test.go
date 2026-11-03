@@ -3,6 +3,7 @@ package jsprovision
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,15 +21,47 @@ import (
 func TestALookupIsAskedAgainUntilItIsAnswered(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	err := fast.lookup(t.Context(), func(context.Context) error {
+	got, err := lookupWith(t.Context(), fast, func(context.Context) (int, error) {
 		calls++
 		if calls <= 2 {
-			return nats.ErrTimeout
+			return 0, nats.ErrTimeout
 		}
-		return nil
+		return calls, nil
 	})
-	if err != nil || calls != 3 {
-		t.Fatalf("lookup = %v after %d call(s), want the third call's answer", err, calls)
+	if err != nil || calls != 3 || got != 3 {
+		t.Fatalf("lookup = %d, %v after %d call(s), want the third call's answer", got, err, calls)
+	}
+}
+
+// A LOOKUP RETURNS THE ANSWER THAT CAME, even when a request it presumed lost
+// ends after it. The read keeps such a request outstanding while it asks
+// again, and once the next one is answered it cancels the first and waits for
+// it to end. So the cut-off request is the LAST to return, with no value.
+// A lookup that took its answer from a variable each request assigned
+// returned that request's nil instead. On a partitioned cluster that handed
+// observeBucket a nil bucket, and the nil dereference stopped the test binary.
+//
+// Mutation: have the lookup keep the value each request returns in a
+// variable they share, as LookupBucket once did, and this returns nil.
+func TestALookupAnsweredLateKeepsTheAnswerNotTheRequestCutOff(t *testing.T) {
+	t.Parallel()
+	answer := &jetstream.StreamInfo{Config: jetstream.StreamConfig{Name: "KV_x"}}
+	var asks atomic.Int32
+	got, err := lookupWith(t.Context(), fast, func(ctx context.Context) (*jetstream.StreamInfo, error) {
+		if asks.Add(1) == 1 {
+			// LOST: nobody answers it until the read cuts it off.
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return answer, nil
+	})
+	if err != nil || got != answer {
+		t.Fatalf("lookup = %+v, %v after %d request(s), want the second request's answer",
+			got, err, asks.Load())
+	}
+	if n := asks.Load(); n != 2 {
+		t.Fatalf("the lookup sent %d request(s), want 2 — the case needs one presumed "+
+			"lost and outstanding when the next is answered", n)
 	}
 }
 
@@ -45,7 +78,7 @@ func TestALookupIsAskedAgainUntilItIsAnswered(t *testing.T) {
 // never returns.
 func TestALookupNobodyAnswersGivesUpWithinItsBudget(t *testing.T) {
 	t.Parallel()
-	silent := func(context.Context) error { return nats.ErrTimeout }
+	silent := func(context.Context) (struct{}, error) { return struct{}{}, nats.ErrTimeout }
 	for name, callerDeadline := range map[string]bool{
 		"the caller's deadline": true,
 		"its own budget":        false,
@@ -59,7 +92,7 @@ func TestALookupNobodyAnswersGivesUpWithinItsBudget(t *testing.T) {
 				defer cancel()
 			}
 			done := make(chan error, 1)
-			go func() { done <- fast.lookup(ctx, silent) }()
+			go func() { _, err := lookupWith(ctx, fast, silent); done <- err }()
 			var err error
 			select {
 			case err = <-done:
@@ -94,11 +127,13 @@ func TestAStreamInfoNamingNoLeaderIsAskedAgain(t *testing.T) {
 		{Cluster: &jetstream.ClusterInfo{Leader: "member-2"}, State: jetstream.StreamState{LastSeq: 5}},
 	}
 	calls := 0
-	var got *jetstream.StreamInfo
-	err := fast.lookup(t.Context(), func(context.Context) error {
-		got = answers[calls]
+	got, err := lookupWith(t.Context(), fast, func(context.Context) (*jetstream.StreamInfo, error) {
+		info := answers[calls]
 		calls++
-		return leaderAnswered("KV_x", got)
+		if err := leaderAnswered("KV_x", info); err != nil {
+			return nil, err
+		}
+		return info, nil
 	})
 	if err != nil || calls != 3 || got.Cluster.Leader != "member-2" || got.State.LastSeq != 5 {
 		t.Fatalf("lookup = %v after %d call(s), got %+v; want the leader's answer, the third", err, calls, got)

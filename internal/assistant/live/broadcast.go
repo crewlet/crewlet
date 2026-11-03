@@ -154,7 +154,7 @@ type Broker interface {
 	Broadcast(ctx context.Context, subject string, payload []byte) error
 	Listen(ctx context.Context, pattern string, h queue.ListenFunc) (queue.Unsubscribe, error)
 	AskEach(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error
-	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
+	Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
 // Roster is the fleet's membership: the presence leases (internal/coord,
@@ -318,7 +318,9 @@ func (f *Fleet) Start(ctx context.Context, server Server) error {
 		{topics.AssistantReplay, f.answerReplay},
 		{topics.AssistantStop, f.answerStop},
 	} {
-		stop, err := f.broker.Serve(ctx, s.subject, s.answer)
+		// WORK DONE NOW: a replay reads this node's ring and a stop
+		// cancels a run, neither waiting in a queue of its own.
+		stop, err := f.broker.Serve(ctx, s.subject, queue.ConcurrentAnswers, s.answer)
 		if err != nil {
 			// The answerers already serving are withdrawn, and a failure to
 			// withdraw one is reported beside the failure to serve.

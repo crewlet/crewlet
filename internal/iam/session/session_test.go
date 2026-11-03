@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -411,50 +412,138 @@ func TestTheCookieNameDropsThePrefixOnlyForPlainHttp(t *testing.T) {
 // They drift silently when they are written at each call site: the sign-in
 // still works with `Secure` dropped, with `SameSite=None`, with a `Domain`
 // attribute set — and each of those is a different way for somebody else's
-// page to act as the person holding the cookie.
+// page to act as the person holding the cookie. Read as a browser reads them,
+// off the response each writer sets them on: a sign-in's ([session.Begin])
+// and the one that carries a session on ([session.Continue]) set the same
+// cookie.
 func TestTheCookieCarriesEveryAttributeThatMakesItSafe(t *testing.T) {
 	t.Parallel()
+	const https = "https://crewlet.example.com"
 	expires := time.Date(2026, 3, 2, 17, 0, 0, 0, time.UTC)
-	got := session.Cookie("https://crewlet.example.com", "v2.value", expires)
-	switch {
-	case got.Name != session.HostCookieName:
-		t.Errorf("the name is %q", got.Name)
-	case !got.HttpOnly:
-		t.Error("not HttpOnly, so any script on the page can read the session")
-	case !got.Secure:
-		t.Error("not Secure, which a browser requires for the __Host- prefix " +
-			"and which otherwise sends the cookie over plain http")
-	case got.Path != "/":
-		t.Errorf("the path is %q, which the __Host- prefix refuses and which "+
-			"leaves part of the API without a credential", got.Path)
-	case got.Domain != "":
-		t.Errorf("a Domain of %q is set, which the __Host- prefix refuses — "+
-			"it is what would let a sibling subdomain write this cookie",
-			got.Domain)
-	case got.SameSite != http.SameSiteLaxMode:
-		t.Errorf("SameSite is %v, so a cross-site form can post as the person "+
-			"holding it", got.SameSite)
-	case !got.Expires.Equal(expires):
-		t.Errorf("the expiry is %v, want the absolute deadline %v — the idle "+
-			"one signs somebody out at the moment a re-issue would have moved "+
-			"it, and none at all leaves a dead cookie re-presented for ever",
-			got.Expires, expires)
+	for _, writer := range []struct {
+		name  string
+		write func(w http.ResponseWriter, external string)
+	}{
+		{"a sign-in's", func(w http.ResponseWriter, external string) {
+			session.Begin(w, external, "v2.value", expires)
+		}},
+		{"a carried-on session's", func(w http.ResponseWriter, external string) {
+			session.Continue(w, external, "v2.value", expires)
+		}},
+	} {
+		got := oneCookie(t, writer.name, func(w http.ResponseWriter) { writer.write(w, https) })
+		switch {
+		case got.Name != session.HostCookieName:
+			t.Errorf("%s: the name is %q", writer.name, got.Name)
+		case got.Value != "v2.value":
+			t.Errorf("%s: the value is %q, not the bearer it was handed", writer.name, got.Value)
+		case !got.HttpOnly:
+			t.Errorf("%s: not HttpOnly, so any script on the page can read the session", writer.name)
+		case !got.Secure:
+			t.Errorf("%s: not Secure, which a browser requires for the __Host- prefix "+
+				"and which otherwise sends the cookie over plain http", writer.name)
+		case got.Path != "/":
+			t.Errorf("%s: the path is %q, which the __Host- prefix refuses and which "+
+				"leaves part of the API without a credential", writer.name, got.Path)
+		case got.Domain != "":
+			t.Errorf("%s: a Domain of %q is set, which the __Host- prefix refuses — "+
+				"it is what would let a sibling subdomain write this cookie",
+				writer.name, got.Domain)
+		case got.SameSite != http.SameSiteLaxMode:
+			t.Errorf("%s: SameSite is %v, so a cross-site form can post as the person "+
+				"holding it", writer.name, got.SameSite)
+		case !got.Expires.Equal(expires):
+			t.Errorf("%s: the expiry is %v, want the absolute deadline %v — the idle "+
+				"one signs somebody out at the moment a re-issue would have moved "+
+				"it, and none at all leaves a dead cookie re-presented for ever",
+				writer.name, got.Expires, expires)
+		}
+
+		// A loopback http deployment drops the prefix AND the Secure flag,
+		// because a browser refuses the Set-Cookie with either one alone.
+		local := oneCookie(t, writer.name, func(w http.ResponseWriter) {
+			writer.write(w, "http://localhost:8000")
+		})
+		if local.Name != session.CookieBaseName || local.Secure {
+			t.Errorf("%s: the loopback cookie is %q (secure %v), want %q and not secure",
+				writer.name, local.Name, local.Secure, session.CookieBaseName)
+		}
 	}
 
-	// A loopback http deployment drops the prefix AND the Secure flag,
-	// because a browser refuses the Set-Cookie with either one alone.
-	local := session.Cookie("http://localhost:8000", "v2.value", expires)
-	if local.Name != session.CookieBaseName || local.Secure {
-		t.Errorf("the loopback cookie is %q (secure %v), want %q and not secure",
-			local.Name, local.Secure, session.CookieBaseName)
+	// And the deletion of the name a deployment issues matches on name,
+	// path and domain, or the browser keeps the original and the person
+	// stays signed in.
+	rec := httptest.NewRecorder()
+	session.End(rec, https)
+	var deleted *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == session.HostCookieName {
+			deleted = c
+		}
 	}
+	if deleted == nil || deleted.Path != "/" || deleted.Domain != "" || deleted.MaxAge >= 0 {
+		t.Errorf("the sign-out's deletion of %s is %+v, which does not match the "+
+			"cookie it is meant to delete", session.HostCookieName, deleted)
+	}
+}
 
-	// And the clear matches on name, path and domain, or the browser
-	// keeps the original and the person stays signed in.
-	clear := session.Clear("https://crewlet.example.com")
-	if clear.Name != got.Name || clear.Path != got.Path ||
-		clear.Domain != got.Domain || clear.MaxAge >= 0 {
-		t.Errorf("the clear is %+v, which does not match the cookie it is "+
-			"meant to delete", clear)
+// oneCookie is the one cookie write sets on a response, read back as a
+// browser reads a Set-Cookie.
+func oneCookie(t *testing.T, what string, write func(http.ResponseWriter)) *http.Cookie {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	write(rec)
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("%s set %d cookies, want the bearer's one: %v", what, len(cookies), cookies)
+	}
+	return cookies[0]
+}
+
+// WHAT A BROWSER'S CACHE KEEPS IS WHO IT IS SIGNED IN AS: a sign-in and a
+// sign-out empty it, and carrying the same person's session on leaves it.
+//
+// An answer by object id is kept by a browser under a key that holds no
+// cookie — the cookie's bytes move at every re-issue, which would miss every
+// kept answer five minutes later — so what it keeps is scoped to who it is
+// signed in as from the other side: every response that may change who that
+// is empties the browser's HTTP cache, and nothing else the browser keeps. A
+// re-issue, and a step-up's replacement, are the same person's session
+// carried on, and empty nothing.
+//
+// Mutations: drop the header from Begin or End and the next person in the
+// browser is served the last one's answers, red; send it on Continue and
+// every kept answer is dropped once a re-issue comes, red.
+func TestABrowsersCacheIsEmptiedWhenWhoItIsSignedInAsMayChange(t *testing.T) {
+	t.Parallel()
+	expires := time.Date(2026, 3, 2, 17, 0, 0, 0, time.UTC)
+	for _, external := range []string{"https://crewlet.example.com", "http://localhost:8000"} {
+		for _, tc := range []struct {
+			name  string
+			write func(http.ResponseWriter)
+			// empties is whether the response empties the browser's
+			// cache, SPELLED OUT rather than read back from the
+			// package: `"cache"`, the cache alone — never `"cookies"`,
+			// which would race the cookie set beside it, nor
+			// `"storage"` or `"*"`.
+			empties string
+		}{
+			{"a sign-in", func(w http.ResponseWriter) { session.Begin(w, external, "v3.value", expires) },
+				`"cache"`},
+			{"a sign-out", func(w http.ResponseWriter) { session.End(w, external) }, `"cache"`},
+			{"a session carried on", func(w http.ResponseWriter) {
+				session.Continue(w, external, "v3.value", expires)
+			}, ""},
+		} {
+			rec := httptest.NewRecorder()
+			tc.write(rec)
+			if got := strings.Join(rec.Header().Values("Clear-Site-Data"), ", "); got != tc.empties {
+				t.Errorf("%s on %s carried Clear-Site-Data %q, want %q", tc.name, external, got, tc.empties)
+			}
+			if len(rec.Result().Cookies()) == 0 {
+				t.Errorf("%s on %s set no cookie: this case would hold the header beside nothing",
+					tc.name, external)
+			}
+		}
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/artifactupload"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -414,13 +415,13 @@ type appliedLog struct {
 	waiting chan statelog.Position
 }
 
-func (l *appliedLog) Committed() statelog.Position {
+func (l *appliedLog) Reached() statelog.Position {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.at
 }
 
-func (l *appliedLog) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (l *appliedLog) WaitReached(ctx context.Context, p statelog.Position) error {
 	announced := false
 	for {
 		l.mu.Lock()
@@ -445,7 +446,7 @@ func (l *appliedLog) WaitCommitted(ctx context.Context, p statelog.Position) err
 }
 
 func (l *appliedLog) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statelog.Position) error {
-	return l.WaitCommitted(ctx, p)
+	return l.WaitReached(ctx, p)
 }
 
 // advance applies the log through p.
@@ -663,6 +664,9 @@ func (chart) LeadsContainer(context.Context, string, string) (bool, error) { ret
 func (chart) LeadsAnyone(_ context.Context, actor string) (bool, error)    { return actor == "lee", nil }
 func (chart) MemberOf(_ context.Context, actor, unit string) (bool, error) {
 	return unit == "ENG" && (actor == "eve" || actor == "lee"), nil
+}
+func (chart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
 }
 
 // roster is the company's units and seats.

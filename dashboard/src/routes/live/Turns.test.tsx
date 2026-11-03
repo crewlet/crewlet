@@ -11,7 +11,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -36,6 +36,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   location.hash = "";
 });
 
@@ -83,7 +84,7 @@ function mountWith(
   answers: Record<string, unknown | ((p: Record<string, unknown>) => unknown)>,
   hash = "#/live/turns",
   org: unknown = { roles: [{ name: "CEO", handle: "ceo" }] },
-): { asked: Asked[] } {
+): { asked: Asked[]; store: Store } {
   location.hash = hash;
   const store = new Store();
   store.applyHealth(healthFrame());
@@ -110,7 +111,7 @@ function mountWith(
       </Router>
     </ClientContext.Provider>,
   );
-  return { asked };
+  return { asked, store };
 }
 
 function mount(turns: TurnRow[], agents: unknown[] = []) {
@@ -359,6 +360,30 @@ test("Load older asks for the page past the cursor and lists it", async () => {
   expect(asked.filter((q) => q.kind === "turns").at(-1)?.params).toMatchObject({
     before: "cursor-1",
   });
+});
+
+// AN OLDER PAGE THAT FAILS LEAVES THE CONTROL THAT ASKS IT AGAIN, its failure
+// said beside it, never in its place. Mutation: draw the failure in the
+// control's place again, and there is no Load older to press.
+test("an older page that fails keeps Load older, which asks it again", async () => {
+  let failures = 1;
+  const { asked } = mountWith({
+    turns: (p: Record<string, unknown>) =>
+      p.before
+        ? failures-- > 0
+          ? Promise.reject(new Error("unavailable"))
+          : { turns: [row("t-2", "the older one", { complete: true })], next: null }
+        : { turns: [row("t-1", "the newer one", { complete: true })], next: "cursor-1" },
+    event_series: series(2),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Load older" }));
+  expect(
+    await screen.findByText("Could not read the next page (unavailable). Try again."),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+  await screen.findByText("the older one");
+  expect(screen.queryByText(/Could not read the next page/)).toBeNull();
+  expect(asked.filter((q) => q.kind === "turns" && q.params.before === "cursor-1")).toHaveLength(2);
 });
 
 // A BAR PICKED IN THE PAST IS ASKED FOR AS ITSELF.

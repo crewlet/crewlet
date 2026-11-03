@@ -421,9 +421,10 @@ const maxRowAnswerBytes = 64 << 10
 // and every command that resolves a company through a running node — they
 // all start with the listing — failed before reading one, blaming a
 // credential. 64 MiB is some 290,000 rows: ten thousand seats holding a
-// credential at each of the eight surfaces stay under a third of it. And it
-// stays a bound, so a node answering garbage cannot make this process read
-// without end.
+// credential are 10,000 rows at each surface integration.Kinds lists, so it
+// holds 29 surfaces' worth, which stays true as that list grows. And it stays
+// a bound, so a node answering garbage cannot make this process read without
+// end.
 const maxListingBytes = 64 << 20
 
 // refusal turns a status code into something an operator can act on.

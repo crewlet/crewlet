@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -54,6 +55,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		search.Domain{}.Name():  {topics.TrackerVectorsStream, topics.TrackerVectorsPrefix, topics.TrackerVectorsWildcard},
 		doclet.Domain{}.Name():  {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
 		usage.Domain{}.Name():   {topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard},
+		code.Domain{}.Name():    {topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard},
 		iamdomain.Domain{}.Name(): {topics.IamLogStream, topics.IamLogPrefix,
 			topics.IamLogWildcard},
 		artifactsdomain.Domain{}.Name(): {topics.ArtifactsLogStream, topics.ArtifactsLogPrefix,
@@ -107,7 +109,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		}
 	}
 	// NO OTHER STREAM OF A DOMAIN'S: every stream on the broker that names
-	// one of the state logs' families is one of the four, so nothing beside
+	// one of the state logs' families is one of the five, so nothing beside
 	// them holds a second copy of a domain's records.
 	logStreams := []string{}
 	for _, names := range declared {
@@ -116,7 +118,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	names := js.StreamNames(t.Context())
 	for name := range names.Name() {
 		family := strings.Contains(name, "TRACKER") || strings.Contains(name, "PAGES") ||
-			strings.Contains(name, "USAGE")
+			strings.Contains(name, "USAGE") || strings.Contains(name, "CODE")
 		if family && !slices.Contains(logStreams, name) {
 			t.Errorf("the node created %s beside the state logs %v", name, logStreams)
 		}
@@ -195,10 +197,10 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		t.Fatalf("read the tick's inputs: %v", err)
 	}
 	running := s.Domain(worklet.Domain{}.Name())
-	if err := r.domain(t.Context(), running, shared); err != nil {
+	if err := trimLog(t.Context(), r, running, shared); err != nil {
 		t.Fatalf("the tracker's tick: %v", err)
 	}
-	floors, err := e.backends.Fleet.Floors(t.Context())
+	floors, err := fleetFloors(t.Context(), e.backends.Fleet)
 	if err != nil {
 		t.Fatalf("read the floors: %v", err)
 	}

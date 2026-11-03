@@ -1,0 +1,35 @@
+-- A landed entry owes its work item's close until its home settles it.
+--
+-- A queued merge that asked its change's work item closed (close_task)
+-- records the ask on its entry, and its repository's home closes the item as
+-- the entry's enqueuer once the landing applies (M5-D27). The home closed it
+-- only where the land proposal it made itself answered `applied`, in the same
+-- turn: a landing answered `pending`, a home that stopped or handed the
+-- repository on between the landing and the close, and a close the tracker
+-- could not answer all left the item open with the change merged, and nothing
+-- asked again — the entry had ended, and the queue's work lists live entries.
+--
+-- close_op makes the owed close a fact of the rows, and names the operation
+-- it is made under: the land's apply sets it, on each entry it lands that
+-- asked the close of a change carrying a work item, to
+-- code.CloseWorkItemOpID of the landing's own operation, and a close_settled
+-- record clears it to '' once the home's close ended — closed, or
+-- definitively not, which that record names on the change. The operation is
+-- on the row because nothing else the row holds names the landing's, and the
+-- tracker's ledger answers a repeated close under one id once, so the close a
+-- second home asks is the same write as the one a first home may have made
+-- before it stopped. Every home's queue work lists the repositories holding
+-- one (code_queue_close_owed_idx), so whichever home holds the repository
+-- next turn closes what an earlier one owed.
+--
+-- code_queue_close_owed_idx holds only the entries owing a close, which is a
+-- landing's few until its home's next turn: the listing and a repository's
+-- owed closes are each one seek of it, and an entry that owes nothing never
+-- enters it. An owed entry is an ENDED one, so the queue's history removes it
+-- past code.QueueHistory as it removes every ended entry: a close no home
+-- could make in all that time is given up with the row.
+--
+-- Class: code_queue stays REPRODUCIBLE: the column and the index are written
+-- only by the applier, from the records on a repository's own subject.
+ALTER TABLE code_queue ADD COLUMN close_op TEXT NOT NULL DEFAULT '';
+CREATE INDEX code_queue_close_owed_idx ON code_queue (repo_id, entry_id) WHERE close_op != '';    -- queue_due's owed closes: the repositories holding one, and a repository's own

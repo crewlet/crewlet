@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -82,8 +83,8 @@ func sealedUnder(t *testing.T, keyID string, e statelog.Envelope) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := statelog.NewSigner(probeDomain{}.Name(),
-		statelog.OneKey(keyID, "material-this-node-lacks-"+keyID))
+	signer, err := recordseal.NewSigner(probeDomain{}.Name(),
+		recordseal.OneKey(keyID, "material-this-node-lacks-"+keyID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,10 +120,10 @@ func TestAnUnverifiableRecordIsWitnessedOncePerKey(t *testing.T) {
 	}
 	got := first.all()
 	want := []statelog.Refusal{
-		{Domain: probeDomain{}.Name(), Verdict: statelog.KeyUnknown, KeyID: "k9",
+		{Domain: probeDomain{}.Name(), Verdict: recordseal.KeyUnknown, KeyID: "k9",
 			Held: []string{"k1"}, Position: statelog.Position{
 				Stream: probeStream, Generation: 1, Seq: 1}},
-		{Domain: probeDomain{}.Name(), Verdict: statelog.KeyUnknown, KeyID: "k8",
+		{Domain: probeDomain{}.Name(), Verdict: recordseal.KeyUnknown, KeyID: "k8",
 			Held: []string{"k1"}, Position: statelog.Position{
 				Stream: probeStream, Generation: 1, Seq: 3}},
 	}
@@ -185,7 +186,7 @@ func TestATamperedRecordIsWitnessedAsTheApplierStops(t *testing.T) {
 				t.Fatalf("the applier went on past a tampered record: %v", err)
 			}
 			got := seen.all()
-			if len(got) != 1 || got[0].Verdict != statelog.Tampered ||
+			if len(got) != 1 || got[0].Verdict != recordseal.Tampered ||
 				got[0].KeyID != tc.keyID || got[0].Position.Seq != 1 ||
 				got[0].Domain != (probeDomain{}).Name() {
 				t.Errorf("witnessed %+v, want one tampered refusal naming %q at 1",
@@ -248,9 +249,9 @@ func TestARefusalNamesNoKeyForATruncatedFrame(t *testing.T) {
 // keyedRunner rebuilds the harness's runner over the same database, applier
 // and broker with a verifier over ring — the shape of a node restarting after
 // an operator added a key to its secrets.keys.
-func (h *applyHarness) keyedRunner(ring statelog.Keyring) {
+func (h *applyHarness) keyedRunner(ring recordseal.Keyring) {
 	h.t.Helper()
-	verifier, err := statelog.NewVerifier(probeDomain{}.Name(), ring)
+	verifier, err := recordseal.NewVerifier(probeDomain{}.Name(), ring)
 	if err != nil {
 		h.t.Fatalf("NewVerifier: %v", err)
 	}
@@ -322,7 +323,7 @@ func TestARetainedRecordAppliesOnceItsKeyArrives(t *testing.T) {
 
 	// THE KEY ARRIVES: k9 with the material the writer signed under,
 	// beside the key this node already held.
-	h.keyedRunner(statelog.Keyring{ActiveID: "k1", Keys: []statelog.Key{
+	h.keyedRunner(recordseal.Keyring{ActiveID: "k1", Keys: []recordseal.Key{
 		{ID: "k1", Material: "test-material"},
 		{ID: "k9", Material: "material-this-node-lacks-k9"},
 	}})
@@ -361,7 +362,7 @@ func TestARetainedRecordThatFailsUnderItsArrivedKeyStopsTheNode(t *testing.T) {
 	}
 
 	// A k9 THAT IS NOT THE ONE THE RECORD WAS SIGNED UNDER.
-	h.keyedRunner(statelog.Keyring{ActiveID: "k1", Keys: []statelog.Key{
+	h.keyedRunner(recordseal.Keyring{ActiveID: "k1", Keys: []recordseal.Key{
 		{ID: "k1", Material: "test-material"},
 		{ID: "k9", Material: "the-fleets-real-k9"},
 	}})

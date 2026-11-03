@@ -135,6 +135,8 @@ units:
       - name: Dev
         handle: dev
         llm: zulu
+        code:
+          access: review
         integrations:
           github:
             enabled: false

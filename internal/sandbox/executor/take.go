@@ -252,8 +252,8 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.
 	if rec.id == "" {
 		return sandbox.SessionArchive{}, nil, nil
 	}
-	script := "PATH=" + shellQuote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + carries.Pack(paths, rec.id)
-	res, err := box.Exec(ctx, "sh -lc "+shellQuote(script),
+	script := "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + carries.Pack(paths, rec.id)
+	res, err := box.Exec(ctx, "sh -lc "+sandbox.ShellQuote(script),
 		sandbox.ExecOptions{TimeoutSec: sandbox.SessionPackWait.Seconds()})
 	if err != nil {
 		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: packing %s's session %s: %w",
@@ -293,8 +293,8 @@ func keepDigest(ctx context.Context, box sandbox.Sandbox, paths Paths, session, 
 	if !sandbox.ValidSessionID(session) {
 		return fmt.Errorf("executor: %q is not a session id a digest may be kept under", session)
 	}
-	res, err := box.Exec(ctx, "printf '%s\\n' "+shellQuote(session+" "+digest)+" >> "+
-		shellQuote(paths.SessionDigests()), sandbox.ExecOptions{})
+	res, err := box.Exec(ctx, "printf '%s\\n' "+sandbox.ShellQuote(session+" "+digest)+" >> "+
+		sandbox.ShellQuote(paths.SessionDigests()), sandbox.ExecOptions{})
 	switch {
 	case err != nil:
 		return fmt.Errorf("executor: recording the kept archive's digest in the box: %w", err)

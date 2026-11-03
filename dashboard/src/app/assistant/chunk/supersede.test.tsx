@@ -7,6 +7,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { join } from "node:path";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -118,6 +119,7 @@ function mount() {
         <FrameReadings>
           <ToastProvider>
             <LayerHost>
+              <AppAnnouncer />
               <Drawer
                 unavailable={null}
                 model={null}

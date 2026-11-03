@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -179,22 +180,22 @@ func TestTheFeedKeepsOnlyTheKindsWhoseHalfIsKept(t *testing.T) {
 		wantErr error
 	}{
 		{"both halves kept", queries.Sources{Work: keptWork{work()}, Pages: wiki(),
-			Usage: db.Replicated()}, "", []string{"work", "schedule", "page"}, nil},
+			Usage: usage.Reader{Estate: db.Replicated()}}, "", []string{"work", "schedule", "page"}, nil},
 		{"the company runs Jira", queries.Sources{Work: absentWork{err: errNotOurs},
-			Pages: wiki(), Usage: db.Replicated()}, "", []string{"schedule", "page"}, nil},
+			Pages: wiki(), Usage: usage.Reader{Estate: db.Replicated()}}, "", []string{"schedule", "page"}, nil},
 		{"the company runs Confluence", queries.Sources{Work: keptWork{work()},
-			Pages: absentPages{err: errNotOurs}, Usage: db.Replicated()}, "",
+			Pages: absentPages{err: errNotOurs}, Usage: usage.Reader{Estate: db.Replicated()}}, "",
 			[]string{"work", "schedule"}, nil},
 		{"neither half is the engine's", queries.Sources{Work: absentWork{err: errNotOurs},
-			Pages: absentPages{err: errNotOurs}, Usage: db.Replicated()}, "",
+			Pages: absentPages{err: errNotOurs}, Usage: usage.Reader{Estate: db.Replicated()}}, "",
 			[]string{"schedule"}, nil},
 		{"a tracker kind named on Jira", queries.Sources{Work: absentWork{err: errNotOurs},
-			Pages: wiki(), Usage: db.Replicated()}, "completed,schedule", nil, queries.ErrBadParams},
+			Pages: wiki(), Usage: usage.Reader{Estate: db.Replicated()}}, "completed,schedule", nil, queries.ErrBadParams},
 		{"the page kind named on Confluence", queries.Sources{Work: keptWork{work()},
-			Pages: absentPages{err: errNotOurs}, Usage: db.Replicated()}, "page", nil,
+			Pages: absentPages{err: errNotOurs}, Usage: usage.Reader{Estate: db.Replicated()}}, "page", nil,
 			queries.ErrBadParams},
 		{"a half this node cannot place yet", queries.Sources{Work: absentWork{err: errNotUpYet},
-			Pages: wiki(), Usage: db.Replicated()}, "", nil, queries.ErrUnavailable},
+			Pages: wiki(), Usage: usage.Reader{Estate: db.Replicated()}}, "", nil, queries.ErrUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

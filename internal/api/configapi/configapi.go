@@ -156,6 +156,9 @@ type Service struct {
 	// of Tier A's `api.auth` this surface reads, through
 	// [config.APIAuth.MayWriteCompany], the one reading of it.
 	writers config.APIAuth
+	// tierWarnings is what a company does beside this node's Tier A
+	// ([Options.TierWarnings]); nil answers none.
+	tierWarnings func(*config.Company) []config.Warning
 	// node is this node's id ([Options.Node]), which an unknown outcome and a
 	// lost race name as the one node holding the revision they stored.
 	node string
@@ -245,6 +248,19 @@ type Options struct {
 	// it has a way to start deciding on any of it.
 	CompanyWriters []string
 
+	// TierWarnings is what a company does beside THIS NODE'S Tier A —
+	// [config.TierWarnings] over the deployment's own document, which
+	// `crewlet run` closes over — carried in a write's answer beside the
+	// company's own warnings, so a person turning code.native on reads the
+	// cross-tier consequence where they made the change rather than in a
+	// node's log.
+	//
+	// A FUNCTION, never the Tier A document, for [Options.CompanyWriters]'
+	// reason: what this surface reads of the deployment is the warnings and
+	// nothing else of it. Nil answers none, which is what a suite about
+	// something else has; it refuses nothing, since a warning never does.
+	TierWarnings func(*config.Company) []config.Warning
+
 	// Queue publishes the activation NUDGE, so an operator's change lands
 	// on every node in milliseconds instead of at the next reconcile poll.
 	// Nil skips it: the pointer is the authoritative path and the poll is
@@ -322,8 +338,9 @@ func New(opts Options) (*Service, error) {
 	s := &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
 		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
-		writers: config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
-		node:    opts.Node, raises: opts.Raises, secrets: opts.Secrets, grants: opts.Grants,
+		writers:      config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
+		tierWarnings: opts.TierWarnings,
+		node:         opts.Node, raises: opts.Raises, secrets: opts.Secrets, grants: opts.Grants,
 	}
 	if s.raises == nil {
 		s.raises = failClosedRaises(s.Managed)

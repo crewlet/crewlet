@@ -88,7 +88,10 @@ type DomainConsumer struct {
 // the count itself as well — see [DomainConsumer.Fetch] — so what this adds is
 // the bound across pulls: records delivered and not yet acknowledged, because
 // their transaction has not committed, hold back the next pull rather than
-// piling up behind it.
+// piling up behind it. And so it is also how many barriers the applier can
+// reach while their checkpoint's commit is stalled — they are acknowledged
+// only once it returns — before the reads resting on the next one wait for
+// that commit again; [statelog.FetchMessages] says what that covers.
 //
 // It used to be the ONLY count bound, because the client library could not
 // send one pull with both a count and a byte bound and the applier pulled by
@@ -357,11 +360,10 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 			// consumer an earlier boot made is one whose position this
 			// node's rows may no longer agree with.
 			createErr := err
-			err = q.provisioning().Settle(ctx, func(ctx context.Context) error {
-				var e error
-				cons, e = q.js.Consumer(ctx, stream, name)
-				return e
-			})
+			cons, err = jsprovision.SettleWith(ctx, q.provisioning(),
+				func(ctx context.Context) (jetstream.Consumer, error) {
+					return q.js.Consumer(ctx, stream, name)
+				})
 			switch {
 			case err == nil:
 				err = handle.resumeAt(ctx, cons, after)
@@ -601,12 +603,22 @@ func (c *DomainConsumer) resumeAt(ctx context.Context, cons jetstream.Consumer,
 
 	info := cons.CachedInfo()
 	if info == nil {
-		// A READ, sized and re-asked as one — see [Queue.askRead].
-		if err := c.q.askRead(ctx, func(ctx context.Context) error {
-			var e error
-			info, e = cons.Info(ctx)
-			return e
-		}); err != nil {
+		// A READ, sized and re-asked as one — see [askRead] — through a
+		// handle of each request's own: the consumer handle's Info caches
+		// its reply into the handle with no lock, and a read may have two
+		// requests out at once.
+		var err error
+		info, err = askRead(ctx, c.q, func(ctx context.Context) (*jetstream.ConsumerInfo, error) {
+			fresh, lookupErr := c.q.js.Consumer(ctx, c.stream, c.name)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			if held := fresh.CachedInfo(); held != nil {
+				return held, nil
+			}
+			return fresh.Info(ctx)
+		})
+		if err != nil {
 			return fmt.Errorf("read the consumer's state: %w", err)
 		}
 	}
@@ -906,35 +918,30 @@ func nextDelivery(through, first uint64) uint64 {
 
 // firstSequence is the first sequence the stream still holds, or zero for one
 // nothing has been written to. It is a READ, sized and re-asked as one — see
-// [Queue.askRead].
+// [askRead].
 func (q *Queue) firstSequence(ctx context.Context, stream string) (uint64, error) {
-	var s jetstream.Stream
-	if err := q.askRead(ctx, func(ctx context.Context) error {
-		var e error
-		s, e = q.js.Stream(ctx, stream)
-		return e
-	}); err != nil {
+	s, err := askRead(ctx, q, func(ctx context.Context) (jetstream.Stream, error) {
+		return q.js.Stream(ctx, stream)
+	})
+	if err != nil {
 		return 0, fmt.Errorf("read %s's first sequence: %w", stream, err)
 	}
 	return s.CachedInfo().State.FirstSeq, nil
 }
 
 // lookup asks the broker for this node's consumer, as a read — see
-// [Queue.askRead].
+// [askRead].
 func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error) {
-	var cons jetstream.Consumer
-	err := c.q.askRead(ctx, func(ctx context.Context) error {
-		var e error
-		cons, e = c.q.js.Consumer(ctx, c.stream, c.name)
-		return e
+	return askRead(ctx, c.q, func(ctx context.Context) (jetstream.Consumer, error) {
+		return c.q.js.Consumer(ctx, c.stream, c.name)
 	})
-	return cons, err
 }
 
 // askRead runs one metadata READ on a state log's bring-up — its stream's
 // ceiling when the logs are sized, and everything a domain consumer's open
-// reads: under the lookup ceiling of [Queue.provisioning], re-issued by
-// [jsprovision.Timing.Read] while nobody answers.
+// reads: at [Queue.provisioning]'s cadences, re-issued by
+// [jsprovision.ReadWith] while nobody answers, every request kept outstanding,
+// and never past the lookup ceiling that every such read is held to.
 //
 // # Why a read on this path is not sized like the writes beside it
 //
@@ -950,10 +957,12 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 // ON THE CALLER'S CONTEXT, which is the one that bounds the boot, and never on
 // what an earlier read or write left: each gets its own term, so no one of
 // them decides how long the next may take.
-func (q *Queue) askRead(ctx context.Context, read func(context.Context) error) error {
-	readCtx, cancel := context.WithTimeout(ctx, q.provisioning().Lookup)
-	defer cancel()
-	return q.provisioning().Read(readCtx, read, nil)
+//
+// A FUNCTION RATHER THAN A METHOD only because a method cannot take a type
+// parameter, and the read hands back what it read rather than writing it
+// anywhere: [jsprovision.ReadWith] may have more than one request out at once.
+func askRead[T any](ctx context.Context, q *Queue, read func(context.Context) (T, error)) (T, error) {
+	return jsprovision.ReadWith(ctx, q.provisioning(), read, nil)
 }
 
 // domainConsumerName is what this node's reader is called on the broker.
@@ -1060,6 +1069,10 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 			StoredAt: meta.Timestamp,
 			Payload:  msg.Data,
 			Ack:      func() error { return msg.Ack() },
+			// A NEGATIVE ACKNOWLEDGEMENT, which the broker answers by
+			// delivering the record again at once, where a delivery
+			// nobody acknowledged waits out the ack window.
+			Release: func() error { return msg.Nak() },
 		})
 	}
 	return out, nil
@@ -1109,19 +1122,50 @@ func (c *DomainConsumer) Close() {
 var errHandleClosed = errors.New("jetstream: state-log consumer handle closed")
 
 // Pending implements [statelog.Fetcher]: how many records this consumer has
-// not delivered, which is what tells a partially filled batch whether waiting
-// would buy anything.
-func (c *DomainConsumer) Pending(ctx context.Context) (uint64, error) {
-	cons, err := c.consumerFor(ctx)
-	if err != nil {
-		return 0, err
+// not handed to a fetch, which is what tells a partially filled batch whether
+// waiting would buy anything.
+//
+// # Counted from what the pull delivered, never asked of the broker
+//
+// The applier asks it on every run it holds records for — at least once a
+// committed run, per domain, per data node — so a request here is a request on
+// the commit path, and a linearizable read whose barrier is in the run waits
+// for it too. The consumer's info was that request: answered only by the
+// consumer's LEADER, served by the server only once its main API queue is
+// empty, and dropped without a word by a member that still believes in a
+// leader its group has just lost (server/jetstream_api.go,
+// jsConsumerInfoRequest: "only the consumer leader should answer"). Measured
+// under load on a fleet of three, the slow ones took 77 ms at the median and
+// 910 ms at worst, every millisecond added to the commit, and the fleet's
+// info requests grew with its data nodes, its domains and its run rate.
+//
+// Every record the pull delivers carries the same count in its own metadata —
+// what the consumer still held past it, at the instant it was delivered — so
+// the answer is the pull's ([puller.undelivered]): the newest delivery's count
+// and what was delivered that no fetch has taken. A hint either way, as a
+// consumer info was, and one no leader election or backed-up queue can drop or
+// delay. Both read the consumer's own count, which can trail an append by a
+// moment: the server acknowledges an append before it tells the stream's
+// consumers of it, from a queue of its own, so a delivery made in between can
+// count fewer records behind it than the log holds. A pull that has delivered
+// nothing has counted nothing, and says so:
+// the applier commits the run in hand on an unknown count, where a zero would
+// call it level with the log on nobody's word.
+func (c *DomainConsumer) Pending(context.Context) (uint64, error) {
+	c.mu.Lock()
+	p := c.pull
+	c.mu.Unlock()
+	if p != nil {
+		if n, counted := p.undelivered(); counted {
+			return n, nil
+		}
 	}
-	info, err := cons.Info(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("jetstream: read %s: %w", c.name, err)
-	}
-	return info.NumPending, nil
+	return 0, fmt.Errorf("jetstream: %s's pull has delivered no record whose metadata "+
+		"counts what follows it: %w", c.name, errNotCounted)
 }
+
+// errNotCounted is a pending count no delivery has made yet.
+var errNotCounted = errors.New("jetstream: nothing counted yet")
 
 // Name is what this consumer is called on the broker, for an operator tracing
 // a stalled applier back to the thing that is not delivering.
@@ -1357,16 +1401,28 @@ func (l *DomainLog) GroupAckFloor(ctx context.Context, group string) (uint64, bo
 	// an unreadable term looks the consumer up on the broker, where the
 	// group's own spelling finds nothing.
 	durable := domainGroupName(l.name, group)
-	cons, err := l.stream.Consumer(ctx, durable)
+	// ASKED AS A READ ([jsprovision.ReadBoundedWith]), and ONCE: the lookup
+	// is the consumer's info request itself, so a second request on the
+	// handle it returns asked the same question twice. Only the consumer's
+	// leader answers it, and a member that still believes in a leader the
+	// group has just lost drops it without a word — on the trim tick's
+	// lifetime, which carries no deadline, one dropped request waited out
+	// the client's five-second default and left the term unreadable, which
+	// blocks that log's trim for the tick. The tick keeps those five
+	// seconds, asked again inside them, so a dropped request costs it two. A
+	// handle of each request's own, since requests can be out together.
+	info, err := jsprovision.ReadBoundedWith(ctx, l.q.provisioning(), l.js.Options().DefaultTimeout,
+		func(ctx context.Context) (*jetstream.ConsumerInfo, error) {
+			cons, err := l.js.Consumer(ctx, l.name, durable)
+			if err != nil {
+				return nil, err
+			}
+			return cons.CachedInfo(), nil
+		}, nil)
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
 		return 0, false, nil
 	case err != nil:
-		return 0, false, fmt.Errorf("jetstream: read the group %q (consumer %s) on %s: %w",
-			group, durable, l.name, err)
-	}
-	info, err := cons.Info(ctx)
-	if err != nil {
 		return 0, false, fmt.Errorf("jetstream: read the group %q (consumer %s) on %s: %w",
 			group, durable, l.name, err)
 	}

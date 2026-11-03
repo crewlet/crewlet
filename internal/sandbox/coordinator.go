@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -154,6 +154,14 @@ type Resumer interface {
 type ResumeRequest struct {
 	Run PendingRun
 
+	// Bridged is the run's bridged tool log as its job left it
+	// ([PendingStore.BridgeLog]), with the call a person approved in the job
+	// that the log is still owed ([BridgeLog.withHeld]): the calls the resumed
+	// phase is judged on, and where a person's answer cut the round. Read by
+	// the coordinator once the job is collected, beside the row rather than
+	// off it.
+	Bridged BridgeLog
+
 	// Answer is what the resumed turn files as its executor's report: the
 	// collected run's own account of itself ([runReport]). Already redacted
 	// — it is published on the executor's phase record. Empty on a person's
@@ -214,9 +222,17 @@ type ResumeRequest struct {
 	DeliveredRefs []string
 
 	// DeliveredRefsElided is how many more refs the run reported than
-	// DeliveredRefs lists ([MaxDeliveredRefBytes]), for the resumed phase's
-	// record to say so too.
+	// DeliveredRefs lists ([Result.DeliveredRefsElided]), for the resumed
+	// phase's record to say so too.
 	DeliveredRefsElided int
+
+	// Pushed, PushedElided and PushedUnread are what the push record says
+	// the run moved on the engine's own code host ([Result.Pushed]), for the
+	// resumed phase's record beside the refs above. Empty, like them, when a
+	// person's answer resumes a parked clarification: no run was collected.
+	Pushed       []PushedRef
+	PushedElided int
+	PushedUnread string
 
 	// InputTokens and OutputTokens are what the job this resume collected
 	// cost, for the resumed segment's charge to the turn's work item
@@ -492,6 +508,8 @@ type CoordinatorOptions struct {
 	// the run had spent ([RunStop.Collected]). The engine implements it,
 	// because only the agent layer reads the parked turn's state
 	// ([PendingRun.ExecuteState]) and publishes the records a turn ends with.
+	// Handed the turn's calls as the ending read them off the run's log
+	// ([RunCalls]), since the log is kept beside the row, not on it.
 	//
 	// EVERY STOP, PARKED OR NOT. A launch stopped before its turn could park
 	// is still in the frame that launched it, which closes the turn on the
@@ -510,7 +528,7 @@ type CoordinatorOptions struct {
 	// ending for its retry, as a refused announcement does. Nil closes
 	// nothing and ends nothing — a coordinator built without an engine (a
 	// test's): the stop is still announced and the run still ended.
-	CloseStopped func(ctx context.Context, run PendingRun) (executordomain.Ending, error)
+	CloseStopped func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error)
 
 	// TurnLost is handed every run whose decided ending is a LOSS
 	// ([PendingRun.lost]) — its box gone or unreadable, its suspension never
@@ -521,7 +539,8 @@ type CoordinatorOptions struct {
 	// ([PendingRun.ColleagueAsk]) is told the turn was lost, and why; and to
 	// answer how the turn ended, which the ending records on the executor log
 	// ([Coordinator.publishEnd]), on the turn's row beside the session it
-	// kept.
+	// kept — whether its reply reached anybody read off the turn's calls as
+	// the ending read them ([RunCalls]).
 	//
 	// THE ONE TERMINAL OF A PARKED TURN THAT NO FRAME OF THE TURN ENDS. A
 	// collected run's turn is ended by its resume, a person's stop by
@@ -545,7 +564,7 @@ type CoordinatorOptions struct {
 	// turn's own frame answered; a stop is [CoordinatorOptions.CloseStopped]'s.
 	// Nil hands over nothing and ends nothing — a coordinator built without
 	// an engine (a test's).
-	TurnLost func(ctx context.Context, run PendingRun) executordomain.Ending
+	TurnLost func(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending
 
 	// SteersExpired publishes, as expired, every note a person sent the run's
 	// turn that no job ran with ([PendingRun.UnreadNotes]): the ones still
@@ -716,6 +735,15 @@ type CoordinatorOptions struct {
 	// the poll tries again. Nil refreshes nothing.
 	Refresh RefreshFunc
 
+	// Pushes reads what a collected run pushed to the engine's own code host
+	// ([RunPushes]). Required, for the reason Resume is: a coordinator built
+	// without it would hand every run given a repository back to its turn
+	// saying nothing of its pushes — the silence its reviewer reads as
+	// "nothing pushed". On a node that serves no code host it answers an
+	// error, which the collection SAYS ([Result.PushedUnread]); and it is
+	// asked only for a run that may push there ([Pushable]).
+	Pushes RunPushes
+
 	// Sessions is the executor log's writes every turn's first read, every
 	// capture of a run's harness session and every turn's end are recorded
 	// through: THE ESTATE ROUTER'S
@@ -803,14 +831,16 @@ type Coordinator struct {
 	// answers is [CoordinatorOptions.Answers].
 	answers  *AnswerSeal
 	condense Condenser
-	ended    func(runID string)
+	// pushes is [CoordinatorOptions.Pushes].
+	pushes RunPushes
+	ended  func(runID string)
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
-	closeStopped func(ctx context.Context, run PendingRun) (executordomain.Ending, error)
+	closeStopped func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error)
 	// turnLost is [CoordinatorOptions.TurnLost].
-	turnLost func(ctx context.Context, run PendingRun) executordomain.Ending
+	turnLost func(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending
 	// steersExpired is [CoordinatorOptions.SteersExpired].
 	steersExpired func(ctx context.Context, run PendingRun) error
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
@@ -985,6 +1015,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		{"Pending", opts.Pending == nil},
 		{"Manager", opts.Manager == nil},
 		{"Resume", opts.Resume == nil},
+		{"Pushes", opts.Pushes == nil},
 		{"Audience", opts.Audience == nil},
 		{"Answers", opts.Answers == nil},
 	} {
@@ -994,13 +1025,14 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("sandbox: a coordinator needs %s: a detached run is "+
-			"published, recorded, reconnected to, resumed and put to its "+
-			"answerers through them, and its answers sealed and opened",
+			"published, recorded, reconnected to, resumed, put to its "+
+			"answerers and told what it pushed through them, and its answers "+
+			"sealed and opened",
 			strings.Join(missing, ", "))
 	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
-		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
+		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
 		answers:       opts.Answers,
 		condense:      opts.Condense,
 		ended:         opts.Ended,
@@ -1545,8 +1577,9 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	// survives the handoffs which reset it. Every
 	// disposition that returns an error is the retry, and every one that
 	// does not is an ending.
-	_, err = c.resumeAndSettle(adm, run, runReport(result), result.Success, trigger, runOutcome{
+	_, err = c.resumeAndSettle(adm, run, runReport(run, result), result.Success, trigger, runOutcome{
 		DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
+		Pushed: result.Pushed, PushedElided: result.PushedElided, PushedUnread: result.PushedUnread,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
@@ -1573,20 +1606,10 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	}
 	if ended {
 		// A RUN ENDED AT ITS TURN'S CAP was working until the collection
-		// stopped it, and the claim read its row before then: a call it made
-		// over the bridge meanwhile is on the row and not on the claim, and
-		// the resumed turn judges the run on the claim's log. Read back
-		// once the box is stopped, so what the run did is all of it.
-		latest, found, readErr := c.pending.Get(ctx, run.TurnID)
-		switch {
-		case readErr != nil:
-			// The claim's log stands: the turn is judged on the calls it
-			// holds, and the line says the late ones may be missing from it.
-			log.WarnContext(ctx, "sandbox_run_calls_reread_failed",
-				"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", readErr.Error())
-		case found && latest.LaunchID == run.LaunchID:
-			run.BridgeCalls, run.BridgeCallsElided = latest.BridgeCalls, latest.BridgeCallsElided
-		}
+		// stopped it: a call it made over the bridge meanwhile is in its
+		// log, which the resume reads once the box is stopped
+		// ([Coordinator.resumeAndSettle]), so what the run did is all of it.
+		//
 		// AND NO QUESTION, whatever it asked on its way: a run that is being
 		// stopped is not one a person's answer could continue
 		// ([endedAtDeadline]), so it is collected and resumed like any
@@ -1721,12 +1744,17 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 type runOutcome struct {
 	DeliveredRefs []string
 	// DeliveredRefsElided is how many more the run reported than its
-	// record lists — see [MaxDeliveredRefBytes].
+	// record lists — see [Result.DeliveredRefsElided].
 	DeliveredRefsElided int
-	InputTokens         int
-	OutputTokens        int
-	CacheReadTokens     int
-	CacheWriteTokens    int
+	// Pushed, PushedElided and PushedUnread are what the push record says
+	// the run moved — see [Result.Pushed].
+	Pushed           []PushedRef
+	PushedElided     int
+	PushedUnread     string
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int
+	CacheWriteTokens int
 	// Engine is what the engine spent on the job between segments — see
 	// [ResumeRequest.Engine].
 	Engine EngineSpend
@@ -1793,9 +1821,13 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 		result = endedAtDeadline(result, run.Deadline, run.Question)
 	}
 	c.warnNotesUnasked(ctx, run, result)
+	// WHAT IT PUSHED, read here, where the result is used: the push record is
+	// the code host's, which the seat's node reaches ([RunPushes]).
+	if result, err = c.readPushes(ctx, run, result); err != nil {
+		return Result{}, false, err
+	}
 	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
-	// so the launch's record, the park and the resumed executor carry one
-	// text.
+	// so the launch's record, the park and the run's report carry one text.
 	return c.fitText(ctx, run, result), ended, nil
 }
 
@@ -1950,6 +1982,103 @@ func endedAtDeadline(result Result, deadline time.Time, asked string) Result {
 		why += ". It had reported: " + result.Error
 	}
 	result.Error = why
+	return result
+}
+
+// readPushes sets what a collected run pushed to the engine's own code host on
+// its result, from the push record ([RunPushes]) — for a run given a
+// repository there to push to, and for no other: a run given only repositories
+// to read pushed none, which its grants say without a read.
+//
+// THE THREE FIELDS ARE THE COORDINATOR'S, cleared before anything is read: a
+// runner that set them would be handing the reviewer its own account of the
+// pushes under the record's name.
+//
+// A RECORD THAT CANNOT BE READ DOES NOT FAIL THE COLLECTION. The run's own
+// result is the main thing collected, and a collection retried until the code
+// host answers would hold a finished run's seat — and its box — for as long as
+// the code host is down; the read's failure is SAID instead
+// ([Result.PushedUnread]), which the run's report says is not "none". A retry
+// after a failed resume collects again and so reads again: the text a resume
+// carries is never older than its own collection.
+//
+// EXCEPT A READ THIS NODE ITSELF CANCELLED, which is the collection
+// interrupted ([Coordinator.collectFailed]): a drain or a moving seat says
+// nothing about the record, and said it would leave the launch's record —
+// published once — calling its pushes unknown for good.
+//
+// AND THE CHANGES ([RunPushes.Changes]), read at the push record's position
+// ([PushRecord.At]), so a collection pays the record's one barrier and no
+// other: every ref read is named by the live change its branch heads, and the
+// changes the run asked to open are opened from what it pushed — only for a run
+// that FINISHED its work, succeeded and asked nothing: a run that stopped on a
+// question is resumed by its answer and carried on by another job, which reads
+// the record again (ADR-0068), and one that did not succeed would put half its
+// work in front of reviewers, which the seat decides whether to do itself
+// (code_open_change). Opened is the coordinator's too, cleared with the rest.
+// Its read failing fails nothing, for the push record's reason: each ask says
+// it was not opened, and why.
+func (c *Coordinator) readPushes(ctx context.Context, run PendingRun, result Result) (Result, error) {
+	result.Pushed, result.PushedElided, result.PushedUnread, result.Opened = nil, 0, "", nil
+	if len(Pushable(run.Repos)) == 0 {
+		return result, nil
+	}
+	record, err := c.pushes.Pushed(ctx, run)
+	switch {
+	case err != nil && errors.Is(ctx.Err(), context.Canceled):
+		return Result{}, fmt.Errorf("sandbox: reading what run %s pushed: %w", run.TurnID, err)
+	case err != nil:
+		// Redacted and bounded where every collected result is
+		// ([Coordinator.fitResult]): the reason rides the launch's record
+		// and the run's report.
+		result.PushedUnread = err.Error()
+		result.Opened = asked(run, unopenedUnread(err.Error()))
+		log.WarnContext(ctx, "sandbox_pushes_unread", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+			"error", err.Error(),
+			"detail", "what the run pushed to the code host could not be read; the run resumes "+
+				"saying its pushes are unknown, never that it pushed nothing")
+		return result, nil
+	}
+	result.Pushed, result.PushedElided = record.Refs, record.More
+	finished := result.Success && !run.asked()
+	if len(record.Refs) == 0 && (!finished || len(asked(run, "")) == 0) {
+		// NOTHING TO NAME AND NOTHING TO OPEN: no read.
+		return withUnopened(run, result, finished), nil
+	}
+	named, opened, err := c.pushes.Changes(ctx, run, record, finished)
+	switch {
+	case err != nil && errors.Is(ctx.Err(), context.Canceled):
+		return Result{}, fmt.Errorf("sandbox: reading the changes run %s delivered to: %w", run.TurnID, err)
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_changes_unread", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+			"error", err.Error(),
+			"detail", "the changes the run's branches head could not be read; its pushed refs name none, "+
+				"and no change it asked to open was opened")
+		if finished {
+			result.Opened = asked(run, unopenedNoChanges(err.Error()))
+			return result, nil
+		}
+		return withUnopened(run, result, finished), nil
+	}
+	result.Pushed = named
+	if finished {
+		result.Opened = opened
+		return result, nil
+	}
+	return withUnopened(run, result, finished), nil
+}
+
+// withUnopened is result with every change run asked to open said unopened —
+// for a run that did not finish its work, why — or as it is, for one that
+// did and opened none.
+func withUnopened(run PendingRun, result Result, finished bool) Result {
+	switch {
+	case finished:
+	case run.asked():
+		result.Opened = asked(run, unopenedAsked)
+	default:
+		result.Opened = asked(run, unopenedFailed)
+	}
 	return result
 }
 
@@ -2122,9 +2251,16 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		CostUSD:       result.CostUSD,
 		DeliveredRefs: result.DeliveredRefs,
 		// How many more it reported than the record lists, said rather
-		// than dropped — see [MaxDeliveredRefBytes].
+		// than dropped — see [Result.DeliveredRefsElided].
 		DeliveredRefsElided: result.DeliveredRefsElided,
-		ConversationKey:     run.ConversationKey,
+		// AND WHAT ITS PUSH RECORD SAYS IT PUSHED, on the launch's own
+		// record as its own refs are: a run that parks on a question is resumed by
+		// an answer, which collects nothing, so the pushes of the job that
+		// asked are on this record or on none — see [Result.Pushed].
+		PushedRefs:       PushedRecords(result.Pushed),
+		PushedRefsElided: result.PushedElided,
+		PushedRefsUnread: result.PushedUnread,
+		ConversationKey:  run.ConversationKey,
 		// THE SESSION THE LAUNCH RAN, as its own script recorded it — not
 		// the one it was asked to continue, which a run that fell back to a
 		// new one did not run — and the harness's release; and what the
@@ -2153,7 +2289,7 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		// AND WHY THE SESSION WAS NOT KEPT, at the bound the executor log
 		// holds the same reason to: it quotes the refusal the take met,
 		// which can quote what the box's archive holds.
-		rec.SessionNotKept = boundReason(kept.NotKept, executordomain.UnkeptReasonMaxBytes)
+		rec.SessionNotKept = boundReason(kept.NotKept, executorkeep.UnkeptReasonMaxBytes)
 	}
 	rec.StartedAt = facts.StartedAt.UTC()
 	if took := collected.Sub(facts.StartedAt); took > 0 {
@@ -3046,10 +3182,10 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// THE TURN TAKES THE ANSWER, on the row, or it does not run —
 			// under the CLAIMANT's lease, which the claim stamped on the
 			// row ([PendingStore.ClaimForResume]).
-			taken, err := c.pending.TakeAnswer(ctx, run.TurnID, run.LaunchID, fenceOf(run))
-			if err != nil {
+			taken, takeErr := c.pending.TakeAnswer(ctx, run.TurnID, run.LaunchID, fenceOf(run))
+			if takeErr != nil {
 				return fmt.Errorf("sandbox: recording that run %s's turn took its answer: %w",
-					run.TurnID, err)
+					run.TurnID, takeErr)
 			}
 			if !taken {
 				return fmt.Errorf("sandbox: run %s is no longer the claim that holds its answer: "+
@@ -3076,15 +3212,31 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// without: "this node cannot resume this run" is the resumer's own
 	// answer, wrapping [ErrResumeUnavailable], and it takes the failure
 	// path below like every other failed resume.
+	//
+	// AND THE RUN'S CALLS, read from its log here — after the collection
+	// stopped or read back its box, so a call the run made up to its end is
+	// in them — and never "no calls" for a log the store could not read:
+	// that read failing is a resume that failed, handed back like any other.
+	// Read INSIDE the frame, so an ending decided while it is read waits for
+	// the frame as it would for the resumer ([Coordinator.framing]). WITH THE
+	// CALL A PERSON APPROVED that the log is still owed ([BridgeLog.withHeld]):
+	// a later attempt at a resume whose relaunch was refused once the call was
+	// made finds it on the row alone, and the run that carries the round on is
+	// judged on it, guarded by it and told it as the session's own call.
 	c.frameBegins(run.TurnID)
-	err := c.resume.Resume(ctx, ResumeRequest{
-		Run: run, Answer: answer, Success: success, Trigger: trigger,
-		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
-		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
-		CacheReadTokens: outcome.CacheReadTokens, CacheWriteTokens: outcome.CacheWriteTokens,
-		Engine: outcome.Engine, Ended: outcome.Ended, Asked: outcome.Asked, Lost: outcome.Lost,
-		Begin: begin,
-	})
+	calls, err := c.pending.BridgeLog(ctx, run)
+	if err == nil {
+		calls = calls.withHeld(run)
+		err = c.resume.Resume(ctx, ResumeRequest{
+			Run: run, Bridged: calls, Answer: answer, Success: success, Trigger: trigger,
+			DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
+			Pushed: outcome.Pushed, PushedElided: outcome.PushedElided, PushedUnread: outcome.PushedUnread,
+			InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
+			CacheReadTokens: outcome.CacheReadTokens, CacheWriteTokens: outcome.CacheWriteTokens,
+			Engine: outcome.Engine, Ended: outcome.Ended, Asked: outcome.Asked, Lost: outcome.Lost,
+			Begin: begin,
+		})
+	}
 	frameDone()
 	if err != nil {
 		if errors.Is(err, ErrResumeAbandoned) && !began.Load() {
@@ -4412,18 +4564,47 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 // ([CoordinatorOptions.TurnLost]), or a stop's, its parked turn closed on the
 // record first ([CoordinatorOptions.CloseStopped]). An ending whose turn came
 // back owes none here: the turn's own frame decided its end.
-func (c *Coordinator) endingOfRun(ctx context.Context, run PendingRun) (executordomain.Ending, bool, error) {
+func (c *Coordinator) endingOfRun(ctx context.Context, run PendingRun) (executorkeep.Ending, bool, error) {
 	switch {
 	case run.lost() && c.turnLost != nil:
-		return c.turnLost(ctx, run), true, nil
+		return c.turnLost(ctx, run, c.runCalls(ctx, run)), true, nil
 	case run.Stop != nil && c.closeStopped != nil:
-		ending, err := c.closeStopped(ctx, run)
+		ending, err := c.closeStopped(ctx, run, c.runCalls(ctx, run))
 		if err != nil {
-			return executordomain.Ending{}, false, err
+			return executorkeep.Ending{}, false, err
 		}
 		return ending, true, nil
 	}
-	return executordomain.Ending{}, false, nil
+	return executorkeep.Ending{}, false, nil
+}
+
+// RunCalls is a run's bridged log as its ending read it, for the engine's
+// account of whether the turn's reply reached anybody
+// ([CoordinatorOptions.TurnLost], [CoordinatorOptions.CloseStopped]): Log, the
+// calls of the run's job and the fold of its earlier rounds
+// ([BridgeLog.PriorCalls]); and Unread, why the store could not answer, nil
+// where it did.
+//
+// AN UNREAD LOG IS A DELIVERY NOT KNOWN, never "no calls": read as an empty
+// log, a turn that did reply would be recorded as one that did not — the false
+// account the turn's end exists to prevent.
+type RunCalls struct {
+	Log    BridgeLog
+	Unread error
+}
+
+// runCalls reads run's log for its ending ([RunCalls]): ONE READ PER ENDING, at
+// the step that decides the turn's end, as a resume reads it for its own
+// ([ResumeRequest.Bridged]) — but the turn's calls whatever job the log is on
+// ([PendingStore.TurnLog]): an ending reaps a row whose relaunch never opened
+// the log to its job as readily as any other, and the calls of its round and
+// of the turn's earlier rounds are the turn's all the same.
+func (c *Coordinator) runCalls(ctx context.Context, run PendingRun) RunCalls {
+	calls, err := c.pending.TurnLog(ctx, run)
+	if err != nil {
+		return RunCalls{Unread: err}
+	}
+	return RunCalls{Log: calls}
 }
 
 // endingRounds bounds [Coordinator.finishEnding]'s rounds.
@@ -5394,13 +5575,20 @@ func fenceOf(run PendingRun) Fence {
 // An instruction here is read by the reviewer as something the executor said,
 // and filed on the work item as what the turn did. Secret-redacted, because it
 // is published on the executor's phase record.
-func runReport(result Result) string {
+//
+// It carries the run's findings — reported text plus delivered refs, and what
+// the push record says the run pushed to the engine's own code host, or the
+// error — and IT TAKES THE RUN, because whether it says the run pushed
+// "nothing" turns on what the run was given ([pushedText]): its repositories
+// are the row's, never the result's.
+func runReport(run PendingRun, result Result) string {
 	status := "did NOT fully succeed"
 	if result.Success {
 		status = "succeeded"
 	}
 	lines := []string{"The executor's run " + status + "."}
-	if len(result.DeliveredRefs) > 0 {
+	switch {
+	case len(result.DeliveredRefs) > 0:
 		delivered := "Delivered: " + strings.Join(result.DeliveredRefs, ", ")
 		if result.DeliveredRefsElided > 0 {
 			// SAID, so the reviewer does not read a short list as all of
@@ -5409,6 +5597,22 @@ func runReport(result Result) string {
 				result.DeliveredRefsElided)
 		}
 		lines = append(lines, delivered)
+	case result.DeliveredRefsElided > 0:
+		// SAID WHERE NONE IS LISTED TOO, which the record can come to: a
+		// ref longer than [MaxDeliveredRefBytes] is past the bound on its
+		// own, and one that is not UTF-8 is never listed ([boundRefs]). The
+		// record still counts it, and so does the dashboard's line; here it
+		// was dropped unsaid, and the report named no ref at all — a run that
+		// seems to have delivered nothing, when its own text below names
+		// what it did.
+		lines = append(lines, fmt.Sprintf("Delivered: %d ref(s) its report names, not listed here",
+			result.DeliveredRefsElided))
+	}
+	if pushed := pushedText(run, result); pushed != "" {
+		lines = append(lines, pushed)
+	}
+	if opened := openedText(result); opened != "" {
+		lines = append(lines, opened)
 	}
 	switch {
 	case result.Text != "":

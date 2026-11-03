@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/modelnote"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -361,8 +362,8 @@ func TestAStateOrACollisionIsToldToAPersonInItsCodesOwnWords(t *testing.T) {
 // alone, with no condition beneath it, reached the dashboard as an unavailable
 // a wait would clear. Nobody has worded the condition for a person yet
 // (ADR-0060), so the answer carries no detail and no `tool_detail`, and its
-// code's own message for a refusal no wait clears stands alone. So is a coding
-// run's record whose seat this node cannot open, sealed under a key it does
+// code's own message for a refusal no wait clears stands alone. So is an executor's
+// record whose seat this node cannot open, sealed under a key it does
 // not hold.
 //
 // Mutation: drop either steer arm from builtin's condition table, or mark it
@@ -538,7 +539,7 @@ func TestAWritersErrorIsClassedByTheToolsRule(t *testing.T) {
 		// EVERY CLASS A DOMAIN DECIDES, by the tools' own table
 		// (builtin.WriterClass) rather than a shorter list here: each of
 		// these was a 500 on the surface while its tool classed it.
-		{err: fmt.Errorf("x: %w", worklet.ErrInboxFull), want: crewletmcp.RefusalInboxFull},
+		{err: fmt.Errorf("x: %w", inbox.ErrFull), want: crewletmcp.RefusalInboxFull},
 		{err: fmt.Errorf("x: %w", worklet.ErrAlreadyAnswered),
 			want: crewletmcp.RefusalAlreadyAnswered},
 		{err: fmt.Errorf("x: %w", worklet.ErrReassignmentBudget),
@@ -766,5 +767,34 @@ func TestAnIfMatchHeaderRefinesOnlyAStaleVersion(t *testing.T) {
 			t.Errorf("%s: under If-Match %d %s, and as an argument %d %s: only a stale "+
 				"version may differ", name, matched.Code, matched.Body, plain.Code, plain.Body)
 		}
+	}
+}
+
+// A CODE HOST'S REFUSAL NAMES ITS OWN WORD beside its class. Several of the
+// host's refusals share a class — a head that moved and a train whose base
+// moved are both stale_version, a target still moving and a full queue both
+// conflict — and the change page's merge controls answer each in its own
+// words, which they can only do from the word itself (`refusal`), never by
+// parsing a sentence written for a model. A refusal that is not the host's
+// carries no such field, so a surface never reads a word that was not said.
+//
+// Mutation: drop the `refusal` field from operator.Fail, or set it from a
+// cause that is not the host's, and this fails.
+func TestACodeHostRefusalNamesItsOwnWord(t *testing.T) {
+	t.Parallel()
+	answer := func(cause error) map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		operator.Fail(rec, cause, caveat.Refusal{}, "op-key", operator.About("code_merge_change", nil))
+		return decode(t, rec)
+	}
+	got := answer(crewletmcp.Classify(crewletmcp.RefusalStaleVersion,
+		&builtin.HostRefusal{Refusal: "head_moved", Detail: "web!42 is at another head"}))
+	if got["error"] != string(crewletmcp.RefusalStaleVersion) || got["refusal"] != "head_moved" {
+		t.Errorf("a host's head_moved answered %v, want error stale_version and refusal head_moved", got)
+	}
+	got = answer(crewletmcp.Classify(crewletmcp.RefusalStaleVersion, errors.New("version 4 is not 5")))
+	if _, said := got["refusal"]; said {
+		t.Errorf("a refusal that is not the code host's named a host word: %v", got)
 	}
 }

@@ -155,7 +155,7 @@ func (r rawChat) applied(rec chatlet.MutationRecord) changefeed.Record {
 	at := statelog.Position{Stream: r.running.spec.Name, Seq: out.Position}
 	wait, cancel := context.WithTimeout(r.t.Context(), 20*time.Second)
 	defer cancel()
-	if err := r.running.runner.WaitCommitted(wait, at); err != nil {
+	if err := r.running.runner.WaitReached(wait, at); err != nil {
 		held, holds := r.running.runner.Deferred()
 		fault, _ := r.running.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget))
 		r.t.Fatalf("the node never applied %s at %d: %v (committed %s, holding %v %+v, "+
@@ -274,7 +274,7 @@ func TestARawPatchOfARoomTheNodeHoldsNoRowForIsHeldNotCommitted(t *testing.T) {
 	at := statelog.Position{Stream: running.spec.Name, Seq: ghost.Position}
 	wait, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	if err := running.runner.WaitCommitted(wait, at); err == nil {
+	if err := running.runner.WaitReached(wait, at); err == nil {
 		t.Fatal("a patch of a room this node holds no row for was committed — the " +
 			"applier skipped what is, under a strict replay, its own fault")
 	}

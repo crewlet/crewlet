@@ -1,0 +1,22 @@
+-- A tip waits for the round of checks in flight on its branch.
+--
+-- The home dispatched a protected branch's newest landing whenever that
+-- landing held no attempt of a required check, whatever an earlier landing's
+-- round was still doing, and nothing cancels a tip round a newer landing
+-- superseded: a branch taking landings at rate λ whose checks run for T kept
+-- about λ·T rounds in flight, each up to code.MaxRequiredChecks boxes. It now
+-- dispatches a tip only once no tip attempt on the branch is still queued or
+-- running (internal/code/home's tips.go), so the landings that arrive while
+-- one round runs are measured together by the next, and a branch keeps one
+-- round in flight however fast it is landed on.
+--
+-- code_checks_tip_live_idx is a branch's tip attempts not yet ended, by its
+-- repository and its branch, PARTIAL on those rows alone: the one seek the
+-- home's read of a target's tip work makes to ask whether a round is in
+-- flight, where code_checks' own key, led by the commit, would read every
+-- attempt of every landing. A tip attempt enters it as it is queued and
+-- leaves it as it ends.
+--
+-- Class: code_checks stays reproducible; the index is the applier's rows.
+CREATE INDEX code_checks_tip_live_idx ON code_checks (repo_id, target_ref, commit_oid, name, attempt)
+    WHERE state IN ('queued', 'running') AND purpose = 'tip';    -- a branch's tip attempts not yet ended: the home's wait for the round in flight

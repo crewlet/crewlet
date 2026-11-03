@@ -528,11 +528,12 @@ it.
    for a 16 MiB file) and gave each acknowledgement the client's default five
    seconds, with no flow control; on slow flushes with the log busy, the last
    acknowledgement came later and the put failed. The backend now writes the
-   bucket's layout itself: at most a mebibyte in flight, each mebibyte given
-   the object store's pace (30 seconds) for its acknowledgements, and a failed
-   put waits for what it has in flight before it purges its pieces
-   (`TestAPutWhoseAcknowledgementsComeLateStillLands`, with every
-   acknowledgement six seconds late).
+   bucket's layout itself: the messages a connection's puts have out are held
+   to a window they share, a put is ended only when the broker has acknowledged
+   nothing for a minute while messages are out, and a failed put drains what
+   is out before it purges its pieces
+   (`TestAPutAcrossALinkSlowerThanFiveSecondsAMessageLands`, whose last
+   acknowledgement comes eight seconds after its publish).
 7. **An import map escaped the copy-in (fixed, `internal/artifactupload/lint`).**
    A page whose import map named a module on another origin was published, and
    the module loaded in the viewer's browser from wherever the map pointed
@@ -629,7 +630,8 @@ it.
    nats` and fill the bucket to 10, 50 and 100 GiB.
 2. Stop one member, remove its store directory, and start it again; time from
    its start until the bucket's stream reports the member current
-   (`nats stream info OBJ_crewlet_files`), and watch the other members' log
+   (`nats stream info OBJ_crewlet_files`, through a member's client listener
+   with the [operator key](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)), and watch the other members' log
    append latency while it catches up.
 3. Repeat with 1,000,000 small objects to confirm the memory figure above at
    scale.

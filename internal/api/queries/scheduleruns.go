@@ -44,7 +44,7 @@ func (s Sources) scheduleRuns(ctx context.Context, p Params) (any, error) {
 	}
 
 	limit := Clamp(p.Int("limit", 0), MaxScheduleRuns, MaxScheduleRuns)
-	runs, more, err := usage.ScheduleRuns(ctx, s.Usage, usage.ScheduleRunsQuery{
+	runs, more, err := s.Usage.ScheduleRuns(ctx, usage.ScheduleRunsQuery{
 		ScopeType: string(scope), ScopeID: scopeID, Name: name, Limit: limit,
 	})
 	if err != nil {
@@ -76,7 +76,7 @@ func (s Sources) recentRuns(ctx context.Context) []map[string]any {
 	if s.Usage == nil {
 		return []map[string]any{}
 	}
-	runs, _, err := usage.ScheduleRuns(ctx, s.Usage, usage.ScheduleRunsQuery{Limit: RecentRunsLimit})
+	runs, _, err := s.Usage.ScheduleRuns(ctx, usage.ScheduleRunsQuery{Limit: RecentRunsLimit})
 	if err != nil {
 		log.WarnContext(ctx, "schedule_history_unreadable", "error", err)
 		return []map[string]any{}

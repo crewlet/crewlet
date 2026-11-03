@@ -15,6 +15,7 @@
  */
 
 import { civilAt, civilKey, fmtClock, parseUTC, readerDay } from "~/lib/format.ts";
+import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import type { ChatMessageView } from "~/protocol/index.ts";
 
 import { packPosition } from "./cursor.ts";
@@ -79,8 +80,8 @@ export function daysBefore(key: string, days: number): string {
 // The day's name in the words the interface is written in: an ordinal suffix
 // ("29th") is English, so the weekday and month beside it are English too.
 // Formatted at UTC because the key is already the reader's civil day.
-const WEEKDAY = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" });
-const MONTH = new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" });
+const WEEKDAY: DateShape = Object.freeze({ weekday: "long" });
+const MONTH: DateShape = Object.freeze({ month: "long" });
 
 /** 1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st. */
 function ordinal(n: number): string {
@@ -100,7 +101,7 @@ export function dayLabel(key: string, today: string): string {
   const at = civilAt(key);
   if (at === null) return key;
   const date = new Date(at);
-  const name = `${WEEKDAY.format(date)}, ${MONTH.format(date)} ${ordinal(date.getUTCDate())}`;
+  const name = `${dateTimeFormat("en-US", "UTC", WEEKDAY).format(date)}, ${dateTimeFormat("en-US", "UTC", MONTH).format(date)} ${ordinal(date.getUTCDate())}`;
   return key.slice(0, 4) === today.slice(0, 4) ? name : `${name}, ${key.slice(0, 4)}`;
 }
 

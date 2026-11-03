@@ -224,9 +224,14 @@ func (e *DecisionRefused) Unwrap() error { return ErrRefused }
 // field at all are the rows that are deliberately absent: an app's own verbs
 // ([authz.ClassApp] — filing an item, writing a page, keeping a file —
 // decided on whether the caller uses the app and on nothing about the
-// object), the overview's ([authz.ClassEverybody]), and the seat-only one
-// (`a2a_ask`), which the table bars a person from before any class reads
-// anything.
+// object), the overview's and the code tools' ([authz.ClassEverybody]; a code
+// read is judged by the repository's grant on the node that answers it, and
+// inside a turn somebody woke is decided again for them — the row through
+// [authz.DecideWithin], a colleague seat's grant beside the asker's: see
+// codetools.go), and the seat-only one (`a2a_ask`), which the table bars a
+// person from before any class reads anything. `code_checkout` has no row at
+// all: only an executor run's bridge offers it, so no person and no registry
+// phase can call it, and [CodeDeps.ResolveRunRepos] decides what it may grant.
 var subjectOf = map[string]subject{
 	// AN ITEM AND ITS THREAD ARE DECIDED ON THE ITEM, because somebody
 	// without Worklet may still read the item an OPEN ASK on it names
@@ -246,6 +251,8 @@ var subjectOf = map[string]subject{
 	worklet.MyWorkTool:    {kind: authz.KindPerson},
 	worklet.MarkInboxTool: {kind: authz.KindPerson},
 	worklet.SetPinsTool:   {kind: authz.KindPerson},
+	// AND THE CODE LOG'S HALF OF AN INBOX'S MARKS, a person's own alike.
+	CodeMarkInboxTool: {kind: authz.KindPerson},
 
 	// AND THE ONES THAT DO ARE DECIDED ON WHOSE RECORD THE NAME IS, NOT ON
 	// WHAT WAS TYPED. Each tool resolves its `handle` first
@@ -719,6 +726,15 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 // the node failing to decide, and reporting it as [ErrUndecidable] would
 // answer every lead's question with a retry.
 //
+// A STEP-UP ADMITS TOO. [authz.ReasonStepUp] is the table admitting the
+// caller on a proof of identity older than the verb's window — the one
+// refusal the caller clears themselves — so the verb is offered, and a press
+// of it is answered `step_up_required`, which the surface's step-up ceremony
+// turns into a fresh proof and the same press again. Refused here instead, a
+// verb that asks a step-up (code_purge_unreachable) would be offered to
+// nobody who had not just signed in, and its control would stay disabled
+// with nothing to say why.
+//
 // nil admits; otherwise the error is the [Authorizer]'s own — [ErrRefused],
 // [ErrUndecidable] or [ErrNoAuthorizer] — so a surface tells "not offered"
 // from "this node cannot say" exactly as a call does.
@@ -733,7 +749,9 @@ func Admits(ctx context.Context, authorize Authorizer, tool string) error {
 		object = about.objectFor(principal, nil)
 	}
 	err := authorize(ctx, authz.Action(tool), object)
-	if errors.Is(err, authz.ErrUnresolved) {
+	var refused *DecisionRefused
+	if errors.Is(err, authz.ErrUnresolved) ||
+		errors.As(err, &refused) && refused.Decision.Reason == authz.ReasonStepUp {
 		return nil
 	}
 	return err

@@ -29,6 +29,7 @@ import { Routing, TurnCard, changeSentence, turnPills } from "./item/Activity.ts
 import { Router, href } from "~/app/router.tsx";
 import { pathOf, refToken } from "~/app/frame/objects.ts";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
+import { loadChunk } from "~/app/lazyScreen.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -48,6 +49,7 @@ import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { DUPLICATE, DUPLICATE_TITLE, SHARED_KEY, collidingHits } from "~/test/keyCollision.ts";
 import { pick } from "~/testing.tsx";
+import { settled } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
@@ -157,7 +159,7 @@ type Answer = unknown | ((params: Record<string, unknown>) => Promise<unknown>);
 
 const QUIET: Record<string, Answer> = {
   // THE SHELL'S OWN READS — the inbox count the frame keeps.
-  work_inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+  inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
   decisions: { handle: "jane", items: [], total: 0, capped: false },
   work_item: detail(),
   work_project: project(),
@@ -196,6 +198,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   resetPageContextForTest();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -211,15 +214,17 @@ function mount(
     answers = {},
     viewer = JANE,
     agents = [],
+    org = ORG,
   }: {
     answers?: Record<string, Answer>;
     viewer?: Record<string, unknown>;
     agents?: Record<string, unknown>[];
+    org?: Record<string, unknown>;
   } = {},
 ) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
-  store.applyOrg(withDerived(ORG) as never);
+  store.applyOrg(withDerived(org) as never);
   store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
@@ -247,10 +252,16 @@ function mount(
   return { ...view, store };
 }
 
+/**
+ * Lets everything the screen asked land: every read the socket was asked and
+ * every write the act route took, and what their answers drew, including the
+ * reads those renders asked in turn (see `settled`).
+ */
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
+  await settled(
+    () => asked.length,
+    () => posted.length,
+  );
 }
 
 /** The reason a write control is disabled with, off the kit's described-by. */
@@ -1126,6 +1137,48 @@ test("older comments are reachable", async () => {
   expect(screen.getByText("the very first word")).toBeTruthy();
 });
 
+// AN EARLIER PAGE THAT FAILS KEEPS "EARLIER ACTIVITY", which asks it again,
+// the failure said beside it rather than as a banner promising a retry
+// nothing makes. Mutation: answer the failure with QueryState's banner again,
+// and the caption is not there.
+test("an earlier page that fails keeps Earlier activity, which asks it again", async () => {
+  let failures = 1;
+  const comment = (id: string, at: string, body: string) => ({
+    id,
+    task: "t-1",
+    author: "ada",
+    author_kind: "agent",
+    body,
+    created_at: at,
+  });
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_comments: (params: Record<string, unknown>) =>
+        params.cursor === "c-50" && failures-- > 0
+          ? Promise.reject(new Error("unavailable"))
+          : Promise.resolve({
+              item: "t-1",
+              key: "ENG-42",
+              title: "x",
+              ...(params.cursor === "c-50"
+                ? { comments: [comment("c-1", "2031-04-01T09:00:00Z", "the very first word")] }
+                : {
+                    comments: [comment("c-51", "2031-04-12T09:00:00Z", "the newest word")],
+                    next_cursor: "c-50",
+                  }),
+            }),
+    },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Earlier activity" }));
+  await settle();
+  expect(screen.getByText("Could not read the next page (unavailable). Try again.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Earlier activity" }));
+  await settle();
+  expect(screen.getByText("the very first word")).toBeTruthy();
+  expect(screen.queryByText(/Could not read the next page/)).toBeNull();
+});
+
 // THE FOUR ANSWERS OF "WHO THIS REACHED" KEEP THEIR SENTENCES: reached nobody,
 // no such change here, beyond the retention window, and cannot say — four
 // different facts, which a tracker that listed recipients would draw as one
@@ -1156,7 +1209,7 @@ test("the Woke answers keep their four empty sentences", async () => {
 
 // THE RETENTION WINDOW IS SAID AS A LENGTH. The answer carries the instant the
 // horizon falls on, which the engine sets to its own clock less
-// `inbox_retention_days`, so the whole days between it and now are the setting.
+// `inbox.retention_days`, so the whole days between it and now are the setting.
 // An answer that names no horizon falls back to the inbox horizon by name.
 test("a swept answer says how long recipients are kept", async () => {
   const swept = (retained_from?: string): WorkRoutingAnswer => ({
@@ -1686,13 +1739,18 @@ test("the peek states each property once", async () => {
 // THE RAIL'S BODY IS KEYED ON ITS SUBJECT: `[` and `]` move the peek from task
 // A to task B, and a different object is a different mount.
 test("moving the rail to another task mounts a new body", async () => {
+  // THE PEEK'S BODY IS A LAZY CHUNK, and its code is in before the case: what
+  // this holds is the remount, not a cold `import()`, which a mount that is
+  // not awaited under act cannot wait out (React says so in the console).
+  // The loading path is `app/lazy.test.tsx`'s.
+  await loadChunk("worklet");
   location.hash = `#/worklet?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
   const { container } = mount(
     <PeekNeighbours>
       <PeekHost />
     </PeekNeighbours>,
   );
-  // THE PEEK'S BODY IS A LAZY CHUNK, so it is waited for rather than settled.
+  // ITS OWN READS ANSWER before the head is drawn, so it is waited for.
   await waitFor(() => expect(container.querySelector(".crewlet-object-header")).toBeTruthy());
   const before = container.querySelector(".crewlet-object-header");
   location.hash = `#/worklet?peek=${refToken({ kind: "item", id: "ENG-43" })}`;
@@ -1702,15 +1760,18 @@ test("moving the rail to another task mounts a new body", async () => {
 // THE DESCRIPTION IS NOT REBUILT ON EVERY TICK OF THE PAGE'S CLOCK: a reader
 // selecting a sentence to copy would lose it within a second.
 test("the description keeps its own DOM across a clock tick", async () => {
+  // The page's clock ticks on the case's own interval, so the tick is made
+  // rather than waited for: one second, exactly once.
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const { container } = mount(<WorkItemPage id="ENG-42" />, {
     answers: { work_item: detail({ task: task({ body: "the runbook is **here**" }) }) },
   });
   await settle();
   const before = container.querySelector(".task-prose");
   expect(before).toBeTruthy();
-  await act(async () => {
+  act(() => {
     vi.mocked(Date.now).mockReturnValue(NOW + 1000);
-    await new Promise((r) => setTimeout(r, 1100));
+    vi.advanceTimersByTime(1000);
   });
   expect(container.querySelector(".task-prose")).toBe(before);
 });
@@ -2034,4 +2095,128 @@ test("the title and the description open together are one draft, each set throug
     reason: "A task needs a title.",
   });
   expect(posted).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// The Changes tab
+// ---------------------------------------------------------------------------
+
+/** The company hosting code, so a task asks whether a change carries it out. */
+const CODE_ORG = {
+  ...ORG,
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+};
+
+/** Answers `/query/code_changes` with `changes`, recording each ask. */
+function serveChanges(changes: unknown[]): URL[] {
+  return serveChangePages(() => ({ changes }));
+}
+
+/**
+ * Answers `/query/code_changes` with the page `page` gives for each ask — its
+ * `changes` and `next` — recording each ask.
+ */
+function serveChangePages(page: (url: URL) => { changes?: unknown[]; next?: string }): URL[] {
+  const codeAsks: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/query/code_changes") codeAsks.push(url);
+      const position = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 3 };
+      return new Response(JSON.stringify({ ...page(url), position, level: "session" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  );
+  return codeAsks;
+}
+
+// THE PROBE KEEPS A ROW, IT DOES NOT READ ONE: a change of a repository the
+// reader may not read is dropped after the engine reads it, so an empty page
+// with `next` is no answer — and a listing that ENDS empty past it is. Here
+// the second page ends the listing with nothing kept, and the task carries no
+// strip. Mutation: decide on the first page alone, and the strip is drawn
+// over a listing that holds nothing for this reader.
+test("a task whose listing ends empty past a page that kept nothing draws no Changes tab", async () => {
+  const codeAsks = serveChangePages((url) =>
+    url.searchParams.get("cursor") === "past-deleted" ? {} : { next: "past-deleted" },
+  );
+  mount(<WorkItemPage id="ENG-42" />, { org: CODE_ORG });
+  await waitFor(() =>
+    expect(codeAsks.some((u) => u.searchParams.get("cursor") === "past-deleted")).toBe(true),
+  );
+  await settle();
+  expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
+});
+
+// AND ONE STOPPED AT ITS BOUND WITH `next` STILL SET MAY HAVE ONE: the strip
+// is drawn, and the tab's own listing pages to it. Mutation: decide on the
+// rows kept alone, and a task whose newest change sits in a deleted
+// repository loses the tab over its readable older ones.
+test("a task whose probe stops at its bound with next still set has a Changes tab", async () => {
+  let n = 0;
+  serveChangePages(() => ({ next: `c${String(++n)}` }));
+  mount(<WorkItemPage id="ENG-42" />, { org: CODE_ORG });
+  expect(await screen.findByRole("tab", { name: "Changes" })).toBeTruthy();
+});
+
+// A TASK NO CHANGE NAMES CARRIES NO STRIP: the page asks the engine for one
+// change naming the task by `native:<id>`, and draws no tab that would always
+// say nothing. Mutation: draw the strip before a change is found, or ask by
+// the key rather than the id, and this fails.
+test("a task no change names draws no Changes tab, after asking by its id", async () => {
+  const codeAsks = serveChanges([]);
+  mount(<WorkItemPage id="ENG-42" />, { org: CODE_ORG });
+  await waitFor(() => expect(codeAsks.length).toBeGreaterThan(0));
+  await settle();
+  expect(codeAsks[0]!.searchParams.get("work")).toBe("native:t-1");
+  expect(codeAsks[0]!.searchParams.get("limit")).toBe("1");
+  expect(codeAsks[0]!.searchParams.has("state")).toBe(false);
+  expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
+});
+
+// A TASK A CHANGE CARRIES OUT HAS A CHANGES TAB, listing every change of the
+// item in Code › Changes' grid — whatever its state, so the listing names the
+// task and no state (a work listing that names none lists every one, and the
+// engine refuses the dashboard's "all"). Mutation: never draw the strip, list
+// the tab's changes by anything but the task, or name a state, and this
+// fails.
+test("a task a change names has a Changes tab listing the task's changes", async () => {
+  const position = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 3 };
+  const codeAsks = serveChanges([
+    {
+      id: "c1",
+      repo_id: "r1",
+      number: 42,
+      title: "Fix the login race",
+      state: "merged",
+      source_ref: "refs/heads/fix",
+      target_ref: "refs/heads/main",
+      head: "0123456789abcdef0123456789abcdef01234567",
+      revision: 1,
+      owner: "swe",
+      owner_kind: "agent",
+      opened_at: "2026-10-27T10:00:00Z",
+      opened_position: position,
+      version: 1,
+      position,
+      repo: "web",
+      ref: "web!42",
+      access: "write",
+    },
+  ]);
+  mount(<WorkItemPage id="ENG-42" />, { org: CODE_ORG });
+  const tab = await screen.findByRole("tab", { name: "Changes" });
+  fireEvent.click(tab);
+  const grid = await screen.findByRole("table", { name: "Changes" });
+  expect(within(grid).getByText("web!42")).toBeTruthy();
+  // THE TAB'S OWN LISTING, beside the one-row probe that found the change.
+  const listing = codeAsks.filter((u) => u.searchParams.get("limit") !== "1");
+  expect(listing.length).toBeGreaterThan(0);
+  for (const u of listing) {
+    expect(u.searchParams.get("work")).toBe("native:t-1");
+    expect(u.searchParams.has("state")).toBe(false);
+  }
 });

@@ -169,3 +169,77 @@ const QueryEpisodes = "query_episodes"
 // SubmitResult is how a delegated worker answers. The worker package owns it
 // and imports the prompts, whose worker preamble tells a model to call it.
 const SubmitResult = "submit_result"
+
+// The company's own code host's tools that the executor prompt's code
+// sections, the code host's refusals and its wake prompt name. The authority
+// table declares every code tool's name as its action and the builtins read
+// each off its row; these are here because the prompts and the code host
+// that send a seat to them cannot import the authority table, whose package
+// reaches the store, any more than the format packages above can.
+const (
+	// CodeResolve resolves a branch, a tag or a commit to a commit id.
+	CodeResolve = "code_resolve"
+	// CodeRead reads a file, or lists a tree, by commit id.
+	CodeRead = "code_read"
+	// CodeDiff is what changed between two commits.
+	CodeDiff = "code_diff"
+	// CodeCompare is how two commits' histories stand to each other.
+	CodeCompare = "code_compare"
+	// CodeLandedIn is whether a commit reached a branch.
+	CodeLandedIn = "code_landed_in"
+	// CodeLog is a file's or a branch's history.
+	CodeLog = "code_log"
+	// CodeBlame is who last changed each line of a file.
+	CodeBlame = "code_blame"
+	// CodeGetChange reads a change: its diff, its findings, its reviews.
+	CodeGetChange = "code_get_change"
+	// CodeSearch searches the company's code across its repositories.
+	CodeSearch = "code_search"
+	// CodeMergeChange merges a change, or enqueues it where its branch
+	// lands through the merge queue.
+	CodeMergeChange = "code_merge_change"
+	// CodeRevertChange opens, and may merge, the change that reverts a
+	// merged one.
+	CodeRevertChange = "code_revert_change"
+	// CodeGetCheckFailures reads what a failed check of a commit reported.
+	CodeGetCheckFailures = "code_get_check_failures"
+	// CodeRerunChecks runs a commit's errored checks again.
+	CodeRerunChecks = "code_rerun_checks"
+	// CodeCheckout checks a repository out into an executor's box, which
+	// the code host's refusals send a run to: offered on the executor run's
+	// surface of its own, beside [AskAndWait], and named by no authority row
+	// — the code host's read verb and each repository's grant decide it.
+	CodeCheckout = "code_checkout"
+	// CodeCommitFiles commits a small change on the server.
+	CodeCommitFiles = "code_commit_files"
+	// CodeCreateRepo creates a repository, a seat's scratch one among them.
+	CodeCreateRepo = "code_create_repo"
+	// CodeDeleteBranch deletes a branch, the remedy the code log's branch
+	// alarm names.
+	CodeDeleteBranch = "code_delete_branch"
+	// CodeRepoReaders is who reads a repository, by the route its counter
+	// is summed across.
+	CodeRepoReaders = "code_repo_readers"
+	// CodeRebaseChange rebases a change onto its target, which a merge
+	// refused on conflicts is pointed at.
+	CodeRebaseChange = "code_rebase_change"
+	// CodeReviewChange reviews a change on the revision read.
+	CodeReviewChange = "code_review_change"
+	// CodeRequestReview asks somebody to review a change.
+	CodeRequestReview = "code_request_review"
+	// CodeCommentOnChange answers on a change, in a thread of it.
+	CodeCommentOnChange = "code_comment_on_change"
+	// CodeResolveFinding resolves a finding on a change.
+	CodeResolveFinding = "code_resolve_finding"
+)
+
+// The administrator's reads of the deployment's health a seat whose role
+// carries `health_tools` is offered, which an alarm's wake, the alarm and
+// metric catalogues and the role field's schema description name, none of
+// which can import the authority table.
+const (
+	// FleetHealth reads what is firing across the fleet now.
+	FleetHealth = "fleet_health"
+	// CodeStatus reads the code host's own standing.
+	CodeStatus = "code_status"
+)

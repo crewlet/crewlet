@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,8 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -103,9 +106,11 @@ func (l *paceLog) all() []string {
 
 // pacedWriter is a recorder that can carry a read and a write deadline, which
 // is what http.NewResponseController looks for, and logs each one it is set.
+// Each write takes the client take on the pace clock.
 type pacedWriter struct {
 	*httptest.ResponseRecorder
-	log *paceLog
+	log  *paceLog
+	take time.Duration
 }
 
 func (w *pacedWriter) SetReadDeadline(t time.Time) error {
@@ -120,6 +125,7 @@ func (w *pacedWriter) SetWriteDeadline(t time.Time) error {
 
 func (w *pacedWriter) Write(p []byte) (int, error) {
 	w.log.add(fmt.Sprintf("write %d", len(p)))
+	w.log.clock.advance(w.take)
 	return w.ResponseRecorder.Write(p)
 }
 
@@ -136,8 +142,9 @@ type fakeFiles struct {
 
 	// work is the store's own time between two reads of an upload's body
 	// — a broker's acknowledgements, a bucket's part — which no client
-	// may be charged for.
-	work time.Duration
+	// may be charged for; and readWork its time to hand a download each
+	// piece of a file, which no client may be charged for either.
+	work, readWork time.Duration
 
 	mu       sync.Mutex
 	file     *worklet.File
@@ -201,7 +208,14 @@ func (f *fakeFiles) File(context.Context, string, string, statelog.Freshness) (w
 }
 
 func (f *fakeFiles) Open(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
-	return f.store.Open(ctx, o)
+	rc, err := f.store.Open(ctx, o)
+	if err != nil || f.readWork == 0 {
+		return rc, err
+	}
+	return struct {
+		io.Reader
+		io.Closer
+	}{working{r: rc, work: f.readWork, clock: f.clock}, rc}, nil
 }
 
 func (f *fakeFiles) Put(ctx context.Context, r io.Reader, limit int64,
@@ -544,6 +558,102 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 	})
 }
 
+// fullBucket is a backend with no room left: a put reads its content and is
+// refused as a backend refuses one for room ([objstore.Full]), storing
+// nothing, naming a room of the case's own ([caseRemedy]) — so a hint naming
+// it spliced the store's remedy rather than a spelling of the route's own.
+type fullBucket struct{ objstore.Backend }
+
+// caseRemedy is the room [fullBucket] names.
+const caseRemedy = "an operator makes room in this case's own bucket"
+
+func (fullBucket) Put(_ context.Context, name string, r io.Reader, _ objstore.PutMeta) error {
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return err
+	}
+	return &objstore.Full{Remedy: caseRemedy, Err: fmt.Errorf(
+		"natsobj: put %s: OBJ_crewlet_files holds as many bytes as it reserves", name)}
+}
+
+// fullS3 is an S3 bucket whose provider has no room left — MinIO's drives at
+// their floor — through the production backend: every write is refused `507
+// XMinioStorageFull`.
+func fullS3(t *testing.T) objstore.Backend {
+	t.Helper()
+	srv := s3fake.Start(t, "files")
+	b, err := s3obj.Open(t.Context(), s3obj.Config{
+		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", PathStyle: true,
+		AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+	})
+	if err != nil {
+		t.Fatalf("opening the S3 fake: %v", err)
+	}
+	srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+	return b
+}
+
+// AN UPLOAD THE OBJECT STORE HAS NO ROOM FOR IS `507 store_full`, NAMING THE
+// ROOM AN OPERATOR MAKES: the store refuses the same upload the same way until
+// then, so the answer is HTTP's own status for a server that cannot store what
+// a request needs, with no Retry-After — never the 503 that asked a client to
+// send the same gibibyte again in two seconds. Nothing is recorded, and the
+// store's own words, naming its bucket, stay in the node's log. Over the
+// fleet's own bucket's twin, and over S3 whose provider has no room.
+//
+// Mutation: answer the full store through the catch-all (503 unavailable) and
+// this fails on the status, the code and the Retry-After; splice a room of the
+// route's own and it fails on the hint; drop s3obj's classification and the
+// s3fake arm fails.
+func TestAnUploadTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []struct {
+		name    string
+		backend func(t *testing.T, fake *fakeFiles) objstore.Backend
+		// remedy is the room the store names, and said its own words.
+		remedy, said string
+	}{
+		{"the nats twin", func(_ *testing.T, fake *fakeFiles) objstore.Backend {
+			return fullBucket{fake.backend}
+		}, caseRemedy, "OBJ_crewlet_files"},
+		{"s3fake", func(t *testing.T, _ *fakeFiles) objstore.Backend { return fullS3(t) },
+			s3obj.FullRemedy, "XMinioStorageFull"},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			fake := newFakeFiles(t)
+			store, err := objstore.NewStore(arm.backend(t, fake))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake.store = store
+			s := filesSurface(t, fake, chart{})
+			rec := httptest.NewRecorder()
+			s.upload(bytes.NewReader([]byte("no room")), rec)
+
+			answer := answerOf(t, rec)
+			hint, _ := answer["hint"].(string)
+			switch {
+			case rec.Code != http.StatusInsufficientStorage || answer["error"] != string(httpjson.CodeStoreFull):
+				t.Fatalf("an upload the store had no room for answered %d: %s, want 507 store_full",
+					rec.Code, rec.Body.String())
+			case rec.Header().Get("Retry-After") != "":
+				t.Errorf("an upload the store had no room for asked its client back in %s seconds",
+					rec.Header().Get("Retry-After"))
+			case !strings.Contains(hint, arm.remedy):
+				t.Errorf("an upload the store had no room for answered the hint %q, which does not name %q",
+					hint, arm.remedy)
+			case strings.Contains(rec.Body.String(), arm.said):
+				t.Errorf("the object store's own words reached the client: %s", rec.Body.String())
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if len(fake.puts) != 0 {
+				t.Errorf("a file was recorded whose content the store had no room for")
+			}
+		})
+	}
+}
+
 // THE WRITER'S REFUSALS ABOUT THE FILE KEEP THEIR OWN CODES, and every other
 // refusal reads as it reads on every write here.
 //
@@ -817,6 +927,52 @@ func TestTheByteRoutesAreServedByTheHalvesTheirRequestFinds(t *testing.T) {
 	}
 }
 
+// A FILE'S BYTES ARE SERVED WHERE NO WRITER IS. A node in a maintenance mode
+// hands no writer to any surface and serves its reads, the file listing among
+// them — so the download, a read, is served by the halves that hold the rows
+// and the object store, while the upload and the removal, which write, answer
+// the mux's own 404 and reach no store. One predicate over both halves answered
+// every download on such a node as a route it does not serve.
+//
+// Mutation: gate the download on servesFileWrites and the download is a 404.
+func TestAFilesBytesAreServedWhereNoWriterIs(t *testing.T) {
+	t.Parallel()
+	fake := newFakeFiles(t)
+	data := []byte("the quarter's report")
+	fake.holding(t, data)
+	stored := fake.objects
+	reads := fake.halves()
+	reads.Work.FileWriter = nil
+	s := filesSurfaceOver(t, serving(reads), chart{}, fake.clock.Now)
+
+	rec := httptest.NewRecorder()
+	if aborted := s.download(rec); aborted != nil {
+		t.Fatal(aborted)
+	}
+	if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), data) {
+		t.Fatalf("a node with no writer answered the download %d %q, want 200 "+
+			"and the file", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.upload(strings.NewReader("x"), rec)
+	if rec.Code != http.StatusNotFound || answerOf(t, rec)["error"] != string(httpjson.CodeNoRoute) {
+		t.Errorf("a node with no writer answered the upload %d %s, want the "+
+			"mux's own 404", rec.Code, rec.Body.String())
+	}
+	if fake.objects != stored {
+		t.Error("a node with no writer stored an upload's body")
+	}
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/worklet/files/ENG/reports/q3.bin", nil)
+	if aborted := s.serve(rec, req, admin("ana")); aborted != nil {
+		t.Fatal(aborted)
+	}
+	if rec.Code != http.StatusNotFound || answerOf(t, rec)["error"] != string(httpjson.CodeNoRoute) {
+		t.Errorf("a node with no writer answered the removal %d %s, want the "+
+			"mux's own 404", rec.Code, rec.Body.String())
+	}
+}
+
 type failingReader struct{ err error }
 
 func (r *failingReader) Read([]byte) (int, error) { return 0, r.err }
@@ -947,20 +1103,27 @@ func TestADownloadFlooredOnAnotherLogIsBadParams(t *testing.T) {
 	}
 }
 
-// A DOWNLOAD'S EVERY MEBIBYTE HAS ITS OWN WINDOW, opened once its bytes are in
-// hand. The route once copied with no write deadline, so a client that opened
-// a download and never read it held the handler and its connection; and a
-// deadline set before the bytes were read from the store would have spent the
-// client's window on the store.
+// A DOWNLOAD'S EVERY MEBIBYTE HAS ITS OWN WINDOW, spent only while the client
+// is taking its bytes. The route once copied with no write deadline, so a
+// client that opened a download and never read it held the handler and its
+// connection; and a deadline set before the bytes were read from the store,
+// or a window charged for the store's own time, would have spent the
+// client's pace on the store. Here the store takes ten seconds to hand over
+// each piece — far more than a mebibyte's pace in all — and the client a
+// second to take each write: every deadline is the window its mebibyte has
+// left after the client's seconds and none of the store's, it directly
+// precedes its write, and the response ends through the Writer, under what
+// the last mebibyte had left.
 func TestADownloadWritesEachMebibyteInAWindowOfItsOwn(t *testing.T) {
 	t.Parallel()
 	fake := newFakeFiles(t)
+	fake.readWork = 10 * time.Second
 	log := fake.paceLog()
 	data := content(2*objstore.MiB + 100)
 	fake.holding(t, data)
 	s := filesSurface(t, fake, chart{})
 
-	w := &pacedWriter{ResponseRecorder: httptest.NewRecorder(), log: log}
+	w := &pacedWriter{ResponseRecorder: httptest.NewRecorder(), log: log, take: time.Second}
 	if aborted := s.download(w); aborted != nil {
 		t.Fatal(aborted)
 	}
@@ -968,29 +1131,42 @@ func TestADownloadWritesEachMebibyteInAWindowOfItsOwn(t *testing.T) {
 		t.Fatalf("download answered %d with %d bytes, want 200 with %d", w.Code, w.Body.Len(), len(data))
 	}
 
-	// EVERY WRITE DIRECTLY FOLLOWS ITS OWN DEADLINE.
+	// EVERY WRITE DIRECTLY FOLLOWS ITS OWN DEADLINE, so nothing the store
+	// does lands between a deadline and the write it bounds; and what the
+	// window has left at each is the pace less a second for every write
+	// before it in its mebibyte.
 	events := log.all()
-	deadlines := 0
-	for i, e := range events {
-		if e == "write-deadline" {
-			deadlines++
-			if i+1 >= len(events) || !strings.HasPrefix(events[i+1], "write ") {
-				t.Errorf("deadline %d is not followed by its write: %v", deadlines, events)
-			}
-		}
-		if strings.HasPrefix(e, "write ") && (i == 0 || events[i-1] != "write-deadline") {
-			t.Errorf("a write at %d follows %q rather than its deadline: %v", i, events[max(i-1, 0)], events)
-		}
-	}
-	if deadlines != 3 {
-		t.Errorf("%d write deadlines for two mebibytes and a hundred bytes: %v", deadlines, events)
-	}
 	log.mu.Lock()
-	defer log.mu.Unlock()
-	for i, d := range log.out {
-		if d != objstore.MiBPace {
-			t.Errorf("deadline %d was set %v out, want %v", i, d, objstore.MiBPace)
+	out := append([]time.Duration(nil), log.out...)
+	log.mu.Unlock()
+	var want []time.Duration
+	written, inMebibyte := 0, 0
+	for i, e := range events {
+		size, isWrite := strings.CutPrefix(e, "write ")
+		if !isWrite {
+			continue
 		}
+		if i == 0 || events[i-1] != "write-deadline" {
+			t.Fatalf("a write at %d follows %q rather than its deadline: %v", i, events[max(i-1, 0)], events)
+		}
+		n, err := strconv.Atoi(size)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if written%objstore.MiB == 0 {
+			inMebibyte = 0
+		}
+		want = append(want, objstore.MiBPace-time.Duration(inMebibyte)*w.take)
+		written += n
+		inMebibyte++
+	}
+	if events[len(events)-1] != "write-deadline" {
+		t.Errorf("the download's last event is %q, want the deadline it ended under", events[len(events)-1])
+	}
+	want = append(want, objstore.MiBPace-time.Duration(inMebibyte)*w.take)
+	if !slices.Equal(out, want) {
+		t.Errorf("write deadlines set %v out, want %v: each mebibyte's whole pace less "+
+			"the client's second at each write before it, none of the store's ten", out, want)
 	}
 }
 

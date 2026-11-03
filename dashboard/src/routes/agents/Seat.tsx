@@ -172,6 +172,7 @@ import {
   type SeatTab,
 } from "./seat/profile.ts";
 import { Schedules } from "./seat/Schedules.tsx";
+import { SeatCode } from "./seat/Code.tsx";
 import { Settings } from "./seat/Settings.tsx";
 import { Turns } from "./seat/Turns.tsx";
 import { Work } from "./seat/Work.tsx";
@@ -519,6 +520,9 @@ export function SeatScreen({ handle }: { handle: string }) {
             ) : (
               <GrantRequired size="compact" grants={[WORKLET]} reader={viewer.login} />
             ))}
+          {/* EVERY READER'S: no app gates code (ADR-0088), and the engine
+              holds each row to the reader's grant on its repository. */}
+          {tab === "code" && <SeatCode seat={seat} human={human} />}
           {tab === "turns" &&
             !human &&
             (viewer.loading ? (

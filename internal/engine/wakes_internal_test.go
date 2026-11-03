@@ -81,7 +81,7 @@ func watchedBackends(t *testing.T, cfg *config.Company) (*config.Bootstrap, *Bac
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

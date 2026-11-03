@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -18,7 +19,7 @@ import (
 )
 
 // takeBound is the archive bound every take here is made within: a session's.
-const takeBound = executordomain.SessionMaxBytes
+const takeBound = executorkeep.SessionMaxBytes
 
 // keptAndOpened is a taken session as the fleet keeps it and a later launch
 // opens it: sealed under the keyring into a spool, uploaded to the object store,

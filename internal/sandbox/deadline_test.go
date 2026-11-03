@@ -88,11 +88,11 @@ func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 		t.Errorf("the resume reads success %v and %q, want the run said to be cut off at its cap",
 			calls[0].Success, calls[0].Answer)
 	}
-	if !slices.ContainsFunc(calls[0].Run.BridgeCalls, func(c BridgeCall) bool {
+	if !slices.ContainsFunc(calls[0].Bridged.Calls, func(c BridgeCall) bool {
 		return c.Name == "comment_on_work_item"
 	}) {
 		t.Errorf("the resume judges the run on %+v, missing the call it made as it was ended",
-			calls[0].Run.BridgeCalls)
+			calls[0].Bridged.Calls)
 	}
 }
 

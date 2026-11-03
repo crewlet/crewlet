@@ -33,6 +33,7 @@ import { healthFrame } from "~/test/health.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { pick } from "~/testing.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
@@ -287,9 +288,9 @@ async function more(name: string) {
   fireEvent.click(await screen.findByRole("menuitem", { name }));
 }
 
+/** Every answer in flight lands, and what it draws. */
 async function settle() {
-  await act(async () => {});
-  await act(async () => {});
+  await afterMicrotasks();
 }
 
 /**
@@ -376,7 +377,7 @@ test("a reader without Admin sees no write control, and an administrator sees th
       (await screen.findAllByRole("button", { name: new RegExp(`^${name}`) })).length,
     ).toBeGreaterThan(0);
   }
-  expect(screen.getByRole("button", { name: /^More for / })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: /^More for / })).toBeTruthy();
   // A SEAT'S OWN GESTURES stay on the seat: this page invites through a picker.
   for (const name of ["Invite", "Add person"]) {
     expect(screen.queryByRole("button", { name })).toBeNull();

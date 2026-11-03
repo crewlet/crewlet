@@ -116,7 +116,12 @@ func (f *Fleet) applyRunChange(turnID string, read coord.Record, change coord.Sa
 		return coord.Record{}, false
 	}
 	if change.Delete {
+		// ITS PARTS GO WITH IT, under the same lock: this twin removes
+		// them at once, where the KV removes the record and then each part.
 		delete(f.runs, turnID)
+		for _, part := range coord.RunParts() {
+			delete(f.runParts, runPartKey{turnID, part})
+		}
 		f.notifyRunLocked(turnID, coord.SandboxRunUpdate{})
 		return read, true
 	}
@@ -156,6 +161,106 @@ func (f *Fleet) WatchSandboxRun(ctx context.Context, turnID string) (<-chan coor
 			delete(f.runWatchers, turnID)
 		}
 	}), nil
+}
+
+// runPartKey names one part beside one run ([coord.RunPart]).
+type runPartKey struct {
+	turnID string
+	part   coord.RunPart
+}
+
+// partOf refuses a part [coord.RunParts] does not name, as the KV backend
+// does.
+func partOf(turnID string, part coord.RunPart) error {
+	switch {
+	case turnID == "":
+		return errors.New("coord/memory: a sandbox run's part needs a turn id")
+	case !part.Valid():
+		return fmt.Errorf("coord/memory: %q is not a part of a sandbox run", part)
+	}
+	return nil
+}
+
+// SandboxRunPart reads the part beside turnID's run.
+func (f *Fleet) SandboxRunPart(_ context.Context, turnID string, part coord.RunPart) (coord.Record, bool, error) {
+	if err := partOf(turnID, part); err != nil {
+		return coord.Record{}, false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	held, ok := f.runParts[runPartKey{turnID, part}]
+	if !ok {
+		return coord.Record{}, false, nil
+	}
+	return copyRecord(held), true, nil
+}
+
+// MutateSandboxRunPart changes the part beside turnID's run by a decision
+// taken on the part as it stands — optimistic, as [Fleet.MutateSandboxRun] is
+// and for its reasons, the decision taken outside the lock.
+//
+// ONLY BESIDE A RECORD, checked under the lock the write takes, so this twin
+// never writes a part it would then have to remove: a run whose record is
+// gone writes nothing.
+func (f *Fleet) MutateSandboxRunPart(ctx context.Context, turnID string, part coord.RunPart,
+	decide func(coord.Record, bool) ([]byte, error)) (coord.Record, bool, error) {
+
+	if err := partOf(turnID, part); err != nil {
+		return coord.Record{}, false, err
+	}
+	if decide == nil {
+		return coord.Record{}, false, errors.New("coord/memory: a change to a sandbox run's part needs a decision")
+	}
+	key := runPartKey{turnID, part}
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			if err := ctx.Err(); err != nil {
+				return coord.Record{}, false, fmt.Errorf("%w: change the sandbox run %s's %s: %w",
+					coord.ErrUnavailable, turnID, part, err)
+			}
+		}
+		f.mu.Lock()
+		read, found := f.runParts[key]
+		f.mu.Unlock()
+		if !found {
+			read = coord.Record{Key: turnID}
+		}
+		read = copyRecord(read)
+		put, err := decide(copyRecord(read), found)
+		if err != nil {
+			return coord.Record{}, false, err
+		}
+		if len(put) == 0 {
+			return read, false, nil
+		}
+		written, won, gone := f.applyRunPart(key, read, found, put)
+		switch {
+		case gone:
+			return coord.Record{}, false, nil
+		case won:
+			return written, true, nil
+		}
+	}
+}
+
+// applyRunPart writes put as the part key names where the part still stands
+// as read (absent where found is false), reporting the part written; or gone,
+// writing nothing, where the run has no record.
+func (f *Fleet) applyRunPart(key runPartKey, read coord.Record, found bool, put []byte) (coord.Record, bool, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, live := f.runs[key.turnID]; !live {
+		return coord.Record{}, false, true
+	}
+	current, ok := f.runParts[key]
+	if ok != found || (ok && current.Version != read.Version) {
+		return coord.Record{}, false, false
+	}
+	// FROM THE STORE-WIDE COUNTER, for the records' reason ([Fleet.version]).
+	f.version++
+	stored := coord.Record{Key: key.turnID, Value: slices.Clone(put), Version: f.version}
+	f.runParts[key] = stored
+	return copyRecord(stored), true, false
 }
 
 // putRunLocked stores value as turnID's record at the next store-wide version

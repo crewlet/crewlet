@@ -249,7 +249,7 @@ test("the trash restores each of two removed tasks under one key as itself", asy
   serving("list", {
     work_activity: { records: [], complete: true },
     // THE FRAME'S OWN READS for a viewer holding a seat — the inbox count.
-    work_inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+    inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
     decisions: { handle: "jane", items: [], total: 0, capped: false },
     viewer: {
       login: "U0FOUNDER",

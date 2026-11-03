@@ -81,7 +81,8 @@ import (
 // `iam_people_kind_idx` and the existence question reads the heap; drop
 // `iam_history_version_idx` and every page of the trail reads it whole; read
 // `iam_people` in a new literal anywhere in the module without registering
-// it, and the walk names the file.
+// it, and the walk names the file; drop `iam_removed_seat_idx` and one seat's
+// removed holder and a bind's leavers read every tombstone.
 func TestTheDirectoryStatementsArePlanned(t *testing.T) {
 	t.Parallel()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
@@ -198,6 +199,8 @@ func directoryReads() map[string]directoryIndexed {
 		invitedTo = "iam_invites_seat_idx"
 		open      = "iam_invites_open_idx"
 		spent     = "iam_invites_spent_idx"
+
+		removedSeat = "iam_removed_seat_idx"
 	)
 	seek := func(index, statement string, args ...any) directoryIndexed {
 		return directoryIndexed{directoryPlanned: directoryPlanned{statement, args}, index: index}
@@ -250,6 +253,7 @@ func directoryReads() map[string]directoryIndexed {
 		"an address invited":        seek(invitedAt, invitedStatements[UniqueEmail], "blind", 1),
 		"a seat invited":            seek(invitedTo, invitedStatements[UniqueSeat], "founder", 1),
 		"a removed seat's holder":   seek(seat, removedHoldersStatement),
+		"one seat's bindings":       seek(seat, seatBindingStatement, "founder"),
 		"a bucket's lapsed invites": seek(open, sweepOpenInvitationsStatement, 1, 1, 100),
 		"a bucket's spent invites":  seek(spent, sweepSpentInvitationsStatement, 1, 1, 100),
 		"a bucket's lapsed probe":   seek(open, dueOpenInvitationsStatement, 1, 1),
@@ -264,6 +268,14 @@ func directoryReads() map[string]directoryIndexed {
 		"a machine's removal trail": seek("iam_history_person_idx", erasedTrailStatement("('')"), "p1"),
 		"a trail row erased":        seek("sqlite_autoindex_iam_history_1", eraseTrailStatement, "{}", "h1"),
 	}
+	// ONE SEAT'S REMOVALS NO BIND HAS STAMPED, sought by the tombstones' own
+	// seat index (replicated 0122) in its third column's order, the person's
+	// id: SeatHolder's second seek and the leavers a bind stamps and scopes.
+	// A tombstone is permanent, so without the index each is every removal
+	// the company ever made.
+	out["one seat's removed holder"] = inOrder(removedSeat, seatRemovedHolderStatement, []any{"founder"})
+	out["one seat's leavers"] = inOrder(removedSeat, leaversStatement, []any{"founder"})
+
 	// THE BINDINGS IN SEAT ORDER, walked through the partial index whose
 	// predicate their WHERE is — SeatClaims' and SeatHolders' shapes.
 	out["the seat claims' bindings"] = walk("iam_people_seat_claim_idx", seatClaimBindingsStatement, nil)
@@ -339,6 +351,7 @@ func directoryCensuses() map[string]directoryPlanned {
 func directoryPasses() map[string]directoryPlanned {
 	return map[string]directoryPlanned{
 		"every invitation's seat":    {invitationSeatsStatement, nil},
+		"every removal's seat":       {removalSeatsStatement, nil},
 		"every sealed value":         {sealedPeopleStatement, nil},
 		"every open sealed address":  {sealedInvitationsStatement, []any{1}},
 		"every sealed name":          {sealedNamesStatement, nil},

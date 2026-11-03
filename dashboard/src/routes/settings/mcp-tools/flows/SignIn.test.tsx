@@ -9,6 +9,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { TestClient } from "~/test/client.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 import type { McpServerAnswer, McpSignIn } from "~/contract/mcp.ts";
 import { readSignIn, signOut, startSignIn, storeValue } from "../api.ts";
 import type { McpData } from "../data.ts";
@@ -95,12 +96,6 @@ function mountAt(hash: string, data: McpData) {
   );
 }
 
-async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  });
-}
-
 /** A tab as `window.open` hands one back, recording where it is sent. */
 function openedTab() {
   const tab = { opener: {} as unknown, location: { href: "" }, close: vi.fn() };
@@ -153,7 +148,7 @@ test("a sign-in opens its tab on the click, sends it to the vendor, and waits fo
     screen.getByText(/Signing in as a client registered automatically, asking for read and write/),
   ).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Continue to Linear" }));
-  await settle();
+  await afterMicrotasks();
   expect(asked).toEqual(["open", "start"]);
   expect(window.open).toHaveBeenCalledWith("about:blank", "_blank");
   expect(tab.opener).toBeNull();
@@ -179,7 +174,7 @@ test("a tab the browser holds back is offered as a link to the vendor's page", a
   );
   expect(screen.getByText("Sign in to Linear again")).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Continue to Linear" }));
-  await settle();
+  await afterMicrotasks();
   expect(screen.getByText("Your browser kept the sign-in from opening")).toBeDefined();
   expect(screen.getByRole("link", { name: "Open Linear's sign-in" }).getAttribute("href")).toBe(
     CONSENT,
@@ -202,7 +197,7 @@ test("a refused start closes its tab and a failed sign-in says why", async () =>
     withOAuth(mcpData("admin"), "linear", LINEAR_OAUTH),
   );
   fireEvent.click(screen.getByRole("button", { name: "Continue to Linear" }));
-  await settle();
+  await afterMicrotasks();
   expect(tab.close).toHaveBeenCalled();
   expect(screen.getByText(/no public address for a sign-in/)).toBeDefined();
 
@@ -210,7 +205,7 @@ test("a refused start closes its tab and a failed sign-in says why", async () =>
     signedIn("failed", "the vendor refused the code: invalid_grant"),
   );
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-  await settle();
+  await afterMicrotasks();
   await act(async () => vi.advanceTimersByTimeAsync(SIGN_IN_POLL_MS));
   expect(screen.getByText("The sign-in did not finish")).toBeDefined();
   expect(screen.getByText("the vendor refused the code: invalid_grant")).toBeDefined();
@@ -250,7 +245,7 @@ test("a revocation the vendor refused still signs out, and says to revoke it the
   );
   expect(screen.getByText("Revoke Linear's sign-in?")).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
-  await settle();
+  await afterMicrotasks();
   expect(signOut).toHaveBeenCalledWith("linear");
   expect(screen.getAllByText("Signed out of Linear, not revoked there").length).toBeGreaterThan(0);
   expect(screen.getAllByText(/the revocation endpoint answered 503/).length).toBeGreaterThan(0);
@@ -269,11 +264,11 @@ test("a client's secret is tested for a service identity and stored untested for
       "#/settings/mcp-tools?flow=value&server=linear&key=oauth.client_secret",
       withOAuth(mcpData("admin"), "linear", oauth),
     );
-    await settle();
+    await afterMicrotasks();
     expect(screen.getByText("Set the client secret")).toBeDefined();
     fireEvent.change(screen.getByLabelText("New value"), { target: { value: "secret-not-real" } });
     fireEvent.click(screen.getByRole("button", { name: test ? "Test and save" : "Save" }));
-    await settle();
+    await afterMicrotasks();
     expect(storeValue).toHaveBeenLastCalledWith(
       "linear",
       "oauth.client_secret",

@@ -1081,10 +1081,11 @@ func TestASearchIsAskedForTheServersViewer(t *testing.T) {
 	if q.Text != "acquisition" || q.Author != "bo" || q.Channel != cSecret {
 		t.Errorf("the search was asked %+v, losing the caller's own narrowing", q)
 	}
-	if q.Fresh.Level != statelog.ReadSession || q.Fresh.MinPosition != chatAt {
+	if q.Fresh.Level != statelog.ReadSession ||
+		!slices.Equal(q.Fresh.Floors, []statelog.Position{chatAt}) {
 		t.Errorf("the visible set is read at %q from %v, want the level the "+
 			"caller chose and the floor they named (%v)", q.Fresh.Level,
-			q.Fresh.MinPosition, chatAt)
+			q.Fresh.Floors, chatAt)
 	}
 	if q.Limit != search.ChatSearchLimit {
 		t.Errorf("limit = %d, want the index's own default of %d", q.Limit,
@@ -1378,10 +1379,11 @@ func TestTheCallersFreshnessReachesEveryChatRead(t *testing.T) {
 			got, err := served(map[string]any{
 				"read_level": "session", "min_position": chatAt.String(),
 			})
-			if err != nil || got.Level != statelog.ReadSession || got.MinPosition != chatAt {
+			if err != nil || got.Level != statelog.ReadSession ||
+				!slices.Equal(got.Floors, []statelog.Position{chatAt}) {
 				t.Errorf("session from %v read at %q from %v (%v) — without the "+
 					"floor somebody who has just posted is shown the room from "+
-					"before they did", chatAt, got.Level, got.MinPosition, err)
+					"before they did", chatAt, got.Level, got.Floors, err)
 			}
 			got, err = served(map[string]any{"max_lag_seconds": "30", "max_lag_seq": "250"})
 			if err != nil || got.MaxLag != 30*time.Second || got.MaxLagSeq != 250 {

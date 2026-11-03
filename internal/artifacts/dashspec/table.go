@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -97,17 +98,25 @@ func (t Table) column(key string) (Column, bool) {
 
 // idPattern is the grammar of a dataset's, a widget's and a filter's id:
 // short, lowercase and safe in a URL path and a presence region.
-var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var idPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
+})
 
 // columnPattern is the grammar of a column key: a datastore field name or a
 // file header, within the datastore's field name bound.
-var columnPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var columnPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+})
 
 // ValidID reports whether id is a dataset, widget or filter id.
-func ValidID(id string) bool { return idPattern.MatchString(id) }
+func ValidID(id string) bool { return idPattern().MatchString(id) }
 
 // ValidColumnKey reports whether key is a column key.
-func ValidColumnKey(key string) bool { return columnPattern.MatchString(key) }
+func ValidColumnKey(key string) bool { return columnPattern().MatchString(key) }
 
 // dayLayout is a calendar day.
 const dayLayout = "2006-01-02"

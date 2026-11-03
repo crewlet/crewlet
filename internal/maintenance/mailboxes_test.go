@@ -146,8 +146,8 @@ func (q *gatedQueue) failDeletes(err error) {
 	q.failure = err
 }
 
-// runRetirements records every call a retirement makes to end a seat's coding
-// runs, what it could see at that moment, and can be made to fail.
+// runRetirements records every call a retirement makes to end a seat's executors,
+// what it could see at that moment, and can be made to fail.
 type runRetirements struct {
 	mu      sync.Mutex
 	calls   []runRetirement
@@ -645,6 +645,19 @@ func TestNothingIsRetiredWhileTheActiveRevisionCannotBeRead(t *testing.T) {
 		}
 	})
 
+	t.Run("a node still applying the fleet's revision is judged not at all, quietly", func(t *testing.T) {
+		h := newMailboxHarness(t, nil)
+		h.seat("swe")
+		h.roster.fail(fmt.Errorf("epoch 4 of the fleet, 3 served: %w", maintenance.ErrRevisionPropagating))
+		if n, err := h.tick(h.m, base.Add(grace+time.Hour)); err != nil || n != 0 {
+			t.Fatalf("tick = (%d, %v), want nothing done and no failure: every activation "+
+				"puts every node here for the seconds its apply takes", n, err)
+		}
+		if rec, _ := h.record("swe"); !rec.Present() {
+			t.Fatalf("a node still applying the fleet's revision had a seat stamped absent: %+v", rec)
+		}
+	})
+
 	t.Run("an unreadable seat lease retires nothing", func(t *testing.T) {
 		faulty := coordtest.NewFaulty(&coordmem.Backend{})
 		h := newMailboxHarness(t, func(o *maintenance.MailboxOptions) { o.Leases = faulty })
@@ -1108,7 +1121,7 @@ func TestAFailedRetirementIsRetriedOnTheNextTick(t *testing.T) {
 // the fleet's run records with nothing able to reach them. They are ended while
 // both subscriptions still exist and while no other node can claim the seat and
 // recover them, and exactly once, for the retired seat alone.
-func TestARetirementEndsTheSeatsCodingRunsBeforeItsSubscriptions(t *testing.T) {
+func TestARetirementEndsTheSeatsExecutorsBeforeItsSubscriptions(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.runs.observe = h.observeRetirement
 	h.removed()

@@ -3,6 +3,7 @@ package slideformat
 import (
 	"slices"
 	"strings"
+	"sync"
 )
 
 // ---- the style table ------------------------------------------------------ //
@@ -39,8 +40,6 @@ var (
 	cellTags   = []string{"th", "td"}
 	placedTags = []string{"div", "h1", "h2", "h3", "p", "ul", "ol", "img", "table", "hr", "x-shape",
 		"x-icon", "svg"}
-	typeTags  = union(boxTags, textTags, cellTags, []string{"table"})
-	paintTags = union([]string{"div", "img", "table", "x-icon", "x-shape", "hr"}, textTags, cellTags)
 )
 
 func union(sets ...[]string) []string {
@@ -59,76 +58,81 @@ func on(sets ...[]string) []string { return union(sets...) }
 
 func tags(t ...string) []string { return t }
 
-// properties is the table.
-var properties = map[string]property{
-	"position":                {keyword("absolute", "relative"), placedTags},
-	"left":                    {offset(true), placedTags},
-	"top":                     {offset(true), placedTags},
-	"right":                   {offset(false), placedTags},
-	"bottom":                  {offset(false), placedTags},
-	"width":                   {lengthPctAuto, on(placedTags, cellTags)},
-	"height":                  {lengthPctAuto, placedTags},
-	"min-width":               {minWidth, placedTags},
-	"min-height":              {lengthUpTo(1080), placedTags},
-	"max-width":               {lengthUpTo(1920), placedTags},
-	"max-height":              {lengthUpTo(1080), placedTags},
-	"display":                 {keyword("flex", "grid", "none"), boxTags},
-	"flex-direction":          {keyword("row", "column", "row-reverse", "column-reverse"), boxTags},
-	"flex-wrap":               {keyword("wrap", "nowrap"), tags("div")},
-	"gap":                     {lengthUpTo(512), boxTags},
-	"align-items":             {keyword(alignWords...), boxTags},
-	"justify-content":         {keyword("start", "center", "end", "flex-start", "flex-end", "space-between", "space-around", "space-evenly"), boxTags},
-	"justify-items":           {keyword("start", "center", "end", "stretch"), boxTags},
-	"align-self":              {keyword(append([]string{"auto"}, alignWords...)...), placedTags},
-	"justify-self":            {keyword("auto", "start", "center", "end", "stretch"), placedTags},
-	"flex":                    {flex, placedTags},
-	"flex-grow":               {numberOnly(0, 1000), placedTags},
-	"flex-shrink":             {numberOnly(0, 1000), placedTags},
-	"flex-basis":              {flexBasis, placedTags},
-	"grid-template-columns":   {tracks, boxTags},
-	"grid-template-rows":      {tracks, boxTags},
-	"grid-column":             {gridSpan, placedTags},
-	"grid-row":                {gridSpan, placedTags},
-	"aspect-ratio":            {aspectRatio, placedTags},
-	"padding":                 {boxSides(0, 256, false), on(boxTags, textTags, cellTags, tags("table"))},
-	"overflow":                {keyword("hidden", "visible"), tags("div")},
-	"font-family":             {family, typeTags},
-	"font-size":               {fontSize, typeTags},
-	"font-weight":             {fontWeight, on(typeTags, tags("span"))},
-	"font-style":              {keyword("normal", "italic"), on(typeTags, tags("span"))},
-	"font":                    {font, typeTags},
-	"line-height":             {lineHeight, typeTags},
-	"letter-spacing":          {letterSpacing, typeTags},
-	"text-align":              {keyword("left", "center", "right", "justify"), typeTags},
-	"text-transform":          {keyword("none", "uppercase", "lowercase", "capitalize"), typeTags},
-	"white-space":             {keyword("normal", "nowrap"), typeTags},
-	"text-decoration":         {textDecoration, on(typeTags, tags("span"))},
-	"font-variant-numeric":    {keyword("normal", "tabular-nums"), typeTags},
-	"-webkit-text-stroke":     {textStroke, typeTags},
-	"color":                   {colorValue, on(typeTags, tags("span", "x-icon", "hr"))},
-	"background":              {background, on(boxTags, paintTags, tags("tr"))},
-	"background-color":        {colorValue, on(boxTags, paintTags, tags("tr"))},
-	"background-clip":         {keyword("text"), textTags},
-	"-webkit-background-clip": {keyword("text"), textTags},
-	"-webkit-text-fill-color": {fillColor, on(textTags, tags("span"))},
-	"border":                  {border, paintTags},
-	"border-top":              {border, paintTags},
-	"border-right":            {border, paintTags},
-	"border-bottom":           {border, paintTags},
-	"border-left":             {border, paintTags},
-	"border-radius":           {boxSides(0, 1080, true), on(tags("div", "img", "table", "x-shape"), textTags)},
-	"box-shadow":              {shadows(false), on(tags("div", "img", "table", "x-icon", "x-shape"), textTags)},
-	"text-shadow":             {shadows(true), on(textTags, tags("table"))},
-	"opacity":                 {numberOnly(0, 1), on(placedTags, tags("section"))},
-	"transform":               {transform, placedTags},
-	"filter":                  {filter, on(tags("div", "img", "x-shape"), textTags)},
-	"backdrop-filter":         {filter, on(tags("div", "img", "x-shape"), textTags)},
-	"mix-blend-mode":          {keyword("normal", "multiply", "screen", "overlay", "darken", "lighten"), on(tags("div", "img", "x-shape"), textTags)},
-	"object-fit":              {keyword("cover", "contain"), tags("img")},
-	"margin":                  {noop("0", "0px"), union(placedTags, textTags, cellTags, tags("section"))},
-	"box-sizing":              {noop("border-box"), union(placedTags, textTags, cellTags, tags("section"))},
-	"grid-template":           {noop("none"), boxTags},
-}
+// properties is the table, built at first use (the package doc says why), with
+// the two element groups the other groups make.
+var properties = sync.OnceValue(func() map[string]property {
+	typeTags := union(boxTags, textTags, cellTags, []string{"table"})
+	paintTags := union([]string{"div", "img", "table", "x-icon", "x-shape", "hr"}, textTags, cellTags)
+	return map[string]property{
+		"position":                {keyword("absolute", "relative"), placedTags},
+		"left":                    {offset(true), placedTags},
+		"top":                     {offset(true), placedTags},
+		"right":                   {offset(false), placedTags},
+		"bottom":                  {offset(false), placedTags},
+		"width":                   {lengthPctAuto, on(placedTags, cellTags)},
+		"height":                  {lengthPctAuto, placedTags},
+		"min-width":               {minWidth, placedTags},
+		"min-height":              {lengthUpTo(1080), placedTags},
+		"max-width":               {lengthUpTo(1920), placedTags},
+		"max-height":              {lengthUpTo(1080), placedTags},
+		"display":                 {keyword("flex", "grid", "none"), boxTags},
+		"flex-direction":          {keyword("row", "column", "row-reverse", "column-reverse"), boxTags},
+		"flex-wrap":               {keyword("wrap", "nowrap"), tags("div")},
+		"gap":                     {lengthUpTo(512), boxTags},
+		"align-items":             {keyword(alignWords...), boxTags},
+		"justify-content":         {keyword("start", "center", "end", "flex-start", "flex-end", "space-between", "space-around", "space-evenly"), boxTags},
+		"justify-items":           {keyword("start", "center", "end", "stretch"), boxTags},
+		"align-self":              {keyword(append([]string{"auto"}, alignWords...)...), placedTags},
+		"justify-self":            {keyword("auto", "start", "center", "end", "stretch"), placedTags},
+		"flex":                    {flex, placedTags},
+		"flex-grow":               {numberOnly(0, 1000), placedTags},
+		"flex-shrink":             {numberOnly(0, 1000), placedTags},
+		"flex-basis":              {flexBasis, placedTags},
+		"grid-template-columns":   {tracks, boxTags},
+		"grid-template-rows":      {tracks, boxTags},
+		"grid-column":             {gridSpan, placedTags},
+		"grid-row":                {gridSpan, placedTags},
+		"aspect-ratio":            {aspectRatio, placedTags},
+		"padding":                 {boxSides(0, 256, false), on(boxTags, textTags, cellTags, tags("table"))},
+		"overflow":                {keyword("hidden", "visible"), tags("div")},
+		"font-family":             {family, typeTags},
+		"font-size":               {fontSize, typeTags},
+		"font-weight":             {fontWeight, on(typeTags, tags("span"))},
+		"font-style":              {keyword("normal", "italic"), on(typeTags, tags("span"))},
+		"font":                    {font, typeTags},
+		"line-height":             {lineHeight, typeTags},
+		"letter-spacing":          {letterSpacing, typeTags},
+		"text-align":              {keyword("left", "center", "right", "justify"), typeTags},
+		"text-transform":          {keyword("none", "uppercase", "lowercase", "capitalize"), typeTags},
+		"white-space":             {keyword("normal", "nowrap"), typeTags},
+		"text-decoration":         {textDecoration, on(typeTags, tags("span"))},
+		"font-variant-numeric":    {keyword("normal", "tabular-nums"), typeTags},
+		"-webkit-text-stroke":     {textStroke, typeTags},
+		"color":                   {colorValue, on(typeTags, tags("span", "x-icon", "hr"))},
+		"background":              {background, on(boxTags, paintTags, tags("tr"))},
+		"background-color":        {colorValue, on(boxTags, paintTags, tags("tr"))},
+		"background-clip":         {keyword("text"), textTags},
+		"-webkit-background-clip": {keyword("text"), textTags},
+		"-webkit-text-fill-color": {fillColor, on(textTags, tags("span"))},
+		"border":                  {border, paintTags},
+		"border-top":              {border, paintTags},
+		"border-right":            {border, paintTags},
+		"border-bottom":           {border, paintTags},
+		"border-left":             {border, paintTags},
+		"border-radius":           {boxSides(0, 1080, true), on(tags("div", "img", "table", "x-shape"), textTags)},
+		"box-shadow":              {shadows(false), on(tags("div", "img", "table", "x-icon", "x-shape"), textTags)},
+		"text-shadow":             {shadows(true), on(textTags, tags("table"))},
+		"opacity":                 {numberOnly(0, 1), on(placedTags, tags("section"))},
+		"transform":               {transform, placedTags},
+		"filter":                  {filter, on(tags("div", "img", "x-shape"), textTags)},
+		"backdrop-filter":         {filter, on(tags("div", "img", "x-shape"), textTags)},
+		"mix-blend-mode":          {keyword("normal", "multiply", "screen", "overlay", "darken", "lighten"), on(tags("div", "img", "x-shape"), textTags)},
+		"object-fit":              {keyword("cover", "contain"), tags("img")},
+		"margin":                  {noop("0", "0px"), union(placedTags, textTags, cellTags, tags("section"))},
+		"box-sizing":              {noop("border-box"), union(placedTags, textTags, cellTags, tags("section"))},
+		"grid-template":           {noop("none"), boxTags},
+	}
+})
 
 // fillColor is the text fill under `background-clip:text`: transparent so the
 // glyphs take the background, or a span's return to its own colour.
@@ -167,7 +171,7 @@ func parseStyle(tag, raw string, bad func(format string, args ...any)) []Decl {
 				"comments; an image is an <img> of a file in the version)", name, forbidden[i])
 			continue
 		}
-		prop, known := properties[name]
+		prop, known := properties()[name]
 		if !known {
 			bad("style %s is not in the slide subset%s", name, closest(name))
 			continue

@@ -6,12 +6,29 @@
 // the collector rest on properties no single backend's own tests would think
 // to state: that a put which fails or is abandoned leaves nothing anybody can
 // find — a body cut short, which reads much like a body's end, included — that
-// a read with no deadline is refused rather than bounded by some default of
+// a put the backend stops taking fails as stalled a stall after it last moved
+// rather than at the end of a deadline sized for its bytes, that a read with no
+// deadline is refused rather than bounded by some default of
 // the backend's, that a read whose context ends stops rather than hands over
 // what it had in hand, that a delete leaves nothing a listing could find, and
 // that a listing visits every name it holds — verbatim, once, however slowly
-// it is read — and that an upload begun and never finished, which no listing
-// of the names shows, is found and removed by the two verbs that exist for it.
+// it is read — that an upload begun and never finished, which no listing
+// of the names shows, is found and removed by the two verbs that exist for it,
+// and that a name holding something the backend cannot read as an object is a
+// definite answer, listed and deletable, rather than a failure. A backend that
+// lists a range of its names in order ([objstore.Ranged]) is held to that too,
+// and so is one that deletes many names in one request
+// ([objstore.BatchDeleter]); one that does not claim either is held to not
+// offering it — an ordering nothing certified is one an audit would read
+// objects as lost by, and a batch nothing certified one that could delete a
+// file somebody keeps.
+//
+// And ONE BENCHMARK SUITE ([Bench]) every backend runs from a
+// `BenchmarkBackend` of its own, as it runs [Run] from `TestContract`: the
+// figures the design argues from are measured through the same calls on every
+// backend, so two backends' figures differ by the backend and nothing else.
+// Each backend's package doc keeps what it measured, on what machine;
+// `make bench` measures again.
 package objstoretest
 
 import (
@@ -56,6 +73,36 @@ type Options struct {
 	// where the backend cannot know one) and its ID. Nil is a backend that
 	// can never hold one, which the suite then holds to listing none.
 	Unfinished func(t *testing.T, b objstore.Backend) objstore.Pending
+
+	// Spoil leaves under name, in b, something the backend holds and
+	// cannot read as an object — by the backend's own means, as a client
+	// writing garbage into its format or a disk returning it would — which
+	// the suite then holds to [objstore.ErrCorrupt]. Nil is a backend that
+	// can never hold one: an S3 bucket answers a name with an object or
+	// with nothing.
+	Spoil func(t *testing.T, b objstore.Backend, name string)
+
+	// Ranged says the backend lists a range of its names in order
+	// ([objstore.Ranged]), which the suite then holds it to. Unset, the
+	// suite holds it to NOT implementing the interface, so no backend can
+	// offer an ordering nothing certified.
+	Ranged bool
+
+	// BatchDeletes says the backend deletes many names in one request
+	// ([objstore.BatchDeleter]), which the suite then holds it to. Unset,
+	// the suite holds it to NOT implementing the interface, so the
+	// collector never hands a batch to a deletion nothing certified.
+	BatchDeletes bool
+
+	// Stalling builds a backend whose stall bound is short — a case's,
+	// never [objstore.Stall] — and answers it with that bound, the most its
+	// clean-up after a stall may add to the put's time, and a freeze that
+	// makes it stop taking a put's bytes by its own means: a broker that
+	// stops acknowledging, a bucket that stops reading. The freeze answers
+	// the thaw that undoes it, so the case can ask the backend what the
+	// put left. Nil is a backend that can never stall — the twin stores
+	// an object whole or not at all — which the suite then does not judge.
+	Stalling func(t *testing.T) (b objstore.Backend, stall, cleanup time.Duration, freeze func() (thaw func()))
 }
 
 // defaultPiece is a piece for a backend with none of its own.
@@ -85,11 +132,15 @@ func Run(t *testing.T, newBackend Factory, opts Options) {
 		{"a_deleted_object_is_gone_and_a_second_delete_is_fine", aDeletedObjectIsGone},
 		{"a_put_whose_reader_fails_leaves_nothing", aPutWhoseReaderFailsLeavesNothing},
 		{"a_put_whose_context_ends_leaves_nothing", aPutWhoseContextEndsLeavesNothing},
+		{"a_put_the_backend_stops_taking_fails_as_stalled", aPutTheBackendStopsTakingFailsAsStalled},
 		{"a_listing_visits_every_name_once", aListingVisitsEveryNameOnce},
 		{"a_listing_stops_at_the_visitors_error", aListingStopsAtTheVisitorsError},
 		{"a_listing_waits_for_a_slow_visitor", aListingWaitsForASlowVisitor},
 		{"names_are_kept_verbatim", namesAreKeptVerbatim},
 		{"an_unfinished_upload_is_pending_until_abandoned", anUnfinishedUploadIsPendingUntilAbandoned},
+		{"a_name_holding_no_object_is_corrupt_listed_and_deletable", aNameHoldingNoObjectIsCorrupt},
+		{"a_range_lists_its_names_in_order", aRangeListsItsNamesInOrder},
+		{"a_batch_deletion_removes_exactly_its_names", aBatchDeletionRemovesExactlyItsNames},
 	}
 	for _, c := range cases {
 		// IN PARALLEL: each case is handed a backend of its own from the
@@ -450,6 +501,48 @@ func aPutWhoseContextEndsLeavesNothing(t *testing.T, b objstore.Backend, opts Op
 	gone(t, b, "abandoned", "an abandoned put")
 }
 
+// A PUT THE BACKEND STOPS TAKING FAILS AS STALLED ([objstore.ErrStalled]) a
+// stall after the backend last moved it — never at the end of a deadline
+// sized for its bytes, and never before its stall — and leaves nothing a stat
+// or a listing finds once the backend moves again.
+//
+// THE BACKEND STOPS AT ONCE, before the put's first byte, so its last
+// movement is the put's start: the put has to end between its stall and its
+// stall plus what its clean-up may add, give or take a second for the
+// machine. The case's own deadline is far past that, so a put that waited
+// for its deadline instead fails here as not stalled.
+func aPutTheBackendStopsTakingFailsAsStalled(t *testing.T, _ objstore.Backend, opts Options) {
+	if opts.Stalling == nil {
+		return
+	}
+	b, stall, cleanup, freeze := opts.Stalling(t)
+	thaw := freeze()
+	thawed := false
+	defer func() {
+		if !thawed {
+			thaw()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), stall+cleanup+30*time.Second)
+	defer cancel()
+	started := time.Now()
+	err := b.Put(ctx, "stalled", streamed{bytes.NewReader(patterned(3*opts.piece(), 6))}, objstore.PutMeta{})
+	took := time.Since(started)
+	if !errors.Is(err, objstore.ErrStalled) {
+		t.Fatalf("a put the backend stopped taking = %v after %v; want objstore.ErrStalled", err, took)
+	}
+	if took < stall {
+		t.Fatalf("a put the backend stopped taking ended after %v, before its %v stall", took, stall)
+	}
+	if most := stall + cleanup + time.Second; took > most {
+		t.Fatalf("a put the backend stopped taking ended after %v; want it ended within %v "+
+			"(its stall %v and its clean-up %v)", took, most, stall, cleanup)
+	}
+	thaw()
+	thawed = true
+	gone(t, b, "stalled", "a put the backend stopped taking")
+}
+
 func aListingVisitsEveryNameOnce(t *testing.T, b objstore.Backend, _ Options) {
 	want := map[string]int{}
 	for i := range 25 {
@@ -633,5 +726,219 @@ func anUnfinishedUploadIsPendingUntilAbandoned(t *testing.T, b objstore.Backend,
 	}
 	if data, err := get(t, b, "finished", 0, -1); err != nil || !bytes.Equal(data, large(opts)) {
 		t.Fatalf("abandoning the unfinished uploads touched a finished object: %d bytes, %v", len(data), err)
+	}
+}
+
+// A NAME HOLDING SOMETHING THE BACKEND CANNOT READ AS AN OBJECT IS A DEFINITE
+// ANSWER: a stat and a get answer [objstore.ErrCorrupt] — never a failure,
+// which a reader would retry for ever and the audit would stop on every day
+// without naming the file — a listing hands the name on, holding nothing, so
+// the collector can judge it, and a delete clears it like any other name. A
+// whole object beside it is untouched throughout.
+func aNameHoldingNoObjectIsCorrupt(t *testing.T, b objstore.Backend, opts Options) {
+	data := []byte("a whole object")
+	put(t, b, "whole", data)
+	if opts.Spoil == nil {
+		// A BACKEND THAT CAN HOLD NO SUCH NAME never answers one: its
+		// whole objects are never called corrupt.
+		if _, err := b.Stat(t.Context(), "whole"); err != nil {
+			t.Fatalf("Stat of a whole object = %v", err)
+		}
+		return
+	}
+	put(t, b, "spoiled", []byte("bytes about to be made unreadable"))
+	before := time.Now().Add(-time.Minute)
+	opts.Spoil(t, b, "spoiled")
+
+	if info, err := b.Stat(t.Context(), "spoiled"); !errors.Is(err, objstore.ErrCorrupt) {
+		t.Fatalf("Stat of a name holding no object = %+v, %v; want ErrCorrupt", info, err)
+	}
+	if _, err := get(t, b, "spoiled", 0, -1); !errors.Is(err, objstore.ErrCorrupt) {
+		t.Fatalf("Get of a name holding no object = %v; want ErrCorrupt", err)
+	}
+	all := listed(t, b)
+	switch got := all["spoiled"]; {
+	case len(got) != 1:
+		t.Fatalf("a listing visited the spoiled name %d times, want once: %+v", len(got), all)
+	case got[0].Size != 0 || got[0].Digest != "":
+		t.Fatalf("a listing said the spoiled name holds %+v; want no bytes and no digest", got[0])
+	case got[0].Written.Before(before) || got[0].Written.After(time.Now().Add(time.Minute)) ||
+		got[0].Written.Location() != time.UTC:
+		t.Fatalf("a listing dated the spoiled name %v, want about now, in UTC", got[0].Written)
+	}
+	if got := all["whole"]; len(got) != 1 || got[0].Size != int64(len(data)) {
+		t.Fatalf("a listing beside a spoiled name visited the whole object as %+v", got)
+	}
+
+	if err := b.Delete(t.Context(), "spoiled"); err != nil {
+		t.Fatalf("Delete of a name holding no object: %v", err)
+	}
+	gone(t, b, "spoiled", "a delete of a name holding no object")
+	if got, err := get(t, b, "whole", 0, -1); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("the whole object beside the spoiled name read back %q, %v", got, err)
+	}
+}
+
+// A RANGE LISTS EXACTLY ITS NAMES, IN THE BYTE ORDER OF THE NAMES: every name
+// after its start and through its end, once, ascending — a name equal to the
+// start left out and one equal to the end kept, so ranges cut at the names a
+// caller already holds tile the store with nothing read twice and nothing
+// skipped — whatever the names spell, across the backend's own pages, and
+// stopping at its visitor's error. An audit reads an object missing from a
+// range as one the store does not hold.
+func aRangeListsItsNamesInOrder(t *testing.T, b objstore.Backend, opts Options) {
+	r, ok := b.(objstore.Ranged)
+	if !opts.Ranged {
+		if ok {
+			t.Fatal("the backend lists ranges and the suite was not told to certify it: " +
+				"set Options.Ranged")
+		}
+		return
+	}
+	if !ok {
+		t.Fatal("the suite was told the backend lists ranges, and it does not implement objstore.Ranged")
+	}
+	// NAMES WHOSE ORDER A STRING SORT AND A NAIVE ONE DISAGREE ON: a prefix
+	// before its extensions, a digit before a letter, an upper case before a
+	// lower, a slash before a dash — and more than any backend's page.
+	names := []string{"a", "a-b", "a/b", "a0", "aa", "B", "b", "files/", "files/0", "files/a", "z"}
+	for i := range 2*defaultPageOf + 3 {
+		names = append(names, fmt.Sprintf("files/k%03d", i))
+	}
+	for _, n := range names {
+		put(t, b, n, []byte(n))
+	}
+	sorted := slices.Sorted(slices.Values(names))
+	within := func(after, through string) []string {
+		var out []string
+		for _, n := range sorted {
+			if n > after && n <= through {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	listRange := func(after, through string) []string {
+		t.Helper()
+		var got []string
+		if err := r.ListRange(t.Context(), after, through, func(info objstore.Info) error {
+			if info.Size != int64(len(info.Name)) || info.Written.IsZero() {
+				t.Errorf("ListRange said %q holds %+v", info.Name, info)
+			}
+			got = append(got, info.Name)
+			return nil
+		}); err != nil {
+			t.Fatalf("ListRange(%q, %q): %v", after, through, err)
+		}
+		return got
+	}
+	for _, c := range []struct{ after, through string }{
+		{"", "zz"},                   // everything
+		{"", "a"},                    // from the first, through one name
+		{"a", "a0"},                  // the start left out, the end kept
+		{"a-", "a/b"},                // bounds that are no name at all
+		{"files/", "files/k" + "ÿ"},  // the namespace, across pages
+		{"files/k005", "files/k017"}, // inside a page and across one
+		{"z", "zz"},                  // past the last name: nothing
+		{"b", "a"},                   // an end before its start: nothing
+	} {
+		if got, want := listRange(c.after, c.through), within(c.after, c.through); !slices.Equal(got, want) {
+			t.Errorf("ListRange(%q, %q) = %q, want %q", c.after, c.through, got, want)
+		}
+	}
+
+	// RANGES CUT AT THE LAST NAME EACH ONE LISTED TILE THE STORE.
+	var tiled []string
+	for after := ""; ; {
+		page := within(after, "zz")
+		if len(page) == 0 {
+			break
+		}
+		through := page[min(len(page), 5)-1]
+		tiled = append(tiled, listRange(after, through)...)
+		after = through
+	}
+	if !slices.Equal(tiled, sorted) {
+		t.Errorf("ranges cut at the names they ended on listed %q, want every name once: %q", tiled, sorted)
+	}
+
+	stop := errors.New("enough")
+	visits := 0
+	if err := r.ListRange(t.Context(), "", "zz", func(objstore.Info) error {
+		visits++
+		return stop
+	}); !errors.Is(err, stop) || visits != 1 {
+		t.Fatalf("ListRange = %v after %d visits; want the visitor's error after one", err, visits)
+	}
+}
+
+// defaultPageOf is more names than any backend's listing page in the suite
+// holds — s3fake pages seven at a time — so a range crosses pages.
+const defaultPageOf = 10
+
+// A BATCH DELETION REMOVES EXACTLY ITS NAMES: every name it is handed is gone —
+// a full batch of [objstore.MaxDeleteBatch] included, names that were never
+// there and a name holding no object the backend can read among them — every
+// name it is not handed is untouched, and an empty batch removes nothing. The
+// collector deletes a batch of the names no row names; a batch that reached a
+// name beside them would delete a file somebody keeps.
+func aBatchDeletionRemovesExactlyItsNames(t *testing.T, b objstore.Backend, opts Options) {
+	d, ok := b.(objstore.BatchDeleter)
+	if !opts.BatchDeletes {
+		if ok {
+			t.Fatal("the backend deletes in batches and the suite was not told to certify it: " +
+				"set Options.BatchDeletes")
+		}
+		return
+	}
+	if !ok {
+		t.Fatal("the suite was told the backend deletes in batches, and it does not implement " +
+			"objstore.BatchDeleter")
+	}
+	var doomed []string
+	for i := range objstore.MaxDeleteBatch - 2 {
+		name := fmt.Sprintf("files/doomed-%04d", i)
+		put(t, b, name, []byte(name))
+		doomed = append(doomed, name)
+	}
+	if opts.Spoil != nil {
+		put(t, b, "files/doomed-spoiled", []byte("bytes about to be made unreadable"))
+		opts.Spoil(t, b, "files/doomed-spoiled")
+	}
+	doomed = append(doomed, "files/doomed-spoiled", "files/never-put")
+	kept := []string{"files/doomed", "files/doomed-0000x", "files/kept"}
+	for _, name := range kept {
+		put(t, b, name, []byte(name))
+	}
+
+	if err := d.DeleteBatch(t.Context(), nil); err != nil {
+		t.Fatalf("DeleteBatch of no names: %v", err)
+	}
+	// A LISTING BEFORE THE DELETION, as the collector's comes before its
+	// batches: a backend that answers a listing from an index it built
+	// must forget what a batch deletes, or the next listing names objects
+	// that are gone — the collector's second pass, an audit — while every
+	// read of them answers not found.
+	listed(t, b)
+	if err := d.DeleteBatch(t.Context(), doomed); err != nil {
+		t.Fatalf("DeleteBatch of %d names: %v", len(doomed), err)
+	}
+	all := listed(t, b)
+	for _, name := range doomed {
+		if got := all[name]; len(got) != 0 {
+			t.Fatalf("a listing after the batch deletion visited %s: %+v", name, got)
+		}
+	}
+	gone(t, b, doomed[0], "a batch deletion")
+	gone(t, b, "files/doomed-spoiled", "a batch deletion")
+	for _, name := range kept {
+		if got, err := get(t, b, name, 0, -1); err != nil || string(got) != name {
+			t.Fatalf("%s, beside the names a batch deletion was handed, read back %q, %v", name, got, err)
+		}
+	}
+	// AGAIN, every name now gone: deleting what is not there is not an
+	// error, as one deletion of it is not.
+	if err := d.DeleteBatch(t.Context(), doomed[:3]); err != nil {
+		t.Fatalf("DeleteBatch of names already gone: %v", err)
 	}
 }

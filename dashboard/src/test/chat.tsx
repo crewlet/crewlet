@@ -17,6 +17,7 @@
  */
 
 import { render } from "@testing-library/react";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import type { ReactNode } from "react";
 import { vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -67,11 +68,12 @@ export const ADA = {
   chat_vendors: [],
 };
 
-/** What a company running Crewlet's own three services publishes as `services`. */
+/** What a company running Crewlet's own four services publishes as `services`. */
 export const NATIVE_SERVICES: OrgServices = {
   tracker: "worklet",
   knowledge: "doclet",
   chat: "chatlet",
+  code: "native",
 };
 
 /** What `GET /auth/session` answers for [ADA]: the person, and the seat they hold. */
@@ -241,6 +243,7 @@ export function mountChat(
   const view = render(
     <ToastProvider>
       <LayerHost>
+        <AppAnnouncer />
         <ClientContext.Provider value={{ store, socket } as never}>
           <SessionReading>
             <ViewerProvider>

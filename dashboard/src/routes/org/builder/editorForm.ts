@@ -104,7 +104,8 @@ export interface SeatForm {
   /** Each window's ceiling as typed: digits, or empty for no ceiling on that window. */
   readonly tokenBudget: BudgetForm;
   readonly schedules: Readonly<Record<string, boolean>>;
-  readonly githubTier: string;
+  /** The seat's `code.access`: its tier on every code host; "" for unset (read only). */
+  readonly codeAccess: string;
   readonly githubRepos: readonly string[];
   readonly mattermostChannel: string;
   readonly mattermostUsername: string;
@@ -214,7 +215,7 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
     llm: llmChain(data.llm),
     tokenBudget: budgetForm(data.token_budget),
     schedules: scheduleToggles(data),
-    githubTier: text(getPath(data, ["integrations", "github", "tier"])),
+    codeAccess: text(getPath(data, ["code", "access"])),
     githubRepos: strings(getPath(data, ["integrations", "github", "repos"])),
     mattermostChannel: text(getPath(data, ["integrations", "mattermost", "channel"])),
     mattermostUsername: text(getPath(data, ["integrations", "mattermost", "username"])),
@@ -416,7 +417,7 @@ export function seatParts(
         ceiling(period, form.tokenBudget[period]),
       ),
     ),
-    ...textPart(["integrations", "github", "tier"], initial.githubTier, form.githubTier, line),
+    ...textPart(["code", "access"], initial.codeAccess, form.codeAccess, line),
     ...changed(
       ["integrations", "github", "repos"],
       listValue(initial.githubRepos),

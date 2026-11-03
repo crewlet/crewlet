@@ -211,9 +211,10 @@ func TestAPermittedOriginMaySendWhatTheRoutesReadAndNothingBeyondIt(t *testing.T
 // CORS-safelisted unless the answer exposes it, so a page on an allowed origin
 // could read a `/config` document and never its `ETag` — the tag its next
 // write's `If-Match` must carry — nor the `Retry-After` of a `503`, nor the
-// engine's mark that says the answer is the engine's at all. The exposure
-// rides the ANSWER, which is where the browser reads it; a preflight and an
-// origin the allow-list does not name carry none.
+// engine's mark that says the answer is the engine's at all, nor the
+// `Location` a started verification of a git node's copy is read back at.
+// The exposure rides the ANSWER, which is where the browser reads it; a
+// preflight and an origin the allow-list does not name carry none.
 //
 // Mutation: drop the exposure from the answer and the first check fails; set
 // it on the preflight and the second does.
@@ -234,7 +235,7 @@ func TestAPermittedOriginsScriptMayReadWhatAClientActsOn(t *testing.T) {
 		return strings.Split(got, ", ")
 	}
 	want := []string{httpjson.EngineHeader, "ETag", "Retry-After", "Accept-Patch", "Allow",
-		"Content-Disposition", httpjson.RequestIDHeader}
+		"Content-Disposition", "Location", httpjson.RequestIDHeader}
 	if got := exposed(http.MethodGet, "https://ops.example.com", false,
 		"https://ops.example.com"); !slices.Equal(got, want) {
 		t.Errorf("a permitted origin's answer exposes %v, want %v", got, want)

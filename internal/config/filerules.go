@@ -573,6 +573,9 @@ func (c *Company) validateMCPServerReferences() error {
 			signedIn[name] = c.MCPServers[i].OAuth != nil
 		}
 	}
+	// RENDERED ONCE, for every refusal below: a document misspelling ten
+	// references sorts the same set once rather than ten times.
+	servers := listOrNone(slices.Sorted(maps.Keys(declared)), "no servers at all")
 	var p problems
 	for _, ref := range c.mcpServerReferences() {
 		// A BOX CANNOT RENEW A SIGN-IN. It is handed a server's values
@@ -597,38 +600,37 @@ func (c *Company) validateMCPServerReferences() error {
 					"Nothing reads this block: the engine looks the "+
 					"credentials up per SERVER, so a key naming none is never "+
 					"consulted and the server it was meant for starts with "+
-					"none", ref.Server, listOrNone(declared))
+					"none", ref.Server, servers)
 		case MCPReferenceSandbox:
 			p.add(ref.Segments, ErrUnknownValue,
 				"%q is not a declared tool server: mcp_servers has %s. "+
 					"A box is given only a server the company declares, so this "+
 					"entry gives the seat's executor nothing: name a declared "+
-					"server, or remove the entry", ref.Server, listOrNone(declared))
+					"server, or remove the entry", ref.Server, servers)
 		case MCPReferenceLimits:
 			p.add(ref.Segments, ErrUnknownValue,
 				"%q is not a declared tool server: mcp_servers has %s. A limit "+
 					"holds back a server the company declares, and one naming none "+
 					"would hold back whichever server later takes the name: name a "+
-					"declared server, or remove the entry", ref.Server, listOrNone(declared))
+					"declared server, or remove the entry", ref.Server, servers)
 		}
 	}
 	return p.err()
 }
 
-// listOrNone renders a set of names for a message, or says there are none.
+// listOrNone renders names for a message, or none where there are none.
 //
-// "mcp_servers has " followed by nothing is the shape of message that makes
-// an operator think the renderer broke rather than that they declared no
-// servers.
-func listOrNone(set map[string]struct{}) string {
-	if len(set) == 0 {
-		return "no servers at all"
+// The caller states its own empty case, because a list followed by nothing —
+// "mcp_servers has ", "the units are: " — is the shape of message that makes
+// an operator think the renderer broke rather than that their document
+// declares none, and what "none" reads as differs by list. The names go in
+// the order given: a caller holding a SET sorts it first, since a map's order
+// is random and a message that changes on every run is one nobody can diff a
+// CI log against.
+func listOrNone(names []string, none string) string {
+	if len(names) == 0 {
+		return none
 	}
-	names := make([]string, 0, len(set))
-	for name := range set {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 	return strings.Join(names, ", ")
 }
 
@@ -748,7 +750,7 @@ func (c *Company) validateReferenceShapes() error {
 	}
 
 	for role, path := range c.EachRole() {
-		if ref := strings.TrimSpace(role.Unit); ref != "" && !entityID.MatchString(ref) {
+		if ref := strings.TrimSpace(role.Unit); ref != "" && !entityID().MatchString(ref) {
 			p.add(at(path, "unit"), ErrShape,
 				"%q is not a unit key: %s. A seat declared at the org root "+
 					"joins its unit by KEY (the unit's `id:`), not by the "+
@@ -758,7 +760,7 @@ func (c *Company) validateReferenceShapes() error {
 		}
 		for i, target := range role.Manages {
 			target = strings.TrimSpace(target)
-			if target == "" || org.ValidHandle(target) || entityID.MatchString(target) {
+			if target == "" || org.ValidHandle(target) || entityID().MatchString(target) {
 				continue
 			}
 			p.add(idx(at(path, "manages"), i), ErrShape,

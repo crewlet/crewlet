@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -32,19 +33,26 @@ import (
 // text is the report, the failure detail and the transcript (each at most
 // this, measured redacted, as the record carries it: [Coordinator.fitText],
 // [boundTranscript]), the question in its notes (one sentence,
-// [decision.MaxQuestion] bytes), the delivered refs ([MaxDeliveredRefBytes])
+// [decision.MaxQuestion] bytes), the delivered refs and the refs the run's
+// push record names, together ([MaxDeliveredRefBytes], a pushed ref counted
+// by the line it renders to), the reason that record could not be read where
+// it could not ([github.com/crewlet/crewlet/internal/events.MaxDiagnosticBytes])
 // and two reasons of a KiB each, why the run started a session of its own
-// ([MaxFellBackBytes]) and why its session was not kept ([boundReason]);
-// everything else on it is identifiers and counts, a few KiB, the two a box
+// ([MaxFellBackBytes]) and why its session was not kept ([boundReason]).
+// Everything else on it is identifiers and counts, a few KiB: the two a box
 // names among them held to the shapes a harness gives them
 // ([ValidSessionID], [ValidRelease]) where its runner reads them and again as
 // the record is published — the session it ran, at most 128 bytes, and its
-// harness's release, at most 64. JSON can grow text six-fold (a control byte
-// becomes \u00XX, `<`, `>` and `&` become \u003c and its kin, an invalid byte
-// becomes \ufffd), so the worst case is (3 × 256 + 16 + 1 + 2) KiB × 6, about
-// 4.6 MiB, with the ceiling's other 3 MiB to spare. A field added to the
-// record that carries text a box wrote needs its own bound and a line here,
-// or this promise is no longer one.
+// harness's release, at most 64 — and, beside each pushed ref's names, its
+// two whole object ids and its keys, about 140 bytes for each of at most
+// [MaxPushedRefs], which a record carries only where the push record's reason
+// is absent and which come to less than that reason's own worst. JSON can
+// grow text six-fold (a control byte becomes \u00XX, `<`, `>` and `&` become
+// \u003c and its kin, an invalid byte becomes \ufffd), so the worst case is
+// (3 × 256 + 16 + 1 + 64 + 2) KiB × 6, 5106 KiB, about 5 MiB, with the
+// ceiling's other 3 MiB to spare. A field added to the record that carries
+// text a box wrote needs its own bound and a line here, or this promise is no
+// longer one.
 //
 // WHAT HAPPENS PAST IT DEPENDS ON WHO READS THE PIECE. The report and the
 // failure detail are what the run's reviewer judges the round on — what it
@@ -270,7 +278,7 @@ const MaxDeliveredRefBytes = 16 << 10
 // engine's sentences whole and the opening of what OpenCode said, where it
 // names its error; the whole of it is on the run's error stream, where the
 // script prints it too. It is the bound the executor log holds a sentence of
-// the same kind to (executordomain.FailureMaxBytes, UnkeptReasonMaxBytes), and
+// the same kind to (executorkeep.FailureMaxBytes, UnkeptReasonMaxBytes), and
 // on the record, escaped at JSON's worst, it is 6 KiB of the ceiling's 8 MiB.
 //
 // HELD, BECAUSE THE RECORD IS A FILE IN THE BOX: the run's own agent can
@@ -295,7 +303,7 @@ func BoundFellBack(why string) string { return boundReason(why, MaxFellBackBytes
 // where a sentence says what happened. The record's two reasons are held by
 // it: why the run started a session of its own ([MaxFellBackBytes]) and why
 // its session was not kept, at the bound the executor log holds that same
-// reason to (executordomain.UnkeptReasonMaxBytes, a KiB).
+// reason to (executorkeep.UnkeptReasonMaxBytes, a KiB).
 //
 // REDACTED BEFORE THE CUT, because a reason quotes what a process in the box
 // answered, and the box's environment holds the seat's credentials: a token
@@ -306,24 +314,6 @@ func BoundFellBack(why string) string { return boundReason(why, MaxFellBackBytes
 // redacts a reason again holds it to its bound by this whole rule, as the
 // record's publish does.
 func boundReason(why string, bound int) string { return textcut.Within(redact.Secrets(why), bound) }
-
-// MaxBranchBytes bounds the branch a run names with its question
-// ([Ask.Branch], [PendingRun.Branch]).
-//
-// SIZED TO WHERE IT TRAVELS AND TO WHAT A BRANCH IS. It rides the run's
-// coordination row beside the question ([MaxAskContextBytes]), read and written
-// whole on every status flip and every listing of active runs — and, where the
-// asking run's own session cannot be continued, the brief of the fresh run that
-// carries the work on from it, which that run's harness re-sends with every request
-// it makes. Git keeps a branch as a path under refs/heads, every part of which
-// a filesystem holds to 255 bytes, and a work-in-progress branch is a few
-// parts at most: 1 KiB is four parts at their longest, past any name a person
-// or an agent gives one, and a sixteenth of the context it is parked beside.
-//
-// A BRANCH IS AN IDENTIFIER, so one past it is REFUSED to the run that named
-// it rather than cut ([Ask.Validate]): a shortened branch names nothing a
-// fresh machine could check out.
-const MaxBranchBytes = 1 << 10
 
 // MaxCondenseBytes is the most text one [Condenser] call reads: what the
 // engine's compactor takes in one condensation, its compact.MaxChunks first-
@@ -400,14 +390,17 @@ type Condenser interface {
 // already trusts no runner to have redacted what it hands back (see
 // [collectedRecord]). Bounded in a runner, a runner that forgot the bound would
 // publish an unbounded transcript, and the record carrying the run's only
-// spend would be refused whole.
+// spend would be refused whole. And THE REFS, the run's own and those its
+// push record names, to one budget ([boundPushed]).
 //
 // TWO HALVES, because a run's box and the seat its result is fitted for need
 // not be on one node ([BoxReader]). [boundBox] is the half that reads no model
 // — the transcript and the refs, held by rule — and is made where the box is
 // read; [Coordinator.fitText] is the half a model may write — the question,
 // the report and the failure, condensed on the seat's own auxiliary model —
-// and is made where the result is used, under the turn that pays for it.
+// and is made where the result is used, under the turn that pays for it, which
+// is also where the push record is read and so where its refs take what the
+// run's own left of the budget.
 func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Result) Result {
 	return c.fitText(ctx, run, boundBox(result))
 }
@@ -499,12 +492,27 @@ func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result
 	result.Text = c.fitPart(ctx, run, PartReport, redact.Secrets(result.Text), MaxRunTextBytes, &result.Condensed)
 	result.Error = c.fitPart(ctx, run, PartFailure, redact.Secrets(result.Error), MaxRunTextBytes,
 		&result.Condensed)
+	// ONE BUDGET FOR THE RUN'S REFS: what the push record says it pushed
+	// has what its own lines, bounded where the box was read ([boundBox]),
+	// leave of it ([boundPushed]).
+	left := MaxDeliveredRefBytes
+	for _, ref := range result.DeliveredRefs {
+		left -= len(ref)
+	}
+	result.Pushed, result.PushedElided = boundPushed(result.Pushed, result.PushedElided, left)
+	// AND WHY THE PUSH RECORD WAS UNREAD, an error built from whatever the
+	// code host's answer said: redacted, and held to the one bound an
+	// error a record carries has.
+	result.PushedUnread = events.ClipDiagnostic(redact.Secrets(result.PushedUnread))
+	// AND WHAT BECAME OF THE CHANGES IT ASKED TO OPEN, each sentence as
+	// that one is ([fitOpened]).
+	result.Opened = fitOpened(result.Opened)
 	return result
 }
 
-// boundRefs is a run's delivered refs, redacted, deduplicated in the order
-// they were found and held to [MaxDeliveredRefBytes], with how many did not
-// fit.
+// boundRefs is a run's delivered refs as its record carries them — redacted,
+// deduplicated in the order they were found, each valid UTF-8, and held to
+// [MaxDeliveredRefBytes] — with how many more the run named than are listed.
 //
 // WHOLE REFS ONLY: a ref is an identifier, and a shortened URL names nothing.
 //
@@ -513,6 +521,21 @@ func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result
 // report put on its `Delivered:` line, which a box can make a credential, and
 // every reader of the record — its event, the run's report — reads these.
 // First, so the bound measures what is carried.
+//
+// NEVER ONE THAT IS NOT UTF-8, because every one of those readers reads the
+// refs through JSON, which replaces each byte that is not UTF-8 with U+FFFD:
+// listed, such a ref arrived as another — a URL the run never delivered —
+// and refs that differ only there arrived as one, past the deduplication
+// above. A branch is held to UTF-8 by its grammar
+// ([github.com/crewlet/crewlet/internal/gitref.ValidBranch]), but a URL
+// holds whatever bytes a report puts in it, and so does the host a scrape of
+// one reads; so the rule is HERE, where every runner's refs pass, rather than
+// in each runner's reading of an account, which hands on the bytes it read.
+// Judged as carried, after the redaction, and DROPPED RATHER
+// THAN MENDED: a mended ref names what nobody delivered. And COUNTED with the
+// refs past the bound, because the run named it and the record does not list
+// it: the reader is told the list is short rather than shown a ref nobody
+// delivered.
 func boundRefs(refs []string) ([]string, int) {
 	seen := make(map[string]bool, len(refs))
 	var kept []string
@@ -523,7 +546,7 @@ func boundRefs(refs []string) ([]string, int) {
 			continue
 		}
 		seen[ref] = true
-		if size+len(ref) > MaxDeliveredRefBytes {
+		if !utf8.ValidString(ref) || size+len(ref) > MaxDeliveredRefBytes {
 			left++
 			continue
 		}

@@ -57,8 +57,8 @@ func TestAQuestionsConditionIsLoggedByItsSurface(t *testing.T) {
 	}
 }
 
-// tailFailed stands in for a failure its own node logged already: a coding
-// run's output that the node owning the run couldn't read.
+// tailFailed stands in for a failure its own node logged already: an executor's
+// output that the node owning the run couldn't read.
 type tailFailed struct{ error }
 
 func (tailFailed) LoggedAtSource() bool { return true }
@@ -68,8 +68,8 @@ func (tailFailed) LoggedAtSource() bool { return true }
 // unclassed condition with a hint, which is DEBUG with or without the mark.
 func (f tailFailed) Unwrap() error { return f.error }
 
-// A FAILURE ITS OWN NODE LOGGED IS A TRACE HERE. The node that owns a coding
-// run writes what it met reading the run's output, with its class and its
+// A FAILURE ITS OWN NODE LOGGED IS A TRACE HERE. The node that owns an executor
+// writes what it met reading the run's output, with its class and its
 // text, and the surface that answers the person writes its own line at DEBUG,
 // whether the answer is a 503 no wait clears or a 500: at WARN, one failure was
 // two WARN lines on every poll of the live view, the asker's naming nothing

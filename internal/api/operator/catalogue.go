@@ -1,6 +1,7 @@
-// Package operator serves Worklet, Doclet and Chatlet to the
-// people who run it: ONE catalogue of tools, built for every call from what
-// this node serves at that moment, and every transport that reaches it
+// Package operator serves Worklet, Doclet and Chatlet — and, where it hosts
+// code, its repositories' read tools, and the deployment's health tools — to
+// the people who run it: ONE catalogue of tools, built for every call from
+// what this node serves at that moment, and every transport that reaches it
 // drawing from that one value through one dispatch.
 //
 // # Why this exists
@@ -48,6 +49,16 @@
 // them ([Options.Runs], [Options.Pauses], [Options.Steer]), and a company that
 // keeps none of the native halves is still served those four: there is no
 // empty catalogue for a transport to answer.
+//
+// A [Server] is built ONCE per node and never changed; what changes is the
+// catalogue each call reads off it, and a call is served by the one catalogue
+// it read, never by half of two. The one thing a client can leave behind is
+// the stream a 2026-07-28 client listens on, which stays on the catalogue its
+// listen request was answered from — so the server keeps every such stream in
+// the node's one registry ([Listeners]), and the node tells every stream
+// there when what a call would be served has changed: at an apply, when a
+// shared tool server comes back with other tools, and when another node says
+// its own catalogue moved (the api package's operator listens).
 //
 // # It is the SAME TOOLS a seat holds, with a different writer
 //
@@ -172,6 +183,24 @@ type Halves struct {
 	// artifacts tools and only where they are.
 	ArtifactData builtin.ArtifactDataDeps
 
+	// Code is the code read tools' half — the company's repositories, read
+	// on the server — or the zero value for a company that hosts none. Read
+	// with the halves, for every call, so a revision that sets code.native
+	// serves the tools from the next call and one that clears it withdraws
+	// them from the next. Its Actor is set per call.
+	Code builtin.CodeDeps
+
+	// Readers is `code_repo_readers`' half — who read a `visibility: unit`
+	// repository, from the usage domain — served only with Code.
+	Readers builtin.ReadersDeps
+
+	// Health is the health tools' half — the fleet's nodes and their alarms,
+	// and the git nodes' status — or the zero value on a node with no
+	// coordination store. Read with the halves, for every call, as Code is:
+	// code_status follows the code host. Its code half's Actor is set per
+	// call.
+	Health builtin.HealthDeps
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -237,6 +266,13 @@ type Options struct {
 	// call.
 	Answer builtin.AnswerDeps
 
+	// Listeners is the registry this server keeps the streams MCP clients
+	// listen on in — ONE per node, so whoever announces that the node's
+	// tools changed reaches every stream whichever catalogue answered it
+	// (see [Listeners]). Nil keeps them in a registry of this server's own,
+	// which nothing else announces through: a server built alone.
+	Listeners *Listeners
+
 	// Audit is where every call that is not a proven read publishes its
 	// runtime audit record (see [Audit]). REQUIRED: a surface that writes
 	// to the company and records nothing about who called it is the one
@@ -259,6 +295,7 @@ type Server struct {
 	steer     builtin.SteerDeps
 	answer    builtin.AnswerDeps
 	audit     AuditPublisher
+	listeners *Listeners
 	counter   tools.Counter
 }
 
@@ -318,10 +355,15 @@ func New(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("%w: Options.Steer.Runs (the run records %s files a note on) is nil",
 			ErrNoSeatControls, builtin.SteerTurnTool)
 	}
+	listeners := opts.Listeners
+	if listeners == nil {
+		listeners = NewListeners()
+	}
 	return &Server{
 		halves: opts.Halves, org: opts.Org, authorize: opts.Authorize,
 		runs: opts.Runs, pauses: opts.Pauses,
 		steer: opts.Steer, answer: opts.Answer, audit: opts.Audit, counter: opts.Counter,
+		listeners: listeners,
 	}, nil
 }
 
@@ -362,8 +404,10 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	if !up {
 		return catalogue{}, false
 	}
-	work, kb, arts, talk := halves.Work, halves.Pages, halves.Artifacts, halves.Chat
-	work.Actor, kb.Actor, talk.Actor = workActor, pageActor, chatActor
+	work, kb, arts, talk, repos, health := halves.Work, halves.Pages, halves.Artifacts,
+		halves.Chat, halves.Code, halves.Health
+	work.Actor, kb.Actor, talk.Actor, repos.Actor, health.Code.Actor =
+		workActor, pageActor, chatActor, workActor, workActor
 	// THE CALL'S OWN OPERATION, where its transport names one: an artifact
 	// write's records derive from it, as a page write's do.
 	arts.CallerKey = keyFrom
@@ -372,7 +416,8 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: kb, Chat: talk, Knowledge: halves.Knowledge,
-		Artifacts: arts, ArtifactData: halves.ArtifactData, Org: s.org,
+		Artifacts: arts, ArtifactData: halves.ArtifactData, Code: repos,
+		Readers: halves.Readers, Health: health, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

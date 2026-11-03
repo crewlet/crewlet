@@ -64,7 +64,7 @@ func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 		Mode:   statelog.ModeNormal,
 		DB:     db,
 		Waiter: localWaiter{at: at},
-		Health: func() statelog.Health {
+		Health: func() (statelog.Health, error) {
 			behind, first, floor := lag, uint64(1), uint64(0)
 			return statelog.Health{
 				Position: at, AppliedThrough: at.Seq, Drained: true,
@@ -72,7 +72,7 @@ func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 				Lag:       &behind,
 				FirstSeq:  &first,
 				TrimFloor: &floor,
-			}
+			}, nil
 		},
 		// THE SHIPPED FIGURE, so a retry hint a case renders is the one an
 		// operator would see rather than a number invented here.
@@ -89,9 +89,9 @@ type DB interface {
 // localWaiter is already at the position and never blocks.
 type localWaiter struct{ at statelog.Position }
 
-func (w localWaiter) Committed() statelog.Position { return w.at }
+func (w localWaiter) Reached() statelog.Position { return w.at }
 
-func (w localWaiter) WaitCommitted(context.Context, statelog.Position) error { return nil }
+func (w localWaiter) WaitReached(context.Context, statelog.Position) error { return nil }
 
 func (w localWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return nil
@@ -119,8 +119,8 @@ func LocalReaderOver(domain statelog.Domain, db DB, waiter statelog.Waiter) (*st
 		Mode:   statelog.ModeNormal,
 		DB:     db,
 		Waiter: waiter,
-		Health: func() statelog.Health {
-			at := waiter.Committed()
+		Health: func() (statelog.Health, error) {
+			at := waiter.Reached()
 			behind, first, floor := uint64(0), uint64(1), uint64(0)
 			return statelog.Health{
 				Position: at, AppliedThrough: at.Seq, Drained: true,
@@ -128,7 +128,7 @@ func LocalReaderOver(domain statelog.Domain, db DB, waiter statelog.Waiter) (*st
 				Lag:       &behind,
 				FirstSeq:  &first,
 				TrimFloor: &floor,
-			}
+			}, nil
 		},
 		Drain: func() float64 { return 2000 },
 	})

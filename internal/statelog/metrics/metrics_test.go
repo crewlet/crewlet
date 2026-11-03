@@ -48,6 +48,9 @@ func TestAMalformedCatalogueIsRefused(t *testing.T) {
 			{Name: "a", Kind: KindCounter, Unit: UnitCount, Shows: "x"},
 			{Name: "a", Kind: KindGauge, Unit: UnitCount, Shows: "y"},
 		},
+		"a histogram in a unit with no boundaries": {
+			{Name: "a", Kind: KindHistogram, Unit: UnitSeconds, Shows: "x"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := Validate(entries); err == nil {

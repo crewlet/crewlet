@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -31,10 +32,11 @@ import (
 // neither decides the hint for itself.
 type Unavailable struct {
 	// Refusal is the state log's own code — a read's refusal (`behind`,
-	// `log_full`, `deferred`, …) or a write's reason — or
-	// `no_active_revision` for a node that has not been handed a company
-	// ([ErrNoCompany]), and empty where neither is behind the answer, such
-	// as an unreachable coordination store.
+	// `log_full`, `deferred`, …) or a write's reason — or the code of a
+	// surface this node serves none of now ([Unserved]: `no_active_revision`
+	// for a node that has not been handed a company, the code host's four),
+	// and empty where none is behind the answer, such as an unreachable
+	// coordination store.
 	Refusal string `json:"refusal,omitempty"`
 
 	// Detail is the condition as a person is told it: what happened and
@@ -64,9 +66,40 @@ type Unavailable struct {
 	RetryAfter int `json:"retry_after"`
 }
 
-// ErrNoCompany is a question only Worklet, Doclet or
-// Chatlet answers, asked of a node that has not been handed a company yet — so no
-// such half is running there. It is an `unavailable` answer whose refusal is
+// Unserved is an `unavailable` answer about a SURFACE this node serves none of
+// now — not a read its state log refused — under a code of its own: what the
+// surface is waiting for, in the node's words, and when, if ever, to ask THIS
+// node again. A REST route answers it `503 <code>` with that wait as its
+// Retry-After and the words as its `detail`; a socket frame as `unavailable`
+// whose `refusal` is the code, beside the same words and the same wait.
+//
+// ONE TYPE FOR EVERY SUCH SURFACE, read by [UnavailableOf] for both
+// transports, because each was a sentinel with an arm of its own in each
+// transport's mapping: a node with no company yet ([ErrNoCompany]) was, and
+// the code host a node serves none of — an apply in flight, an apply that
+// failed, a configuration it could not read, a runtime that needs its restart
+// — answered only over REST, from routes of its own. A second sentinel with
+// arms of its own is a second place the REST answer and the socket's could say
+// different things about when to come back.
+type Unserved struct {
+	// Code is the answer's own code — a REST 503's `error` and a socket
+	// frame's `refusal` — and is on the REST refusal table with its sentence.
+	Code httpjson.Code
+
+	// Detail is what this node found, written for the caller who reads it.
+	Detail string
+
+	// RetryAfter is when to ask THIS node again, ZERO where waiting clears
+	// nothing — somebody acts, or another node answers.
+	RetryAfter time.Duration
+}
+
+// Error is the code and the words, for a log.
+func (u *Unserved) Error() string { return "stream: " + string(u.Code) + ": " + u.Detail }
+
+// ErrNoCompany is a question only Worklet, Doclet or Chatlet answers, asked
+// of a node that has not been handed a company yet — so no such half is
+// running there. It is an `unavailable` answer whose refusal is
 // `no_active_revision` and whose hint is the reconcile poll that brings the
 // company ([httpjson.NoActiveRevisionRetry]), on the socket as over REST.
 //
@@ -77,7 +110,8 @@ type Unavailable struct {
 // tick's five seconds — one question, two answers about when to come back and
 // only one about why, which is the disagreement this one reading exists to
 // make impossible.
-var ErrNoCompany = errors.New("stream: this node has not been handed a company yet")
+var ErrNoCompany error = &Unserved{Code: httpjson.CodeNoActiveRevision,
+	Detail: httpjson.NativeHalvesNotUp, RetryAfter: httpjson.NoActiveRevisionRetry}
 
 // UnavailableOf reads an `unavailable` answer's cause.
 //
@@ -90,16 +124,13 @@ var ErrNoCompany = errors.New("stream: this node has not been handed a company y
 // table's fixed words and on the socket nothing. [builtin.ConditionSentence]
 // is the one switch every person surface tells a condition through.
 func UnavailableOf(err error) Unavailable {
-	u := Unavailable{
-		RetryAfter: httpjson.RetrySeconds(builtin.RetryAfter(err, HealthInterval)),
-	}
+	u := Unavailable{RetryAfter: httpjson.RetrySeconds(retryAfter(err))}
+	var unserved *Unserved
 	var read *statelog.Refused
 	var write *statelog.Unavailable
 	switch {
-	case errors.Is(err, ErrNoCompany):
-		u.Refusal = string(httpjson.CodeNoActiveRevision)
-		u.Detail = httpjson.NativeHalvesNotUp
-		u.RetryAfter = httpjson.RetrySeconds(httpjson.NoActiveRevisionRetry)
+	case errors.As(err, &unserved):
+		u.Refusal, u.Detail = string(unserved.Code), unserved.Detail
 		return u
 	case errors.As(err, &read):
 		u.Refusal = string(read.Code)
@@ -108,6 +139,19 @@ func UnavailableOf(err error) Unavailable {
 	}
 	u.Detail, _ = builtin.ConditionSentence(err)
 	return u
+}
+
+// retryAfter is the hint an `unavailable` answer about err sends: an unserved
+// surface's own ([Unserved.RetryAfter]), and every other condition's
+// ([builtin.RetryAfter]) over the health tick. ONE READING for the answer and
+// its log line, so an unserved surface no wait clears (an apply that failed)
+// is written where somebody acts on it, as the hint it was answered with says.
+func retryAfter(err error) time.Duration {
+	var unserved *Unserved
+	if errors.As(err, &unserved) {
+		return unserved.RetryAfter
+	}
+	return builtin.RetryAfter(err, HealthInterval)
 }
 
 // LogUnavailable writes what an `unavailable` answer's cause says for whoever
@@ -135,7 +179,7 @@ func LogUnavailable(ctx context.Context, logger *slog.Logger, event string, err 
 	fields ...any) {
 
 	level := slog.LevelDebug
-	if builtin.RetryAfter(err, HealthInterval) == 0 && !atSource(err) {
+	if retryAfter(err) == 0 && !atSource(err) {
 		level = slog.LevelWarn
 	}
 	logger.Log(ctx, level, event,

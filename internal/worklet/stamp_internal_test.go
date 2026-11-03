@@ -130,6 +130,7 @@ func TestAStampBelowWhatTheRecordCarriesIsRefused(t *testing.T) {
 		"a purge":            stampRecord(t, OpPurge, GateRecordVersion, carrying),
 		"a purge stamped 2":  stampRecord(t, OpPurge, 2, carrying),
 		"the barrier":        stampRecord(t, OpBarrier, baseRecordVersion, carrying),
+		"a trimmed record":   stampRecord(t, OpTrimmed, baseRecordVersion, carrying),
 		"a generation":       stampRecord(t, OpGeneration, 0, carrying),
 		"a generation set 2": stampRecord(t, OpGeneration, 2, carrying),
 	} {
@@ -141,8 +142,9 @@ func TestAStampBelowWhatTheRecordCarriesIsRefused(t *testing.T) {
 	// AND THE SAME RECORDS CARRYING NOTHING NEWER ENCODE AT THEIR PIN.
 	plain := map[string]any{"comment": map[string]any{"body": "hi"}}
 	for name, record := range map[string]MutationRecord{
-		"the barrier":  stampRecord(t, OpBarrier, baseRecordVersion, plain),
-		"a generation": stampRecord(t, OpGeneration, baseRecordVersion, plain),
+		"the barrier":      stampRecord(t, OpBarrier, baseRecordVersion, plain),
+		"a trimmed record": stampRecord(t, OpTrimmed, baseRecordVersion, plain),
+		"a generation":     stampRecord(t, OpGeneration, baseRecordVersion, plain),
 	} {
 		body, err := record.encodeWith(fields)
 		if err != nil {

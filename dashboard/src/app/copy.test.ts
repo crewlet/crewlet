@@ -11,7 +11,14 @@
  * tooltip with nothing to stop it.
  *
  * A TEXT THAT IS AN EM DASH AND NOTHING ELSE is a mark rather than a
- * sentence (a group's React key, a cell's empty value) and is not judged.
+ * sentence (a group's React key, a cell's empty value) and is not judged,
+ * but only where it is WHOLE (`ShippedText.whole`): a string literal, a
+ * template with nothing substituted, or JSX text that is its element's only
+ * child. The constant part of a template beside a substitution (a space, the
+ * dash and a space, then `${held}`) and JSX text beside an expression (the
+ * dash, then `{count}`) trim to a lone dash too, and each is the joint of a
+ * sentence: excused by its trimmed text alone, three such joints shipped in
+ * the merge panel and Settings › Code.
  */
 
 import { expect, test } from "vitest";
@@ -25,8 +32,8 @@ test("the dashboard's shipped sentences carry no em dash", () => {
   expect(read.length, "the gate read too few of the dashboard's modules").toBeGreaterThan(300);
   const found: string[] = [];
   for (const module of read) {
-    for (const { text, line } of shippedText(module)) {
-      if (text.includes(EM_DASH) && text.trim() !== EM_DASH) {
+    for (const { text, line, whole } of shippedText(module)) {
+      if (text.includes(EM_DASH) && !(whole && text.trim() === EM_DASH)) {
         found.push(`${module.path}:${line} ${text.trim()}`);
       }
     }

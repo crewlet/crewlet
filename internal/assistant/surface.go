@@ -673,7 +673,7 @@ type stepClock struct {
 }
 
 // patternOf is a catalogue route's path pattern, without the method it opens
-// with ("GET /work/{id}" is "/work/{id}").
+// with ("GET /worklet/{id}" is "/worklet/{id}").
 func patternOf(route string) string {
 	_, path, _ := strings.Cut(route, " ")
 	return path

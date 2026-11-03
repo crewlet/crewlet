@@ -46,8 +46,13 @@ const ADA: ViewerState = {
   assistantModel: null,
 };
 
-/** What the engine says the company runs: Crewlet's own, all three. */
-const CHATLET: OrgServices = { tracker: "worklet", knowledge: "doclet", chat: "chatlet" };
+/** What the engine says the company runs: Crewlet's own, all four. */
+const CHATLET: OrgServices = {
+  tracker: "worklet",
+  knowledge: "doclet",
+  chat: "chatlet",
+  code: "native",
+};
 
 beforeEach(() => {
   location.hash = "#/agents/swe";

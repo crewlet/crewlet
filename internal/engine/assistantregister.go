@@ -65,6 +65,7 @@ func assistantRegistrations() []registration {
 				Gates: assistantdomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 		},
 		Barrier: assistantdomain.EncodeBarrier,
+		Trimmed: assistantdomain.EncodeTrimmed,
 		// NO SEAT READS THIS LOG, so its read model is zero, as the identity
 		// estate's is: a person's reads take no barrier (above), and the
 		// object collector's pins, its one linearizable reader, are counted
@@ -190,7 +191,7 @@ func (e *Engine) AssistantWriter() *assistantdomain.Writer {
 // late rather than wrong. A node that runs no company at all is no exception:
 // it reaps nothing for its age until it applies the fleet's revision.
 func (e *Engine) assistantRetention(ctx context.Context) (time.Duration, error) {
-	company, err := e.fleetCompany(ctx, e.Company())
+	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
 		return 0, err
 	}

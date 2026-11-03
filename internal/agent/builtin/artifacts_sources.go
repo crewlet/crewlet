@@ -31,8 +31,8 @@ import (
 //
 // Inline text (`content`, `files[...].content`) rides the call itself, at most
 // [artifacts.MaxInlineBytes] decoded across it, because anything larger cannot
-// have been typed by a model and belongs in one of the other two. A coding
-// run's box (`from_sandbox`, `source.sandbox`) and a project's file
+// have been typed by a model and belongs in one of the other two. An executor's
+// box (`from_sandbox`, `source.sandbox`) and a project's file
 // (`from_project_file`) are STREAMED: their digests are read first, the
 // publish pipeline reserves their bytes in an upload intent, and each file is
 // then put through the engine's own transfer leg, so the bytes a version names

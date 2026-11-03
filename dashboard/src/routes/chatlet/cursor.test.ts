@@ -7,6 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { eventually } from "~/test/settle.ts";
 
 import type { WriteAccess } from "~/lib/useWriteAccess.ts";
 import type { ActResult } from "~/protocol/act.ts";
@@ -138,7 +139,7 @@ describe("flushing", () => {
     const cursors = new ReadCursors({ flush });
     cursors.see("room-1", packPosition(at(1, 5)));
     vi.advanceTimersByTime(READ_FLUSH_MS);
-    await vi.waitFor(() => expect(flush).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(flush).toHaveBeenCalledTimes(1));
 
     fail = false;
     await vi.advanceTimersByTimeAsync(READ_FLUSH_MS);
@@ -284,6 +285,7 @@ describe("whether a flush is still owed", () => {
     sentence: "",
     detail: "",
     hint: "",
+    hostRefusal: "",
     grants: [],
     reason: "",
     retryable,

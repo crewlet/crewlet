@@ -6,9 +6,17 @@
 // key ON TOP of an ordered ephemeral consumer created and destroyed per call:
 // two JetStream metadata proposals on a clustered bucket, for a question that
 // is one pass over the stream. Several of a node's fifteen-second duty loops
-// read a bucket on every tick and the state-log write fence lists the trim
-// floors out of the positions register on every write at an expectation of
-// zero, so that cost is paid continuously rather than at the edges.
+// read a bucket on every tick, so that cost is paid continuously rather than
+// at the edges.
+//
+// A pass is still a consumer created and deleted, which is why no state-log
+// read and no seat's write waits on a listing: the state-log write fence
+// listed the trim floors on every write at an expectation of zero, and on a
+// loaded three-member fleet the consumer's create ran past the client's
+// five-second API timeout and refused a page create with the register
+// perfectly readable. It reads its one domain's floor by key now
+// ([FleetStore.Floor]). What still lists does so on a duty loop's own clock or
+// once per operator gesture — a readmission, the retention report, a backup.
 //
 // So the walk is ONE pass that carries each key AND its value together, and
 // the filter goes to the BROKER rather than to a client-side test.
@@ -57,17 +65,20 @@
 // stream info with a subject filter names every key that has a message at one
 // instant — answered by the stream LEADER, from the index the store keeps
 // under its own lock, so it is not the replica-served, block-hinted read the
-// last section rules out. A key it names that the pass did not deliver LIVE —
-// never delivered at all, or delivered as a delete or purge marker — is read
-// by itself, from the leader as well: "Every certifying answer is the
-// LEADER's" below says why neither read is taken from anything else, and "A
-// tombstone the pass delivered is not an answer" why a marker is read again.
-// That closes the hole exactly: a key live from the moment the index is read
-// until its own read is reported has a message at the first moment, so it is
-// named by the index, and it is either delivered live by the pass or read.
+// last section rules out — and, past the hundred thousand keys one answer
+// holds, every key that has a message throughout the pages it is read in
+// ([jsapi.Leader.Subjects] overlaps them so). A key it names that the pass did
+// not deliver LIVE — never delivered at all, or delivered as a delete or
+// purge marker — is read by itself, from the leader as well: "Every
+// certifying answer is the LEADER's" below says why neither read is taken
+// from anything else, and "A tombstone the pass delivered is not an answer"
+// why a marker is read again. That closes the hole exactly: a key live from
+// the moment the index is first asked until its own read is reported has a
+// message throughout the index read, so it is named by the index, and it is
+// either delivered live by the pass or read.
 //
-// What that costs is ONE PASS, as before; one index read, which is two API
-// requests (a fresh stream handle, then the filtered info on it) run BESIDE
+// What that costs is ONE PASS, as before; one index read, which is one API
+// request for each hundred thousand keys of the class, run BESIDE
 // the pass rather than after it, so that on a network their round trips
 // overlap the pass's own; and one leader read for each key the pass lost or
 // delivered as a marker. The lost keys are zero without concurrent writes and
@@ -160,14 +171,20 @@
 // gone reads exactly as one never written, here and in [createKey] — so its
 // horizon is a cost, never a correctness, bound.
 //
-// # What the certification does not close
+// # Past one page of the index
 //
 // The broker's page size for that index, jetstream_api.go JSMaxSubjectDetails:
-// 100,000 keys under one filter. Past it the client reads the index in pages
-// by offset into a sorted list the server re-sorts per page, so a key removed
-// before a page boundary between two page reads shifts a later key across it,
-// and that later key goes uncertified — which matters only if the pass lost it
-// too.
+// 100,000 keys under one filter. Past it the index is read a page at a time
+// ([jsapi.Leader.Subjects]), and the pages OVERLAP: the leader cuts every page
+// out of a list it sorts for that request alone, so a key removed before a
+// page boundary between two page reads shifts the next one back across it,
+// into the page already read — and the client's offset paging, which counted
+// what it had to find the next offset, left that key uncertified. So each
+// later page is asked from one key before where the last ended, and asked
+// again from further back unless it begins at or before that key, which names
+// every key with a message throughout the read, at any size. What grows with the class is what each
+// page costs the leader, a sort of all of it (internal/jsapi's
+// BenchmarkASubjectListing).
 //
 // # The batched direct read, and why it is not here
 //
@@ -216,6 +233,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // eachEntry walks the latest revision of every LIVE key in a bucket, handing
@@ -238,9 +256,8 @@ func eachEntry(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 // token path under its bucket (coord/keys.go), so a class of keys written by
 // [coord.DocumentKey] is a subject wildcard the broker can match — and the
 // shared positions register holds EIGHT classes, so a walk that read the whole
-// bucket moved all eight to use one. That read is not an edge case: the
-// state-log write fence takes it, for the floors, on every write at an
-// expectation of zero.
+// bucket moved all eight to use one, on every heartbeat, trim tick and alarm
+// evaluation that reads a class.
 //
 // The filter is in the KEY's vocabulary rather than the subject's — "floor.>"
 // and not "$KV.crewlet_x.floor.>" — because a key is what the caller holds and
@@ -582,11 +599,13 @@ func keep(latest map[string]jetstream.KeyValueEntry, kve jetstream.KeyValueEntry
 // keysUnder reads the stream's per-subject index: every key under the filter
 // that has a message at the instant the stream leader answers.
 //
-// THROUGH A HANDLE OF ITS OWN rather than the bucket's Status: the client
-// caches the StreamInfo a status call fetched onto the shared bucket handle
-// WITHOUT a lock (nats.go jetstream/stream.go Info), so two listings of one
-// bucket at once would race in the client — the same reason lane.stream
-// exists. js.Stream hands back a fresh handle per call and shares nothing.
+// ONE REQUEST A PAGE, each asked again while nobody answers it
+// ([jsapi.Leader.Subjects]): only the leader answers the index, so a member
+// that still believes in a leader its group has just lost drops it without a
+// word, and a page is the unit the broker answers. It was the client's
+// listing behind a fresh stream handle — two requests, the handle's own
+// unfiltered info and then the index — asked whole as one read, so a dropped
+// or merely slow page started the whole index again from its first.
 //
 // An answer that names NO LEADER is refused with [errIndexLeaderless]: it is
 // a member's own copy, given while its group elects (see the file doc), and it
@@ -594,31 +613,63 @@ func keep(latest map[string]jetstream.KeyValueEntry, kve jetstream.KeyValueEntry
 // name the server that answered, so only a replicated group between leaders
 // is refused.
 func keysUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue, keys string) ([]string, error) {
-	stream, err := js.Stream(ctx, bucketStream(kv))
+	leader, err := jsapi.NewLeader(js, bucketStream(kv))
 	if err != nil {
 		return nil, err
 	}
 	pre := bucketSubjects(kv)
-	info, err := stream.Info(ctx, jetstream.WithSubjectFilter(pre+keys))
+	var names []string
+	err = leader.Subjects(ctx, pre+keys, func(subjects map[string]uint64) error {
+		for subject := range subjects {
+			key, ok := strings.CutPrefix(subject, pre)
+			if !ok {
+				// The broker matched this subject against a filter that
+				// begins with the prefix, so a subject without it is a
+				// broker that did not do what it was asked. Dropping it
+				// would be the silent short answer this file exists to
+				// prevent.
+				return fmt.Errorf("the key index answered %q, which is not under %q", subject, pre)
+			}
+			names = append(names, key)
+		}
+		return nil
+	})
+	if errors.Is(err, jsapi.ErrLeaderless) {
+		return nil, errIndexLeaderless
+	}
 	if err != nil {
 		return nil, err
 	}
-	if c := info.Cluster; c != nil && c.Leader == "" {
-		return nil, errIndexLeaderless
-	}
-	names := make([]string, 0, len(info.State.Subjects))
-	for subject := range info.State.Subjects {
-		key, ok := strings.CutPrefix(subject, pre)
-		if !ok {
-			// The broker matched this subject against a filter that begins
-			// with the prefix, so a subject without it is a broker that did
-			// not do what it was asked. Dropping it would be the silent short
-			// answer this file exists to prevent.
-			return nil, fmt.Errorf("the key index answered %q, which is not under %q", subject, pre)
-		}
-		names = append(names, key)
-	}
 	return names, nil
+}
+
+// leaderInfo is stream's info as its LEADER answered it — a lease bucket's
+// last write, the store's clock — through a handle of each request's own,
+// asked as a metadata read ([jsprovision.ReadBounded]).
+//
+// ASKED AGAIN WHILE NOBODY ANSWERS, because nobody but the leader does: a
+// member that still believes in a leader its group has just lost takes the
+// request and returns without a word (server/jetstream_api.go,
+// jsStreamInfoRequest: "only the stream leader should answer"). Sent as one
+// request, it waited for its caller's deadline — or for the client's
+// five-second default — for a reply nobody would send, where a request asked
+// again is answered by the new leader; and a request behind a backed-up queue
+// is still listened for while the next is out, since it is answered late
+// rather than never. A caller with no deadline keeps those five seconds,
+// asked again inside them. A HANDLE OF EACH REQUEST'S OWN, because the
+// requests of one read can be out together and the client caches each reply
+// on the handle that fetched it with no lock — the same reason lane.stream
+// exists.
+func leaderInfo(ctx context.Context, js jetstream.JetStream, stream string) (*jetstream.StreamInfo, error) {
+	return jsprovision.ReadBounded(ctx, js.Options().DefaultTimeout, func(ctx context.Context) (*jetstream.StreamInfo, error) {
+		// js.Stream is itself the info request: the handle carries what it
+		// just fetched, the server's timestamp among it.
+		s, err := js.Stream(ctx, stream)
+		if err != nil {
+			return nil, err
+		}
+		return s.CachedInfo(), nil
+	}, nil)
 }
 
 // errUndecodableHeaders is a message the leader holds whose headers do not

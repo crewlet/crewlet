@@ -281,6 +281,8 @@ func TestAFullSeatDayRecordFitsOneMessage(t *testing.T) {
 					Refused: math.MaxInt64, TotalMS: math.MaxInt64, LastAt: at})
 			}
 			r.ToolsElided = math.MaxInt32
+			r.Code = &usage.CodeDay{ChangesOpened: math.MaxInt64, ReviewsGiven: math.MaxInt64,
+				FindingsReceived: math.MaxInt64, ChecksFailed: math.MaxInt64, Ejections: math.MaxInt64}
 			encoded, err := r.Encode()
 			if err != nil {
 				t.Fatalf("encode: %v", err)

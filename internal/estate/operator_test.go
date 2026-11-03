@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -48,7 +49,7 @@ func (d *desk) note(op, opID string, a Actor) worklet.WriteResult {
 	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}}
 }
 
-func (d *desk) For(context.Context) (Backend, bool) {
+func (d *desk) For(context.Context, string) (Backend, bool) {
 	return Backend{
 		Tracker: deskBoard{d: d}, Pages: deskPages{}, PageWriter: deskPageWriter{d: d},
 		Writer: func(a Actor) TrackerWriter { return deskWriter{d: d, a: a} },
@@ -172,8 +173,16 @@ func (w deskWriter) WriteFields(_ context.Context, opID string, _ []worklet.Fiel
 	return w.d.note("write_fields", opID, w.a), nil
 }
 
-func (w deskWriter) MarkInbox(_ context.Context, opID, _ string,
-	g worklet.InboxGesture, authority worklet.PersonAuthority) (worklet.WriteResult, error) {
+// deskSeen is the floor a mark carries across, which the holder must receive
+// as sent: dropped on the wire, the deciding node waits for nothing and
+// refuses a notice its caller was shown as unknown.
+var deskSeen = statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 41}
+
+func (w deskWriter) MarkInbox(_ context.Context, opID, _ string, seen statelog.Position,
+	g inbox.Gesture[worklet.Reason], authority worklet.PersonAuthority) (worklet.WriteResult, error) {
+	if seen != deskSeen {
+		return worklet.WriteResult{}, fmt.Errorf("the floor did not cross: %+v", seen)
+	}
 	if !slices.Equal(g.Read, []string{"rec-1"}) {
 		return worklet.WriteResult{}, fmt.Errorf("the gesture did not cross: %+v", g)
 	}
@@ -317,9 +326,9 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		places["r-2"].TaskID != "t-r-2" || places["r-2"].Ordinal != 2 {
 		t.Errorf("turn places = (%+v, %v), want both runs placed", places, err)
 	}
-	if inbox, err := work.Inbox(ctx, worklet.InboxQuery{Reasons: []worklet.Reason{"mention", "asked"}},
-		now); err != nil || inbox.Unread != 2 {
-		t.Errorf("inbox = (%+v, %v), want the query's two reasons answered", inbox, err)
+	if answer, err := work.Inbox(ctx, worklet.InboxQuery{Reasons: []worklet.Reason{"mention", "asked"}},
+		now); err != nil || answer.Unread != 2 {
+		t.Errorf("inbox = (%+v, %v), want the query's two reasons answered", answer, err)
 	}
 	if routing, err := work.Routing(ctx, worklet.RoutingQuery{RecordID: "rec-9"}, now); err != nil ||
 		routing.RecordID != "rec-9" || !routing.Held {
@@ -360,7 +369,7 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		{"write_types", func() (worklet.WriteResult, error) { return w.WriteTypes(ctx, "op-2", nil) }},
 		{"write_fields", func() (worklet.WriteResult, error) { return w.WriteFields(ctx, "op-3", nil) }},
 		{"mark_inbox", func() (worklet.WriteResult, error) {
-			return w.MarkInbox(ctx, "op-4", "founder", worklet.InboxGesture{Read: []string{"rec-1"}},
+			return w.MarkInbox(ctx, "op-4", "founder", deskSeen, inbox.Gesture[worklet.Reason]{Read: []string{"rec-1"}},
 				authorized)
 		}},
 		{"write_pins", func() (worklet.WriteResult, error) {

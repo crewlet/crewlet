@@ -14,7 +14,7 @@
  * NOBODY: the block says so and offers the sign-in. Each is a sentence, never
  * a blank avatar, because "who does the engine think I am" is the question
  * every write this dashboard makes turns on. Their ACCESS is said in the
- * header of the reader's menu ("Admin", "Tracker · Knowledge", "Overview
+ * header of the reader's menu ("Admin", "Worklet · Doclet", "Overview
  * only"), since it is what decides which of those writes and screens the
  * reader reaches.
  *
@@ -64,7 +64,7 @@
  * the row had just said.
  *
  * THE MENU SAYS ONLY WHAT THE ROW DOES NOT. Its header is the reader's ACCESS
- * ("Admin", "Tracker · Knowledge", "Overview only"), which decides which
+ * ("Admin", "Worklet · Doclet", "Overview only"), which decides which
  * writes and screens they reach and which the row has no room for; the name,
  * the login and the seat are the row's. Under it:
  *

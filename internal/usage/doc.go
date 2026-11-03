@@ -1,6 +1,7 @@
 // Package usage is what each node's seats, schedules and people did each
-// company day, replicated to every data node — the state-log framework's FIFTH
-// domain, and its second COMPACTED one.
+// company day — and who read the repositories a unit keeps to itself —
+// replicated to every data node: the state-log framework's FIFTH domain, and
+// its second COMPACTED one.
 //
 // # The question it answers, and who has to agree on it
 //
@@ -14,8 +15,9 @@
 // Every node has to agree on a node's day, and only its CURRENT value matters —
 // which is ADR-0014's fourth answer, a compacted changelog. Each data node
 // derives its own day from its own event log ([store.DB.UsageForDay]), folds it
-// into one record per (node, day, seat), per (node, day, schedule) and per
-// (node, day, person), and publishes the record whole — signed, as every
+// into one record per (node, day, seat), per (node, day, schedule), per
+// (node, day, person) and per (node, day, unit repository read), and publishes
+// the record whole — signed, as every
 // state-log record is (ADR-0031) — and every data node's applier writes it into
 // the replicated estate. ADR-0020 is the decision.
 //
@@ -95,8 +97,43 @@
 // by trace). A person-day: what the seats' auxiliary model
 // spent for a human seat — a question answered on the operator surface, a pass
 // on a unit a person leads — by the same cells, and nothing else, since a
-// person has no agent id, no turns and no reads ([KindPerson]). A record is
-// always the cumulative value; an apply REPLACES.
+// person has no agent id, no turns and no reads ([KindPerson]). A
+// repository-day: every credential and seat that read a `visibility: unit`
+// repository's contents on the node that served them — a git fetch that
+// carried a pack, a code tool's answer, which that node records a reader's
+// reads of a flush at a time (types.CodeFetched, internal/code/readaudit) —
+// with how often and how many bytes, capped at [ReadersPerRepoDay] with the
+// remainder counted
+// ([KindRepoRead], record version 4: the one kind a build below version 4
+// retains rather than applies). A record is always the cumulative value; an
+// apply REPLACES.
+//
+// # Reading a window, a page at a time
+//
+// The reads a window grows ([Spend], [SeatTurns], [PersonSpend], [SeatDays],
+// [PageReads]) are each the first page of a paged read asked with no budget,
+// and a peer answers the same read a page at a time ([Fill]); a repository's
+// readers ([RepoReadsPage]) are paged by their caller, a reader at a time. A
+// page pays for its own rows: the read walks its window one leading key at a
+// time — a company day, a page id, a principal kind — each by a statement that
+// seeks the key and the place inside it the page resumes at, and streams in the
+// read's order, so a page stops reading where it ends.
+//
+// Measured with BenchmarkAUsageWindowInPages (ninety days, three nodes, 120
+// seats with six spend cells and four page reads a day — 194 400 spend rows —
+// on a four-vCPU 2.8 GHz Xeon), each read whole and walked at the routed
+// page's budget of 2 MiB:
+//
+//	             one statement a window          one statement a key
+//	spend        whole 4.6 s, 19 pages 11.6 s    whole 3.5 s, 19 pages 4.0 s
+//	page reads   whole 2.9 s, 16 pages  7.0 s    whole 3.0 s, 16 pages 4.1 s
+//	seat days    whole 1.0 s,  4 pages  1.3 s    whole 1.0 s,  4 pages 1.0 s
+//
+// The whole spend read got faster as well: its heads are read once a day and
+// joined in memory, where the one statement probed the head table once a
+// spend cell and sorted the window. What a page still costs beyond the whole
+// read is the encoding it measures each row by — which the wire then carries
+// rather than encoding the row again ([Page.AppendJSON]).
 //
 // # What it deliberately is not
 //

@@ -30,7 +30,7 @@ import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { installWindow } from "~/testing.tsx";
 
 /** A company running every service built into Crewlet. */
-const EVERY = { tracker: true, knowledge: true, chat: true } as const;
+const EVERY = { tracker: true, knowledge: true, chat: true, code: true } as const;
 
 afterEach(cleanup);
 
@@ -462,7 +462,7 @@ describe("the section tabs fold what does not fit into More", () => {
     test("a strip with room for every tab draws no More", async () => {
       lay(2000);
       mount(["me"]);
-      await waitFor(() => expect(drawn()).toHaveLength(7));
+      await waitFor(() => expect(drawn()).toHaveLength(8));
       expect(screen.queryByRole("button", { name: /^More sections of / })).toBeNull();
     });
   });
@@ -550,7 +550,7 @@ describe("Settings' section picker on a phone", () => {
     const view = render(column(["settings", "people"]));
     fireEvent.click(row("#/settings/models"));
     view.rerender(column(["settings", "models"]));
-    expect(toggle().getAttribute("aria-expanded"), "a pick of Models & keys").toBe("false");
+    expect(toggle().getAttribute("aria-expanded"), "a pick of Models").toBe("false");
     view.rerender(column(["settings", "nodes"]));
     expect(toggle().getAttribute("aria-expanded"), "a link to Nodes").toBe("false");
     // THE SIDEBAR'S SETTINGS ROW, or Back: no pick in this list made it.
@@ -570,7 +570,7 @@ describe("Settings' section picker on a phone", () => {
         query={new URLSearchParams()}
         grants={null}
         figures={{}}
-        runs={{ tracker: false, knowledge: true, chat: true }}
+        runs={{ tracker: false, knowledge: true, chat: true, code: true }}
       />,
     );
     expect(row("#/settings/spend")).not.toBeNull();

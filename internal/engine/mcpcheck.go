@@ -18,9 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -242,7 +242,7 @@ type mcpChecks struct {
 
 // newMCPChecks builds this node's half of the test channel over the fleet
 // keyring every state-log record is signed under.
-func newMCPChecks(ring statelog.Keyring) (*mcpChecks, error) {
+func newMCPChecks(ring recordseal.Keyring) (*mcpChecks, error) {
 	wire, err := signedask.New[mcpCheckAsk, mcpCheckReply](mcpCheckChannel, ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the MCP test channel's envelopes: %w", err)
@@ -875,7 +875,7 @@ func (e *Engine) clearRemovedMCPChecks(ctx context.Context, next *Company) {
 	if next == nil || next.Config == nil || e.backends == nil || e.backends.Fleet == nil {
 		return
 	}
-	if _, err := e.fleetCompany(ctx, next); err != nil {
+	if err := e.fleetCompany(ctx, next); err != nil {
 		log.DebugContext(ctx, "mcp_checks_not_swept", "reason", err.Error(),
 			"detail", "a removed server's test is cleared by the company the fleet is pointed "+
 				"at; this one is not it yet")
@@ -904,7 +904,7 @@ func (e *Engine) startMCPChecks(ctx context.Context) {
 	if e.mcpChecks == nil || e.backends == nil || e.backends.Queue == nil {
 		return
 	}
-	stop, err := e.backends.Queue.Serve(ctx, topics.MCPCheck, e.answerMCPCheck)
+	stop, err := e.backends.Queue.Serve(ctx, topics.MCPCheck, queue.ConcurrentAnswers, e.answerMCPCheck)
 	if err != nil {
 		log.WarnContext(ctx, "mcp_check_answerer_not_registered", "error", err,
 			"detail", "a test asked through another node reads this node as not answering until "+

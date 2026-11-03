@@ -106,6 +106,13 @@ Role (a SEAT: can live at root level OR inside a unit)
 │                                       box reads: setup, env, optional_keys, mcp,
 │                                       pause_ttl_seconds, max_turns)
 ├── Placement                          (role.placement: which nodes may run it)
+├── CodeAccess string                  (role.code.access as written:
+│                                       read_only, review or full_access;
+│                                       empty where the document is silent,
+│                                       which reads as read_only. The one
+│                                       per-seat code tier: the native code
+│                                       host's cap on what the chart grants.
+│                                       Agent seats only)
 ├── Slack SlackIdentity                (role.integrations.slack: this seat's OWN
 │                                       Slack app, bot_token and signing_secret)
 ├── Mattermost MattermostIdentity      (role.integrations.mattermost: its bot)

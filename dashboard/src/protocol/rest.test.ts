@@ -110,6 +110,33 @@ test("a caller with a longer path keeps the request past the ordinary deadline",
   vi.useRealTimers();
 });
 
+// A DEADLINE OF HOURS IS SAID IN HOURS: a backup waits twelve of them for a
+// first copy of a large company's files, and "720 minutes" is a number nobody
+// reads at a glance.
+test("a deadline of hours is named in hours", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    ),
+  );
+  const twelveHours = 12 * 60 * 60_000;
+  const settled = rest
+    .request("POST", "/backup", { timeoutMs: twelveHours })
+    .catch((err: unknown) => err);
+  await vi.advanceTimersByTimeAsync(twelveHours + 1);
+  const err = await settled;
+  expect((err as RestError).status).toBe(0);
+  expect((err as RestError).message).toContain("12 hours");
+  vi.useRealTimers();
+});
+
 // A CALL WITH A LONGER PATH SAYS SO, AND ITS REFUSAL NAMES ITS OWN DEADLINE.
 //
 // The node gate takes up to fifty seconds to answer a gesture
@@ -162,7 +189,27 @@ describe("the whole answer", () => {
   test("status, body and the entity-tag verbatim", async () => {
     stub(() => json({ name: "Acme" }, 200, { ETag: '"01JREV"' }));
     const answer = await rest.request("GET", "/config");
-    expect(answer).toEqual({ status: 200, body: { name: "Acme" }, etag: '"01JREV"', marked: true });
+    expect(answer).toEqual({
+      status: 200,
+      body: { name: "Acme" },
+      etag: '"01JREV"',
+      marked: true,
+      immutable: false,
+    });
+  });
+
+  // AN ANSWER THE ENGINE MARKS AS NEVER CHANGING SAYS SO, by the one
+  // directive that marks it, among whatever else its Cache-Control names —
+  // and nothing short of that directive does. Mutation: read `immutable` off
+  // any Cache-Control, or off the tag, and a case below fails.
+  test.each([
+    ["private, max-age=31536000, immutable", true],
+    ["private, max-age=31536000", false],
+    ["no-store", false],
+  ])("Cache-Control %j is immutable: %s", async (cacheControl, immutable) => {
+    stub(() => json({}, 200, { ETag: '"sha"', "Cache-Control": cacheControl }));
+    const answer = await rest.request("GET", "/query/code_diff");
+    expect(answer.immutable).toBe(immutable);
   });
 
   test("a success status other than 200 is reported, not flattened", async () => {
@@ -179,7 +226,13 @@ describe("the whole answer", () => {
     const answer = await rest.request("GET", "/config", {
       headers: { "If-None-Match": '"01JREV"' },
     });
-    expect(answer).toEqual({ status: 304, body: null, etag: '"01JREV"', marked: false });
+    expect(answer).toEqual({
+      status: 304,
+      body: null,
+      etag: '"01JREV"',
+      marked: false,
+      immutable: false,
+    });
     expect((sent[0]!.init.headers as Record<string, string>)["If-None-Match"]).toBe('"01JREV"');
   });
 
@@ -218,7 +271,13 @@ describe("a text answer", () => {
       query: { format: "yaml" },
       read: "text",
     });
-    expect(answer).toEqual({ status: 200, body: "name: Acme\n", etag: '"01JREV"', marked: false });
+    expect(answer).toEqual({
+      status: 200,
+      body: "name: Acme\n",
+      etag: '"01JREV"',
+      marked: false,
+      immutable: false,
+    });
   });
 
   test("a refusal is still read as the engine's JSON", async () => {
@@ -319,9 +378,14 @@ describe("a body that never arrives whole", () => {
   /**
    * A fetch that answers `status` at once and then streams a body that
    * `stall` decides the fate of. The stream errors when the request's own
-   * signal aborts, as a browser's does.
+   * signal aborts, as a browser's does, and `reading` is told when the caller
+   * has the headers and has begun reading the body.
    */
-  function headersThen(status: number, stall: (body: ReadableStreamDefaultController) => void) {
+  function headersThen(
+    status: number,
+    stall: (body: ReadableStreamDefaultController) => void,
+    reading: () => void = () => {},
+  ) {
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -334,6 +398,11 @@ describe("a body that never arrives whole", () => {
                   body.error(new DOMException("aborted", "AbortError")),
                 );
                 stall(body);
+              },
+              // ASKED FOR MORE ONCE THE FIRST CHUNK IS TAKEN, which only a
+              // caller already reading the body does.
+              pull() {
+                reading();
               },
             }),
             { status },
@@ -355,13 +424,16 @@ describe("a body that never arrives whole", () => {
   });
 
   test("the caller's abort still ends a request whose body is slow", async () => {
-    headersThen(200, () => {});
+    let read: () => void = () => {};
+    const reading = new Promise<void>((resolve) => (read = resolve));
+    headersThen(200, () => {}, read);
     const controller = new AbortController();
     const pending = rest
       .request("GET", "/config", { signal: controller.signal })
       .catch((e: unknown) => e);
-    // Let the headers land, so the abort arrives while the body is read.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The headers have landed and the body is being read, so the abort
+    // arrives while it is.
+    await reading;
     controller.abort();
     expect(isAbort(await pending)).toBe(true);
   });

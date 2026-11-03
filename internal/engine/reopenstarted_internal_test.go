@@ -40,6 +40,8 @@ func (stubLoader) Call(context.Context, map[string]any) (tools.Result, error) {
 // job's bridge tokens, and its parked state armed with the required skill
 // that guards the probe — over a bridge served at a test server's address,
 // which restart puts a fresh process's bridge behind, holding no session.
+// continued and fresh are the probe's server beneath each of the job's two
+// endpoints, where the box reaches the probe.
 type continuingRun struct {
 	e                *Engine
 	tool             *probeTool
@@ -57,9 +59,12 @@ func launchContinuingRun(t *testing.T) continuingRun {
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
 	material := runtoken.OneKey("k", "test-key")
+	// THE ROUTES A NODE MOUNTS for the bridge (internal/api, mcp.go): the
+	// job's endpoint and each of its MCP servers beneath it.
 	serve := func(b *mcpbridge.Bridge) {
 		mux := http.NewServeMux()
 		mux.Handle(mcpbridge.PathPrefix+"{token}", b.Handler())
+		mux.Handle(mcpbridge.ServerPattern, b.Handler())
 		server.Config.Handler = mux
 	}
 	launched := bridgeFor(t, mcpbridge.Options{Material: material, BaseURL: server.URL})
@@ -69,10 +74,16 @@ func launchContinuingRun(t *testing.T) continuingRun {
 		runIn: config.PlacementE2B})
 	tool := &probeTool{}
 	c.Tools = tools.NewRegistry()
-	for _, registered := range []tools.Callable{tool, stubLoader{}} {
-		if err := c.Tools.Register(registered, tools.OriginBuiltin); err != nil {
-			t.Fatalf("Register: %v", err)
-		}
+	// THE PROBE IS AN MCP SERVER'S TOOL, never a builtin: every builtin is
+	// decided by the authority table, and the surface a seat's recovery
+	// rebuilds leaves off one the table refuses before any object is named
+	// ([Company.withheldFrom]) — which a builtin with no row, as the probe
+	// would be, always is. The loader has its row.
+	if err := c.Tools.Register(tool, tools.Origin("probe")); err != nil {
+		t.Fatalf("Register(probe): %v", err)
+	}
+	if err := c.Tools.Register(stubLoader{}, tools.OriginBuiltin); err != nil {
+		t.Fatalf("Register(%s): %v", toolname.LoadToolSkill, err)
 	}
 	sessions := &keptLog{rows: map[string]executordomain.Session{}, archives: map[string][]byte{}}
 	e, runners := launchRigRestoring(t, c, launched, sessions)
@@ -135,6 +146,10 @@ func launchContinuingRun(t *testing.T) continuingRun {
 		t.Fatalf("the relaunch continues %q wired for a session of its own %+v, want the kept session "+
 			"wired both ways", last.Resume, last.FreshWiring)
 	}
+	if last.MCPServers["probe"].URL == "" || last.FreshWiring.MCPServers["probe"].URL == "" {
+		t.Fatalf("the relaunch handed the box no endpoint for the probe's server under one of its "+
+			"tokens: %+v, fresh %+v", last.MCPServers, last.FreshWiring.MCPServers)
+	}
 	// THE SUSPENSION THE RELAUNCHING TURN WRITES: the skill armed for the
 	// session its launch continued.
 	blob, err := execstate.Encode(execstate.State{Version: execstate.Version, Round: 1,
@@ -147,8 +162,8 @@ func launchContinuingRun(t *testing.T) continuingRun {
 		t.Fatalf("MarkSuspended: %v %v", ok, err)
 	}
 	return continuingRun{e: e, tool: tool, pending: pending,
-		continued: last.MCPServers[config.ToolServerName].URL,
-		fresh:     last.FreshWiring.MCPServers[config.ToolServerName].URL,
+		continued: last.MCPServers["probe"].URL,
+		fresh:     last.FreshWiring.MCPServers["probe"].URL,
 		restart: func() {
 			e.bridge = bridgeFor(t, mcpbridge.Options{Material: material, BaseURL: server.URL})
 			serve(e.bridge)

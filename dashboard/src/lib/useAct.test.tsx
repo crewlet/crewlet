@@ -9,7 +9,7 @@
  * polling at `stale` would pass every smaller test here.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useState } from "react";
 import { ToastProvider } from "@crewlethq/ui";
@@ -20,6 +20,7 @@ import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { session } from "~/protocol/session.ts";
+import { eventually } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 // NO ORG: the company's services are not known, so every write is the
@@ -78,9 +79,30 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+/**
+ * A faked clock for a case that asserts something does NOT happen later: a
+ * retry, a refusal that clears itself, a press queued for a reconnect. Timers
+ * only — the stubbed answers are promises, and `eventually` (Vitest's own
+ * wait) keeps the real clock, so a case waits with it rather than with
+ * testing-library's, whose timeout this clock would hold back.
+ */
+function fakeTimers() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+}
+
+/**
+ * Runs every timer pending now on the case's faked clock, inside `act`: what a
+ * press or its answer armed to happen later has then happened, so an absence
+ * asserted after it holds for good rather than for as long as the case waited.
+ */
+async function runPendingTimers() {
+  await act(() => vi.runOnlyPendingTimersAsync());
+}
 
 /** One press as the act route received it: its operation key, and its body. */
 interface Post {
@@ -152,7 +174,7 @@ test("an applied press is re-read at the position it landed at, and named in a t
   expect(sent[1]!.params).toMatchObject({
     container: "workspace",
     read_level: "session",
-    min_position: "CREWLET_TRACKER_LOG@1:900",
+    min_position: ["CREWLET_TRACKER_LOG@1:900"],
   });
   expect((await screen.findAllByText("Pinned Triage")).length).toBeGreaterThan(0);
 });
@@ -168,7 +190,7 @@ test("pending tells the person this node has not applied it, and the reads wait 
     0,
   );
   await waitFor(() => expect(sent).toHaveLength(2));
-  expect(sent[1]!.params).toMatchObject({ min_position: "CREWLET_TRACKER_LOG@1:901" });
+  expect(sent[1]!.params).toMatchObject({ min_position: ["CREWLET_TRACKER_LOG@1:901"] });
   expect(session.floor("tracker")).toBe("CREWLET_TRACKER_LOG@1:901");
 });
 
@@ -221,14 +243,16 @@ test("a press that reads its receipt is told in the receipt's words", async () =
 // the SAME operation key: the engine takes it as the write's identity, so the
 // retry is the first attempt again rather than a second change.
 test("unknown stays on screen, and its Retry sends the same operation key", async () => {
+  fakeTimers();
   const posts = engine(() => new Response("bad gateway", { status: 502 }));
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
-  expect(
-    (await screen.findAllByText(/Could not confirm\. It may have landed/)).length,
-  ).toBeGreaterThan(0);
-  await new Promise((r) => setTimeout(r, 20));
+  await eventually(() =>
+    expect(screen.getAllByText(/Could not confirm\. It may have landed/).length).toBeGreaterThan(0),
+  );
+  await runPendingTimers();
   expect(posts).toHaveLength(1);
+  vi.useRealTimers();
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(posts).toHaveLength(2));
   expect(posts[0]!.opId).toBeTruthy();
@@ -307,15 +331,16 @@ test("an unknown press's Retry sends that press, whatever was pressed since", as
 // and stays until the next press, because a sentence naming the field that
 // was wrong is gone from a toast before it has been read.
 test("a refusal is drawn beside the control and stays until the next press", async () => {
+  fakeTimers();
   engine(() =>
     json({ error: "invalid", tool: "set_pins", detail: "views: v9 is not a view" }, 422),
   );
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
   const refusal = () => document.querySelector(".crewlet-refusal-strip");
-  await waitFor(() => expect(refusal()?.textContent).toContain("views: v9 is not a view"));
+  await eventually(() => expect(refusal()?.textContent).toContain("views: v9 is not a view"));
   expect(refusal()?.getAttribute("role")).toBe("alert");
-  await new Promise((r) => setTimeout(r, 50));
+  await runPendingTimers();
   expect(refusal()?.textContent).toContain("views: v9 is not a view");
 });
 
@@ -406,13 +431,14 @@ test("a refusal that is not on authority carries no grants", async () => {
 
 // OFFLINE IS DISABLED, NEVER QUEUED.
 test("offline, the press sends nothing and says why", async () => {
+  fakeTimers();
   vi.mocked(useConnection).mockReturnValue({ connected: false, accessRefused: null } as never);
   const posts = engine(() => json({}, 200));
   mount();
   const button = screen.getByRole("button", { name: "Pin" });
   expect(button.getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(button);
-  await new Promise((r) => setTimeout(r, 20));
+  await runPendingTimers();
   expect(posts).toHaveLength(0);
   expect(document.body.textContent).toContain("Offline");
 });
