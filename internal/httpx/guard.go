@@ -247,12 +247,18 @@ func (refusing) RoundTrip(r *http.Request) (*http.Response, error) {
 // judgeTarget refuses a target a proxy would be asked for when the URL writes
 // its address and that address is not public on this node's network, or
 // cannot be judged there. A host that does not parse as an address is a name,
-// which the proxy resolves.
+// which the proxy resolves: the parse failing is that verdict, not an error to
+// pass on, so only a written address reaches [guard.judgeAddr].
 func (g *guard) judgeTarget(ctx context.Context, u *url.URL) error {
-	ip, err := netip.ParseAddr(u.Hostname())
-	if err != nil {
-		return nil
+	if ip, err := netip.ParseAddr(u.Hostname()); err == nil {
+		return g.judgeAddr(ctx, ip)
 	}
+	return nil
+}
+
+// judgeAddr refuses ip when this node's rule, made on the resolver the guard
+// dials with, finds it not public, or cannot judge it.
+func (g *guard) judgeAddr(ctx context.Context, ip netip.Addr) error {
 	public, err := g.ruleOn(g.resolver())(ctx, ip)
 	switch {
 	case err != nil:
