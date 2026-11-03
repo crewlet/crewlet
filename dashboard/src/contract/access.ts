@@ -15,7 +15,9 @@
  * system_post_all_public"; Cloudflare's `read`, `operate` or `configure`,
  * Crewlet's own sets of permission groups; Expo's `viewer`, `runner`,
  * `developer` or `release_manager`, each a set of Expo permissions named for
- * the Expo role that holds them) and is drawn under the vendor's exact name, which
+ * the Expo role that holds them; Scaleway's `read`, `operate` or `administer`,
+ * Crewlet's own sets of Scaleway permission sets) and is drawn under the
+ * vendor's exact name, which
  * `options` carries. Datadog's, Jira's and Confluence's lists are read live
  * from the vendor, so no list of them lives here. GitHub has no levels; a
  * seat holds GitHub App permissions.
@@ -34,7 +36,8 @@ export type AccessLaneKey =
   | "slack"
   | "mattermost"
   | "cloudflare"
-  | "expo";
+  | "expo"
+  | "scaleway";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";

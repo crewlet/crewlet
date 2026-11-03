@@ -408,7 +408,12 @@ export function boxSettings(saved: AccessSeatLane): string | null {
 /** The tool, as one value: whether it works, and what it works through. */
 export function toolWords(lane: Lane, saved: AccessSeatLane): string {
   const names = andList(boxLines(saved).map((line) => line.name));
-  const through = names ? `${laneWords(lane.key).tool}, as ${names}` : laneWords(lane.key).tool;
+  // A LANE WITH A SERVER TOO may be live through either, so its tool's words,
+  // which name both routes, are not narrowed to the box's variables.
+  const through =
+    names && !lane.tool_server
+      ? `${laneWords(lane.key).tool}, as ${names}`
+      : laneWords(lane.key).tool;
   const server = lane.tool_server ? `${lane.tool_server} tool server` : "tool server";
   // A LANE WITH BOTH ROUTES is live through either, so a seat with neither is
   // told both, the server first.

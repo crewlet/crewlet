@@ -196,6 +196,7 @@ export const INTEGRATION_TOOLS = {
   datadog: ["datadog"],
   cloudflare: ["cloudflare"],
   expo: ["expo"],
+  scaleway: ["scaleway"],
 } as const;
 
 /**

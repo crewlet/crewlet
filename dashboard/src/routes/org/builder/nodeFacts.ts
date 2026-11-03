@@ -196,7 +196,8 @@ export type Tool =
   | "datadog"
   | "atlassian"
   | "cloudflare"
-  | "expo";
+  | "expo"
+  | "scaleway";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -210,6 +211,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   atlassian: "Atlassian",
   cloudflare: "Cloudflare",
   expo: "Expo",
+  scaleway: "Scaleway",
 };
 
 /**
@@ -436,6 +438,9 @@ const VENDOR_LANES = {
  *
  * NOTHING FOR EXPO: a seat's robot user is all it has there, and the engine
  * deletes it once the seat is off or gone, so nothing is left to decommission.
+ *
+ * NOTHING FOR SCALEWAY: a seat's IAM application, policy and API key are all it
+ * has there, and the engine deletes them once the seat is off or gone.
  */
 export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
   if (isMintedKey(seat.key)) return [];
