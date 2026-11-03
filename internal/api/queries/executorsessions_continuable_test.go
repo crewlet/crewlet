@@ -725,11 +725,13 @@ func TestALiveRowTheListingDoesNotHoldIsReadAlone(t *testing.T) {
 
 // levelledSessions is the executor log as two copies answer it: the copy a page
 // is read from, and the row a read at the relaunch's level is answered with —
-// which, where through names it, has applied the turn's newest capture — and
-// how many reads at that level it was asked for.
+// which, where through names it, has applied the turn's newest capture, or its
+// end — beside the head of its conversation that read names (heads, by turn);
+// and how many reads at that level it was asked for.
 type levelledSessions struct {
 	*stubSessions
 	through map[string]executordomain.Session
+	heads   map[string]string
 
 	mu      sync.Mutex
 	reReads int
@@ -743,7 +745,7 @@ func (l *levelledSessions) Session(ctx context.Context, handle, turn string,
 		l.reReads++
 		l.mu.Unlock()
 		if row, ok := l.through[turn]; ok {
-			return executordomain.SessionRead{Session: row, Complete: true}, nil
+			return executordomain.SessionRead{Session: row, Head: l.heads[turn], Complete: true}, nil
 		}
 	}
 	return l.stubSessions.Session(ctx, handle, turn, fresh)
@@ -791,6 +793,54 @@ func TestALiveRowIsDecidedOnTheLogAsARelaunchReadsIt(t *testing.T) {
 		got.NotContinuable != "" {
 		t.Errorf("a row read from a copy behind the run's record is %s, want continuable in any box with "+
 			"no reason, as a relaunch reading the log at its level continues it", decided(got))
+	}
+	if n := onLog.readAgain(); n != 1 {
+		t.Errorf("the row was read again at the relaunch's level %d times, want once", n)
+	}
+}
+
+// A ROW READ AGAIN IS DECIDED ON THE HEAD THAT READ NAMED. A page read from a
+// copy of the executor log behind the run's record holds a live turn's older
+// capture, and the head of its conversation as that copy saw it: the turn
+// before. The row is read again at the relaunch's level, and the turn's end
+// landed in between: the row comes back ended, its conversation's head in the
+// snapshot that answered it. Decided on that read's head, it is the session
+// the conversation's next turn continues, in any box; decided on the page's,
+// it was a definite no naming the turn before, whose row that end may have
+// absorbed.
+//
+// Mutation: decide a row read again on the head its page named, and it says no.
+func TestARowReadAgainIsDecidedOnTheHeadItsOwnReadNamed(t *testing.T) {
+	t.Parallel()
+	before := endedOn("chat:room", 1)
+	behind, run := liveSession(executor.ClaudeCodeName)
+	behind.ConversationKey = "chat:room"
+	newer := *run.Kept
+	newer.CaptureSeq = 2
+	run.Capture, run.Kept = &newer, &newer
+	run.Status, run.Launch.Collected, run.SandboxID = sandbox.StatusRunning, true, ""
+	ended := behind
+	ended.CaptureSeq = 2
+	ended.EndedAt = ended.CapturedAt.Add(time.Minute)
+	ended.EndedAtPosition = statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1, Seq: 2}
+	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	store, _ := sessionObjectStore(t)
+	s := sessionSources(t, nil, store)
+	onLog := &levelledSessions{stubSessions: &stubSessions{rows: []executordomain.Session{behind, before}},
+		through: map[string]executordomain.Session{behind.Turn: ended},
+		heads:   map[string]string{behind.Turn: behind.Turn}}
+	s.ExecutorSessions = onLog
+	s.SessionRuns = &stubRuns{runs: []sandbox.PendingRun{run}}
+	s.RelaunchTargets = targetOf(claudeTarget())
+	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	got := rowsByTurn(t, page)[behind.Turn]
+	if got.ContinuedBy != sandbox.ContinuedByNextTurn || got.Continuable == nil || !*got.Continuable ||
+		got.ContinuesIn != sandbox.ContinuesInAnyBox || got.NotContinuable != "" {
+		t.Errorf("a live row read again ended is %s by %q, want continuable by the conversation's next turn "+
+			"in any box, as the head its own read named", decided(got), got.ContinuedBy)
 	}
 	if n := onLog.readAgain(); n != 1 {
 		t.Errorf("the row was read again at the relaunch's level %d times, want once", n)

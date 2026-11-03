@@ -523,9 +523,9 @@ func (s Sources) liveRun(ctx context.Context, row executordomain.Session) (*sand
 // rowContinuity is one row of a seat's sessions on its way to its
 // `continuable`: the row as its page read it, the row the decision reads — the
 // same, or read again as a relaunch reads it ([Sources.relaunchRow]) — its
-// conversation's head as the read that answered the row named it, its turn's
-// run record, nil where its run is over, and why it cannot be decided, where it
-// cannot before anything else is asked.
+// conversation's head as the read that answered the row the decision reads
+// named it, its turn's run record, nil where its run is over, and why it cannot
+// be decided, where it cannot before anything else is asked.
 type rowContinuity struct {
 	row, decideOn executordomain.Session
 	head          string
@@ -574,6 +574,12 @@ func (c rowContinuity) decide(target sandbox.RelaunchTarget,
 // decision reaches a row that names another capture than the run's record
 // keeps ([sandbox.RereadsRow]), and row itself everywhere else, which decides
 // as that read would — undecided where the read again fails.
+//
+// A ROW READ AGAIN IS DECIDED ON THE HEAD THAT READ NAMED, never the page's: the
+// turn's end can land between the two reads, and the row read again then
+// comes back ended, the head of its conversation in its own snapshot, while
+// the page's older head names the turn before it — a definite no, naming a
+// row the end that came back with it may have absorbed.
 func (s Sources) relaunchRow(ctx context.Context, row executordomain.Session, head string,
 	run *sandbox.PendingRun, unread error, fresh statelog.Freshness, now time.Time) rowContinuity {
 
@@ -592,7 +598,7 @@ func (s Sources) relaunchRow(ctx context.Context, row executordomain.Session, he
 		c.undecided = unreadRelaunchRow
 		return c
 	}
-	c.decideOn = read.Session
+	c.decideOn, c.head = read.Session, read.Head
 	return c
 }
 
