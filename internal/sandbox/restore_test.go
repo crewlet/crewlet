@@ -27,7 +27,12 @@ type keptRestore struct {
 	archives map[string][]byte
 	// unreadable fails every fetch as an object the store no longer holds.
 	unreadable bool
-	asked      []string
+	// failOpen fails the open of a spool numbered so, from 1 — the fetch's
+	// own check that the seal opens whole is the first, the launch's open of
+	// what it carries the second — as a seal that does not authenticate does.
+	failOpen int
+	opened   int
+	asked    []string
 }
 
 func (k *keptRestore) Session(_ context.Context, handle, turn string,
@@ -59,6 +64,12 @@ func (k *keptRestore) Fetch(_ context.Context, row executordomain.Session, dst i
 }
 
 func (k *keptRestore) OpenSpooled(_ executordomain.Session, sealed io.Reader) (io.Reader, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.opened++
+	if k.opened == k.failOpen {
+		return nil, executordomain.ErrUnreadable
+	}
 	return sealed, nil
 }
 
@@ -274,17 +285,22 @@ func TestARunThatContinuesASessionIsWiredForEitherSessionItsBoxStarts(t *testing
 // harness cannot continue it, an object the store no longer holds, a turn whose
 // kept session moved since the launch chose it, a capture of the job taken
 // since that was not kept, a log row that names another capture, and a kept
-// capture of a job before the one this launch follows. Without a kept capture,
-// the job before's own session is continued in place only in its own box.
+// capture of a job before the one this launch follows, a seal that does not
+// open whole, a spool that does not open again once checked. Without a kept
+// capture, the job before's own session is continued in place only in its own
+// box. And whatever the launch hands, it leaves no spool of a session it
+// fetched behind once its run has started, or did not.
 //
 // Mutation: choose the brief before the box's harness and the object are asked,
-// restore over a cleanly ended box's own copy, or skip any check the launch
-// makes of the record as it opened the job, and a row goes red.
+// restore over a cleanly ended box's own copy, skip any check the launch makes
+// of the record as it opened the job, or leave a fetched spool behind where its
+// fetch or its open fails, and a row goes red.
 func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		reused, interrupted, unreadable, inPlace, moved bool
 		newerUnkept, logMoved, earlierJob               bool
+		failOpen                                        int
 		carryWhy                                        string
 		want                                            BriefKind
 		session                                         string
@@ -301,10 +317,15 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 		"an earlier job's kept capture": {earlierJob: true, want: BriefFresh},
 		"in place, its own box":         {reused: true, inPlace: true, want: BriefContinued, session: "sess-ask"},
 		"in place, a new box":           {inPlace: true, want: BriefFresh},
+		"a seal that does not open":     {failOpen: 1, want: BriefFresh},
+		"a spool that does not reopen":  {failOpen: 2, want: BriefFresh},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			rig := newCoordRig(t)
+			// ITS SPOOLS ITS OWN, so what a case leaves in them is the case's
+			// to see.
+			rig.coordinator.spoolDir = t.TempDir()
 			rig.runner.Carries, rig.runner.CarryWhy = true, tc.carryWhy
 			key := objstore.KeyAt(time.Now())
 			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, Final: true,
@@ -315,7 +336,8 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 				row.CaptureSeq = 2
 			}
 			restore := &keptRestore{rows: map[string]executordomain.Session{"t1": row},
-				archives: map[string][]byte{key.String(): []byte("the transcript")}, unreadable: tc.unreadable}
+				archives: map[string][]byte{key.String(): []byte("the transcript")}, unreadable: tc.unreadable,
+				failOpen: tc.failOpen}
 			rig.coordinator.restore = restore
 			newest := kept
 			if tc.newerUnkept {
@@ -335,7 +357,7 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 			}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, tc.reused)
-			defer got.release()
+			t.Cleanup(got.release)
 			wantBrief := map[BriefKind]string{BriefContinued: "carry on in the box you left",
 				BriefContinuedNewBox: "carry on in a box that replaced yours", BriefFresh: "the fresh brief"}[tc.want]
 			if got.kind != tc.want || got.brief != wantBrief || got.session != tc.session {
@@ -353,6 +375,17 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 			}
 			if want := (LaunchDecision{Brief: tc.want, Kept: tc.want != BriefFresh && !tc.inPlace}); got.decision() != want {
 				t.Errorf("the launch tells its caller %+v, want %+v", got.decision(), want)
+			}
+			// NO SPOOL LEFT once the run has started, or a fresh one in its
+			// place: one the launch fetched and could not use is gone already.
+			if !tc.carried {
+				if left := restoreSpools(t, rig); len(left) != 0 {
+					t.Errorf("the launch left a spool of the session behind: %v", left)
+				}
+			}
+			got.release()
+			if left := restoreSpools(t, rig); len(left) != 0 {
+				t.Errorf("the run's start left the spool it carried the session in: %v", left)
 			}
 		})
 	}

@@ -729,12 +729,14 @@ type CoordinatorOptions struct {
 	// sealed object — see restore.go. Nil continues no kept session: every
 	// relaunch then continues at most the session its own box holds.
 	Restore SessionRestore
-	// SpoolDir is the directory a capture's sealed session waits in between
-	// its take and its keep ([Coordinator.spool]), and the one whose leftover
-	// spools a take sweeps ([Coordinator.sweepSpools]). Empty is the node's
-	// temporary directory (os.TempDir), which is where the engine keeps them;
-	// a test names a directory of its own, so what is left in it is the
-	// case's to see.
+	// SpoolDir is the directory this node spools sealed sessions in: a
+	// capture's, between its take and its keep ([Coordinator.spool]), and a
+	// relaunch's, the kept session it fetched to carry into its box, between
+	// the fetch and the run's start ([Coordinator.fetchSession]) — and the one
+	// whose leftover spools of either kind every take and every fetch sweeps
+	// ([Coordinator.sweepSpools]). Empty is the node's temporary directory
+	// (os.TempDir), which is where the engine keeps them; a test names a
+	// directory of its own, so what is left in it is the case's to see.
 	SpoolDir string
 
 	// Now is the clock, injectable for tests.
