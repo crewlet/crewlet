@@ -273,7 +273,7 @@
           ]
         },
         "native": {
-          "description": "Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node running no native backend yet starts the code host at the activation that sets it; on a node whose native runtime already runs, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart).",
+          "description": "Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node that has run no company yet starts the code host at the activation that hands it a company setting it; on every other node, whatever backends its first company named, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",

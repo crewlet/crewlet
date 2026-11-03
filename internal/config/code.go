@@ -410,12 +410,13 @@ const (
 //
 // NATIVE IS PART OF A NODE'S NATIVE RUNTIME, like tracker.backend: the
 // committer and the lifecycle store are built with it, once per process, from
-// the company that starts it. On a node that runs no native runtime yet — a
-// company on vendors for its tracker and its knowledge base — the activation
-// that sets it starts that runtime, the code host in it, with no restart. On a
-// node whose runtime is already running, a revision that turns it on or off
-// activates normally and takes effect at the node's restart, which the node
-// says once per activation (native_backend_needs_restart). The LIMITS are the
+// the first company the node runs, whatever backends that company names. On a
+// node that has run no company yet — one that booted with none — the
+// activation that hands it a company setting it starts that runtime, the code
+// host in it, with no restart. On every other node, a company on vendors for
+// every half included, a revision that turns it on or off activates normally
+// and takes effect at the node's restart, which the node says once per
+// activation (native_backend_needs_restart). The LIMITS are the
 // epoch's, read at every decision, so a revision that moves one holds from its
 // activation; a revision that turns the host off, which must drop them,
 // leaves a node still serving it the limits of the last revision that hosted
@@ -429,7 +430,7 @@ const (
 // changes nothing on a running node until its restart, and after the restart
 // nothing reconciles at all.
 type Code struct {
-	Native               bool        `yaml:"native,omitempty" json:"native,omitempty" desc:"Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node running no native backend yet starts the code host at the activation that sets it; on a node whose native runtime already runs, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
+	Native               bool        `yaml:"native,omitempty" json:"native,omitempty" desc:"Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node that has run no company yet starts the code host at the activation that hands it a company setting it; on every other node, whatever backends its first company named, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
 	DeletedRetentionDays int         `yaml:"deleted_retention_days,omitempty" json:"deleted_retention_days,omitempty" js:"min=0;max=365" desc:"How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7."`
 	IdentityDomain       string      `yaml:"identity_domain,omitempty" json:"identity_domain,omitempty" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$;maxlen=189" desc:"The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@<domain>, and its author's, <handle>@<domain>, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own."`
 	Limits               CodeLimits  `yaml:"limits,omitempty" json:"limits,omitzero"`
