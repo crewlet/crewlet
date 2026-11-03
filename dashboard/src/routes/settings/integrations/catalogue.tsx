@@ -159,6 +159,7 @@ const SURFACE_NAMES: Record<string, string> = {
   datadog: "Datadog",
   cloudflare: "Cloudflare",
   expo: "Expo",
+  digitalocean: "DigitalOcean",
   aws: "AWS",
 };
 
@@ -236,6 +237,14 @@ export const CATALOG: Entry[] = [
     vendor: "expo",
     surfaces: surfacesOf("expo"),
     doc: "expo",
+  },
+  {
+    key: "digitalocean",
+    name: "DigitalOcean",
+    description: "Droplets, Kubernetes, databases and DNS, a token per agent.",
+    vendor: "digitalocean",
+    surfaces: surfacesOf("digitalocean"),
+    doc: "digitalocean",
   },
   {
     key: "aws",

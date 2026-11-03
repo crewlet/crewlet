@@ -21,6 +21,10 @@ import (
 // box. Empty for a request naming none.
 type launchRepos struct {
 	repos []sandbox.RunRepo
+	// heads are where each grant's branch stood as the resolution read it,
+	// in repos' order, "" where it does not exist yet
+	// (builtin.RunRepos.Heads).
+	heads []string
 	floor statelog.Position
 	clone []sandbox.SetupStep
 	// ceiling is the colleague seat whose ask woke the turn, whose own grant
@@ -105,7 +109,8 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 	if err != nil {
 		return launchRepos{}, fmt.Errorf("engine: %w", err)
 	}
-	return launchRepos{repos: resolved.Repos, floor: resolved.Floor, ceiling: resolved.Ceiling, clone: clone}, nil
+	return launchRepos{repos: resolved.Repos, heads: resolved.Heads, floor: resolved.Floor,
+		ceiling: resolved.Ceiling, clone: clone}, nil
 }
 
 // runCheckouts is where `code_checkout` gives a running job a repository
@@ -158,16 +163,16 @@ func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch s
 			len(resolved.repos))
 	}
 	floor := resolved.floor
+	// A FLOOR THIS BUILD CANNOT READ IS RAISED OVER, as boxRuns' raise does:
+	// the box reads at a floor it can be served at.
+	raise := func(current string) (string, bool) {
+		if cur, perr := statelog.ParsePosition(current); perr == nil && holds(cur, floor) {
+			return "", false
+		}
+		return floor.String(), true
+	}
 	granted, outcome, err := rt.pending.GrantRepo(ctx, turn.RunID, launch, sandbox.RepoGrant{
-		Repo: resolved.repos[0], Floor: floor.String(), Ceiling: resolved.ceiling,
-		// A FLOOR THIS BUILD CANNOT READ IS RAISED OVER, as boxRuns' raise
-		// does: the box reads at a floor it can be served at.
-		Raise: func(current string) (string, bool) {
-			if cur, perr := statelog.ParsePosition(current); perr == nil && holds(cur, floor) {
-				return "", false
-			}
-			return floor.String(), true
-		},
+		Repo: resolved.repos[0], Floor: floor.String(), Ceiling: resolved.ceiling, Raise: raise,
 	})
 	if err != nil {
 		return builtin.Checkout{}, err
@@ -177,8 +182,32 @@ func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch s
 	case sandbox.GrantAdded:
 		out.Steps = resolved.clone
 	case sandbox.GrantHeld:
-		// THE ROW'S GRANT, cloned as it was given: a box that lost its clone
-		// starts from the base the first checkout resolved.
+		// THE ROW'S GRANT, CLONED WHERE ITS BRANCH STANDS NOW. A box asking
+		// again lost its clone — a fresh one that a round carried on was
+		// launched in, whether or not the session it continues was restored
+		// there — and continues the job before it, whose work is what that
+		// job pushed to the branch: so the clone starts from the head the
+		// resolution just read, and from the base the first checkout
+		// resolved only where nothing was pushed and the branch does not
+		// exist yet. Started at the first base whatever was pushed since, the
+		// box's branch stood behind its own job's pushes, and a push from it
+		// was refused as no fast-forward or, in the seat's own namespace,
+		// forced over them. A box that kept its clone runs none of this
+		// ([sandbox.CloneRecipe] skips a checkout that is there).
+		//
+		// ITS FLOOR IS RAISED TO THAT READ FIRST, as an added grant's is, so
+		// the node that serves the box's fetch of the head has applied it. It
+		// shows the box nothing its grant does not: the same repository and
+		// branch, read for the same seat and the colleague it works for, and
+		// a floor says only how fresh the box's reads are, never what they
+		// may read.
+		if head := resolved.heads[0]; head != "" && head != granted.Base {
+			if _, err = rt.pending.RaiseCodeFloor(ctx, turn.RunID, launch, raise); err != nil {
+				return builtin.Checkout{}, err
+			}
+			granted.Base = head
+			out.Repo = granted
+		}
 		if out.Steps, err = sandbox.CodingSteps(sandbox.Placement(run.Placement),
 			[]sandbox.RunRepo{granted}); err != nil {
 			return builtin.Checkout{}, fmt.Errorf("engine: %w", err)

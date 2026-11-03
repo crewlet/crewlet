@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -64,11 +65,15 @@ import (
 // (toolcredentials.go):
 //
 //   - THE INTEGRATION CANNOT ISSUE IT YET: a person's step its card already
-//     asks for (GitHub's app not created or not installed). The variable is
-//     declared as the integration's to issue ([Engine.mintedFor]), so the
-//     value it is read into is held back as WAITING, exactly as a
-//     provisioning pass's seal is, and released when the reconcile records
-//     the step, which applies a revision and runs every read again.
+//     asks for (GitHub's app not created or not installed), or the
+//     integration's own wait, which clears with nobody acting (a grant its
+//     vendor is still applying). The variable is declared as the
+//     integration's to issue ([Engine.mintedFor]), so the value it is read
+//     into is held back as WAITING, exactly as a provisioning pass's seal is.
+//     A person's step releases it when the reconcile records the step, which
+//     applies a revision and runs every read again; the integration's own
+//     wait is asked again on the restart schedule ([seatToken.settling]),
+//     since no revision or seal is coming to run the reads.
 //   - THE VENDOR REFUSED THE ISSUE, or could not be reached: a failure with a
 //     reason ([seatToken.unissued]), retried on the restart schedule, which
 //     each issuer's cache holds the refusal for, so a refusal that lasts
@@ -104,12 +109,18 @@ type seatIssuer interface {
 	// issuing is how seat's credential is issued for one resolution, its
 	// settings read through env, or nil where the seat is issued nothing
 	// now (it is off at the integration). Called once per resolution; the
-	// issue itself runs at the source's first lookup.
+	// issue itself runs at the source's first lookup. A seat that is on and
+	// cannot be issued yet is given one that fails with the integration's
+	// waiting story, so the issue is attempted, told, and retried where it
+	// settles ([errIssueSettling]).
 	issuing(c *Company, seat *org.Role, env *config.Resolver) issueFunc
 
 	// refusal is why an issue that failed with err failed, and whether a
-	// wait clears it; "" where err is the waiting story, a person's step the
-	// integration's card already asks for. Never the credential.
+	// wait clears it. "" is a waiting story: a person's step the
+	// integration's card already asks for where passes is false, and the
+	// integration still settling the credential where it is true, which a
+	// wait clears with nothing sealed or applied ([seatToken.settling]).
+	// Never the credential.
 	refusal(err error) (reason string, passes bool)
 
 	// words are its words in the stories every issued credential is told by.
@@ -157,6 +168,12 @@ func (l issuedLives) ask(life time.Duration) time.Duration {
 // issueFunc issues one seat's credential good for at least life after the
 // call, from the issuer's own process-wide cache while what it holds is.
 type issueFunc func(ctx context.Context, life time.Duration) (issuedToken, error)
+
+// errIssueSettling is an issue the integration cannot answer yet and will with
+// nobody acting, such as a grant its vendor is still applying. An issuer's
+// issue fails with it, wrapped in the issuer's own words, and its refusal
+// answers it as settling: no reason, and a wait clears it ([seatToken.settling]).
+var errIssueSettling = errors.New("engine: the integration is still settling the seat's credential")
 
 // issuedToken is one credential an issuer handed out: its value, when it
 // expires, and when a holder asks again, which is before it expires.
@@ -315,6 +332,23 @@ func (s *seatToken) unissued(name string) string { return s.failure(name).said }
 func (s *seatToken) refused() bool {
 	for t := s; t != nil; t = t.next {
 		if t.unissued(t.name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// settling reports whether an issue the resolution attempted for any of its
+// variables met the integration still settling it: a waiting story a wait
+// clears ([seatIssuer.refusal] answering no reason, and passes). Told as
+// waiting, and retried by the seat's children, since nothing will be sealed
+// or applied to run the read again.
+func (s *seatToken) settling() bool {
+	for t := s; t != nil; t = t.next {
+		if t.err == nil {
+			continue
+		}
+		if said, passes := t.issuer.refusal(t.err); said == "" && passes {
 			return true
 		}
 	}

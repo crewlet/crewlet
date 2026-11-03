@@ -34,16 +34,17 @@ func (e *Engine) launchBoxGit(seat *org.Role, turnID string,
 	}
 }
 
-// boxGitEnv is the engine's git environment for ONE LAUNCH of a run given
-// repositories on the code host (ADR-0093), over run, the run environment the
-// launch assembled from the operator's configuration: the run's credential for
-// this launch — a token naming the turn and the launch id the store just
-// minted, so a job a relaunch superseded is refused — the code host's base,
-// git's configuration through the environment with the operator's own entries
-// kept and the engine's appended ([sandbox.BoxGit]). A commit's trailers are no
-// part of it: they come from the run's attribution hook, which the harness's
-// launch writes from [sandbox.CommitAttribution], and that hook is the only
-// place they are spelled, because a value here would name them twice.
+// boxGitEnv is the engine's git environment for ONE LAUNCH of a run on a node
+// that serves the code host, whatever the run goes on to check out
+// (ADR-0093), over run, the run environment the launch assembled from the
+// operator's configuration: the run's credential for this launch — a token
+// naming the turn and the launch id the store just minted, so a job a
+// relaunch superseded is refused — the code host's base, git's configuration
+// through the environment with the operator's own entries kept and the
+// engine's appended ([sandbox.BoxGit]). A commit's trailers are no part of
+// it: they come from the run's attribution hook, which the harness's launch
+// writes from [sandbox.CommitAttribution], and that hook is the only place
+// they are spelled, because a value here would name them twice.
 //
 // THE SEAT'S COMMIT IDENTITY IS THE ENGINE'S ONE RULE for a seat's commits —
 // its role's name and email as written, else its handle on the identity

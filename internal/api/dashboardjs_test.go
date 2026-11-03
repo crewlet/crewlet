@@ -1800,11 +1800,26 @@ const (
 	// lane naming its issued token's period took the merged tree from 5486.1
 	// KiB (5,617,793 bytes) to 5486.9 KiB (5,618,603 bytes, +810 bytes), all
 	// of it the integrations model chunk. It stays at 5487 KiB.
+	// Reading a box file's type where the details list it, and the public
+	// view taking the shell's ceiling, took it to 5,618,606 bytes (+3). It
+	// stays at 5487 KiB.
+	// DigitalOcean (its catalogue entry, and the Set up sheet taught a token
+	// that is the agent's whole identity: the team to switch to, the name to
+	// type, and a numbered guide to the scope picker derived from the levels'
+	// grants and the lane's refused and unneeded scopes, with Regenerate Token
+	// on a rotate), with Expo's story and builder facts aligned with its
+	// hand-off, took main's from 5486.1 KiB (5,617,793 bytes) to 5492.0 KiB
+	// (5,623,824 bytes, +6,031 bytes): the integrations model chunk +5,666
+	// bytes, the catalogue chunk +241 and the org nodes chunk +92, the
+	// initial load unchanged. The measured size's next KiB: 5493 KiB.
+	// Merged again with it, main's +6,031 bytes came to 6,032 bytes on the
+	// merged tree, taking it from 5486.9 KiB (5,618,606 bytes) to 5492.8 KiB
+	// (5,624,638 bytes). It moved by main's own 6 KiB, from 5487 KiB: 5493 KiB.
 	// AWS (its catalogue entry and story, the Agents tab's words and the org
 	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
-	// tile's cloud glyph) took it from 5486.9 KiB to 5489.0 KiB (5,620,690
-	// bytes, +2,087 bytes). 5490 KiB.
-	treeBudget = 5<<20 + 370<<10
+	// tile's cloud glyph) took it from 5492.8 KiB (5,624,638 bytes) to 5494.9
+	// KiB (5,626,754 bytes, +2,116 bytes). 5495 KiB.
+	treeBudget = 5<<20 + 375<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

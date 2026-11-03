@@ -347,6 +347,18 @@ type runEnv struct {
 	// sign-in ([newExecutorRun]).
 	defaults map[string]string
 
+	// homePaths is each variable naming one of the integrations' box files
+	// ([seataccess.BoxFile.PathEnv]) no layer above sets, to the file's path
+	// under the box's home, which the launch joins on lowest of all.
+	homePaths map[string]string
+
+	// tools is the names of env that hand a tool in the box one of the
+	// seat's own vendor credentials ([config.Company.SeatCredentialVariables]),
+	// doctl's DIGITALOCEAN_ACCESS_TOKEN set to the seat's sealed token: in the
+	// box like the rest of env, and never judged as a sign-in
+	// ([newExecutorRun]).
+	tools []string
+
 	// setup is the provider-wide steps then the seat's own, every file's
 	// body read as the content it is.
 	setup []sandbox.SetupStep
@@ -394,17 +406,21 @@ type runEnv struct {
 // then the setup steps' contributions, then the seat's own env, so an
 // operator's explicit value always beats a step's default. The integrations'
 // defaults are returned apart (runEnv.defaults), for the launch to lay beneath
-// the entry's env as well ([newExecutorRun]).
+// the entry's env as well ([newExecutorRun]), and so are the variables naming
+// their files (runEnv.homePaths), beneath those, since only the box knows its
+// home ([sandbox.LaunchRequest.HomePaths]). The names whose value hands a tool
+// one of the seat's own vendor credentials are named apart (runEnv.tools), for
+// the launch to keep out of the run's sign-in.
 //
-// BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0093): a run given repositories on
-// it is given ACCESS TO THAT SURFACE — the run's own credential and the box's
-// git configuration ([Engine.boxGitEnv]), as an executor's run is given the
-// tool bridge's endpoint — a credential the box acts AS, scoped to the run and
-// dying with it. Added to the LAUNCH's environment once the store has named
-// the job, never here: this environment is the spec's, and the credential
-// names the launch. Every OTHER host's credential is still the operator's to
-// declare, and config refuses the engine's own names in any env it writes
-// (config.ReservedSandboxEnv).
+// BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0093): every launch on a node that
+// serves it is given ACCESS TO THAT SURFACE — the run's own credential and
+// the box's git configuration ([Engine.boxGitEnv]), as an executor's run is
+// given the tool bridge's endpoint — a credential the box acts AS, scoped to
+// the run and dying with it. Added to the LAUNCH's environment once the store
+// has named the job, never here: this environment is the spec's, and the
+// credential names the launch. Every OTHER host's credential is still the
+// operator's to declare, and config refuses the engine's own names in any env
+// it writes (config.ReservedSandboxEnv).
 //
 // RESOLVED EXACTLY ONCE, here, at launch — not at load. These values are
 // where an operator declares a code-host token, and Tier B stores its
@@ -489,6 +505,10 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	}
 	gap := refGap{env: resolver, mint: mint}
 	facts := refGap{env: resolver, mint: mint}
+	var mine map[string]string
+	if c != nil {
+		mine = c.Config.SeatCredentialVariables(seat.Handle())
+	}
 	out := runEnv{env: make(map[string]string, len(merged))}
 	for _, key := range slices.Sorted(maps.Keys(merged)) {
 		l := merged[key]
@@ -498,6 +518,9 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 			out.env[key] = resolver.Value(l.value)
 			if !l.fact {
 				out.secrets = append(out.secrets, referencedValues(resolver, l.value)...)
+			}
+			if slices.ContainsFunc(envref.Names(l.value), func(name string) bool { return mine[name] != "" }) {
+				out.tools = append(out.tools, key)
 			}
 		case l.fact:
 			facts.hold(key, missing, false, "", false)
@@ -568,6 +591,14 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		content, unresolved := secrets.ReadContent(d.File.Ref, resolver.LookupOK)
 		if name, whole := envref.Whole(d.File.Ref); whole && content == "" {
 			unresolved = name
+		}
+		// ITS VARIABLE NAMES A FILE THE BOX HOLDS: one written here, or a
+		// rewritten one the poll writes once issued. A name a layer sets is its.
+		if _, set := merged[d.File.PathEnv]; d.File.PathEnv != "" && !set && (unresolved == "" || d.File.Rewritten) {
+			if out.homePaths == nil {
+				out.homePaths = map[string]string{}
+			}
+			out.homePaths[d.File.PathEnv] = d.File.Path
 		}
 		if unresolved != "" {
 			facts.hold(d.File.Path, []string{unresolved}, false, "", false)
@@ -3824,15 +3855,22 @@ type executorRun struct {
 	files map[string]string
 	env   map[string]string
 
-	// signIn is env without the integrations' box defaults: what the run's
-	// sign-in is judged on, since a default never signs a harness in.
+	// signIn is env without the integrations' box defaults and the seat's
+	// own credentials for a tool: what the run's sign-in is judged on, since
+	// neither ever signs a harness in.
 	signIn map[string]string
+
+	// homePaths is the variables naming the integrations' box files, each to
+	// its path under the box's home, which the launch joins onto the box's
+	// own beneath env ([sandbox.LaunchRequest.HomePaths]). Never in signIn.
+	homePaths map[string]string
 }
 
 // newExecutorRun is the [executorRun] of a box run on agent, the executor-chain
-// member the launch picked ([agentLauncher.member]), over seatEnv, the
+// member the launch picked ([agentLauncher.member]), over seat, the
 // environment the seat's own config assembled ([Engine.runEnvironment]), with
-// boxDefaults, the integrations' box settings, beneath everything.
+// its integrations' box settings beneath everything, and the variables naming
+// their files beneath those in the box.
 //
 // ONE CONSTRUCTION for a seat's executor run and the Dashboard Assistant's
 // deep work on its own entry ([assistantDeep.Run]), which brings no seat
@@ -3843,7 +3881,7 @@ type executorRun struct {
 // and its env and sign-in, which that harness reads, are always ones the runner can
 // use — and a launch that fell back past the head runs on the member it fell
 // back to, with that member's environment and login rather than the head's.
-func newExecutorRun(agent *harness.Provider, seatEnv, boxDefaults map[string]string) executorRun {
+func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE HARNESS IT IS
 	// WRITTEN FOR. An entry's model is in that harness's own grammar — OpenCode
 	// reads `<provider>/<model>`, Claude Code an alias — so the run is handed
@@ -3855,23 +3893,31 @@ func newExecutorRun(agent *harness.Provider, seatEnv, boxDefaults map[string]str
 	// URL in the entry's env names, which the run environment carries — a
 	// provider the engine declared beside it would shadow the one the model
 	// names.
+	// THE SEAT'S OWN VENDOR CREDENTIALS IN ITS BOX ARE A TOOL'S, NEVER A
+	// SIGN-IN ([config.Company.SeatCredentialVariables]): in the box with the
+	// rest of the seat's env, winning a name over the entry's as every line of
+	// it does, and out of every sign-in judgment. OpenCode reads any
+	// credential-named variable as a provider's key, so judged with them, the
+	// agent's DigitalOcean token handed to doctl passed a remote run that had
+	// no model key at all; and for a harness whose seat signs it in itself, a
+	// tool's token named like a sign-in would strip the entry's ([entryEnv]).
+	// Config refuses one under a name the harness signs in by, so in the box
+	// it never stands in for the entry's sign-in either.
+	own := maps.Clone(seat.env)
+	for _, name := range seat.tools {
+		delete(own, name)
+	}
+	entry := entryEnv(agent, own)
+	signIn := underlay(own, entry)
 	// THE INTEGRATIONS' BOX DEFAULTS LOWEST OF ALL, beneath the entry's env
 	// too, and out of every sign-in judgment: a cloud CLI's region or token
 	// file must never override, strip or stand in for the harness's sign-in.
-	signIn := underlay(seatEnv, entryEnv(agent, seatEnv))
-	defaults := make(map[string]string, len(boxDefaults))
-	for name, value := range boxDefaults {
-		// A HARNESS'S OWN SIGN-IN NAME IS NEVER AN INTEGRATION'S TO SET: a
-		// cloud toggle or a token under it would switch or replace the sign-in.
-		if !slices.Contains(agent.CredentialEnvNames(), name) {
-			defaults[name] = value
-		}
-	}
 	run := executorRun{
-		model:  agent.ModelArgument(),
-		env:    underlay(maps.Clone(signIn), defaults),
-		signIn: signIn,
-		files:  agent.SandboxCredentials(),
+		model:     agent.ModelArgument(),
+		env:       underlay(underlay(maps.Clone(seat.env), entry), integrationsOwn(agent, seat.defaults)),
+		signIn:    signIn,
+		files:     agent.SandboxCredentials(),
+		homePaths: integrationsOwn(agent, seat.homePaths),
 	}
 	// A LOGIN THE HARNESS KEEPS IN ITS OWN DATABASE travels as the document its
 	// export printed, mapped where the runner imports it from — the runner's
@@ -3884,6 +3930,19 @@ func newExecutorRun(agent *harness.Provider, seatEnv, boxDefaults map[string]str
 		run.files[executor.CredentialDocument] = doc
 	}
 	return run
+}
+
+// integrationsOwn is what of vars, variables an integration puts in a box, the
+// box is handed: every one but a name agent's harness signs in by, since a
+// cloud toggle or a token under it would switch or replace the sign-in.
+func integrationsOwn(agent *harness.Provider, vars map[string]string) map[string]string {
+	out := make(map[string]string, len(vars))
+	for name, value := range vars {
+		if !slices.Contains(agent.CredentialEnvNames(), name) {
+			out[name] = value
+		}
+	}
+	return out
 }
 
 // launchSecrets is every value a launch's run environment hands its box out of

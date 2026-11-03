@@ -1,22 +1,22 @@
 // Package expo gives each agent seat its own Expo robot user on the company's
 // Expo account, with its own access token, at the seat's level.
 //
-// # A robot per seat
+// # A person creates each robot
 //
-// Expo robot users act for an account, carry permissions there and sign in
-// only with access tokens, so each agent acts as itself and its actions are
-// attributable and revocable on their own. The per-seat access vendor
-// ([seataccess.Vendor]) creates the robot through the company's provisioner
-// token (an access token whose actor holds Admin on the account), mints its
-// token, grants and revokes its permissions when the seat's level changes,
-// rotates its token, and deletes the robot when the seat is turned off.
+// Expo lets robot users be created only in its website, so a person creates
+// each seat's robot there and pastes its access token ([seataccess.HandsIn]).
+// The engine checks the token with reads only (it is a robot's, the robot holds
+// the seat's role on the account, and no other seat has it), seals it, and
+// from then on reads everything about the robot with that token. The engine
+// holds no Expo token of its own: a role change, a turned-off robot's deletion
+// and a rotate's old tokens are a person's steps at Expo, each confirmed by
+// reading the robot back.
 //
-// # Only what the ledger records is the engine's
+// # A robot is its ID, never its name
 //
-// Anyone holding Admin can create a robot under any name, so a name is never
-// proof of provenance. The engine acts only on robot IDs its ledger recorded
-// when it created them, and adopts nothing by name. A token is the engine's
-// when it sits on such a robot and carries the engine's note ([TokenNote]).
+// A robot's name is a label a person types, so it proves nothing about
+// provenance. The engine identifies a robot by the ID its token proves, and
+// records that ID in the ledger when the seat's first token is pasted.
 //
 // # The token reaches the agent's box by reference
 //

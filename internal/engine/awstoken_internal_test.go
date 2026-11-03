@@ -33,21 +33,38 @@ func (r toServer) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // awsRig is the AWS issuer on a company where builder's seat is on and
-// planner's is not yet: Roles Anywhere opens the broker, and STS assumes the
-// seat's role, or refuses it when refused.
+// planner's is not yet: Roles Anywhere opens the broker, or refuses the
+// certificate when refused, and STS assumes the seat's role.
 func awsRig(t *testing.T, refused bool) issuerRig {
+	t.Helper()
+	if refused {
+		return awsRigIn(t, "refused")
+	}
+	return awsRigIn(t, "ok")
+}
+
+// awsRigIn is [awsRig] in mode: "ok", "refused" (Roles Anywhere refuses the
+// broker's sign-in, a person's fix), or "settling" (STS will not assume a role
+// IAM is still propagating).
+func awsRigIn(t *testing.T, mode string) issuerRig {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 		_, _ = io.ReadAll(r.Body)
 		if r.URL.Path == "/sessions" {
+			if mode == "refused" {
+				w.Header().Set("X-Amzn-Errortype", "AccessDeniedException")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, `{"message":"Untrusted certificate. Insufficient certificate"}`)
+				return
+			}
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]any{"credentialSet": []any{map[string]any{
 				"credentials": map[string]any{"accessKeyId": "ASIABROKER", "secretAccessKey": "s",
 					"sessionToken": "broker", "expiration": exp}}}})
 			return
 		}
-		if refused {
+		if mode == "settling" {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = io.WriteString(w, `<ErrorResponse><Error><Type>Sender</Type><Code>AccessDenied</Code>`+
 				`<Message>not authorized to perform sts:AssumeRole</Message></Error></ErrorResponse>`)
@@ -100,7 +117,7 @@ roles:
 	e.awsIssuer.HTTP = &http.Client{Transport: toServer{to: to}}
 	e.epoch.current.Store(c)
 	return issuerRig{e: e, c: c, kind: integration.KindAWS, ready: "builder", waiting: "planner",
-		says: "AccessDenied"}
+		says: "Untrusted certificate"}
 }
 
 // A SEAT'S AWS SERVER IS SIGNED WITH ITS OWN SESSION: the seat on at AWS gets a
@@ -156,5 +173,21 @@ func TestEachIssuerIsAskedForItsOwnLives(t *testing.T) {
 	}
 	if gh != defaultLives || aws.lifetime != 15*time.Minute || aws.renewBefore != 5*time.Minute {
 		t.Errorf("lives: github %+v, aws %+v", gh, aws)
+	}
+}
+
+// A ROLE IAM IS STILL PROPAGATING SETTLES: STS refusing to assume a seat's role
+// is told as the integration still settling, which a wait clears, never as a
+// failure a person owes a step for.
+func TestAnAWSRoleStillPropagatingSettles(t *testing.T) {
+	t.Parallel()
+	r := awsRigIn(t, "settling")
+	issuer := r.issuerOf(t)
+	_, tokens := r.e.seatResolver(t.Context(), r.c, r.c.Org.AgentSeatByHandle("builder"), toolTokenLife)
+	if v, _ := tokens.Lookup(issuer.variable(r.c, "builder")); v != "" {
+		t.Fatal("a role STS refused was issued a session")
+	}
+	if !tokens.settling() || tokens.refused() {
+		t.Errorf("settling = %v, refused = %v: want the role settling", tokens.settling(), tokens.refused())
 	}
 }

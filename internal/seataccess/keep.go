@@ -19,6 +19,12 @@ var ErrNoCloudflareLevel = errors.New("the token's permissions are not those of 
 var ErrNoExpoLevel = errors.New("the robot's Expo permissions match no level: " +
 	"save the level it should hold here, and Crewlet moves it to that")
 
+// ErrNoDigitalOceanLevel refuses keeping a DigitalOcean token's scopes when
+// they are no level's: DigitalOcean cannot change a token's scopes, so the seat
+// needs a token made with a level's scopes.
+var ErrNoDigitalOceanLevel = errors.New("the token's DigitalOcean scopes match no level: " +
+	"choose the level it should hold here, and paste a token made with that level's scopes")
+
 // ErrNoAWSLevel refuses keeping an IAM role's policies when they are no
 // level's: a seat names a level, and none of them is what it holds.
 var ErrNoAWSLevel = errors.New("the role's AWS policies match no level: " +
@@ -65,6 +71,11 @@ func KeptAccess(lane Lane, want Desired, have Observed) (Desired, error) {
 	case LaneExpo:
 		if !slices.Contains(config.ExpoLevels(), have.Level) {
 			return Desired{}, ErrNoExpoLevel
+		}
+		kept.Level = have.Level
+	case LaneDigitalOcean:
+		if !slices.Contains(config.DigitalOceanLevels(), have.Level) {
+			return Desired{}, ErrNoDigitalOceanLevel
 		}
 		kept.Level = have.Level
 	case LaneAWS:

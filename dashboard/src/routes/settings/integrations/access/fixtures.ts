@@ -3,9 +3,10 @@
  * suites: GoPhrase's Datadog (SRE on the Datadog Admin Role, its tool live,
  * the rest off), its GitHub (every agent on, with the app permissions its
  * old tier registered), its GitLab (Dev a Developer in a group that lists no
- * projects), its Cloudflare (SRE able to purge, the rest off), its Expo
- * (QA's robot a Developer, the rest off) and its AWS (SRE's role on Operate,
- * the rest off), built from the fields a case names.
+ * projects), its Cloudflare (SRE able to purge, the rest off), its Expo (QA's
+ * robot a Developer, the rest off) and its DigitalOcean (SRE's token at
+ * Operate, the rest off) and its AWS (SRE's role on Operate, the rest off),
+ * built from the fields a case names.
  *
  * Times are relative to the moment the fixture is built, so "1d ago" reads
  * the same on every run.
@@ -127,6 +128,57 @@ const EXPO_OPTIONS: AccessOptions = {
   ],
 };
 
+/**
+ * DigitalOcean's three levels over a few of its scope picker's sections, each
+ * level holding the one before it. With `refused` and `unneeded` they cover
+ * every scope of those sections, as the engine's lists cover the whole picker.
+ */
+const DO_READ = [
+  "account:read",
+  "droplet:read",
+  "firewall:read",
+  "kubernetes:read",
+  "project:read",
+  "snapshot:read",
+];
+const DO_OPERATE = [
+  ...DO_READ,
+  "droplet:create",
+  "droplet:update",
+  "droplet:delete",
+  "firewall:create",
+  "firewall:update",
+  "firewall:delete",
+  "kubernetes:create",
+  "kubernetes:update",
+  "kubernetes:delete",
+  "project:assign_resource",
+  "snapshot:delete",
+];
+export const DO_TOKENS_PAGE = "https://cloud.digitalocean.com/account/api/tokens";
+
+const DIGITALOCEAN_OPTIONS: AccessOptions = {
+  lane: "digitalocean",
+  tool_server: "digitalocean",
+  live: false,
+  rotatable: true,
+  action_url: DO_TOKENS_PAGE,
+  vendor_account: "gophrase",
+  levels: [
+    { id: "read", name: "Read", grants: DO_READ },
+    { id: "operate", name: "Operate", grants: DO_OPERATE },
+    {
+      id: "administer",
+      name: "Administer",
+      administers: true,
+      note: "Can download cluster credentials, read database passwords and open consoles on Droplets and apps.",
+      grants: [...DO_OPERATE, "droplet:admin", "kubernetes:access_cluster"],
+    },
+  ],
+  refused: ["billing:read", "security:read", "security:create", "ssh_key:create"],
+  unneeded: ["genai:read", "genai:create", "project:create", "project:update", "project:delete"],
+};
+
 /** AWS's three fixed levels, each Crewlet's own customer managed policy, attached additively. */
 const AWS_OPTIONS: AccessOptions = {
   lane: "aws",
@@ -141,7 +193,6 @@ const AWS_OPTIONS: AccessOptions = {
     {
       id: "operate",
       name: "Operate",
-      administers: true,
       note: "Read, plus starting, stopping and scaling instances and services, invalidating caches, and alarms.",
     },
     {
@@ -206,7 +257,7 @@ export const GITLAB_LANE = laneOf(GITLAB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
 export const CLOUDFLARE_LANE = laneOf(CLOUDFLARE_OPTIONS);
 export const EXPO_LANE = laneOf(EXPO_OPTIONS);
-export const AWS_LANE = laneOf(AWS_OPTIONS);
+export const DIGITALOCEAN_LANE = laneOf(DIGITALOCEAN_OPTIONS);
 
 /** A lane that is on and in sync, holding what `over` says. */
 export function onLane(over: Partial<AccessSeatLane> & { variable: string }): AccessSeatLane {
@@ -556,6 +607,7 @@ const NEUTRAL_OPTIONS: AccessOptions = {
 };
 
 export const NEUTRAL_LANE = laneOf(NEUTRAL_OPTIONS);
+export const AWS_LANE = laneOf(AWS_OPTIONS);
 
 /** The lines Crewlet puts in a neutral seat's box: a variable naming a token file, and the file. */
 export const neutralBox = (handle: string): AccessBox => ({
@@ -603,6 +655,103 @@ export function neutralAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
   };
 }
 
+/** The line doctl needs in a seat's box, as the engine sends it. */
+const doBox = (handle: string): AccessBox => ({
+  env: [
+    { name: "DIGITALOCEAN_ACCESS_TOKEN", value: `\${DIGITALOCEAN_TOKEN_${handle}}`, by: "you" },
+  ],
+});
+
+/** Whose token every DigitalOcean seat holds: the person who made it, on the company's team. */
+const DO_OWNER = "Miles on gophrase";
+
+/**
+ * DigitalOcean with SRE's token at Operate, live through its box, and PM off
+ * at Read. `observed.account` is whose token it is, never the token's name,
+ * which only `hand_in` carries.
+ */
+export function digitaloceanAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
+  return {
+    kind: "digitalocean",
+    revision: "rev-7",
+    syncing: false,
+    last_sync_at: ago(4 * MIN),
+    options: [DIGITALOCEAN_OPTIONS],
+    seats: [
+      seat("pm", "PM", {
+        digitalocean: {
+          ...offLane("read"),
+          box: doBox("PM"),
+          hand_in: { name: "crewlet-gophrase-pm-read" },
+        },
+      }),
+      seat("sre", "SRE", {
+        digitalocean: onLane({
+          variable: "DIGITALOCEAN_TOKEN_SRE",
+          box: doBox("SRE"),
+          hand_in: { name: "crewlet-gophrase-sre-operate" },
+          desired: { enabled: true, level: "operate" },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: DO_OWNER,
+            account_id: "hmac-sre",
+            level: "operate",
+            credential: { variable: "DIGITALOCEAN_TOKEN_SRE", minted_at: ago(DAY) },
+          },
+          ...sre,
+        }),
+      }),
+    ],
+  };
+}
+
+/**
+ * DigitalOcean with PM turned on at Operate and waiting on a person for its
+ * token: its first at `create`, a new one at `mint` (the old one refused, or
+ * a level changed). `named: false` leaves `hand_in` off, as an engine that
+ * sends none would.
+ */
+export function digitaloceanWaitingAnswer(
+  step: "create" | "mint" = "create",
+  { named = true }: { named?: boolean } = {},
+): AccessAnswer {
+  const answer = digitaloceanAnswer();
+  const renew = step === "mint";
+  answer.seats[0] = seat("pm", "PM", {
+    digitalocean: {
+      desired: { enabled: true, level: "operate" },
+      observed: renew
+        ? {
+            exists: false,
+            enabled: false,
+            account: DO_OWNER,
+            credential: { variable: "DIGITALOCEAN_TOKEN_PM", minted_at: ago(DAY) },
+            credential_gone: true,
+          }
+        : { exists: false, enabled: false },
+      sync: {
+        at: ago(MIN),
+        outcome: "waiting",
+        steps: [],
+        error: {
+          step,
+          said: renew
+            ? "Create a new token crewlet-gophrase-pm-operate with the Operate scopes, then paste it here"
+            : "Create a personal access token named crewlet-gophrase-pm-operate with Custom Scopes for the Operate level, then paste it here",
+          remedy: "",
+          actor: "you",
+        },
+      },
+      plan: [],
+      tool: "off",
+      box: doBox("PM"),
+      ...(named ? { hand_in: { name: "crewlet-gophrase-pm-operate" } } : {}),
+    },
+  });
+  return answer;
+}
+
 /**
  * The files Crewlet puts in an AWS seat's box, as the engine sends them: the
  * issued credentials it rewrites, and the CLI profile that reads them. No
@@ -612,16 +761,16 @@ const awsBox = (handle: string): AccessBox => ({
   env: [],
   files: [
     {
-      path: ".config/crewlet/aws-credentials.json",
-      value: `\${AWS_CREDENTIALS_${handle}}`,
-      rewritten: true,
+      path: ".aws/config",
+      value:
+        "[profile crewlet]\nregion = us-east-2\ncredential_process = sh -c 'cat \"$HOME/.aws/crewlet-credentials.json\"'\n",
+      rewritten: false,
       by: "crewlet",
     },
     {
-      path: ".aws/config",
-      value:
-        "[profile crewlet]\nregion = us-east-2\ncredential_process = cat /home/crewlet/.config/crewlet/aws-credentials.json\n",
-      rewritten: false,
+      path: ".aws/crewlet-credentials.json",
+      value: `\${AWS_CREDENTIALS_${handle}}`,
+      rewritten: true,
       by: "crewlet",
     },
   ],

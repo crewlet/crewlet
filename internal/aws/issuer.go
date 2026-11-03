@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -26,6 +27,11 @@ type Issuer struct {
 	// now is the clock; nil is the wall clock.
 	now func() time.Time
 }
+
+// ErrSettling is a seat whose role STS will not let the broker assume yet: a
+// role just created, still propagating through IAM. A wait clears it; a role
+// that stays refused is the access sync's to report.
+var ErrSettling = errors.New("aws: the agent's role is not assumable yet")
 
 // SeatVariable is the variable an agent's session is issued under, and the
 // one its box's credentials file holds.
@@ -80,6 +86,9 @@ func (i *Issuer) session(ctx context.Context, client *Client, handle string, lif
 	}
 	role := conn.resolve("arn:{partition}:iam::{account}:role"+seatPath) + conn.Company.SeatRoleName(slug)
 	creds, _, err := client.SeatSession(ctx, slug, role, SeatSeconds)
+	if hasCode(err, "AccessDenied") {
+		return awssdk.Credentials{}, fmt.Errorf("%w: %w", ErrSettling, err)
+	}
 	if err != nil {
 		return awssdk.Credentials{}, err
 	}

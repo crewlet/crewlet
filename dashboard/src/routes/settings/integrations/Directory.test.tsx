@@ -79,13 +79,15 @@ const answer: IntegrationsAnswer = {
       label: "Connected",
       reason: "",
     },
-    ...["slack", "mattermost", "github", "cloudflare", "expo", "aws"].map((key) => ({
-      key,
-      surfaces: [key],
-      state: "not_in_use" as const,
-      label: "Not in use",
-      reason: "",
-    })),
+    ...["slack", "mattermost", "github", "cloudflare", "expo", "digitalocean", "aws"].map(
+      (key) => ({
+        key,
+        surfaces: [key],
+        state: "not_in_use" as const,
+        label: "Not in use",
+        reason: "",
+      }),
+    ),
   ],
   traffic_known: true,
   traffic_since: null,
@@ -117,9 +119,17 @@ const listing = {
     { ...tool("gitlab", true), can_provision: true },
     tool("datadog", true),
     tool("confluence", true),
-    ...["slack", "mattermost", "atlassian", "jira", "github", "cloudflare", "expo", "aws"].map(
-      (k) => tool(k),
-    ),
+    ...[
+      "slack",
+      "mattermost",
+      "atlassian",
+      "jira",
+      "github",
+      "cloudflare",
+      "expo",
+      "digitalocean",
+      "aws",
+    ].map((k) => tool(k)),
   ],
   external_url: { value: "https://engine.example.com", config_path: "api.external_url" },
 } as unknown as SetupListing;
@@ -278,7 +288,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
     ["Code", ["GitHub", "GitLab"]],
     ["Observability", ["Datadog"]],
-    ["Cloud and Infrastructure", ["AWS", "Cloudflare"]],
+    ["Cloud and Infrastructure", ["AWS", "Cloudflare", "DigitalOcean"]],
     ["Mobile apps", ["Expo"]],
   ]);
 });

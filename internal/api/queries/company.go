@@ -383,6 +383,17 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		}
 		add("expo", in.Expo.Enabled, nil, map[string]any{"account_name": account})
 	}
+	if in.DigitalOcean != nil {
+		// PROVISIONING ONLY, like expo above: a person pastes each agent's
+		// token, which the engine checks and seals, and no delivery arrives,
+		// so there is no delivery secret to report. The team is what the row
+		// names, as written in the document.
+		var team string
+		if in.DigitalOcean.Provisioning != nil {
+			team = in.DigitalOcean.Provisioning.Team
+		}
+		add("digitalocean", in.DigitalOcean.Enabled, nil, map[string]any{"team": team})
+	}
 	if in.AWS != nil {
 		// NOTHING INBOUND: the row names the stack, by its short name and
 		// home Region, which every name in the account carries.

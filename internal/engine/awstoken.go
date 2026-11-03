@@ -62,11 +62,15 @@ func (a awsSeatIssuer) issuing(c *Company, seat *org.Role, env *config.Resolver)
 }
 
 // refusal is why an issue failed: a stack output not pasted yet is the
-// integration's card's step, a throttle, a server error or a transport failure
-// passes, and a refusal is the person's to fix.
+// integration's card's step, a role IAM is still propagating settles with a
+// wait, a throttle, a server error or a transport failure passes, and a
+// refusal is the person's to fix.
 func (awsSeatIssuer) refusal(err error) (string, bool) {
 	if errors.Is(err, awsint.ErrNotConnected) || errors.Is(err, integration.ErrNotConfigured) {
 		return "", false
+	}
+	if errors.Is(err, awsint.ErrSettling) {
+		return "", true
 	}
 	status := awsint.Status(err)
 	var unanswered *url.Error

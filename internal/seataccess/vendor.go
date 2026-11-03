@@ -68,6 +68,12 @@ type OpenInput struct {
 	// request and redirect URLs from. Empty on a preview, where the
 	// session creates and restores nothing.
 	WebhookBase string
+
+	// Derive is a 32-byte key for one purpose, derived from the fleet's
+	// secrets keyring and alike on every node ([secrets.Keyring.Derive]),
+	// for a fingerprint the ledger may record in place of a value. Nil where
+	// the caller holds no keyring, as a migration's read does.
+	Derive func(info string) []byte
 }
 
 // Session is one pass's connection to the vendor.
@@ -452,18 +458,24 @@ type BoxSet struct {
 	Env map[string]string
 
 	// Files are written into the box at launch, beside the files a person's
-	// setup steps write and never into its environment, so no file can sign
-	// a harness in.
+	// setup steps write and never into its environment, which holds at most a
+	// file's path ([BoxFile.PathEnv]), so no file can sign a harness in.
 	Files []BoxFile
 }
 
 // BoxFile is one file a vendor puts in a seat's box: at Path, relative to the
 // box's home, holding the whole `${VAR}` reference Ref, resolved at launch
 // through the seat's own resolution, so a credential issued at use is issued
-// there. Its value is scrubbed from the run's output as a credential's is.
+// there, or Ref itself where it is literal text and no reference. Its value
+// is scrubbed from the run's output as a credential's is.
 type BoxFile struct {
 	Path string
 	Ref  string
+
+	// PathEnv is the variable the launch sets to this file's absolute path in
+	// the box, joined onto that box's own home, for a CLI pointed at the file
+	// by one; empty for none. Never a sign-in, and beneath every other layer.
+	PathEnv string
 
 	// Rewritten is a file the completion poll keeps current for as long as
 	// the run lasts, where Ref names a credential issued at use, which
@@ -538,6 +550,15 @@ type Options struct {
 	// ActionURL is where a person takes the lane's [ByYou] steps at the
 	// vendor, which each such step drawn without one of its own carries.
 	ActionURL string `json:"action_url,omitempty"`
+	// Refused is every vendor permission no level grants that a pasted
+	// credential must not hold, and Unneeded every other one no level grants:
+	// with the levels' [Level.Grants], each permission the vendor offers is
+	// in exactly one. Nil where Crewlet grants permissions itself.
+	Refused  []string `json:"refused,omitempty"`
+	Unneeded []string `json:"unneeded,omitempty"`
+	// VendorAccount is the account, organization or team the company
+	// connected, as the vendor shows it, for a step that says where to act.
+	VendorAccount string `json:"vendor_account,omitempty"`
 
 	// Managed is [ManagedExternal] where the engine does not provision this
 	// lane for the company (D4b): a seat's switch still binds its tool to
@@ -613,6 +634,11 @@ type StepsInput struct {
 	// vendor's own name rather than by its id. Zero where the caller read
 	// none, and a vendor then names what it can without it.
 	Options Options
+
+	// HandIn is the name a person gives what they make at the vendor for the
+	// seat ([HandInNamer]), "" where the vendor names none or the caller
+	// handed no document.
+	HandIn string
 }
 
 // NamedSteps is a vendor whose steps name its levels by the vendor's own
@@ -667,6 +693,11 @@ type Level struct {
 	// empty where one can. A picker offers it disabled with this reason,
 	// rather than as a choice a save would only fail at.
 	Unavailable string `json:"unavailable,omitempty"`
+
+	// Grants is every vendor permission the level holds, in the vendor's own
+	// names, where a person grants them by hand at the vendor (DigitalOcean's
+	// token scopes); nil where Crewlet grants them itself.
+	Grants []string `json:"grants,omitempty"`
 }
 
 // ToolState is whether a seat can use its credential through a tool right now.

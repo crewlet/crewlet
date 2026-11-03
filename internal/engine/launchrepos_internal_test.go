@@ -705,6 +705,84 @@ func TestABoxReachesOnlyWhatItCheckedOut(t *testing.T) {
 	}
 }
 
+// A BOX THAT LOST ITS CLONE CONTINUES ITS BRANCH WHERE IT STANDS. The same
+// checkout again — from a fresh box a round carried on was launched in — is
+// answered the row's grant cloned from the head the run's branch has now,
+// with whatever its job pushed there, and the row's floor raised to the read
+// that found that head, so the node serving the box's fetch holds it. While
+// nothing was pushed and the branch does not exist, the clone starts from the
+// base the first checkout resolved, however far the default branch has moved
+// since.
+//
+// Mutations: the held grant cloned from its first base whatever was pushed
+// → the pushed branch's clone, red; its base taken from the resolution's own
+// rather than the branch's head → the moved default branch's clone, red; the
+// floor left where it was → the floor, red; the resolution reporting no head
+// → the pushed branch's clone, red.
+func TestABoxThatLostItsCloneContinuesItsBranchWhereItStands(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
+	web := project("web", "Engineering", code.VisibilityCompany)
+	rig.host.add(web, map[string]string{"refs/heads/main": mainHead})
+	turn := rig.turn(t, "swe", nil)
+	row, err := rig.pending.BeginLaunch(ctx, sandbox.PendingRun{TurnID: turn.RunID, AgentHandle: "swe",
+		AgentID: "a-1", Role: "SWE", Harness: executor.ClaudeCodeName, Placement: string(rig.placement),
+		Reply: "tool", CreatedAt: time.Now().UTC()}, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("begin the launch: %v", err)
+	}
+	desk := runCheckouts{engine: rig.e, deps: rig.deps}
+	first, err := desk.Checkout(ctx, turn, row.LaunchID, builtin.RepoRequest{Repo: "web"})
+	if err != nil || first.Outcome != sandbox.GrantAdded || first.Repo.Base != mainHead {
+		t.Fatalf("the first checkout answered %+v, %v; want web added from main's head", first, err)
+	}
+	// clonesFrom reports whether a checkout answers web's grant from base and
+	// its steps clone it from there.
+	clonesFrom := func(got builtin.Checkout, base string) bool {
+		t.Helper()
+		want := first.Repo
+		want.Base = base
+		clone, err := sandbox.CloneRecipe(want, sandbox.CloneCoding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Repo.Base == base && slices.ContainsFunc(got.Steps, func(s sandbox.SetupStep) bool {
+			return slices.Equal(s.Commands, clone.Commands)
+		})
+	}
+
+	// NOTHING PUSHED, AND MAIN MOVED ON: the run's branch does not exist, so
+	// the box starts where its session started, not on main's new head.
+	rig.host.mu.Lock()
+	rig.host.refs[web.ID]["refs/heads/main"] = strings.Repeat("4", 40)
+	rig.host.mu.Unlock()
+	again, err := desk.Checkout(ctx, turn, row.LaunchID, builtin.RepoRequest{Repo: "web"})
+	if err != nil || again.Outcome != sandbox.GrantHeld || !clonesFrom(again, mainHead) {
+		t.Errorf("web checked out again before any push answered %+v, %v; want the grant cloned from the "+
+			"base its first checkout resolved, %s", again, err, mainHead)
+	}
+
+	// PUSHED: the job pushed its branch, at a position past the row's floor.
+	rig.host.mu.Lock()
+	rig.host.refs[web.ID]["refs/heads/"+first.Repo.Branch] = seatHead
+	rig.host.resolved = codeLogAt(12)
+	rig.host.mu.Unlock()
+	pushed, err := desk.Checkout(ctx, turn, row.LaunchID, builtin.RepoRequest{Repo: "web"})
+	if err != nil || pushed.Outcome != sandbox.GrantHeld || !clonesFrom(pushed, seatHead) {
+		t.Errorf("web checked out again after a push answered %+v, %v; want the grant cloned from the "+
+			"branch's head, %s", pushed, err, seatHead)
+	}
+	stored, _, err := rig.pending.Get(ctx, turn.RunID)
+	if err != nil {
+		t.Fatalf("read the row: %v", err)
+	}
+	if at, err := statelog.ParsePosition(stored.CodeFloor); err != nil || !holds(at, codeLogAt(12)) {
+		t.Errorf("the row's floor is %q (%v), want it raised to the read that found the head, %s",
+			stored.CodeFloor, err, codeLogAt(12))
+	}
+}
+
 // A CHECKOUT HOLDS WHAT IT RESOLVES ON ITS JOB'S ROW (M3-decisions M3-O61,
 // M3-O64): an executor on ENG-42 checks out a scratch repository of its seat
 // it never wrote, and web, whose seats/swe/ENG-42 an earlier turn pushed. The

@@ -96,18 +96,33 @@ func (b WaitBound) String() string {
 // instant the request must be answered by, whichever comes first — and that
 // bound, for the answer that names it.
 //
+// THE WAIT ENDS AT AN INSTANT, never after a length: the asker's answer-by
+// instant is the context's deadline itself, and the budget's end is laid off
+// from the one reading of the clock the two were compared at. Turned into what
+// is left and armed as a timeout, the bound is re-anchored to whenever the
+// timeout is armed, so a goroutine stalled between reading the clock and
+// arming it — a stop of the world, a starved runner — ran the wait on by the
+// stall: past the instant its asker must be answered by and, for a stall the
+// length of the margin, to the asker's own deadline, which is the answer said
+// for nobody. The budget goes from the same reading because the choice between
+// the two was made at it: a budget ahead of the instant then, armed later,
+// could end after the instant it was chosen ahead of.
+//
 // An instant already past is a wait of NOTHING rather than a refusal of its
 // own: a position already reached is still found at once, because every
 // waiter here looks before it waits ([Runner.WaitReached]), and any other
 // wait ends at its first step with the answer its budget running out gives.
 func WaitWithin(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc, WaitBound) {
-	bound := WaitBound{Within: budget}
-	if at, ok := answerBy(ctx); ok {
-		if left := time.Until(at); left < budget {
-			bound = WaitBound{Within: max(left, 0), Asker: true}
-		}
+	return waitWithin(ctx, budget, time.Now())
+}
+
+// waitWithin is [WaitWithin] with the clock read at now.
+func waitWithin(ctx context.Context, budget time.Duration, now time.Time) (context.Context, context.CancelFunc, WaitBound) {
+	end, bound := now.Add(budget), WaitBound{Within: budget}
+	if at, ok := answerBy(ctx); ok && at.Before(end) {
+		end, bound = at, WaitBound{Within: max(at.Sub(now), 0), Asker: true}
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, bound.Within)
+	waitCtx, cancel := context.WithDeadline(ctx, end)
 	return waitCtx, cancel, bound
 }
 

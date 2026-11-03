@@ -197,6 +197,7 @@ export type Tool =
   | "atlassian"
   | "cloudflare"
   | "expo"
+  | "digitalocean"
   | "aws";
 
 /** How each tool is named on screen. */
@@ -211,6 +212,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   atlassian: "Atlassian",
   cloudflare: "Cloudflare",
   expo: "Expo",
+  digitalocean: "DigitalOcean",
   aws: "AWS",
 };
 
@@ -428,14 +430,15 @@ const VENDOR_LANES = {
   gitlab: ["gitlab"],
   datadog: ["datadog"],
   atlassian: ["jira", "confluence"],
+  expo: ["expo"],
   aws: ["aws"],
 } as const;
 
 /**
  * What exists at the vendors for a seat, by name, never by value: its own
- * GitHub App, Slack app and Mattermost bot, and the GitLab, Datadog and
- * Atlassian accounts it is enrolled for. Each stays when the seat is deleted
- * or stops being an agent, until somebody decommissions it.
+ * GitHub App, Slack app and Mattermost bot, the GitLab, Datadog and
+ * Atlassian accounts it is enrolled for, and its Expo robot. Each stays when
+ * the seat is deleted or stops being an agent, until somebody decommissions it.
  *
  * NOTHING FOR A SEAT THIS DRAFT CREATED: it was never saved, so no engine
  * made anything for it anywhere. And an account is named only where the seat
@@ -447,8 +450,13 @@ const VENDOR_LANES = {
  * NOTHING FOR CLOUDFLARE: a seat's token is all it has there, and the engine
  * deletes it once the seat is off or gone, so nothing is left to decommission.
  *
- * NOTHING FOR EXPO: a seat's robot user is all it has there, and the engine
- * deletes it once the seat is off or gone, so nothing is left to decommission.
+ * AN EXPO ROBOT STAYS until a person deletes it at Expo: Crewlet drops the
+ * seat's token at once, but only a person can delete a robot there, or keep
+ * it, so it is named wherever the seat is enrolled at a connected Expo.
+ *
+ * NOTHING FOR DIGITALOCEAN: a seat's token is all it has there, and Crewlet
+ * revokes it itself once the seat is off or gone, so nothing is left to
+ * decommission.
  *
  * AWS'S IAM ROLE STAYS: the engine denies it everything when the seat goes,
  * and deletes it only when somebody removes it on the Agents tab.
@@ -477,6 +485,7 @@ export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[]
     out.push("its Datadog service account");
   }
   if (isConnected(company, "atlassian") && enrolled("atlassian")) out.push("its Atlassian account");
+  if (isConnected(company, "expo") && enrolled("expo")) out.push("its Expo robot");
   if (isConnected(company, "aws") && enrolled("aws")) out.push("its AWS IAM role");
   return out;
 }

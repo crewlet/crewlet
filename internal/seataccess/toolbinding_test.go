@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/digitalocean"
 	_ "github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
@@ -96,10 +97,11 @@ func TestTheToolStateComesFromTheResolvedBinding(t *testing.T) {
 func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 	t.Parallel()
 	vendors := map[string][]string{
-		"datadog":    datadog.CredentialKeys,
-		"gitlab":     gitlab.CredentialKeys,
-		"github":     github.CredentialKeys,
-		"cloudflare": cloudflare.CredentialKeys,
+		"datadog":      datadog.CredentialKeys,
+		"gitlab":       gitlab.CredentialKeys,
+		"github":       github.CredentialKeys,
+		"cloudflare":   cloudflare.CredentialKeys,
+		"digitalocean": digitalocean.CredentialKeys,
 	}
 	for _, b := range catalogue.Bindings() {
 		keys, ok := vendors[b.Vendor]
