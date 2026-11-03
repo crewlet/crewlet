@@ -203,11 +203,10 @@ kubectl create rolebinding sre-agent-edit --role=deployer --namespace=app \
 - A change can read back stale for a while.
 
 **Crewlet waits these out, never reporting them as a failure.** The sync ends as done once Crewlet's writes are made, and the agent's tool on the Agents tab says what it waits on:
-- "Waiting: Google is still applying the grant", for 10 minutes after Crewlet grants the agent access, since its first token can take a minute or two;
-- "Waiting: Google is still applying the change", for 3 minutes after any other change, such as a project removed;
-- "Waiting: Google is still creating the agent's account", for 3 minutes after the account is made, where the sync stopped before granting it.
+- "Waiting: Google is still applying the grant", for up to 10 minutes after Crewlet grants the agent access (turning it on, raising its level, adding a project), since its first token can take a minute or two;
+- "Waiting: Google is still applying the change", for up to 3 minutes after any other change (lowering its level, dropping a project).
 
-Each ends by itself. A sync that still cannot see its own write after 3 minutes says so, and the next pass tries again.
+Each ends by itself. A sync that still cannot see its own write after 3 minutes says so, and the next pass tries again: for a new account, "Google is still creating the agent's account".
 
 ### Disconnecting
 
