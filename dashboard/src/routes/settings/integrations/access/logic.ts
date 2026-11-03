@@ -194,15 +194,15 @@ export function onlyScope(lane: Lane, want: AccessDesired): string[] | undefined
 }
 
 /**
- * Why a seat's scope cannot be saved, or null, as the engine would refuse it:
- * on a lane where an empty scope reaches nothing (`scope_required`), a seat
- * turned on with none.
+ * Why a seat's scope cannot be saved, or null, in the engine's words for the
+ * same refusal: on a lane where an empty scope reaches nothing
+ * (`scope_required`), the agent `who` turned on with none.
  */
-export function refusedScope(lane: Lane, want: AccessDesired): string | null {
+export function refusedScope(lane: Lane, want: AccessDesired, who: string): string | null {
   if (!lane.scope_required || !want.enabled || managedOutside(lane)) return null;
   if ((want.scope ?? []).length > 0) return null;
   const singular = laneWords(lane.key).scope?.singular ?? "entry";
-  return `Choose at least one ${lane.name} ${singular} for every agent that is on.`;
+  return `Choose at least one ${singular} for ${who}: an agent in no ${singular} can reach nothing.`;
 }
 
 /**
@@ -317,6 +317,12 @@ export function needsAttention(status: Status): boolean {
 /** The lines a person adds to a seat's box for its CLI, as the engine sends them. */
 export function boxLines(saved: AccessSeatLane): AccessBoxLine[] {
   return (saved.box?.env ?? []).filter((line) => line.by === "you");
+}
+
+/** The settings Crewlet puts in a seat's box itself, by name, or null where it puts none. */
+export function boxSettings(saved: AccessSeatLane): string | null {
+  const names = (saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name);
+  return names.length > 0 ? andList(names) : null;
 }
 
 /** The tool, as one value: whether it works, and what it works through. */
