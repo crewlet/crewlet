@@ -6572,8 +6572,12 @@ Two things follow, and both were bugs before they were rules:
   width.
 
 `PropertiesRail` keeps the one thing this shape is for on this screen: the
-conversation key, which really is a term and its detail — labelled, with the
-caption that says which external thread it names.
+conversation key, which really is a term and its detail — labelled, printed as
+every row prints a key (a schedule's parts decoded, the key as sent on its
+title), with the caption that says what it names: the external conversation the
+turn served, or, for a schedule's fire, the schedule the turn was a fire of,
+which no surface holds. A phase card's footer prints it the same way, saying
+which on its title.
 
 And **a chip must not repeat the sentence beside it.** The trigger's summary
 is built by the vendor's own summariser and already opens with who wrote it

@@ -66,6 +66,7 @@ import { useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
 import { LiveOutput, NoJobCaption, steerMarks, Waterfall } from "./trace/Waterfall.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
+import { conversationLabel, conversationRole } from "~/lib/conversationKey.ts";
 import {
   Button,
   Callout,
@@ -2119,16 +2120,22 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                               {
                                 properties: [
                                   {
-                                    // The turn's CONVERSATION IDENTITY,
-                                    // "{source}:{local}", the surface's own
-                                    // answer to "which ongoing conversation is
-                                    // this", not an address.
+                                    // The turn's CONVERSATION IDENTITY, not an
+                                    // address: "{source}:{local}", the
+                                    // surface's own answer to "which ongoing
+                                    // conversation is this", or a fire's
+                                    // schedule's own key, which no surface
+                                    // holds. Printed as every row prints a
+                                    // key, a schedule's decoded, the key as
+                                    // sent on its title.
                                     label: "Conversation",
                                     value: (
                                       <span className="row gap-2 baseline">
-                                        <InlineCode>{conversation}</InlineCode>
+                                        <span title={conversation}>
+                                          <InlineCode>{conversationLabel(conversation)}</InlineCode>
+                                        </span>
                                         <span className="t-caption">
-                                          the external conversation this turn served
+                                          {conversationRole(conversation)}
                                         </span>
                                       </span>
                                     ),

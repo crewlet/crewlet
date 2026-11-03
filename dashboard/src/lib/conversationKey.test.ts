@@ -1,12 +1,12 @@
 // @vitest-environment node
 
 /**
- * A conversation key as a row prints it: the Memory tab's episodes column and
- * the subtitle of a session's transcript.
+ * A conversation key as a row prints it: the Memory tab's episodes column, the
+ * subtitle of a session's transcript, a turn's page and its phase cards.
  */
 
 import { expect, test } from "vitest";
-import { conversationLabel } from "./conversationKey.ts";
+import { conversationLabel, conversationRole, isScheduleConversation } from "./conversationKey.ts";
 
 // A ROW PRINTS A UUID'S HEAD — the way every narrow row names one — and
 // nothing else in a key changes, so `work:ENG-32` stays whole.
@@ -42,4 +42,22 @@ test("a schedule's conversation key prints its parts as they were written", () =
     "schedule/unit/eng/broken%E2%80",
   );
   expect(conversationLabel("jira:ENG-42%20x")).toBe("jira:ENG-42%20x");
+});
+
+// A SCHEDULE'S KEY NAMES THE SCHEDULE A TURN WAS A FIRE OF, known by the
+// engine's own prefix alone: no surface holds it and nobody replies into it,
+// so it is never called the external conversation a turn served — and a key a
+// source derives, which starts with its source and a colon, always is.
+//
+// Mutation: match the prefix anywhere in the key, drop its slash, or word a
+// schedule's key as an external conversation, and one of these reads otherwise.
+test("a schedule's key is said to be the schedule a turn was a fire of", () => {
+  expect(isScheduleConversation("schedule/unit/eng/weekly%20report")).toBe(true);
+  expect(isScheduleConversation("schedule:ops")).toBe(false);
+  expect(isScheduleConversation("jira:schedule/unit/eng")).toBe(false);
+  expect(isScheduleConversation("")).toBe(false);
+  expect(conversationRole("schedule/role/4d631f6d-5107-46f0-8043-a1f9d7a74abc/check")).toBe(
+    "the schedule this turn was a fire of",
+  );
+  expect(conversationRole("slack:C9:1718.001")).toBe("the external conversation this turn served");
 });

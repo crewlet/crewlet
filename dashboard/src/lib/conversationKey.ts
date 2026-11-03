@@ -3,11 +3,13 @@
  *
  * # A module of its own, out of `format.ts`
  *
- * Only a seat's Memory tab prints a conversation key — its episodes' column
- * and the subtitle of a session's transcript — and both are drawn by lazily
- * loaded chunks. `format.ts` is in the shell's initial load, which every screen
- * pays for before its first paint, so a label two lazy screens print, and the
- * decoding of a schedule's key it carries, belong with them rather than there.
+ * A conversation key is printed by a seat's Memory tab — its episodes' column
+ * and the subtitle of a session's transcript — by a turn's page and by the
+ * phase cards a turn, a seat and an event draw, and every one of them is drawn
+ * by a lazily loaded chunk. `format.ts` is in the shell's initial load, which
+ * every screen pays for before its first paint, so a label only lazy screens
+ * print, and the decoding of a schedule's key it carries, belong with them
+ * rather than there.
  */
 
 import { SCHEDULE_CONVERSATION_PREFIX } from "~/contract/sessions.ts";
@@ -47,4 +49,26 @@ export function conversationLabel(key: string): string {
     ? prefix + raw.slice(prefix.length).split("/").map(unescapedPart).join("/")
     : raw;
   return shown.replace(UUID_IN, (id) => id.slice(0, 8));
+}
+
+/**
+ * Whether a conversation key is a schedule's: the conversation every fire of
+ * one schedule is on the seat that runs it (`notify.ScheduleConversation`),
+ * which no surface holds and nobody replies into — so a screen that prints a
+ * turn's conversation says the turn was a fire of that schedule, rather than
+ * calling the key the external conversation the turn served.
+ */
+export function isScheduleConversation(key: string): boolean {
+  return (key ?? "").startsWith(SCHEDULE_CONVERSATION_PREFIX);
+}
+
+/**
+ * What a turn's conversation key names, in the words a screen prints beside
+ * it: the schedule the turn was a fire of, or the external conversation it
+ * served.
+ */
+export function conversationRole(key: string): string {
+  return isScheduleConversation(key)
+    ? "the schedule this turn was a fire of"
+    : "the external conversation this turn served";
 }

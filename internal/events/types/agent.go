@@ -433,9 +433,13 @@ type AgentTurnCompleted struct {
 	// `auth`, `timeout`, …) — or `stopped` for a turn a person
 	// ended, which is the one kind that is not a failure.
 	ErrorKind string `json:"error_kind"`
-	// ConversationKey is which conversation the turn served, "{source}:{local}".
-	// Stamped so the event store can answer "what has this seat done on this
-	// thread" by tag, which no field on this event could answer before.
+	// ConversationKey is which conversation the turn served: "{source}:{local}"
+	// for one a surface holds, or for a schedule's fire the schedule's own
+	// key, "schedule/<scope>/<scope id>/<name>" with each part escaped
+	// (internal/notify's ScheduleConversation), which no surface holds and
+	// nobody replies into. Stamped so the event store can answer "what has
+	// this seat done on this thread" by tag, which no field on this event
+	// could answer before.
 	ConversationKey string `json:"conversation_key"`
 }
 
