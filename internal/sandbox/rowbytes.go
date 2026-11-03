@@ -174,10 +174,14 @@ const (
 	// ([PendingRun.AudienceHandles]). TWO HUNDRED AND FIFTY-SIX: a `team`
 	// audience is every person in the asking seat's unit, which nothing else
 	// bounds, and a question put to more people than that is put to nobody in
-	// particular. Every other audience is one or two seats — the requester,
-	// the manager — and a `team` one is resolved as the unit's lead first and
-	// then its members in the chart's order, so a unit past the bound keeps
-	// its lead and its first members.
+	// particular. The requester, the manager and a colleague named by the run
+	// are one seat each; the FALLBACK, for a label that names nobody the chart
+	// has, is the seat's lead chain — its managers up to the top of the chart,
+	// or for a seat nobody manages the leads of the units that hold it — as
+	// long as the chart is deep, which is far under it. A `team` audience is
+	// resolved as the unit's lead first and then its people in the chart's
+	// order, and the chain nearest first, so past the bound a unit keeps its
+	// lead and its first members, and a chain its nearest leads.
 	//
 	// WHAT A SEAT PAST IT LOSES is being the question's audience: the list is
 	// what the board shows a question's body to, and what puts it in a

@@ -1246,7 +1246,10 @@ type PendingRun struct {
 	// question when a new job opens on the row ([PendingStore.BeginLaunch]).
 	// A key a NEWER build adds beside these survives this build's
 	// compare-and-swap through [PendingRun.Extra]. Held to
-	// [MaxAudienceHandles], the nearest first, by the park that writes them.
+	// [MaxAudienceHandles] by the park that writes them, the first kept in
+	// the order the resolution names them: a `team` audience's lead and then
+	// its people in the chart's order, the fallback's lead chain nearest
+	// first.
 	AudienceHandles  []string `json:"audience_handles,omitempty"`
 	AudienceFallback bool     `json:"audience_fallback,omitempty"`
 
@@ -1903,8 +1906,10 @@ type PendingStore interface {
 	// MarkAwaiting parks a run on a question, freeing the seat. A
 	// question with no [Clarification.AskedAt] is refused: it is the anchor
 	// every answer is measured against ([PendingRun.AskedAt]). The seats it
-	// is put to are held to [MaxAudienceHandles], the first of them kept:
-	// the resolution names the nearest first.
+	// is put to are held to [MaxAudienceHandles], the first of them kept in
+	// the order the resolution names them: a `team` audience's lead and then
+	// its people in the chart's order, the fallback's lead chain nearest
+	// first.
 	MarkAwaiting(ctx context.Context, turnID string, q Clarification) error
 
 	// ClaimOwnership takes the run for a node, reporting whether it won.

@@ -598,8 +598,11 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 	}
 	_, _, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		run.Status = StatusAwaiting
-		// THE NEAREST FIRST, held to [MaxAudienceHandles]: the resolution
-		// names them in that order, and a unit's every person is not.
+		// THE FIRST OF THEM, held to [MaxAudienceHandles], in the order the
+		// resolution names them — a `team` audience its unit's lead and then
+		// its people in the chart's order, the fallback its lead chain
+		// nearest first — so past the bound a unit keeps its lead and its
+		// first members, and a chain its nearest leads.
 		run.AudienceHandles = slices.Clone(q.Answerers.Handles[:min(len(q.Answerers.Handles),
 			MaxAudienceHandles)])
 		run.AudienceFallback = q.Answerers.Fallback
