@@ -18,11 +18,11 @@
 
 import type { LogPosition } from "./positions.ts";
 
-/** How a turn ended, in the engine's four words (`executordomain.Outcomes`). */
+/** How a turn ended, in the engine's four words (`executorkeep.Outcomes`). */
 export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";
 
 /**
- * The engine's account of how a turn ended (`executordomain.Ending`): what a
+ * The engine's account of how a turn ended (`executorkeep.Ending`): what a
  * harness's transcript cannot know. Every member but the outcome is sent only
  * where the way the turn ended establishes it.
  */
