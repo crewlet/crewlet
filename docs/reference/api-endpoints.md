@@ -6970,15 +6970,18 @@ stays: the four tools about the fleet's own records, `search_knowledge` and
 
 **The catalogue follows what the node runs, without a restart.** Because each
 request builds it from what the node serves at that moment, it follows the
-revision that brings the company's first native backend (a company applied
-after boot — the [live bootstrap](../getting-started/quickstart.md) — is
-offered its Worklet, Doclet and Chatlet tools from that revision on), a
-revision that adds or removes the company's knowledge backend, and a rename of
+revision that hands a node that booted with no company its first one (the
+[live bootstrap](../getting-started/quickstart.md): its Worklet, Doclet and
+Chatlet tools are offered from that revision on), a revision that adds or
+removes a vendor's knowledge backend, which is rebuilt live, and a rename of
 the company, which titles the MCP server. A revision that reconfigures the
 knowledge backend it has — another Confluence site or space, a rotated
 credential — changes no tool: `search_knowledge` and `answer_knowledge` reach
-the backend the node holds at each call. A revision that switches a native
-half to a vendor or back changes nothing here until the node restarts, as
+the backend the node holds at each call. A revision that turns a native half
+on or off on a node that has run a company — its first native half included,
+since the node built its runtime from its first company, whatever that named —
+or switches one to a vendor or back changes nothing here until the node
+restarts, as
 [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)
 says for every surface. Nothing is held for a client between two requests, so
 a change ends nobody's connection, and a listing is answered by the catalogue
