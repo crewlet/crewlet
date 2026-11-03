@@ -182,3 +182,38 @@ func TestABoxListsTheEnginesFilesWhileOn(t *testing.T) {
 		t.Errorf("defaults = %+v, want the vendor's two files, by path", defaults)
 	}
 }
+
+// A VENDOR'S BOX DEFAULTS REACH A SEAT WITH ANY OF ITS LANES ON, whether that
+// lane's tool reads a box variable or not, and no seat with every lane off:
+// its settings and its files alike. Mutation: reach only a seat with a lane
+// that reads a box variable on, and the seat on the other lane goes without.
+func TestBoxDefaultsReachASeatWithAnyOfItsVendorsLanesOn(t *testing.T) {
+	t.Parallel()
+	file := BoxFile{Path: ".config/crewlet/token", Ref: "${ATLASSIAN_TOKEN_QA}", Rewritten: true}
+	twoLanes := defaulter{cat: Catalog{Kind: integration.KindAtlassian, Credentials: []string{"TOKEN", "EMAIL"},
+		Lanes: []LaneSpec{
+			{Lane: LaneJira, BoxEnv: []BoxVar{{Field: "TOKEN", Env: "CLI_TOKEN"}}},
+			{Lane: LaneConfluence},
+		}}, vars: map[string]string{"CLI_SITE": "acme"}, files: []BoxFile{file}}
+	on, off := true, false
+	company := func(jira, confluence *bool) *config.Company {
+		return &config.Company{Roles: []config.Role{{Name: "QA", Handle: "qa",
+			Integrations: config.RoleIntegrations{
+				Jira: &config.RoleJira{Enabled: jira}, Confluence: &config.RoleConfluence{Enabled: confluence},
+			}}}}
+	}
+	for name, c := range map[string]*config.Company{
+		"only the lane that reads no box variable on": company(&off, &on),
+		"only the lane that reads one on":             company(&on, &off),
+		"both on":                                     company(&on, &on),
+	} {
+		got := boxDefaults(c, "qa", []Vendor{twoLanes})
+		if len(got) != 2 || got[0].Env != "CLI_SITE" || got[0].Value != "acme" ||
+			got[1].File == nil || *got[1].File != file {
+			t.Errorf("%s: defaults = %+v, want the setting and the file", name, got)
+		}
+	}
+	if got := boxDefaults(company(&off, &off), "qa", []Vendor{twoLanes}); got != nil {
+		t.Errorf("a seat with every lane off got %+v", got)
+	}
+}
