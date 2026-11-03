@@ -141,7 +141,7 @@ test("an Expo seat's tool is the EAS CLI in its box, and its level is Expo's rol
     "Not set up: its sandbox env does not set EXPO_TOKEN",
   );
   expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).toBe(
-    'its sandbox env does not set EXPO_TOKEN. Add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env in the company document, and its tool signs in as the agent.',
+    'its sandbox env does not set EXPO_TOKEN. Add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env in the company document. Then its tool signs in as the agent.',
   );
   expect(noToolRemedy(DATADOG_LANE, [{ name: "SRE", saved: sre() }])).toMatch(
     /^the company declares no datadog tool server\./,
@@ -408,6 +408,28 @@ test("a box tool reading several variables names each agent's own lines", () => 
       { name: "QA", saved: boxed("QA") },
     ]),
   ).toBe(
-    'their sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY. In the company document, add each agent\'s own lines to its sandbox.env: SRE, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_SRE}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_SRE}"; QA, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_QA}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_QA}". Each tool then signs in as its agent.',
+    'their sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY. Add each agent\'s own lines to its sandbox.env in the company document: SRE, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_SRE}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_SRE}"; QA, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_QA}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_QA}". Then each tool signs in as its agent.',
   );
+});
+
+// A LANE WITH BOTH ROUTES (a CLI in the box and a per-seat tool server) is live
+// through either, so a seat with neither is told both, the server first; a box
+// lane with no server is told only its lines, and never about a server.
+test("a box lane that also has a tool server names both routes, the server first", () => {
+  const both: Lane = { ...EXPO_LANE, tool_server: "expo" };
+  const qa = {
+    ...expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!,
+    tool: "no_server" as const,
+  };
+  expect(toolWords(both, qa)).toBe(
+    "Not set up: no expo tool server is declared, and its sandbox env does not set EXPO_TOKEN",
+  );
+  expect(toolWords(both, { ...qa, tool: "server_off" })).toBe(
+    "Not running: the expo tool server is turned off, and its sandbox env does not set EXPO_TOKEN",
+  );
+  expect(noToolRemedy(both, [{ name: "QA", saved: qa }])).toBe(
+    'the company declares no expo tool server, and its sandbox env does not set EXPO_TOKEN. Add the expo tool server under Settings › MCP & tools as one instance per agent, or add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env in the company document. Either way its tool signs in as the agent.',
+  );
+  expect(toolWords(EXPO_LANE, qa)).toBe("Not set up: its sandbox env does not set EXPO_TOKEN");
+  expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).not.toMatch(/tool server/);
 });
