@@ -185,9 +185,25 @@ type Session struct {
 	// does not hold creates and then answers as if it remembered
 	// ([sandbox.Result.Continued]). "" for a run that continues nothing.
 	Fresh string
+
+	// Replaces says the archive carried in replaces the box's own copy of
+	// the session even where that copy already holds it
+	// ([sandbox.CarriedSession.Replace]): the copy is one its harness was cut
+	// off in. False for a run carried no archive, or one whose box keeps a
+	// copy that holds it.
+	Replaces bool
 }
 
 // resumer is a harness that continues a session an earlier run reported.
+//
+// AND THAT WIRES ITS RUN TO THE SESSION IT STARTED: a run that continues a
+// session is handed the seat's tools under two bridge tokens, that session's
+// and one for a session of its own its script starts in that one's place
+// ([sandbox.RunRequest.FreshWiring]), and a resumer's [Harness.WriteConfig]
+// writes both and its script installs the one of the session it started,
+// removing the other, before its harness starts. A harness that could not would
+// start a session of its own reaching the seat's tools as the continued one, and
+// be held to that session's skill guard.
 type resumer interface{ Resumes() bool }
 
 // carrier is a harness whose session the runner carries between boxes
@@ -212,6 +228,18 @@ type carrier interface {
 	// A release that cannot be read is taken for a current one, as the
 	// notes gate takes it ([claudeNotesGate]).
 	Continues(box, writer string) (bool, string)
+
+	// Pack is the script that packs session NOW, as the run's script packs
+	// it once its harness exits — the same pack, into
+	// [Paths.SessionPackStaging], its digest kept the same way — for a job
+	// that never got to ([Runner.PackCapture]). Run in a login shell with
+	// the box's bin directory first on its PATH, as the run's wrapper runs.
+	Pack(paths Paths, session string) string
+
+	// layout is how the harness's archive is laid out, which is what the
+	// scrub a capture streams it through has to read and write it as
+	// ([scrubArchive]).
+	layout() archiveLayout
 
 	// transcript reads an archive of ArchiveFormat, already decompressed, as
 	// the entries of the session's transcript, handing each to b in the
@@ -454,16 +482,21 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // capture and a carried archive it left — each this run's to write again or
 // to have none of, so a run that packs nothing is never collected with the
 // last run's capture as its own — and the staging directory a script that was
-// killed part way left. NOT THE HARNESS'S OWN SESSION STORE, which is the session
+// killed part way left. And the wiring a run that continued a session was
+// handed for a session of its own ([Paths.MCPConfigFresh],
+// [Paths.OpenCodeValuesFresh]), which its script removes before its harness
+// starts and one killed before it could leaves behind: this run writes its own
+// where it has one, and none is left beside a run that has none.
+// NOT THE HARNESS'S OWN SESSION STORE, which is the session
 // a run in this box continues, nor the digests of the archives that store's
 // copy holds ([Paths.SessionDigests]), which describe it for as long as it is
 // there.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.harness.Output(p)
-	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.System(),
+	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(), p.BaseResult(),
-		p.SessionRecord(), p.SessionCapture(), p.SessionCarried()}
+		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfigFresh()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
@@ -474,8 +507,9 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// file, removed as it always was. Two statements rather than one joined
 	// by `&&`, so a file that will not go never keeps a directory.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
-		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
-			p.SessionStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()})
+		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
+			p.CommitAttribution(), p.SessionStaging(), p.SessionPackStaging(), p.ClaudeSkillsPlugin(),
+			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()})
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
@@ -524,6 +558,13 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	if err := r.refuseSkills(req); err != nil {
 		return sandbox.RunHandle{}, err
+	}
+	// A SECOND WIRING IS A CONTINUING RUN'S ALONE: a run that starts a session
+	// of its own has one session, and the other token written into its box
+	// would be one its model could read and dial as a session it is not in.
+	if req.FreshWiring != nil && req.Resume == "" {
+		return sandbox.RunHandle{}, fmt.Errorf("executor: this run starts a session of its own and was " +
+			"handed a second wiring for one, which only a run that continues a session is handed")
 	}
 	paths := PathsFor(box)
 	// WHAT THE SESSION HAD SPENT, read before the clear removes it: the
@@ -586,6 +627,20 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if req.SkillLoads.Set() {
 		req.SkillLoads.URL = sandbox.EngineAddress(box, req.SkillLoads.URL)
 	}
+	// AND THE SAME THREE UNDER THE JOB'S OTHER TOKEN, for a session the run's
+	// script starts of its own ([sandbox.RunRequest.FreshWiring]): dialled from
+	// the same box, so held to the same addresses. A copy, as req is.
+	if f := req.FreshWiring; f != nil {
+		wired := sandbox.Wiring{MCPServers: sandbox.EngineServers(box, f.MCPServers), Steer: f.Steer,
+			SkillLoads: f.SkillLoads}
+		if wired.Steer.Set() {
+			wired.Steer.URL = sandbox.EngineAddress(box, wired.Steer.URL)
+		}
+		if wired.SkillLoads.Set() {
+			wired.SkillLoads.URL = sandbox.EngineAddress(box, wired.SkillLoads.URL)
+		}
+		req.FreshWiring = &wired
+	}
 	configPath, err := r.harness.WriteConfig(ctx, box, req, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
@@ -609,6 +664,14 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief: %w", err)
 		}
+		// AND THE BRIEF A SESSION OF ITS OWN IS HANDED, for a run that
+		// continues one: its script points its harness at it where it starts
+		// a new session in the one's place ([sandbox.RunRequest.FreshBrief]).
+		if session.Continues && req.FreshBrief != "" {
+			if err = box.WriteFile(ctx, paths.FreshBrief(), []byte(req.FreshBrief)); err != nil {
+				return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief a new session is handed: %w", err)
+			}
+		}
 	}
 
 	// A LOGIN SHELL, and the -l is load-bearing: a harness is commonly
@@ -627,7 +690,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	log.InfoContext(ctx, "harness_started", "harness", r.harness.Name(), "pid", pid,
 		"session", session.ID, "continues", session.Continues, "carried", req.Carried != nil)
-	return sandbox.RunHandle{CommandID: pid, SessionID: session.ID}, nil
+	return sandbox.RunHandle{CommandID: pid, SessionID: session.ID, FreshSessionID: session.Fresh}, nil
 }
 
 // refuseCarried is why req's carried session ([sandbox.RunRequest.Carried])
@@ -1045,6 +1108,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 	code := strings.TrimSpace(codeText)
 	crashed := code != "" && code != "0"
+	// AND WHETHER ITS HARNESS EXITED CLEANLY, for the session its script
+	// packed after it whatever its status: one killed while the wrapper lived
+	// on — a signal, its memory limit — may end mid-record, and so may one
+	// whose status the box never recorded ([sandbox.Result.HarnessCutOff]).
+	result.HarnessCutOff = code != "0"
 
 	// THE FINDINGS FILE IS THE RESULT CARRIER OF RECORD. The system text asks
 	// the agent to write its report there before stopping, and it survives both

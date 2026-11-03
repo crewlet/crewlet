@@ -6,7 +6,15 @@ version: "2"
 # team disable the linter.
 
 run:
-  timeout: 5m
+  # A HANG DETECTOR, NOT A BUDGET. ci.yml's jobs set no timeout-minutes, so
+  # this is the only bound on the lint short of GitHub's six hours, and a run
+  # that reaches it has to be stuck rather than slow. A change to
+  # internal/engine and internal/sandbox, the two largest packages,
+  # re-analyses both: on 2026-11-02 such a run was cut at the 5m this used to
+  # be (316 s into the step), where a small change's took 106 s, and main's
+  # whole lint job ran 4m12s and 5m11s. Ten minutes is twice the five
+  # minutes the slowest of them reached.
+  timeout: 10m
 
 linters:
   enable:

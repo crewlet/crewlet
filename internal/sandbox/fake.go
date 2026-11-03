@@ -39,8 +39,11 @@ type FakeSandbox struct {
 	timeoutCalls int
 	paused       bool
 	closed       bool
-	commands     []string
-	background   []string
+	// reclaimed is a box its provider killed ([FakeProvider.Kill]), which
+	// nothing reads any more.
+	reclaimed  bool
+	commands   []string
+	background []string
 	// readCap is the whole-read cap a suite gave the box, zero for
 	// [MaxFileBytes]: see [FakeSandbox.CapReads].
 	readCap int
@@ -233,6 +236,14 @@ func (s *FakeSandbox) Keepalives() int {
 	return s.timeoutCalls
 }
 
+// unreadable reports whether the box can no longer be read: paused, or
+// reclaimed by its provider.
+func (s *FakeSandbox) unreadable() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.paused || s.reclaimed
+}
+
 // Paused reports whether the box is currently snapshotted.
 func (s *FakeSandbox) Paused() bool {
 	s.mu.Lock()
@@ -401,6 +412,11 @@ func (p *FakeProvider) Kill(ctx context.Context, sandboxID string) error {
 	if p.KillErr != nil {
 		return p.KillErr
 	}
+	if box := p.boxes[sandboxID]; box != nil {
+		box.mu.Lock()
+		box.reclaimed = true
+		box.mu.Unlock()
+	}
 	delete(p.boxes, sandboxID)
 	return nil
 }
@@ -479,6 +495,25 @@ type FakeRunner struct {
 	// LiveGate, when set, is waited on by every read of a live reading
 	// before it answers — a box that takes a while to read.
 	LiveGate chan struct{}
+
+	// Session, when set, is the harness session every box this runner is
+	// asked about holds: what [FakeRunner.TakeSession] hands a capture,
+	// and what makes this fake a [SessionTaker]. Set it before the first
+	// collection.
+	Session *FakeSession
+	// takes is every capture asked of this runner, in order.
+	takes []SessionTake
+
+	// Carries makes this fake restore a session carried from another box
+	// ([SessionRestorer]): one its own harness wrote, in [FakeArchiveFormat],
+	// which every box it is asked about can take up unless CarryWhy says why
+	// its harness cannot — what a runner of a harness that packs and restores
+	// answers. Unset, it restores none. Set both before the first launch.
+	Carries  bool
+	CarryWhy string
+	// carried is every archive a job was started with, read whole as a
+	// runner writes it into its box.
+	carried []FakeCarried
 
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
@@ -568,8 +603,27 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 		return RunHandle{}, r.StartErr
 	}
 	req.Env = maps.Clone(req.Env)
+	// THE CARRIED ARCHIVE IS READ AS THE RUN STARTS, as a runner writes it
+	// into its box: the launch releases what it spooled once Start returns.
+	if c := req.Carried; c != nil {
+		body, err := io.ReadAll(c.Body)
+		if err != nil {
+			return RunHandle{}, fmt.Errorf("fake: reading the carried session: %w", err)
+		}
+		r.carried = append(r.carried, FakeCarried{Archive: c.Archive, Body: body, Replace: c.Replace})
+	}
 	r.started = append(r.started, req)
 	handle := RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}
+	// THE SESSION THE RUN WORKS IN, NAMED AS IT STARTS, as a runner names it
+	// before its harness starts: the one it continues, or one minted for it —
+	// and, for a run that continues one, the session its script starts of its
+	// own in that one's place. What a job's box ran is read off these and its
+	// word ([PendingRun.SessionRan]), never off what its collection reports.
+	handle.SessionID = "session-" + handle.CommandID
+	if req.Resume != "" {
+		handle.SessionID = req.Resume
+		handle.FreshSessionID = "fresh-" + handle.CommandID
+	}
 	if r.Player != nil {
 		r.plays[handle.CommandID] = &fakePlay{req: req}
 	}
@@ -778,6 +832,120 @@ func (r *FakeRunner) lostJob(handle RunHandle) (Result, bool) {
 		return Result{}, false
 	}
 	return r.lost.partial, true
+}
+
+// FakeSession is a session a [FakeRunner]'s boxes hold, as a capture takes it.
+type FakeSession struct {
+	// Archive describes it, and Body is its archive's bytes — what the
+	// capture is handed as they are, the fake scrubbing nothing.
+	Archive SessionArchive
+	Body    []byte
+
+	// TakeErr fails the take, as a box whose session cannot be read does,
+	// and KeepErr the record of its digest in the box.
+	TakeErr, KeepErr error
+
+	// kept counts the digests recorded.
+	kept atomic.Int32
+}
+
+// Kept is how many captures of the session recorded their digest in the box.
+func (s *FakeSession) Kept() int { return int(s.kept.Load()) }
+
+// TakeSession hands a capture the runner's [FakeRunner.Session], recording what
+// it was asked ([FakeRunner.Takes]); a runner with none holds no session.
+//
+// A BOX THAT IS PAUSED OR RECLAIMED IS NOT READ, as a remote box paused for its
+// snapshot is not, and a reclaimed one of any cell: a capture made after the
+// pause or the reclaim it must come before is refused here as it would be
+// there.
+func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionTake) (TakenSession, error) {
+	r.mu.Lock()
+	r.takes = append(r.takes, SessionTake{Pack: take.Pack, Scrub: slices.Clone(take.Scrub),
+		MaxBytes: take.MaxBytes})
+	session := r.Session
+	r.mu.Unlock()
+	if fake, ok := box.(*FakeSandbox); ok && fake.unreadable() {
+		return TakenSession{}, fmt.Errorf("fake: box %s is paused or reclaimed, and its session cannot be "+
+			"read", fake.ID())
+	}
+	if session == nil {
+		return TakenSession{}, nil
+	}
+	if session.TakeErr != nil {
+		return TakenSession{}, session.TakeErr
+	}
+	return TakenSession{
+		Archive: session.Archive,
+		Body:    io.NopCloser(bytes.NewReader(session.Body)),
+		Keep: func(context.Context) error {
+			if session.KeepErr != nil {
+				return session.KeepErr
+			}
+			session.kept.Add(1)
+			return nil
+		},
+	}, nil
+}
+
+// Takes is every capture asked of this runner, in order.
+func (r *FakeRunner) Takes() []SessionTake {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.takes)
+}
+
+// FakeArchiveFormat is the one archive format a [FakeRunner] that carries
+// sessions restores.
+const FakeArchiveFormat = 1
+
+// FakeCarried is an archive a job of a [FakeRunner] was started with
+// ([RunRequest.Carried]), as its box was handed it.
+type FakeCarried struct {
+	Archive SessionArchive
+	Body    []byte
+	Replace bool
+}
+
+// Carried is every archive a job was started with, in order.
+func (r *FakeRunner) Carried() []FakeCarried {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.carried)
+}
+
+var _ SessionRestorer = (*FakeRunner)(nil)
+
+// Restores answers as a runner of a harness that packs and restores does where
+// [FakeRunner.Carries] is set — a session its own harness wrote, in
+// [FakeArchiveFormat] — and restores nothing otherwise.
+func (r *FakeRunner) Restores(archive SessionArchive) (bool, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case !r.Carries:
+		return false, "fake: this runner carries no session between boxes"
+	case archive.Harness != r.name:
+		return false, fmt.Sprintf("fake: the session was written by %q, and this runner drives %q",
+			archive.Harness, r.name)
+	case archive.Format != FakeArchiveFormat:
+		return false, fmt.Sprintf("fake: the session's archive is format %d", archive.Format)
+	}
+	return true, ""
+}
+
+// CheckCarry answers [FakeRunner.Restores], and then [FakeRunner.CarryWhy] for
+// the box's own harness.
+func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArchive) (CarryCheck, error) {
+	if ok, why := r.Restores(archive); !ok {
+		return CarryCheck{Why: why}, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.CarryWhy != "" {
+		return CarryCheck{Why: r.CarryWhy}, nil
+	}
+	return CarryCheck{Continues: true}, nil
 }
 
 // Installed reports whether the agent was installed in this box.

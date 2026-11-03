@@ -23,9 +23,12 @@ import (
 //
 // So each section that a later build may add fields to carries an Extra of its
 // own, filled by its decode and written back by its encode under the rule the
-// record's top follows: [RunSteer], [RunNote], [NoteRead] and [BridgeCall]. A
-// section that does not is extended the other way, with a key of its own at
-// the top of the record (as [PendingRun.Stop] is, beside [RecordedEnding]).
+// record's top follows: [RunSteer], [RunNote], [NoteRead], [BridgeCall],
+// [SessionCapture], [HeldCall] and [LaunchRecord] — the job's own record, which
+// grows a fact about the job with nearly every piece that touches launching,
+// and which every write but a relaunch's hands back. A section that does not
+// is extended the other way, with a key of its own at the top of the record
+// (as [PendingRun.Stop] is, beside [RecordedEnding]).
 
 // wireKeys is every wire key a struct type declares, read off its own json tags
 // so a field added to the struct is known the moment it exists — a hand-kept
@@ -181,5 +184,25 @@ func (c *BridgeCall) UnmarshalJSON(raw []byte) error {
 	}
 	*c = BridgeCall(p)
 	c.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the job's record with the keys a later build added to it.
+func (l LaunchRecord) MarshalJSON() ([]byte, error) {
+	type plain LaunchRecord
+	return marshalCarrying(plain(l), wireKeys(reflect.TypeFor[LaunchRecord]()), l.Extra)
+}
+
+// UnmarshalJSON reads the job's record and keeps the keys this build does not
+// know.
+func (l *LaunchRecord) UnmarshalJSON(raw []byte) error {
+	type plain LaunchRecord
+	p := plain(*l)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[LaunchRecord]()))
+	if err != nil {
+		return err
+	}
+	*l = LaunchRecord(p)
+	l.Extra = extra
 	return nil
 }

@@ -158,6 +158,7 @@ func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 		// Nil-safe on a company with no Atlassian block, which declared
 		// nothing.
 		Declared: company.Integrations.Atlassian.Declared(),
+		Zones:    company.Integrations.Cloudflare.ZoneNames(),
 	})
 	switch {
 	case errors.Is(err, setup.ErrUnusableInput):

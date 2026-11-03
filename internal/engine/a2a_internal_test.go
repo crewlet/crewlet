@@ -405,6 +405,12 @@ func TestACoalescedPartitionTakesItsDeepestTrigger(t *testing.T) {
 	}
 }
 
+// answerText is the text a colleague is answered with ([answerContent]).
+func answerText(res turn.Result, err error) string {
+	text, _ := answerContent(res, err)
+	return text
+}
+
 // A COLLEAGUE IS TOLD WHAT ACTUALLY HAPPENED.
 //
 // Only `done` produced something for them. The other decisions carry an
@@ -414,10 +420,10 @@ func TestACoalescedPartitionTakesItsDeepestTrigger(t *testing.T) {
 // looking like an answer.
 func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 	t.Parallel()
-	if got := answerContent(turn.Result{Decision: phase.Done, Artifact: "the answer"}, nil); got != "the answer" {
+	if got := answerText(turn.Result{Decision: phase.Done, Artifact: "the answer"}, nil); got != "the answer" {
 		t.Errorf("a delivered turn answered %q", got)
 	}
-	skipped := answerContent(turn.Result{
+	skipped := answerText(turn.Result{
 		Decision: phase.Skipped, Artifact: "nobody was asking this seat to do anything",
 	}, nil)
 	if strings.Contains(skipped, "nobody was asking") {
@@ -426,7 +432,7 @@ func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 	if skipped == "" {
 		t.Error("a skipped turn answered with silence, so the asker waits out the sweep")
 	}
-	breached := answerContent(turn.Result{
+	breached := answerText(turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: types.GuardDepthCap},
 	}, nil)
@@ -434,13 +440,13 @@ func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 		t.Errorf("a breach did not say which guard stopped it: %q", breached)
 	}
 	// A `done` turn that produced no text is still not silence.
-	if got := answerContent(turn.Result{Decision: phase.Done}, nil); got == "" {
+	if got := answerText(turn.Result{Decision: phase.Done}, nil); got == "" {
 		t.Error("an empty artifact answered with silence")
 	}
 	// A TURN A PERSON STOPPED says so, whatever its result held when the stop
 	// reached it, rather than asking for more detail: the question was not
 	// what ended it.
-	stopped := answerContent(turn.Result{Decision: phase.Failed},
+	stopped := answerText(turn.Result{Decision: phase.Failed},
 		fmt.Errorf("resume: %w", turn.ErrStoppedByPerson))
 	if !strings.Contains(stopped, "a person stopped my turn") || strings.Contains(stopped, "more detail") {
 		t.Errorf("a stopped turn answered %q", stopped)
@@ -468,7 +474,7 @@ func TestABlockedTurnAnswersWithWhatStoppedIt(t *testing.T) {
 			Evidence: "asked @founder which repo to file against; waiting on them",
 		},
 	}
-	got := answerContent(blocked, nil)
+	got := answerText(blocked, nil)
 	if !strings.Contains(got, "waiting on them") {
 		t.Errorf("the asker was not told what the turn is blocked on: %q", got)
 	}
@@ -481,7 +487,7 @@ func TestABlockedTurnAnswersWithWhatStoppedIt(t *testing.T) {
 	// answer.
 	withBoth := blocked
 	withBoth.Artifact = "the answer itself"
-	if got := answerContent(withBoth, nil); got != "the answer itself" {
+	if got := answerText(withBoth, nil); got != "the answer itself" {
 		t.Errorf("the evidence displaced a real artifact: %q", got)
 	}
 
@@ -492,7 +498,7 @@ func TestABlockedTurnAnswersWithWhatStoppedIt(t *testing.T) {
 		Decision: phase.Done,
 		LastWork: &turn.Work{Outcome: turn.OutcomeBlocked, Evidence: "   "},
 	}
-	if got := answerContent(bare, nil); strings.TrimSpace(got) == "" {
+	if got := answerText(bare, nil); strings.TrimSpace(got) == "" {
 		t.Error("a blocked turn with no evidence answered with silence")
 	}
 }

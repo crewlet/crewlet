@@ -115,6 +115,11 @@ type Check struct {
 	// host rule names (Isolated Cloud), from it. Every client this engine
 	// builds for those products is handed the same declaration.
 	Declared atlassianhost.Deployment
+
+	// Zones is the Cloudflare zone list the company declared
+	// (`integrations.cloudflare.provisioning.zones`), carried for the one
+	// probe that reads it: a document field with no form field of its own.
+	Zones []string
 }
 
 // Secret is the credential under check, for a probe that must keep it out

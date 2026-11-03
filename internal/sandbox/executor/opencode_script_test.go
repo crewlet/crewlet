@@ -44,10 +44,12 @@ import (
 //   - `api session.get` prints a held session's usage report on one line, and
 //     fails for any other, as OpenCode answers an id it does not hold;
 //   - `session export` prints a held session's export document — its info
-//     and its messages, or FAKE_SESSION_EXPORT where that is set, a document
-//     of a run's whole conversation for a case that reads one back — and
-//     fails for any other, recording in `exported` the
-//     session and whether the server was still serving; `session import` keeps the
+//     and its messages, those `export-messages` in the case's directory holds
+//     where it is there — or FAKE_SESSION_EXPORT where that is set, a
+//     document of a run's whole conversation for a case that reads one back
+//     — through the server or with `--standalone` beside it, and fails for
+//     any other, recording in `exported` the session and whether the server
+//     was still serving; `session import` keeps the
 //     file it was handed (`imported-session`) and the directory it was told
 //     (`import-directory`), and holds the session the file names and prints
 //     `Imported session: <id>`, as 2.0.32 does — or, where FAKE_IMPORT is
@@ -113,6 +115,10 @@ auth)
 serve)
   printf '%s|%s' "${OPENCODE_PASSWORD:-}" "${OPENCODE_SERVER_PASSWORD:-}" > "$d/serve-env"
   printf '%s' "${OPENCODE_CONFIG_CONTENT-}" > "$d/serve-config"
+  if [ -n "${FAKE_VALUES:-}" ]; then
+    cat "$FAKE_VALUES/v1" > "$d/served-value" 2> /dev/null
+    if [ -e "$FAKE_VALUES-fresh" ]; then echo yes; else echo no; fi > "$d/served-beside-other"
+  fi
   echo $$ > "$d/serve.pid"
   [ "${FAKE_SERVE:-}" != silent ] || exec sleep 60
   if [ "${FAKE_SERVE:-}" = password-first ]; then
@@ -152,11 +158,12 @@ api)
 session)
   case "$2" in
   export)
-    [ "$3" != --server ] || authed
-    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$5 serving" >> "$d/exported"; else echo "$5 stopped" >> "$d/exported"; fi
-    held "$5" || { echo "Error: Session not found: $5" >&2; exit 1; }
+    if [ "$3" = --standalone ]; then id=$4; else [ "$3" != --server ] || authed; id=$5; fi
+    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
+    held "$id" || { echo "Error: Session not found: $id" >&2; exit 1; }
     if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then printf '%s\n' "$FAKE_SESSION_EXPORT"; else
-      printf '{"info":{"id":"%s","title":"crewlet"},"messages":[{"id":"msg_1","type":"user","text":"fix the flake"}]}\n' "$5"; fi ;;
+      msgs=$(cat "$d/export-messages" 2> /dev/null) || msgs='[{"id":"msg_1","type":"user","text":"fix the flake"}]'
+      printf '{"info":{"id":"%s","title":"crewlet"},"messages":%s}\n' "$id" "$msgs"; fi ;;
   import)
     shift 2; dir=
     while [ $# -gt 1 ]; do case "$1" in --directory) dir=$2; shift 2;; *) shift;; esac; done
@@ -218,6 +225,17 @@ type scriptOpts struct {
 	// the session ([executor.Paths.SessionDigests]), as a box that packed
 	// or restored that export keeps it.
 	ownsCarried bool
+	// freshBrief, where set, is the brief a session of the run's own is
+	// handed, written where [executor.Paths.FreshBrief] names it as a run's
+	// start would have written it ([sandbox.RunRequest.FreshBrief]).
+	freshBrief string
+	// values and freshValues, where set, are the run's first configuration
+	// value under the continued session's bridge token and under a session
+	// of its own's, written where [executor.Paths.OpenCodeValues] and
+	// [executor.Paths.OpenCodeValuesFresh] name them as WriteConfig would have
+	// ([sandbox.RunRequest.FreshWiring]); the fake's server records which it
+	// started on, and whether the other was still in the box.
+	values, freshValues string
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -316,6 +334,25 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			keepDigest(t, paths, session.ID, packed)
 		}
 	}
+	if o.freshBrief != "" {
+		if err := os.WriteFile(paths.FreshBrief(), []byte(o.freshBrief), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var env []string
+	for dir, value := range map[string]string{paths.OpenCodeValues(): o.values,
+		paths.OpenCodeValuesFresh(): o.freshValues} {
+		if value == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "v1"), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env = []string{"FAKE_VALUES=" + paths.OpenCodeValues()}
+	}
 	command := executor.OpenCode{}.Command(o.req, session, paths, "")
 	if o.times != nil {
 		command = executor.OpenCodeCommandTimed(o.req, session, paths, *o.times)
@@ -330,9 +367,9 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	args := append(append([]string{}, argv[1:]...), "-c", script)
 	j.cmd = exec.Command(argv[0], args...) //nolint:gosec // the script under test
 	j.cmd.Dir = dir
-	j.cmd.Env = append([]string{
+	j.cmd.Env = append(append([]string{
 		"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + home, "FAKE_DIR=" + dir,
-	}, o.env...)
+	}, env...), o.env...)
 	j.cmd.Stdin = strings.NewReader(`fix "the" flake`)
 	j.cmd.Stdout, j.cmd.Stderr = &j.stdout, &j.stderr
 	j.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

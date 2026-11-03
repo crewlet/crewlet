@@ -291,7 +291,7 @@ type orderedResumer struct{ order *sequence }
 
 func (r *orderedResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	if req.Begin != nil {
-		if err := req.Begin(ctx); err != nil {
+		if err := req.Begin(ctx, sandbox.ResumeCarriesOn); err != nil {
 			return err
 		}
 	}
@@ -334,7 +334,7 @@ func (r *relaunchingResumer) launch(turnID string) sandbox.LaunchRequest {
 
 func (r *relaunchingResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	if req.Begin != nil {
-		if err := req.Begin(ctx); err != nil {
+		if err := req.Begin(ctx, sandbox.ResumeCarriesOn); err != nil {
 			return err
 		}
 	}

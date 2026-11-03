@@ -30,11 +30,13 @@ export interface GivenAnswer {
  *
  *  - `recorded`: the executor is answered with this answer, and its resume
  *    waits for the seat;
- *  - `taken`: the executor was launched again with it, or its record is gone
- *    after it was seen recorded or taken (it took the answer and finished);
- *  - `ended`: the record is gone and was never seen holding this answer: the
- *    executor ended (finished, was cancelled or was reaped) and whether it
- *    took the answer first is not something the record can say any more;
+ *  - `taken`: the executor was launched again with it, or it ended — its
+ *    record gone, or its ending decided — after it was seen recorded or taken
+ *    (it took the answer and finished);
+ *  - `ended`: the executor ended (finished, was cancelled or was reaped) —
+ *    its record gone, or its ending decided, which no answer reaches — and
+ *    was never seen holding this answer, so whether it took the answer first
+ *    is not something the record can say;
  *  - `superseded`: another answer was recorded first, so this one was not used;
  *  - `declined`: the question let this very answer go, and the executor waits
  *    on it again, so the person must answer again;
@@ -56,7 +58,9 @@ export type AnswerFate =
 
 export function answerFate(
   given: GivenAnswer,
-  run: Pick<ExecutorRow, "status" | "launch_id" | "declined_answers" | "answer_ids"> | undefined,
+  run:
+    | Pick<ExecutorRow, "status" | "launch_id" | "declined_answers" | "answer_ids" | "ending">
+    | undefined,
   loaded: boolean,
   /** Whether this answer was already seen recorded on the executor, or taken. */
   seenTaken = false,
@@ -65,6 +69,10 @@ export function answerFate(
     if (!loaded) return "sent";
     return seenTaken ? "taken" : "ended";
   }
+  // AN ENDING DECIDED IS AN EXECUTOR THAT IS OVER, as a record that is gone
+  // is: it takes no answer, and its record waits only for the ending's last
+  // steps, whatever status it was ended in.
+  if (run.ending) return seenTaken ? "taken" : "ended";
   if (given.answerId && run.declined_answers?.includes(given.answerId)) return "declined";
   const recorded = run.answer_ids ?? [];
   const ours = given.answerId !== "" && recorded.includes(given.answerId);

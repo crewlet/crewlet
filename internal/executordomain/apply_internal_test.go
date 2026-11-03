@@ -310,6 +310,41 @@ func TestAnEndWithNothingCapturedKeepsTheEndingAlone(t *testing.T) {
 	}
 }
 
+// AN END WHOSE TURN'S NEWEST CAPTURE WAS NOT KEPT TAKES THE OLDER ONE OFF THE
+// ROW. The turn's row names launch 1's session; launch 2's capture was refused,
+// so that session does not hold what launch 2 did, and the conversation's next
+// turn must not continue it as the turn's last: the end releases it and keeps
+// the ending, which says why. Where the capture the end names as unkept landed
+// after all — its record was out when the end was decided, and the row's place
+// is that capture's — the session stays.
+//
+// Mutation: drop the release from applyEnd, or decide it on anything but the
+// row's own place, and the stale session stays named, or the landed one goes.
+func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	stale, landed := newTurn(), newTurn()
+	unkept := &Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the object store's reservation is spent"}
+
+	e.capture(capturing("ana", "chat:room", stale, 1, 1, 100, budget))
+	e.end(ending("ana", "chat:room", stale, "", Ending{Outcome: OutcomeCompleted, Unkept: unkept}))
+	s, found := e.session("ana", stale)
+	if !found || !s.Ended() || s.HasObject() {
+		t.Fatalf("the turn whose newest capture was refused is (%+v, %v), want it ended "+
+			"naming no session", s, found)
+	}
+	if s.Ending.Unkept == nil || s.Ending.Unkept.LaunchSeq != 2 || !strings.Contains(s.Ending.Unkept.Reason, "reservation") {
+		t.Errorf("the ending says %+v of the capture not kept, want launch 2's and why", s.Ending.Unkept)
+	}
+
+	e.capture(capturing("ana", "chat:other", landed, 2, 1, 100, budget))
+	e.end(ending("ana", "chat:other", landed, "", Ending{Outcome: OutcomeCompleted, Unkept: unkept}))
+	if s, _ := e.session("ana", landed); !s.HasObject() || s.LaunchSeq != 2 {
+		t.Errorf("the capture the end named unkept landed first and is (%+v): its session "+
+			"must stay", s)
+	}
+}
+
 // THE SEAT'S BUDGET RELEASES THE OLDEST ENDED SESSIONS FIRST, keeping their
 // endings, and never a live turn's: and a capture that cannot fit even with
 // every ended session released writes nothing and releases nothing.

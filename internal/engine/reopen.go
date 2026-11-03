@@ -139,20 +139,23 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		refuse("the run's turn could not be rebuilt here", "error", err.Error())
 		return
 	}
-	surface, meter, err := r.ReopenAgentRun(ctx, state, bridgedCalls(run.BridgeCalls),
-		bridgedOf(run.Launch.Bridged))
+	// ITS GUARD THE SESSION'S ITS BOX STARTED, as the job's record says the box
+	// said it ([sandbox.LaunchRecord.SessionStart]): a box that has not said
+	// yet says it on its first request here, which the reopened run is told.
+	reopened, err := r.ReopenAgentRun(ctx, state, bridgedCalls(run.BridgeCalls),
+		bridgedOf(run.Launch.Bridged), run.Launch.SessionStart == sandbox.SessionStartContinued)
 	if err != nil {
 		refuse("the run's tool surface could not be rebuilt", "error", err.Error())
 		return
 	}
-	ledger := newBridgeLedger(rt.pending, meter)
+	ledger := newBridgeLedger(rt.pending, reopened.Meter)
 	ledger.nudge = e.nudgeRun
 	// THE RUN'S CALLS GO ON IN ITS OWN ORDER: the session numbers its calls
 	// after the last one the row records, and a resume reads them by it.
 	job := sandbox.OpenedJob{LaunchID: run.LaunchID, LastSeq: run.LastBridgeSeq()}
 	session := &mcpbridge.Session{
 		RunID: run.TurnID, Handle: handle, Role: seat.Name,
-		Surface: surface, Ledger: ledger,
+		Surface: reopened.Surface, Ledger: ledger,
 		// AS THE LAUNCH OPENED IT, so the opening is refused or made on the
 		// same terms; the box already holds its endpoint and is never handed
 		// the one this opening mints.
@@ -164,6 +167,10 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		// launch handed them under, which its box still lists: a load it
 		// reports here is read as the launch's opening read one.
 		Skills: state.NativeSkills,
+		// AND THE SESSION ITS BOX STARTED, said again by the token it dials
+		// on its first request here — the same token it dialled the node it
+		// was taken from with ([reopenedStarted]).
+		Started: reopenedStarted(ledger, run, reopened.Started),
 	}
 	// AND THE RUN'S NOTE INBOX, built from its record alone — its turn, its
 	// job and its round — so a note to the turn reaches the run between its
@@ -179,4 +186,18 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	}
 	log.InfoContext(ctx, "bridge_reopened", "run_id", run.TurnID, "launch_id", run.LaunchID,
 		"seat", handle, "calls_before", len(run.BridgeCalls))
+}
+
+// reopenedStarted is what the bridge session of run, taken over while it works,
+// does once the run's box says which session it started there ([boxStarted]):
+// it holds the reopened run's guard to that session through started
+// ([runner.ReopenedRun.Started]) and records it on the job's record — for a job
+// whose launch continued a session, AS THE JOB'S RECORD NAMES ITS BRIEF
+// ([sandbox.LaunchRecord.Brief]), the one word on it this node has of what the
+// launch on another node, or before a restart, decided.
+func reopenedStarted(ledger *bridgeLedger, run sandbox.PendingRun,
+	started func(continued bool)) func(context.Context, bool) {
+
+	continues := run.Launch.Brief.Continues()
+	return boxStarted(ledger, run.TurnID, func() bool { return continues }, started)
 }

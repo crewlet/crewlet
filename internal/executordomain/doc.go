@@ -6,28 +6,30 @@
 //
 // # Who has to agree on it
 //
-// A seat's next turn on a conversation may run on any node, in any box, and
-// continue the session its previous turn left: so the name of that session is
-// the WHOLE FLEET's, identically, which is the replicated estate, which only
-// this domain's applier writes. The bytes are not here at all. A session is
-// tens of mebibytes, so it lives in the object store as one sealed object per
-// capture under a key the store mints, and a row names it; the collector keeps
-// every object a row names and deletes the rest a day after their upload
-// (ADR-0027). Not a volume per node (a box on another node, or on e2b, could
-// not reach it, and the collector, the audit and the backup could not see
-// it), not the memory changelog (a compacted subject per seat cannot carry a
-// conversation's ordering rules), and not the coordination store (a value of
-// mebibytes in a bucket every lease shares).
+// A turn's relaunch may run on any node, in any box, and continues the session
+// the turn's earlier launch left; and a conversation's HEAD — the session a
+// later turn on it would continue, which no launch takes up yet: a later turn
+// starts a session of its own — is read over the same rows. So the name of a
+// session is the WHOLE FLEET's, identically, which is the replicated estate,
+// which only this domain's applier writes. The bytes are not here at all. A
+// session is tens of mebibytes, so it lives in the object store as one sealed
+// object per capture under a key the store mints, and a row names it; the
+// collector keeps every object a row names and deletes the rest a day after
+// their upload (ADR-0027). Not a volume per node (a box on another node, or on
+// e2b, could not reach it, and the collector, the audit and the backup could
+// not see it), not the memory changelog (a compacted subject per seat cannot
+// carry a conversation's ordering rules), and not the coordination store (a
+// value of mebibytes in a bucket every lease shares).
 //
 // # One row per turn, never per conversation
 //
-// A conversation's next turn continues its HEAD, the newest ended turn of it
-// that left a session — but that is a READ over rows that each belong to one
-// turn, never a conversation row a later turn's capture takes over: a row that
-// took another turn's object would be an object carry, which ADR-0027 (as
-// ADR-0036 amends it) allows only inside one artifact. So a turn's capture
-// only ever writes its own row, and a conversation's earlier rows go when a
-// later turn's `end` ABSORBS them.
+// A conversation's HEAD is the newest ended turn of it that left a session —
+// what a later turn on it would continue, which nothing does yet — but that is
+// a READ over rows that each belong to one turn, never a conversation row a
+// later turn's capture takes over: a row that took another turn's object
+// would be an object carry, which ADR-0027 (as ADR-0036 amends it) allows only
+// inside one artifact. So a turn's capture only ever writes its own row, and a
+// conversation's earlier rows go when a later turn's `end` ABSORBS them.
 //
 // # Subjects, scopes and the four records
 //
@@ -59,7 +61,12 @@
 //     launch's read of the conversation handed out ([Head.Absorbs], which the
 //     turn's captures carry), and DEDUPES on a non-empty work key, merging
 //     what the older attempt delivered. The end is authoritative for the
-//     turn's work key where its captures carried none.
+//     turn's work key where its captures carried none. And where the turn's
+//     newest capture was NOT KEPT ([Ending.Unkept]: refused, or never
+//     answered) and the row names an older one, the row's object goes: that
+//     session does not hold what the turn did after it, so the row names no
+//     session of the turn rather than one older than its last, and its end
+//     says why.
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a

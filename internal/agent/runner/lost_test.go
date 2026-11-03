@@ -40,15 +40,17 @@ func lostRound(t *testing.T, before run, lost runner.Lost, opts buildOpts,
 	return relauncher, collector, err
 }
 
-// A LOST JOB'S ROUND IS CARRIED ON IN A FRESH SESSION, never collected: the job
-// was cut off mid-step, so what it left is no account of the round, and judged
-// as one the round "did not succeed" for a reason the run never had. The same
-// round is relaunched with what it did so far — its tools, its calls counted —
-// and the fresh run is told what happened and where to look for the work.
+// A LOST JOB'S ROUND IS CARRIED ON IN A FRESH SESSION where the turn keeps no
+// capture of its session, never collected, and never in the box's own copy of
+// the session: the job was cut off mid-step, so what it left is no account of
+// the round, and judged as one the round "did not succeed" for a reason the run
+// never had. The same round is relaunched with what it did so far — its tools,
+// its calls counted — and the fresh run is told what happened and where to look
+// for the work. (A kept capture's continuation is continued_test.go's.)
 //
 // Mutation: collect a lost job as resumeAgentRun does, and the turn files the
-// truncated run as the round's result; continue its session, and the harness is
-// resumed from a conversation cut off mid-call.
+// truncated run as the round's result; continue its session in place, and the
+// harness is resumed from the copy it was cut off in.
 func TestALostJobsRoundIsCarriedOnInAFreshSession(t *testing.T) {
 	t.Parallel()
 	before := run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"starting on it"}`)}}

@@ -43,6 +43,8 @@ const (
 //     agent's app is made from a manifest whose result the engine records in
 //     the document, so where only the operator writes it the apps are made
 //     outside Crewlet and handed in, however the block reads.
+//   - cloudflare: an enabled block with `provisioning`, whose provisioner
+//     token mints each agent's account API token.
 //   - slack: the sealed app-configuration token
 //     (`integrations.slack.app_config_token`) the engine creates each agent's
 //     app with (D11). The block alone grants no authority: an operator renders
@@ -71,6 +73,8 @@ func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMo
 		engine = in.GitHub != nil && in.GitHub.Enabled && in.GitHub.Provisioning != nil && !managed
 	case "slack":
 		engine = in.Slack != nil && strings.TrimSpace(in.Slack.AppConfigToken) != ""
+	case "cloudflare":
+		engine = in.Cloudflare != nil && in.Cloudflare.Enabled && in.Cloudflare.Provisioning != nil
 	}
 	if engine {
 		return SeatCredentialEngine

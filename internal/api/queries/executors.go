@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -40,15 +41,18 @@ import (
 // Declared here rather than imported as a concrete store so this package
 // depends on the shape, and so the memory twin answers it too.
 //
-// ONE METHOD AND NO STATUS FILTER, because there is nothing left to filter:
-// a run's record is deleted the moment the run settles, so [sandbox.Active] is
+// ONE METHOD AND NO STATUS FILTER, because there is nothing left to filter: a
+// run's record is deleted once its ending is finished, so [sandbox.Active] is
 // every status a record can hold and "every run this store holds" and "the
-// active ones" name one set. A `status=` parameter selecting `done` or
-// `failed` would be a question whose answer is structurally empty — worse than
-// absent, because an empty board reads as "nothing failed" rather than "this
-// is not where that is recorded". How a run ENDED is on the event stream: the
-// resumed turn's own events, an `executor_failed` naming the reason, or a
-// `executor_stopped` naming the person who stopped it.
+// active ones" name one set. A run whose ending is decided and not yet finished
+// — waiting for its turn's captures to settle and the executor log to take its
+// turn's end — is still on the board, saying so (`ending`). A `status=`
+// parameter selecting `done` or `failed` would be a question whose answer is
+// structurally empty — worse than absent, because an empty board reads as
+// "nothing failed" rather than "this is not where that is recorded". How a run
+// ENDED is on the event stream: the resumed turn's own events, an
+// `executor_failed` naming the reason, or a `executor_stopped` naming the
+// person who stopped it.
 //
 // AND ONE RUN BY ITS TURN, which `executor_tail` reads to learn whose seat a
 // run is before it shows anybody that seat's transcript — the record is the
@@ -269,15 +273,17 @@ func (s Sources) runReach(ctx context.Context) func(sandbox.PendingRun) livestat
 // STILL WAITING, because "what is waiting on me" is the question this answers:
 // a run whose question already has its answer recorded ([sandbox.StatusAnswered])
 // or is being resumed with it keeps the audience it was asked of, and listing
-// it would put a question the person already answered back in front of them.
-// The home screen's decisions ask the same two things, through this.
+// it would put a question the person already answered back in front of them;
+// and a run whose ending is decided is over, whatever status it was ended in,
+// and takes no answer. The home screen's decisions ask the same things,
+// through this.
 //
 // ONE RECORD, never a set of identities: a run's audience is recorded as seat
 // handles, and the name a caller asked about is resolved to the one record it
 // names before anything is compared ([Sources.audienceOf], [iam.OwnerOf]). An
 // empty record — a login nobody holds a seat by — is put nothing.
 func putTo(run sandbox.PendingRun, record string) bool {
-	return record != "" && slices.Contains(sandbox.Awaiting, run.Status) &&
+	return record != "" && run.Ending == nil && slices.Contains(sandbox.Awaiting, run.Status) &&
 		slices.Contains(run.AudienceHandles, record)
 }
 
@@ -384,6 +390,7 @@ var runKeys = map[string]runShown{
 	"answer_ids":          runStatus, // the recorded answer's delivery ids, not its text
 	"answered_by":         runStatus,
 	"answered_at":         runStatus,
+	"ending":              runStatus, // that the run is over and when, never what its turn did
 	"reply":               runBody,
 	"bridge_calls":        runBody,
 	"bridge_calls_elided": runStatus, // a count of what was cut, never a call
@@ -472,6 +479,14 @@ func runRow(run sandbox.PendingRun, opened runOpened) map[string]any {
 	// acts on ([sandbox.PendingRun.HeldSince]), so the screen and the
 	// reclaim cannot disagree about which boxes are held.
 	heldSince, _ := run.HeldSince()
+	// A BOX ITS ENDING RECLAIMS IS NO LONGER THE RUN'S, whether or not the
+	// reclaim has reached it yet: drawn as up and held, an ended turn read as
+	// a paused, billed box beside a run still resuming, for as long as the
+	// ending waited on a capture's keep or on the executor log.
+	reclaimed := run.Ending != nil && run.Ending.Reclaim
+	if reclaimed {
+		heldSince = time.Time{}
+	}
 	return withHeld(run, opened, withDecision(run, map[string]any{
 		"turn_id": run.TurnID,
 		// The unit of work behind that run, so a board row links back to
@@ -524,8 +539,9 @@ func runRow(run sandbox.PendingRun, opened runOpened) map[string]any {
 		"owner":             run.Owner,
 		// The two facts the board draws, rather than the ids themselves: a
 		// non-empty sandbox id means a box exists, and a set paused_at
-		// means it is currently held as a snapshot and being paid for.
-		"box_exists":         run.SandboxID != "",
+		// means it is currently held as a snapshot and being paid for —
+		// neither, once an ending reclaims the box.
+		"box_exists":         run.SandboxID != "" && !reclaimed,
 		"paused_at":          isoOrEmpty(heldSince),
 		"pause_ttl_seconds":  run.PauseTTLSeconds,
 		"started_at":         isoOrEmpty(run.CreatedAt),
@@ -545,6 +561,13 @@ func runRow(run sandbox.PendingRun, opened runOpened) map[string]any {
 		"answer_ids":  answerIDs(run.Answer),
 		"answered_by": answeredBy,
 		"answered_at": answeredAt(run.Answer),
+		// THAT THE RUN IS OVER, though its record is not gone yet: its
+		// ending is decided ([sandbox.RecordedEnding]) and finishing — on a
+		// node that records every turn's end, waiting for the turn's
+		// captures to settle and the executor log to take the end, which
+		// can be minutes — while its status still reads as the run it was.
+		// Null on a run whose ending nobody has decided.
+		"ending": endingOf(run),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
 		// than re-derived precisely because the resumed turn does not see
@@ -567,7 +590,7 @@ func runRow(run sandbox.PendingRun, opened runOpened) map[string]any {
 		// somebody else's system: the harness's own session, the
 		// command the engine launched, and the chain of asks that led
 		// here.
-		"session_id":       run.SessionID,
+		"session_id":       run.SessionRan(),
 		"command_id":       run.CommandID,
 		"delegation_chain": run.DelegationChain,
 		// WHETHER [runKeys]' body was left out for this reader, so a board
@@ -602,6 +625,23 @@ func withHeld(run sandbox.PendingRun, opened runOpened, row map[string]any) map[
 		row["held_arguments"] = opened.heldArgs
 	}
 	return row
+}
+
+// endingOf is a run's decided ending as the board carries it — when it was
+// decided, the reason it announces ("" for a run whose turn came back, which
+// announces nothing) and who stopped it, for a person's stop — or an untyped
+// nil, sent as null, for a run whose ending nobody has decided.
+func endingOf(run sandbox.PendingRun) any {
+	if run.Ending == nil {
+		return nil
+	}
+	stoppedBy := ""
+	if run.Stop != nil {
+		stoppedBy = run.Stop.By
+	}
+	return map[string]any{
+		"at": isoOrEmpty(run.Ending.At), "reason": run.Ending.Reason, "stopped_by": stoppedBy,
+	}
 }
 
 // answerIDs and answeredAt are the recorded answer's deliveries and instant,
