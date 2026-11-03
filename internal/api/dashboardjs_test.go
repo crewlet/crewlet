@@ -1606,12 +1606,19 @@ const (
 	// from 5443.7 KiB to 5444.6 KiB (+0.9 KiB, 967 bytes): the icons chunk
 	// +1409 bytes for the two marks, less 442 bytes net across the kit's
 	// renamed chunks, the shell page and the stylesheet. 5445 KiB.
+	// The Agents tab's generic scope and tool mechanics (scope names, a list
+	// that could not be read, a required scope and its single-entry pre-fill,
+	// an open connection's typed entries, a refusal drawn beside its control,
+	// each seat's box lines from the engine and a lane's two tool routes) took
+	// it from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, 3165 bytes): the
+	// integrations model chunk +3096 bytes, its sheet +61 bytes and 8 bytes
+	// elsewhere. 5448 KiB.
 	// A level an agent cannot be given drawn disabled with its reason, a
 	// setup verdict that wraps, and the kit's move to 0.92.0 (a StatusDot's
-	// word that wraps) took it from 5444.6 KiB to 5446.1 KiB (+1.5 KiB, 1534
-	// bytes): the kit +1472 bytes net across its renamed chunks and its
-	// stylesheet, and the access and settings chunks +62 bytes. 5447 KiB.
-	treeBudget = 5<<20 + 327<<10
+	// word that wraps) took it from 5447.7 KiB to 5449.2 KiB (+1.5 KiB, 1529
+	// bytes): the kit +1467 bytes net across its renamed chunks and its
+	// stylesheet, and the access and settings chunks +62 bytes. 5450 KiB.
+	treeBudget = 5<<20 + 330<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
