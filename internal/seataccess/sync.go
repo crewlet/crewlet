@@ -319,7 +319,7 @@ func (s *syncer) seat(
 	var removed bool
 	err = walk(s.in.Vendor, SeatInput{
 		Seat: ref, Want: want, Have: have, Record: &rec, Ask: s.in.Asks[h],
-		Options: s.options,
+		Options: s.options, Company: s.in.Open.Config,
 	}, func(lane Lane, w Desired, hv Observed, steps []Step) laneEffect {
 		if f := blocked[lane]; f != nil {
 			s.finish(&rec, lane, w, hv, SyncResult{At: s.now, Outcome: OutcomeFailed, Error: f})

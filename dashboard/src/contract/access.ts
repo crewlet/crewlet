@@ -68,6 +68,11 @@ interface AccessLevel {
   note?: string;
   /** Why no seat can be given it yet: offered disabled, with this as the reason. */
   unavailable?: string;
+  /**
+   * Every vendor permission the level holds, in the vendor's own names, where a
+   * person grants them by hand at the vendor (DigitalOcean's token scopes).
+   */
+  grants?: string[];
 }
 
 /** One GitHub App permission a seat can hold, in GitHub's own name. */
@@ -109,6 +114,16 @@ export interface AccessOptions {
   rotatable?: boolean;
   /** Where a person takes this lane's steps at the vendor, for a step that names no page of its own. */
   action_url?: string;
+  /**
+   * Every vendor permission no level grants that a pasted credential must not
+   * hold. With `unneeded` and the levels' `grants`, each permission the
+   * vendor offers is in exactly one.
+   */
+  refused?: string[];
+  /** Every vendor permission no level grants that a pasted credential may still hold. */
+  unneeded?: string[];
+  /** The account, organization or team the company connected, as the vendor shows it. */
+  vendor_account?: string;
   /**
    * Whether a person may keep a turned-off agent's account at the vendor
    * rather than delete it there (the `release` action, on its remove wait).
@@ -282,6 +297,16 @@ export interface AccessSeatLane {
   administers?: boolean;
   /** Where the lane's tool is a CLI in the seat's own box (Expo's EAS CLI), what that box holds for it. */
   box?: AccessBox;
+  /**
+   * Where a person makes the seat's credential at the vendor: the name to give
+   * it at the seat's desired level. Computed by the engine, never read back.
+   */
+  hand_in?: AccessHandIn;
+}
+
+/** What a person makes at the vendor for a seat. */
+interface AccessHandIn {
+  name: string;
 }
 
 export interface AccessSeat {
