@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
-	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -195,34 +194,40 @@ type bridgeLedger struct {
 	ended bool
 }
 
-// The retry of one bridged call's append ([bridgeLedger]): THREE ATTEMPTS,
-// spaced 250 ms and then 500 ms, held to a second at the most between two.
-// One compare-and-swap of one row, which a healthy coordination store answers
-// in milliseconds; what a retry rides over is a stream's leader stepping down
-// mid-write, whose re-election the broker answers within about a second. Every
-// second spent here is a second the box waits for its call's answer, and a
-// store out for longer is an outage the session's later appends ride over
-// instead, carrying the call as owed.
-const (
-	appendAttempts     = 3
-	appendRetryBase    = 250 * time.Millisecond
-	appendRetryCeiling = time.Second
-)
+// appendRetryWaits are the waits between the attempts of one bridged call's
+// append ([bridgeLedger]): a QUARTER OF A SECOND, HALF OF ONE AND A WHOLE ONE,
+// 1.75 s in all. The append is one compare-and-swap of one row, which a
+// healthy coordination store answers in milliseconds; what a retry rides over
+// is a stream's leader stepping down mid-write, whose successor the broker
+// elects within about a second (nats-server's campaign timeout is 800 ms at
+// the most). So the first waits are short, for a blip that clears at once,
+// and the last attempt comes once that second has passed, however quickly the
+// attempts before it failed: two waits of 250 and 500 ms ended the retry
+// before a re-election it was there to outlast. Every second spent here is a
+// second the box waits for its call's answer, and a store out for longer — a
+// leader lost rather than stepping down, which its followers wait four seconds
+// and more to replace — is an outage the session's later appends and its
+// carries ride over instead, carrying the call as owed.
+var appendRetryWaits = [...]time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
+
+// appendAttempts is how many times one bridged call's append is tried before
+// the call is owed: once, and again after each of [appendRetryWaits].
+const appendAttempts = len(appendRetryWaits) + 1
 
 // settleBudget bounds one carry of what a session still owes
 // ([bridgeLedger.Settle], [bridgeLedger.End]) from its ask, its wait for a
 // carry still out and its retries included: FIVE SECONDS, as the write that
 // records a job's session start is given ([sessionStartRecordBudget]), and for
-// its reason — the carry is that same compare-and-swap of one row, tried
-// [appendAttempts] times, which a healthy store answers in milliseconds and a
-// store that has not answered in five is in an outage the rest of the bound
-// would not see the end of. And it is waited on: by the collection of the
-// job's run before it reads the job's record, and by whatever ends the session
-// — a run's settle, a stop, the relaunch that replaces the job, the seat
-// leaving this node — none of which should stand for longer on calls the store
-// will not take. So a session's end that waits for the collection's carry
-// waits within its own bound, not beside it: the collection asked first, and
-// its bound ends first.
+// its reason — the carry is that same compare-and-swap of one row, tried as a
+// call's own append is ([appendRetryWaits]), which a healthy store answers in
+// milliseconds and a store that has not answered in five is in an outage the
+// rest of the bound would not see the end of. And it is waited on: by the
+// collection of the job's run before it reads the job's record, and by
+// whatever ends the session — a run's settle, a stop, the relaunch that
+// replaces the job, the seat leaving this node — none of which should stand
+// for longer on calls the store will not take. So a session's end that waits
+// for the collection's carry waits within its own bound, not beside it: the
+// collection asked first, and its bound ends first.
 const settleBudget = 5 * time.Second
 
 // owedDigestPrefix is how much of a call's identity a line naming a call no
@@ -463,7 +468,7 @@ func (l *bridgeLedger) appendRetrying(ctx context.Context, runID string, a sandb
 		if err == nil || attempt >= appendAttempts || ctx.Err() != nil {
 			return recorded, err
 		}
-		timer := time.NewTimer(backoff.Doubling(attempt, appendRetryBase, appendRetryCeiling))
+		timer := time.NewTimer(appendRetryWaits[attempt-1])
 		select {
 		case <-timer.C:
 		case <-ctx.Done():

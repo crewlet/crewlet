@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -338,6 +339,58 @@ func TestABridgedCallsRecordThatDidNotLandIsTriedAgainAndThenOwed(t *testing.T) 
 	if again := down.landed[1]; len(again.Owed) != 0 {
 		t.Errorf("the append after the one that carried the owed call carried %+v again", again.Owed)
 	}
+}
+
+// electingStore fails every bridged append until a re-election has passed
+// since its first, as a coordination store does while a stream's leader steps
+// down and its successor is elected, and takes every append after that.
+type electingStore struct {
+	sandbox.PendingStore
+	mu    sync.Mutex
+	first time.Time
+	asked int
+}
+
+// reElection is how long a stream's successor takes to be elected once its
+// leader steps down: about a second (see [appendRetryWaits]).
+const reElection = time.Second
+
+func (s *electingStore) AppendBridgeCall(context.Context, string, sandbox.BridgeAppend) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asked++
+	if s.first.IsZero() {
+		s.first = time.Now()
+	}
+	if time.Since(s.first) < reElection {
+		return false, errors.New("the coordination store is electing a leader")
+	}
+	return true, nil
+}
+
+// A BRIDGED CALL'S RECORD OUTLASTS A LEADER'S RE-ELECTION. A call made as the
+// coordination store's stream leader steps down meets a store that refuses
+// every write until a successor is elected, about a second later. The retry is
+// there to outlast exactly that, so the call's own append lands before its
+// answer goes back to the box, rather than being owed to a later call the job
+// may never make. On a bubble's clock, so the second is exact and costs the
+// suite nothing.
+//
+// Mutation: space the attempts 250 ms and then 500 ms, as they were, and the
+// last one comes before the successor is elected: the call is owed.
+func TestABridgedCallsRecordOutlastsALeadersReElection(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		store := &electingStore{}
+		l := newBridgeLedger(store, nil)
+		l.bind("launch-1")
+		err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "post_message"},
+			Seq: 1, Digest: strings.Repeat("e1", 32)})
+		if err != nil || l.owing() != 0 {
+			t.Errorf("a call made as the stream's leader stepped down was owed after %d attempts (%v); "+
+				"want its own append to land once a successor was elected", store.asked, err)
+		}
+	})
 }
 
 // outageStore is a pending store whose bridged appends fail while it is down,
