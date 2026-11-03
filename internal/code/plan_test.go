@@ -396,6 +396,8 @@ func registeredStatements() map[string]statement {
 		"protections":         {protectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"push rules":          {pushRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"gates":               {gatesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
+		"rule sources":        {ruleSourcesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
+		"sourced rules":       {sourcedRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"rule":                {ruleSQL, []any{"repo-1", "refs/heads/main"}, []string{protectionKey + " (repo_id=? AND pattern=?)"}},
 		"read back":           {readBackSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo view":           {repoViewSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
@@ -431,6 +433,19 @@ func registeredStatements() map[string]statement {
 		"count a gate reject": {countRejectSQL, []any{1, "repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"decide repo":         {decideRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"decide deletion":     {decideDeletionSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
+		// THE NAMES A PREFIX BEGINS, in a listing's order: one range of its
+		// index, from the prefix on a first page and past the cursor after
+		// one, up to the prefix's end — never a walk of the names before it.
+		"repos under first": {reposUnderFirstSQL, []any{`["active","archived"]`, "r01", "r02", 100},
+			[]string{"code_repos_name_idx (name>=? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"repos under after": {reposUnderAfterSQL, []any{`["active","archived"]`, "r0150", "r02", 100},
+			[]string{"code_repos_name_idx (name>? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"protected repos under first": {protectedReposUnderFirstSQL,
+			[]any{`["active","archived"]`, "r01", "r02", 100},
+			[]string{protectedReposKey + " (name>=? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"protected repos under after": {protectedReposUnderAfterSQL,
+			[]any{`["active","archived"]`, "r0150", "r02", 100},
+			[]string{protectedReposKey + " (name>? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
 		// A SEAT'S DAY IS ONE ROW, read by its key for every seat a round
 		// names, and its oldest day beyond its two newest forgotten by the
 		// same key, read newest first — never a count over the push history,

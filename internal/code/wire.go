@@ -1262,7 +1262,11 @@ type ReadQuery struct {
 	Protected bool `json:"protected,omitempty"`
 	// Prefix narrows a refs listing to the refs under it: "refs/heads/"
 	// (the default) or "refs/tags/", or a deeper prefix ending in "/" — a
-	// seat's own namespace.
+	// seat's own namespace. It narrows a repositories listing to the names
+	// it begins — a name whole, or the opening of one — read as one range
+	// of the index by name, so a page of them costs what they cost however
+	// many repositories sort before them: what a picker asks with what was
+	// typed into it, since a company's repositories outnumber one page.
 	Prefix string `json:"prefix,omitempty"`
 	// Brief asks a push history for its rows IN BRIEF: the commits each push
 	// introduced counted and not listed, and the commands of a push of more
@@ -1414,10 +1418,12 @@ type ReadQuery struct {
 	// Window narrows a `changes` listing to the changes that moved within
 	// it ([ChangeWindow], [ChangeSummary.UpdatedAt]), refused on every other
 	// kind. A listing that names nothing else an index leads by — no
-	// repository, work item, reviewer or need — walks the two indexes of
-	// when its changes last moved (changewindow.go), newest move first, and
-	// tests a state and an owner on the rows it read; one that names any of
-	// those walks that one's index and tests the window on each row.
+	// repository, work item, reviewer or need, and no live state — walks the
+	// two indexes of when its changes last moved (changewindow.go), newest
+	// move first, and tests a terminal state and an owner on the rows it
+	// read; one that names any of those walks that one's index, in its order
+	// (a live state's newest opening first), and tests the window on each
+	// row.
 	Window ChangeWindow `json:"window,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
@@ -2572,6 +2578,12 @@ type RepoDetail struct {
 	// repository's gates are half a mebibyte of JSON. A read that asked and
 	// finds none answers none.
 	Gates []RuleGate `json:"gates,omitempty"`
+	// RuleSources are who set each of its rules and when ([RuleSource]),
+	// every rule's — a gate's or none — in pattern order, and to the read
+	// that asks for the gates alone: the two are a rule in detail, which the
+	// row never carries, read in the same transaction as the rules it does,
+	// so every source names a rule of the row.
+	RuleSources []RuleSource `json:"rule_sources,omitempty"`
 	// Expunge is where the repository's expunges stand ([ExpungeState]):
 	// the one open, the purge a person asked for and not yet served, and the
 	// last one committed — the repository's own row, read with the rest of
@@ -2583,6 +2595,28 @@ type RepoDetail struct {
 	// with its expunge in one seek of its row, never on the [RepoRef] every
 	// push and fetch reads, which needs only [RepoRef.Mirrored].
 	Remotes RemoteState `json:"remotes,omitzero"`
+}
+
+// RuleSource is who set one of a repository's rules and when, named by the
+// rule's pattern: the decider of the record that last CHANGED the rule — its
+// push controls or its gate — and that record's instant (code_protections,
+// replicated 0143). A record that carries the rule unchanged, as every
+// settings change carries every rule, leaves its source as it was
+// ([rulesSourced]).
+//
+// A READ'S ANSWER, never a record's field: the columns are derived from what
+// every record already carries, its envelope's decider and its broker
+// instant, so none of it takes a versionedFields row (0143 states the
+// condition the derivation holds under).
+type RuleSource struct {
+	Pattern string `json:"pattern"`
+	// SetBy is the decider as the record names it: a seat's handle (SetByKind
+	// agent), a person's human seat or an unbound credential's login
+	// (operator, iam.ActorFor), and "" where the configuration set it
+	// (config), which no principal decides.
+	SetBy     string    `json:"set_by,omitempty"`
+	SetByKind ActorKind `json:"set_by_kind"`
+	SetAt     time.Time `json:"set_at"`
 }
 
 // RemoteState is a repository's other hosts as its row holds them
@@ -2777,8 +2811,9 @@ type ChangeDetail struct {
 // none of its authors has answered; its STANDING BLOCKERS — the blockers that
 // hold it back whatever its authors answered, until their raiser's later
 // review or a dismissal clears them (S40); how many reviewers' latest verdict
-// asks for changes; and the version and position of the last record on the
-// change's subject — the floor a read of its parts is asked at.
+// asks for changes; the version and position of the last record on the
+// change's subject — the floor a read of its parts is asked at; and when
+// somebody last wrote on it.
 type ConversationRow struct {
 	Comments         int64             `json:"comments"`
 	Reviews          int64             `json:"reviews"`
@@ -2787,6 +2822,16 @@ type ConversationRow struct {
 	ChangesRequested int64             `json:"changes_requested"`
 	Version          int64             `json:"version"`
 	Position         statelog.Position `json:"position"`
+	// SpokenAt is the broker instant of the last record somebody wrote on
+	// the change's subject — an ask for review, a comment, a thread
+	// resolved, a review, an answer to a finding (code_conversations.
+	// updated_at, replicated 0142) — and zero, left out, where every record
+	// on it was the home's or the engine's. Unlike Version, which every
+	// record there moves — a revision's facts and every mergeability its
+	// home records again as the target branch moves among them — it moves
+	// only with what the change's reviews and comments are rows of, so a
+	// reader holding pages of those asks them again only when it moves.
+	SpokenAt time.Time `json:"spoken_at,omitzero"`
 }
 
 // ReviewRow is one review of a change (code_reviews): the revision it judged,

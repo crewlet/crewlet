@@ -21,8 +21,9 @@
  *   protected repositories, a page at a time, with the push rules it carries
  *   and, as a repository's fold is first opened, the merge gate of each rule
  *   from its detail, asked for by name, said in the repository page's own
- *   words (`lib/protection.ts`). Who set a rule and when is not on
- *   its row: the card says which surface sets the repository's rules instead.
+ *   words (`lib/protection.ts`), with who last changed each rule and when,
+ *   which the same detail answers beside the gates (`rule_sources`), and
+ *   which surface sets the repository's rules.
  *
  * ADMIN'S, as the rest of the Engine group: the document is read by an admin
  * alone, and the log and the fleet are the engine's. Hidden where the company
@@ -44,7 +45,7 @@ import {
 } from "~/contract/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
-import { gateLine, pushRuleLine } from "~/lib/protection.ts";
+import { gateLine, pushRuleLine, ruleSourceLine } from "~/lib/protection.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -53,6 +54,7 @@ import type {
   CodeRepoSummary,
   CodeReposAnswer,
   CodeRuleGate,
+  CodeRuleSource,
   CompanyDocument,
   FleetAnswer,
   RetentionDomain,
@@ -190,7 +192,7 @@ function RepoFold({ repo }: { repo: CodeRepoSummary }) {
     >
       <summary>
         <span className="mono">{repo.name}</span>{" "}
-        <span className="muted">— {plural(repo.protections?.length ?? 0, "rule")}</span>
+        <span className="muted">({plural(repo.protections?.length ?? 0, "rule")})</span>
       </summary>
       {opened && <RepoProtection repo={repo} />}
     </details>
@@ -204,7 +206,8 @@ function RepoFold({ repo }: { repo: CodeRepoSummary }) {
  */
 export function RepoProtection({ repo }: { repo: CodeRepoSummary }) {
   const read = useCodeQuery("code_repo", { name: repo.name, gates: true });
-  const lines = protectionLines(repo.protections ?? [], read.data?.repo?.gates);
+  const detail = read.data?.repo;
+  const lines = protectionLines(repo.protections ?? [], detail?.gates, detail?.rule_sources);
   return (
     <div className="col gap-1">
       <span className="t-caption">
@@ -226,6 +229,7 @@ export function RepoProtection({ repo }: { repo: CodeRepoSummary }) {
             <li key={line.pattern}>
               <span className="mono">{line.pattern}</span>
               <span className="muted">{line.says}</span>
+              {line.source && <span className="t-caption">{line.source}</span>}
             </li>
           ))}
         </ul>
@@ -238,17 +242,25 @@ export function RepoProtection({ repo }: { repo: CodeRepoSummary }) {
  * Each rule of a repository in a line: what it lets a push do and, once the
  * repository's detail has answered (`gates`), what a merge into it must meet
  * — a rule with no gate SAID to have none, never left blank, since a blank
- * reads the same as a detail not yet read.
+ * reads the same as a detail not yet read — and who last changed it and
+ * when, from the same detail (`rule_sources`), absent until it answers.
  */
 export function protectionLines(
   rules: readonly CodeProtection[],
   gates: readonly CodeRuleGate[] | undefined,
-): { pattern: string; says: string }[] {
+  sources?: readonly CodeRuleSource[],
+): { pattern: string; says: string; source?: string }[] {
   const byPattern = new Map((gates ?? []).map((g) => [g.pattern, g.gate]));
+  const sourceOf = new Map((sources ?? []).map((s) => [s.pattern, s]));
   return rules.map((rule) => {
     const gate = byPattern.get(rule.pattern);
     const merge = gate ? `; a merge into it is ${gateLine(gate)}` : gates ? "; no merge gate" : "";
-    return { pattern: rule.pattern, says: `${pushRuleLine(rule)}${merge}` };
+    const source = sourceOf.get(rule.pattern);
+    return {
+      pattern: rule.pattern,
+      says: `${pushRuleLine(rule)}${merge}`,
+      ...(source ? { source: ruleSourceLine(source) } : {}),
+    };
   });
 }
 

@@ -54,7 +54,7 @@ import type {
   CodeCheckRow,
   CodeChecksAnswer,
 } from "~/protocol/index.ts";
-import { commitHref, compareHref } from "../paths.ts";
+import { commitHref, compareHref, repoHref } from "../paths.ts";
 
 /**
  * How often a listing's newest page is read again: HALF A MINUTE. A check ends minutes after it starts, and the code log
@@ -385,13 +385,20 @@ function CheckWhole({ repo, d }: { repo: string; d: CodeCheckDetail }) {
 
 /**
  * Where a failure is in the diff the attempt was checked on: the comparison
- * of its base and its commit, opened on the file — or the commit's own page,
- * where the attempt records no base.
+ * of its base and its commit, opened on the file at the failing line, which
+ * the diff marks (or, where the line is outside what the diff changes, offers
+ * in the file itself). Where the attempt records no base there is no diff: a
+ * failure naming a line opens the file at the attempt's commit on that line,
+ * and one naming none the commit's own page.
  */
 export function failureHref(repo: string, d: CodeCheckRow, f: CodeCheckFailure): string {
   if (!f.path) return commitHref(repo, d.oid);
-  if (!d.base) return commitHref(repo, d.oid);
-  return compareHref(repo, { base: d.base, head: d.oid, file: f.path });
+  if (!d.base) {
+    return f.line
+      ? repoHref(repo, { tab: "files", ref: d.oid, path: f.path, lines: String(f.line) })
+      : commitHref(repo, d.oid);
+  }
+  return compareHref(repo, { base: d.base, head: d.oid, file: f.path, line: f.line });
 }
 
 function Failures({

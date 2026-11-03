@@ -1399,6 +1399,35 @@ func gatesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, error) {
 	return out, nil
 }
 
+// ruleSourcesIn reads who set each of a repository's rules and when
+// ([RuleSource]), in pattern order — what one repository's detail answers a
+// read that asks for its gates — and nil where no rule protects it.
+func ruleSourcesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleSource, error) {
+	rows, err := tx.QueryContext(ctx, ruleSourcesSQL, id)
+	if err != nil {
+		return nil, fmt.Errorf("code: read who set %s's rules: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RuleSource
+	for rows.Next() {
+		var (
+			r    RuleSource
+			kind string
+			at   int64
+		)
+		if err = rows.Scan(&r.Pattern, &r.SetBy, &kind, &at); err != nil {
+			return nil, fmt.Errorf("code: read who set %s's rules: %w", id, err)
+		}
+		r.SetByKind, r.SetAt = ActorKind(kind), store.DecodeTime(at)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("code: read who set %s's rules: %w", id, err)
+	}
+	slices.SortFunc(out, func(a, b RuleSource) int { return strings.Compare(a.Pattern, b.Pattern) })
+	return out, nil
+}
+
 // The lifecycle decides' statements. claimsSQL and reposRowsSQL are
 // [Store.unchanged]'s batch forms of claimSQL and repoRowSQL, each driven from
 // its JSON list (planner.go); the batch's rules are protectionsOfSQL, the
@@ -1430,6 +1459,10 @@ const (
 	// gatesSQL is the gates of a repository's rules that carry one, by
 	// pattern ([gatesIn]): one repository's detail asked for them.
 	gatesSQL = `SELECT pattern, gate FROM code_protections WHERE repo_id = ? AND gate != '' ORDER BY pattern`
+	// ruleSourcesSQL is who set each of a repository's rules and when, by
+	// pattern ([ruleSourcesIn]): one repository's detail asked for its gates.
+	ruleSourcesSQL = `SELECT pattern, set_by, set_by_kind, set_at FROM code_protections WHERE repo_id = ?
+		ORDER BY pattern`
 	// protectionsOfSQL is protectionsSQL for every repository a JSON list
 	// names, in one statement ([reposIn]).
 	protectionsOfSQL = `SELECT repo_id, pattern, allow_force, allow_delete, direct_push, gate

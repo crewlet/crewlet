@@ -1,0 +1,44 @@
+-- A protection names who set it.
+--
+-- Settings › Code and a repository's own settings show every branch rule
+-- with what it lets a push do and what its merge gate asks, and an
+-- administrator reading them asks the next question at once: who set this,
+-- and when. The rows could not say. The rules are replaced whole by every
+-- record that carries a repository's settings — a create, a settings change
+-- and a restore — so a rule's row was as old as the repository's last
+-- settings record, whatever that record changed.
+--
+-- set_by and set_by_kind are the decider of the record that last CHANGED the
+-- rule, as its envelope names it (code.MutationRecord.Actor and ActorKind):
+-- a seat's handle with the kind `agent`, a person's human seat or an unbound
+-- credential's login with `operator` (iam.ActorFor), and '' with `config`
+-- for the reconcile of code.repos, which no principal decides. set_at is that
+-- record's broker instant (store.EncodeTime), the one instant this domain's
+-- apply writes from a record.
+--
+-- A RULE A RECORD CARRIES UNCHANGED KEEPS ITS SOURCE. The applier compares
+-- each rule a record writes with the row it replaces (code.Protection.Equal:
+-- its push controls and its gate by value) and carries the row's three
+-- columns over where the two are the same, so a description edited, a
+-- repository archived and brought back, another pattern protected or a
+-- declaration re-activated unchanged leaves every rule it did not touch
+-- naming the record that set it (code.rulesSourced).
+--
+-- THE DEFAULTS ARE '' AND 0 because SQLite requires one for a NOT NULL column
+-- added to a table, and every record that writes the rules writes all three.
+-- No release carries the code domain (its stated condition,
+-- code.RecordVersion), so no store outside a development branch holds a rule
+-- the columns were not written for (0129's reason). The columns are derived
+-- from what every record already carries — its envelope's decider and its
+-- broker instant — so no record gains a field and none takes a
+-- versionedFields row; were a build without them ever to apply the code log
+-- beside one with them, the two would hold different sources for one rule,
+-- which is why the condition is stated rather than assumed.
+--
+-- Class: code_protections stays reproducible (code.ReproducibleTables): the
+-- columns are written only by the applier, from the record it applies and the
+-- rows it replaces — a pure function of the log — and removed with the rules
+-- by the repository's purge, so a replay from zero writes them again.
+ALTER TABLE code_protections ADD COLUMN set_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE code_protections ADD COLUMN set_by_kind TEXT NOT NULL DEFAULT '';
+ALTER TABLE code_protections ADD COLUMN set_at INTEGER NOT NULL DEFAULT 0;

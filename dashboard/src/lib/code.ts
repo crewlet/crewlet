@@ -44,6 +44,18 @@ export function isRepoName(name: string): boolean {
 }
 
 /**
+ * Whether a string opens a name a repository can have: a name whole, or the
+ * opening of one, which a "0" completes, since a digit may end either label
+ * of a name and follow its hyphen or its dot. What a repositories listing
+ * takes as its `prefix`, and the engine refuses any other
+ * (`internal/code.validRepoPrefix`, the same test), so a picker says in place
+ * what no name could begin with rather than asking.
+ */
+export function isRepoPrefix(prefix: string): boolean {
+  return isRepoName(prefix) || isRepoName(`${prefix}0`);
+}
+
+/**
  * How many digits of an object id a reader is shown: SEVEN, git's own default
  * abbreviation (`core.abbrev`) and the fewest an abbreviated id the engine
  * takes back may have (`code.MinAbbrevDigits`), so what is printed is what a

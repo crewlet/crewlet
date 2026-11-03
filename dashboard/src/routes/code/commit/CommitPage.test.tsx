@@ -339,6 +339,39 @@ test.each([
   expect(reads(asked, "code_diff").some((u) => u.searchParams.get("file") === "z.go")).toBe(true);
 });
 
+// THE LINE THE ADDRESS NAMES IS MARKED in its file's patch, on the newer
+// side, where a check's failure points; and a line the patch does not draw is
+// said to be outside what the diff changes, with the file itself at the head
+// offered on that line. Mutation: drop the line from what the patch is
+// handed, mark it on the older side, or offer the file at the base, and this
+// fails.
+test("a line the address names is marked in its file's patch", async () => {
+  stubEngine();
+  mount(<CommitPage repo="web" sha={SHA} />, `#/code/repos/web/commits/${SHA}?file=app.go&line=2`);
+
+  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  await within(region).findByText("new");
+  const marked = region.querySelectorAll(".diff-view__line[data-picked]");
+  expect(marked.length).toBe(1);
+  expect(marked[0]?.textContent).toContain("new");
+  expect(within(region).queryByText(/outside what this diff changes/)).toBeNull();
+});
+
+test("a line the patch does not draw offers the file at the head on that line", async () => {
+  stubEngine();
+  mount(<CommitPage repo="web" sha={SHA} />, `#/code/repos/web/commits/${SHA}?file=app.go&line=40`);
+
+  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  const open = await within(region).findByRole("link", { name: "Open app.go at line 40" });
+  const target = new URL(open.getAttribute("href")!, "http://x");
+  expect(target.hash).toContain("/code/repos/web");
+  expect(target.hash).toContain("tab=files");
+  expect(target.hash).toContain(`ref=${SHA}`);
+  expect(target.hash).toContain("path=app.go");
+  expect(target.hash).toContain("lines=40");
+  expect(region.querySelectorAll(".diff-view__line[data-picked]").length).toBe(0);
+});
+
 // A ROOT COMMIT'S CHANGE IS EVERY FILE IT HOLDS, measured from git's empty
 // tree. Mutation: skip the diff of a root commit, or diff it against itself,
 // and this fails.

@@ -54,7 +54,6 @@ import {
   Button,
   Callout,
   EmptyState,
-  Select,
   Skeleton,
   TableDateCell,
   TableEntityCell,
@@ -86,10 +85,10 @@ import {
   type CodePushCommand,
   type CodePushRow,
   type CodePushesAnswer,
-  type CodeRepoSummary,
 } from "~/protocol/index.ts";
 import { spellPosition } from "~/protocol/session.ts";
 import { REPO_PARAM } from "./paths.ts";
+import { RepoPicker } from "./RepoPicker.tsx";
 
 /**
  * How often the newest page is read again: a MINUTE, the cadence this
@@ -121,25 +120,11 @@ export function Pushes() {
   // history entry rather than adding one per repository looked at.
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
   const named = repo !== "" && isRepoName(repo);
-  // THE REPOSITORIES THE READER MAY READ, for the bar's picker: the listing's
-  // first page, by name, which every other one is a press of Repositories'
-  // Load more away.
-  const choices = useCodeQuery("code_repos");
 
   return (
     <>
       <div className="toolbar">
-        <RepoPicker repo={repo} onChoose={setRepo} listing={choices.data?.repos ?? []} />
-        {choices.data?.next && (
-          <span className="t-caption">
-            The first {plural(choices.data.repos?.length ?? 0, "repository", "repositories")} by
-            name; open any other from{" "}
-            <a className="prose-link" href={href(["code", "repos"])}>
-              Repositories
-            </a>
-            .
-          </span>
-        )}
+        <RepoPicker repo={repo} onChoose={setRepo} />
       </div>
 
       {repo === "" ? (
@@ -308,39 +293,6 @@ export function PushHistory({ repo }: { repo: string }) {
         </>
       )}
     </>
-  );
-}
-
-/**
- * The repository the history is narrowed to, chosen from the ones the reader
- * may read. The chosen name stays an option where the listing's first page
- * does not hold it, so an address naming any repository reads as itself.
- */
-function RepoPicker({
-  repo,
-  onChoose,
-  listing,
-}: {
-  repo: string;
-  onChoose: (name: string) => void;
-  listing: readonly CodeRepoSummary[];
-}) {
-  const options = listing.map((r) => ({ value: r.name, label: r.name }));
-  if (repo !== "" && !options.some((o) => o.value === repo)) {
-    options.unshift({ value: repo, label: repo });
-  }
-  return (
-    <Select
-      width="auto"
-      searchable
-      value={repo}
-      onChange={(value) => onChoose(String(value))}
-      options={options}
-      ariaLabel="Repository"
-      placeholder="Choose a repository"
-      emptyMessage="No repository matches"
-      active={repo !== ""}
-    />
   );
 }
 

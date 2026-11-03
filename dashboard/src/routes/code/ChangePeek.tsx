@@ -155,14 +155,14 @@ export function Readiness({ readiness }: { readiness: CodeReadiness }) {
       <p>
         <strong>
           {readiness.met} of {plural(readiness.total, "precondition")} met
-        </strong>{" "}
-        — {readiness.first}
+        </strong>
+        . {readiness.first}
       </p>
       <ul className="code-person-band__list">
         {readiness.preconditions.map((p) => (
           <li key={p.kind}>
             <PreconditionTag precondition={p} /> {preconditionWord(p.kind)}
-            <span className="muted"> — {p.detail}</span>
+            <span className="muted">: {p.detail}</span>
           </li>
         ))}
       </ul>

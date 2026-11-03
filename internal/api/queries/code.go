@@ -240,9 +240,10 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 	default:
 		q.Repo = p.String("name")
 	}
-	// A REFS LISTING NAMES ITS PREFIX, the reader's to refuse where it is
-	// none it lists under.
-	if kind == code.ReadRefs {
+	// A REFS LISTING NAMES ITS PREFIX, and a repositories listing the
+	// opening of the names it lists — a picker's typed text — each the
+	// reader's to refuse where it is none it lists under.
+	if kind == code.ReadRefs || kind == code.ReadRepos {
 		q.Prefix = strings.TrimSpace(p.String("prefix"))
 	}
 	// A CHANGE IS THE PATH'S TOO, by its number on the repository — web!42's

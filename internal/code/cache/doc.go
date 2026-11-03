@@ -835,10 +835,14 @@
 // A dropped file is written again at once because the maintainer is woken
 // as the round lets the repository go — never from inside the round, since a
 // pass starts no run on a repository a round holds: woken from inside, it met
-// the round still running and left the copy to its next tick. A pass a tick
-// starts inside a round is owed the same wake, so a repository read steadily,
-// a round for every linearizable read, is not left to the odds of a tick
-// landing between two of them.
+// the round still running and left the copy to its next tick.
+//
+// A repository read without a pause is maintained too. Every linearizable read
+// is a round, and one queued behind another starts as it ends, so such a
+// repository may have no moment between rounds for a pass to find, at a tick or
+// woken. A pass that finds a round holding a repository due keeps its place in
+// the order, and the run starts as that round ends, before the next round starts:
+// neither waits for the other, since the run holds a pin and never the round.
 //
 // # Background work never takes a person's slot
 //

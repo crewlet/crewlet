@@ -136,6 +136,34 @@ test("each protected rule says its own gate, or that it has none once the detail
   );
 });
 
+// WHO SET EACH RULE AND WHEN, by its own pattern: a rule a person or a seat
+// last changed names them, a declared rule names the company document rather
+// than a blank decider, and before the detail answers no source is claimed.
+// Mutation: match a source to another rule's pattern, or drop the config
+// arm, and this fails.
+test("each protected rule says who last set it and when, once the detail answered", () => {
+  const rules = [
+    { pattern: "refs/heads/main", direct_push: "none" },
+    { pattern: "refs/heads/release/*", direct_push: "persons" },
+  ];
+  expect(protectionLines(rules, undefined)[0]?.source).toBeUndefined();
+  const read = protectionLines(
+    rules,
+    [],
+    [
+      { pattern: "refs/heads/main", set_by_kind: "config", set_at: "2026-10-01T09:00:00Z" },
+      {
+        pattern: "refs/heads/release/*",
+        set_by: "founder",
+        set_by_kind: "operator",
+        set_at: "2026-10-02T09:00:00Z",
+      },
+    ],
+  );
+  expect(read[0]?.source).toMatch(/^Set by the company document, \S/);
+  expect(read[1]?.source).toMatch(/^Set by founder, \S/);
+});
+
 /** A declared repository whose main branch takes no direct push. */
 const REPO = {
   id: "id-web",
@@ -168,7 +196,17 @@ test("a repository's fold asks for its rules' gates and draws each rule's", asyn
           repo: {
             ...REPO,
             ...(gated
-              ? { gates: [{ pattern: "refs/heads/main", gate: { approvals: "one" } }] }
+              ? {
+                  gates: [{ pattern: "refs/heads/main", gate: { approvals: "one" } }],
+                  rule_sources: [
+                    {
+                      pattern: "refs/heads/main",
+                      set_by: "cto",
+                      set_by_kind: "agent",
+                      set_at: "2026-10-02T09:00:00Z",
+                    },
+                  ],
+                }
               : {}),
           },
         }),
@@ -179,6 +217,7 @@ test("a repository's fold asks for its rules' gates and draws each rule's", asyn
   render(<RepoProtection repo={REPO} />);
 
   expect(await screen.findByText(/a merge into it is .*one approval/)).toBeTruthy();
+  expect(screen.getByText(/^Set by cto, /)).toBeTruthy();
   const read = asked.find((u) => u.pathname === "/query/code_repo");
   expect(read?.searchParams.get("gates")).toBe("true");
   expect(read?.searchParams.has("path_owners")).toBe(false);

@@ -35,8 +35,11 @@
  * lifecycle's last record and the last thing somebody wrote about it, never
  * the home's facts, so a target branch that moved re-dates nothing. `window=`
  * narrows the listing to the changes that moved within the last day, week or
- * month; with nothing else narrowing the walk the engine walks its two
- * indexes of that instant, and the rows come newest move first.
+ * month. Beside every state, or a merged or closed one, and nothing else
+ * narrowing the walk, the engine walks its two indexes of that instant and the
+ * rows come newest move first; beside a live state (the default open, or
+ * draft) it walks that state's changes, which a company keeps few of, and
+ * tests the window on each, so the rows come newest opening first.
  *
  * # Needs a person
  *
@@ -98,6 +101,7 @@ import type {
   CodeReadiness,
 } from "~/protocol/index.ts";
 import { REPO_PARAM, changeObject } from "./paths.ts";
+import { RepoPicker } from "./RepoPicker.tsx";
 
 /**
  * How often the listing's first page is read again while it is open: a
@@ -198,9 +202,6 @@ export function Changes() {
   );
   const asked = useMemo(() => changesParams(filters), [filters]);
   const params = "params" in asked ? asked.params : {};
-  // THE REPOSITORIES THE READER MAY READ, for the bar's picker: the listing's
-  // first page, by name, as Pushes offers them.
-  const choices = useCodeQuery("code_repos");
   const first = useCodeQuery("code_changes", params, {
     enabled: "params" in asked,
     pollMs: CHANGES_POLL_MS,
@@ -215,15 +216,6 @@ export function Changes() {
   );
   const rows = paged.items;
   const narrowed = narrowsTheWalk(filters);
-  const repoChoices = [
-    { value: "", label: "Every repository" },
-    ...(choices.data?.repos ?? []).map((r) => ({ value: r.name, label: r.name })),
-    // THE NAMED ONE, where the first page does not hold it: a choice the
-    // address made is never one the picker cannot show.
-    ...(repo !== "" && !(choices.data?.repos ?? []).some((r) => r.name === repo)
-      ? [{ value: repo, label: repo }]
-      : []),
-  ];
 
   return (
     <>
@@ -246,14 +238,7 @@ export function Changes() {
           ariaLabel="Which changes"
           active={state !== DEFAULT_STATE}
         />
-        <Select
-          width="auto"
-          value={repo}
-          onChange={(value) => setRepo(String(value))}
-          options={repoChoices}
-          ariaLabel="Repository"
-          active={repo !== ""}
-        />
+        <RepoPicker repo={repo} onChoose={setRepo} every="Every repository" />
         <Select
           width="auto"
           value={movedIn}
@@ -519,7 +504,7 @@ function PersonBand({ repo, showAll }: { repo: string; showAll: () => void }) {
               {c.ref}
             </a>{" "}
             {c.title}
-            {c.readiness && <span className="muted"> — {c.readiness.first}</span>}
+            {c.readiness && <span className="muted"> · {c.readiness.first}</span>}
           </li>
         ))}
       </ul>

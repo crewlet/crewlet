@@ -49,18 +49,21 @@ import (
 //   - a repository and a state: code_changes_repo_state_idx (replicated
 //     0092), the repository's changes in that state;
 //   - a repository: code_changes_number_idx, the repository's changes;
-//   - a window: code_changes_updated_idx and code_conversations_updated_idx
+//   - a window beside no state or a terminal one (merged, closed):
+//     code_changes_updated_idx and code_conversations_updated_idx
 //     (replicated 0142) walked in step, the changes that moved within it,
 //     each once at its last move (changewindow.go);
-//   - a state: code_changes_state_idx, the company's changes in that state.
+//   - a state: code_changes_state_idx, the company's changes in that state
+//     — a live state's (draft, open) ahead of a window, which is then tested
+//     on each row, since the state's index holds the live set alone where
+//     the window's hold every change that moved, the merged among them.
 //
 // NEWEST FIRST, always: a repository's walks by number, which is the order the
 // code log opened its changes in (a number is the apply's); a reviewer's and a
 // person's by the change's id, a UUIDv7 minted when it was opened; a window's
-// by each change's last move and then its id; every other
-// by the position
-// of the record that opened each change and then its id, since one record can
-// open several. A filter the walked index does not seek — a repository beside
+// walk by each change's last move and then its id; every other — a live
+// state's in a window among them — by the position of the record that opened
+// each change and then its id, since one record can open several. A filter the walked index does not seek — a repository beside
 // a work item, an owner or a reviewer, a state beside a work item or a
 // reviewer, an owner beside a repository's, a work item's or a reviewer's
 // walk, a work item beside a reviewer's, and whether a change awaits its
@@ -210,11 +213,17 @@ func walkLedBy(q ReadQuery, repoID string) changeWalk {
 		return changeWalk{index: changesRepoStateKey, keys: []any{repoID, string(q.State)}, order: byNumber}
 	case named:
 		return changeWalk{index: changesNumberKey, keys: []any{repoID}, order: byNumber, owner: q.Owner != ""}
-	case q.Window != "":
-		// A WINDOW LEADS where no repository, work item, reviewer or need
-		// does — ahead of a state alone, whose index holds every change in
-		// it ever, where the window's hold what moved lately: a state and
-		// an owner are tested on the rows it read.
+	case q.Window != "" && !q.State.Live():
+		// A WINDOW LEADS where no repository, work item, reviewer, need or
+		// LIVE state does — ahead of a terminal state, whose index holds
+		// every change that ever merged or closed, where the window's hold
+		// what moved lately: a state and an owner are tested on the rows it
+		// read. A live state leads instead, below, and the window is tested
+		// on its rows: its index holds the live set alone, which a company
+		// keeps bounded, where the window's hold every change that moved
+		// lately — and a merge moves its change, so in a company that merges
+		// far more than it keeps open the window's walk would read mostly
+		// merged changes to keep the few open ones.
 		return changeWalk{index: changesMovedKey, order: byMove, state: q.State != "", owner: q.Owner != ""}
 	}
 	return changeWalk{index: changesStateKey, keys: []any{string(q.State)}, order: byOpening}
@@ -374,8 +383,9 @@ type listedRepo struct {
 }
 
 // summary is row as a listing of changes renders it, from repository l: what
-// its conversation says of it where a read set that on the row
-// ([withConversations]), and its lifecycle's last move alone where none did.
+// its conversation says of it where a read set that on the row — a listing's
+// by [withConversations], a change read's from the conversation row its detail
+// reads — and its lifecycle's last move alone where none did.
 func (l listedRepo) summary(row changeRow) ChangeSummary {
 	return ChangeSummary{ChangeRow: row.wire(), Repo: l.ref.Name, Ref: ChangeRef(l.ref.Name, row.number),
 		Access: l.access.String(), OpenFindings: row.openFindings,
@@ -676,7 +686,7 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if authorsErr != nil {
 			return authorsErr
 		}
-		conversation, conversationErr := conversationRowIn(ctx, tx, row.id)
+		conversation, spoken, conversationErr := conversationRowIn(ctx, tx, row.id)
 		if conversationErr != nil {
 			return conversationErr
 		}
@@ -684,11 +694,14 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if mergeErr != nil {
 			return mergeErr
 		}
-		said := []changeRow{row}
-		if saidErr := withConversations(ctx, tx, said); saidErr != nil {
-			return saidErr
+		// WHAT ITS CONVERSATION SAYS OF IT, from the row just read: the
+		// detail is the most re-read question of a change, so it pays no
+		// second statement for what [withConversations] would read of the
+		// same row.
+		row.moved = max(row.updatedAt, spoken)
+		if conversation != nil {
+			row.openFindings = conversation.OpenFindings
 		}
-		row = said[0]
 		readiness, readinessErr := readinessIn(ctx, tx, []changeRow{row}, map[string]listedRepo{row.repoID: repo},
 			chart, q.Asker, r.limits().MergeByFloor)
 		if readinessErr != nil {

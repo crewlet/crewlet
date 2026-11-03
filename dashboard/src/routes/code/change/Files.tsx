@@ -563,7 +563,7 @@ function FindingNote({
       {where && (
         <p className="muted mono">
           {finding.path}:{finding.line_start}
-          {finding.line_end !== finding.line_start ? `–${finding.line_end}` : ""} — {where}
+          {finding.line_end !== finding.line_start ? `–${finding.line_end}` : ""} · {where}
         </p>
       )}
       {finding.body && <div className="prose md">{renderMarkdown(finding.body)}</div>}

@@ -47,15 +47,7 @@
  */
 
 import { memo, useMemo, useRef } from "react";
-import {
-  Button,
-  Callout,
-  EmptyState,
-  Input,
-  SegmentedControl,
-  Select,
-  Skeleton,
-} from "@crewlethq/ui";
+import { Button, Callout, EmptyState, Input, SegmentedControl, Skeleton } from "@crewlethq/ui";
 import { SearchGlyph } from "@crewlethq/icons/glyphs";
 import { href, useDraft, useNavigator, useParam } from "~/app/router.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
@@ -65,6 +57,7 @@ import { repoPath, shortOID } from "~/lib/code.ts";
 import { plural } from "~/lib/format.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { repoHref } from "./paths.ts";
+import { RepoPicker } from "./RepoPicker.tsx";
 import { coverageNotes, groupHits, hitAt, type FileHits, type RepoHits } from "~/lib/codeSearch.ts";
 
 /** Each mode, as the bar offers it. */
@@ -108,19 +101,6 @@ export function Search() {
     { q, mode, repo: repo || undefined, path: path || undefined, ref: ref || undefined },
     { enabled: asked, refetchOnReconnect: "unreached" },
   );
-  // THE REPOSITORIES THE READER MAY READ, for the bar's picker: the listing's
-  // first page, by name.
-  const choices = useCodeQuery("code_repos");
-  const repoOptions = useMemo(() => {
-    const options = [
-      { value: EVERY_REPO, label: "Every indexed repository" },
-      ...(choices.data?.repos ?? []).map((r) => ({ value: r.name, label: r.name })),
-    ];
-    if (repo !== EVERY_REPO && !options.some((o) => o.value === repo)) {
-      options.push({ value: repo, label: repo });
-    }
-    return options;
-  }, [choices.data, repo]);
   const groups = useMemo(() => (answer.data ? groupHits(answer.data) : []), [answer.data]);
 
   return (
@@ -162,16 +142,7 @@ export function Search() {
           </Button>
         </div>
         <div className="code-search-filters">
-          <Select
-            width="auto"
-            searchable
-            value={repo}
-            onChange={(value) => setRepo(String(value))}
-            options={repoOptions}
-            ariaLabel="Repository"
-            emptyMessage="No repository matches"
-            active={repo !== EVERY_REPO}
-          />
+          <RepoPicker repo={repo} onChoose={setRepo} every="Every indexed repository" />
           <Input
             aria-label="Path"
             placeholder="Path, e.g. internal/"

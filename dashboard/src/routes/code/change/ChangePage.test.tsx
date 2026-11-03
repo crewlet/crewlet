@@ -650,6 +650,95 @@ test("the conversation draws a change's newest review once the reader loads its 
   await waitFor(() => expect(screen.queryByRole("button", { name: "Load more" })).toBeNull());
 });
 
+// THE REVIEWS AND COMMENTS ARE ASKED AGAIN ONLY WHEN SOMEBODY WROTE: their
+// rows are written by a review, a comment or a resolved thread alone, so a
+// move of the change and its conversation that nobody wrote — a push to its
+// head, the mergeability its home records again each time the target branch
+// moves — asks neither again, however many pages the reader holds, and a
+// record somebody wrote (`spoken_at`) asks every page held again. Mutation:
+// key the two parts on the conversation's version again, or drop the re-ask
+// on `spoken_at`, and this fails.
+test("the conversation asks its reviews and comments again only when somebody wrote", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let version = 5;
+  let conversationVersion = 3;
+  let spokenAt = "2026-10-28T10:00:00Z";
+  const conversation = () => ({
+    comments: 0,
+    reviews: 2,
+    open_findings: 0,
+    open_blockers: 0,
+    changes_requested: 0,
+    version: conversationVersion,
+    position: POSITION,
+    spoken_at: spokenAt,
+  });
+  const review = (id: string, seq: number, summary: string) => ({
+    id,
+    revision: 1,
+    reviewer: "jane",
+    reviewer_kind: "person",
+    verdict: "comment",
+    summary,
+    findings: 0,
+    position: { ...POSITION, seq },
+    at: "2026-10-28T10:00:00Z",
+  });
+  stubEngine(
+    () => detail({ version, conversation: conversation() }),
+    () => json({}),
+    {
+      reviews: (url) =>
+        url.searchParams.get("cursor") === "r1"
+          ? json({
+              position: POSITION,
+              level: "session",
+              reviews: [review("r2", 30, "A second look")],
+            })
+          : json({
+              position: POSITION,
+              level: "session",
+              reviews: [review("r1", 20, "A first look")],
+              next: "r1",
+            }),
+    },
+  );
+  mount();
+  expect(await screen.findByText("A first look")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+  expect(await screen.findByText("A second look")).toBeTruthy();
+  const asked = (part: string, cursor = "") =>
+    changeAsked.filter(
+      (u) => u.searchParams.get("part") === part && (u.searchParams.get("cursor") ?? "") === cursor,
+    ).length;
+  const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
+  expect(asked("reviews")).toBe(1);
+  expect(asked("reviews", "r1")).toBe(1);
+  expect(asked("comments")).toBe(1);
+
+  // A PUSH AND A MERGEABILITY RECORDED AGAIN, three minutes running: the
+  // detail moves both versions, and nobody wrote anything.
+  for (let minute = 0; minute < 3; minute++) {
+    version++;
+    conversationVersion++;
+    const before = details();
+    await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+    await waitFor(() => expect(details()).toBeGreaterThan(before));
+  }
+  expect(asked("reviews")).toBe(1);
+  expect(asked("reviews", "r1")).toBe(1);
+  expect(asked("comments")).toBe(1);
+
+  // A THREAD RESOLVED, which adds no row and moves only the instant: every
+  // page held is asked again.
+  conversationVersion++;
+  spokenAt = "2026-10-28T11:00:00Z";
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(asked("reviews")).toBe(2));
+  await waitFor(() => expect(asked("reviews", "r1")).toBe(2));
+  await waitFor(() => expect(asked("comments")).toBe(2));
+});
+
 // A CHANGE NO LONGER LIVE takes no review: each control stays drawn, held with
 // the reason. Mutation: hide them, or let them press, and this fails.
 test("a merged change holds its review controls with the reason", async () => {

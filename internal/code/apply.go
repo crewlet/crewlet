@@ -470,7 +470,10 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 			return 0, fmt.Errorf("code: count repository %s in at %s: %w", p.RepoID, at.position, err)
 		}
 	}
-	protections, err := insertProtections(ctx, tx, at.maxVariables, p.RepoID, s.Protections)
+	// EVERY RULE A CREATE WRITES IS ITS OWN: there is no row before it to
+	// carry a source from.
+	protections, err := insertProtections(ctx, tx, at.maxVariables, p.RepoID, s.Protections,
+		at.sourcesOf(len(s.Protections)))
 	if err != nil {
 		return 0, fmt.Errorf("code: write %s's protections at %s: %w", p.RepoID, at.position, err)
 	}
@@ -541,14 +544,20 @@ func packPaths(paths []string) string { return strings.Join(paths, "\n") }
 func unpackPaths(packed string) []string { return strings.Split(packed, "\n") }
 
 // insertProtections writes a repository's rules in the record's order, each
-// with its merge gate as the record encodes it ([gateColumn]); the digest of
-// their human paths is the repository's row's, written by the statement that
-// writes the row beside them ([rowDigests]; humanpaths.go says who reads it). A
+// with its merge gate as the record encodes it ([gateColumn]) and the source
+// at its index — who set it and when ([ruleSource]); the digest of their
+// human paths is the repository's row's, written by the statement that writes
+// the row beside them ([rowDigests]; humanpaths.go says who reads it). A
 // pattern the record names twice — which no writer forms, the settings being
 // sorted and unique — keeps its first rule rather than aborting the
 // transaction on every node.
 func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID string,
-	rules []Protection) (int, error) {
+	rules []Protection, sources []ruleSource) (int, error) {
+
+	if len(sources) != len(rules) {
+		return 0, fmt.Errorf("code: write %s's protections: %d rules and %d sources", repoID, len(rules),
+			len(sources))
+	}
 
 	gates := make([]string, len(rules))
 	for i, r := range rules {
@@ -558,12 +567,113 @@ func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID
 		}
 	}
 	return store.InsertRows(ctx, tx, maxVariables,
-		`INSERT INTO code_protections (repo_id, pattern, allow_force, allow_delete, direct_push, gate) VALUES `,
-		`(?, ?, ?, ?, ?, ?)`, `ON CONFLICT (repo_id, pattern) DO NOTHING`, len(rules),
+		`INSERT INTO code_protections (repo_id, pattern, allow_force, allow_delete, direct_push, gate,
+			set_by, set_by_kind, set_at) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (repo_id, pattern) DO NOTHING`, len(rules),
 		func(i int) []any {
-			r := rules[i]
-			return []any{repoID, r.Pattern, r.AllowForce, r.AllowDelete, string(r.DirectPush), gates[i]}
+			r, src := rules[i], sources[i]
+			return []any{repoID, r.Pattern, r.AllowForce, r.AllowDelete, string(r.DirectPush), gates[i],
+				src.by, string(src.kind), src.at}
 		})
+}
+
+// ruleSource is who set one rule and when, as code_protections holds it
+// (set_by, set_by_kind, set_at; replicated 0143): the decider of the record
+// that last CHANGED the rule, as its envelope names it — a seat's handle, a
+// person's human seat or an unbound credential's login, and nobody for the
+// reconcile of code.repos — and that record's broker instant, encoded as the
+// store encodes every instant.
+type ruleSource struct {
+	by   string
+	kind ActorKind
+	at   int64
+}
+
+// source is the record's own source for a rule it sets: its decider, nobody
+// for a declaration — which the configuration made, as a create's created_by
+// says — and its broker instant.
+func (c applyContext) source() ruleSource {
+	by := c.record.Actor
+	if c.record.ActorKind == ActorConfig {
+		by = ""
+	}
+	return ruleSource{by: by, kind: c.record.ActorKind, at: c.at()}
+}
+
+// sourcesOf is the record's own source for each of n rules.
+func (c applyContext) sourcesOf(n int) []ruleSource {
+	out := make([]ruleSource, n)
+	for i := range out {
+		out[i] = c.source()
+	}
+	return out
+}
+
+// rulesSourced is the source of each rule a record writes over a
+// repository's rules (a settings change, a restore): the source of the row it
+// replaces where that row holds the SAME rule ([Protection.Equal]: its push
+// controls, and its gate by value), and the record's own otherwise.
+//
+// WHY THE ROW IS CARRIED, NOT RESTAMPED: every record that carries a
+// repository's settings carries its rules whole, so a description edited, the
+// repository archived and brought back, another pattern protected or a
+// declaration re-activated with one rule changed rewrites every rule, and a
+// source stamped from that record would name, for every rule it did not
+// touch, somebody who never set it. The comparison reads the rows the record
+// replaces in its own transaction, so the source is a pure function of the
+// record and the rows before it, as every column the applier writes is, and
+// a replay from zero forms it again.
+func rulesSourced(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
+	rules []Protection) ([]ruleSource, error) {
+
+	held, err := sourcedRulesIn(ctx, tx, repoID)
+	if err != nil {
+		return nil, fmt.Errorf("code: read %s's protections at %s: %w", repoID, at.position, err)
+	}
+	out := make([]ruleSource, len(rules))
+	for i, r := range rules {
+		if was, ok := held[r.Pattern]; ok && was.rule.Equal(r) {
+			out[i] = was.source
+			continue
+		}
+		out[i] = at.source()
+	}
+	return out, nil
+}
+
+// sourcedRule is one rule as its row holds it, with its source.
+type sourcedRule struct {
+	rule   Protection
+	source ruleSource
+}
+
+// sourcedRulesIn reads a repository's rules whole — each with its gate and
+// its source — by pattern: what a record that replaces them compares the
+// rules it writes with ([rulesSourced]).
+func sourcedRulesIn(ctx context.Context, tx *sql.Tx, repoID string) (map[string]sourcedRule, error) {
+	rows, err := tx.QueryContext(ctx, sourcedRulesSQL, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]sourcedRule{}
+	for rows.Next() {
+		var (
+			r            sourcedRule
+			direct, gate string
+			kind         string
+		)
+		if err = rows.Scan(&r.rule.Pattern, &r.rule.AllowForce, &r.rule.AllowDelete, &direct, &gate,
+			&r.source.by, &kind, &r.source.at); err != nil {
+			return nil, err
+		}
+		r.rule.DirectPush, r.source.kind = DirectPush(direct), ActorKind(kind)
+		if r.rule.Gate, err = gateFrom(gate); err != nil {
+			return nil, fmt.Errorf("rule %s: %w", r.rule.Pattern, err)
+		}
+		out[r.rule.Pattern] = r
+	}
+	return out, rows.Err()
 }
 
 // applyRepo is every record on a repository's own subject.
@@ -854,16 +964,21 @@ func replacePathOwners(ctx context.Context, tx *sql.Tx, at applyContext, repoID 
 	return int(removed) + written, nil
 }
 
-// replaceProtections deletes a repository's rules and writes the new set.
+// replaceProtections deletes a repository's rules and writes the new set,
+// each rule it carries unchanged keeping who set it ([rulesSourced]).
 func replaceProtections(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	rules []Protection) (int, error) {
 
+	sources, err := rulesSourced(ctx, tx, at, repoID, rules)
+	if err != nil {
+		return 0, err
+	}
 	res, err := tx.ExecContext(ctx, clearProtectionsSQL, repoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: clear %s's protections at %s: %w", repoID, at.position, err)
 	}
 	removed, _ := res.RowsAffected()
-	written, err := insertProtections(ctx, tx, at.maxVariables, repoID, rules)
+	written, err := insertProtections(ctx, tx, at.maxVariables, repoID, rules, sources)
 	if err != nil {
 		return 0, fmt.Errorf("code: write %s's protections at %s: %w", repoID, at.position, err)
 	}
@@ -991,8 +1106,12 @@ const (
 			status = 'importing', import_source = ?, import_seq = 0, imported_at = 0, import_error = ''
 		WHERE id = ? AND status = 'active'`
 	clearProtectionsSQL = `DELETE FROM code_protections WHERE repo_id = ?`
-	clearPathOwnersSQL  = `DELETE FROM code_path_owners WHERE repo_id = ?`
-	deleteRepoSQL       = `UPDATE code_repos SET
+	// sourcedRulesSQL is a repository's rules as the record replacing them
+	// compares them, each with who set it ([sourcedRulesIn]).
+	sourcedRulesSQL = `SELECT pattern, allow_force, allow_delete, direct_push, gate, set_by, set_by_kind,
+			set_at FROM code_protections WHERE repo_id = ?`
+	clearPathOwnersSQL = `DELETE FROM code_path_owners WHERE repo_id = ?`
+	deleteRepoSQL      = `UPDATE code_repos SET
 			status = 'deleted', deleted_at = ?, config_epoch = ?, version = ?
 		WHERE id = ? AND status IN ('importing', 'active', 'archived')`
 	// restoreRepoSQL brings a deleted repository back: IMPORTING where its

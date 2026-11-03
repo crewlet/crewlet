@@ -5,8 +5,20 @@
  * two ways.
  */
 
-import { plural } from "~/lib/format.ts";
-import type { CodeMergeGate, CodeProtection } from "~/protocol/index.ts";
+import { fmtDateTime, plural } from "~/lib/format.ts";
+import type { CodeMergeGate, CodeProtection, CodeRuleSource } from "~/protocol/index.ts";
+
+/**
+ * Who set a rule and when, in a line: the decider of the record that last
+ * changed it, by the name the engine records them under (a seat's handle, a
+ * person's seat, a credential's login), or the configuration, which names
+ * nobody, and that record's instant.
+ */
+export function ruleSourceLine(source: CodeRuleSource): string {
+  const who =
+    source.set_by_kind === "config" || !source.set_by ? "the company document" : source.set_by;
+  return `Set by ${who}, ${fmtDateTime(source.set_at)}`;
+}
 
 /** What a rule lets a push do to the refs it matches. */
 export function pushRuleLine(rule: CodeProtection): string {

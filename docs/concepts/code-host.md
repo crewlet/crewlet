@@ -328,6 +328,19 @@ archived repository is not warned about: it takes no push at all, so nothing
 can move or delete its branch until it is unarchived, and the revision that
 unarchives it brings the warning back.
 
+**Every rule names who last changed it, and when.** The rules are carried
+whole by every record that carries a repository's settings — its create, a
+settings change, a restore — and each rule's row keeps the decider of the
+record that last CHANGED it (its push controls or its gate) and that
+record's instant: a seat by its handle, a person by their human seat, an
+unbound credential by its login, and nobody for a rule the company document
+declares, whose source is the configuration. A record that carries a rule
+unchanged, as a description edit or another pattern's protection does,
+leaves the rule's source as it was. A read of one repository in detail that
+asks for its gates answers each rule's source beside them (`rule_sources`:
+`pattern`, `set_by`, `set_by_kind` and `set_at`), and Settings › Code and the
+repository's Settings tab draw it under each rule.
+
 A declared repository's rules change only with its declaration. Those of a
 repository a tool made change one pattern at a time through a lifecycle
 request, where a seat may add a rule or tighten one and only a person removes
@@ -1731,8 +1744,8 @@ answer that holds every record the code log had committed when it was asked.
   repository, or on a work item. A repository's changes are listed by
   number; a reviewer's by the change's id, which is minted as the change is
   opened; a window's, where nothing else leads it, by when each change last
-  moved; every other listing in the order the records that opened its
-  changes landed on the code log. Every change it lists says how many of its
+  moved; every other listing — a live state's in a window among them — in
+  the order the records that opened its changes landed on the code log. Every change it lists says how many of its
   findings stand open — none of its authors has answered them — and **when it
   last moved**.
 - **When a change last moved** is the later of two instants, one a subject it
@@ -1746,10 +1759,16 @@ answer that holds every record the code log had committed when it was asked.
   moved because its target did would put every change of a busy branch in
   every day's window. A **window** (`24h`, `7d` or `30d`) lists the changes
   that moved within the last day, week or month. Named with nothing else an
-  index leads by — no repository, work item, reviewer or need — it walks the
-  two instants' indexes together, newest move first, each change once, and
-  tests a state and an owner on the rows it read; named beside one of those,
-  it is tested on the rows that one's walk read.
+  index leads by — no repository, work item, reviewer or need, and no live
+  state — it walks the two instants' indexes together, newest move first,
+  each change once, and tests a merged or closed state and an owner on the
+  rows it read; named beside one of those, it is tested on the rows that
+  one's walk read, in that walk's order. A **live state** (`draft`, `open`)
+  leads its own walk, newest opening first, because its index holds only the
+  live changes, where the window's hold every change that moved, the merged
+  among them: in a company that merges far more changes than it keeps open,
+  the open changes of a month's window walked by the window would cost a page
+  for every few that are kept.
 - **The changes waiting on a reviewer** are a listing that names a
   `reviewer` — the changes whose ask of that reviewer still **waits** — or
   `needs=review`, the **live** ones alone, the asker's own where it names no
@@ -3333,7 +3352,9 @@ take at most half the node's cores, one each,
 in a slot that is free or not at all, so they never make a push or a fetch
 wait; and only as many run at once as a quarter of a gibibyte a core holds
 beside the largest, so a node that has just joined does not index all its
-largest repositories at once.
+largest repositories at once. A repository read so steadily that one read's
+sync starts as the last ends is indexed all the same, in its turn: the run starts
+between the two, and neither waits for the other.
 
 **The commit-graph first.** A copy the node has just read whole — after a cold
 sync or a rebuild, or on a node that has just joined — gets its commit-graph at

@@ -1757,11 +1757,14 @@ func (q ReadQuery) validate() error {
 			"changes it answers", ErrInvalid)
 	case q.MinPacks != 0:
 		return fmt.Errorf("%w: min_packs: only a compaction_due read names a floor of live packs", ErrInvalid)
-	case q.Prefix != "" && q.Kind != ReadRefs:
-		return fmt.Errorf("%w: prefix: only a refs listing names a prefix", ErrInvalid)
-	case q.Prefix != "" && !validRefPrefix(q.Prefix):
+	case q.Prefix != "" && q.Kind != ReadRefs && q.Kind != ReadRepos:
+		return fmt.Errorf("%w: prefix: only a refs listing and a repositories listing name a prefix", ErrInvalid)
+	case q.Prefix != "" && q.Kind == ReadRefs && !validRefPrefix(q.Prefix):
 		return fmt.Errorf("%w: prefix: %q is not refs/heads/ or refs/tags/ or a directory of refs under "+
 			"either, ending in /", ErrInvalid, q.Prefix)
+	case q.Prefix != "" && q.Kind == ReadRepos && !validRepoPrefix(q.Prefix):
+		return fmt.Errorf("%w: prefix: no repository name begins %q: a name is lowercase letters, digits and "+
+			"hyphens, beginning with a letter or a digit, and a seat's own holds one dot", ErrInvalid, q.Prefix)
 	case q.Brief && q.Kind != ReadPushes && q.Kind != ReadChange:
 		return fmt.Errorf("%w: brief: only a push history and a change's first page are read in brief",
 			ErrInvalid)
@@ -2512,6 +2515,23 @@ func validRefPrefix(prefix string) bool {
 		strings.HasSuffix(prefix, "/") && ValidRef(prefix+"x")
 }
 
+// validRepoPrefix reports a prefix a repositories listing may name: a
+// repository name whole, or the opening of one — which a "0" completes,
+// since a digit may end either label of a name and follow its hyphen or its
+// dot. A prefix no name could begin with is refused rather than answered
+// empty, as a refs listing's is.
+func validRepoPrefix(prefix string) bool {
+	return ValidName(prefix) || ValidName(prefix+"0")
+}
+
+// prefixEnd is the first string past every one prefix begins: prefix with its
+// last byte one higher, so [prefix, prefixEnd) is one range of an index by
+// name. A refs listing's prefix ends in "/" and a repository name is ASCII
+// throughout, so the last byte is never 0xff and the step never carries.
+func prefixEnd(prefix string) string {
+	return prefix[:len(prefix)-1] + string([]byte{prefix[len(prefix)-1] + 1})
+}
+
 // limitOr is a limit, or its kind's default.
 func limitOr(limit, fallback int) int {
 	if limit == 0 {
@@ -2551,12 +2571,34 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	limit := min(limitOr(q.Limit, defaultRepoLimit), r.pageRows)
 	// THE PROTECTED ONES BY THEIR OWN INDEX ([ReadQuery.Protected]): the
 	// same rows in the same order, walked by an index that holds no
-	// repository a rule does not protect.
-	listing := reposSQL
-	if q.Protected {
-		listing = protectedReposSQL
+	// repository a rule does not protect. AND THE NAMES A PREFIX BEGINS
+	// ([ReadQuery.Prefix]) in one range of either index, from the prefix
+	// itself to its end — so a picker finds the repository typed into it
+	// however many sort before it — past a cursor that must be one of them.
+	var (
+		listing string
+		args    []any
+	)
+	switch {
+	case q.Prefix == "":
+		listing, args = reposSQL, []any{list, q.Cursor, limit}
+		if q.Protected {
+			listing = protectedReposSQL
+		}
+	case q.Cursor == "":
+		listing, args = reposUnderFirstSQL, []any{list, q.Prefix, prefixEnd(q.Prefix), limit}
+		if q.Protected {
+			listing = protectedReposUnderFirstSQL
+		}
+	case !strings.HasPrefix(q.Cursor, q.Prefix):
+		return fmt.Errorf("%w: %q is not a repository name beginning %q", ErrBadCursor, q.Cursor, q.Prefix)
+	default:
+		listing, args = reposUnderAfterSQL, []any{list, q.Cursor, prefixEnd(q.Prefix), limit}
+		if q.Protected {
+			listing = protectedReposUnderAfterSQL
+		}
 	}
-	rows, err := tx.QueryContext(ctx, listing, list, q.Cursor, limit)
+	rows, err := tx.QueryContext(ctx, listing, args...)
 	if err != nil {
 		return fmt.Errorf("code: list repositories: %w", err)
 	}
@@ -2709,8 +2751,13 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	// AND THE GATES ONLY TO A READ THAT ASKS ([ReadQuery.Gates]), for the
 	// path owners' reason: read in the same transaction as the rules the row
 	// carries, so every gate names a rule of the row.
+	// WITH WHO SET EACH RULE AND WHEN, every rule's: the rules in detail, as
+	// a person reading a repository's protection asks for them.
 	if q.Gates {
 		if out.Repo.Gates, err = gatesIn(ctx, tx, id); err != nil {
+			return err
+		}
+		if out.Repo.RuleSources, err = ruleSourcesIn(ctx, tx, id); err != nil {
 			return err
 		}
 	}
@@ -2898,8 +2945,7 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 		after = q.Cursor
 	}
 	limit := min(limitOr(q.Limit, defaultRefLimit), r.pageRows)
-	rows, err := tx.QueryContext(ctx, refsUnderSQL, id, after,
-		strings.TrimSuffix(prefix, "/")+"0", limit)
+	rows, err := tx.QueryContext(ctx, refsUnderSQL, id, after, prefixEnd(prefix), limit)
 	if err != nil {
 		return fmt.Errorf("code: read %s's refs under %s: %w", q.Repo, prefix, err)
 	}
@@ -4517,19 +4563,33 @@ const (
 		r.live_bytes, r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target`
 	reposHead = ` LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
 			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''`
-	reposSQL = reposColumns + `
+	// reposFrom is a listing's rows, by name, and protectedReposFrom those
+	// of the repositories a rule protects ([ReadQuery.Protected]), walked by
+	// [protectedReposKey] — NAMED, since code_repos_name_idx serves the same
+	// order and the planner may take either — with its predicate repeated
+	// verbatim, so the planner may use the partial index at all. Each ends
+	// at the range of names a page reads, which the statements below spell.
+	reposFrom = reposColumns + `
 		FROM code_repos r` + reposHead + `
-		WHERE r.status IN (SELECT value FROM json_each(?)) AND r.name > ?
-		ORDER BY r.name LIMIT ?`
-	// protectedReposSQL is a listing of the repositories a rule protects
-	// ([ReadQuery.Protected]): reposSQL's rows, walked by
-	// [protectedReposKey] — NAMED, since code_repos_name_idx serves the
-	// same order and the planner may take either — with its predicate
-	// repeated verbatim, so the planner may use the partial index at all.
-	protectedReposSQL = reposColumns + `
+		WHERE r.status IN (SELECT value FROM json_each(?)) AND `
+	protectedReposFrom = reposColumns + `
 		FROM code_repos r INDEXED BY ` + protectedReposKey + reposHead + `
-		WHERE r.` + protectedRepos + ` AND r.status IN (SELECT value FROM json_each(?)) AND r.name > ?
-		ORDER BY r.name LIMIT ?`
+		WHERE r.` + protectedRepos + ` AND r.status IN (SELECT value FROM json_each(?)) AND `
+	// reposSQL is a page of the whole listing, past its cursor, and
+	// protectedReposSQL a page of the protected ones.
+	reposSQL          = reposFrom + `r.name > ? ORDER BY r.name LIMIT ?`
+	protectedReposSQL = protectedReposFrom + `r.name > ? ORDER BY r.name LIMIT ?`
+	// THE NAMES A PREFIX BEGINS ([ReadQuery.Prefix]), in the one range of
+	// the index below the prefix's end ([prefixEnd]): FROM the prefix itself
+	// on a first page, since a name may be the prefix whole, and PAST the
+	// cursor after one. Two statements, and not one beside both lower
+	// bounds, which would leave the planner to choose the bound it seeks by
+	// and filter by the other — and a first page sought by its empty cursor
+	// walks every name below the prefix.
+	reposUnderFirstSQL          = reposFrom + `r.name >= ? AND r.name < ? ORDER BY r.name LIMIT ?`
+	reposUnderAfterSQL          = reposFrom + `r.name > ? AND r.name < ? ORDER BY r.name LIMIT ?`
+	protectedReposUnderFirstSQL = protectedReposFrom + `r.name >= ? AND r.name < ? ORDER BY r.name LIMIT ?`
+	protectedReposUnderAfterSQL = protectedReposFrom + `r.name > ? AND r.name < ? ORDER BY r.name LIMIT ?`
 	// pushRulesOfSQL is a listing page's rules as a push is judged by them,
 	// in one statement ([protectionsOf]) — pushRulesSQL for every repository
 	// the page keeps, never selecting the gate.

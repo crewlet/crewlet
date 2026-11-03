@@ -85,6 +85,9 @@ function detail(extra: Record<string, unknown> = {}) {
         },
       },
     ],
+    rule_sources: [
+      { pattern: "refs/heads/main", set_by_kind: "config", set_at: "2026-10-01T10:00:00Z" },
+    ],
     path_owners: [{ owner: { kind: "unit", ref: "engineering" }, paths: ["src/**"] }],
     ...extra,
   };
@@ -214,12 +217,12 @@ function stubEngine(repo: Record<string, unknown> = detail(), acted: Acted[] = [
           return new Promise<Response>(() => {});
         case "/query/code_repo": {
           // THE PATH OWNERS AND THE GATES ONLY TO A QUESTION THAT ASKS, as
-          // the engine answers them.
-          const { gates, path_owners, ...row } = repo;
+          // the engine answers them, who set each rule beside the gates.
+          const { gates, rule_sources, path_owners, ...row } = repo;
           return json({
             repo: {
               ...row,
-              ...(p.get("gates") === "true" ? { gates } : {}),
+              ...(p.get("gates") === "true" ? { gates, rule_sources } : {}),
               ...(p.get("path_owners") === "true" ? { path_owners } : {}),
             },
             position: POSITION,
@@ -680,15 +683,17 @@ test("the history is read at the revision and the path, with who pushed each com
 
 // A DECLARED REPOSITORY'S SETTINGS ARE SHOWN, NEVER EDITED: the rules and
 // their gates as the detail carries them — a gate requiring a check with how
-// its queue lands a change — and the way to Settings › Configuration, where
-// they are changed. Mutation: offer an edit, drop the link, or leave the
-// queue's landing out of the gate, and this fails.
+// its queue lands a change — with who set each rule (a declared one, the
+// company document), and the way to Settings › Configuration, where they are
+// changed. Mutation: offer an edit, drop the link, leave the queue's landing
+// out of the gate, or drop who set a rule, and this fails.
 test("a declared repository's settings are shown and lead to the configuration", async () => {
   const asked = stubEngine();
   mount("#/code/repos/web?tab=settings");
 
   expect(await screen.findByText("refs/heads/main")).toBeTruthy();
   expect(await screen.findByText(/one approval/)).toBeTruthy();
+  expect(screen.getByText(/^Set by the company document, /)).toBeTruthy();
   expect(screen.getByText("src/**")).toBeTruthy();
   // THE GATES AND THE PATH OWNERS ARE THE TAB'S OWN ASK: the page's polled
   // read of the row asks for neither (at their bound, three quarters of a
