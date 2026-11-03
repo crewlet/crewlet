@@ -963,41 +963,49 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 
 	t.Run("placed at the first survivor", func(t *testing.T) {
 		t.Parallel()
-		js := &firstReadJS{held: &jetstream.ConsumerInfo{
-			Config:    domainConsumerConfig(name, 2),
-			Delivered: jetstream.SequenceInfo{Stream: 4},
-			AckFloor:  jetstream.SequenceInfo{Stream: 4}}}
-		q := &Queue{js: js, cfg: cfg, log: slog.Default(), timing: timing}
-		if _, err := q.DomainConsumer(t.Context(), "CREWLET_PAGES_LOG", "node-0", 2); err != nil {
-			t.Fatalf("open: %v", err)
-		}
-		if js.reads != 2 {
-			t.Fatalf("the first sequence was asked for %d time(s), want 2 — a "+
-				"dropped request asked again rather than being the whole answer",
-				js.reads)
-		}
-		for i, had := range js.had {
-			if !had {
-				t.Fatalf("ask %d carried no deadline of its own", i+1)
+		// IN A SYNCTEST BUBBLE ([inBubble]), so the re-ask is held to its
+		// cadence exactly: on the machine's clock this was a second of
+		// slack on how late a loaded race-detector run wakes the timer's
+		// goroutine, which the read never promised.
+		inBubble(t, func(t *testing.T) {
+			js := &firstReadJS{held: &jetstream.ConsumerInfo{
+				Config:    domainConsumerConfig(name, 2),
+				Delivered: jetstream.SequenceInfo{Stream: 4},
+				AckFloor:  jetstream.SequenceInfo{Stream: 4}}}
+			q := &Queue{js: js, cfg: cfg, log: slog.Default(), timing: timing}
+			if _, err := q.DomainConsumer(t.Context(), "CREWLET_PAGES_LOG", "node-0", 2); err != nil {
+				t.Fatalf("open: %v", err)
 			}
-			if left := time.Until(js.until[i]); left > ceiling {
-				t.Errorf("ask %d was given %v, past the %v lookup ceiling — it "+
-					"is bounded as a write", i+1, left, ceiling)
+			if js.reads != 2 {
+				t.Fatalf("the first sequence was asked for %d time(s), want 2 — a "+
+					"dropped request asked again rather than being the whole answer",
+					js.reads)
 			}
-		}
-		// ASKED AGAIN AT A READ'S CADENCE: the dropped request is told
-		// nothing at once, so the next follows a re-ask later — never a
-		// write's term, which a read the server dropped would wait out for
-		// a reply nobody will send.
-		if gap := js.at[1].Sub(js.at[0]); gap > timing.ReadTerm+timing.ReAsk {
-			t.Errorf("the dropped ask was asked again %v later, past the %v read "+
-				"term and %v re-ask — it is held for a write's %v term", gap,
-				timing.ReadTerm, timing.ReAsk, timing.AskTerm)
-		}
-		if js.deletes != 0 {
-			t.Fatal("a consumer the broker placed at the first survivor was " +
-				"rebuilt once its first sequence had been read")
-		}
+			for i, had := range js.had {
+				if !had {
+					t.Fatalf("ask %d carried no deadline of its own", i+1)
+				}
+				if left := time.Until(js.until[i]); left > ceiling {
+					t.Errorf("ask %d was given %v, past the %v lookup ceiling — it "+
+						"is bounded as a write", i+1, left, ceiling)
+				}
+			}
+			// ASKED AGAIN AT A READ'S CADENCE: the dropped request is told
+			// nothing at once, so it is presumed lost at once and the next
+			// follows a re-ask later — never a write's term, which a read
+			// the server dropped would wait out for a reply nobody will
+			// send.
+			if gap := js.at[1].Sub(js.at[0]); gap != timing.ReAsk {
+				t.Errorf("the dropped ask was asked again %v later, want the %v "+
+					"re-ask after a request told nothing at once — it is held for "+
+					"the %v read term or a write's %v term", gap, timing.ReAsk,
+					timing.ReadTerm, timing.AskTerm)
+			}
+			if js.deletes != 0 {
+				t.Fatal("a consumer the broker placed at the first survivor was " +
+					"rebuilt once its first sequence had been read")
+			}
+		})
 	})
 
 	t.Run("in flight at the checkpoint", func(t *testing.T) {
