@@ -18,7 +18,9 @@ import (
 
 // fakeToken is an obviously fake personal access token, distinct per seed: the
 // seed's hex digits, repeated.
-func fakeToken(seed byte) string { return "dop_v1_" + strings.Repeat(hex.EncodeToString([]byte{seed}), 32) }
+func fakeToken(seed byte) string {
+	return "dop_v1_" + strings.Repeat(hex.EncodeToString([]byte{seed}), 32)
+}
 
 // profile is what one fake token is: its user, team and scopes.
 type profile struct {

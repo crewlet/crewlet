@@ -68,7 +68,9 @@ func newSyncWorld(t *testing.T, level string) *syncWorld {
 		ledger: seataccesstest.NewLedger(), sink: seataccesstest.NewSink()}
 }
 
-func (w *syncWorld) seat() *config.RoleDigitalOcean { return w.company.Roles[0].Integrations.DigitalOcean }
+func (w *syncWorld) seat() *config.RoleDigitalOcean {
+	return w.company.Roles[0].Integrations.DigitalOcean
+}
 
 func (w *syncWorld) open() seataccess.OpenInput {
 	return seataccess.OpenInput{Config: w.company, Derive: testKey, Env: config.NewResolver(
@@ -375,7 +377,7 @@ func TestTheDigitalOceanOfferCarriesItsLists(t *testing.T) {
 		t.Errorf("levels = %+v", o.Levels)
 	}
 	if !slices.Equal(o.Refused, refusedScopes) || !slices.Equal(o.Unneeded, unneededScopes) ||
-		o.VendorAccount != "Example Team" || o.ActionURL != NewTokenURL || !o.Rotatable || o.Releasable {
+		o.VendorAccount != "Example Team" || o.ActionURL != TokensURL || !o.Rotatable || o.Releasable {
 		t.Errorf("options = %+v", o)
 	}
 	spec, _ := accessVendor{}.Catalog().Lane(seataccess.LaneDigitalOcean)
