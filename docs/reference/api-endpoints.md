@@ -3580,7 +3580,16 @@ that this input being absent produces, which is what lets a row reporting
 `credential_missing` offer exactly the fields that clear it.
 
 `mintable` means the engine can generate the value, so nobody should be asked
-to invent it. **No route here ever returns a credential.**
+to invent it. **No route here ever returns a credential.** Most minted values
+are a random token; a field that signs takes an ES256 key instead, an ECDSA
+P-256 private key in PKCS#8 PEM, sealed whole and never shown. Where a person
+has to hand the vendor something made from a minted value, the field carries
+`public`: `{"text": ..., "language": "sh"}`, text the engine renders from the
+public half alone (a key set, or a command block holding it), drawn as code to
+copy. A requirement whose public view would hold the value itself or any
+private key is never sent.
+A field that depends on a minted value is `required` only once that value is
+held, so the Save that mints it can leave the dependent field empty.
 
 `checkable` means the credential can be [checked at its
 vendor](#checking-a-credential-before-it-is-stored) before it is stored, so a
@@ -4231,12 +4240,27 @@ a tool right now: `live`, `waiting` (a server reads it and it is not sealed
 yet), `builtin` (Jira and Confluence, whose credential the engine's own tools
 read), `no_server` (no server the company declares reads it), `server_off`
 (every server that reads it is turned off, `enabled: false`) or `off` (the
-seat or its account is off). A lane whose tool is a CLI in the agent's own box
+seat or its account is off). A `waiting` tool also carries `tool_reason`, a
+sentence in the engine's words, where it waits on the vendor applying a grant
+the last sync wrote (a new account not yet grantable, a grant not yet in
+effect): that sync ended `ok`, since nobody owes a step, and the tool reads as
+it otherwise would once the vendor's stated wait ends. A lane whose tool is a CLI in the agent's own box
 (Expo's EAS CLI, DigitalOcean's doctl) also carries `box`, what that box holds for it: in `env`, the
 exact `sandbox.env` lines the seat needs, each variable set to the seat's own
 sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
 settings the engine supplies itself, as configured (`"by": "crewlet"`):
 `{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "by": "you"}]}`.
+While the seat's lane is on, `files` lists the files the engine writes into the
+box itself, by path under the box's home, each with its reference as
+configured and never its value, and `rewritten` where the completion poll keeps
+it current: `{"path": ".config/crewlet/token", "value": "${VENDOR_TOKEN_QA}",
+"rewritten": true, "by": "crewlet"}`. It is absent where the engine writes
+none, and `env` is a list, empty or not, wherever `box` is sent. A file a
+vendor's CLI finds through a variable adds that variable to `env` among the
+engine's own lines, its value the file's path from the box's home:
+`{"name": "CLI_TOKEN_FILE", "value": "~/.config/crewlet/token", "by": "crewlet"}`.
+The launch sets it to the file's absolute path in the agent's box, joined onto
+that box's own home, so it is right in every cell.
 With no server, `tool` is `live` or `waiting` only while the seat's box sets
 every one of its own lines exactly so.
 
@@ -4287,7 +4311,11 @@ apps with. On such a lane a seat's switch still binds its
 tool to the credential handed in from outside Crewlet, its access is managed
 where that credential was issued, and its `observed.credential` names the
 variable the seat holds with `"source": "external"`. A credential Crewlet
-minted says `"source": "minted"`. `observed.retired` lists the credentials an
+minted says `"source": "minted"`. A lane whose credential the engine issues
+at use and never seals names the seat's variable with `"source": "issued"`
+while the seat is on and its account exists, with no `minted_at`: each node
+issues its own, so a time would be the answering node's. Only a credential
+Crewlet sealed carries `minted_at`. `observed.retired` lists the credentials an
 account still holds besides the sealed one (`label`, what the vendor shows of
 each, and `since`, when it was created as near as Crewlet knows), where the
 vendor can tell: while it is non-empty on a lane that is on, every pass plans
@@ -10548,8 +10576,12 @@ held back, unstarted, for a credential a
 [provisioning pass mints for that seat](../guides/tools-and-mcp.md#shared-vs-per-role-servers)
 and has not sealed yet, where nothing that pass last reported says it cannot —
 neither started nor failed, since nothing is wrong and each starts once the
-seal reaches its node. One whose pass reports that a person must act first
-(its own credential missing or refused, an approval outstanding, the seat's
+seal reaches its node. So does an instance whose token the engine issues at
+use while its integration is still settling it (a grant the vendor is still
+applying): nobody has to act and nothing is sealed, so its node asks for the
+token again on the restart schedule (15 seconds, doubling to 5 minutes) and
+starts the instance once it is issued. One whose pass reports that a person
+must act first (its own credential missing or refused, an approval outstanding, the seat's
 account failed or switched off, or the integration being disconnected) counts
 as `failed`, judged again at every heartbeat, since a wait with no end is a
 failure somebody has to act on:

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -37,6 +38,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -892,6 +894,43 @@ func TestALaunchedRunIsToldHowToGetAPersonsAnswer(t *testing.T) {
 		"`" + builtin.CommentOnWorkTool + "` with `ask`"} {
 		if !strings.Contains(started[0].System, said) {
 			t.Errorf("the run's system text does not say %q:\n%s", said, started[0].System)
+		}
+	}
+}
+
+// A BOX FILE'S VARIABLE REACHES THE JOB AS THE FILE'S ABSOLUTE PATH IN THE BOX
+// THE LAUNCH GOT, joined onto that box's own home, while the seat's own line
+// for a name wins it. Mutation: hand the launch no paths, or lay them over the
+// seat's env, and this goes red.
+func TestALaunchHandsTheJobItsBoxFilesPathsInItsBox(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	seat.Sandbox = &org.RoleSandbox{Env: map[string]string{"CLI_OWN_FILE": "/srv/own"}}
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	e.environ = config.MapSource{"VENDOR_TOKEN": "a-token"}
+	e.boxSupply = func(*config.Company, string) []seataccess.BoxDefault {
+		return []seataccess.BoxDefault{
+			{Kind: fakeCloud, File: &seataccess.BoxFile{Path: ".config/crewlet/token", Ref: "${VENDOR_TOKEN}",
+				PathEnv: "CLI_TOKEN_FILE"}},
+			{Kind: fakeCloud, File: &seataccess.BoxFile{Path: ".config/crewlet/own", Ref: "${VENDOR_TOKEN}",
+				PathEnv: "CLI_OWN_FILE"}},
+		}
+	}
+	l := launcherOn(e, c, seat, "t1")
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+		t.Fatalf("LaunchExecutor: %v", err)
+	}
+	started := jobs.Started()
+	if len(started) != 1 {
+		t.Fatalf("%d jobs started, want 1", len(started))
+	}
+	for name, want := range map[string]string{
+		"CLI_TOKEN_FILE": path.Join(sandbox.DefaultHome, ".config/crewlet/token"), "CLI_OWN_FILE": "/srv/own",
+	} {
+		if got := started[0].Env[name]; got != want {
+			t.Errorf("the job was handed %s=%q, want %q", name, got, want)
 		}
 	}
 }

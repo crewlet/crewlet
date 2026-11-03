@@ -31,6 +31,7 @@ import {
   gitlabAnswer,
   jiraAnswer,
   mattermostAnswer,
+  neutralAnswer,
   offLane,
   onLane,
   seat,
@@ -1265,4 +1266,24 @@ test("an agent's details name the settings Crewlet puts in its box, and only tho
   draw(expoAnswer());
   details("QA", "Expo");
   expect(screen.queryByText("Set by Crewlet")).toBeNull();
+});
+
+// A CREDENTIAL ISSUED AT USE, A TOOL WAITING ON THE VENDOR AND A FILE IN THE
+// BOX each read in the details as what they are: the token by how it is
+// issued, the wait in the engine's words, and the file beside the variables
+// Crewlet sets.
+test("an agent's details read an issued token, the engine's wait and the files Crewlet sets", () => {
+  draw(neutralAnswer({ tool: "waiting", tool_reason: "the vendor is still applying the grant" }));
+  expect(screen.queryByText("Needs you")).toBeNull();
+  details("SRE", "the vendor");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on the vendor"]')!);
+  expect(facts.getByText("VENDOR_TOKEN_SRE").parentElement!.textContent).toBe(
+    "VENDOR_TOKEN_SRE, issued at use",
+  );
+  expect(
+    facts.getByText(
+      "Waiting: the vendor is still applying the grant, Its tool server, one per agent",
+    ),
+  ).toBeTruthy();
+  expect(facts.getByText("VENDOR_TOKEN_FILE and .config/crewlet/token")).toBeTruthy();
 });

@@ -32,6 +32,10 @@ type LaneAnswer struct {
 	// Tool is whether the seat can use its credential through a tool now.
 	Tool ToolState `json:"tool"`
 
+	// ToolReason is why Tool is waiting, in the engine's words, where it
+	// waits on the vendor applying a grant ([Settling]); empty otherwise.
+	ToolReason string `json:"tool_reason,omitempty"`
+
 	// Administers is whether the lane's setting is an administration grant
 	// (D10), for the review's warning.
 	Administers bool `json:"administers,omitempty"`
@@ -81,11 +85,26 @@ type Box struct {
 	// Env is each variable: the lines a person adds to the seat's box
 	// settings ([ByYou]), then those the engine supplies itself ([ByCrewlet]).
 	Env []BoxLine `json:"env"`
+
+	// Files are the files the engine writes into the box itself
+	// ([ByCrewlet]), by path; omitted where it writes none.
+	Files []BoxFileLine `json:"files,omitempty"`
+}
+
+// BoxFileLine is one file in a seat's box: at Path, relative to the box's
+// home, holding Value, the `${VAR}` reference as configured and never what it
+// resolves to; Rewritten where the completion poll keeps it current.
+type BoxFileLine struct {
+	Path      string    `json:"path"`
+	Value     string    `json:"value"`
+	Rewritten bool      `json:"rewritten"`
+	By        StepActor `json:"by"`
 }
 
 // BoxLine is one variable in a seat's box: Name set to Value. A person's line
 // holds the seat's sealed name as a whole reference (`${EXPO_TOKEN_QA}`); the
-// engine's holds a non-secret setting as configured, a literal or a reference.
+// engine's holds a non-secret setting as configured, a literal or a reference,
+// or one of its files' paths from the box's home (`~/.config/crewlet/token`).
 type BoxLine struct {
 	Name  string    `json:"name"`
 	Value string    `json:"value"`
