@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
 
@@ -28,11 +28,13 @@ func ToolFor(lane Lane) *ToolBinding {
 
 // ToolStateOf is whether the seat with handle can use its credential through
 // a tool on lane right now, as the access route reports it: off while the seat
-// or its account is off; live or waiting where a per-seat server, or the
-// seat's own executor box, reads the lane's credential (waiting until the
-// credential is sealed); server_off where every such server is turned off;
-// and otherwise builtin for Jira and Confluence, whose credential the engine's
-// own tools read, and no_server for the rest.
+// or its account is off; live or waiting where a per-seat server reads the
+// lane's credential, or the seat's box sets the lane's [LaneSpec.BoxEnv] to
+// exactly its sealed name (waiting until the credential is sealed);
+// server_off where every such server is turned off; and otherwise builtin for
+// Jira and Confluence, whose credential the engine's own tools read, and
+// no_server for the rest, a box CLI whose variable is unset or points
+// elsewhere included.
 //
 // A SERVER TURNED OFF READS NO CREDENTIAL ([config.MCPServer.IsEnabled]): it
 // starts for nobody, so a lane whose only server is off is not live however
@@ -50,10 +52,9 @@ func ToolStateOf(c *config.Company, handle string, lane Lane, want Desired, have
 		switch {
 		case lane == LaneJira || lane == LaneConfluence:
 			return ToolBuiltin
-		case boxReads(c, handle, lane.Kind()):
-			// THE SEAT'S OWN BOX IS ITS TOOL: a CLI there reads the
-			// credential its environment names, as Expo's EAS CLI reads
-			// EXPO_TOKEN.
+		case boxReads(c, handle, lane):
+			// THE SEAT'S OWN BOX IS ITS TOOL: Expo's EAS CLI reads the
+			// seat's token as EXPO_TOKEN.
 		case len(servers) > 0:
 			return ToolServerOff
 		default:
@@ -69,22 +70,26 @@ func ToolStateOf(c *config.Company, handle string, lane Lane, want Desired, have
 	return ToolLive
 }
 
-// boxReads reports whether the seat with handle names one of kind's sealed
-// credentials in its own executor box ([config.RoleSandbox.References]).
-func boxReads(c *config.Company, handle string, kind integration.Kind) bool {
-	vendor, ok := Lookup(kind)
+// boxReads reports whether the seat with handle sets lane's [LaneSpec.BoxEnv]
+// in its own box to exactly `${<its sealed credential>}`.
+func boxReads(c *config.Company, handle string, lane Lane) bool {
+	vendor, ok := Lookup(lane.Kind())
 	if c == nil || !ok || strings.TrimSpace(handle) == "" {
 		return false
 	}
+	cat := vendor.Catalog()
+	spec, ok := cat.Lane(lane)
+	if !ok || spec.BoxEnv == "" {
+		return false
+	}
+	want := SinkName(cat.Kind, cat.Credentials[0], handle)
 	for role := range c.EachRole() {
-		if strings.TrimSpace(role.IdentityKey()) != handle || role.Sandbox == nil {
+		if strings.TrimSpace(role.IdentityKey()) != handle {
 			continue
 		}
-		for _, name := range SinkNames(vendor.Catalog(), handle) {
-			if role.Sandbox.References(name) {
-				return true
-			}
-		}
+		value, set := role.Sandbox.EnvValue(spec.BoxEnv)
+		name, whole := envref.Whole(value)
+		return set && whole && name == want
 	}
 	return false
 }

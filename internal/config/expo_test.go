@@ -89,8 +89,9 @@ func TestAnExpoSeatNamesALevelTheEngineOffers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a seat naming no level was refused: %v", err)
 	}
-	if got := c.Roles[0].Integrations.Expo.LevelOrDefault(); got != config.ExpoLevelViewer {
-		t.Errorf("an unset level = %q, want viewer", got)
+	if got := c.Roles[0].Integrations.Expo.LevelOrDefault(); got != config.ExpoLevelDefault ||
+		config.ExpoLevelDefault != config.ExpoLevelViewer {
+		t.Errorf("an unset level = %q, want the default, viewer", got)
 	}
 }
 
@@ -131,28 +132,25 @@ func TestExpoSeatCredentialsAreTheEnginesOnlyWithAProvisioner(t *testing.T) {
 	}
 }
 
-// A SEAT'S BOX NAMES A VARIABLE WHERE ITS ENV, A SETUP STEP'S ENV OR A SETUP
-// FILE REFERENCES IT, and nowhere else.
-func TestARoleSandboxReferencesWhatItNames(t *testing.T) {
+// WHAT A SEAT'S BOX SETS A VARIABLE TO is its env's value, else the last of
+// its own setup steps that sets it, as a launch layers them.
+func TestARoleSandboxEnvValueLayersAsALaunch(t *testing.T) {
 	t.Parallel()
-	box := &config.RoleSandbox{
-		Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"},
-		Setup: []config.SandboxSetupStep{{Name: "npm",
-			Env:   map[string]string{"NPM_TOKEN": "${NPM_TOKEN}"},
-			Files: map[string]string{".netrc": "machine example.com password ${NETRC_TOKEN}"}}},
+	steps := []config.SandboxSetupStep{
+		{Name: "first", Env: map[string]string{"EXPO_TOKEN": "${A}", "NPM_TOKEN": "${NPM_1}"}},
+		{Name: "second", Env: map[string]string{"NPM_TOKEN": "${NPM_2}"}},
 	}
-	for _, name := range []string{"EXPO_TOKEN_QA", "NPM_TOKEN", "NETRC_TOKEN"} {
-		if !box.References(name) {
-			t.Errorf("%s is not read as named", name)
+	box := &config.RoleSandbox{Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"}, Setup: steps}
+	for key, want := range map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}", "NPM_TOKEN": "${NPM_2}"} {
+		if got, ok := box.EnvValue(key); !ok || got != want {
+			t.Errorf("%s = %q (%v), want %q", key, got, ok, want)
 		}
 	}
-	for _, name := range []string{"EXPO_TOKEN", "EXPO_TOKEN_Q", "OTHER"} {
-		if box.References(name) {
-			t.Errorf("%s is read as named", name)
-		}
+	if _, ok := box.EnvValue("OTHER"); ok {
+		t.Error("a variable nothing sets reads as set")
 	}
 	var none *config.RoleSandbox
-	if none.References("EXPO_TOKEN_QA") {
-		t.Error("no box names anything")
+	if _, ok := none.EnvValue("EXPO_TOKEN"); ok {
+		t.Error("no box sets anything")
 	}
 }

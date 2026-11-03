@@ -25,7 +25,8 @@ type accessVendor struct{}
 func (accessVendor) Kind() integration.Kind { return integration.KindExpo }
 
 // Catalog is Expo's per-seat offer: four fixed levels, no per-seat scope (a
-// robot acts on the whole account) and a rotatable token.
+// robot acts on the whole account) and a rotatable token the EAS CLI in the
+// seat's box reads as EXPO_TOKEN.
 func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
 		Kind:        integration.KindExpo,
@@ -33,7 +34,7 @@ func (accessVendor) Catalog() seataccess.Catalog {
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneExpo, Levels: true,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet,
-			Rotatable: true,
+			Rotatable: true, BoxEnv: ToolEnv,
 		}},
 	}
 }

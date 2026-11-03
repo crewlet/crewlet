@@ -114,38 +114,50 @@ func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 	}
 }
 
-// A SEAT'S OWN BOX IS ITS TOOL WHERE ITS ENVIRONMENT NAMES ITS CREDENTIAL: the
-// EAS CLI reads EXPO_TOKEN, so a seat whose role.sandbox.env or setup names
-// its own sealed token is live once it is sealed and waiting before. Another
-// seat's token, or none, is no tool.
-func TestASeatsBoxThatNamesItsCredentialIsItsTool(t *testing.T) {
+// A SEAT'S OWN BOX IS ITS TOOL WHERE IT SETS THE CLI'S VARIABLE TO ITS OWN
+// CREDENTIAL: EXPO_TOKEN exactly "${EXPO_TOKEN_<HANDLE>}", in role.sandbox.env
+// or the seat's own setup, is live once sealed and waiting before; unset or
+// pointing anywhere else is no tool.
+func TestASeatsBoxThatSetsItsCLIsVariableIsItsTool(t *testing.T) {
 	t.Parallel()
 	seat := func(sandbox *config.RoleSandbox) *config.Company {
 		return &config.Company{Roles: []config.Role{{Name: "QA", Handle: "qa", Sandbox: sandbox}}}
+	}
+	env := func(value string) *config.Company {
+		return seat(&config.RoleSandbox{Env: map[string]string{"EXPO_TOKEN": value}})
 	}
 	live := seataccess.Observed{Exists: true, Enabled: true, Level: "viewer",
 		Credential: &seataccess.Credential{Variable: "EXPO_TOKEN_QA"}}
 	waiting := live
 	waiting.Credential = nil
-	byEnv := seat(&config.RoleSandbox{Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"}})
-	byFile := seat(&config.RoleSandbox{Setup: []config.SandboxSetupStep{{Name: "eas",
-		Files: map[string]string{".expo-token": "${EXPO_TOKEN_QA}"}}}})
 	for _, tc := range []struct {
 		name string
 		c    *config.Company
 		have seataccess.Observed
 		want seataccess.ToolState
 	}{
-		{"named in its env", byEnv, live, seataccess.ToolLive},
-		{"named in its env, not sealed yet", byEnv, waiting, seataccess.ToolWaiting},
-		{"named in a setup file", byFile, live, seataccess.ToolLive},
-		{"another seat's token", seat(&config.RoleSandbox{Env: map[string]string{
-			"EXPO_TOKEN": "${EXPO_TOKEN_SRE}"}}), live, seataccess.ToolNoServer},
+		{"set in its env", env("${EXPO_TOKEN_QA}"), live, seataccess.ToolLive},
+		{"set in its env, not sealed yet", env("${EXPO_TOKEN_QA}"), waiting, seataccess.ToolWaiting},
+		{"set by its own setup step", seat(&config.RoleSandbox{Setup: []config.SandboxSetupStep{{
+			Name: "eas", Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"}}}}), live, seataccess.ToolLive},
+		{"its env winning over a step pointing elsewhere", seat(&config.RoleSandbox{
+			Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"},
+			Setup: []config.SandboxSetupStep{{Name: "eas",
+				Env: map[string]string{"EXPO_TOKEN": "${SHARED_EXPO}"}}}}), live, seataccess.ToolLive},
+		{"another seat's token", env("${EXPO_TOKEN_SRE}"), live, seataccess.ToolNoServer},
+		{"its token inside other text", env("Bearer ${EXPO_TOKEN_QA}"), live, seataccess.ToolNoServer},
+		{"its token under another variable", seat(&config.RoleSandbox{Env: map[string]string{
+			"EAS_TOKEN": "${EXPO_TOKEN_QA}"}}), live, seataccess.ToolNoServer},
 		{"no box settings", seat(nil), live, seataccess.ToolNoServer},
 	} {
 		got := seataccess.ToolStateOf(tc.c, "qa", seataccess.LaneExpo, on("viewer"), tc.have)
 		if got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}
+	}
+	// A LANE WITH NO BOX VARIABLE IS UNMOVED by a box naming its credential.
+	dd := seat(&config.RoleSandbox{Env: map[string]string{"DD_APP_KEY": "${DATADOG_APP_KEY_QA}"}})
+	if got := seataccess.ToolStateOf(dd, "qa", seataccess.LaneDatadog, on("a"), held("a")); got != seataccess.ToolNoServer {
+		t.Errorf("datadog with its key in the box = %q, want no_server", got)
 	}
 }

@@ -29,7 +29,8 @@ func TestTheExpoCatalog(t *testing.T) {
 	cat := vendor(t).Catalog()
 	spec, ok := cat.Lane(seataccess.LaneExpo)
 	if !ok || !spec.Levels || spec.LiveLevels || spec.Scoped || !spec.Rotatable ||
-		spec.CreatedBy != seataccess.ByCrewlet || spec.EnabledBy != seataccess.ByCrewlet {
+		spec.CreatedBy != seataccess.ByCrewlet || spec.EnabledBy != seataccess.ByCrewlet ||
+		spec.BoxEnv != "EXPO_TOKEN" {
 		t.Fatalf("lane spec = %+v", spec)
 	}
 	if !slices.Equal(cat.Credentials, []string{expo.TokenField}) {

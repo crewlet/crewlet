@@ -371,26 +371,21 @@ func (s *RoleSandbox) validate(path Path) error {
 	return p.err()
 }
 
-// References reports whether this seat's box environment names ${name}: its
-// env, or one of its own setup steps' env or files. Nil-safe.
-func (s *RoleSandbox) References(name string) bool {
+// EnvValue is what this seat's own settings set key to in its box, as a launch
+// layers them: its env, else the last of its setup steps that sets key. Nil-safe.
+func (s *RoleSandbox) EnvValue(key string) (string, bool) {
 	if s == nil {
-		return false
+		return "", false
 	}
-	names := func(values map[string]string) bool {
-		for _, v := range values {
-			if slices.Contains(envref.Names(v), name) {
-				return true
-			}
+	if v, ok := s.Env[key]; ok {
+		return v, true
+	}
+	for i := len(s.Setup) - 1; i >= 0; i-- {
+		if v, ok := s.Setup[i].Env[key]; ok {
+			return v, true
 		}
-		return false
 	}
-	if names(s.Env) {
-		return true
-	}
-	return slices.ContainsFunc(s.Setup, func(step SandboxSetupStep) bool {
-		return names(step.Env) || names(step.Files)
-	})
+	return "", false
 }
 
 // RoleIntegrations is a seat's own identity on external surfaces: the chat

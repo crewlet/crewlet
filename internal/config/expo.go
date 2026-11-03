@@ -39,6 +39,10 @@ const (
 	ExpoLevelReleaseManager = "release_manager"
 )
 
+// ExpoLevelDefault is the level a seat that names none holds: the least access,
+// until a live account shows whether Viewer can read EAS builds through eas-cli.
+const ExpoLevelDefault = ExpoLevelViewer
+
 // ExpoLevels is every level a seat may name, least access first.
 func ExpoLevels() []string {
 	return []string{ExpoLevelViewer, ExpoLevelRunner, ExpoLevelDeveloper, ExpoLevelReleaseManager}
@@ -52,15 +56,12 @@ type RoleExpo struct {
 	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=viewer|runner|developer|release_manager" desc:"viewer (the default): reads projects, builds, submissions and updates. runner: viewer plus low-risk actions such as starting builds. developer: runner plus publishing updates. release_manager: developer plus publishing to protected channels."`
 }
 
-// LevelOrDefault is the seat's level, viewer where it names none.
+// LevelOrDefault is the seat's level, [ExpoLevelDefault] where it names none.
 func (r *RoleExpo) LevelOrDefault() string {
-	if r == nil {
-		return ExpoLevelViewer
+	if r == nil || strings.TrimSpace(r.Level) == "" {
+		return ExpoLevelDefault
 	}
-	if level := strings.TrimSpace(r.Level); level != "" {
-		return level
-	}
-	return ExpoLevelViewer
+	return strings.TrimSpace(r.Level)
 }
 
 func (e *Expo) validate(path Path) error {
