@@ -903,6 +903,10 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 		decided  bool
 		in       ContinuesIn
 		whyHolds string
+		// ending is a run whose ending is decided, which no relaunch of it
+		// follows: of a turn of no conversation, as this row is, no launch
+		// continues it at all.
+		ending bool
 	}{
 		"its kept capture":  {target: target, decided: true, in: ContinuesInAnyBox},
 		"in its parked box": {target: older, decided: true, in: ContinuesInParkedBox, whyHolds: "older than"},
@@ -977,7 +981,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			target: RelaunchTarget{Undecided: true, Why: "every member is sitting out its plan"}},
 		"no member at all": {decided: true, whyHolds: "no runner member",
 			target: RelaunchTarget{Why: "the seat's chain has no runner member"}},
-		"a decided ending": {target: target, decided: true, whyHolds: "is ending",
+		"a decided ending": {target: target, decided: true, whyHolds: "is ending", ending: true,
 			run: func(r *PendingRun) { r.Ending = &RecordedEnding{ID: "ending-1"} }},
 		"a company that keeps no session": {decided: true, in: ContinuesInParkedBox,
 			whyHolds: "keeps no executor session",
@@ -990,8 +994,14 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			if tc.run != nil {
 				tc.run(&run)
 			}
-			got := ReadContinuityOf(row, &run, tc.target, now)
+			got := ReadContinuityOf(row, "", &run, tc.target, now)
+			by := ContinuedByRelaunch
+			if tc.ending {
+				by = ""
+			}
 			switch {
+			case got.By != by:
+				t.Fatalf("ReadContinuityOf = %+v, want it about %q", got, by)
 			case got.Decided != tc.decided:
 				t.Fatalf("ReadContinuityOf = %+v, want decided %v", got, tc.decided)
 			case got.Continues != (tc.in != "") || got.In != tc.in:

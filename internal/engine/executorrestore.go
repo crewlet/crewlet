@@ -213,17 +213,17 @@ func (c chainRestorers) Restores(archive sandbox.SessionArchive) (bool, string) 
 	return false, why
 }
 
-// relaunchTarget is what a relaunch of seat's turn would be launched on now,
-// as this node picks it ([sandbox.RelaunchTarget]): the first member of the
-// seat's executor chain with an in-box runner that is not sitting out its plan
-// on this node — the member the launch's own pick takes
-// ([agentLauncher.member]), without the hand-offs the pick announces — the cell
-// its run lands in, this node, and its runner as it restores a session carried
-// between boxes; or why there is none.
+// relaunchTarget is what a launch of seat's turn — a relaunch, or a
+// conversation's next turn — would be launched on now, as this node picks it
+// ([sandbox.RelaunchTarget]): the first member of the seat's executor chain
+// with an in-box runner that is not sitting out its plan on this node — the
+// member the launch's own pick takes ([agentLauncher.member]), without the
+// hand-offs the pick announces — the cell its run lands in, this node, and its
+// runner as it restores a session carried between boxes; or why there is none.
 //
-// THIS NODE'S PICK, and so the one a reader of a relaunch is handed only where
+// THIS NODE'S PICK, and so the one a reader of a launch is handed only where
 // this node holds the seat: which members sit out is this node's own bench, and
-// the relaunch is decided on the node holding the seat ([Engine.RelaunchTargets]
+// the launch is decided on the node holding the seat ([Engine.RelaunchTargets]
 // asks that node).
 func (c *Company) relaunchTarget(seat *org.Role, manager *sandbox.Manager, node string) sandbox.RelaunchTarget {
 	members, err := executorRunners(c, seat, manager)
@@ -251,14 +251,15 @@ func (c *Company) relaunchTarget(seat *org.Role, manager *sandbox.Manager, node 
 		return target
 	}
 	return sandbox.RelaunchTarget{Node: node, Undecided: true, Why: "every member of the seat's executor " +
-		"chain is sitting out its plan on the node holding the seat, and which of them takes a relaunch " +
+		"chain is sitting out its plan on the node holding the seat, and which of them takes a launch " +
 		"decides what it continues"}
 }
 
 // localRelaunchTarget is what a relaunch of the seat handle's turn would be
-// launched on, as the company revision that relaunch runs on picks it now
+// launched on — or, for no turn, the next turn of one of the seat's
+// conversations — as the company revision that launch runs on picks it now
 // ([Engine.relaunchCompany], [Company.relaunchTarget]) — and, where the company
-// keeps no session, that a relaunch continues no kept one, by the keep the
+// keeps no session, that the launch continues no kept one, by the keep the
 // coordinator's launch asks ([executorKeep.Keeps]), which reads the revision
 // this node runs. A node running no company, or none that reaches a sandbox
 // cell, and a handle the company holds no seat under, have no member to say
@@ -286,7 +287,9 @@ func (e *Engine) localRelaunchTarget(handle, turn string) sandbox.RelaunchTarget
 // admitted under ([resumeInput.Company]) — its reviewer's send-back and the
 // round it carries on are launched from that segment's pinned epoch, which an
 // apply landing mid-segment does not move — and otherwise the revision this
-// node runs now, which a segment admitted later pins.
+// node runs now, which a segment admitted later pins. No turn is a
+// conversation's next turn, whose first launch the revision this node runs
+// when it comes admits: never a pinned one, whatever segments run here.
 func (e *Engine) relaunchCompany(turn string) *Company {
 	if turn != "" {
 		if pinned, ok := e.resumedSegments.Load(turn); ok {

@@ -27,9 +27,11 @@ import (
 // WHO READS IT: every capture of the turn, which carries the read as the turn's
 // first read where no begin landed ([Coordinator.recordCapture]); the launch
 // that continues the base ([Coordinator.continueBase]) and the relaunch's
-// question of which session it continues ([Coordinator.ContinuedCapture]); and
-// the seat's budget pre-check, which counts the base of every live turn that
-// holds one ([Coordinator.overBudget]).
+// question of which session it continues ([Coordinator.ContinuedCapture]); the
+// seat's budget pre-check, which counts the base of every live turn that holds
+// one ([Coordinator.overBudget]); and a reader of the turn's session, told that
+// a relaunch of a turn that has kept nothing continues the base, as that
+// relaunch's question decides it ([ReadContinuityOf], [TargetAsk]).
 
 // ConversationBaseMaxBytes bounds a frozen read as the run's record carries it,
 // as JSON: what [NewConversationBase] can make of any read the executor log
@@ -160,13 +162,23 @@ func NewConversationBase(head executordomain.Head, told []string) *ConversationB
 		}
 	}
 	if s := head.Session; s != nil && s.HasObject() && isTold[s.Turn] {
-		base.Session = &BaseSession{Turn: s.Turn,
-			Object: s.Object.Key.String(), ObjectHash: string(s.Object.Hash), ObjectSize: s.Object.Size,
-			ContentKey: s.ContentKey, Harness: s.Harness, HarnessVersion: s.HarnessVersion,
-			SessionID: s.SessionID, ArchiveFormat: s.ArchiveFormat, Home: s.Home, Workspace: s.Workspace,
-			ContextTokens: s.ContextTokens, Interrupted: s.Interrupted, EndedAt: s.EndedAt}
+		session := baseSessionOf(*s)
+		base.Session = &session
 	}
 	return base
+}
+
+// baseSessionOf is row — an ended turn's row that names a session — as the base
+// a launch continues: what a turn's first launch freezes of the head its
+// dispatch read ([NewConversationBase]), and what a reader of a seat's sessions
+// decides a conversation's head by ([ReadContinuityOf]), so the two decide one
+// shape by one decision ([BaseContinuityOf]).
+func baseSessionOf(row executordomain.Session) BaseSession {
+	return BaseSession{Turn: row.Turn,
+		Object: row.Object.Key.String(), ObjectHash: string(row.Object.Hash), ObjectSize: row.Object.Size,
+		ContentKey: row.ContentKey, Harness: row.Harness, HarnessVersion: row.HarnessVersion,
+		SessionID: row.SessionID, ArchiveFormat: row.ArchiveFormat, Home: row.Home, Workspace: row.Workspace,
+		ContextTokens: row.ContextTokens, Interrupted: row.Interrupted, EndedAt: row.EndedAt}
 }
 
 // archive is the base as a runner's restore takes it ([ArchiveOf]).

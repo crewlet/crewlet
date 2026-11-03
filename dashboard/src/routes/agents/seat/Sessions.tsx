@@ -1,9 +1,10 @@
 /**
  * A seat's executor sessions, beside its Conversations under Memory.
  *
- * Every turn whose executor captured its harness's session has a row: it names
- * the session the harness kept when its run ended — the whole record of what
- * the run read, called and wrote — and how the turn ended. The list is every
+ * Every turn whose executor captured its harness's session has a row, and so
+ * does every turn that read its conversation, from its first launch on: it
+ * names the session the harness kept when its run ended — the whole record of
+ * what the run read, called and wrote — and how the turn ended. The list is every
  * turn's: how it ended, what it was asked and the harness that wrote it.
  * Choosing one opens its transcript, as the harness recorded it: the brief,
  * the notes a person sent the run, the model's words, every tool call and what
@@ -59,7 +60,7 @@
 import { Button, Callout, Card, CodeBlock, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
 import { CircleAlertGlyph, FileTextGlyph, SquareTerminalGlyph } from "@crewlethq/icons/glyphs";
 import { useLayoutEffect, useRef, useState } from "react";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useParam, useRoute } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { conversationLabel, fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdownText.ts";
@@ -73,6 +74,7 @@ import type {
   ExecutorSessionAnswer,
   ExecutorSessionRow,
   ExecutorSessionsAnswer,
+  SessionContinuedBy,
   SessionContinuesIn,
   SessionOutcome,
   TranscriptEntry,
@@ -571,27 +573,66 @@ export function readCutWords(readBytes: number, shown: number): string {
     : `The rest of this session cannot be shown: ${why}`;
 }
 
+/** The three leads of a sentence saying whether a launch continues a session. */
+interface ContinuedWords {
+  /** It would, before where. */
+  would: string;
+  /** It would not. */
+  not: string;
+  /** That cannot be said now. */
+  unknown: string;
+}
+
 /**
- * What a relaunch would continue a session in, as the sentence that says it
- * leads. Keyed by the engine's own set, so a place the engine adds is a
+ * Which launch would continue a session, as the sentence that says whether it
+ * would leads. Keyed by the engine's own set, so a launch the engine adds is a
  * typecheck failure here before it is a raw word on a reader's screen.
  */
-const CONTINUES_IN: Record<SessionContinuesIn, string> = {
-  any_box:
-    "A relaunch of this turn would continue this session in whichever box it gets, " +
-    "where that box can take it up and the seat's budget can carry it",
-  parked_box:
-    "A relaunch of this turn would continue this session only in the box its run " +
-    "parked in, while that box is held and where the seat's budget can carry it",
+const CONTINUED_BY: Record<SessionContinuedBy, ContinuedWords> = {
+  relaunch: {
+    would: "A relaunch of this turn would continue this session",
+    not: "A relaunch would not continue this session",
+    unknown: "Whether a relaunch continues this session cannot be said now",
+  },
+  next_turn: {
+    would: "The conversation's next turn would continue this session",
+    not: "The conversation's next turn would not continue this session",
+    unknown: "Whether the conversation's next turn continues this session cannot be said now",
+  },
 };
 
 /**
- * Whether a relaunch of the session's turn would continue it, as a sentence:
- * the engine's decision (`continuable`) and where (`continues_in`), with its
- * own reason (`not_continuable`) where it would not, where it would only in the
- * box the turn's run parked in, and where it cannot be said now.
+ * The leads where no launch is named: a turn that served no conversation,
+ * whose session no launch continues once its run is over — or a launch a newer
+ * engine names, said without a guess at who it is.
+ */
+const NO_LAUNCH: ContinuedWords = {
+  would: "This session would be continued",
+  not: "This session is not continued",
+  unknown: "Whether this session is continued cannot be said now",
+};
+
+/**
+ * Where a launch would continue a session, after the lead that says which.
+ * Keyed by the engine's own set, so a place the engine adds is a typecheck
+ * failure here before it is a raw word on a reader's screen.
+ */
+const CONTINUES_IN: Record<SessionContinuesIn, string> = {
+  any_box:
+    "in whichever box it gets, where that box can take it up and the seat's budget can carry it",
+  parked_box:
+    "only in the box its run parked in, while that box is held and where the seat's budget can " +
+    "carry it",
+};
+
+/**
+ * Whether a launch would continue the session, as a sentence: which launch
+ * (`continued_by` — a relaunch of its turn, or its conversation's next turn),
+ * the engine's decision (`continuable`) and where (`continues_in`), with its own
+ * reason (`not_continuable`) where it would not, where a relaunch would only in
+ * the box the turn's run parked in, and where it cannot be said now.
  *
- * NO MORE THAN THE ENGINE DECIDED: a relaunch WOULD continue the session where
+ * NO MORE THAN THE ENGINE DECIDED: a launch WOULD continue the session where
  * the box it gets can take it up and the seat's budget can carry it, which only
  * the launch finds out — so the sentence says so rather than that it does.
  *
@@ -601,31 +642,35 @@ const CONTINUES_IN: Record<SessionContinuesIn, string> = {
  */
 export function continuableWords(row: ExecutorSessionRow): string {
   const why = (row.not_continuable ?? "").replace(/\.\s*$/, "");
+  const who = (row.continued_by && CONTINUED_BY[row.continued_by]) ?? NO_LAUNCH;
   if (row.continuable) {
-    const lead = CONTINUES_IN[row.continues_in ?? "any_box"] ?? CONTINUES_IN.any_box;
+    const where = CONTINUES_IN[row.continues_in ?? "any_box"] ?? CONTINUES_IN.any_box;
+    const lead = `${who.would} ${where}`;
     if (row.continues_in === "parked_box") {
       return why ? `${lead}; no other box would: ${why}.` : `${lead}.`;
     }
     return `${lead}.`;
   }
-  const lead =
-    row.continuable === null
-      ? "Whether a relaunch continues this session cannot be said now"
-      : "A relaunch would not continue this session";
+  const lead = row.continuable === null ? who.unknown : who.not;
   return why ? `${lead}: ${why}.` : `${lead}.`;
 }
 
 /**
  * How the session's turn ended, as the engine recorded it — what its
- * harness's own transcript cannot know — beside what is kept of it, and
- * whether a relaunch would continue it (`continuableWords`).
+ * harness's own transcript cannot know — beside what is kept of it, the
+ * session its first launch was handed, and whether a launch would continue it
+ * (`continuableWords`).
  *
  * EVERY FACT IS DRAWN ONLY WHERE THE ENDING CARRIES IT: an ending says what
  * the way its turn ended established, and a blank "Stopped by" on a turn
- * nobody stopped would read as a stop by nobody.
+ * nobody stopped would read as a stop by nobody. A reply that did not reach
+ * the party waiting is said only where the ending names whom it was owed to
+ * and knows it did not go: a delivery the engine cannot vouch for either way
+ * is said as not known, never as not made.
  */
 export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
   const ending = row.ending;
+  const unkept = ending?.unkept ? ending.unkept.reason.replace(/\.\s*$/, "") : "";
   return (
     <div className="thread-entry">
       <div className="row gap-1 wrap">
@@ -647,10 +692,24 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         {row.ended_at ? ` · ended ${fmtDateTime(row.ended_at)}` : ""}
         {row.kept ? ` · ${fmtBytes(row.object_bytes)} kept` : ""}
       </p>
+      {row.base_turn && <HandedSession turn={row.base_turn} />}
       <p className="t-caption">{continuableWords(row)}</p>
       {ending?.delivered && (
         <p className="t-caption">
           Its reply was delivered{ending.delivered_to ? ` on ${ending.delivered_to}` : ""}.
+        </p>
+      )}
+      {ending && !ending.delivered && ending.delivery_unknown && (
+        <p className="t-caption">Whether its reply reached anybody is not known.</p>
+      )}
+      {ending && !ending.delivered && !ending.delivery_unknown && ending.delivered_to && (
+        <p className="t-caption">
+          Its reply did not reach the party waiting on {ending.delivered_to}.
+        </p>
+      )}
+      {ending?.unkept && (
+        <p className="t-caption">
+          {unkept ? `Its newest session was not kept: ${unkept}.` : "Its newest session was not kept."}
         </p>
       )}
       {ending?.answer && <p className="t-caption">It answered a colleague: {ending.answer}.</p>}
@@ -664,6 +723,28 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
       )}
       {ending?.failure && <p className="t-caption">{ending.failure}</p>}
     </div>
+  );
+}
+
+/**
+ * The session a turn's first launch was handed to continue — the newest its
+ * conversation left as the turn's dispatch read it — as a link that opens that
+ * session here, where this seat still keeps it: the chain a conversation's
+ * turns make, followed a turn at a time. The engine says whether the session is
+ * still kept once it is opened; an absorbed one is gone with the turn that was
+ * handed it.
+ */
+function HandedSession({ turn }: { turn: string }) {
+  const route = useRoute();
+  const opens = href(route.path, { ...Object.fromEntries(route.query), session: turn });
+  return (
+    <p className="t-caption">
+      Its first launch was handed turn{" "}
+      <a className="t-link mono" href={opens}>
+        {turn}
+      </a>
+      's session to continue.
+    </p>
   );
 }
 

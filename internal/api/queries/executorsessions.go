@@ -23,10 +23,11 @@ import (
 
 // A SEAT'S EXECUTOR SESSIONS, read by a person (ADR-0073).
 //
-// Every turn whose executor captured its harness's session leaves a row in the
-// executor log naming the sealed object that holds the session its harness
-// kept when its run ended — the whole record of what the run read, called and
-// wrote — and how the turn ended. Two questions read it: `executor_sessions`,
+// Every turn whose executor captured its harness's session — and every turn
+// that read its conversation, from its first launch's `begin` on — leaves a
+// row in the executor log naming the sealed object that holds the session its
+// harness kept when its run ended — the whole record of what the run read,
+// called and wrote — and how the turn ended. Two questions read it: `executor_sessions`,
 // a seat's rows newest first, a page at a time, each with how its turn ended
 // and whether its session is still kept; and `executor_session`, one turn's
 // transcript, its object opened and read as the entries its harness recorded.
@@ -76,28 +77,49 @@ import (
 // not yet opened, for as long as its caller waits, and ends with the caller's
 // own error where the caller leaves first.
 //
-// # Whether a relaunch continues it, decided as a relaunch decides it
+// # Whether a launch continues it, decided as that launch decides it
 //
-// Each row says whether a relaunch of its turn would continue its session
-// (`continuable`), where (`continues_in`: from the turn's kept capture in
-// whichever box the relaunch gets, or only in the box the turn's run parked
-// in, while that box is held), and where it would not, why
-// (`not_continuable`): asked of [sandbox.ReadContinuityOf] — THE decision a
-// relaunch takes, [sandbox.ContinuityOf], and beside it the launch's own tests
-// of a box it continues in — over what a relaunch reads: the turn's row on the
+// Each row says which launch would continue its session (`continued_by`: a
+// relaunch of its turn while the turn is live; its conversation's next turn
+// once the turn has ended or is ending; none for a turn that served no
+// conversation), whether it would (`continuable`), where (`continues_in`: in
+// whichever box the launch gets, or — a relaunch's alone — only in the box the
+// turn's run parked in, while that box is held), and where it would not, why
+// (`not_continuable`): asked of [sandbox.ReadContinuityOf], THE decision that
+// launch takes — [sandbox.ContinuityOf] for a relaunch, with the launch's own
+// tests of a box it continues in beside it, and [sandbox.BaseContinuityOf] for
+// the next turn, as that turn's first launch asks it of the head its dispatch
+// reads — over what that launch reads. A LIVE ROW: the turn's row on the
 // executor log as a relaunch reads it, the turn's run record in the
 // coordination store ([SessionRuns]) and the job that record names as the one
-// a relaunch would follow, and the member a relaunch of the seat's turn would
-// be launched on now, the cell its run lands in and that member's runner — as
-// THE NODE HOLDING THE SEAT picks them ([RelaunchTargets]): which members sit
-// out a spent plan is that node's own, and the relaunch is decided there, off
-// the chain of the company revision that turn's relaunch runs on — a resumed
-// segment of it running there relaunches on the revision it was admitted
-// under. Never a second copy of any part of it. As far as the engine can know before a box
-// is chosen: whether the box a relaunch gets runs a harness release that takes
-// the session up, and whether the seat's budget can carry it, are the launch's
-// to find out, and no row says them. An ended turn's session is never
-// continuable here: a conversation's next turn continues no session yet.
+// a relaunch would follow, and — where the turn has kept no session of its own
+// — the session its first launch was handed, which a relaunch in a box of its
+// own continues instead. AN ENDED ROW: whether it is its conversation's HEAD,
+// the newest ended turn of the conversation that left a session, which the
+// read that answered the row names from the same snapshot
+// (executordomain.Page.Heads, SessionRead.Head) — only the head is continued,
+// and a row that is not names the head the next turn is handed; a row that
+// names no session says why, of three reasons. And for either, the member the
+// launch would be launched on now, the cell its run lands in and that member's
+// runner — as THE NODE HOLDING THE SEAT picks them ([RelaunchTargets]): which
+// members sit out a spent plan is that node's own, and the launch is decided
+// there, off the chain of the company revision it runs on — a resumed segment
+// of the turn running there relaunches on the revision it was admitted under,
+// and a conversation's next turn is admitted under the revision live when it
+// comes, which an ask of NO turn names ([sandbox.TargetAsk]). Never a second
+// copy of any part of it. As far as the engine can know before a box is
+// chosen: whether the box a launch gets runs a harness release that takes the
+// session up, whether it is a box of its own, and whether the seat's budget
+// can carry it, are the launch's to find out, and no row says them.
+//
+// A ROW BEGINS AT ITS TURN'S FIRST LAUNCH where the turn read its
+// conversation, whose `begin` records that read and holds the session it was
+// handed (`base_turn`) — at its first capture otherwise — and IT GOES WITH THE
+// LATER TURN OF ITS CONVERSATION THAT WAS HANDED IT, once that turn, having
+// landed a capture of its own, ends: an end absorbs the turns its read handed
+// out, deleting their rows. It goes past the retention, and with its seat,
+// too. So a session read by its turn after its row went is `not_found`, said
+// as one that may have gone any of these ways.
 //
 // A PAGE READS THE COORDINATION STORE ONCE for every run it lists: one listing
 // of the seat's live runs ([SessionRuns.ListActiveForSeat]), which the fleet's
@@ -105,18 +127,20 @@ import (
 // which the log's row alone decides, and one turn's record alone for a live
 // row the listing does not hold — a record of a status this build does not
 // know, or one it could not decode — which a session read alone decides the
-// same way. It ASKS THE NODE HOLDING THE SEAT ONCE, for every live row's turn
-// and archive at once, and not at all where no row is live — which costs one
-// read more of the coordination store, the seat's lease, naming that node
-// ([RelaunchTargets]), on every page that asks, the holder's own included. And
-// A LIVE ROW IS
-// DECIDED ON THE LOG AS A RELAUNCH READS IT: read again at the relaunch's level
-// ([sandbox.RelaunchRead]) where the page was read below it and the row names
-// another capture than the one its run's record keeps ([sandbox.RereadsRow]),
+// same way. It ASKS THE NODE HOLDING THE SEAT ONCE, for every row a member
+// decides at once — each live row whose run is neither over nor ending, and
+// each ended row that is its conversation's head — and not at all where no row
+// is either, which costs one read more of the coordination store, the seat's
+// lease, naming that node ([RelaunchTargets]), on every page that asks, the
+// holder's own included. And A LIVE ROW IS DECIDED ON THE LOG AS A RELAUNCH
+// READS IT: read again at the relaunch's level ([sandbox.RelaunchRead]) where
+// the page was read below it and the row names another capture than the one
+// its run's record keeps, or the record keeps none ([sandbox.RereadsRow]),
 // since a copy of the log behind the record would read a session a relaunch
 // continues as one the log no longer names — and nowhere else, since a read at
 // that level appends a barrier to the executor log, and a row naming the kept
-// capture already decides as one read there would.
+// capture already decides as one read there would. An ended row is decided on
+// the snapshot its page was read in, which `read_level` states.
 //
 // A TRANSCRIPT'S LATER PAGES DO NOT DECIDE IT AGAIN: its first page, read with
 // no cursor, says it beside the transcript's opening, and every later page —
@@ -124,14 +148,15 @@ import (
 //
 // AN UNKNOWN IS NEVER A NO: `continuable` is null, and `not_continuable` says
 // why, where the turn's run record or its row at the relaunch's level could not
-// be read, and where a relaunch would not decide now either — its job still
-// working or being collected, its capture still being kept, what a relaunch is
+// be read, and where the launch would not decide now either — its job still
+// working or being collected, its capture still being kept, what the launch is
 // launched on not to be said now (every member of the seat's chain sitting out
-// its plan, no node holding the seat, the node holding it not answering), and
-// a relaunch only the resume of its job's collection decides. A no would tell a
-// person a session will start over that may well be continued; and a store
-// that does not answer never fails the page, whose rows the log answered
-// whole.
+// its plan, no node holding the seat, the node holding it not answering), a
+// relaunch only the resume of its job's collection decides, and a turn whose
+// end is not on the log yet, which its conversation's head decides once it
+// is. A no would tell a person a session will start over that may well be
+// continued; and a store that does not answer never fails the page, whose rows
+// the log answered whole.
 
 // ExecutorSessions is the seats' executor sessions as this surface reads them:
 // the two reads of the domain's reader a person asks, answered through the
@@ -165,15 +190,16 @@ type SessionRuns interface {
 	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
 }
 
-// RelaunchTargets is what a relaunch of each of a seat's turns asked about
-// would be launched on now, one target per ask in the order asked, as THE NODE
-// HOLDING THE SEAT picks it ([sandbox.RelaunchTarget]): the member of the
-// seat's executor chain the relaunch takes — off the chain of the company
-// revision that turn's relaunch runs on — the cell its run lands in, that node,
-// and whether that member's runner restores the ask's archive, so a row is
-// decided by the runner a relaunch would take, never by the harness that wrote
-// the session, nor by a bench of spent plans the relaunching node does not
-// keep.
+// RelaunchTargets is what a launch of each of a seat's sessions asked about
+// would be launched on now — a relaunch of the turn an ask names, or the next
+// turn of a conversation, for an ask that names none — one target per ask in
+// the order asked, as THE NODE HOLDING THE SEAT picks it
+// ([sandbox.RelaunchTarget]): the member of the seat's executor chain the
+// launch takes — off the chain of the company revision that launch runs on —
+// the cell its run lands in, that node, and whether that member's runner
+// restores the ask's archive, so a row is decided by the runner the launch
+// would take, never by the harness that wrote the session, nor by a bench of
+// spent plans the launching node does not keep.
 type RelaunchTargets interface {
 	RelaunchTargets(ctx context.Context, seat uuid.UUID, handle string,
 		asks []sandbox.RelaunchAsk) []sandbox.RelaunchTarget
@@ -211,16 +237,30 @@ type SessionRow struct {
 	Kept        bool  `json:"kept"`
 	ObjectBytes int64 `json:"object_bytes"`
 
-	// Continuable says whether a relaunch of the turn would continue this
-	// session, as far as the engine can know before a box is chosen, decided
-	// as a relaunch decides it ([sandbox.ReadContinuityOf]), and ContinuesIn
-	// where it would: from the turn's kept capture in whichever box the
-	// relaunch gets, or only in the box the turn's run parked in, while that
-	// box is held. NotContinuable, in the engine's own words, redacted, is why
-	// it would not; or, where it would only in the box the run parked in, why
-	// no other box continues it. NULL where it cannot be decided now, which
-	// NotContinuable then says: an unknown is never sent as a no. See the file
-	// comment.
+	// BaseTurn is the ended turn whose session the turn's first launch was
+	// handed to continue — its conversation's head as the turn's dispatch
+	// read it, which the turn's `begin` held on the log — absent where the
+	// read named none, that session had gone before the begin landed, or no
+	// begin landed. Whether a launch took it up is its executor records'
+	// `brief`.
+	BaseTurn string `json:"base_turn,omitempty"`
+
+	// ContinuedBy is the launch the rest is about ([sandbox.ContinuedBy]): a
+	// relaunch of the turn while it is live, its conversation's next turn once
+	// it has ended or is ending — absent where no launch would ever continue
+	// the session (a turn that served no conversation), and where nothing was
+	// decided (a transcript's later page).
+	//
+	// Continuable says whether that launch would continue this session, as far
+	// as the engine can know before a box is chosen, decided as that launch
+	// decides it ([sandbox.ReadContinuityOf]), and ContinuesIn where it would:
+	// in whichever box the launch gets, or — a relaunch's alone — only in the
+	// box the turn's run parked in, while that box is held. NotContinuable, in
+	// the engine's own words, redacted, is why it would not; or, where a
+	// relaunch would only in the box the run parked in, why no other box
+	// continues it. NULL where it cannot be decided now, which NotContinuable
+	// then says: an unknown is never sent as a no. See the file comment.
+	ContinuedBy    sandbox.ContinuedBy `json:"continued_by,omitempty"`
 	Continuable    *bool               `json:"continuable"`
 	ContinuesIn    sandbox.ContinuesIn `json:"continues_in,omitempty"`
 	NotContinuable string              `json:"not_continuable,omitempty"`
@@ -349,13 +389,17 @@ func (s Sources) executorSessions(ctx context.Context, p Params) (any, error) {
 			// decode, and neither is a run that is over.
 			run, runErr = s.liveRun(ctx, row)
 		}
-		pending = append(pending, s.relaunchRow(ctx, row, run, runErr, fresh, now))
+		// ITS CONVERSATION'S HEAD AS THE PAGE'S OWN SNAPSHOT NAMED IT, so an
+		// ended row is decided where its rows were read, never on a second
+		// read the page's own could disagree with.
+		head := page.Heads[row.ConversationKey]
+		pending = append(pending, s.relaunchRow(ctx, row, head, run, runErr, fresh, now))
 	}
 	targets := s.relaunchTargets(ctx, seat, pending)
 	rows := make([]SessionRow, 0, len(pending))
 	for i, c := range pending {
 		shown := sessionRowOf(c.row)
-		shown.Continuable, shown.ContinuesIn, shown.NotContinuable = c.decide(targets[i], now)
+		shown.ContinuedBy, shown.Continuable, shown.ContinuesIn, shown.NotContinuable = c.decide(targets[i], now)
 		rows = append(rows, shown)
 	}
 	return SessionsAnswer{Handle: seat.Handle, Sessions: rows, Next: page.Next,
@@ -380,13 +424,14 @@ const unreadRelaunchRow = "the turn's row on the executor log could not be read 
 // relaunch continues the session: its first page says it, once.
 const laterTranscriptPage = "said on the transcript's first page, which a later page does not ask again"
 
-// relaunchTargets is what a relaunch of each row's turn would be launched on,
-// one per row, as the node holding the seat answers it for the turn and the
-// archive the row decides on — asked once for every row that asks
-// ([rowContinuity.asksTarget]), and not at all where none does, a row that does
-// not deciding by it — or, on a node wired with nothing to ask
-// ([Sources.RelaunchTargets]), a target that cannot be said: every live row of
-// the seat is then undecided, as one whose run record could not be read is.
+// relaunchTargets is what a launch of each row's session would be launched on,
+// one per row, as the node holding the seat answers it for the ask the row
+// makes ([sandbox.TargetAsk]: a relaunch of a live row's turn, or the next turn
+// of the conversation an ended row is the head of) — asked once for every row
+// that asks, and not at all where none does, a row that does not deciding by
+// it — or, on a node wired with nothing to ask ([Sources.RelaunchTargets]), a
+// target that cannot be said: every row that asks is then undecided, as a live
+// one whose run record could not be read is.
 func (s Sources) relaunchTargets(ctx context.Context, seat memread.Seat,
 	rows []rowContinuity) []sandbox.RelaunchTarget {
 
@@ -394,10 +439,11 @@ func (s Sources) relaunchTargets(ctx context.Context, seat memread.Seat,
 	var asks []sandbox.RelaunchAsk
 	var asking []int
 	for i, c := range rows {
-		if !c.asksTarget() {
+		ask, asked := c.ask()
+		if !asked {
 			continue
 		}
-		asks = append(asks, sandbox.RelaunchAsk{Turn: c.decideOn.Turn, Archive: sandbox.ArchiveOf(c.decideOn)})
+		asks = append(asks, ask)
 		asking = append(asking, i)
 	}
 	if len(asks) == 0 {
@@ -411,11 +457,11 @@ func (s Sources) relaunchTargets(ctx context.Context, seat memread.Seat,
 		switch {
 		case s.RelaunchTargets == nil:
 			targets[i] = sandbox.RelaunchTarget{Undecided: true, Why: "this node asks no node holding the seat " +
-				"what a relaunch is launched on; ask a node that runs the company"}
+				"what a launch of the seat's turns is launched on; ask a node that runs the company"}
 		case j >= len(answered):
 			// AN ASK LEFT UNANSWERED is unknown, never a no.
 			targets[i] = sandbox.RelaunchTarget{Undecided: true, Why: "the node holding the seat said nothing " +
-				"of this session's relaunch; ask again shortly"}
+				"of what this session's launch is launched on; ask again shortly"}
 		default:
 			targets[i] = answered[j]
 		}
@@ -477,51 +523,61 @@ func (s Sources) liveRun(ctx context.Context, row executordomain.Session) (*sand
 // rowContinuity is one row of a seat's sessions on its way to its
 // `continuable`: the row as its page read it, the row the decision reads — the
 // same, or read again as a relaunch reads it ([Sources.relaunchRow]) — its
-// turn's run record, nil where its run is over, and why it cannot be decided,
-// where it cannot before anything else is asked.
+// conversation's head as the read that answered the row named it, its turn's
+// run record, nil where its run is over, and why it cannot be decided, where it
+// cannot before anything else is asked.
 type rowContinuity struct {
 	row, decideOn executordomain.Session
+	head          string
 	run           *sandbox.PendingRun
 	undecided     string
 }
 
-// asksTarget reports whether the row is decided by what a relaunch would be
-// launched on: a live turn with a run, its record and its row read.
-func (c rowContinuity) asksTarget() bool {
-	return c.undecided == "" && c.run != nil && !c.decideOn.Ended()
+// ask is what the row asks the node holding the seat ([sandbox.TargetAsk]), and
+// false where the row is decided by no member — or cannot be decided at all.
+func (c rowContinuity) ask() (sandbox.RelaunchAsk, bool) {
+	if c.undecided != "" {
+		return sandbox.RelaunchAsk{}, false
+	}
+	return sandbox.TargetAsk(c.decideOn, c.head, c.run)
 }
 
-// decide is the row's `continuable`, `continues_in` and `not_continuable`: THE
-// DECISION A RELAUNCH TAKES ([sandbox.ReadContinuityOf]), asked of the row a
-// relaunch reads, its run record and target, the member the node holding the
-// seat would launch a relaunch on — or undecided, where the run record or the
-// row could not be read as a relaunch reads it.
-func (c rowContinuity) decide(target sandbox.RelaunchTarget, now time.Time) (*bool, sandbox.ContinuesIn, string) {
+// decide is the row's `continued_by`, `continuable`, `continues_in` and
+// `not_continuable`: THE DECISION THE LAUNCH THAT WOULD CONTINUE IT TAKES
+// ([sandbox.ReadContinuityOf]), asked of the row that launch reads, its
+// conversation's head, its run record and target, the member the node holding
+// the seat would launch it on — or undecided, where the run record or the row
+// could not be read as a relaunch reads it.
+func (c rowContinuity) decide(target sandbox.RelaunchTarget,
+	now time.Time) (sandbox.ContinuedBy, *bool, sandbox.ContinuesIn, string) {
+
 	if c.undecided != "" {
-		return nil, "", c.undecided
+		return sandbox.ContinuedByRelaunch, nil, "", c.undecided
 	}
-	decided := sandbox.ReadContinuityOf(c.decideOn, c.run, target, now)
+	decided := sandbox.ReadContinuityOf(c.decideOn, c.head, c.run, target, now)
 	// REDACTED, as every text of this surface is: a reason can quote a
-	// harness's release as its box printed it.
+	// harness's release as its box printed it, and why a turn's newest
+	// capture was not kept quotes what refused it.
 	why := redact.Secrets(decided.Why)
 	if !decided.Decided {
-		return nil, "", why
+		return decided.By, nil, "", why
 	}
-	return &decided.Continues, decided.In, why
+	return decided.By, &decided.Continues, decided.In, why
 }
 
-// relaunchRow is row on its way to its continuity: undecided where its turn is
-// live and its record could not be read (unread) — the decision would read a
-// missing record as a run that is over — and otherwise decided on the row as a
-// relaunch reads it: read again at the relaunch's level ([sandbox.RelaunchRead])
-// where the caller's read was below it and the decision reaches a row that
-// names another capture than the run's record keeps ([sandbox.RereadsRow]), and
-// row itself everywhere else, which decides as that read would — undecided
-// where the read again fails.
-func (s Sources) relaunchRow(ctx context.Context, row executordomain.Session, run *sandbox.PendingRun,
-	unread error, fresh statelog.Freshness, now time.Time) rowContinuity {
+// relaunchRow is row on its way to its continuity, head being its
+// conversation's head as the read that answered row named it: undecided where
+// its turn is live and its record could not be read (unread) — the decision
+// would read a missing record as a run that is over — and otherwise decided on
+// the row as a relaunch reads it: read again at the relaunch's level
+// ([sandbox.RelaunchRead]) where the caller's read was below it and the
+// decision reaches a row that names another capture than the run's record
+// keeps ([sandbox.RereadsRow]), and row itself everywhere else, which decides
+// as that read would — undecided where the read again fails.
+func (s Sources) relaunchRow(ctx context.Context, row executordomain.Session, head string,
+	run *sandbox.PendingRun, unread error, fresh statelog.Freshness, now time.Time) rowContinuity {
 
-	c := rowContinuity{row: row, decideOn: row, run: run}
+	c := rowContinuity{row: row, decideOn: row, head: head, run: run}
 	switch {
 	case unread != nil && !row.Ended():
 		c.undecided = undecidedContinuity
@@ -559,8 +615,13 @@ func (s Sources) executorSession(ctx context.Context, p Params) (any, error) {
 	read, err := s.ExecutorSessions.Session(ctx, seat.Handle, turn, fresh)
 	switch {
 	case errors.Is(err, executordomain.ErrNotFound):
-		return nil, fmt.Errorf("%w: %s keeps no executor session of the turn %s", ErrNotFound,
-			seat.Handle, turn)
+		// A ROW THAT WENT is said as the ways one goes, the first of them
+		// the one a reader following a conversation meets: an end absorbs
+		// every turn its read handed out, deleting their rows, and an
+		// absorbed row leaves no word of the turn that took it.
+		return nil, fmt.Errorf("%w: %s keeps no executor session of the turn %s: the turn may have "+
+			"recorded none, or its row went — with the end of a later turn of its conversation that was "+
+			"handed it, past the retention, or with the seat", ErrNotFound, seat.Handle, turn)
 	case err != nil:
 		return nil, executorRefusal(err)
 	}
@@ -572,11 +633,12 @@ func (s Sources) executorSession(ctx context.Context, p Params) (any, error) {
 	}
 	shown := sessionRowOf(row)
 	if cursor == "" {
-		// THE FIRST PAGE DECIDES IT, once — see the file comment.
+		// THE FIRST PAGE DECIDES IT, once — see the file comment — on the
+		// head the row's own read named.
 		now := s.clock()
 		run, unread := s.liveRun(ctx, row)
-		c := s.relaunchRow(ctx, row, run, unread, fresh, now)
-		shown.Continuable, shown.ContinuesIn, shown.NotContinuable = c.decide(
+		c := s.relaunchRow(ctx, row, read.Head, run, unread, fresh, now)
+		shown.ContinuedBy, shown.Continuable, shown.ContinuesIn, shown.NotContinuable = c.decide(
 			s.relaunchTargets(ctx, seat, []rowContinuity{c})[0], now)
 	} else {
 		shown.NotContinuable = laterTranscriptPage
@@ -744,7 +806,7 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 		Turn: s.Turn, ConversationKey: s.ConversationKey, WorkKey: s.WorkKey,
 		Harness: s.Harness, HarnessVersion: s.HarnessVersion,
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
-		AskExcerpt: redact.Secrets(s.AskExcerpt), Kept: s.HasObject(),
+		AskExcerpt: redact.Secrets(s.AskExcerpt), Kept: s.HasObject(), BaseTurn: s.BaseTurn,
 	}
 	if row.Kept {
 		row.ObjectBytes = s.Object.Size

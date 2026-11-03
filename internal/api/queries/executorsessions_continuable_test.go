@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -142,15 +143,16 @@ func claudeTarget() sandbox.RelaunchTarget {
 // first capture, as the executor log's row names it and the run's record keeps
 // it, written by harness — the job parked on a question, its box held in the
 // direct cell on the host of the node holding the seat, as a collection leaves
-// a job that asked.
+// a job that asked. Each is a conversation of its own, so ended, it is its
+// conversation's head.
 func liveSession(harness string) (executordomain.Session, sandbox.PendingRun) {
 	turn := uuid.NewString()
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	key := objstore.KeyAt(at)
 	kept := sandbox.SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: sandbox.CaptureLanded,
 		Object: key.String(), At: at}
-	row := executordomain.Session{Handle: "ana", Turn: turn, Harness: harness, SessionID: "s-1",
-		ArchiveFormat: executor.ClaudeCode{}.ArchiveFormat(), CapturedAt: at,
+	row := executordomain.Session{Handle: "ana", Turn: turn, ConversationKey: "chat:" + turn, Harness: harness,
+		SessionID: "s-1", ArchiveFormat: executor.ClaudeCode{}.ArchiveFormat(), CapturedAt: at,
 		Object:    objstore.Object{Key: key, Hash: objstore.Hash(strings.Repeat("a", 64)), Size: 4096},
 		LaunchSeq: 2, CaptureSeq: 1}
 	return row, sandbox.PendingRun{TurnID: turn, AgentHandle: "ana", Status: sandbox.StatusAwaiting,
@@ -193,27 +195,30 @@ func decided(row queries.SessionRow) string {
 	return "not continuable (" + row.NotContinuable + ")"
 }
 
-// A SESSION'S ROW SAYS WHETHER A RELAUNCH WOULD CONTINUE IT, AS A RELAUNCH
-// DECIDES IT. Asked of the one decision a relaunch takes, over the turn's row
-// on the log, its run's record and the member a relaunch of the seat's turn is
-// launched on: a live turn whose job kept the capture the row names, which that
-// member's runner restores, is continuable in any box, with no reason; a turn
-// whose end is owed, and one whose run's ending is decided and its end not yet
-// owed, are ending; a session another harness wrote, which the member's runner
-// does not take up, is not continued from its capture — and, its parked box of
-// that other harness, nowhere; a live turn whose run is over continues nothing,
-// and an ended turn's session no relaunch continues, only its conversation's
-// next turn — each not continuable, saying why. A whole page reads the coordination store ONCE, and
-// once more for the one live row the listing does not hold, and asks the node
-// holding the seat ONCE, about every live row's turn and session at once; one
-// session read alone reads its own turn's record and asks about its own turn's
-// session, and nothing else.
+// A SESSION'S ROW SAYS WHICH LAUNCH WOULD CONTINUE IT, AND WHETHER, AS THAT
+// LAUNCH DECIDES IT. Asked of the one decision that launch takes, over the
+// turn's row on the log, its run's record, its conversation's head as the page
+// named it and the member the launch is launched on: a live turn whose job kept
+// the capture the row names, which that member's runner restores, is
+// continuable by a relaunch in any box, with no reason; a session another
+// harness wrote, which the member's runner does not take up, is not continued
+// from its capture — and, its parked box of that other harness, nowhere — saying
+// why; an ended turn's session that is its conversation's head is the next
+// turn's, continuable in any box where the member restores it; and a live turn
+// whose end is owed, whose run's ending is decided, or whose run is over, is the
+// next turn's too, undecided until its end is on the log. A whole page reads the
+// coordination store ONCE, and once more for the one live row the listing does
+// not hold, and asks the node holding the seat ONCE, about the two live rows a
+// relaunch decides, each by its turn, and the head the next turn decides, by no
+// turn; one session read alone reads its own turn's record and asks about its
+// own turn's session, and nothing else.
 //
 // Mutation: decide a row by anything but sandbox.ReadContinuityOf, read the
 // store or ask the holder once per row, ask the runner of the harness that
-// wrote the session rather than the relaunch's member, or answer a decided
-// ending as live, and a check goes red.
-func TestASessionsRowSaysWhetherARelaunchWouldContinueIt(t *testing.T) {
+// wrote the session rather than the launch's member, ask about an ended head
+// by its own turn, answer a decided ending as live, or say which launch a row
+// is about otherwise than the decision did, and a check goes red.
+func TestASessionsRowSaysWhichLaunchWouldContinueIt(t *testing.T) {
 	t.Parallel()
 	continues, continuesRun := liveSession(executor.ClaudeCodeName)
 	continuesRun.Status = sandbox.StatusRunning
@@ -237,27 +242,37 @@ func TestASessionsRowSaysWhetherARelaunchWouldContinueIt(t *testing.T) {
 	rows := rowsByTurn(t, page)
 	for name, tc := range map[string]struct {
 		turn      string
+		by        sandbox.ContinuedBy
+		decided   bool
 		continues bool
 		why       string
 	}{
-		"a live turn's kept session":           {turn: continues.Turn, continues: true},
-		"a turn whose end is owed":             {turn: ending.Turn, why: "is ending"},
-		"a turn whose run's ending is decided": {turn: stopping.Turn, why: "is ending"},
-		"a session another harness wrote": {turn: foreign.Turn,
+		"a live turn's kept session": {turn: continues.Turn, by: sandbox.ContinuedByRelaunch, decided: true,
+			continues: true},
+		"a session another harness wrote": {turn: foreign.Turn, by: sandbox.ContinuedByRelaunch, decided: true,
 			why: "written by " + executor.OpenCodeName + ", and this runner drives " + executor.ClaudeCodeName},
-		"a live turn whose run is over": {turn: over.Turn, why: "has ended"},
-		"an ended turn's session":       {turn: ended.Turn, why: "continued only by its conversation's next turn"},
+		"an ended turn's session, its conversation's head": {turn: ended.Turn, by: sandbox.ContinuedByNextTurn,
+			decided: true, continues: true},
+		"a turn whose end is owed": {turn: ending.Turn, by: sandbox.ContinuedByNextTurn,
+			why: "is ending, and its end is not on the executor log"},
+		"a turn whose run's ending is decided": {turn: stopping.Turn, by: sandbox.ContinuedByNextTurn,
+			why: "is ending, and its end is not on the executor log"},
+		"a live turn whose run is over": {turn: over.Turn, by: sandbox.ContinuedByNextTurn,
+			why: "run is over, and its end is not on the executor log"},
 	} {
 		row, ok := rows[tc.turn]
 		switch {
 		case !ok:
 			t.Errorf("%s: the page holds no row of its turn", name)
-		case row.Continuable == nil:
-			t.Errorf("%s: %s, want decided", name, decided(row))
-		case *row.Continuable != tc.continues || !strings.Contains(row.NotContinuable, tc.why) ||
-			(tc.continues && (row.NotContinuable != "" || row.ContinuesIn != sandbox.ContinuesInAnyBox)) ||
-			(!tc.continues && row.ContinuesIn != ""):
+		case row.ContinuedBy != tc.by:
+			t.Errorf("%s: %s by %q, want it about %q", name, decided(row), row.ContinuedBy, tc.by)
+		case (row.Continuable != nil) != tc.decided:
+			t.Errorf("%s: %s, want decided %v", name, decided(row), tc.decided)
+		case !strings.Contains(row.NotContinuable, tc.why) || (tc.continues && (row.NotContinuable != "" ||
+			row.ContinuesIn != sandbox.ContinuesInAnyBox)) || (!tc.continues && row.ContinuesIn != ""):
 			t.Errorf("%s: %s, want continues %v saying %q", name, decided(row), tc.continues, tc.why)
+		case tc.decided && *row.Continuable != tc.continues:
+			t.Errorf("%s: %s, want continues %v", name, decided(row), tc.continues)
 		}
 	}
 	if listed, got := runs.reads(); listed != 1 || got != 1 {
@@ -265,9 +280,16 @@ func TestASessionsRowSaysWhetherARelaunchWouldContinueIt(t *testing.T) {
 			"and the one live turn it does not hold", listed, got)
 	}
 	targets := s.RelaunchTargets.(*stubTargets)
-	if asks := targets.asks(); len(asks) != 1 || len(asks[0]) != 4 {
-		t.Errorf("a page asked the node holding the seat %v, want once, about the four live rows with a run",
-			asks)
+	asks := targets.asks()
+	if len(asks) != 1 || len(asks[0]) != 3 {
+		t.Fatalf("a page asked the node holding the seat %v, want once, about the two live rows a relaunch "+
+			"decides and the head the next turn decides", asks)
+	}
+	if !slices.Contains(asks[0], sandbox.RelaunchAsk{Turn: continues.Turn,
+		Archive: sandbox.ArchiveOf(continues)}) ||
+		!slices.Contains(asks[0], sandbox.RelaunchAsk{Archive: sandbox.ArchiveOf(ended)}) {
+		t.Errorf("a page asked the node holding the seat %v, want a live row by its turn and the head by none",
+			asks[0])
 	}
 
 	read, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": continues.Turn})
@@ -296,8 +318,8 @@ func TestASessionsRowSaysWhetherARelaunchWouldContinueIt(t *testing.T) {
 // holding the seat what a relaunch is launched on each leave every live turn's
 // row with `continuable` null and its reason saying why — a no would tell a
 // person a session starts over that may well be continued — while the page is
-// still answered, and an ended turn's row is decided off the log alone. A page
-// of ended turns reads nothing from the store at all.
+// still answered, and an ended turn's row of no conversation is decided off the
+// log alone. A page of ended turns reads nothing from the store at all.
 //
 // Mutation: answer an unread record as a run that is over, read a node with no
 // run records as one whose runs are all over, read a node that asks no holder
@@ -307,6 +329,7 @@ func TestALiveSessionWhoseRunCannotBeReadIsUndecided(t *testing.T) {
 	t.Parallel()
 	live, liveRun := liveSession(executor.ClaudeCodeName)
 	ended, _ := liveSession(executor.ClaudeCodeName)
+	ended.ConversationKey = ""
 	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeFailed}
 	down := &stubRuns{runs: []sandbox.PendingRun{liveRun}, err: errors.New("the coordination store is down")}
 	unwired := continuableSources(t, []executordomain.Session{live, ended}, nil)
@@ -331,7 +354,7 @@ func TestALiveSessionWhoseRunCannotBeReadIsUndecided(t *testing.T) {
 				}
 			case ended.Turn:
 				if row.Continuable == nil || *row.Continuable ||
-					!strings.Contains(row.NotContinuable, "no relaunch of it continues") {
+					!strings.Contains(row.NotContinuable, "served no conversation") {
 					t.Errorf("%s: the ended turn's row is %s, want no, off the log alone", name, decided(row))
 				}
 			}
@@ -853,5 +876,152 @@ func TestAContinuityReasonIsRedacted(t *testing.T) {
 	got := rowsByTurn(t, page)[row.Turn]
 	if strings.Contains(got.NotContinuable, secret) || !strings.Contains(got.NotContinuable, "the box answered") {
 		t.Errorf("the row says %q, want the reason with the credential taken out", got.NotContinuable)
+	}
+}
+
+// endedOn is ana's ended turn on conversation, its end at seq on the executor
+// log, its session written by Claude Code and kept: each made into the row a
+// case needs by what it takes off.
+func endedOn(conversation string, seq uint64) executordomain.Session {
+	row, _ := liveSession(executor.ClaudeCodeName)
+	row.ConversationKey = conversation
+	row.EndedAt = row.CapturedAt.Add(time.Minute)
+	row.EndedAtPosition = statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1, Seq: seq}
+	row.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	return row
+}
+
+// A ROW SAYS WHETHER THE NEXT TURN CONTINUES IT, as that turn's first launch
+// decides it, on the head the read that answered the row named: the head of a
+// conversation is continuable by the next turn in any box, asked of the node
+// holding the seat by NO turn, its runner restoring it; an older row names the
+// head the next turn is handed instead; a row that names no session says which
+// of three reasons — nothing captured, its newest capture not kept (that
+// capture's own reason redacted, on the ending as much as in the sentence), or
+// the seat's budget's release — and a turn that served no conversation is
+// continued by no launch. A live turn whose first job was lost before it kept
+// anything says its relaunch continues the session its first launch was
+// handed, names it (`base_turn`), and asks the holder about that session's
+// archive. A head whose launch cannot be said is undecided, never a no. And a
+// session read alone is decided as its page decides it, on its own read's head.
+//
+// Mutation: decide an ended row as 6b did (a relaunch's no), by its own turn's
+// target or by a head the page did not name; read an unknown target as a no;
+// drop a reason for a row with no session, or send an unkept capture's reason
+// unredacted; or ask the holder about a begun turn's own empty archive, and a
+// check goes red.
+func TestARowSaysWhetherTheNextTurnContinuesIt(t *testing.T) {
+	t.Parallel()
+	secret := "ghp_" + strings.Repeat("d", 36)
+	older := endedOn("chat:room", 1)
+	unkept := endedOn("chat:room", 2)
+	unkept.Object = objstore.Object{}
+	unkept.Ending.Unkept = &executordomain.Unkept{LaunchSeq: 3, CaptureSeq: 1,
+		Reason: "refused: the store answered " + secret}
+	head := endedOn("chat:room", 3)
+	released := endedOn("chat:room", 4)
+	released.Object = objstore.Object{}
+	blank := endedOn("chat:room", 5)
+	blank.Object, blank.CapturedAt, blank.LaunchSeq, blank.CaptureSeq = objstore.Object{}, time.Time{}, 0, 0
+	keyless := endedOn("", 6)
+	begun := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), ConversationKey: "chat:room",
+		BaseTurn: head.Turn}
+	base := sandbox.BaseSession{Turn: head.Turn, Object: head.Object.Key.String(),
+		ObjectHash: string(head.Object.Hash), ObjectSize: head.Object.Size, Harness: head.Harness,
+		SessionID: head.SessionID, ArchiveFormat: head.ArchiveFormat}
+	begunRun := sandbox.PendingRun{TurnID: begun.Turn, AgentHandle: "ana", Status: sandbox.StatusRunning,
+		LaunchSeq: 1, Launch: sandbox.LaunchRecord{Collected: true},
+		Lost: &sandbox.JobLoss{Cause: sandbox.LossBoxGone},
+		Base: &sandbox.ConversationBase{ReadThrough: 9, Absorbs: []string{head.Turn}, Session: &base}}
+	s := continuableSources(t, []executordomain.Session{begun, keyless, blank, released, head, unkept, older},
+		&stubRuns{runs: []sandbox.PendingRun{begunRun}})
+
+	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	rows := rowsByTurn(t, page)
+	for name, tc := range map[string]struct {
+		turn      string
+		by        sandbox.ContinuedBy
+		continues bool
+		why       string
+	}{
+		"its conversation's head": {turn: head.Turn, by: sandbox.ContinuedByNextTurn, continues: true},
+		"an older ended turn": {turn: older.Turn, by: sandbox.ContinuedByNextTurn,
+			why: "is handed turn " + head.Turn + "'s session"},
+		"a turn that captured nothing": {turn: blank.Turn, by: sandbox.ContinuedByNextTurn,
+			why: "nothing of this turn's session was captured"},
+		"a turn whose newest capture was not kept": {turn: unkept.Turn, by: sandbox.ContinuedByNextTurn,
+			why: "(launch 3, capture 1) was not kept: refused: the store answered"},
+		"a session the seat's budget released": {turn: released.Turn, by: sandbox.ContinuedByNextTurn,
+			why: "budget released"},
+		"a turn that served no conversation": {turn: keyless.Turn, why: "served no conversation"},
+		"a turn whose first job was lost before it kept anything": {turn: begun.Turn, by: sandbox.ContinuedByRelaunch,
+			why: "a relaunch of the turn in a box of its own continues turn " + head.Turn + "'s session instead"},
+	} {
+		row, ok := rows[tc.turn]
+		switch {
+		case !ok:
+			t.Errorf("%s: the page holds no row of its turn", name)
+		case row.ContinuedBy != tc.by || row.Continuable == nil:
+			t.Errorf("%s: %s by %q, want decided, about %q", name, decided(row), row.ContinuedBy, tc.by)
+		case *row.Continuable != tc.continues || !strings.Contains(row.NotContinuable, tc.why) ||
+			(tc.continues && (row.NotContinuable != "" || row.ContinuesIn != sandbox.ContinuesInAnyBox)) ||
+			(!tc.continues && row.ContinuesIn != ""):
+			t.Errorf("%s: %s, want continues %v saying %q", name, decided(row), tc.continues, tc.why)
+		}
+	}
+	if got := rows[begun.Turn]; got.BaseTurn != head.Turn {
+		t.Errorf("the begun turn's row names %q as the session its first launch was handed, want %s",
+			got.BaseTurn, head.Turn)
+	}
+	if got := rows[unkept.Turn]; strings.Contains(got.NotContinuable, secret) || got.Ending == nil ||
+		got.Ending.Unkept == nil || strings.Contains(got.Ending.Unkept.Reason, secret) ||
+		!strings.Contains(got.Ending.Unkept.Reason, redact.Marker) {
+		t.Errorf("an unkept capture's reason reaches the reader as %q and %+v, want it redacted in both",
+			got.NotContinuable, got.Ending)
+	}
+	targets := s.RelaunchTargets.(*stubTargets)
+	want := []sandbox.RelaunchAsk{{Turn: begun.Turn, Archive: sandbox.SessionArchive{Harness: head.Harness,
+		SessionID: head.SessionID, Format: head.ArchiveFormat}}, {Archive: sandbox.ArchiveOf(head)}}
+	if asks := targets.asks(); len(asks) != 1 || !slices.Equal(asks[0], want) {
+		t.Errorf("a page asked the node holding the seat %v, want once, about the begun turn's base by its "+
+			"turn and the head by none: %v", asks, want)
+	}
+
+	read, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": head.Turn})
+	if err != nil {
+		t.Fatalf("executor_session: %v", err)
+	}
+	alone := read.(queries.SessionAnswer).Session
+	if decided(alone) != decided(rows[head.Turn]) || alone.ContinuedBy != sandbox.ContinuedByNextTurn {
+		t.Errorf("the head read alone is %s by %q, and its page said %s", decided(alone), alone.ContinuedBy,
+			decided(rows[head.Turn]))
+	}
+	if asks := targets.asks(); len(asks) != 2 || !slices.Equal(asks[1],
+		[]sandbox.RelaunchAsk{{Archive: sandbox.ArchiveOf(head)}}) {
+		t.Errorf("the head read alone asked the node holding the seat %v, want its session by no turn", asks)
+	}
+	none, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": unkept.Turn})
+	if err != nil {
+		t.Fatalf("executor_session: %v", err)
+	}
+	if got := none.(queries.SessionAnswer); got.State != queries.TranscriptNone ||
+		!strings.Contains(got.Why, "was not kept") || strings.Contains(got.Why, secret) {
+		t.Errorf("a session whose newest capture was not kept reads %s: %q, want none, saying why, redacted",
+			got.State, got.Why)
+	}
+
+	sittingOut := continuableSources(t, []executordomain.Session{head}, nil)
+	sittingOut.RelaunchTargets = targetOf(sandbox.RelaunchTarget{Undecided: true,
+		Why: "every member of the seat's executor chain is sitting out its plan"})
+	unsaid, err := askAsSeat(t, sittingOut, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	if got := rowsByTurn(t, unsaid)[head.Turn]; got.Continuable != nil ||
+		got.ContinuedBy != sandbox.ContinuedByNextTurn || !strings.Contains(got.NotContinuable, "sitting out") {
+		t.Errorf("a head whose next turn's member cannot be said is %s, want undecided, saying why", decided(got))
 	}
 }

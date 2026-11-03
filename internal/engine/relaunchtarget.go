@@ -16,33 +16,40 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// WHAT A RELAUNCH OF A SEAT'S TURN WOULD BE LAUNCHED ON, answered by the node
-// holding the seat ([sandbox.RelaunchTarget]).
+// WHAT A LAUNCH OF A SEAT'S TURN WOULD BE LAUNCHED ON — a relaunch of a live
+// turn, or the next turn of a conversation whose last turn left a session —
+// answered by the node holding the seat ([sandbox.RelaunchTarget]).
 //
 // # Asked of the holder, never decided where the question lands
 //
-// Whether a relaunch would continue a turn's session turns on the member of the
+// Whether a launch would continue a turn's session turns on the member of the
 // seat's executor chain it is launched on, and which member that is turns on the
 // plans the node holding the seat has met spent — its own bench, which no node
 // shares (internal/providers/llm/harness) — and on the company revision that
-// node runs, which says whether sessions are kept. A relaunch is decided on that
+// node runs, which says whether sessions are kept. A launch is decided on that
 // node. So a reader of a seat's sessions, on whichever node serves the API, asks
 // it: this node where it holds the seat, and otherwise the incarnation the
 // seat's lease names, over an ephemeral scatter only that incarnation answers
 // ([topics.HeldRelaunch]) — as a seat's memory is read
 // (internal/learning/memread).
 //
-// # Per turn
+// # Per turn, and for the next turn by none
 //
-// The chain a relaunch picks its member from is the one of the company revision
-// it is launched under, and that is the turn's: a resumed segment of the turn
-// running on the holder — a review, whose send-back relaunches the round, or a
-// round carried on — relaunches on the revision it was admitted under, pinned
-// for the whole segment ([resumeInput.Company]), which an apply since does not
-// move; any other turn's next segment is admitted under the revision the holder
-// runs when it comes ([Engine.relaunchCompany]). So the question names, for
-// each session it asks about, the turn it is of, and the holder answers each
-// with the pick of the revision that turn's relaunch would run on.
+// The chain a launch picks its member from is the one of the company revision
+// it is launched under, and for a relaunch that is the turn's: a resumed
+// segment of the turn running on the holder — a review, whose send-back
+// relaunches the round, or a round carried on — relaunches on the revision it
+// was admitted under, pinned for the whole segment ([resumeInput.Company]),
+// which an apply since does not move; any other turn's next segment is
+// admitted under the revision the holder runs when it comes
+// ([Engine.relaunchCompany]). So the question names, for each session it asks
+// about, the turn it is of, and the holder answers each with the pick of the
+// revision that turn's relaunch would run on. A CONVERSATION'S NEXT TURN is
+// admitted under the revision the holder runs when it comes, too, so the
+// session a reader asks about for it — the head of its conversation — is
+// asked by NO turn: by the ended turn's own id, a segment of it still pinned
+// in the moments before it returns would answer for a revision the next turn
+// never runs on.
 //
 // # What crosses
 //
@@ -133,14 +140,16 @@ type relaunchReply struct {
 // nothing, since its asker waits on the one it named.
 var errRelaunchNotAddressed = errors.New("engine: the relaunch target request is addressed to another incarnation")
 
-// RelaunchTargets is what a relaunch of each turn asked about would be
-// launched on now, one target per ask in the order asked, as the node holding
-// the seat picks it — this node's own pick where it holds the seat
-// ([Engine.localRelaunchTarget]), and otherwise the holder's answer, asked over
-// the broker once for every ask — with whether that member's runner restores
-// the ask's archive: what the read surface decides each row of a seat's
-// sessions by (internal/api/queries' `continuable`, [sandbox.ReadContinuityOf]).
-// Never an error: what cannot be said now is a target that says so.
+// RelaunchTargets is what a launch of each session asked about would be
+// launched on now — a relaunch of the turn an ask names, or a conversation's
+// next turn for an ask that names none — one target per ask in the order
+// asked, as the node holding the seat picks it — this node's own pick where it
+// holds the seat ([Engine.localRelaunchTarget]), and otherwise the holder's
+// answer, asked over the broker once for every ask — with whether that
+// member's runner restores the ask's archive: what the read surface decides
+// each row of a seat's sessions by (internal/api/queries' `continuable`,
+// [sandbox.ReadContinuityOf]). Never an error: what cannot be said now is a
+// target that says so.
 func (e *Engine) RelaunchTargets(ctx context.Context, seat uuid.UUID, handle string,
 	asks []sandbox.RelaunchAsk) []sandbox.RelaunchTarget {
 
@@ -205,7 +214,7 @@ func (r relaunchTargets) targets(ctx context.Context, seat uuid.UUID, handle str
 		return undecidedRelaunches(len(asks), fmt.Sprintf("which node holds the seat could not be read: %v", err))
 	case lease == nil || !lease.Live(r.now()):
 		return undecidedRelaunches(len(asks), "no node holds the seat now, and the node that takes it decides "+
-			"what a relaunch of its turns is launched on")
+			"what a launch of its turns is launched on")
 	case lease.Owner == r.owner:
 		return r.locals(handle, asks)
 	}
@@ -251,7 +260,7 @@ func (r relaunchTargets) ask(ctx context.Context, owner, handle string,
 	replies, err := r.queue.Ask(askCtx, topics.HeldRelaunch, raw, 1)
 	if err != nil {
 		return undecidedRelaunches(len(asks), fmt.Sprintf("%s, which holds the seat, could not be asked "+
-			"what a relaunch is launched on: %v", node, err))
+			"what a launch of its turns is launched on: %v", node, err))
 	}
 	for _, body := range replies {
 		var reply relaunchReply
@@ -261,7 +270,7 @@ func (r relaunchTargets) ask(ctx context.Context, owner, handle string,
 		return reply.targets(node, question.Sessions)
 	}
 	return undecidedRelaunches(len(asks), fmt.Sprintf("%s, which holds the seat, did not say within %s "+
-		"what a relaunch is launched on", node, r.budget))
+		"what a launch of its turns is launched on", node, r.budget))
 }
 
 // targets is the reply as the targets it names, one per session asked, each

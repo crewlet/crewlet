@@ -2447,11 +2447,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// object store, opened under this node's keyring.
 			ExecutorSessions: executorSessionReads(e),
 			SessionObjects:   sessionObjects(e, log),
-			// AND WHETHER A RELAUNCH CONTINUES EACH ONE, decided as a
-			// relaunch decides it: off the FLEET's run records — the store
-			// a relaunch reads its own turn's from — and the member a
-			// relaunch of the seat's turn would be launched on, as the
-			// node holding the seat picks it, asked of that node.
+			// AND WHETHER A LAUNCH CONTINUES EACH ONE — a relaunch of its
+			// turn, or its conversation's next turn — decided as that
+			// launch decides it: off the FLEET's run records — the store a
+			// relaunch reads its own turn's from — and the member the
+			// launch would be launched on, as the node holding the seat
+			// picks it, asked of that node.
 			SessionRuns:     sandbox.NewCoordStore(e.Backends().Fleet),
 			RelaunchTargets: e,
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —

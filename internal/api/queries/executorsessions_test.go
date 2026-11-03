@@ -76,7 +76,38 @@ func (s *stubSessions) Sessions(_ context.Context, handle, cursor string, limit 
 	if end < len(held) {
 		page.Next = strconv.Itoa(end)
 	}
+	// EACH CONVERSATION'S HEAD, as the domain's page names it: of every row
+	// the seat holds, not of the page's alone.
+	for _, row := range page.Sessions {
+		if row.ConversationKey == "" {
+			continue
+		}
+		if page.Heads == nil {
+			page.Heads = map[string]string{}
+		}
+		page.Heads[row.ConversationKey] = headOf(s.rows, handle, row.ConversationKey)
+	}
 	return page, nil
+}
+
+// headOf is the head of handle's conversation key among rows, as the domain's
+// head statement answers it: the newest ended row that names a session, by
+// where its end is on the log — "" for none.
+func headOf(rows []executordomain.Session, handle, key string) string {
+	var head *executordomain.Session
+	for i := range rows {
+		row := &rows[i]
+		if row.Handle != handle || row.ConversationKey != key || !row.Ended() || !row.HasObject() {
+			continue
+		}
+		if head == nil || row.EndedAtPosition.Packed() > head.EndedAtPosition.Packed() {
+			head = row
+		}
+	}
+	if head == nil {
+		return ""
+	}
+	return head.Turn
 }
 
 // stubAt is where the stub's reads are served: the executor log's position the
@@ -98,7 +129,11 @@ func (s *stubSessions) Session(_ context.Context, handle, turn string,
 	}
 	for _, row := range s.rows {
 		if row.Handle == handle && row.Turn == turn {
-			return executordomain.SessionRead{Session: row, Position: stubAt, Complete: true}, nil
+			read := executordomain.SessionRead{Session: row, Position: stubAt, Complete: true}
+			if row.ConversationKey != "" {
+				read.Head = headOf(s.rows, handle, row.ConversationKey)
+			}
+			return read, nil
 		}
 	}
 	return executordomain.SessionRead{}, fmt.Errorf("%w: %s's turn %s", executordomain.ErrNotFound,

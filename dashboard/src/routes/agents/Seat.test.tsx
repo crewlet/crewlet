@@ -205,7 +205,8 @@ const SESSION_TURN = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11";
 const LOG_AT = { stream: "CREWLET_EXECUTOR_LOG", generation: 1, seq: 9 };
 
 /** One turn's executor session as `executor_sessions` lists it: a completed
- *  turn whose session is kept, with `over` laid on top. */
+ *  turn whose session is kept and its conversation's newest, which the
+ *  conversation's next turn would continue, with `over` laid on top. */
 function sessionRow(over: Record<string, unknown> = {}) {
   return {
     turn_id: SESSION_TURN,
@@ -219,10 +220,9 @@ function sessionRow(over: Record<string, unknown> = {}) {
     ask_excerpt: "Fix the flaky provisioner test.",
     kept: true,
     object_bytes: 41234,
-    continuable: false,
-    not_continuable:
-      "the turn has ended, and no later turn continues its session yet, since a session is " +
-      "continued only by a relaunch of the turn that kept it",
+    continued_by: "next_turn",
+    continuable: true,
+    continues_in: "any_box",
     ...over,
   };
 }
@@ -2464,6 +2464,14 @@ test("choosing a session opens its transcript, asked by its turn", async () => {
   });
   expect(screen.getByText("Note")).toBeTruthy();
   expect(screen.getByText(/40 KiB kept/)).toBeTruthy();
+  // WHICH LAUNCH WOULD CONTINUE IT leads what the account says of it: an
+  // ended turn's newest session is its conversation's next turn's.
+  expect(
+    screen.getByText(
+      "The conversation's next turn would continue this session in whichever box it gets, " +
+        "where that box can take it up and the seat's budget can carry it.",
+    ),
+  ).toBeTruthy();
 });
 
 // A SESSION WHOSE OBJECT IS GONE IS A WARNING SAYING SO, in the engine's own

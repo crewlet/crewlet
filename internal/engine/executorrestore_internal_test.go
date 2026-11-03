@@ -514,10 +514,14 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 // live since; so the node running it answers what that turn's relaunch is
 // launched on from the segment's revision, while a turn with no segment running
 // here — whose next one is admitted under the revision live when it comes — is
-// answered from the live one. Two turns of the seat, one page, two answers.
+// answered from the live one. Two turns of the seat, one page, two answers. And
+// a conversation's next turn, asked about by no turn, is answered from the live
+// revision whatever segment is pinned: its first launch is admitted under that
+// one.
 //
-// Mutation: answer every turn from the revision the node runs, and the open
-// segment's row is decided for a member its send-back is never launched on.
+// Mutation: answer every turn from the revision the node runs, or an ask of no
+// turn from a pinned segment's, and a row is decided for a member its launch is
+// never launched on.
 func TestAResumedTurnsRelaunchIsTargetedFromTheRevisionItRunsOn(t *testing.T) {
 	t.Parallel()
 	pinned, seat := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
@@ -538,10 +542,10 @@ func TestAResumedTurnsRelaunchIsTargetedFromTheRevisionItRunsOn(t *testing.T) {
 		t.Fatal("the seat has no agent id")
 	}
 	got := e.RelaunchTargets(t.Context(), id, seat.Handle(), []sandbox.RelaunchAsk{
-		{Turn: "t-open"}, {Turn: "t-parked"},
+		{Turn: "t-open"}, {Turn: "t-parked"}, {},
 	})
-	if len(got) != 2 {
-		t.Fatalf("two turns asked about were answered %d targets", len(got))
+	if len(got) != 3 {
+		t.Fatalf("three sessions asked about were answered %d targets", len(got))
 	}
 	if open := got[0]; open.Undecided || open.Harness != "claude-code" || open.Placement != sandbox.Direct {
 		t.Errorf("the open segment's turn is targeted %+v, want the claude-code member of the revision it "+
@@ -550,6 +554,10 @@ func TestAResumedTurnsRelaunchIsTargetedFromTheRevisionItRunsOn(t *testing.T) {
 	if parked := got[1]; parked.Undecided || parked.Harness != "opencode" || parked.Placement != sandbox.Container {
 		t.Errorf("a turn with no segment open is targeted %+v, want the opencode member of the revision "+
 			"live now, in the container cell", parked)
+	}
+	if next := got[2]; next.Undecided || next.Harness != "opencode" || next.Placement != sandbox.Container {
+		t.Errorf("a conversation's next turn, asked by no turn, is targeted %+v, want the opencode member "+
+			"of the revision live now, whatever segment is pinned", next)
 	}
 	// AND ONCE THE SEGMENT ENDS, the turn's next one is admitted under the
 	// live revision, which answers it.
