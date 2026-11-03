@@ -80,15 +80,16 @@ const (
 	LaneConfluence Lane = "confluence"
 	LaneSlack      Lane = "slack"
 	LaneMattermost Lane = "mattermost"
+	LaneExpo       Lane = "expo"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
 // ([integration.Kinds]): chat, then the tracker and its wiki, then the code
-// hosts, then observability.
+// hosts, then observability, then app delivery.
 func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
-		LaneGitHub, LaneGitLab, LaneDatadog,
+		LaneGitHub, LaneGitLab, LaneDatadog, LaneExpo,
 	}
 }
 
@@ -207,6 +208,8 @@ type Desired struct {
 	//     sorted and space-separated (`create:page read:space`).
 	//   - mattermost: the roles, space-separated in Mattermost's own order
 	//     ([config.MattermostRoleSets]).
+	//   - expo: `viewer`, `runner`, `developer` or `release_manager`, an
+	//     unset level reading as viewer.
 	Level string `json:"level,omitempty"`
 
 	// Permissions is GitHub's per-permission grant; nil elsewhere.

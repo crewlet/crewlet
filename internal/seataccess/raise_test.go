@@ -132,6 +132,18 @@ func TestKeepingTheVendorsSettingWritesItsOwnTerms(t *testing.T) {
 	if err != nil || !got.Enabled || got.Level != "" || len(got.Scope) != 0 {
 		t.Errorf("Slack kept = %+v, %v; want on and nothing else", got, err)
 	}
+	// AN EXPO ROBOT KEEPS A LEVEL IT HOLDS, and permissions matching none
+	// are refused rather than kept as a level no seat can name.
+	expoWant := seataccess.Desired{Enabled: true, Level: "viewer"}
+	got, err = seataccess.KeptAccess(seataccess.LaneExpo, expoWant,
+		seataccess.Observed{Exists: true, Enabled: true, Level: "developer"})
+	if err != nil || !got.Enabled || got.Level != "developer" {
+		t.Errorf("Expo kept = %+v, %v; want on at developer", got, err)
+	}
+	if _, err = seataccess.KeptAccess(seataccess.LaneExpo, expoWant,
+		seataccess.Observed{Exists: true, Enabled: true}); !errors.Is(err, seataccess.ErrNoExpoLevel) {
+		t.Errorf("no level = %v, want ErrNoExpoLevel", err)
+	}
 }
 
 // A KIND THE ENGINE STARTS GRANTING IS A TURN-ON, in two writes as in one.

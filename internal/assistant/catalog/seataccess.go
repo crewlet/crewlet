@@ -48,7 +48,7 @@ var laneTitles = map[seataccess.Lane]string{
 	seataccess.LaneDatadog: "Datadog", seataccess.LaneGitHub: "GitHub",
 	seataccess.LaneGitLab: "GitLab", seataccess.LaneJira: "Jira",
 	seataccess.LaneConfluence: "Confluence", seataccess.LaneSlack: "Slack",
-	seataccess.LaneMattermost: "Mattermost",
+	seataccess.LaneMattermost: "Mattermost", seataccess.LaneExpo: "Expo",
 }
 
 // githubGrantWords are GitHub's own words for a permission's grant.

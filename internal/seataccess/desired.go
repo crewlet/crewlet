@@ -106,6 +106,12 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 			return Desired{}, false
 		}
 		d = Desired{Enabled: config.SeatAccessOn(b.Enabled)}
+	case LaneExpo:
+		b := in.Expo
+		if b == nil {
+			return Desired{}, false
+		}
+		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault()}
 	case LaneGitHub:
 		b := in.GitHub
 		if b == nil {
@@ -174,6 +180,11 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 			in.Slack = &config.RoleSlack{}
 		}
 		in.Slack.Enabled = &on
+	case LaneExpo:
+		if in.Expo == nil {
+			in.Expo = &config.RoleExpo{}
+		}
+		in.Expo.Enabled, in.Expo.Level = &on, d.Level
 	case LaneGitHub:
 		if in.GitHub == nil {
 			in.GitHub = &config.RoleGitHub{}

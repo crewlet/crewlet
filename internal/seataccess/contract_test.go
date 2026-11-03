@@ -25,6 +25,7 @@ func TestDesiredRoundTripsThroughTheDocument(t *testing.T) {
 		seataccess.LaneConfluence: {Enabled: false, Level: "create:page read:space", Scope: []string{"ENG"}},
 		seataccess.LaneMattermost: {Enabled: true, Level: "system_user system_post_all", Scope: []string{"town-square"}},
 		seataccess.LaneSlack:      {Enabled: true},
+		seataccess.LaneExpo:       {Enabled: true, Level: "release_manager"},
 		seataccess.LaneGitHub: {Enabled: true, Scope: []string{"acme/api"},
 			Permissions: seataccess.Permissions{"contents": seataccess.AccessRead, "workflows": seataccess.AccessWrite}},
 	}
