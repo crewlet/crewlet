@@ -336,7 +336,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		servers = e.boxServers(ctx, company, l.seat, settings)
 	}
 
-	run := newCodingRun(agent, runEnv.env, runEnv.defaults)
+	run := newCodingRun(agent, runEnv)
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       cell,
 		Harness:         agent.Harness(),

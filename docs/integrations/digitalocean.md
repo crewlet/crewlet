@@ -101,6 +101,8 @@ An agent works with DigitalOcean two ways, each bounded by its token's scopes.
 
 **doctl, as itself.** doctl reads a token from `DIGITALOCEAN_ACCESS_TOKEN` in place of a login. Declare it in the seat's [`sandbox.env`](../concepts/code-sandbox.md#credentials-and-the-run-environment), pointing at the seat's own sealed token, as in the example above. The engine names no variable in a run of its own, so without this line the agent's container has no DigitalOcean token. While no token is pasted yet, a run waits for it rather than starting without it.
 
+The line is doctl's and never the agent's model sign-in. OpenCode reads `DIGITALOCEAN_ACCESS_TOKEN` as the key of its DigitalOcean model provider, so an agent whose executor runs on an OpenCode entry that signs in to DigitalOcean's models by that name (`DIGITALOCEAN_ACCESS_TOKEN` in the entry's `env`) cannot also have this line: in one box the model calls would be made with the agent's infrastructure token. Crewlet refuses the line then. Give that agent the MCP server below instead, or run its executor on an entry that signs in by another name. On any other entry the line is fine: the run's model is the entry's, and Crewlet never counts the agent's token as the run's sign-in.
+
 doctl must be in the box. Install the one release Crewlet pins, checked against the checksums file DigitalOcean publishes with it, with a setup step like [Recipe 1](../concepts/code-sandbox.md#bring-your-own-image) does for `gh`:
 
 ```yaml

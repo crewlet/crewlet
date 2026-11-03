@@ -1398,10 +1398,8 @@ func (p *Provider) MintsHeadlessToken() bool {
 }
 
 // CredentialEnvNames are the variables that authenticate this harness inside a
-// box: the headless token's and the API key's, the names it signs in by from an
-// entry's env, and, for a harness that reads its
-// model provider's key from its own environment — the credential-named
-// variables the entry's env sets.
+// box: its profile's list for this entry's env
+// ([harnessprofile.Profile.CredentialEnvNames]).
 //
 // Exported because the launch has to answer a question only it can — whether
 // ANYTHING in the run environment authenticates, including a value the
@@ -1409,28 +1407,7 @@ func (p *Provider) MintsHeadlessToken() bool {
 // variable of its own, so it cannot recognise a credential by inspection; what
 // it can do is ask the profile which names count and look for those.
 func (p *Provider) CredentialEnvNames() []string {
-	names := make([]string, 0, 2+len(p.profile.SignInEnv))
-	for _, name := range []string{p.profile.TokenEnv, p.profile.APIKeyEnv} {
-		if name != "" {
-			names = append(names, name)
-		}
-	}
-	// The names the profile signs in by from an entry's env
-	// ([harnessprofile.Profile.SignInEnv]): a cloud provider's switch or a
-	// gateway's token authenticates a box as surely as a key does.
-	for _, name := range p.profile.SignInEnv {
-		if !slices.Contains(names, name) {
-			names = append(names, name)
-		}
-	}
-	if p.profile.EnvSignIn {
-		for _, name := range slices.Sorted(maps.Keys(p.env)) {
-			if harnessprofile.IsCredentialName(name) && !slices.Contains(names, name) {
-				names = append(names, name)
-			}
-		}
-	}
-	return names
+	return p.profile.CredentialEnvNames(p.env)
 }
 
 // SignsInThroughEnv reports whether this harness reads its model provider's key

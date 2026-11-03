@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -35,6 +36,16 @@ import (
 // refused: that is one seat reading another's identity, or the company's. A
 // seat's own sealed names stay readable everywhere in its own entry, which is
 // how its executor box reaches its own GitLab token for git.
+//
+// AND IN ITS BOX, NEVER UNDER A NAME ITS EXECUTOR SIGNS IN BY. A box CLI reads
+// the seat's credential from a variable the seat's box sets (doctl's
+// DIGITALOCEAN_ACCESS_TOKEN, glab's GITLAB_TOKEN), and the seat's executor
+// harness runs in the same environment. A harness that reads its model
+// provider's key from its environment reads those very names (OpenCode keys
+// its DigitalOcean and GitLab providers by them), so a seat whose executor
+// entry signs in by one would make every model call with the seat's tool
+// credential: the second reader this file exists to refuse
+// ([Company.validateSeatSignIns]).
 //
 // ADMISSION RULES like the rest of roleaccessrules.go; the access sync holds
 // the same line again at the vendor (internal/seataccess).
@@ -303,4 +314,113 @@ func (c *Company) validateSeatCredentials(refs VariableReferences) error {
 // allOwn reports whether every name is one of handle's own sealed names.
 func allOwn(names []string, handle string, owners map[string]string) bool {
 	return !slices.ContainsFunc(names, func(n string) bool { return owners[n] != handle })
+}
+
+// SeatCredentialVariables is every variable the agent seat with handle keeps
+// one of its own vendor credentials in, by the rules above: its sealed names,
+// which the engine writes in engine mode, and every variable its own
+// credential positions name (its `mcp_env` block for an integration, its role
+// credential fields), where somebody outside Crewlet holds the account. Empty
+// for a human seat and a handle no seat holds.
+//
+// A value of the seat's box that references one is the seat's credential for a
+// tool, which never signs its executor's harness in: config refuses it under a
+// name the executor signs in by ([Company.validateSeatSignIns]), and a launch
+// judges a run's sign-in without it (internal/engine).
+func (c *Company) SeatCredentialVariables(handle string) map[string]bool {
+	for role := range c.EachRole() {
+		if role.Kind != org.KindHuman && handle != "" && role.IdentityKey() == handle {
+			return role.credentialVariables()
+		}
+	}
+	return map[string]bool{}
+}
+
+// credentialVariables is [Company.SeatCredentialVariables] for the agent seat
+// r.
+func (r *Role) credentialVariables() map[string]bool {
+	handle := r.IdentityKey()
+	out := map[string]bool{}
+	for _, kind := range SeatCredentialKinds() {
+		for _, field := range SeatSealedFields(kind) {
+			out[envref.SealedName(kind, field, handle)] = true
+		}
+	}
+	for server, block := range r.MCPEnv {
+		if _, managed := credentialKindOf(server); !managed {
+			continue
+		}
+		for _, value := range block {
+			for _, name := range envref.Names(value) {
+				out[name] = true
+			}
+		}
+	}
+	for _, pos := range r.credentialPositions() {
+		for _, name := range envref.Names(pos.value) {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// validateSeatSignIns refuses a value of an agent seat's own box settings that
+// carries one of the seat's credentials ([Company.SeatCredentialVariables])
+// under a name a member of its executor chain signs its harness in by
+// ([harnessprofile.Profile.CredentialEnvNames]).
+//
+// EVERY MEMBER THAT CAN RUN THE EXECUTOR, not the head's alone: a launch falls
+// back down the chain ([Company.runners]), and the member it lands on runs in
+// the box this seat's settings fill. A member whose profile does not load is
+// skipped here, because that entry is refused where it is written
+// ([LLMProvider.validateCredentials]) and names no sign-in to compare.
+func (c *Company) validateSeatSignIns() error {
+	var p problems
+	for seat := range c.executorSeats() {
+		box := seat.role.Sandbox
+		if box == nil {
+			continue
+		}
+		signs := map[string]string{}
+		for _, key := range c.runners(seat.chain) {
+			provider := c.Providers.LLM[key]
+			profile, err := harnessprofile.Load(provider.HarnessName(), provider.Overrides)
+			if err != nil {
+				continue
+			}
+			for _, name := range profile.CredentialEnvNames(provider.Env) {
+				if _, seen := signs[name]; !seen {
+					signs[name] = key
+				}
+			}
+		}
+		mine := seat.role.credentialVariables()
+		check := func(here Path, name, value string) {
+			key, signsIn := signs[name]
+			if !signsIn {
+				return
+			}
+			i := slices.IndexFunc(envref.Names(value), func(ref string) bool { return mine[ref] })
+			if i < 0 {
+				return
+			}
+			provider := c.Providers.LLM[key]
+			p.add(here, ErrConflict,
+				"%s hands a tool in this agent's box its own credential ${%s}, and providers.llm.%s, "+
+					"which runs this agent's executor on the %q harness, signs in by %s: the harness "+
+					"would make its model calls with the agent's tool credential. Remove this line and "+
+					"reach the tool through its MCP server, or run this agent's executor on an entry "+
+					"that does not sign in by %s",
+				name, envref.Names(value)[i], key, provider.HarnessName(), name, name)
+		}
+		for _, name := range sortedKeys(box.Env) {
+			check(entry(at(seat.path, "sandbox.env"), name), name, box.Env[name])
+		}
+		for i, step := range box.Setup {
+			for _, name := range sortedKeys(step.Env) {
+				check(entry(at(idx(at(seat.path, "sandbox.setup"), i), "env"), name), name, step.Env[name])
+			}
+		}
+	}
+	return p.err()
 }

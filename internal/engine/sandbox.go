@@ -348,6 +348,13 @@ type runEnv struct {
 	// sign-in ([newCodingRun]).
 	defaults map[string]string
 
+	// tools is the names of env that hand a tool in the box one of the
+	// seat's own vendor credentials ([config.Company.SeatCredentialVariables]),
+	// doctl's DIGITALOCEAN_ACCESS_TOKEN set to the seat's sealed token: in the
+	// box like the rest of env, and never judged as a sign-in
+	// ([newCodingRun]).
+	tools []string
+
 	// setup is the provider-wide steps then the seat's own, every file's
 	// body read as the content it is.
 	setup []sandbox.SetupStep
@@ -395,7 +402,9 @@ type runEnv struct {
 // then the setup steps' contributions, then the seat's own env, so an
 // operator's explicit value always beats a step's default. The integrations'
 // defaults are returned apart (runEnv.defaults), for the launch to lay beneath
-// the entry's env as well ([newCodingRun]).
+// the entry's env as well ([newCodingRun]), and the names whose value hands a
+// tool one of the seat's own vendor credentials are named apart (runEnv.tools),
+// for the launch to keep out of the run's sign-in.
 //
 // RESOLVED EXACTLY ONCE, here, at launch — not at load. These values are
 // where an operator declares a code-host token, and Tier B stores its
@@ -477,6 +486,10 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	}
 	gap := refGap{env: resolver, mint: mint}
 	facts := refGap{env: resolver, mint: mint}
+	var mine map[string]bool
+	if c != nil {
+		mine = c.Config.SeatCredentialVariables(seat.Handle())
+	}
 	out := runEnv{env: make(map[string]string, len(merged))}
 	for _, key := range slices.Sorted(maps.Keys(merged)) {
 		l := merged[key]
@@ -486,6 +499,9 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 			out.env[key] = resolver.Value(l.value)
 			if !l.fact {
 				out.secrets = append(out.secrets, referencedValues(resolver, l.value)...)
+			}
+			if slices.ContainsFunc(envref.Names(l.value), func(name string) bool { return mine[name] }) {
+				out.tools = append(out.tools, key)
 			}
 		case l.fact:
 			facts.hold(key, missing, false, "", false)
@@ -3655,9 +3671,9 @@ type codingRun struct {
 }
 
 // newCodingRun is the [codingRun] of a box run on agent, the executor-chain
-// member the launch picked ([agentLauncher.member]), over seatEnv, the
+// member the launch picked ([agentLauncher.member]), over seat, the
 // environment the seat's own config assembled ([Engine.runEnvironment]), with
-// boxDefaults, the integrations' box settings, beneath everything.
+// its integrations' box settings beneath everything.
 //
 // ONE CONSTRUCTION for a seat's executor run and the Dashboard Assistant's
 // deep work on its own entry ([assistantDeep.Run]), which brings no seat
@@ -3668,7 +3684,7 @@ type codingRun struct {
 // and its env and sign-in, which that harness reads, are always ones the runner can
 // use — and a launch that fell back past the head runs on the member it fell
 // back to, with that member's environment and login rather than the head's.
-func newCodingRun(agent *harness.Provider, seatEnv, boxDefaults map[string]string) codingRun {
+func newCodingRun(agent *harness.Provider, seat runEnv) codingRun {
 	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE HARNESS IT IS
 	// WRITTEN FOR. An entry's model is in that harness's own grammar — OpenCode
 	// reads `<provider>/<model>`, Claude Code an alias — so the run is handed
@@ -3680,12 +3696,27 @@ func newCodingRun(agent *harness.Provider, seatEnv, boxDefaults map[string]strin
 	// URL in the entry's env names, which the run environment carries — a
 	// provider the engine declared beside it would shadow the one the model
 	// names.
+	// THE SEAT'S OWN VENDOR CREDENTIALS IN ITS BOX ARE A TOOL'S, NEVER A
+	// SIGN-IN ([config.Company.SeatCredentialVariables]): in the box with the
+	// rest of the seat's env, winning a name over the entry's as every line of
+	// it does, and out of every sign-in judgment. OpenCode reads any
+	// credential-named variable as a provider's key, so judged with them, the
+	// agent's DigitalOcean token handed to doctl passed a remote run that had
+	// no model key at all; and for a harness whose seat signs it in itself, a
+	// tool's token named like a sign-in would strip the entry's ([entryEnv]).
+	// Config refuses one under a name the harness signs in by, so in the box
+	// it never stands in for the entry's sign-in either.
+	own := maps.Clone(seat.env)
+	for _, name := range seat.tools {
+		delete(own, name)
+	}
+	entry := entryEnv(agent, own)
+	signIn := underlay(own, entry)
 	// THE INTEGRATIONS' BOX DEFAULTS LOWEST OF ALL, beneath the entry's env
 	// too, and out of every sign-in judgment: a cloud CLI's region or token
 	// file must never override, strip or stand in for the harness's sign-in.
-	signIn := underlay(seatEnv, entryEnv(agent, seatEnv))
-	defaults := make(map[string]string, len(boxDefaults))
-	for name, value := range boxDefaults {
+	defaults := make(map[string]string, len(seat.defaults))
+	for name, value := range seat.defaults {
 		// A HARNESS'S OWN SIGN-IN NAME IS NEVER AN INTEGRATION'S TO SET: a
 		// cloud toggle or a token under it would switch or replace the sign-in.
 		if !slices.Contains(agent.CredentialEnvNames(), name) {
@@ -3694,7 +3725,7 @@ func newCodingRun(agent *harness.Provider, seatEnv, boxDefaults map[string]strin
 	}
 	run := codingRun{
 		model:  agent.ModelArgument(),
-		env:    underlay(maps.Clone(signIn), defaults),
+		env:    underlay(underlay(maps.Clone(seat.env), entry), defaults),
 		signIn: signIn,
 		files:  agent.SandboxCredentials(),
 	}

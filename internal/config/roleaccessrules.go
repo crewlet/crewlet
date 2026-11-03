@@ -30,7 +30,8 @@ import (
 //   - a scope wider than the company's reach, so a seat cannot widen it, and
 //     no scope at all on a lane whose agents must name one;
 //   - a seat credential written where the engine owns it, shared with a
-//     company block or another seat, or reading another seat's
+//     company block or another seat, reading another seat's, or handed to a
+//     tool in the seat's box under a name its executor signs in by
 //     (seatcredentialrules.go).
 
 // seatAccessOnHuman is the refusal of a per-seat access block on a human seat.
@@ -42,7 +43,7 @@ func (c *Company) validateSeatAccess() error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(c.validateSeatBlocks(), c.validateSeatCredentials(refs))
+	return errors.Join(c.validateSeatBlocks(), c.validateSeatCredentials(refs), c.validateSeatSignIns())
 }
 
 // validateSeatBlocks checks every seat's per-integration blocks.

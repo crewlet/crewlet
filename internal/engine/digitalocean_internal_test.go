@@ -3,13 +3,17 @@ package engine
 import (
 	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -131,5 +135,49 @@ func TestADigitalOceanPasteIsRefusedForASeatNotWaiting(t *testing.T) {
 	}
 	if _, err := api.HandIn(t.Context(), q, "qa", lane, "fake-token", by); !errors.Is(err, setupapi.ErrNotAwaitingHandIn) {
 		t.Errorf("a seat off at DigitalOcean = %v", err)
+	}
+}
+
+// THE SEAT'S DIGITALOCEAN TOKEN IS DOCTL'S, NEVER OPENCODE'S SIGN-IN. OpenCode
+// reads DIGITALOCEAN_ACCESS_TOKEN as its DigitalOcean provider's key, so the
+// agent's token, handed to doctl in its box, reaches the box but is judged out
+// of the run's sign-in: an OpenCode seat with no model key of its own is
+// refused a remote box rather than launched on the agent's infrastructure
+// token. Mutation: judge the sign-in on the seat's whole env, and the run is
+// launched.
+func TestADigitalOceanTokenInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
+	t.Parallel()
+	c := specCompany(t, strings.Replace(digitaloceanRunDoc, "    zulu:\n      model: claude-sonnet-5\n",
+		"    zulu:\n      harness: opencode\n      model: openrouter/qwen\n", 1))
+	e := &Engine{}
+	e.secretsMu.Lock()
+	e.installSecrets(map[string]string{"DIGITALOCEAN_TOKEN_SRE": "fake-digitalocean-seat-token"})
+	e.secretsMu.Unlock()
+
+	seat := c.Org.AgentSeatByHandle("sre")
+	run := e.runEnvironment(t.Context(), c, seat, seatSandbox(c, "sre"), nil, nil)
+	if !slices.Equal(run.tools, []string{"DIGITALOCEAN_ACCESS_TOKEN"}) {
+		t.Fatalf("tools = %v, want doctl's variable alone", run.tools)
+	}
+	member, err := c.Models.Head(seat, phase.Execute)
+	if err != nil {
+		t.Fatalf("executor chain: %v", err)
+	}
+	agent := member.Provider.(*harness.Provider)
+	if !agent.SignsInThroughEnv() {
+		t.Fatal("the entry is not OpenCode, so this case tests nothing")
+	}
+	coding := newCodingRun(agent, run)
+	if coding.env["DIGITALOCEAN_ACCESS_TOKEN"] != "fake-digitalocean-seat-token" {
+		t.Errorf("doctl's token did not reach the box: %v", coding.env)
+	}
+	if _, present := coding.signIn["DIGITALOCEAN_ACCESS_TOKEN"]; present {
+		t.Error("the agent's DigitalOcean token is judged as part of the run's sign-in")
+	}
+	if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, coding.env); err != nil {
+		t.Fatalf("the token is not credential-named, so this case tests nothing: %v", err)
+	}
+	if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, coding.signIn); err == nil {
+		t.Error("the agent's DigitalOcean token signed OpenCode in to a remote box")
 	}
 }
