@@ -41,7 +41,14 @@ import type {
   GitHubAccess,
 } from "~/contract/access.ts";
 import { marked } from "~/ui/Problems.tsx";
-import { accessApi, isStale, refusalWords, type AccessDraft } from "./api.ts";
+import {
+  accessApi,
+  isStale,
+  placedRefusal,
+  refusalWords,
+  type AccessDraft,
+  type PlacedRefusal,
+} from "./api.ts";
 import { lanesOf, levelName, levelsHeading, scopeApplies, scopeWords, type Lane } from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
@@ -163,6 +170,7 @@ export function ReviewDialog({
   onClose,
   onSaved,
   onStale,
+  onRefused,
 }: {
   kind: string;
   name: string;
@@ -170,6 +178,8 @@ export function ReviewDialog({
   draft: AccessDraft;
   onClose: () => void;
   onSaved: (answer: AccessAnswer) => void;
+  /** A refusal about one seat's control, which the tab draws beside that control. */
+  onRefused: (refusal: PlacedRefusal) => void;
   /**
    * The document moved since the tab read it, said by a refused save or by a
    * plan drawn from a newer revision: read again, keeping the draft.
@@ -196,6 +206,14 @@ export function ReviewDialog({
     asked.current = drawnFrom;
     onStale();
   });
+  // A REFUSAL ABOUT ONE SEAT'S CONTROL goes back to the tab, beside it;
+  // any other stays here, where the save was asked for.
+  const refused = (err: unknown) => {
+    const placed = placedRefusal(err);
+    if (placed) onRefused(placed);
+    else setError(refusalWords(err));
+  };
+  const planRefused = useEffectEvent(refused);
   useEffect(() => {
     let live = true;
     setPlan(null);
@@ -206,7 +224,7 @@ export function ReviewDialog({
         if (p.revision !== revision) moved(p.revision);
       },
       (err: unknown) => {
-        if (live) setError(refusalWords(err));
+        if (live) planRefused(err);
       },
     );
     return () => {
@@ -266,7 +284,7 @@ export function ReviewDialog({
               try {
                 onSaved(await accessApi.save(kind, draft, data.revision));
               } catch (err) {
-                setError(refusalWords(err));
+                refused(err);
                 setSaving(false);
                 if (isStale(err)) onStale();
               }

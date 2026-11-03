@@ -723,6 +723,8 @@ var contract = []Entry{
 	{"AccessPermission", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessSeat", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessSeatLane", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessBox", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessBoxLine", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessDesired", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessObserved", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessCredential", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
@@ -736,6 +738,7 @@ var contract = []Entry{
 	{"AccessPlanAnswer", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessSeatPlan", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessInstallLink", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessRefusal", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessLaneKey", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"GitHubAccess", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessSeatAction", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
@@ -748,6 +751,7 @@ var contract = []Entry{
 	{"AccessCredentialSource", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessManaged", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessManagedBy", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
+	{"AccessRefusalField", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 }
 
 // Contract is every declaration the engine's gates read out of the

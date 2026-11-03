@@ -621,6 +621,7 @@ func (p *cloudflarePass) run(ctx context.Context, _ setup.PassInput) ([]integrat
 	res, err := cloudflare.Reconcile(ctx, cloudflare.Options{
 		Client: client, Config: cfg, Company: company.Config.Name,
 		Managed: slices.Collect(maps.Values(held)),
+		InUse:   seataccess.LevelsInUse(company.Config, seataccess.LaneCloudflare),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: cloudflare pass: %w", err)

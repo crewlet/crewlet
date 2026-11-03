@@ -47,7 +47,7 @@
 # under this repository's identity, with no change anybody reviewed. The digest
 # is what Dependabot's `docker` entry moves, so a new base arrives as a
 # `build(deps)` pull request, which release.yml's snapshot job builds.
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 
 # ca-certificates: every vendor call is HTTPS, and a container with no trust
 # store fails them all with an error that names the certificate rather than

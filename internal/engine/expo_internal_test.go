@@ -64,7 +64,7 @@ func TestAnExpoSeatsTokenReachesItsBoxAsExpoToken(t *testing.T) {
 
 	seat := c.Org.AgentSeatByHandle("qa")
 	settings := seatSandbox(c, "qa")
-	run := e.runEnvironment(t.Context(), c, seat, settings, nil)
+	run := e.runEnvironment(t.Context(), c, seat, settings, nil, nil)
 	if run.gap == nil || !run.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run waiting for the expo integration", run.gap)
 	}
@@ -78,7 +78,7 @@ func TestAnExpoSeatsTokenReachesItsBoxAsExpoToken(t *testing.T) {
 	e.secretsMu.Lock()
 	e.installSecrets(map[string]string{"EXPO_TOKEN_QA": "fake-expo-seat-token"})
 	e.secretsMu.Unlock()
-	run = e.runEnvironment(t.Context(), c, seat, settings, nil)
+	run = e.runEnvironment(t.Context(), c, seat, settings, nil, nil)
 	if run.gap != nil || run.env["EXPO_TOKEN"] != "fake-expo-seat-token" {
 		t.Fatalf("env = %v, gap = %+v: want the sealed token as EXPO_TOKEN", run.env, run.gap)
 	}

@@ -11,6 +11,7 @@
 
 import type {
   AccessAnswer,
+  AccessBoxLine,
   AccessDesired,
   AccessLaneKey,
   AccessObserved,
@@ -19,6 +20,7 @@ import type {
   GitHubAccess,
 } from "~/contract/access.ts";
 import { plural, relTime } from "~/lib/format.ts";
+import { andList } from "~/lib/words.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
 type Tone = "success" | "neutral" | "warning" | "danger" | "info";
@@ -219,12 +221,13 @@ export function productOnly(lane: Lane, id: string | undefined): string | null {
 }
 
 /**
- * Whether a seat's scope is offered: never on a lane managed outside Crewlet,
- * and not with product access only, unless a list is already held there
- * (which the document refuses), so it can be cleared.
+ * Whether a seat's scope is offered: only on a lane that narrows by scope,
+ * never on one managed outside Crewlet, and not with product access only,
+ * unless a list is already held there (which the document refuses), so it
+ * can be cleared.
  */
 export function scopeApplies(lane: Lane, want: AccessDesired): boolean {
-  if (lane.scope === undefined || managedOutside(lane)) return false;
+  if (!lane.scoped || managedOutside(lane)) return false;
   return productOnly(lane, want.level) === null || (want.scope ?? []).length > 0;
 }
 
@@ -260,6 +263,29 @@ export function refusedLevel(lane: Lane, want: AccessDesired): string | null {
 }
 
 /**
+ * The scope a seat takes as it is turned on, or undefined: on a lane where an
+ * empty scope reaches nothing, the one entry a list read just now holds, so a
+ * person need not pick the only one there is.
+ */
+export function onlyScope(lane: Lane, want: AccessDesired): string[] | undefined {
+  if (!lane.scope_required || !lane.scope_live || want.enabled) return undefined;
+  if ((want.scope ?? []).length > 0 || lane.scope?.length !== 1) return undefined;
+  return [...lane.scope];
+}
+
+/**
+ * Why a seat's scope cannot be saved, or null, in the engine's words for the
+ * same refusal: on a lane where an empty scope reaches nothing
+ * (`scope_required`), the agent `who` turned on with none.
+ */
+export function refusedScope(lane: Lane, want: AccessDesired, who: string): string | null {
+  if (!lane.scope_required || !want.enabled || managedOutside(lane)) return null;
+  if ((want.scope ?? []).length > 0) return null;
+  const singular = laneWords(lane.key).scope?.singular ?? "entry";
+  return `Choose at least one ${singular} for ${who}: an agent in no ${singular} can reach nothing.`;
+}
+
+/**
  * The empty level's note under a seat on a lane of sets that holds it, where
  * the multi-select has no menu row to carry it, or null.
  */
@@ -288,12 +314,49 @@ export function accessWords(lane: Lane, o: AccessObserved): string {
   return laneWords(lane.key).fixed ?? levelName(lane, o.level);
 }
 
+/** How a person reads one scope entry: the vendor's name for it, else the identifier stored. */
+export function scopeLabel(lane: Lane, id: string): string {
+  return lane.scope_names?.[id] ?? id;
+}
+
 /** A seat's scope as a sentence fragment: "gophrase/backend and gophrase/web", or the lane's empty words. */
 export function scopeWords(lane: Lane, scope: string[] | undefined): string {
+  if (!scope || scope.length === 0) return laneWords(lane.key).scope?.empty ?? "None";
+  return andList(scope.map((id) => scopeLabel(lane, id)));
+}
+
+/** One entry a scope picker offers: the vendor's name, with the identifier beneath where they differ. */
+export interface ScopeChoice {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+/**
+ * What a seat's scope picker offers: every entry the connection reaches, then
+ * any the seat holds that it no longer reaches (a project deleted at the
+ * vendor), so a person can clear it.
+ */
+export function scopeChoices(lane: Lane, held: string[] | undefined): ScopeChoice[] {
+  const ids = [...(lane.scope ?? [])];
+  for (const id of held ?? []) if (!ids.includes(id)) ids.push(id);
+  return ids.map((id) => {
+    const label = scopeLabel(lane, id);
+    return label === id ? { value: id, label } : { value: id, label, description: id };
+  });
+}
+
+/**
+ * What a scope picker says where it has nothing to offer, or null where it
+ * offers something or takes typed entries (`scope_open`): the vendor's list
+ * could not be read, or it was read and holds nothing.
+ */
+export function scopeUnavailable(lane: Lane, held: string[] | undefined): string | null {
+  if (lane.scope_open || scopeChoices(lane, held).length > 0) return null;
   const words = laneWords(lane.key).scope;
-  if (!scope || scope.length === 0) return words?.empty ?? "None";
-  if (scope.length === 1) return scope[0]!;
-  return `${scope.slice(0, -1).join(", ")} and ${scope[scope.length - 1]}`;
+  const noun = (words?.noun ?? "Scope").toLowerCase();
+  if (!lane.scope_live) return `Crewlet could not read your ${noun}`;
+  return words?.none ?? `No ${noun} to choose from`;
 }
 
 export interface Status {
@@ -331,10 +394,25 @@ export function needsAttention(status: Status): boolean {
   return status.tone === "danger" || status.tone === "warning";
 }
 
+/** The lines a person adds to a seat's box for its CLI, as the engine sends them. */
+export function boxLines(saved: AccessSeatLane): AccessBoxLine[] {
+  return (saved.box?.env ?? []).filter((line) => line.by === "you");
+}
+
+/** The settings Crewlet puts in a seat's box itself, by name, or null where it puts none. */
+export function boxSettings(saved: AccessSeatLane): string | null {
+  const names = (saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name);
+  return names.length > 0 ? andList(names) : null;
+}
+
 /** The tool, as one value: whether it works, and what it works through. */
 export function toolWords(lane: Lane, saved: AccessSeatLane): string {
-  const words = laneWords(lane.key);
-  const through = words.tool;
+  const names = andList(boxLines(saved).map((line) => line.name));
+  const through = names ? `${laneWords(lane.key).tool}, as ${names}` : laneWords(lane.key).tool;
+  const server = lane.tool_server ? `${lane.tool_server} tool server` : "tool server";
+  // A LANE WITH BOTH ROUTES is live through either, so a seat with neither is
+  // told both, the server first.
+  const andBox = names ? `, and its sandbox env does not set ${names}` : "";
   switch (saved.tool) {
     case "live":
       return `Live, ${through}`;
@@ -343,11 +421,11 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
     case "waiting":
       return `Waiting for the credential, ${through}`;
     case "no_server":
-      return words.boxEnv
-        ? `Not set up: its sandbox env does not set ${words.boxEnv.name}`
-        : `Not set up: no ${words.server} tool server is declared`;
+      return names && !lane.tool_server
+        ? `Not set up: its sandbox env does not set ${names}`
+        : `Not set up: no ${server} is declared${andBox}`;
     case "server_off":
-      return `Not running: the ${words.server} tool server is turned off`;
+      return `Not running: the ${server} is turned off${andBox}`;
     case "off":
       return "None while off";
   }
@@ -355,15 +433,35 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
 
 /**
  * What agents with an account and no tool lack, and how to give them one, said
- * once above the table after "... nothing to use it with: ".
+ * once above the table after "... nothing to use it with: ". A box tool's
+ * remedy is each agent's own lines, exactly as the engine sends them; a lane
+ * with a tool server too offers the server first.
  */
-export function noToolRemedy(laneKey: string): string {
-  const words = laneWords(laneKey);
-  if (words.boxEnv) {
-    const { name, value } = words.boxEnv;
-    return `its sandbox env does not set ${name}. Add ${name}: "${value}" to each agent's sandbox.env in the company document, and its tool signs in as the agent.`;
-  }
-  return `the company declares no ${words.server} tool server. Add it under Settings › MCP & tools as one instance per agent, and each agent's own credential is sent with it.`;
+export function noToolRemedy(
+  lane: Lane,
+  seats: readonly { name: string; saved: AccessSeatLane }[],
+): string {
+  const server = lane.tool_server;
+  const where = "under Settings › MCP & tools as one instance per agent";
+  const boxed = seats.filter((s) => boxLines(s.saved).length > 0);
+  if (boxed.length === 0)
+    return server
+      ? `the company declares no ${server} tool server. Add it ${where}, and each agent's own credential is sent with it.`
+      : `the company declares no tool server for it. Add one ${where}, and each agent's own credential is sent with it.`;
+  const one = boxed.length === 1 ? boxed[0]! : null;
+  const lines = (s: (typeof boxed)[number]) =>
+    andList(boxLines(s.saved).map(({ name, value }) => `${name}: "${value}"`));
+  const names = andList([...new Set(boxed.flatMap((s) => boxLines(s.saved).map((l) => l.name)))]);
+  const unset = `${one ? "its" : "their"} sandbox env does not set ${names}`;
+  const lineup = one
+    ? `${lines(one)} to ${one.name}'s sandbox.env in the company document`
+    : `each agent's own lines to its sandbox.env in the company document: ${boxed
+        .map((s) => `${s.name}, ${lines(s)}`)
+        .join("; ")}`;
+  const signsIn = one ? "its tool signs in as the agent" : "each tool signs in as its agent";
+  return server
+    ? `the company declares no ${server} tool server, and ${unset}. Add the ${server} tool server ${where}, or add ${lineup}. Either way ${signsIn}.`
+    : `${unset}. Add ${lineup}. Then ${signsIn}.`;
 }
 
 /** The last sync, as one value. */
@@ -416,13 +514,16 @@ export function widensPermissions(
 
 /**
  * The quiet hint under a seat that is on with an empty scope, where an empty
- * scope is literal (Mattermost: no channels), or null.
+ * scope is literal (Mattermost: no channels) or refused (`scope_required`),
+ * or null.
  */
 export function emptyScopeHint(lane: Lane, want: AccessDesired): string | null {
-  const hint = laneWords(lane.key).scope?.emptyOn;
-  return hint && !managedOutside(lane) && want.enabled && (want.scope ?? []).length === 0
-    ? hint
-    : null;
+  if (managedOutside(lane) || !want.enabled || (want.scope ?? []).length > 0) return null;
+  const words = laneWords(lane.key).scope;
+  if (words?.emptyOn) return words.emptyOn;
+  if (!lane.scope_required) return null;
+  const noun = (words?.noun ?? "scope").toLowerCase();
+  return `Not in any ${words?.singular ?? "entry"} yet, so it can reach nothing. Choose its ${noun}.`;
 }
 
 /**
