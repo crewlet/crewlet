@@ -482,12 +482,12 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 		o := base[lane]
 		if registered {
 			if spec, ok := vendor.Catalog().Lane(lane); ok {
-				o.Rotatable = spec.Rotatable
+				o.Rotatable, o.Releasable = spec.Rotatable, spec.Releasable
 			}
 		}
 		if session != nil {
 			if live, err := session.Options(openCtx, lane); err == nil {
-				live.Rotatable = o.Rotatable
+				live.Rotatable, live.Releasable = o.Rotatable, o.Releasable
 				o = live
 			} else {
 				whole = false
@@ -497,7 +497,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 		}
 		o.Lane = lane
 		if !provisioned {
-			o.Managed, o.Rotatable = seataccess.ManagedExternal, false
+			o.Managed, o.Rotatable, o.Releasable = seataccess.ManagedExternal, false, false
 		}
 		out = append(out, o)
 	}

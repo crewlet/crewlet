@@ -749,6 +749,7 @@ func TestKeepingAnAccountAtTheVendorClosesOnlyADeleteWait(t *testing.T) {
 	const path = "/setup/integrations/expo/access/seats/qa/expo/release"
 	s := newSurface(t)
 	s.seedDocument(t, expoCompany)
+	s.access.options = []seataccess.Options{{Lane: seataccess.LaneExpo, Releasable: true}}
 	if res := s.do(t, http.MethodPost, path, `{}`, nil); res.Code != http.StatusConflict {
 		t.Fatalf("a release with nothing waiting = %d %s, want 409", res.Code, res.Body)
 	}
@@ -766,6 +767,16 @@ func TestKeepingAnAccountAtTheVendorClosesOnlyADeleteWait(t *testing.T) {
 	sync := s.access.lastSync(t)
 	if len(sync.Asks) != 1 || !sync.Asks[0].Ask.Release || sync.Asks[0].Ask.Lane != seataccess.LaneExpo {
 		t.Errorf("the release's sync = %+v, want the person's release on the lane", sync)
+	}
+
+	// A LANE THAT KEEPS ONLY A CREDENTIAL offers no keeping, waiting or not.
+	syncs := len(s.access.syncs)
+	s.access.options = []seataccess.Options{{Lane: seataccess.LaneExpo}}
+	if res := s.do(t, http.MethodPost, path, `{}`, nil); res.Code != http.StatusConflict {
+		t.Fatalf("a release on a lane that is not releasable = %d %s, want 409", res.Code, res.Body)
+	}
+	if len(s.access.syncs) != syncs {
+		t.Error("a refused release ran a sync")
 	}
 }
 

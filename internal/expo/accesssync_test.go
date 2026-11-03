@@ -458,6 +458,9 @@ func TestAnExpoSeatTurnedBackOnForgetsTheRetiredToken(t *testing.T) {
 func TestKeepingAnExpoRobotClosesItsDeleteStep(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, "")
+	if spec, _ := w.vendor.Catalog().Lane(seataccess.LaneExpo); !spec.Releasable {
+		t.Fatal("Expo's lane does not offer keeping its robot")
+	}
 	_, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
 	if _, err := w.paste(tok.value); err != nil {
 		t.Fatal(err)

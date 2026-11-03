@@ -373,7 +373,8 @@ type Retired struct {
 	// name), drawn as it is.
 	Label string `json:"label"`
 
-	// Since is when the vendor says it was created, where it says.
+	// Since is when it was created at the vendor, as near as Crewlet knows:
+	// the vendor's own date, or when a person handed it in.
 	Since time.Time `json:"since,omitzero"`
 }
 

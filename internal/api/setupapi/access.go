@@ -772,8 +772,15 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 		}
 		ask.Reenable = true
 	case seataccess.ActionRelease:
-		// ONLY A STEP WAITING FOR THE ACCOUNT'S DELETION is closed by
-		// keeping it: the person's choice, recorded below.
+		// ONLY A LANE WHOSE ACCOUNT IS WORTH KEEPING, and only a step waiting
+		// for its deletion: the person's choice, recorded below.
+		if !offerOf(current, lane).Releasable {
+			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+				"detail": string(lane) + " keeps nothing at the vendor a person may choose to keep",
+				"hint":   "delete the old credential at the vendor; the row clears once it stops working",
+			})
+			return
+		}
 		if sync := held.Sync; sync == nil || sync.Outcome != seataccess.OutcomeWaiting ||
 			sync.Error == nil || sync.Error.Step != seataccess.VerbRemove {
 			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{

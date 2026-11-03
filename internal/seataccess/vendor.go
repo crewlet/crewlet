@@ -345,6 +345,12 @@ type LaneSpec struct {
 	// reinstall.
 	Rotatable bool
 
+	// Releasable is whether a person may keep at the vendor an account a
+	// step waits for them to delete ([ActionRelease]): an Expo robot keeps
+	// its builds' author. False where what is kept is only a credential,
+	// which would stay live and unwatched.
+	Releasable bool
+
 	// BoxEnv is the variable a CLI in the seat's executor box reads the
 	// lane's credential from (Expo's EXPO_TOKEN); empty where its tool is a
 	// server. The seat's own box settings set it to the sealed name.
@@ -389,6 +395,10 @@ type Options struct {
 	// Rotatable is whether a person can ask for a seat's credential on this
 	// lane to be rotated ([LaneSpec.Rotatable]).
 	Rotatable bool `json:"rotatable,omitempty"`
+
+	// Releasable is whether a person may keep the account at the vendor
+	// rather than delete it ([LaneSpec.Releasable]).
+	Releasable bool `json:"releasable,omitempty"`
 
 	// ActionURL is where a person takes the lane's [ByYou] steps at the
 	// vendor, which each such step drawn without one of its own carries.
