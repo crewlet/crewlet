@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -86,10 +87,21 @@ func (w *syncWorld) syncAsking(asks map[string]seataccess.Ask) seataccess.SyncRe
 
 func (w *syncWorld) sync() seataccess.SyncReport { return w.syncAsking(nil) }
 
-// paste is the paste route's work: the check, then the seat's sync carrying
-// the value.
+// paste is the paste route's work for qa.
 func (w *syncWorld) paste(value string) (seataccess.HandedIn, error) {
 	w.t.Helper()
+	return w.pasteFor("qa", value)
+}
+
+// pasteFor is the paste route's work for one seat: the check, then the seat's
+// sync carrying the value.
+func (w *syncWorld) pasteFor(handle, value string) (seataccess.HandedIn, error) {
+	w.t.Helper()
+	i := slices.IndexFunc(w.company.Roles, func(r config.Role) bool { return r.Handle == handle })
+	if i < 0 {
+		w.t.Fatalf("no seat %s", handle)
+	}
+	role := &w.company.Roles[i]
 	sess, err := w.vendor.Open(context.Background(), w.open())
 	if err != nil {
 		w.t.Fatal(err)
@@ -99,18 +111,18 @@ func (w *syncWorld) paste(value string) (seataccess.HandedIn, error) {
 		w.t.Fatal(err)
 	}
 	var rec *seataccess.Record
-	if r, ok := records["qa"]; ok {
+	if r, ok := records[handle]; ok {
 		rec = &r
 	}
-	want, _ := seataccess.DesiredOf(&w.company.Roles[0], seataccess.LaneExpo)
+	want, _ := seataccess.DesiredOf(role, seataccess.LaneExpo)
 	handed, err := sess.(seataccess.HandsIn).CheckHandIn(context.Background(), seataccess.HandInInput{
-		Seat: seataccess.SeatRef{Handle: "qa", Name: "QA"}, Lane: seataccess.LaneExpo, Want: want,
+		Seat: seataccess.SeatRef{Handle: handle, Name: role.Name}, Lane: seataccess.LaneExpo, Want: want,
 		Record: rec, Records: records, Value: value,
 	})
 	if err != nil {
 		return handed, err
 	}
-	w.syncAsking(map[string]seataccess.Ask{"qa": {HandIn: value, Rotate: handed.Rotate, Lane: seataccess.LaneExpo}})
+	w.syncAsking(map[string]seataccess.Ask{handle: {HandIn: value, Rotate: handed.Rotate, Lane: seataccess.LaneExpo}})
 	return handed, nil
 }
 

@@ -148,6 +148,18 @@ func (f *fakeExpo) setRole(id string, role expo.Role) {
 	f.actors[id].roles[testAccountName] = role
 }
 
+// writes is every operation the fake answered that is not one of the two
+// reads a seat's token makes: anything a person would have to undo at Expo.
+func (f *fakeExpo) writes() []string {
+	var out []string
+	for _, op := range f.operations() {
+		if op != "CrewletViewer" && op != "CrewletRole" {
+			out = append(out, op)
+		}
+	}
+	return out
+}
+
 // operations is every operation the fake answered, in order.
 func (f *fakeExpo) operations() []string {
 	f.mu.Lock()
