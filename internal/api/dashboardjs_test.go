@@ -1643,6 +1643,8 @@ const (
 	// bytes): the integrations model chunk +5691 bytes (1705 bytes gzipped),
 	// the catalogue chunk +241 bytes, and 60 bytes across the settings and
 	// org chunks that import them. The initial load did not grow. 5461 KiB.
+	// Expo's story and builder facts, aligned with its hand-off, added 45
+	// bytes, which the same KiB holds.
 	treeBudget = 5<<20 + 341<<10
 )
 
