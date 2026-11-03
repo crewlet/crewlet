@@ -566,7 +566,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
 		SeatBudget: policy.SeatBudget,
 	}
-	stampCtx, stampCancel := stampContext(ctx, by)
+	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME, never past it: a
+	// reservation answered after the take's deadline reserves a place for a
+	// take that can no longer spool, and leaves the stamp of what came of it
+	// none of the room it is kept before by ([Coordinator.takeContext]).
+	reserveBy, _ := ctx.Deadline()
+	stampCtx, stampCancel := stampContext(ctx, reserveBy)
 	took, stampErr := c.pending.StampCapture(stampCtx, run.TurnID, stamp)
 	stampCancel()
 	if stampErr != nil || !took {
@@ -624,7 +629,9 @@ func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context
 // its own ([detached]), since the take's budget may be what ended the take and
 // the stamp is what says so, and never past by, where the read the take is
 // part of needs the rest of its time for the box's pause
-// ([Coordinator.takeContext]). by zero bounds it by its own grace alone.
+// ([Coordinator.takeContext]). The reservation of a capture's place is made
+// by the take's own deadline instead, so the stamp of what came of it keeps
+// its room. by zero bounds it by its own grace alone.
 func stampContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
 	stamp, cancel := detached(ctx)
 	if by.IsZero() {

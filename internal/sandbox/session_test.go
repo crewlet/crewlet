@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -405,6 +406,52 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 	}
 	if run.Kept == nil || run.Kept.LaunchSeq != 2 || run.Kept.CaptureSeq != 1 {
 		t.Errorf("the kept capture is %+v, want (2, 1)", run.Kept)
+	}
+}
+
+// unansweredStamps is a run store whose stamps of a capture are never
+// answered, as a coordination store in an outage: each waits out its caller's
+// context.
+type unansweredStamps struct {
+	PendingStore
+	asked atomic.Int32
+}
+
+func (s *unansweredStamps) StampCapture(ctx context.Context, _ string, _ SessionCapture) (bool, error) {
+	s.asked.Add(1)
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+// A TAKE RESERVES ITS PLACE WITHIN ITS OWN TIME, however long the store keeps
+// silent: a reservation answered past the take's deadline reserves a place for
+// a take that can no longer spool, and leaves the stamp of what came of it
+// none of the room it is kept before the read's by ([Coordinator.takeContext]),
+// so the capture would stand begun with nothing left to say how it came out.
+//
+// Mutation: bound the reservation by the read's by rather than the take's own
+// deadline, and the take waits out a stamp's own grace, thirty seconds, past a
+// deadline two seconds off.
+func TestATakeReservesItsPlaceWithinItsOwnTime(t *testing.T) {
+	t.Parallel()
+	rig, _, _ := keepingRig(t)
+	run := rig.launchKept(t, "t1")
+	silent := &unansweredStamps{PendingStore: rig.coordinator.pending}
+	rig.coordinator.pending = silent
+	// A READ WITH A DEADLINE, whose take ends two seconds from now and whose by
+	// is a pause's grace after that.
+	read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
+	defer cancel()
+	began := time.Now()
+	spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+		readCapture(BoxReadCollect, Result{}, false))
+	if took := time.Since(began); took > 20*time.Second {
+		t.Errorf("the take asked a silent store to reserve its place for %s, past its own deadline "+
+			"two seconds off", took)
+	}
+	if spooled != nil || silent.asked.Load() == 0 {
+		t.Errorf("the take spooled %+v after %d reservations, want none spooled, the place asked for",
+			spooled, silent.asked.Load())
 	}
 }
 
