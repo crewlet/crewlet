@@ -611,7 +611,7 @@ function InBoxRow({
       href={peekHref({ kind: "run", id: run.turn_id })}
       onClick={peekClickHandler(onOpen)}
     >
-      <RunStatus status={run.status} />
+      <RunStatus status={run.status} ending={run.ending} />
       <span className="col live-box-body">
         <span className="truncate t-cell">{runTitle(run)}</span>
         <span className="truncate t-caption">

@@ -2,6 +2,7 @@ package sandboxtest
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ var heldCases = []struct {
 	{"AHeldCallIsRecordedWithItsQuestionAndPinnedToItsJob", testAHeldCallIsRecordedWithItsQuestionAndPinnedToItsJob},
 	{"AHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack", testAHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack},
 	{"AHeldCallIsMarkedOnlyByTheClaimOfItsAnswer", testAHeldCallIsMarkedOnlyByTheClaimOfItsAnswer},
+	{"TheCallAPersonApprovedIsACallOfItsRound", testTheCallAPersonApprovedIsACallOfItsRound},
 }
 
 // heldSeal seals a held call's arguments for the cases, under a keyring of
@@ -138,10 +140,10 @@ func testAHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack(t *testing.T, s 
 	if err != nil || first {
 		t.Fatalf("a mark after the claim came back = %+v, %v, %v, want it found marked", again, first, err)
 	}
-	if ok, err = s.RecordHeldResult(ctx, "t1", launch, "sealed-result", sandbox.Fence{}); err != nil || !ok {
+	if ok, err = s.RecordHeldResult(ctx, "t1", launch, heldMade("sealed-result"), sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("RecordHeldResult = %v, %v", ok, err)
 	}
-	if ok, err = s.RecordHeldResult(ctx, "t1", launch, "another", sandbox.Fence{}); err != nil || !ok {
+	if ok, err = s.RecordHeldResult(ctx, "t1", launch, heldMade("another"), sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("a second RecordHeldResult = %v, %v, want it answered as recorded", ok, err)
 	}
 	made, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
@@ -195,4 +197,74 @@ func testAHeldCallIsMarkedOnlyByTheClaimOfItsAnswer(t *testing.T, s sandbox.Pend
 	if _, _, err := s.MarkHeldCall(ctx, "t2", plain, sandbox.Fence{}); !errors.Is(err, sandbox.ErrHeldCallUnclaimed) {
 		t.Fatalf("a mark on a run that holds no call = %v, want ErrHeldCallUnclaimed", err)
 	}
+}
+
+// THE CALL A PERSON APPROVED IS A CALL OF ITS ROUND, ON THE ROW: the write that
+// records what it returned records the call beside every call the job made over
+// its bridge — answered as the tool answered it, its arguments and output left
+// sealed on the held call — so the job that carries the work on keeps it in its
+// round's log, a later round finds it among the turn's earlier calls, and every
+// reader of whether the turn replied reads it. It was made on the engine host
+// and recorded nowhere a reader looked: a reply that went out read as one that
+// did not.
+//
+// Mutation: record the result alone in RecordHeldResult, and the round's log
+// holds nothing the approved call came to.
+func testTheCallAPersonApprovedIsACallOfItsRound(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := heldParked(t, s, "t1")
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "once"), sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	if _, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{}); err != nil || !first {
+		t.Fatalf("MarkHeldCall = %v, %v", first, err)
+	}
+	made := heldMade("sealed-result")
+	// WHAT THE CALL'S SURFACE SAID, which a write must never put in the
+	// clear: the arguments and output ride the row sealed.
+	made.Call.Name, made.Call.Args, made.Call.Output = "another_tool", `{"id":"7"}`, "closed #7"
+	if ok, err := s.RecordHeldResult(ctx, "t1", launch, made, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("RecordHeldResult = %v, %v", ok, err)
+	}
+	if ok, err := s.RecordHeldResult(ctx, "t1", launch, heldMade("again"), sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("a second RecordHeldResult = %v, %v, want it answered as recorded", ok, err)
+	}
+	approved := func(r sandbox.PendingRun) []sandbox.BridgeCall {
+		var out []sandbox.BridgeCall
+		for _, call := range r.BridgeCalls {
+			if call.Name == "tr_close_issue" && !call.Failed {
+				out = append(out, call)
+			}
+		}
+		return out
+	}
+	row := mustGet(t, s, "t1")
+	got := approved(row)
+	if len(got) != 1 || !got[0].Approved || got[0].Args != "" || got[0].Output != "" ||
+		got[0].Origin != "mcp:tracker" || got[0].Server != "tracker" || got[0].At.IsZero() ||
+		got[0].Seq != row.LastBridgeSeq() {
+		t.Fatalf("the round's log holds %+v of the approved call, want it once, approved, last, named "+
+			"the held call's tool, answered by its server, and its arguments and output left sealed", got)
+	}
+	carried := run("t1")
+	carried.Continues = true
+	mustBeginLaunch(t, s, carried)
+	if again := approved(mustGet(t, s, "t1")); len(again) != 1 {
+		t.Fatalf("the job carrying the work on keeps %+v of the approved call, want it in its round", again)
+	}
+	mustBeginLaunch(t, s, run("t1"))
+	if prior := mustGet(t, s, "t1").PriorCalls; !slices.Contains(prior, "tr_close_issue") {
+		t.Fatalf("a later round finds %v of the turn's earlier calls, want the approved call among them", prior)
+	}
+}
+
+// heldMade is what a held call to close_issue came to, its result sealed as
+// result: made, as the tracker's server answered it.
+func heldMade(result string) sandbox.HeldMade {
+	return sandbox.HeldMade{Result: result, Call: sandbox.BridgeCall{
+		Name: "tr_close_issue", Origin: "mcp:tracker", Server: "tracker", Source: "mcp:tracker",
+	}}
 }

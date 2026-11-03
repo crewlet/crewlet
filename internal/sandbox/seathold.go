@@ -23,20 +23,25 @@ import "context"
 //
 // The coordinator holds the seat's inbox — a pause hold under ONE reason,
 // [SeatHold] — for exactly as long as the seat has a run in [Holding] or owes
-// one of its runs a recorded answer's resume, and lifts it the moment it has
-// neither. Held, the consumer fetches nothing: the mail waits on the broker
-// with its order and its delivery count intact, costs nothing while it waits,
-// and is delivered in order when the hold lifts. Both conditions are this
-// node's own counts ([seatRuns], the owed set), moved by the coordinator's own
-// transitions, so the hold follows them at the transition itself rather than
-// at whichever delivery happens to arrive next: a launch, from the write that
-// opens its row ([Coordinator.Launch]) — not from the started event a separate
-// subscription processes later, which left a window for the seat's next mail
-// to run beside the job. Then a park on a question, a run that settles, a
-// resumed turn that has RETURNED (never one that is starting: the resumed turn
-// is the seat's work, and the hold lasts through it, see
-// [Coordinator.resumeAndSettle]), and a seat recovered mid-run, whose hold is
-// taken in its preparation, before its mailbox is attached.
+// one of its runs a recorded answer's resume or the finish of an ending this
+// node keeps, and lifts it the moment it has neither. Held, the consumer
+// fetches nothing: the mail waits on the broker with its order and its delivery
+// count intact, costs nothing while it waits, and is delivered in order when
+// the hold lifts. Both conditions are this node's own counts ([seatRuns], the
+// owed set), moved by the coordinator's own transitions, so the hold follows
+// them at the transition itself rather than at whichever delivery happens to
+// arrive next: a launch, from the write that opens its row
+// ([Coordinator.Launch]) — not from the started event a separate subscription
+// processes later, which left a window for the seat's next mail to run beside
+// the job. Then a park on a question, a run that settles — its record deleted,
+// which for a resumed turn comes once the turn has RETURNED, and where the
+// record owes the executor log the turn's end, once its ending's retry has
+// recorded that end (never at a resumed turn's start: the resumed turn is the
+// seat's work, and the hold lasts through it and through its end, see
+// [Coordinator.resumeAndSettle]) — and a seat recovered mid-run, whose hold is
+// taken in its preparation, before its mailbox is attached: for a run it finds
+// running, and for an ending it finds decided and owing its turn's end, which
+// this node then keeps ([Coordinator.endRun]).
 //
 // A delivery that reaches a held seat anyway — one that raced the hold, or a
 // hold the queue refused — is DEFERRED by the screening, which asks for the

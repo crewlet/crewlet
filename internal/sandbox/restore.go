@@ -462,8 +462,19 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	case !found:
 		return ContinuedSession{}, "the turn has no run record"
 	}
-	run = c.awaitCapture(ctx, run, c.relaunchWait)
+	run, found, err = c.awaitCapture(ctx, run, c.relaunchWait)
+	if !found {
+		return ContinuedSession{}, "the turn's run record was gone before the capture of the job " +
+			"the relaunch follows settled"
+	}
 	answer := ContinuedSession{Context: followedContext(run)}
+	if err != nil {
+		// NO ANSWER IS NO KEPT CAPTURE: the row the wait could not read again
+		// may hold a capture since kept, or refused, and a relaunch never
+		// continues one it has not seen kept.
+		return answer, fmt.Sprintf("what came of the capture of the job the relaunch follows "+
+			"could not be read: %v", err)
+	}
 	if captureInFlight(run, c.now()) {
 		return answer, fmt.Sprintf("the capture of the job the relaunch follows (launch %d, capture %d) "+
 			"was still being kept %s after the relaunch asked for it, which the relaunch does not wait out",

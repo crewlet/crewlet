@@ -74,7 +74,7 @@ import { RunQuestion } from "~/components/RunQuestion.tsx";
 import { answerFate, type GivenAnswer } from "./answerFate.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
-import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
+import { CHECKED_WORDS, renderInline, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
@@ -94,8 +94,9 @@ import {
   answeredQuestion,
   answeredTexts,
   askContext,
+  askHeadline,
+  askIsMessage,
   askTexts,
-  askQuestion,
   followThrough,
   budgetLine,
   moment,
@@ -383,7 +384,7 @@ function AskPane({
           </>,
         )}
         <ReadingPaneTitle>
-          {renderTokens(askQuestion(ask), "question", "text", true)}
+          {renderInline(askHeadline(ask), "question", { links: "text", scoped: true })}
         </ReadingPaneTitle>
         {context && (
           <ReadingPaneLead>
@@ -400,7 +401,7 @@ function AskPane({
             }
             footer={chips}
           >
-            <p>{renderTokens(reasoning.text, "reasoning", "checked", true)}</p>
+            <p>{renderInline(reasoning.text, "reasoning", { ...CHECKED_WORDS, scoped: true })}</p>
           </ReadingPaneReasoning>
         ) : (
           chips
@@ -488,7 +489,12 @@ function AnsweredPane({
   const asked = (decision && WAS_ASKED[decision.role]) || "asked you";
   const said =
     words.kind === "resolved" ? null : words.kind === "choice" ? words.said : `“${words.said}”`;
-  const context = run ? run.question_context.trim() : "";
+  // An answered message is read whole, since its heading does not quote it.
+  const context = run
+    ? run.question_context.trim()
+    : ask && askIsMessage(ask.ask)
+      ? ask.ask.body.trim()
+      : "";
   return (
     <TokenScope texts={answeredTexts(answered)}>
       <>
@@ -503,7 +509,10 @@ function AnsweredPane({
           <RunQuestion question={answeredQuestion(answered)} />
         ) : (
           <ReadingPaneTitle>
-            {renderTokens(answeredQuestion(answered), "question", "text", true)}
+            {renderInline(ask ? askHeadline(ask.ask) : "", "question", {
+              links: "text",
+              scoped: true,
+            })}
           </ReadingPaneTitle>
         )}
         {context && (
@@ -1059,7 +1068,7 @@ function RunPane({
             }
             footer={chips}
           >
-            <p>{renderTokens(reasoning.text, "reasoning", "checked", true)}</p>
+            <p>{renderInline(reasoning.text, "reasoning", { ...CHECKED_WORDS, scoped: true })}</p>
           </ReadingPaneReasoning>
         ) : (
           chips
@@ -1202,6 +1211,12 @@ function answeredAt(record: ExecutorRow, now: number, who: boolean): string {
  */
 function busyLine(busy: ExecutorRow, name: string): string {
   const who = busy.role ? `The ${busy.role}` : name;
+  if (busy.ending) {
+    // OVER, and still holding the seat: its ending records how its turn ended
+    // before the seat takes its next work, this answer's resume included.
+    const turn = busy.work_item?.key ? `its turn on ${busy.work_item.key}` : "another turn";
+    return `${who} is finishing ${turn} and picks this up next.`;
+  }
   const on = busy.work_item?.key ? `executing ${busy.work_item.key}` : "executing another turn";
   return `${who} is busy ${on} and picks this up next.`;
 }

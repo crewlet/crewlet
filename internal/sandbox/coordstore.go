@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // CoordStore is the pending-run store, on the FLEET's coordination store.
@@ -351,32 +352,11 @@ func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, 
 func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
 	if capture.LaunchSeq <= 0 || capture.CaptureSeq <= 0 || !capture.State.Valid() {
 		return false, fmt.Errorf("sandbox: a capture of run %s is placed at (%d, %d) in state %q, and "+
-			"every capture is placed from (1, 1) in one of %v", turnID, capture.LaunchSeq,
-			capture.CaptureSeq, capture.State, CaptureStates)
+			"every capture is placed from (1, 1) in one of %s", turnID, capture.LaunchSeq,
+			capture.CaptureSeq, capture.State, words.Or(CaptureStates))
 	}
 	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
-		took := false
-		newest := run.Capture
-		switch {
-		case newest == nil || capture.newerThan(*newest):
-			took = true
-		case capture.samePlace(*newest):
-			took = newest.State.advancesTo(capture.State)
-		}
-		if took {
-			stamped := capture
-			run.Capture = &stamped
-		}
-		// LANDED, and not a place the row already answered otherwise: an
-		// older capture's answer that comes after a newer one began is the
-		// kept one where it is newer than what is kept, and a place the row
-		// holds refused is never kept, whatever a late write says.
-		landed := capture.State == CaptureLanded && (took || !capture.samePlace(*newest))
-		if landed && (run.Kept == nil || capture.newerThan(*run.Kept)) {
-			kept := capture
-			run.Kept, took = &kept, true
-		}
-		return took
+		return stampOnto(run, capture)
 	})
 	return won, err
 }
@@ -729,20 +709,28 @@ func (s *CoordStore) MarkHeldCall(ctx context.Context, turnID, launch string, fe
 	return held, won, nil
 }
 
-// RecordHeldResult records what a marked held call returned. See the contract on
-// [PendingStore].
-func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch, sealed string, fence Fence) (bool, error) {
-	claimed, made := false, false
+// RecordHeldResult records what a marked held call came to: its result, and the
+// call in its round's log. See the contract on [PendingStore].
+func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string, made HeldMade,
+	fence Fence) (bool, error) {
+
+	claimed, already := false, false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if claimed = heldClaim(*run, launch, fence) && run.HeldCall.Calling(); !claimed {
 			return false
 		}
-		if made = run.HeldCall.Made(); made {
+		if already = run.HeldCall.Made(); already {
 			return false
 		}
+		now := s.clock()
 		held := *run.HeldCall
-		held.Result, held.MadeAt = sealed, s.clock()
+		held.Result, held.MadeAt = made.Result, now
 		run.HeldCall = &held
+		call := made.Call
+		call.Name, call.Approved, call.At = held.Tool, true, now
+		call.Args, call.Output, call.Held = "", "", false
+		call.Seq = run.LastBridgeSeq() + 1
+		run.BridgeCalls, run.BridgeCallsElided = appendBounded(run.BridgeCalls, run.BridgeCallsElided, call)
 		return true
 	})
 	switch {
@@ -751,7 +739,7 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch, seale
 	case !claimed:
 		return false, fmt.Errorf("%w: run %s, launch %s", ErrHeldCallUnclaimed, turnID, launch)
 	}
-	return won || made, nil
+	return won || already, nil
 }
 
 // OweHandBack lets go of the recorded answer a run whose ending is decided still

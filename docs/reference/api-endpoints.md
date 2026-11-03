@@ -11179,7 +11179,8 @@ reclaimed, work preserved on a pushed branch) is listed on both.
       "started_at": "2026-06-08T07:12:44+00:00",
       "updated_at": "2026-06-08T07:30:02+00:00",
       "answerable_in_chat": true,
-      "declined_answers": []
+      "declined_answers": [],
+      "ending": null
     }
   ]
 }
@@ -11221,7 +11222,15 @@ alone; every other reader, a seat's lead included, is told the model the job
 runs under and not the entry. `bridge_calls` is always an array on a row the
 store answered — every run's tools reach it over the bridge, so an empty one is
 a run that has called nothing yet — and absent only where the run's body is
-withheld from the reader.
+withheld from the reader. A call a person approved once the run asked for it
+([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs))
+is among them, marked `approved: true`, with no `args` and no `output`: the
+run's resume made it with the arguments the run held sealed, and handed its
+result to the job that carries the work on sealed too. The call the run held
+for that approval comes before it, marked `held: true`, with no `args`, which
+ride the run's row sealed beside its question, and with `failed: true`, since
+nothing it asked for happened: it is the run's question, not a failure, and
+the executors board draws it so.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed
@@ -11229,7 +11238,19 @@ for as a snapshot), not which box it is. `paused_at` is the answer the
 [pause reaper](../concepts/code-sandbox.md#mid-run-clarification-ask_and_wait)
 acts on rather than the raw stamp, so a run parked on a question whose pause
 instant never reached its row still reads as held: that box is being paid for,
-and a board drawing the stamp alone showed it as a live one. `answerable_in_chat` is `false`
+and a board drawing the stamp alone showed it as a live one. Both read as no
+box, and `paused_at` empty, once the run's ending is decided to reclaim it.
+
+`ending` is `null` on a run nobody has ended, and `{at, reason, stopped_by}`
+on one whose ending is decided and not yet finished: when it was decided, the
+reason it announces (empty for a run whose turn came back, which announces
+nothing; `executor_failed` carries why a lost run was lost) and who stopped
+it, for a person's stop. Such a run is over, and its `status` is the one it
+was ended in: its record waits only for the ending's last steps, which on an
+engine that records every turn's end include [recording that
+end](../concepts/turn-engine.md#how-a-turn-ends-on-the-executor-log) once the
+turn's captures have settled, and can take minutes. The seat's next work
+waits behind it. `answerable_in_chat` is `false`
 for a run whose turn was triggered by something other than an inbound
 message — a schedule tick, a task assignment, an A2A wake — because the
 resume path matches an inbound message's conversation identity against
@@ -11250,7 +11271,8 @@ of the units above it). Both are empty on a run that is not parked. See
 [who is asked](../concepts/code-sandbox.md#who-a-question-is-put-to).
 
 `?audience=<name>` narrows the board to the runs whose question is put to
-one person, the name resolved as [a personal
+one person and still waits for them (a run parked on it, its ending not
+decided), the name resolved as [a personal
 question's](#whose-record-a-personal-question-answers-for) is: absent or either
 of your own names is your own record, somebody's **login** is the seat the
 identity directory binds them to — never read as a seat's handle, and asked of
