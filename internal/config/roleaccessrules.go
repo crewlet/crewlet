@@ -30,7 +30,8 @@ import (
 //   - a scope wider than the company's reach, so a seat cannot widen it, and
 //     no scope at all on a lane whose agents must name one;
 //   - a seat credential written where the engine owns it, shared with a
-//     company block or another seat, or reading another seat's
+//     company block or another seat, reading another seat's, or handed to a
+//     tool in the seat's box under a name its executor signs in by
 //     (seatcredentialrules.go).
 
 // seatAccessOnHuman is the refusal of a per-seat access block on a human seat.
@@ -42,7 +43,7 @@ func (c *Company) validateSeatAccess() error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(c.validateSeatBlocks(), c.validateSeatCredentials(refs))
+	return errors.Join(c.validateSeatBlocks(), c.validateSeatCredentials(refs), c.validateSeatSignIns())
 }
 
 // validateSeatBlocks checks every seat's per-integration blocks.
@@ -75,7 +76,7 @@ func (c *Company) validateSeatBlocks() error {
 				// seat already, each with its own remedy: the GitHub App by
 				// [Company.validateHumanSeatCode], the chat apps by the org
 				// model's agent-only rule.
-				if slices.Contains([]string{"datadog", "gitlab", "jira", "confluence", "cloudflare", "expo"}, b.lane) {
+				if slices.Contains([]string{"datadog", "gitlab", "jira", "confluence", "cloudflare", "expo", "digitalocean"}, b.lane) {
 					p.add(here, ErrConflict, "%s: a person signs in as themselves. "+
 						"Remove this block, or make the seat an agent seat", seatAccessOnHuman)
 				}
@@ -109,6 +110,7 @@ func (c *Company) validateSeatBlocks() error {
 		c.checkMattermost(&p, at(base, "mattermost"), in.Mattermost)
 		c.checkCloudflare(&p, at(base, "cloudflare"), in.Cloudflare)
 		c.checkExpo(&p, at(base, "expo"), in.Expo)
+		c.checkDigitalOcean(&p, at(base, "digitalocean"), in.DigitalOcean)
 	}
 	return p.err()
 }

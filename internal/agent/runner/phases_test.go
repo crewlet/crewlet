@@ -329,6 +329,10 @@ type buildOpts struct {
 	// engine hands the runner from outside the seat's registry
 	// ([runner.Config.Ask]). Nil offers none.
 	ask runner.RunAsk
+	// checkout is the tool the executor's run checks a repository of the
+	// company's own code host out with ([runner.Config.Checkout]). Nil
+	// offers none: a company that hosts no code.
+	checkout tools.Callable
 
 	// calls, when set, is the run's call log, on a turn context the
 	// surfaces are bound to — for the cases about what a run has called.
@@ -443,6 +447,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Steer:     opts.steer,
 		Subagent:  opts.subagent,
 		Ask:       opts.ask,
+		Checkout:  opts.checkout,
 		Turn:      runTurn,
 		Budget:    opts.budget,
 		Compact:   opts.compact,

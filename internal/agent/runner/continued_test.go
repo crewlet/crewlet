@@ -289,6 +289,82 @@ func TestAnAnsweredOrARefusedRunsSessionIsContinuedToldWhatCarriesItOn(t *testin
 	}
 }
 
+// A SESSION CONTINUED IN A NEW BOX IS TOLD WHAT THAT BOX HOLDS. Where the
+// run's surface offers the code host's checkout, a new box holds none of the
+// repositories the session checked out of it — nothing is cloned at launch —
+// so the continuation tells it to check each out again with that tool, the
+// same branch and access and no base, and calls a fresh checkout only what
+// the box's setup clones; a run offered no checkout, in a company that hosts
+// no code, is told the box is on a fresh checkout, as before. The form for
+// the box the session was last worked in says neither.
+//
+// Mutations: hand the new-box form no checkout whatever the surface offers →
+// the code host's case, red; keep "on a FRESH checkout of the repository"
+// beside a checkout → red; write the checkout's paragraph for a run offered
+// none → the other case, red.
+func TestASessionContinuedInANewBoxIsToldWhatThatBoxHolds(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	before := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"looking into it"}`)}})
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	for name, tc := range map[string]struct {
+		checkout tools.Callable
+		want     []string
+		not      []string
+	}{
+		"in a company that hosts code": {
+			checkout: stubTool{name: "code_checkout"},
+			want: []string{"you are in a new one. Anything it had not committed",
+				"is not in this box until you check it out again with `code_checkout`, naming the same " +
+					"branch and access and no `base`: it is cloned at that branch's head",
+				"A repository the box's setup clones is a FRESH checkout."},
+			not: []string{"on a FRESH checkout of the repository"},
+		},
+		"in a company that hosts none": {
+			want: []string{"you are in a new one, on a FRESH checkout of the repository."},
+			not:  []string{"code host", "check it out again"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			relauncher := &probingLauncher{basis: keptBasis}
+			resume := &runner.Resume{State: parked.State, Bridged: before,
+				Asked: &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+					Branch: "seats/cto/wk-1", SessionID: "s-1", BoxKept: true}}
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				resume: resume, checkout: tc.checkout})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			again := relauncher.last(t)
+			if again.Session == nil {
+				t.Fatal("the answered run's relaunch continues no session, want the kept one")
+			}
+			_, box, found := strings.Cut(again.Session.Replaced, "## This run is in a new box")
+			if !found {
+				t.Fatalf("the new-box continuation does not say it is in a new box:\n%s", again.Session.Replaced)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(box, want) {
+					t.Errorf("the new-box continuation does not say %q:\n%s", want, box)
+				}
+			}
+			for _, not := range tc.not {
+				if strings.Contains(box, not) {
+					t.Errorf("the new-box continuation says %q:\n%s", not, box)
+				}
+			}
+			if strings.Contains(again.Session.Brief, "## This run is in a new box") ||
+				strings.Contains(again.Session.Brief, "check it out again") {
+				t.Errorf("the continuation for the session's own box speaks of a new one:\n%s",
+					again.Session.Brief)
+			}
+		})
+	}
+}
+
 // A RELAUNCH HANDS ITS LAUNCH WHAT ITS SESSION SENDS FIRST, kept or not. A
 // person's answer carries the asking run on in the session its box holds where
 // the launch takes up no kept capture of it — whose newest capture was
@@ -707,6 +783,75 @@ func TestAScheduledFireIsToldWhereItBegins(t *testing.T) {
 		if strings.Contains(lead, unsaid) {
 			t.Errorf("the fire's lead says %q, a conversation's words:\n%s", unsaid, lead)
 		}
+	}
+}
+
+// A CONVERSATION'S NEXT TURN IS TOLD WHAT ITS NEW BOX HOLDS. The session its
+// last turn left is continued only in a box of its own, and on this company's
+// code host nothing is cloned at launch: a run offered the code host's checkout
+// is told that a repository the session checked out of it is in no box until it
+// is checked out again, and how — at its branch's head — never that a fresh
+// checkout is in front of it. A run offered none is told of a fresh checkout,
+// as before.
+//
+// Mutations: hand the next turn's lead no checkout whatever the surface offers
+// → the code host's case, red; keep "on a FRESH checkout of the repository"
+// beside a checkout → red; write the checkout's paragraph for a run offered
+// none → the other case, red.
+func TestAConversationsNextTurnIsToldWhatItsNewBoxHolds(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	for name, tc := range map[string]struct {
+		checkout tools.Callable
+		want     []string
+		not      []string
+	}{
+		"in a company that hosts code": {
+			checkout: stubTool{name: "code_checkout"},
+			want: []string{"You are in a new box: anything the session above had not committed",
+				"is not in this box until you check it out again with `code_checkout`, naming the same " +
+					"branch and access and no `base`: it is cloned at that branch's head",
+				"A repository the box's setup clones is a FRESH checkout."},
+			not: []string{"on a FRESH checkout of the repository"},
+		},
+		"in a company that hosts none": {
+			want: []string{"You are in a new box, on a FRESH checkout of the repository: anything"},
+			not:  []string{"code host", "check it out again"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			launcher := &probingLauncher{basis: baseBasis}
+			first, _ := buildWith(t, entries, buildOpts{launcher: launcher, calls: turnctx.NewCallLog(),
+				checkout: tc.checkout})
+			if work, _, err := first.Execute(t.Context(), 1, "", nil); err != nil || !work.Suspended {
+				t.Fatalf("the first launch: %+v, %v", work, err)
+			}
+			s := launcher.last(t).Session
+			if s == nil || !s.Basis.ContinuesBase() {
+				t.Fatalf("the first launch continues %+v, want the conversation's session", s)
+			}
+			// THE LEAD'S NEW-BOX PART ALONE: the turn's fresh brief follows the
+			// lead, and what it says is not the box's.
+			_, box, found := strings.Cut(s.Replaced, "## This turn is in a new box")
+			if !found {
+				t.Fatalf("the next turn's lead does not say it is in a new box:\n%s", s.Replaced)
+			}
+			box, _, found = strings.Cut(box, "Absolute paths in the session above")
+			if !found {
+				t.Fatalf("the next turn's lead does not say whose its old paths were:\n%s", s.Replaced)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(box, want) {
+					t.Errorf("the next turn's lead does not say %q:\n%s", want, box)
+				}
+			}
+			for _, not := range tc.not {
+				if strings.Contains(box, not) {
+					t.Errorf("the next turn's lead says %q:\n%s", not, box)
+				}
+			}
+		})
 	}
 }
 

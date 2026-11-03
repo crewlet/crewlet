@@ -1195,48 +1195,53 @@ func TestProductionsReadAttemptHoldsALinearizableReadsWaits(t *testing.T) {
 // AND THE WEDGED NODE IS SUSPECTED, because the wait that ran out on it was the
 // router's own. The router's clock is held still, so what marks it is the
 // attempt's own end and never how long the read took by that clock.
+//
+// IN A SYNCTEST BUBBLE ([inBubble]), so the read is held to costing its
+// router's attempt to the nanosecond, the answering node's trip taking no
+// time, rather than to a ceiling halfway to production's attempt on the
+// machine's clock, which a runner stalled for four seconds overruns.
 func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 	t.Parallel()
-	f := newFleet(t, "data-a", "data-b")
-	timing := Production()
-	timing.ReadAttempt = minReadAttempt + time.Second
-	still := time.Now()
-	r, err := NewRouter(RouterOptions{Queue: f.start(t), Self: "agent-2", Placement: f.placement,
-		Git: f.git, Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes,
-		Now: func() time.Time { return still }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	hang := make(chan struct{})
-	t.Cleanup(func() { close(hang) })
-	firstName, first := f.first(t, r)
-	first.set(func(n *fakeNode) { n.hang = hang })
+	inBubble(t, func(t *testing.T) {
+		f := newFleet(t, "data-a", "data-b")
+		timing := Production()
+		timing.ReadAttempt = minReadAttempt + time.Second
+		still := time.Now()
+		r, err := NewRouter(RouterOptions{Queue: f.start(t), Self: "agent-2", Placement: f.placement,
+			Git: f.git, Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes,
+			Now: func() time.Time { return still }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hang := make(chan struct{})
+		t.Cleanup(func() { close(hang) })
+		firstName, first := f.first(t, r)
+		first.set(func(n *fakeNode) { n.hang = hang })
 
-	begun := time.Now()
-	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
-		t.Fatalf("a read with a live second node failed: %v", err)
-	}
-	waited := time.Since(begun)
-	if !first.askedFor("hung") || waited < timing.ReadAttempt {
-		t.Fatalf("the premise: %s, the node asked first, was asked (%v) and held the read "+
-			"for %s, want it to have held its router's whole %s attempt", firstName,
-			first.askedFor("hung"), waited, timing.ReadAttempt)
-	}
-	// HALFWAY TO PRODUCTION'S, so a loaded machine's slack is on both sides.
-	if bound := (timing.ReadAttempt + Production().ReadAttempt) / 2; waited >= bound {
-		t.Fatalf("a read waited %s on wedged %s, want about its router's %s read attempt "+
-			"and under %s — the router waited a timing it was not built with",
-			waited, firstName, timing.ReadAttempt, bound)
-	}
-	// SUSPECTED, which a caller's own ending never makes it
-	// (TestACallerThatStopsWaitingSuspectsNoNode).
-	f.placement.mu.Lock()
-	told := slices.Contains(f.placement.unanswered, firstName)
-	f.placement.mu.Unlock()
-	if !told {
-		t.Errorf("%s held a read through its router's whole attempt and was not reported "+
-			"unanswered", firstName)
-	}
+		begun := time.Now()
+		if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
+			t.Fatalf("a read with a live second node failed: %v", err)
+		}
+		waited := time.Since(begun)
+		if !first.askedFor("hung") {
+			t.Fatalf("the premise: %s, the node asked first, was never asked the read", firstName)
+		}
+		if waited != timing.ReadAttempt {
+			t.Fatalf("a read waited %v on wedged %s, want its router's whole %v read attempt "+
+				"and not a moment more — production's is %v, and a router that waited a "+
+				"timing it was not built with is what this case exists to catch",
+				waited, firstName, timing.ReadAttempt, Production().ReadAttempt)
+		}
+		// SUSPECTED, which a caller's own ending never makes it
+		// (TestACallerThatStopsWaitingSuspectsNoNode).
+		f.placement.mu.Lock()
+		told := slices.Contains(f.placement.unanswered, firstName)
+		f.placement.mu.Unlock()
+		if !told {
+			t.Errorf("%s held a read through its router's whole attempt and was not reported "+
+				"unanswered", firstName)
+		}
+	})
 }
 
 // GITPROC'S READ BOUNDS ARE ONE READ ATTEMPT — production's, the one every
@@ -3306,50 +3311,46 @@ func TestAdmissionsPingNeedsNoArguments(t *testing.T) {
 // ADMISSION IS BOUNDED AS A WHOLE, not per data node: a sweep asks it on every
 // pass, the first one at boot, and each listed node that is wedged would
 // otherwise cost the sweep a whole read attempt. A fleet whose data nodes do
-// not answer withholds the claim within the bound, and the sweep goes on.
+// not answer withholds the claim at the bound, and the sweep goes on.
+//
+// IN A SYNCTEST BUBBLE ([inBubble]), so the question is held to ending at its
+// bound to the nanosecond — one bound over every node it asks, where each
+// node's own read attempt would have run on past it — and to nothing about how
+// late a loaded runner wakes the case. On the machine's clock the case allowed
+// two seconds, ten times the bound, and a loaded race-detector run has spent a
+// whole second waking a case's goroutines (CI run 41694160997).
 func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 	t.Parallel()
-	f := newFleet(t, "data-a", "data-b", "data-c")
-	hang := make(chan struct{})
-	t.Cleanup(func() { close(hang) })
-	for _, n := range f.nodes {
-		n.set(func(n *fakeNode) { n.hang = hang })
-	}
-	timing := Production()
-	timing.AdmissionAsk = 200 * time.Millisecond
-	r := f.routerTimed(t, "agent-2", nil, timing)
-	type answer struct {
-		served bool
-		err    error
-	}
-	begun := time.Now()
-	done := make(chan answer, 1)
-	go func() {
+	inBubble(t, func(t *testing.T) {
+		f := newFleet(t, "data-a", "data-b", "data-c")
+		hang := make(chan struct{})
+		t.Cleanup(func() { close(hang) })
+		for _, n := range f.nodes {
+			n.set(func(n *fakeNode) { n.hang = hang })
+		}
+		timing := Production()
+		timing.AdmissionAsk = 200 * time.Millisecond
+		r := f.routerTimed(t, "agent-2", nil, timing)
+		begun := time.Now()
 		served, err := r.Serves(t.Context())
-		done <- answer{served.Tracker, err}
-	}()
-	select {
-	case got := <-done:
-		if got.served || got.err == nil {
-			t.Fatalf("wedged data nodes admitted a seat (%v, %v)", got.served, got.err)
+		if served.Tracker || err == nil {
+			t.Fatalf("wedged data nodes admitted a seat (%v, %v)", served.Tracker, err)
 		}
-		if waited := time.Since(begun); waited > 2*time.Second {
-			t.Fatalf("admission waited %s on wedged data nodes, past its %s bound",
-				waited, timing.AdmissionAsk)
+		if waited := time.Since(begun); waited != timing.AdmissionAsk {
+			t.Fatalf("admission waited %v on wedged data nodes, want its whole %v bound and "+
+				"not a moment more", waited, timing.AdmissionAsk)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("admission waited on every wedged data node in turn, past its bound")
-	}
-	// AND THE NODE IT WAS ASKING IS SUSPECTED: the bound is the router's own,
-	// so a node silent through it is evidence, and the next sweep — a
-	// heartbeat later — asks the others first.
-	f.placement.mu.Lock()
-	told := slices.Clone(f.placement.unanswered)
-	f.placement.mu.Unlock()
-	if len(told) == 0 {
-		t.Error("no wedged data node was reported unanswered: admission's own bound ran out " +
-			"on one, and the next sweep would ask it first again")
-	}
+		// AND THE NODE IT WAS ASKING IS SUSPECTED: the bound is the router's
+		// own, so a node silent through it is evidence, and the next sweep — a
+		// heartbeat later — asks the others first.
+		f.placement.mu.Lock()
+		told := slices.Clone(f.placement.unanswered)
+		f.placement.mu.Unlock()
+		if len(told) == 0 {
+			t.Error("no wedged data node was reported unanswered: admission's own bound ran out " +
+				"on one, and the next sweep would ask it first again")
+		}
+	})
 }
 
 // A PUSH IS ASKED OF ITS REPOSITORY'S COMMITTER — the first node in the

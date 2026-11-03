@@ -2701,7 +2701,7 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `PUT` | `/setup/integrations/{kind}/access` | Save a draft as one revision of the company document, held to the revision the tab was read at, then start the sync. `?dry_run=true` answers the plan and the warnings and writes nothing |
 | `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}` | One action on one agent's account: `rotate`, `remove` (only once the agent is off), `keep` (write the vendor's setting into the document), `restore`, `retry`, `done` or `release` (keep the account at the vendor) |
 | `POST` | `/setup/integrations/slack/access/seats/{handle}/{lane}/install` | A fresh, single-use link a person follows to approve one agent's Slack app install, while the app waits for it. `{"url": "..."}`, `Cache-Control: no-store`, never stored and never part of a read |
-| `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/credential` | A credential a person created at the vendor and pasted for one agent (Expo's robot token): checked at the vendor, then sealed by the agent's sync. `{"detail", "access"}`, or `400 invalid_input` beside `value` |
+| `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/credential` | A credential a person created at the vendor and pasted for one agent (Expo's robot token, DigitalOcean's personal access token): checked at the vendor, then sealed by the agent's sync. `{"detail", "access"}`, or `400 invalid_input` beside `value` |
 | `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped (`crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle), where a provisioner's `-secret-store` run made that way records `provision`, `models` for a model's credential the Models page wrote, and `mcp` for an MCP server's header or variable [stored from its page](#put-mcp-serversnamevalueskey); see [the secret store](../concepts/secret-store.md#the-design)), and `write_only` (whether no reveal answers the value: one stored from Settings › MCP & tools is); `engine_keys`, a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values`, the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate; and `assistant_values`, Ask Crewlet's sealed values counted the same way (a file a conversation keeps counted by the key its content is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves (each leaves with its conversation), or `null` on a node that runs no Ask Crewlet estate; and `executor_values`, the seats' executor sessions counted the same way (each session a turn's row names counted by the key its object is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves either (each leaves with its row), or `null` on a node that runs no executor log. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator. The longest answer is some 384 KiB — the largest value a write admits, in the characters JSON spells longest — which is what a client reading it must be prepared to take |
@@ -4181,14 +4181,15 @@ link, so the dashboard asks the begin route above for one and submits a form.
 
 Every integration the engine manages an account or a credential per agent on
 (Slack, Mattermost, Atlassian for Jira and Confluence, GitHub, GitLab, Datadog,
-Cloudflare and Expo) has an Agents tab, and these routes are what it reads and
+Cloudflare, Expo and DigitalOcean) has an Agents tab, and these routes are what it reads and
 writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
 Datadog role id, a GitLab access level, a Jira project role id; Cloudflare's
 `read`, `operate` or `configure`, each a fixed set of permission groups;
 Expo's `viewer`, `runner`, `developer` or `release_manager`, each a fixed set
-of Expo permissions), GitHub's permissions, and the scope it is narrowed to.
+of Expo permissions; DigitalOcean's `read`, `operate` or `administer`, each a
+fixed set of DigitalOcean token scopes), GitHub's permissions, and the scope it is narrowed to.
 A lane is the block's key:
 `atlassian` has two, `jira` and `confluence`, over one account per agent, and
 every other integration has one named after itself. Jira and Confluence asked
@@ -4231,13 +4232,26 @@ yet), `builtin` (Jira and Confluence, whose credential the engine's own tools
 read), `no_server` (no server the company declares reads it), `server_off`
 (every server that reads it is turned off, `enabled: false`) or `off` (the
 seat or its account is off). A lane whose tool is a CLI in the agent's own box
-(Expo's EAS CLI) also carries `box`, what that box holds for it: in `env`, the
+(Expo's EAS CLI, DigitalOcean's doctl) also carries `box`, what that box holds for it: in `env`, the
 exact `sandbox.env` lines the seat needs, each variable set to the seat's own
 sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
 settings the engine supplies itself, as configured (`"by": "crewlet"`):
 `{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "by": "you"}]}`.
 With no server, `tool` is `live` or `waiting` only while the seat's box sets
 every one of its own lines exactly so.
+
+Where a person makes the agent's credential at the vendor and pastes it (Expo,
+DigitalOcean), the answer also says exactly what to make there, so the tab holds
+no copy of it. Each seat lane carries `hand_in`, the name to give the
+credential at the vendor at the seat's desired level, computed by the engine
+and never read back (`{"name": "crewlet-acme-sre-operate"}`). The lane's
+`options` entry carries `vendor_account`, the account, organization or team the
+company connected as the vendor shows it, for a step that says where to act.
+Where the person grants the level's permissions by hand (DigitalOcean's token
+scopes), each level carries `grants`, every permission it holds in the vendor's
+own names, and the entry carries `refused`, the permissions no level grants that
+a pasted credential must not hold, and `unneeded`, the ones no level grants that
+it may still hold: each permission the vendor offers is in exactly one.
 
 `revision` is the company revision the answer was read at, and the `ETag` is
 the same value quoted. An entry of `options` whose vendor did not answer just
@@ -4389,7 +4403,7 @@ acts on one agent's account, and answers the tab:
 | `restore` | Turns back on an account somebody turned off at the vendor, which no sync does unasked, or restores a changed role now rather than on the next pass. On a lane managed outside Crewlet it is `409 access_external` |
 | `retry` | Runs the sync again after a vendor refusal was settled |
 | `done` | Reads the vendor again after a person took a step there (a GitHub App's creation or permission request, a Slack install) |
-| `release` | Keeps at the vendor an account a step waits for a person to delete ("Keep the robot at Expo"): the step closes, the engine stops tracking the account, and the audit records the person's choice. Only on a lane whose options say `releasable`, and only while the lane waits on its `remove` step: `409 invalid_input` otherwise |
+| `release` | Keeps at the vendor an account a step waits for a person to delete ("Keep the robot at Expo"): the step closes, the engine stops tracking the account, and the audit records the person's choice. Only on a lane whose options say `releasable` (never DigitalOcean's, where a kept token would be live access nobody watches), and only while the lane waits on its `remove` step: `409 invalid_input` otherwise |
 
 Every action but `keep` is carried by a sync, and one asked while a sync of the
 same integration runs is `409 pass_in_flight`. `keep` writes its revision and
@@ -4408,7 +4422,7 @@ operator writes the document too.
 **`POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential`**
 takes `{"value": "<token>"}`: a credential a person created at the vendor for
 one agent, for an integration whose accounts only a person can create (Expo's
-robots). It asks `secrets.write` beside the route's own verb, since it seals a
+robots, DigitalOcean's personal access tokens). It asks `secrets.write` beside the route's own verb, since it seals a
 credential, before it reads the body; both ask a proof inside `step_up`.
 - **Route checks:** before anything reaches the vendor, an empty value, a
   `${VAR}` reference, and stray whitespace or invisible characters are each
@@ -4417,6 +4431,10 @@ credential, before it reads the body; both ask a proof inside `step_up`.
   only. For Expo it checks that the token works, that it is a robot's, that
   the robot holds a role on the company's account, that the role is the
   agent's level and not Admin or Owner, and that no other agent has the robot.
+  For DigitalOcean it checks that the value is a personal access token and no
+  other agent's, that it works in the company's team, and, with requests that
+  cannot change anything, that it holds no refused scope and exactly its
+  level's scopes as far as they can be proven.
   A refusal is `400 invalid_input` with the vendor's sentence in `detail`, what
   to do in `hint`, and `"field": "value"`.
 - **Sealing:** a value that passes is sealed by the agent's own sync under the
@@ -4424,7 +4442,7 @@ credential, before it reads the body; both ask a proof inside `step_up`.
   answer is `{"detail": "Works. ...", "access": <the Agents tab>}`. The value is
   never echoed, logged or recorded: the audit line names the seat, the lane,
   the account and its id, and what the vendor shows of the credential (Expo's
-  token prefix).
+  token prefix, DigitalOcean's expected token name).
 - **Other refusals:** an agent that is not on at the integration is
   `409 invalid_input`, a kind that takes no pasted credential is
   `404 no_seat_access`, and a sync in flight is `409 pass_in_flight`.
@@ -12796,7 +12814,7 @@ trace anywhere except the provider's own delivery UI.
 
 `tools` is **one roll-up per tool** this build serves (`slack`, `mattermost`,
 `atlassian` for the organization, Confluence, Jira and the Forge relay,
-`github`, `gitlab`, `datadog`, `cloudflare`, `expo`), whether or not the company configured it, so a
+`github`, `gitlab`, `datadog`, `cloudflare`, `expo`, `digitalocean`), whether or not the company configured it, so a
 reader never invents a state for a missing one. `state` is `attention` (a
 person has to act), `not_connected` (configured and not working yet, with
 nobody owing anything — or this node could not read the status),

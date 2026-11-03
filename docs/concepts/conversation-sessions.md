@@ -61,7 +61,11 @@ has the mechanism):
 - **That its box is new.** A base is continued only in a box of the launch's
   own, so the lead says it is on a fresh checkout, that what the session had
   not committed and pushed went with the box it was worked in, and that
-  absolute paths under the base's home were that box's.
+  absolute paths under the base's home were that box's. A run offered
+  `code_checkout` is told that only a repository the box's setup clones is a
+  fresh checkout: one the session checked out of this company's code host is
+  not in the box until it checks it out again, at its branch's head
+  ([Code Sandbox](code-sandbox.md#repositories-on-this-companys-code-host)).
 
 A schedule's conversation is told all three in its own words: the block is
 `## How this schedule's earlier fires ended`, each of its accounts a fire's,

@@ -156,6 +156,39 @@ func (p *Profile) SignsInWithEnv(env map[string]string) []string {
 	return names
 }
 
+// CredentialEnvNames are the variables that sign this harness in for an entry
+// whose env is env: the headless token's and the API key's, the names it signs
+// in by from an entry's env ([Profile.SignInEnv]), a cloud provider's switch
+// or a gateway's token, which authenticate a box as surely as a key does, and,
+// for a harness that reads its model provider's key from its own environment
+// ([Profile.EnvSignIn]), the credential-named variables env sets.
+//
+// ONE LIST, read by name and never by value, for the two that must agree on
+// it: a launch judging whether anything in a run's environment signs the
+// harness in, and config refusing a seat's own vendor credential in its box
+// under a name that would sign the seat's executor in instead.
+func (p *Profile) CredentialEnvNames(env map[string]string) []string {
+	names := make([]string, 0, 2+len(p.SignInEnv))
+	for _, name := range []string{p.TokenEnv, p.APIKeyEnv} {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	for _, name := range p.SignInEnv {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	if p.EnvSignIn {
+		for _, name := range slices.Sorted(maps.Keys(env)) {
+			if IsCredentialName(name) && !slices.Contains(names, name) {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
 // HasDeviceLogin reports whether the harness has a device sign-in the engine can
 // run ([Profile.DeviceLoginArgs]).
 func (p *Profile) HasDeviceLogin() bool { return len(p.DeviceLoginArgs) > 0 }

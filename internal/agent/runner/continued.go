@@ -42,8 +42,10 @@ import (
 //
 // AND IN TWO FORMS, because which box the launch gets is the launch's to learn:
 // one for the box the session was last worked in, and one for any other, which
-// adds what a fresh checkout changes ([prompts.BoxReplaced]). The fresh brief,
-// for a run whose box cannot take the session up after all, rides beside them.
+// adds what a new box changes — a fresh checkout, and a repository of the
+// company's code host to check out again ([prompts.BoxReplaced]). The fresh
+// brief, for a run whose box cannot take the session up after all, rides
+// beside them.
 //
 // THE RUN'S GUARD IS THE SESSION'S IT RUNS IN ([Runner.sessionDecided]): the
 // skills the launch state of the job it follows held and that job's own loads —
@@ -100,7 +102,7 @@ func (r *Runner) keptSession(basis SessionBasis, lead string, bridged []BridgedC
 	parts = slices.DeleteFunc(parts, func(p string) bool { return strings.TrimSpace(p) == "" })
 	brief := strings.Join(parts, "\n\n")
 	replaced := brief + "\n\n" + prompts.BoxReplaced(provenance.Neutralise(b, branch),
-		provenance.Neutralise(b, basis.Home))
+		provenance.Neutralise(b, basis.Home), r.checkoutName())
 	return &SessionContinuation{Basis: basis, Brief: brief, Replaced: replaced}
 }
 
@@ -121,9 +123,22 @@ func (r *Runner) baseSession(basis SessionBasis, fresh string) *SessionContinuat
 	lead := prompts.BuildNextTurn(prompts.NextTurn{
 		BaseTurn: provenance.Neutralise(b, base.Turn), EndedAt: base.EndedAt,
 		Home: provenance.Neutralise(b, base.Home), Interrupted: base.Interrupted,
-		Fire: notify.Scheduled(r.cfg.Turn.ConversationKey),
+		Checkout: r.checkoutName(),
+		Fire:     notify.Scheduled(r.cfg.Turn.ConversationKey),
 	})
 	return &SessionContinuation{Basis: basis, Replaced: lead + "\n\n" + strings.TrimSpace(fresh)}
+}
+
+// checkoutName is the checkout the executor's surface offers, the tool that
+// checks a repository of the company's own code host out, "" where it offers
+// none: a run continuing its session in a new box that can check those
+// repositories out is told it must again, since the box holds none of them
+// ([prompts.BoxReplaced], [prompts.BuildNextTurn]).
+func (r *Runner) checkoutName() string {
+	if r.cfg.Checkout == nil {
+		return ""
+	}
+	return r.cfg.Checkout.Name()
 }
 
 // calledAfter is the calls of bridged a session saved with seq as the highest

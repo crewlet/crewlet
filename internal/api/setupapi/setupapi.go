@@ -96,6 +96,7 @@ import (
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/digitalocean"
 	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
@@ -1010,6 +1011,14 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.Expo
 		summary = expo.Summary()
 		reqs = expo.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindDigitalOcean:
+		// NO ROSTER HERE either: each agent's token is listed on the
+		// integration's Agents tab from the access ledger.
+		block := company.Integrations.DigitalOcean
+		summary = digitalocean.Summary()
+		reqs = digitalocean.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:
