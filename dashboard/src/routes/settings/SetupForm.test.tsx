@@ -16,7 +16,7 @@
  */
 
 import type { ReactElement } from "react";
-import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 
 // uilet's PROVIDER, which is the one `app/App.tsx` mounts now. Our own
 // context is no longer supplied anywhere, so a form tested under it would
@@ -2817,6 +2817,51 @@ test("a requirement's check note is part of its help", () => {
   );
   const help = screen.getByText(/Paste the key\./);
   expect(help.textContent).toContain(note);
+});
+
+// A HELP OF SEVERAL LINES KEEPS THEM. Cloudflare's provisioner token says what
+// to create, then its account and zone permissions a line each; drawn as one
+// paragraph the groups ran together. Each line keeps its literals, and the
+// link still ends the last line. Mutation: render the help through marked()
+// alone and there is no line break.
+test("a requirement's help keeps its lines, and its link ends the last one", () => {
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Cloudflare",
+          tool: {
+            ...tool,
+            requirements: [
+              req({
+                field: "api_token",
+                label: "Provisioner token",
+                kind: "secret",
+                connect: true,
+                help:
+                  "An account API token Crewlet mints each agent's token from.\n" +
+                  "Account permissions: Account API Tokens: Edit and Account Settings: Read.\n" +
+                  "Sealed as CLOUDFLARE_API_TOKEN. Create one on your",
+                link_text: "account API tokens page",
+                vendor_url: "https://dash.cloudflare.com/profile/api-tokens",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Cloudflare"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const help = screen.getByText(/Crewlet mints each agent's token from\./).closest("div")!;
+  expect(help.querySelectorAll("br")).toHaveLength(2);
+  expect(help.textContent).toContain("from.Account permissions:");
+  expect(within(help).getByText("CLOUDFLARE_API_TOKEN").tagName).toBe("CODE");
+  within(help).getByRole("link", { name: "account API tokens page" });
+  const last = help.innerHTML.split("<br>").at(-1)!;
+  expect(last).toContain("Create one on your");
+  expect(last).toContain("account API tokens page</a>.");
 });
 
 /**

@@ -39,7 +39,7 @@
  * no way for a closed tab to leave the write half done.
  */
 
-import { Fragment, useCallback, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -174,6 +174,23 @@ export function fillTemplate(text: string, resolve: (field: string) => string): 
     const value = resolve(field).trim();
     return value === "" ? whole : value;
   });
+}
+
+/**
+ * A requirement's help, one line per line break the app wrote (a token's
+ * grouped permissions under its sentence), each with its literals picked out.
+ * What follows the help, its link included, continues the last line.
+ */
+export function helpLines(text: string): ReactNode {
+  return text
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line, i) => (
+      <Fragment key={i}>
+        {i > 0 && <br />}
+        {marked(line)}
+      </Fragment>
+    ));
 }
 
 /**
@@ -1288,7 +1305,7 @@ export function SetupForm({
                 {/* THE APP'S OWN SENTENCE FIRST, always, so a field's
                     description opens the same way whether or not this
                     company has answered it. */}
-                {marked(fill(r.help ?? ""))}
+                {helpLines(fill(r.help ?? ""))}
                 {r.where && <> {marked(fill(r.where))}</>}
                 {/* A TRAILING LINK, for a field whose sentence does not
                     carry one of its own. A vendor that knows where the link
