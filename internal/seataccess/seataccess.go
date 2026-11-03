@@ -73,15 +73,16 @@ type Lane string
 
 // The lanes this build manages.
 const (
-	LaneDatadog    Lane = "datadog"
-	LaneGitHub     Lane = "github"
-	LaneGitLab     Lane = "gitlab"
-	LaneJira       Lane = "jira"
-	LaneConfluence Lane = "confluence"
-	LaneSlack      Lane = "slack"
-	LaneMattermost Lane = "mattermost"
-	LaneCloudflare Lane = "cloudflare"
-	LaneExpo       Lane = "expo"
+	LaneDatadog     Lane = "datadog"
+	LaneGitHub      Lane = "github"
+	LaneGitLab      Lane = "gitlab"
+	LaneJira        Lane = "jira"
+	LaneConfluence  Lane = "confluence"
+	LaneSlack       Lane = "slack"
+	LaneMattermost  Lane = "mattermost"
+	LaneCloudflare  Lane = "cloudflare"
+	LaneExpo        Lane = "expo"
+	LaneGoogleCloud Lane = "google_cloud"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
@@ -90,7 +91,7 @@ const (
 func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
-		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo,
+		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneGoogleCloud,
 	}
 }
 
@@ -213,6 +214,8 @@ type Desired struct {
 	//     as read.
 	//   - expo: `viewer`, `runner`, `developer` or `release_manager`, an
 	//     unset level reading as viewer.
+	//   - google_cloud: `viewer`, `operator` or `administer`, an unset level
+	//     reading as viewer.
 	Level string `json:"level,omitempty"`
 
 	// Permissions is GitHub's per-permission grant; nil elsewhere.

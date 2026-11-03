@@ -15,6 +15,7 @@ import (
 	_ "github.com/crewlet/crewlet/internal/expo"
 	_ "github.com/crewlet/crewlet/internal/github"
 	_ "github.com/crewlet/crewlet/internal/gitlab"
+	_ "github.com/crewlet/crewlet/internal/googlecloud"
 	_ "github.com/crewlet/crewlet/internal/mattermost"
 	_ "github.com/crewlet/crewlet/internal/slack"
 )

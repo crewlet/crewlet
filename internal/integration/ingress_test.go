@@ -15,16 +15,17 @@ import (
 // healthy integration over deliveries that go nowhere.
 func TestEverySurfaceDeclaresWhoOwnsItsAddress(t *testing.T) {
 	want := map[integration.Kind]integration.Ingress{
-		integration.KindGitHub:     integration.IngressEngine,
-		integration.KindGitLab:     integration.IngressEngine,
-		integration.KindJira:       integration.IngressEngine,
-		integration.KindConfluence: integration.IngressEngine,
-		integration.KindDatadog:    integration.IngressEngine,
-		integration.KindSlack:      integration.IngressOperator,
-		integration.KindMattermost: integration.IngressNone,
-		integration.KindAtlassian:  integration.IngressNone,
-		integration.KindCloudflare: integration.IngressNone,
-		integration.KindExpo:       integration.IngressNone,
+		integration.KindGitHub:      integration.IngressEngine,
+		integration.KindGitLab:      integration.IngressEngine,
+		integration.KindJira:        integration.IngressEngine,
+		integration.KindConfluence:  integration.IngressEngine,
+		integration.KindDatadog:     integration.IngressEngine,
+		integration.KindSlack:       integration.IngressOperator,
+		integration.KindMattermost:  integration.IngressNone,
+		integration.KindAtlassian:   integration.IngressNone,
+		integration.KindCloudflare:  integration.IngressNone,
+		integration.KindExpo:        integration.IngressNone,
+		integration.KindGoogleCloud: integration.IngressNone,
 	}
 	for _, kind := range integration.Kinds {
 		expect, listed := want[kind]

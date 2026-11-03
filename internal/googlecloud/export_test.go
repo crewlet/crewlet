@@ -2,7 +2,10 @@ package googlecloud
 
 import (
 	"context"
+	"net/http"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // SetClock replaces the time a client reads and waits by, so a test's
@@ -57,3 +60,16 @@ func PredefinedRoles() map[string]string { return predefinedRoles() }
 
 // Reject is how the loop reads a failure: the credential's, or a fault.
 func Reject(err error) error { return reject(err) }
+
+// Seat-facing names a test asserts on.
+func DisplayName(company, handle string) string { return displayName(company, handle) }
+func Description(company, handle string) string { return description(company, handle) }
+
+// OpenAccess opens the registered access vendor with a transport pointed at a
+// fake and a clock, which the production Open cannot be handed.
+func OpenAccess(
+	vendor seataccess.Vendor, in seataccess.OpenInput, hc *http.Client,
+	now func() time.Time, sleep func(context.Context, time.Duration) error,
+) (seataccess.Session, error) {
+	return vendor.(accessVendor).open(in, hc, &clock{now: now, sleep: sleep})
+}
