@@ -1569,13 +1569,13 @@ Two things MCP does not cover, and what to do instead:
   a parser, and that is an in-tree Go interface — the
   [notification spine](../concepts/event-system.md) is backend-neutral by
   design, but a third-party app contributes a client, a parser and a transport as code.
-  That is a pull request, not a config entry. The nine this build serves are
+  That is a pull request, not a config entry. The eight this build routes are
   [Mattermost](../integrations/mattermost.md), [Slack](../integrations/slack.md),
   [Jira](../integrations/jira.md), [Confluence](../integrations/confluence.md),
-  [GitLab](../integrations/gitlab.md), [GitHub](../integrations/github.md),
-  [Datadog](../integrations/datadog.md) and [Cloudflare](../integrations/cloudflare.md),
-  plus Atlassian's own Forge relay, and
-  every one of them routes end to end. A config block the engine cannot honour
+  [GitLab](../integrations/gitlab.md), [GitHub](../integrations/github.md) and
+  [Datadog](../integrations/datadog.md), plus Atlassian's own Forge relay, and
+  every one of them routes end to end. [Cloudflare](../integrations/cloudflare.md)
+  receives nothing yet: it provisions each agent's token and its tool only. A config block the engine cannot honour
   is refused rather than ignored, because a silently dropped integration block
   looks exactly like one that is working until somebody notices the messages
   never arrived.
