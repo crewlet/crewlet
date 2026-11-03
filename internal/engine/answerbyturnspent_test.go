@@ -131,6 +131,7 @@ func (w *spentWorld) leasedBy(t *testing.T, lease func(string) (sandbox.Fence, b
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Answers:  fleetAnswers(),
+		Pushes:   noPushes{},
 		Audience: noAudience{}, Queue: w.board, Pending: w.store, Manager: w.manager,
 		Resume: resume, After: h.retries.after, Spent: h.dispatcher.SpendAnswer,
 		WasSpent: h.dispatcher.AnswerWorked,

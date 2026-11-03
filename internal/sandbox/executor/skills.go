@@ -211,7 +211,7 @@ func claudeSkillsGate(plugin string, required bool) string {
 			`that reports loading a skill, and this run's company requires a skill before some of its ` +
 			`tools; upgrade Claude Code in the box image" >&2; exit 1`
 	}
-	return "if at " + floorArgs(claudeSkillsFloor) + `; then set -- "$@" --plugin-dir ` + shellQuote(plugin) +
+	return "if at " + floorArgs(claudeSkillsFloor) + `; then set -- "$@" --plugin-dir ` + sandbox.ShellQuote(plugin) +
 		"; else " + older + "; fi\n"
 }
 

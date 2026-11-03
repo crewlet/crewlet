@@ -19,7 +19,9 @@ import (
 // floors are there: a mark has no age, and one that expired would read as a
 // group nobody ever consumed. A COMPARE-AND-SET on the revision it read from
 // the leader, because every node consuming the group writes the mark, and a
-// plain put landing out of order would move it back.
+// plain put landing out of order would move it back. Retried as every fleet
+// compare-and-swap loop is, at most [fleetCASAttempts] times: its contenders
+// are the nodes consuming the group, which the fleet's head count bounds.
 func (f *FleetStore) RaiseFeedMark(ctx context.Context, m coord.FeedMark) (bool, error) {
 	if err := m.Validate(); err != nil {
 		return false, err
@@ -33,21 +35,21 @@ func (f *FleetStore) RaiseFeedMark(ctx context.Context, m coord.FeedMark) (bool,
 	}
 	key := coord.FeedMarkKey(m.Stream, m.Group)
 	raised := false
-	err = f.retryRaces(ctx, "raise a feed mark", key, func() (bool, error) {
+	settled, err := casRetry(ctx, &f.positionTrips, "raise a feed mark", func() (bool, error) {
 		held, revision, found, readErr := f.feedMarkAt(ctx, key)
 		switch {
 		case readErr != nil:
 			return false, readErr
 		case found && !m.Supersedes(held):
-			return false, nil
+			return true, nil
 		case !found:
 			_, createErr := f.create(ctx, f.positions, key, body)
 			switch {
 			case createErr == nil:
 				raised = true
-				return false, nil
-			case errors.Is(createErr, jetstream.ErrKeyExists):
 				return true, nil
+			case errors.Is(createErr, jetstream.ErrKeyExists):
+				return false, nil
 			case errors.Is(createErr, errCreateUnanswered):
 				return false, writeUnknown("raise a feed mark", createErr)
 			default:
@@ -58,13 +60,16 @@ func (f *FleetStore) RaiseFeedMark(ctx context.Context, m coord.FeedMark) (bool,
 		switch {
 		case updateErr == nil:
 			raised = true
-			return false, nil
-		case lostUpdateRace(updateErr):
 			return true, nil
+		case lostUpdateRace(updateErr):
+			return false, nil
 		default:
 			return false, writeUnknown("raise a feed mark", updateErr)
 		}
 	})
+	if err == nil && !settled {
+		err = contended("RaiseFeedMark", key)
+	}
 	return raised, err
 }
 

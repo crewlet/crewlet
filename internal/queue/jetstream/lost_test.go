@@ -220,7 +220,7 @@ func TestAConnectionClosedForGoodIsReportedOnceWithItsCause(t *testing.T) {
 func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 	t.Parallel()
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
-	q := newQueueWith(t, Config{URL: srv.URL()})
+	q := newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
 	second, err := q.DialWatched()
 	if err != nil {
 		t.Fatalf("DialWatched: %v", err)
@@ -386,7 +386,7 @@ func TestAStartThatFailedOnALostConnectionCarriesTheCause(t *testing.T) {
 func TestAStartWaitsForTheCauseOfAConnectionAlreadyClosed(t *testing.T) {
 	t.Parallel()
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
-	nc, err := dial(Config{URL: srv.URL()}, watched{})
+	nc, err := dial(Config{URL: srv.URL(), Token: externaltest.Token}, watched{})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestAStartIsNeverWaitedOnForItsOwnClose(t *testing.T) {
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
 	step := fmt.Errorf("record a node's admission: %w", nats.ErrConnectionClosed)
 
-	q := newQueueWith(t, Config{URL: srv.URL()})
+	q := newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
 	if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
@@ -486,7 +486,7 @@ func TestAStartIsNeverWaitedOnForItsOwnClose(t *testing.T) {
 	stop := context.WithoutCancel(cancelled)
 	opened := make(chan error, 1)
 	go func() {
-		q, err := Open(cancelled, Config{URL: srv.URL()})
+		q, err := Open(cancelled, Config{URL: srv.URL(), Token: externaltest.Token})
 		if err == nil {
 			_ = q.Stop(stop)
 		}
@@ -531,7 +531,7 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 	t.Run("the queue's own stop", func(t *testing.T) {
 		t.Parallel()
 		srv := externaltest.Start(t, queue.MaxPayloadBytes)
-		q, err := Open(t.Context(), Config{URL: srv.URL()})
+		q, err := Open(t.Context(), Config{URL: srv.URL(), Token: externaltest.Token})
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
@@ -544,7 +544,7 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 	t.Run("an owner closing a watched connection", func(t *testing.T) {
 		t.Parallel()
 		srv := externaltest.Start(t, queue.MaxPayloadBytes)
-		q := newQueueWith(t, Config{URL: srv.URL()})
+		q := newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
 		watched, err := q.DialWatched()
 		if err != nil {
 			t.Fatalf("DialWatched: %v", err)
@@ -556,7 +556,7 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 	t.Run("a donor's own connection closed for good under it", func(t *testing.T) {
 		t.Parallel()
 		srv := externaltest.Start(t, queue.MaxPayloadBytes)
-		q := newQueueWith(t, Config{URL: srv.URL()})
+		q := newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
 		owned, err := q.DialOwned()
 		if err != nil {
 			t.Fatalf("DialOwned: %v", err)
@@ -605,7 +605,8 @@ func TestEveryConnectionANodeDependsOnIsWatched(t *testing.T) {
 		t.Fatalf("Client: %v", err)
 	}
 	t.Cleanup(func() { _ = onEmbedded.Stop(context.WithoutCancel(t.Context())) })
-	onExternal := newQueueWith(t, Config{URL: externaltest.Start(t, queue.MaxPayloadBytes).URL()})
+	onExternal := newQueueWith(t, Config{URL: externaltest.Start(t, queue.MaxPayloadBytes).URL(),
+		Token: externaltest.Token})
 
 	want := reflect.ValueOf(lossWatch{}.closed).Pointer()
 	for _, q := range []struct {

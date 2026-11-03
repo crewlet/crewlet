@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +44,11 @@ type Bootstrap struct {
 
 	// Store is the local database file this node materializes into.
 	Store Store `yaml:"store,omitempty" json:"store"`
+
+	// Git is how this node serves the company's repositories: its cache's
+	// directory and budget and its git processes. Read only on a node with
+	// the git role whose company sets code.native.
+	Git Git `yaml:"git,omitempty" json:"git,omitzero"`
 
 	// Stream is the durable event log — the source of truth every node
 	// writes through.
@@ -394,6 +400,7 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.normalize())
 	p.wrap(b.Node.validate(field("node")))
 	p.wrap(b.Store.validate(field("store")))
+	p.wrap(b.Git.validate(field("git"), b.Store))
 	p.wrap(b.Stream.validate(field("stream")))
 	p.wrap(b.Coordination.validate(field("coordination")))
 	p.wrap(b.API.validate(field("api"), b.ServesAPI(), b.Profile("").RunsIngress()))
@@ -599,7 +606,8 @@ func (b *Bootstrap) ValidateRoles() error {
 }
 
 // checkRolesAndBroker refuses the three pairings of roles and broker the
-// estate cannot run on.
+// estate cannot run on, and the one pairing of roles a git node cannot serve
+// on (git without the ingress whose listener it is served on).
 //
 // ONE PLACE FOR ALL THREE, because they are one decision rather than three:
 // every data node holds the whole estate as a MEMBER of the broker, and a node
@@ -611,6 +619,19 @@ func (b *Bootstrap) ValidateRoles() error {
 // ways out.
 func (b *Bootstrap) checkRolesAndBroker(p *problems, roles placement.RoleSet) {
 	data := roles.Has(placement.RoleData)
+	// GIT IS SERVED ON THE API LISTENER, which only a node with ingress
+	// mounts: a git node without it would build a cache and a host that no
+	// request can reach. Asked BEFORE the data rule below returns, so a
+	// data node is held to it too. NOT a "git needs data" rule: in this
+	// release git needs data only through ingress, and a node without data
+	// that names both is refused once, by the ingress rule below.
+	if roles.Has(placement.RoleGit) && !roles.Has(placement.RoleIngress) {
+		p.add(field("node.roles"), ErrConflict,
+			"%q needs %q: its routes are served on the API listener, which only a "+
+				"node with %q mounts. Add %q, or drop %q", placement.RoleGit,
+			placement.RoleIngress, placement.RoleIngress, placement.RoleIngress,
+			placement.RoleGit)
+	}
 	switch kind := b.BrokerKind(); {
 	case data && kind == placement.BrokerLeaf:
 		p.add(field("stream.leaf.urls"), ErrConflict,
@@ -650,6 +671,55 @@ var needsData = map[placement.NodeRole]string{
 		"replicated estate and act on its own state log",
 }
 
+// otherMembers is how many OTHER broker members this file names, and the
+// list they were counted from.
+//
+// COUNTED ONLY FOR AN EMBEDDED STREAM, because those are the members this
+// file names. An external cluster's membership is not here and cannot be —
+// `stream.url` is an address, and how many servers answer behind it is the
+// operator's business — so a peer list written against one is refused
+// outright by [Stream.validate] rather than counted into a quorum the engine
+// never sees. Counted anyway, it refused a one-peer external config as a
+// two-node fleet: an error naming a quorum that is not this file's, whose only
+// remedy was to delete a line that was already doing nothing.
+//
+// And counted as the OTHER members the list names, which is what it is for:
+// an entry recognisably this node's own route, or a repeat of one already
+// counted, is not another member ([StreamCluster.members]), and counting it
+// passed a two-node fleet as three and let replicas 3 onto two members.
+// [Bootstrap.Warnings] names every entry discounted here.
+func (b *Bootstrap) otherMembers() (int, clusterMembers) {
+	if b.Stream.Type == StreamNATS {
+		return 0, clusterMembers{}
+	}
+	members := b.Stream.Cluster.members()
+	return len(members.Others), members
+}
+
+// clustered reports whether this node is in a FLEET, as this file says: it
+// names other members, a cluster name or an external broker; it is a leaf; or
+// it is a member that opens a leaf listener.
+//
+// ONE PREDICATE, for every rule that asks "is this node in a fleet"
+// (ADR-0008: two copies of the question are two answers): the topology's
+// refusal of local coordination ([Bootstrap.validateTopology]). The warning
+// about a `container` coding box beside the broker asks a narrower question —
+// is the broker an external cluster this engine cannot see the admission of —
+// and reads the broker's kind instead ([tierWarnings]).
+//
+// A LEAF IS IN A FLEET by definition — it holds nothing of its own, so the
+// broker it reaches is always somebody else's members. And so is a member
+// that OPENS a leaf listener, even one with no peers: the nodes that join it
+// claim seats and hold presence leases, and a lease kept in this process is
+// one they can never see — each would read the fleet as having no data node
+// and claim every seat for itself.
+func (b *Bootstrap) clustered() bool {
+	peers, _ := b.otherMembers()
+	leaf := b.BrokerKind() == placement.BrokerLeaf
+	servesLeaves := b.BrokerKind() == placement.BrokerMember && b.Stream.Leaf.Port != 0
+	return peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded || leaf || servesLeaves
+}
+
 // validateTopology refuses slot combinations that cannot work.
 //
 // Both halves of a deployment are named in this one file, so the incoherent
@@ -668,8 +738,10 @@ func (b *Bootstrap) validateTopology() error {
 	// is verified with. That left a node serving no API free to leave it
 	// out — and every data node runs every state-log domain, whatever its
 	// other roles (the identity directory included), and every record on
-	// every one of those logs is signed and verified under this keyring
-	// because the broker authenticates nothing. A node WITHOUT data needs it
+	// every one of those logs is signed and verified under this keyring,
+	// because the broker's admission vouches for a connection and never a
+	// record (ADR-0031). An embedded fleet's broker admits only keys derived
+	// from this keyring too (ADR-0094). A node WITHOUT data needs it
 	// just as much: the company document it fetches from the coordination
 	// store is authenticated by its seal, a seats node mints and verifies
 	// the per-run tokens its executors carry, and every request it sends
@@ -692,37 +764,9 @@ func (b *Bootstrap) validateTopology() error {
 				"`material:` at a ${VAR}")
 	}
 
-	// COUNTED ONLY FOR AN EMBEDDED STREAM, because those are the members
-	// this file names. An external cluster's membership is not here and
-	// cannot be — `stream.url` is an address, and how many servers answer
-	// behind it is the operator's business — so a peer list written against
-	// one is refused outright by [Stream.validate] rather than counted into
-	// a quorum the engine never sees. Counted anyway, it refused a
-	// one-peer external config as a two-node fleet: an error naming a
-	// quorum that is not this file's, whose only remedy was to delete a
-	// line that was already doing nothing.
-	//
-	// And counted as the OTHER members the list names, which is what it is
-	// for: an entry recognisably this node's own route, or a repeat of one
-	// already counted, is not another member ([StreamCluster.members]), and
-	// counting it passed a two-node fleet as three and let replicas 3 onto
-	// two members. [Bootstrap.Warnings] names every entry discounted here.
-	peers := 0
-	var members clusterMembers
-	if b.Stream.Type != StreamNATS {
-		members = b.Stream.Cluster.members()
-		peers = len(members.Others)
-	}
-	// A LEAF IS IN A FLEET by definition — it holds nothing of its own, so
-	// the broker it reaches is always somebody else's members. And so is a
-	// member that OPENS a leaf listener, even one with no peers: the nodes
-	// that join it claim seats and hold presence leases, and a lease kept
-	// in this process is one they can never see — each would read the
-	// fleet as having no data node and claim every seat for itself.
+	peers, members := b.otherMembers()
+	clustered := b.clustered()
 	leaf := b.BrokerKind() == placement.BrokerLeaf
-	servesLeaves := b.BrokerKind() == placement.BrokerMember && b.Stream.Leaf.Port != 0
-	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded ||
-		leaf || servesLeaves
 
 	// NOT HERE: a broker MEMBER with no store directory. Every member is
 	// refused one — a member of a fleet and a solo member alike — by
@@ -821,10 +865,12 @@ type clusterMembers struct {
 
 // discountedPeer is a peer entry not counted as another member, and why.
 type discountedPeer struct {
-	// Index is the entry's position in stream.cluster.peers, and Raw what
-	// it says.
+	// Index is the entry's position in stream.cluster.peers, and Shown
+	// what it says with any userinfo dropped ([withoutUserinfo]): every
+	// sentence that names a discounted entry quotes this, and an entry with
+	// a credential is discounted like any other before it is refused.
 	Index int
-	Raw   string
+	Shown string
 
 	// Self is set when the entry is this node's own route, and Matches
 	// names the setting it matched ("cluster.host and cluster.port" or
@@ -866,13 +912,13 @@ func (c StreamCluster) members() clusterMembers {
 		}
 		if setting, self := own[addr]; self {
 			out.Discounted = append(out.Discounted, discountedPeer{
-				Index: i, Raw: raw, Self: true, Matches: setting,
+				Index: i, Shown: withoutUserinfo(raw), Self: true, Matches: setting,
 			})
 			continue
 		}
 		if first, repeat := seen[addr]; repeat {
 			out.Discounted = append(out.Discounted, discountedPeer{
-				Index: i, Raw: raw, RepeatOf: first,
+				Index: i, Shown: withoutUserinfo(raw), RepeatOf: first,
 			})
 			continue
 		}
@@ -931,6 +977,115 @@ func routeAddress(raw string) (string, bool) {
 	return joinRoute(u.Hostname(), port), true
 }
 
+// carriesCredential reports whether a fleet URL — a peer's route or a member's
+// leaf listener — carries a userinfo: `user:pass@`, or a bare `token@`, with
+// a scheme or without one.
+//
+// REFUSED IN A FLEET URL, because a fleet's credentials are DERIVED from
+// secrets.keys, never written (ADR-0094): the engine sets each route's
+// userinfo itself, so one written there is overwritten and is a password
+// sitting in a config file for nothing, and a leaf link presents an nkey,
+// beside which nats-server would also send a URL's userinfo, in clear.
+//
+// ANY `@` IS ONE, read off the text rather than off a parse. A route or a
+// leaf URL is a scheme, a host and a port, so a userinfo is the only thing
+// an `@` in one can be — and a parse misses the entries most likely to hold
+// one: `ops:s3cret@node-b:6222`, written without its scheme, parses as the
+// scheme `ops` with no userinfo at all, `s3cret@node-b:6222` does not parse,
+// and neither does a userinfo beside a mistyped port. Each of those fell
+// through to the shape refusal, whose sentence quoted the credential this
+// rule exists to keep out of one. An empty userinfo (`nats://@host`) is
+// refused too: it sends nothing a member could check, and is never what a
+// fleet URL means.
+func carriesCredential(raw string) bool {
+	return strings.Contains(raw, "@")
+}
+
+// withoutUserinfo is a fleet URL as a sentence may quote it: as written, with
+// everything between its scheme and its last `@` dropped — or everything up
+// to that `@`, where the entry opens with no scheme.
+//
+// EVERY SENTENCE THAT QUOTES A PEER OR A LEAF URL QUOTES IT THROUGH THIS —
+// a refusal, a count's clause, an advisory — because those sentences reach
+// `crewlet validate`, a refused boot's stderr and a config_advisory log line.
+// An entry that carries a credential is refused for it ([carriesCredential])
+// BESIDE the rules that count it (its own route, a repeat), whose sentences
+// name it too; the shape refusals are reached only by an entry with no `@`,
+// and quote through this all the same, so no reordering of the checks can
+// put a credential back into one.
+//
+// A SCHEME IS ONLY WHAT RFC 3986 CALLS ONE — a letter, then letters, digits,
+// `+`, `-` or `.` — and not merely whatever precedes the first `://`: in
+// `ops:pa://ss@node-b:6222`, a schemeless entry whose password holds `://`,
+// keeping that prefix would quote `ops:pa`.
+func withoutUserinfo(raw string) string {
+	entry := strings.TrimSpace(raw)
+	at := strings.LastIndex(entry, "@")
+	if at < 0 {
+		return entry
+	}
+	if scheme := strings.Index(entry, "://"); scheme > 0 && scheme < at && isURLScheme(entry[:scheme]) {
+		return entry[:scheme+len("://")] + entry[at+1:]
+	}
+	return entry[at+1:]
+}
+
+// isURLScheme reports whether s is a URL scheme as RFC 3986 §3.1 spells one:
+// ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ).
+func isURLScheme(s string) bool {
+	for i, r := range s {
+		switch {
+		case 'a' <= r && r <= 'z', 'A' <= r && r <= 'Z':
+		case i > 0 && ('0' <= r && r <= '9' || r == '+' || r == '-' || r == '.'):
+		default:
+			return false
+		}
+	}
+	return s != ""
+}
+
+// presentsCredential answers whether an external stream's dial presents
+// anything a server could authenticate: a credentials file, a token, a client
+// certificate, or a userinfo in any entry of url.
+//
+// EVERY ENTRY, split and trimmed as the NATS client splits stream.url (the
+// rule internal/queue/jetstream's serverAddresses follows), because the client
+// fails over between them and sends whichever entry's userinfo it dials.
+func (s *Stream) presentsCredential() bool {
+	if s.Credentials != "" || s.Token != "" || s.TLS.Cert != "" {
+		return true
+	}
+	for _, entry := range strings.Split(s.URL, ",") {
+		if entryCarriesUserinfo(strings.TrimSpace(entry)) {
+			return true
+		}
+	}
+	return false
+}
+
+// entryCarriesUserinfo answers whether one stream.url entry carries a
+// non-empty userinfo — `user:password@`, or a bare `token@`, which the client
+// sends as a bearer token.
+//
+// A BARE host:port IS THE CLIENT'S nats:// ONE, and is given that scheme
+// before it is parsed: without one, `token@host:4222` parses as a path whose
+// first segment holds a colon and is refused, and the token the client sends
+// would not be counted. An empty userinfo (`nats://@host`) sends nothing.
+func entryCarriesUserinfo(entry string) bool {
+	if entry == "" {
+		return false
+	}
+	if !strings.Contains(entry, "://") {
+		entry = "nats://" + entry
+	}
+	u, err := url.Parse(entry)
+	if err != nil || u.User == nil {
+		return false
+	}
+	password, _ := u.User.Password()
+	return u.User.Username() != "" || password != ""
+}
+
 // joinRoute is the one normal form both sides of the comparison are put in.
 func joinRoute(host string, port int) string {
 	host = strings.ToLower(strings.Trim(host, "[]"))
@@ -963,9 +1118,9 @@ func (m clusterMembers) discountedList() string {
 func (d discountedPeer) describe() string {
 	if d.Self {
 		return fmt.Sprintf("peers[%d] %q, which is this node's own route (%s)",
-			d.Index, d.Raw, d.Matches)
+			d.Index, d.Shown, d.Matches)
 	}
-	return fmt.Sprintf("peers[%d] %q, which repeats peers[%d]", d.Index, d.Raw, d.RepeatOf)
+	return fmt.Sprintf("peers[%d] %q, which repeats peers[%d]", d.Index, d.Shown, d.RepeatOf)
 }
 
 // MaxStreamReplicas is the most copies a stream may keep.
@@ -990,13 +1145,17 @@ const NodeIDEnvVar = "CREWLET_NODE_ID"
 
 // nodeIDPattern is what a node id may look like. It ends up in log fields
 // and in broker consumer names, so it is restricted to what both accept.
-var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var nodeIDPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+})
 
 // ValidNodeID reports whether id is one a node could run under — the rule
 // [Node.ID] is resolved against, for a caller naming some OTHER node, such as
 // the operator gesture that evicts one.
 func ValidNodeID(id string) bool {
-	return nodeIDPattern.MatchString(id) && reservedNodeID(id) == ""
+	return nodeIDPattern().MatchString(id) && reservedNodeID(id) == ""
 }
 
 // reservedNodeID is why id, which has a node id's shape, names something
@@ -1035,8 +1194,8 @@ type Node struct {
 	// and then DefaultNodeID, so nothing has to be set to run one engine.
 	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" desc:"Stable identity of this process. Empty reads CREWLET_NODE_ID, then defaults to node-0."`
 
-	// Roles is what this process is willing to do: data, ingress, seats,
-	// workers. Omit the key to run every role — the single-process
+	// Roles is what this process is willing to do: data, git, ingress,
+	// seats, workers. Omit the key to run every role — the single-process
 	// default, and the shape every company starts as.
 	//
 	// `data` is the one role that is a promise about the DISK rather than
@@ -1051,7 +1210,7 @@ type Node struct {
 	// retention sweep, and one with no ingress node never hears a webhook.
 	// Neither is visible in any single node's config, so the engine checks
 	// it against live node presence at runtime.
-	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers."`
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, git, ingress, seats, workers. Omit for all five. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers. git needs ingress."`
 
 	// Labels are free-form facts about where this process runs (zone: eu,
 	// gpu: "true"), matched exactly by a seat's role.placement selector.
@@ -1088,6 +1247,7 @@ type Node struct {
 // config layer and the seat host can never disagree about what a role is.
 var nodeRoleNames = []string{
 	string(placement.RoleData),
+	string(placement.RoleGit),
 	string(placement.RoleIngress),
 	string(placement.RoleSeats),
 	string(placement.RoleWorkers),
@@ -1107,7 +1267,7 @@ func (n *Node) validate(path Path) error {
 				"effectively no limit", n.MaxConcurrent)
 	}
 
-	if n.ID != "" && !envref.Has(n.ID) && !nodeIDPattern.MatchString(n.ID) {
+	if n.ID != "" && !envref.Has(n.ID) && !nodeIDPattern().MatchString(n.ID) {
 		// A reference is checked after resolution, in ResolveNodeID — the
 		// YAML load path substitutes before this runs, so this branch only
 		// catches a config built in code.
@@ -1231,7 +1391,7 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 	if value == "" {
 		return DefaultNodeID, nil
 	}
-	if !nodeIDPattern.MatchString(value) {
+	if !nodeIDPattern().MatchString(value) {
 		return "", fault(field("node.id"), ErrUnknownValue,
 			"%q must start alphanumeric and contain only letters, digits, "+
 				"'.', '_' or '-' (max 64 chars)", value)
@@ -1547,11 +1707,15 @@ type Stream struct {
 	Debug bool `yaml:"debug,omitempty" json:"debug,omitempty" desc:"Turn on the EMBEDDED broker's own debug logging. Separate from logging.level, which is the engine's; refused for type: nats. Its warnings and errors are never gated by this."`
 
 	// Credentials is a path to a NATS credentials file.
-	Credentials string `yaml:"credentials,omitempty" json:"credentials,omitempty" desc:"Path to a NATS credentials file for an external server."`
+	//
+	// type: nats needs one of Credentials, Token, TLS.Cert or a userinfo in
+	// URL: a node presenting nothing reaches only a server that
+	// authenticates nobody ([Stream.presentsCredential]).
+	Credentials string `yaml:"credentials,omitempty" json:"credentials,omitempty" desc:"Path to a NATS credentials file for an external server. type: nats needs one of credentials, token, tls.cert or a credential in url."`
 
 	// Token is a bearer token presented to an external server. Use ${VAR}
 	// to read it from the environment.
-	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Bearer token for an external server; ${VAR} supported."`
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Bearer token for an external server; ${VAR} supported. type: nats needs one of credentials, token, tls.cert or a credential in url."`
 
 	// TLS is the transport for an external NATS server: a private CA to
 	// trust, and a client certificate to present. Without it a broker
@@ -1599,9 +1763,9 @@ type Stream struct {
 	// this log asks for within it. The broker reserves each ceiling in full
 	// when it creates the stream, so the derived ceilings of every state
 	// log being created are scaled down together to fit what the logs that
-	// already exist leave of half of what the broker can grant them; a
-	// value set here is never scaled, and a boot that cannot reserve it
-	// fails naming this field.
+	// already exist leave of five eighths of what the broker can grant them
+	// (engine.StreamBudgetShare); a value set here is never scaled, and a
+	// boot that cannot reserve it fails naming this field.
 	//
 	// WHAT THIS FIELD DOES IS NARROWER THAN IT LOOKS. It is the value the
 	// stream is CREATED with, and thereafter a DECLARATION the engine
@@ -1748,6 +1912,51 @@ type Stream struct {
 	// a company whose pages write heavily sets it, up to twice the
 	// artifacts log's bound.
 	ArtifactDataLogMaxBytes int64 `yaml:"artifact_data_log_max_bytes,omitempty" json:"artifact_data_log_max_bytes,omitempty" js:"min=1073741824;max=549755813888" desc:"Byte ceiling on the artifact datastore's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
+
+	// CodeLogMaxBytes is the byte ceiling on the code log — the ordered
+	// stream a repository's refs, packs and settings move on.
+	//
+	// UNSET DERIVES IT beside the mutation log's, at two thirds of that
+	// log's ceiling as set or derived, clamped to 1 GiB..1 TiB. Two thirds
+	// is not the byte rate, at which a blocked trim would reach either
+	// ceiling in the same time: the log is reserved on every node whether or
+	// not the company hosts code (below), so its share is weighed against
+	// what the other logs give up for it — a first boot's mutation log
+	// about a fifth shorter — and a share at the byte rate would cost every
+	// company far more ([DerivedCodeLogNumerator] has both). By the byte
+	// rate, two thirds is the least of what a company
+	// whose seats only push writes here, and BELOW what a company whose
+	// seats work through changes writes: its push records, the records that
+	// compact their packs, publish their layers and sweep what each
+	// compaction retired, the barriers its git clients' reads append, and
+	// its changes' records — opens, reviews, comments, merges, every
+	// revision's facts and mergeability, and its queue's and checks' where
+	// they run — take nearly twice to about eight times what its tracker
+	// writes and its seats' reads take a day. Such a company sizes the log
+	// in two steps. Before the first boot neither log exists, so it sets
+	// this field from the reference company's day: twice the mutation log's
+	// ceiling, that day's least, which a set ceiling takes from the derived
+	// logs' share whole ([DerivedCodeLogNumerator] prints what that costs
+	// them on 100 GiB free). Once the streams exist, its own ratio is the
+	// two logs' crewlet.statelog.log.bytes_per_day, and `crewlet retention
+	// set-capacity` moves the log to it.
+	//
+	// It shares the state logs' one budget, and what the mutation log's
+	// field says about it holds here unchanged: the value is the one the
+	// stream is CREATED with, a derived value is scaled with the others to
+	// fit the broker and a set one is not, and crossing it refuses the
+	// append rather than shedding history. The log runs on every node that
+	// runs a state log, whether or not the company hosts code, as every
+	// domain's log does — so its derived ask is paid by every company:
+	// below about 652 GiB free it comes out of the other logs' share (at
+	// 100 GiB the mutation log is created at 9.1 GiB rather than 11.1;
+	// docs/guides/replication.md, "What the code log's reservation costs",
+	// has the other volumes, and internal/engine's
+	// TestThePagesPrintTheCeilingsAFirstBootCreates holds both to what a
+	// first boot creates). A company that hosts no code and is short of
+	// broker room sets the floor here before the first boot, which the
+	// other logs then divide.
+	CodeLogMaxBytes int64 `yaml:"code_log_max_bytes,omitempty" json:"code_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the code log, the ordered stream a repository's refs, packs and settings move on; unset derives two thirds of the mutation log's ceiling, set or derived, 1 GiB..1 TiB. Reserved whether or not the company hosts code: one that hosts none and is short of broker room sets 1073741824 before the first boot."`
 
 	// AssistantLogMaxBytes is the byte ceiling on the Dashboard Assistant's
 	// log, where every person's conversations, turns and proposals are
@@ -1993,11 +2202,16 @@ type StreamCluster struct {
 	Peers []string `yaml:"peers,omitempty" json:"peers,omitempty" desc:"Route URLs of the OTHER members, e.g. nats://node-b.internal:6222. An entry that is this node's own route (cluster.host and port, or cluster.advertise) or a repeat is not counted as a member."`
 
 	// Host is the interface the route listener binds. Empty binds every
-	// one of them, which on a host with a public interface publishes
-	// UNAUTHENTICATED CLUSTER ACCESS: a route port is how a member joins,
-	// and joining is how it reads and writes every stream. Set it to the
+	// one of them.
+	//
+	// The listener admits only a member presenting a route credential
+	// derived from a key of secrets.keys (ADR-0094), and that credential
+	// crosses the network IN CLEAR once per connection — NATS routes carry
+	// a password or a certificate, never a signature — as does every byte
+	// after it: the company's whole event history and every lease. So on a
+	// host with a public interface, empty publishes both. Set it to the
 	// private address the peers reach.
-	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the route listener binds. Empty binds every interface."`
+	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the route listener binds. Empty binds every interface. The listener admits only members presenting a key derived from secrets.keys; a route's credential and every byte after it cross the network in clear, so bind it to the private network the peers are on."`
 
 	// Advertise is the address peers should dial for this member when it
 	// differs from what the member binds — a mapped container port, a NAT,
@@ -2029,14 +2243,18 @@ type StreamLeaf struct {
 	// Port is the leaf listener a MEMBER opens for the fleet's leaves. Zero
 	// opens none.
 	//
-	// It accepts any connection that reaches it, exactly as the route
-	// port does and for the same reason: the fleet is one trust domain on
-	// a network its operator controls. Put both there and nowhere else.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"A member's leaf listener, where the fleet's leaves join. Accepts any connection that reaches it, like the route port. A member with one is in a fleet, so it needs stream.store_dir."`
+	// It admits only a leaf whose link presents the nkey derived from a key
+	// of secrets.keys and signs this member's nonce with it (ADR-0094): a
+	// challenge, so no secret crosses the network. What crosses it after,
+	// everything the leaf's clients ask of the fleet, crosses in clear, as
+	// the route port's does — so both belong on the network the fleet's
+	// operator controls and nowhere else.
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"A member's leaf listener, where the fleet's leaves join. Admits only a leaf whose key is derived from secrets.keys. A member with one is in a fleet, so it needs stream.store_dir."`
 
 	// Host is the interface the leaf listener binds, empty for every one
-	// of them — the same exposure [StreamCluster.Host] names.
-	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the leaf listener binds. Empty binds every interface."`
+	// of them — the same exposure [StreamCluster.Host] names: a link is
+	// authenticated, never encrypted.
+	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the leaf listener binds. Empty binds every interface. A leaf's link is authenticated, not encrypted, so bind it to the private network the leaves are on."`
 
 	// Advertise is the address leaves should dial for this member when it
 	// differs from what it binds.
@@ -2083,11 +2301,21 @@ func (l *StreamLeaf) validate(path Path, s *Stream, external bool) error {
 				"a leaf runs no JetStream, so it has no stream store to keep")
 		}
 		for i, raw := range l.URLs {
+			if carriesCredential(raw) {
+				// NAMING NO PART OF IT, for the peers' reason: the sentence
+				// would print the credential.
+				p.add(at(path, fmt.Sprintf("urls[%d]", i)), ErrConflict,
+					"carries a credential, and a fleet's credentials are derived "+
+						"from secrets.keys: remove the user:pass@, because the link presents "+
+						"this node's own key, and a userinfo would be sent beside it "+
+						"in clear")
+				continue
+			}
 			u, err := url.Parse(strings.TrimSpace(raw))
 			if err != nil || u.Host == "" || !slices.Contains(leafSchemes, u.Scheme) {
 				p.add(at(path, fmt.Sprintf("urls[%d]", i)), ErrUnknownValue,
 					"%q is not a member's leaf listener: want %s://host:port",
-					raw, leafSchemes[0])
+					withoutUserinfo(raw), leafSchemes[0])
 			}
 		}
 		return p.err()
@@ -2199,6 +2427,27 @@ func (s *Stream) validate(path Path) error {
 			"store_dir is where an EMBEDDED server persists; an external "+
 				"cluster keeps its own storage")
 	}
+	// AN EXTERNAL CLUSTER IS DIALLED WITH SOMETHING TO PRESENT, or not at
+	// all. A node that presents nothing can only be admitted by a server
+	// that authenticates nobody, and anything that reaches such a server
+	// reads every event this company publishes and writes as any person on
+	// its estate. The dial refuses that server by what it announces
+	// (internal/queue/jetstream's requiresAuthentication); this is the half
+	// a file can be held to before any dial, and it names the fields.
+	//
+	// A URL's USERINFO COUNTS: the client sends `user:password@` and a bare
+	// `token@` as credentials (address.go in internal/queue/jetstream), so
+	// refusing a file that carries its token there would refuse a node that
+	// authenticates.
+	if external && !s.presentsCredential() {
+		p.add(at(path, "credentials"), ErrMissing,
+			"this node dials an external NATS cluster and presents no "+
+				"credential, so it can only reach one that authenticates nobody, "+
+				"and anything that reaches such a broker reads every event of this "+
+				"company and writes as any person on its estate. Set "+
+				"stream.credentials (a .creds file), stream.token, or "+
+				"stream.tls.cert, as the cluster's operator issues them")
+	}
 	p.wrap(s.durable(path))
 	// THE SAME RULE, and the same reason: this is the limit handed to the
 	// server this process starts. An external cluster's account limits
@@ -2255,9 +2504,10 @@ func (s *Stream) validate(path Path) error {
 	// ASKED AS "is anything else set", THROUGH IsZero, rather than as a
 	// list of the fields that matter. Written as a list it named two of
 	// the four and the other two — cluster.host, which is the answer to
-	// this block's own warning about publishing unauthenticated cluster
-	// access, and cluster.advertise, which a NAT'd member cannot cluster
-	// without — went silently unvalidated. IsZero is the one place that
+	// this block's own warning about publishing the route port, and the
+	// traffic it carries in clear, on a public interface, and
+	// cluster.advertise, which a NAT'd member cannot cluster without —
+	// went silently unvalidated. IsZero is the one place that
 	// enumerates this struct, so a field added later is covered by having
 	// been added there.
 	//
@@ -2302,11 +2552,19 @@ func (s *Stream) validate(path Path) error {
 	// refused whole above.
 	if !external {
 		for i, raw := range s.Cluster.Peers {
-			if _, ok := routeAddress(raw); !ok {
+			switch _, ok := routeAddress(raw); {
+			case carriesCredential(raw):
+				// BEFORE THE SHAPE, and naming no part of the entry: a
+				// sentence that quoted it would print the credential.
+				p.add(idx(at(path, "cluster.peers"), i), ErrConflict,
+					"carries a credential, and a fleet's credentials are "+
+						"derived from secrets.keys: remove the user:pass@, because "+
+						"the engine presents this node's own on every route it dials")
+			case !ok:
 				p.add(idx(at(path, "cluster.peers"), i), ErrUnknownValue,
 					"%q is not a member's route URL: want nats://host:port. "+
 						"The embedded server dials each entry's host and port, "+
-						"and one it cannot dial is never routed to", raw)
+						"and one it cannot dial is never routed to", withoutUserinfo(raw))
 			}
 		}
 	}
@@ -2321,6 +2579,8 @@ func (s *Stream) validate(path Path) error {
 		IamLogMaxBytesFloor, IamLogMaxBytesCeiling)
 	bytesInRange(&p, path, "usage_log_max_bytes", s.UsageLogMaxBytes,
 		UsageLogMaxBytesFloor, UsageLogMaxBytesCeiling)
+	bytesInRange(&p, path, "code_log_max_bytes", s.CodeLogMaxBytes,
+		CodeLogMaxBytesFloor, CodeLogMaxBytesCeiling)
 	bytesInRange(&p, path, "artifacts_log_max_bytes", s.ArtifactsLogMaxBytes,
 		ArtifactsLogMaxBytesFloor, ArtifactsLogMaxBytesCeiling)
 	bytesInRange(&p, path, "artifact_data_log_max_bytes", s.ArtifactDataLogMaxBytes,
@@ -2340,8 +2600,8 @@ func (s *Stream) validate(path Path) error {
 	// operator's own, on the same page of the same file, so the honest
 	// moment to say so is now.
 	//
-	// EVERY STATE LOG IS IN THE SUM, the identity, usage, chat and executor
-	// logs included. The sum is what the broker will be asked to back, so a log
+	// EVERY STATE LOG IS IN THE SUM, the identity, usage, chat, executor and
+	// code logs included. The sum is what the broker will be asked to back, so a log
 	// left out of it is a limit this check passes and the boot refuses —
 	// which is the one outcome the check exists to prevent, arriving with a
 	// message that says the configuration was fine.
@@ -2368,17 +2628,17 @@ func (s *Stream) validate(path Path) error {
 				"pages_log_max_bytes %d + iam_log_max_bytes %d + "+
 				"usage_log_max_bytes %d + artifacts_log_max_bytes %d + "+
 				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d + "+
-				"chat_log_max_bytes %d + executor_log_max_bytes %d = %d): the "+
-				"broker refuses a stream whose "+
-				"ceiling it cannot back, so this node would fail to provision one "+
-				"of them. Raise store_max_bytes, or lower the "+
+				"chat_log_max_bytes %d + executor_log_max_bytes %d + "+
+				"code_log_max_bytes %d = %d): the broker refuses a stream "+
+				"whose ceiling it cannot back, so this node would fail to "+
+				"provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings, and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
 			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
 			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, s.AssistantLogMaxBytes,
-			s.ChatLogMaxBytes, s.ExecutorLogMaxBytes, declared)
+			s.ChatLogMaxBytes, s.ExecutorLogMaxBytes, s.CodeLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an
@@ -2584,6 +2844,30 @@ func (c *Coordination) LeaseTTL() time.Duration {
 	return time.Duration(c.LeaseTTLSeconds * float64(time.Second))
 }
 
+// LinkLeaseFloor is the shortest seat lease TTL whose heartbeat covers one
+// message of an upload to the broker's object store crossing a LINK at the
+// floor every leg is promised — 11.25 seconds: three heartbeats
+// (seat.HeartbeatRatio) of one 128 KiB message (natsobj.MessageBytes) at
+// thirty seconds a mebibyte (objstore.MiBPace).
+//
+// What it bounds: a node whose uploads cross a link holds at least one
+// message out on the connection its lease renewals ride, so a renewal can
+// queue behind it. At this TTL or over, the renewal still lands with a whole
+// heartbeat of its lease to spare; under it, with less, and under half of it a
+// renewal behind one message at the floor lands after its lease and the node
+// loses its seats to its own upload (natsobj's linkWindow says why the window
+// cannot go below one message).
+//
+// NOTHING WARNS OF IT, because nothing can be set under it: [MinLeaseTTL]
+// refuses every lease under 15 seconds, which is over this floor, so the
+// refusal that keeps a node from ending itself under load keeps it from
+// losing its seats to its own upload too. A test holds the one over the
+// other, so a lower lease floor cannot reopen the gap without a rule for it.
+//
+// A FIGURE HERE, not derived, because config imports none of the three
+// packages whose constants make it; a test in natsobj holds it to them.
+const LinkLeaseFloor = 11250 * time.Millisecond
+
 // ---- secrets --------------------------------------------------------- //
 
 // secretKeyIDPattern keeps a key id colon-free so the envelope
@@ -2598,9 +2882,11 @@ var secretKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // refuses a file without one), because far more than the company's
 // credentials rest on it: every state-log record is signed and verified
 // under it, the company document a node fetches from its peers is
-// authenticated by its seal, and a node serving the API signs every session
-// cookie and per-run token with it. There is no default: a key the engine
-// invented would be one no other node holds.
+// authenticated by its seal, a node serving the API signs every session
+// cookie and per-run token with it, and an embedded fleet's broker admits
+// only a route, a leaf link or an operator presenting a credential derived
+// from it (ADR-0094). There is no default: a key the engine invented would be
+// one no other node holds.
 type Secrets struct {
 	// ActiveKeyID names the key that seals new writes. Required, and it
 	// must name one of Keys.
@@ -2608,7 +2894,7 @@ type Secrets struct {
 
 	// Keys is the keyring. More than one entry supports online rotation:
 	// the active key seals, every key decrypts.
-	Keys []SecretKey `yaml:"keys,omitempty" json:"keys,omitempty" desc:"The keyring; several entries support online rotation."`
+	Keys []SecretKey `yaml:"keys,omitempty" json:"keys,omitempty" desc:"The keyring; several entries support online rotation. Required on every node; an embedded fleet's broker credentials are derived from it beside everything else it signs."`
 }
 
 // SecretKey is one key in the keyring.

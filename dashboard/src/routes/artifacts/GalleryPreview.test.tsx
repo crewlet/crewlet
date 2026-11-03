@@ -6,7 +6,7 @@
  * preview reads its first row alone.
  */
 
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { LivePreviewBudgetProvider } from "@crewlethq/ui";
@@ -14,6 +14,7 @@ import { GalleryPreview, previewWidgets, snapshotKey } from "./GalleryPreview.ts
 import type { ArtifactListItem, DashboardWidget } from "~/protocol/index.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { mintFrame, readBoard, readOutline } from "~/lib/artifacts/api.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 vi.mock("~/lib/artifacts/api.ts", async () => {
   const actual =
@@ -152,7 +153,7 @@ test("nothing live is drawn for an artifact in the trash", async () => {
   const { container } = render(
     <GalleryPreview item={item({ id: "t1", kind: "html", status: "trashed" })} people={people} />,
   );
-  await act(async () => {});
+  await afterMicrotasks();
   expect(container.querySelector(".crewlet-live-preview__live")).toBeNull();
   expect(mintFrame).not.toHaveBeenCalled();
 });

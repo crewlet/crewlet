@@ -12,7 +12,7 @@ afterEach(cleanup);
 
 /** A filing the engine refused on authority, by `reason`, naming `grants`. */
 function refused(reason: string, grants: string[], sentence: string): Refusal {
-  return { sentence, hint: "", retryable: false, grants, reason, remedy: null };
+  return { sentence, hint: "", hostRefusal: "", retryable: false, grants, reason, remedy: null };
 }
 
 test("a refusal some access clears names that access", () => {

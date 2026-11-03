@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/datadog"
@@ -428,8 +429,8 @@ func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 }
 
 // firstPartySources are the notification sources this engine hosts itself —
-// its tracker, its knowledge base and its chat — whose senders ARE seat
-// handles, declared to every party registry the engine builds
+// its tracker, its knowledge base, its chat and its code host — whose senders
+// ARE seat handles, declared to every party registry the engine builds
 // ([partyRegistry]) as the namespaces whose ids are handles.
 //
 // EVERY ONE, whether or not the company runs it natively: a source the
@@ -440,7 +441,7 @@ func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 // fails nothing — its every sender reads as an outside party, so a person's
 // comment wakes a seat that will not act for them — which is why a test
 // holds every native parser's source to this list.
-var firstPartySources = []string{worklet.Source, doclet.Source, chatlet.Source}
+var firstPartySources = []string{worklet.Source, doclet.Source, chatlet.Source, code.Source}
 
 // partyRegistry is the ONE construction of a party registry on this node: the
 // org's seats, with the engine's own surfaces declared as the namespaces whose
@@ -775,7 +776,19 @@ func (e *Engine) inboundStarted() bool {
 // that fails can refuse the apply with nothing served. What a failed start
 // brought up is taken down again: a chat transport left running would hold
 // every seat's socket beside the one the retry opens.
+//
+// NOTHING ON A NODE IN A MAINTENANCE MODE, which has no edge for the same
+// reason a node with no company has none — its constructor returns before the
+// edge, behind the gate that keeps every publisher off it — but which an
+// apply reaches on every activation. The edge is a fleet-wide consumer that
+// routes each delivery onto a seat's mailbox, so starting it here put the
+// notification spine on every node of a capacity window the moment somebody
+// activated a revision. Deliveries are left for a node that publishes, as
+// they are while such a node boots.
 func (e *Engine) startInbound(ctx context.Context, c *Company) error {
+	if !e.mode.Publishes() {
+		return nil
+	}
 	if err := e.startNotifications(ctx, c); err != nil {
 		e.stopNotifications(ctx)
 		return fmt.Errorf("start the inbound edge: %w", err)

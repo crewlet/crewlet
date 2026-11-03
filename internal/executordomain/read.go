@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -113,7 +114,7 @@ type Session struct {
 	// it ended, nil until then.
 	EndedAt         time.Time
 	EndedAtPosition statelog.Position
-	Ending          *Ending
+	Ending          *executorkeep.Ending
 
 	// AskExcerpt is what the turn was asked: somebody else's words.
 	AskExcerpt string `untrusted:"fence"`
@@ -125,11 +126,55 @@ func (s Session) Ended() bool { return s.Ending != nil }
 // HasObject reports a row that names a session's object.
 func (s Session) HasObject() bool { return !s.Object.Key.IsZero() }
 
+// Kept is the row as continuing its turn's kept session reads it
+// ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
+// view of it, which the engine's restore and the read surface both make, so a
+// reader of whether a relaunch would continue the session decides on the
+// fields the relaunch does.
+func (s Session) Kept() executorkeep.TurnRow {
+	return executorkeep.TurnRow{
+		Handle: s.Handle, Turn: s.Turn,
+		Harness: s.Harness, HarnessVersion: s.HarnessVersion, SessionID: s.SessionID,
+		ArchiveFormat: s.ArchiveFormat, LaunchSeq: s.LaunchSeq, CaptureSeq: s.CaptureSeq,
+		Object: s.Object, Ended: s.Ended(),
+		ConversationKey: s.ConversationKey, NotKept: s.NotKept(),
+		ContentKey: s.ContentKey, Home: s.Home, Workspace: s.Workspace,
+		ContextTokens: s.ContextTokens, Interrupted: s.Interrupted, EndedAt: s.EndedAt,
+		BaseTurn: s.BaseTurn,
+	}
+}
+
+// Kept is the read as a turn's first launch freezes it
+// ([executorkeep.ConversationHead]): the ONE conversion of a head into the
+// sandbox's view of it, as [Session.Kept] is of a row. A read made at no
+// position carries none.
+func (h Head) Kept() executorkeep.ConversationHead {
+	kept := executorkeep.ConversationHead{Absorbs: h.Absorbs()}
+	if h.Position.Seq != 0 {
+		kept.ReadThrough = h.Position.Packed()
+	}
+	for _, s := range h.Siblings {
+		kept.Siblings = append(kept.Siblings, s.Kept())
+	}
+	if h.Session != nil {
+		session := h.Session.Kept()
+		kept.Session = &session
+	}
+	return kept
+}
+
+// RelaunchRead is the level a relaunch reads its turn's row at, and so the
+// level every reader of whether a relaunch would continue the turn's session
+// decides on (internal/sandbox's ReadContinuityOf): the capture it continues
+// may have been recorded by another node's keep, which this node's copy may
+// not have applied yet.
+func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
+
 // NotKept is why the row names no session's object, in a reader's words, ""
 // where it names one. A row names none for one of three reasons, each the
 // domain's own and told apart off the row alone: nothing of the turn's session
 // was captured — yet, while the turn is live, its row its begin's; the turn's
-// newest capture was not kept, which its end said ([Ending.Unkept]) and which
+// newest capture was not kept, which its end said ([executorkeep.Ending.Unkept]) and which
 // released the older capture the row named, if any ([applyEnd]) — told by the
 // unkept capture being newer than the place the row keeps, which a release
 // leaves as it was; or the seat's session budget released it to make room
@@ -143,7 +188,7 @@ func (s Session) NotKept() string {
 	switch {
 	case s.HasObject():
 		return ""
-	case s.Ending != nil && s.Ending.Unkept != nil && s.Ending.Unkept.supersedes(s.LaunchSeq, s.CaptureSeq):
+	case s.Ending != nil && s.Ending.Unkept != nil && unkeptSupersedes(*s.Ending.Unkept, s.LaunchSeq, s.CaptureSeq):
 		u := *s.Ending.Unkept
 		reason := u.Reason
 		if reason == "" {
@@ -217,7 +262,7 @@ func scanSession(row rowScanner) (Session, error) {
 	if endSeq.Valid {
 		s.EndedAt = store.DecodeTime(endedAt.Int64)
 		s.EndedAtPosition = statelog.Unpack(stream, endSeq.Int64)
-		var e Ending
+		var e executorkeep.Ending
 		if err := json.Unmarshal([]byte(ending), &e); err != nil {
 			return Session{}, fmt.Errorf("executordomain: %s's turn %s's ending: %w",
 				s.Handle, s.Turn, err)
@@ -225,7 +270,7 @@ func scanSession(row rowScanner) (Session, error) {
 		// THE COLUMNS ARE THE ACCOUNT: the outcome as the row was ended
 		// with, and whether a reply went out, which a dedupe merges into
 		// the row rather than into the ending's bytes.
-		e.Outcome, e.Delivered = Outcome(outcome), delivered == 1
+		e.Outcome, e.Delivered = executorkeep.Outcome(outcome), delivered == 1
 		s.Ending = &e
 	}
 	return s, nil
@@ -956,7 +1001,7 @@ func (s ObjectEstate) Read(ctx context.Context, at statelog.Position, fn func(*s
 		return false, errNoReader
 	}
 	served, err := s.Reader.log.Read(ctx, statelog.Query{
-		Level: statelog.ReadStale, Scope: DomainScope(), Set: true, MinPosition: at,
+		Level: statelog.ReadStale, Scope: DomainScope(), Set: true, Floors: []statelog.Position{at},
 	}, fn)
 	if err != nil {
 		return false, err

@@ -58,6 +58,12 @@
 //     ended, or after a relaunch replaced it, is answered and not run.
 //   - A CREDENTIAL A BOX MAY HOLD. The endpoint is per-job, its token expires
 //     with the run, and nothing secret enters the box — see internal/runtoken.
+//   - THE MODEL A CALL WAS MADE ON. A tool loop tells each call its round's
+//     model; a bridged call was made by a harness's own loop, whose rounds
+//     the engine never sees, so each is told the model the run's launch
+//     pointed that harness at ([Session.Model]) — the one a seat's code write
+//     names on its push, so a run's pushes name one model whichever path
+//     made them.
 //   - A DURABLE LEDGER. A run outlives its launching turn and can outlive the
 //     process, so every call is appended where a resume can read it back,
 //     with when it ran, how long it took and who answered it.
@@ -240,6 +246,14 @@ type Session struct {
 	Handle string
 	Role   string
 
+	// Model is the model the run's launch pointed its harness at — the
+	// value the launch records on the run's row (sandbox.LaunchRecord.Model)
+	// — or "" where it named none and left the harness to choose. Every bridged
+	// call carries it as the model it was made on ([toolloop.CallModel]), the
+	// value a tool loop gives a call from its round, so a seat's code write
+	// made through this bridge names the model its run's other writes name.
+	Model string
+
 	// Surface is the live tool surface for this run — the SAME object a
 	// tool loop would execute against. See the package doc for why nothing
 	// here reimplements what it does.
@@ -381,12 +395,12 @@ type Ledger interface {
 	// work that has been done.
 	Append(ctx context.Context, runID string, call Call) error
 
-	// Settle carries onto the run's record whatever calls the ledger still
-	// owes it — ones whose own record did not land, which it carries on a
+	// Settle carries into the run's log whatever calls the ledger still
+	// owes it — ones whose own append did not land, which it carries on a
 	// later call's — before it returns, under a context and a bound of its
 	// own, and reports whether it carried any. The run's collection asks for
-	// it through [Bridge.Settle] before it reads the job's record, since a
-	// job's last call has no later call of its own.
+	// it through [Bridge.Settle] before the job's calls are read for its
+	// resume, since a job's last call has no later call of its own.
 	Settle(ctx context.Context, runID string) bool
 
 	// End is Settle as the session's opening ENDS ([Bridge.Close], a
@@ -978,12 +992,12 @@ func (b *Bridge) Close(runID string) {
 	opened.end()
 }
 
-// Settle asks the session serving job `launch` of a run to carry onto the run's
-// record whatever calls it still owes ([Ledger.Settle]), and reports whether
-// it carried any. For the run's collection, which asks before it reads the
-// job's record: the job is over, so no call of its own will carry them, and
-// its session has not ended yet — a run's session lives until its run settles
-// or its next job replaces it, both after the record is read.
+// Settle asks the session serving job `launch` of a run to carry into the run's
+// log whatever calls it still owes ([Ledger.Settle]), and reports whether it
+// carried any. For the run's collection, which asks before the job's calls are
+// read for its resume: the job is over, so no call of its own will carry them,
+// and its session has not ended yet — a run's session lives until its run
+// settles or its next job replaces it, both after the calls are read.
 //
 // THE JOB'S OWN SESSION, or nothing: a run whose opening on this node serves
 // another job — its next one — or none at all owes this job nothing here.
@@ -1728,8 +1742,8 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// at all — nothing was recorded on it, and nothing is here: the
 		// call did not happen as far as any record says.
 		//
-		// IN WORDS OF ITS OWN, never the error's: the caller is the coding
-		// agent in the box, a model, and the error is a Go error's text
+		// IN WORDS OF ITS OWN, never the error's: the caller is the harness
+		// in the box, a model, and the error is a Go error's text
 		// ("toolloop: context canceled") it can do nothing with. The error
 		// goes to this node's log.
 		log.ErrorContext(o.ctx, "mcp_bridge_dispatch_failed",
@@ -1798,7 +1812,13 @@ func (o *binding) execute(admitted toolloop.Admitted, name string, args map[stri
 	// THE SESSION'S JOB rides the call, so a tool that writes the run's own
 	// row (a question it parks on) writes the job that made the call, or
 	// nothing ([turnctx.WithJob]).
-	ctx := turnctx.WithJob(o.caller.Acting(o.ctx), o.session.Launch)
+	//
+	// AND THE MODEL THE CALL WAS MADE ON, set here and nowhere else on this
+	// path: a harness's own loop made it, and the one model the engine
+	// knows that loop runs is the one the run's launch named
+	// ([Session.Model]).
+	ctx := turnctx.WithJob(toolloop.WithCallModel(o.caller.Acting(o.ctx), o.session.Model),
+		o.session.Launch)
 	res, err = admitted(ctx, llm.ToolCall{Name: name, Arguments: args})
 	return res, nil, err
 }

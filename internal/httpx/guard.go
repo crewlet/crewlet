@@ -13,18 +13,24 @@ import (
 	"time"
 )
 
-// ErrNotPublic is a connection [Guarded] refused because the address it would
-// reach is not on the public internet ([Public]). A client hands it back
-// wrapped in the url.Error and net.OpError of the request, and errors.Is finds
-// it through both, so a caller tells "this address is not allowed" from "this
-// address did not answer".
+// ErrNotPublic is an address the rule refuses: one that is not on the public
+// internet. A connection [Guarded] refused hands it back wrapped in the
+// url.Error and net.OpError of the request, naming the address it refused, and
+// errors.Is finds it through both, so a caller tells "this address is not
+// allowed" from "this address did not answer". [ResolvePublic] answers it for
+// a host that is, or resolves to, such an address. An address the rule could
+// not judge, because the network's resolver failed the lookup it needed
+// ([Rule.Public]), is refused with that failure instead, never with this.
 var ErrNotPublic = errors.New("httpx: the address is not on the public internet")
 
 // The guarded dialer's bounds. They are the shared transport's own, the ones
 // net/http's default dialer carries, because the guard changes WHICH addresses
 // are dialled and nothing about how long a dial may take: the whole request is
 // bounded by the timeout its caller hands [Guarded], which is the patience the
-// caller chose for what it is asking.
+// caller chose for what it is asking. The one lookup the rule may make for a
+// dial (the network's NAT64 prefixes, [Rule.Public]) runs inside the share of
+// the dial's bound net.Dialer gives the address that needed it, so it adds no
+// bound of its own.
 const (
 	guardDialTimeout = 30 * time.Second
 	guardKeepAlive   = 30 * time.Second
@@ -32,7 +38,8 @@ const (
 
 // Guarded builds a client whose every connection reaches only a public
 // address: a clone of [Transport] whose dialer refuses, at the moment it
-// connects, any address [Public] refuses. It is the one client a request to a
+// connects, any address the rule refuses on the network the node is on
+// ([Rule]). It is the one client a request to a
 // URL a REMOTE party named is sent through (ADR-0072), whatever named it: a
 // page an agent wrote, a server's metadata, a redirect.
 //
@@ -49,16 +56,40 @@ const (
 // that does not answer, and when it refuses them all the request fails with
 // [ErrNotPublic].
 //
+// Judged there, the dial stays net.Dialer's own: it resolves the name, races
+// its IPv6 addresses against its IPv4 ones (RFC 8305: the second family starts
+// 300 ms after the first, at once if the first fails) and splits its bound
+// across a family's addresses. A dialer that resolved the name itself and
+// handed net.Dialer one judged address at a time would forgo all of it: each
+// address would take the whole bound, so on a node whose IPv6 path drops
+// connections, the IPv6 addresses the resolver orders first (RFC 6724) would
+// spend the request's time before IPv4 was tried at all.
+//
+// # The network's NAT64 prefixes
+//
+// Each dial makes a [Rule] of its own on the resolver its dialer resolves the
+// name with, the process's own ([NewRule]): on a network that reaches IPv4
+// through a translator, a host with no IPv6 address of its own is dialled at
+// an address under the network's prefix, judged by the IPv4 address it
+// carries. The rule asks for the prefixes at most once a dial, at the socket of
+// the first address whose verdict they can change ([Rule.Public] says which),
+// so an IPv4 address's connect waits on no lookup, and a dial that tries none
+// costs none. When the resolver cannot answer for them, each address that
+// needed the answer is refused at its socket with the resolver's failure,
+// never connected to on a guess, and the dial goes on to the name's addresses
+// that need none.
+//
 // # A proxy the operator configured is dialled as itself
 //
 // The clone keeps the process's proxy settings (the rule [Transport] states),
 // and the proxy's own address is dialled without the check, since a proxy on a
 // private address is the operator's choice rather than the remote party's. The
 // target the proxy is asked for is judged where this process can judge it: an
-// address written into the URL must be public, and is refused before the proxy
-// hears of it. A NAME the proxy resolves itself, so no answer this process got
-// would be the address the proxy connects to, and a check here would be a
-// guess a rebinding answer defeats. An operator whose proxy reaches internal
+// address written into the URL must be public by the same rule on this node's
+// network, and is refused before the proxy hears of it. A NAME the proxy
+// resolves itself, so no answer this process got would be the address the
+// proxy connects to, and a check here would be a guess a rebinding answer
+// defeats. An operator whose proxy reaches internal
 // addresses holds the proxy to this rule; [ErrNotPublic] cannot be its wall.
 //
 // THE PROXY IS TRUSTED FOR THE REQUEST THAT CHOSE IT, never by its address.
@@ -82,7 +113,7 @@ const (
 // address there is a deployment the operator chose, and refusing it would
 // break the deployments the docs describe.
 func Guarded(timeout time.Duration) *http.Client {
-	g := newGuard(&net.Dialer{Timeout: guardDialTimeout, KeepAlive: guardKeepAlive}, Public)
+	g := newGuard(&net.Dialer{Timeout: guardDialTimeout, KeepAlive: guardKeepAlive}, onNetwork)
 	return g.wrap(Customized(timeout, g.install))
 }
 
@@ -92,22 +123,49 @@ var ErrUnguarded = errors.New("httpx: the public-address guard could not be inst
 
 // guard is the dialer behind [Guarded].
 type guard struct {
-	// checked dials every address but a proxy's, with [guard.control] as its
-	// Control hook; plain dials the proxies the transport chose.
+	// checked dials every address but a proxy's, each dial on a copy of it
+	// whose ControlContext judges the address ([guard.dial]); plain dials the
+	// proxies the transport chose.
 	checked, plain *net.Dialer
 
-	// admit is the rule an address is judged by: [Public], always, outside
-	// this package's own tests, which stand a listener on loopback and need
-	// an admitted address to reach it.
-	admit func(netip.Addr) bool
+	// then is the ControlContext the dialer handed to [newGuard] carried, run
+	// after the judgement on an address it lets through: none, outside this
+	// package's own tests, which stop a dial at its connect.
+	then control
+
+	// ruleOn makes the judgement one dial asks of each address, on the
+	// network resolver resolves on: [onNetwork], always, outside this
+	// package's own tests, which stand a listener on loopback and need an
+	// admitted address to reach it.
+	ruleOn func(Resolver) judgement
 }
 
+// control is the shape of net.Dialer's ControlContext.
+type control = func(ctx context.Context, network, address string, c syscall.RawConn) error
+
+// judgement is one dial's verdict on an address it is about to connect to, or
+// the failure that kept the address from being judged: [Rule.Public]'s shape.
+type judgement func(ctx context.Context, ip netip.Addr) (bool, error)
+
+// onNetwork is the rule a guarded dial judges by: one [Rule] a dial, on the
+// resolver the dial resolves its name with, so the network's own NAT64
+// prefixes are asked of the network that translates through them.
+func onNetwork(r Resolver) judgement { return NewRule(r).Public }
+
 // newGuard builds the dialer, d's settings shared by both of its halves.
-func newGuard(d *net.Dialer, admit func(netip.Addr) bool) *guard {
+func newGuard(d *net.Dialer, ruleOn func(Resolver) judgement) *guard {
 	plain, checked := *d, *d
-	g := &guard{plain: &plain, checked: &checked, admit: admit}
-	checked.Control, checked.ControlContext = nil, g.control
-	return g
+	checked.Control, checked.ControlContext = nil, nil
+	return &guard{plain: &plain, checked: &checked, then: d.ControlContext, ruleOn: ruleOn}
+}
+
+// resolver is the resolver the checked dialer resolves a name with: its own,
+// or the process's where it names none.
+func (g *guard) resolver() Resolver {
+	if g.checked.Resolver != nil {
+		return g.checked.Resolver
+	}
+	return net.DefaultResolver
 }
 
 // install sets the guard on a transport: its dialer, and the judgement of
@@ -122,7 +180,7 @@ func (g *guard) install(t *http.Transport) {
 		if err != nil || u == nil {
 			return u, err
 		}
-		if err := g.judgeTarget(r.URL); err != nil {
+		if err := g.judgeTarget(r.Context(), r.URL); err != nil {
 			return nil, err
 		}
 		if rt, ok := r.Context().Value(routeKey{}).(*route); ok {
@@ -187,10 +245,25 @@ func (refusing) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // judgeTarget refuses a target a proxy would be asked for when the URL writes
-// its address and that address is not public. A host that does not parse as
-// an address is a name, which the proxy resolves.
-func (g *guard) judgeTarget(u *url.URL) error {
-	if ip, err := netip.ParseAddr(u.Hostname()); err == nil && !g.admit(ip) {
+// its address and that address is not public on this node's network, or
+// cannot be judged there. A host that does not parse as an address is a name,
+// which the proxy resolves: the parse failing is that verdict, not an error to
+// pass on, so only a written address reaches [guard.judgeAddr].
+func (g *guard) judgeTarget(ctx context.Context, u *url.URL) error {
+	if ip, err := netip.ParseAddr(u.Hostname()); err == nil {
+		return g.judgeAddr(ctx, ip)
+	}
+	return nil
+}
+
+// judgeAddr refuses ip when this node's rule, made on the resolver the guard
+// dials with, finds it not public, or cannot judge it.
+func (g *guard) judgeAddr(ctx context.Context, ip netip.Addr) error {
+	public, err := g.ruleOn(g.resolver())(ctx, ip)
+	switch {
+	case err != nil:
+		return err
+	case !public:
 		return fmt.Errorf("%w: %s", ErrNotPublic, ip)
 	}
 	return nil
@@ -214,97 +287,71 @@ func proxyAddr(u *url.URL) string {
 	return net.JoinHostPort(u.Hostname(), port)
 }
 
-// dial dials the proxy a request's transport chose as itself and everything
-// else through the checked dialer.
+// dial dials the proxy a request's transport chose as itself, and everything
+// else through a copy of the checked dialer whose ControlContext judges each
+// address with a rule of the dial's own, made on the resolver the copy
+// resolves with ([guard.judging]).
 func (g *guard) dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	if rt, ok := ctx.Value(routeKey{}).(*route); ok && rt.proxied(addr) {
 		return g.plain.DialContext(ctx, network, addr)
 	}
-	return g.checked.DialContext(ctx, network, addr)
+	d := *g.checked
+	d.ControlContext = g.judging(g.ruleOn(g.resolver()))
+	return d.DialContext(ctx, network, addr)
 }
 
-// control is the checked dialer's hook: address is the resolved address the
-// socket is about to connect to, never a name.
-func (g *guard) control(_ context.Context, _, address string, _ syscall.RawConn) error {
-	ap, err := netip.ParseAddrPort(address)
-	if err != nil {
-		return fmt.Errorf("%w: %s is not an address this guard can judge", ErrNotPublic, address)
+// judging is one dial's ControlContext. net.Dialer calls it with each address
+// it is about to connect to, once the socket for it exists and before the
+// connection is made, so the address judged is the address connected to
+// whatever a resolver answered, and an address refused here is sent nothing:
+// one that is not public with [ErrNotPublic], and one the rule could not judge
+// with the failure of the lookup that names the network's prefixes.
+// net.Dialer then moves on to the name's next address, and when every address
+// fails it answers with the first one's error, inside a *net.OpError naming
+// that address.
+func (g *guard) judging(judge judgement) control {
+	return func(ctx context.Context, network, address string, c syscall.RawConn) error {
+		ap, err := netip.ParseAddrPort(address)
+		if err != nil {
+			// net.Dialer formats the address itself. One this cannot read is
+			// refused rather than connected to unjudged.
+			return fmt.Errorf("%w: %s is not an address this guard can judge", ErrNotPublic, address)
+		}
+		public, err := judge(ctx, ap.Addr())
+		switch {
+		case err != nil:
+			return err
+		case !public:
+			return fmt.Errorf("%w: %s", ErrNotPublic, ap.Addr())
+		case g.then == nil:
+			return nil
+		}
+		return g.then(ctx, network, address, c)
 	}
-	if !g.admit(ap.Addr()) {
-		return fmt.Errorf("%w: %s", ErrNotPublic, ap.Addr())
-	}
-	return nil
 }
 
-// The ranges [Public] refuses beyond what [netip.Addr]'s own predicates name.
-var (
-	// reserved4 are the IPv4 ranges the IANA IPv4 Special-Purpose Address
-	// Registry marks as not globally reachable, less the ones IsPrivate,
-	// IsLoopback and IsLinkLocalUnicast already cover.
-	reserved4 = []netip.Prefix{
-		netip.MustParsePrefix("0.0.0.0/8"),       // this network
-		netip.MustParsePrefix("100.64.0.0/10"),   // carrier-grade NAT, a cloud's metadata address among it
-		netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
-		netip.MustParsePrefix("192.0.2.0/24"),    // documentation
-		netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
-		netip.MustParsePrefix("198.51.100.0/24"), // documentation
-		netip.MustParsePrefix("203.0.113.0/24"),  // documentation
-		netip.MustParsePrefix("240.0.0.0/4"),     // reserved, and the broadcast address
-	}
-
-	// globalUnicast6 is the one IPv6 block IANA allocates global unicast
-	// addresses from (RFC 4291, 2.4). Everything outside it is loopback,
-	// link-local, unique local, multicast, discard-only, reserved or a
-	// translation prefix, and none of it is a public address.
-	globalUnicast6 = netip.MustParsePrefix("2000::/3")
-
-	// reserved6 are the ranges inside 2000::/3 that are still not public.
-	reserved6 = []netip.Prefix{
-		netip.MustParsePrefix("2001::/23"),     // IETF protocol assignments: Teredo, benchmarking, ORCHID
-		netip.MustParsePrefix("2001:db8::/32"), // documentation
-		netip.MustParsePrefix("2002::/16"),     // 6to4, which embeds an IPv4 address and is deprecated (RFC 7526)
-		netip.MustParsePrefix("3fff::/20"),     // documentation (RFC 9637)
-	}
-
-	// nat64 is the well-known NAT64 prefix (RFC 6052). An address in it IS
-	// an IPv4 address, reached through the network's translator, so it is
-	// judged as the IPv4 address it carries: refusing the prefix outright
-	// would cut an IPv6-only host off from every IPv4-only site, and
-	// admitting it outright would let 64:ff9b::a9fe:a9fe reach the metadata
-	// address the translator forwards it to.
-	nat64 = netip.MustParsePrefix("64:ff9b::/96")
-)
-
-// Public reports whether ip is an address on the public internet: not
-// loopback, private, link-local (the cloud metadata address among them),
-// multicast, unspecified, carrier-grade NAT, documentation or any other range
-// the IANA special-purpose registries mark as not globally reachable. An IPv4
-// address written in IPv6 form, or behind the NAT64 prefix, is judged as the
-// IPv4 address it is. An address carrying an IPv6 zone is never public: a zone
-// names one of this host's interfaces, which only a scoped address needs.
+// Public reports whether ip is an address on the public internet on a network
+// that names no NAT64 prefix of its own: not loopback, private, link-local
+// (the cloud metadata address among them), multicast, unspecified,
+// carrier-grade NAT, documentation or any other block the IANA special-purpose
+// registries mark as not globally reachable. An IPv4 address written in IPv6
+// form, or behind the well-known NAT64 prefix, is judged as the IPv4 address it
+// is. An IPv6 address carrying a zone is never public: a zone names one of
+// this host's interfaces, which only a scoped address needs. public.go holds
+// the blocks and the reason for each.
+//
+// IT IS THE VERDICT FOR A CALLER WITH AN ADDRESS AND NO DIAL to judge it at:
+// whether the public internet routes an MCP server's configured address
+// (internal/config), whether github.com can deliver to a webhook's
+// (internal/github). Neither asks on behalf of a network a translator serves,
+// so neither has a resolver to ask for prefixes. A dialer never asks it:
+// [Guarded] judges each socket's address by a [Rule] on the network it dials
+// from, and [ResolvePublic] a host by one on the resolver it resolves with,
+// because only that network can say which NAT64 prefixes it translates
+// through. Judged without them, an address under a network-specific prefix
+// inside global unicast that carries 10.0.0.5 is called public by the
+// allowlist alone, though that network's translator delivers it to the
+// private address.
 func Public(ip netip.Addr) bool {
-	if !ip.IsValid() || ip.Zone() != "" {
-		return false
-	}
-	ip = ip.Unmap()
-	if nat64.Contains(ip) {
-		ip = netip.AddrFrom4([4]byte(ip.AsSlice()[12:]))
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsMulticast() {
-		return false
-	}
-	reserved := reserved4
-	if ip.Is6() {
-		if !globalUnicast6.Contains(ip) {
-			return false
-		}
-		reserved = reserved6
-	}
-	for _, p := range reserved {
-		if p.Contains(ip) {
-			return false
-		}
-	}
-	return true
+	return public(ip, nil)
 }

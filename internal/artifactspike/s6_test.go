@@ -92,8 +92,8 @@ func (c *countingQueue) AskEach(ctx context.Context, subject string, request []b
 	return c.q.AskEach(ctx, subject, request, each)
 }
 
-func (c *countingQueue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
-	return c.q.Serve(ctx, subject, h)
+func (c *countingQueue) Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error) {
+	return c.q.Serve(ctx, subject, answers, h)
 }
 
 // presenceNode is one node's presence: its hub, its socket hub, and the room

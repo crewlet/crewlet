@@ -304,10 +304,10 @@ func TestTheFrameworkAndTheDomainAgreeAboutABarrier(t *testing.T) {
 			"no quorum round trip at all, which is the one claim a barrier "+
 			"must never fake", env.OpID)
 	}
-	if len(env.Scope.Paths) != 1 || env.Scope.Paths[0] != statelog.BarrierScope {
+	if len(env.Scope.Paths) != 1 || env.Scope.Paths[0] != statelog.FrameworkScope {
 		t.Errorf("a barrier's scope reads back as %v rather than the "+
 			"framework's own %q — anything else serialises every linearizable "+
-			"read behind every other", env.Scope.Paths, statelog.BarrierScope)
+			"read behind every other", env.Scope.Paths, statelog.FrameworkScope)
 	}
 	if (chatlet.Domain{}).InstallsGate(env) {
 		t.Error("a barrier installs a gate — it writes no row on any node, so " +
@@ -443,6 +443,9 @@ var theWrittenTables = map[chatlet.ObjectKind][]string{
 	chatlet.KindEviction:   {"chat_evictions"},
 	chatlet.KindGeneration: {"chat_log_generations"},
 	chatlet.KindBarrier:    barrierWrites(),
+	// The trim's record writes no row of this domain's either: the
+	// framework removes its own anchors in the record's transaction.
+	chatlet.KindTrimmed: barrierWrites(),
 }
 
 // barrierWrites is [chatlet.BarrierTables] as this walk reads it.

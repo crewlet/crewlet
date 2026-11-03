@@ -371,12 +371,7 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 // builds a bridge.
 func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 	t.Parallel()
-	env := func(name string) string {
-		if name == mcpbridge.BaseURLVar {
-			return "https://engine.example.com"
-		}
-		return ""
-	}
+	const base = "https://engine.example.com"
 	for name, material := range map[string]runtoken.Material{
 		"no keys":             {},
 		"an active id unheld": {ActiveID: "k9", Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "m"}}},
@@ -386,20 +381,20 @@ func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 			if b, err := mcpbridge.New(mcpbridge.Options{Material: material}); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
 				t.Errorf("New = %v, %v, want ErrNoKeyring and no bridge", b, err)
 			}
-			if b, err := mcpbridge.Build(env, material, ""); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
+			if b, err := mcpbridge.Build(base, material, ""); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
 				t.Errorf("Build = %v, %v, want ErrNoKeyring and no bridge", b, err)
 			}
 			// THE CONTROL: with no address at all nothing is built,
 			// whatever the keyring, and that is a configuration rather
 			// than a refusal.
-			if b, err := mcpbridge.Build(func(string) string { return "" }, material, ""); err != nil || b != nil {
+			if b, err := mcpbridge.Build("", material, ""); err != nil || b != nil {
 				t.Errorf("Build with no base URL = %v, %v, want nothing and no error", b, err)
 			}
 		})
 	}
 	// And a usable keyring builds one, so the rows above are refused for the
 	// keyring and not for something else Build dislikes.
-	if b, err := mcpbridge.Build(env, runtoken.OneKey("k1", "m"), ""); err != nil || b == nil {
+	if b, err := mcpbridge.Build(base, runtoken.OneKey("k1", "m"), ""); err != nil || b == nil {
 		t.Fatalf("Build with a usable keyring = %v, %v, want a bridge", b, err)
 	}
 }
@@ -421,26 +416,20 @@ func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 func TestABoxOnTheHostDialsTheNodesOwnListener(t *testing.T) {
 	t.Parallel()
 	const host, base = "http://127.0.0.1:8080", "https://engine.example.com"
-	withBase := func(name string) string {
-		if name == mcpbridge.BaseURLVar {
-			return base
-		}
-		return ""
-	}
-	noEnv := func(string) string { return "" }
 	for _, tc := range []struct {
-		name          string
-		env           func(string) string
+		name string
+		// base is the variable as the engine parsed it, "" where it is unset.
+		base          string
 		host          string
 		onHost, other string
 	}{
-		{"the host URL alone", noEnv, host, host, ""},
-		{"the variable alone", withBase, "", base, base},
-		{"both", withBase, host, host, base},
+		{"the host URL alone", "", host, host, ""},
+		{"the variable alone", base, "", base, base},
+		{"both", base, host, host, base},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			b, err := mcpbridge.Build(tc.env, runtoken.OneKey("k", "k"), tc.host)
+			b, err := mcpbridge.Build(tc.base, runtoken.OneKey("k", "k"), tc.host)
 			if err != nil || b == nil {
 				t.Fatalf("Build = %v, %v, want a bridge", b, err)
 			}
@@ -1173,8 +1162,8 @@ func TestOnlyASignedMissIsWorthWarningAbout(t *testing.T) {
 	}
 }
 
-// The handshake says WHICH SEAT this is, because it reaches the coding
-// agent's own logs and a box that cannot tell one bridge from another is a box
+// The handshake says WHICH SEAT this is, because it reaches the harness's
+// own logs and a box that cannot tell one bridge from another is a box
 // whose logs cannot be read.
 func TestTheHandshakeNamesTheSeat(t *testing.T) {
 	t.Parallel()

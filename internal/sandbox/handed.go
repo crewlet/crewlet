@@ -31,7 +31,8 @@ import (
 //     ([LaunchRequest.Secrets]);
 //   - every MCP server's env and headers, written or referenced — where a
 //     tool server's credentials are declared;
-//   - the run's own export token, in its telemetry endpoint;
+//   - the run's own export token, in its telemetry endpoint, and its
+//     credential on the engine's own code host ([GitTokenVar]);
 //   - and the login the box was seeded with.
 //
 // NOT the engine's identity facts (the seat's handle and email, which a
@@ -50,9 +51,12 @@ import (
 // box held the old one, and an entry renamed since resolved to nothing at all,
 // so the scrub took out less than the box was handed and said nothing. So the
 // launch collects them from the very request it starts the job with
-// ([handedSecrets]), and the row keeps them SEALED under the fleet keyring
-// ([SessionKeep.SealHanded]), bound to the turn: the coordination store is not
-// encrypted, and a capture may be made on any node whose host the box is on.
+// ([handedSecrets]), and the run keeps them SEALED under the fleet keyring
+// ([SessionKeep.SealHanded]), bound to the turn, BESIDE its row and named for
+// the job ([PendingStore.Handed]): the coordination store is not encrypted, a
+// capture may be made on any node whose host the box is on, and the row, which
+// every git request of a coding box and every listing reads whole, is kept
+// small of what only a capture and the next launch read.
 //
 // # Carried forward where a box is kept
 //
@@ -68,14 +72,15 @@ import (
 //
 // A login is refreshed while the run works — in the box, by its harness, and
 // on the engine host, by the entry's own calls — and each refresh mints values
-// the launch never saw. So the row also keeps where each seeded login lives,
+// the launch never saw. So the sealed set also keeps where each seeded login lives,
 // and the capture reads it again in the box and on the host before it scrubs
 // ([Coordinator.scrubValues]).
 //
 // # A capture that cannot know them keeps nothing
 //
-// A row with no sealed secrets — a launch whose secrets could not be sealed, or
-// one this build's predecessors made — or a seal this node cannot open is a
+// A job with no sealed secrets beside its row — a launch whose secrets could
+// not be sealed, or whose write of them did not land — or a seal this node
+// cannot open is a
 // session that cannot be scrubbed of what the engine put in its box, and it is
 // refused rather than kept scrubbed of less.
 
@@ -94,7 +99,7 @@ type HandedSecrets struct {
 	Logins map[string]string `json:"logins,omitempty"`
 }
 
-// MaxHandedBytes bounds the secrets one launch's row keeps, encoded, before
+// MaxHandedBytes bounds the secrets one launch keeps, encoded, before
 // they are sealed — its own and those carried from the jobs before it in the
 // same box.
 //
@@ -102,20 +107,23 @@ type HandedSecrets struct {
 // headers, a deploy key a setup step writes from a reference, and a login
 // document of a kibibyte or two: a few kibibytes in all, a key file the
 // largest single value. Sixty-four is room for a dozen keys beside everything
-// else, carried across a turn's relaunches, and still a small part of a row the
-// coordination store reads whole on every write of the run. A launch handed
-// more keeps none, and its captures are refused saying so, rather than a row
-// grown without bound or a scrub of only some of them.
+// else, carried across a turn's relaunches — kept beside the run's row, never
+// on it, since even this much on the row would ride every read of it. A launch
+// handed more keeps none, and its captures are refused saying so, rather than
+// a set grown without bound or a scrub of only some of them.
 const MaxHandedBytes = 64 << 10
 
 // ErrHandedUnknown is a capture refused because the secrets its box was
-// handed cannot be known: the row keeps none, or a seal this node cannot open.
+// handed cannot be known: the run keeps none for the job, or a seal this node
+// cannot open.
 var ErrHandedUnknown = errors.New("sandbox: the secrets the engine handed the box cannot be read back")
 
 // handedSecrets is what req hands its box out of a credential position — see
 // the file comment — env being the environment the job is started with
-// ([withTelemetry]), whose run export token is the one secret of it this
-// package adds itself.
+// ([withTelemetry]), whose run export token and code-host credential
+// ([GitTokenVar], minted for the launch by [LaunchRequest.RunEnv]) are the
+// secrets of it no request field names: both minted for this job alone, after
+// the request was built.
 func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 	var values []string
 	add := func(vs ...string) {
@@ -129,6 +137,7 @@ func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 	if _, token, ok := strings.Cut(env[otelBoxEndpointVar], otelTokenPath); ok {
 		add(token)
 	}
+	add(env[GitTokenVar])
 	for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
 		server := req.MCPServers[name]
 		for _, key := range slices.Sorted(maps.Keys(server.Env)) {
@@ -189,7 +198,7 @@ func (h HandedSecrets) encode() ([]byte, error) {
 	}
 	if len(raw) > MaxHandedBytes {
 		return nil, fmt.Errorf("sandbox: the secrets the launch handed its box are %d bytes encoded, "+
-			"past the %d a run's record keeps for its session's scrub", len(raw), MaxHandedBytes)
+			"past the %d a run keeps for its session's scrub", len(raw), MaxHandedBytes)
 	}
 	return raw, nil
 }
@@ -241,8 +250,8 @@ func boxLoginPath(box Sandbox, rel string) string {
 	return path.Join(box.Home(), rel)
 }
 
-// sealHanded is what a launch's row keeps of the secrets it handed its box
-// ([PendingRun.Handed]): sealed — with, where the job continues in the box the
+// sealHanded is what a launch keeps beside its row of the secrets it handed its box
+// ([PendingStore.Handed]): sealed — with, where the job continues in the box the
 // job before it ran in (continues), what prior's job and those before it handed
 // that box ([PriorBox.Handed]) — or "" where they cannot be: a company that
 // keeps no session ([Coordinator.capturing]), a box continued whose record says

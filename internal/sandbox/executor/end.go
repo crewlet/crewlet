@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A RUN ENDS ON REQUEST, and packs its session as its own end does.
@@ -84,12 +86,12 @@ func endFunction(stop time.Duration) string {
 // Every name is the protocol's own, apart from the one-letter variables the
 // scripts already keep (s, k, w, h, d, a, b, c, i, z, v).
 func endPrologue(paths Paths, stop time.Duration) string {
-	next := shellQuote(paths.JobScript() + ".next")
+	next := sandbox.ShellQuote(paths.JobScript() + ".next")
 	return `endasked= endhalted= harness= endedas=
 ` + endFunction(stop) + `endask() { endasked=1; [ -z "$harness" ] || endharness; }
 trap endask USR1
 ` + fmt.Sprintf(`printf '%d %%s\n' "$$" > %s && mv -f %s %s
-`, jobScriptProtocol, next, next, shellQuote(paths.JobScript()))
+`, jobScriptProtocol, next, next, sandbox.ShellQuote(paths.JobScript()))
 }
 
 // endHarness is the `endharness` a script's handler runs to end its harness
@@ -148,7 +150,7 @@ func launchHarness(harness string, paths Paths) string {
 // recordEnded is the line that records how the job was ended
 // ([Paths.JobEnded]), where it was: written beside and moved into place whole.
 func recordEnded(paths Paths) string {
-	next := shellQuote(paths.JobEnded() + ".next")
+	next := sandbox.ShellQuote(paths.JobEnded() + ".next")
 	return fmt.Sprintf(`[ -z "$endedas" ] || { printf '%%s\n' "$endedas" > %s && mv -f %s %s; }
-`, next, next, shellQuote(paths.JobEnded()))
+`, next, next, sandbox.ShellQuote(paths.JobEnded()))
 }

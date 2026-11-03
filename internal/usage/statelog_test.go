@@ -30,30 +30,70 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 			Encode: encodeSuiteRecord,
 			// THE VERSIONED-FIELD TABLE: a seat-day's tool calls and what
 			// their cap dropped, at 2; a fire's tick and a schedule-day's
-			// fires its seats did not run, at 3. Each row brings a record carrying it
-			// alone ([carryingSuiteField]); a kind this build's successor
-			// adds is a row keyed on the kind's value, and brings its
-			// record the same way.
+			// fires its seats did not run, at 3; the repo_read kind and its
+			// four fields, at 4; a seat's code day, at 5, and its failed
+			// checks and ejections, at 6 — each brought by a record that
+			// carries it ([carryingSuiteField]), which fails on the first
+			// row somebody adds without a case. A kind this build's
+			// successor adds is a row keyed on the kind's value, and brings
+			// its record the same way.
 			Fields:   usage.VersionedFields(),
 			Carrying: carryingSuiteField,
 			Kinds: []string{string(usage.KindSeat), string(usage.KindSchedule),
-				string(usage.KindPerson)},
+				string(usage.KindPerson), string(usage.KindRepoRead)},
 			Rows:  usage.NewRows,
 			Write: suiteWrite,
+			// NO READ INDEX: the engine registers no barrier for the
+			// usage log, which grants no linearizable read.
+			NoBarrier: true,
 		}
 	})
 }
 
-// carryingSuiteField builds a valid record carrying exactly one versioned
-// field, with its version left for the encoder to stamp: a seat-day of the
-// suite's own shape, with one tool's calls or with a count its cap dropped, or
-// a schedule-day of it, with a fire's tick or a fire its seat did not run.
+// carryingSuiteField builds a valid record carrying the named versioned field,
+// with its version left for the encoder to stamp: a seat-day of the suite's
+// own shape, with one tool's calls or with a count its cap dropped, or a
+// schedule-day of it, with a fire's tick or a fire its seat did not run; a
+// repository's day; or a seat's day carrying its changes and reviews.
 //
-// A row added to the table without a case here fails the suite rather than
-// passing unexamined: a record that did not carry the field would be stamped
-// at 1 and reported as the path being wrong, which is a fixture fault dressed
-// as a domain one.
+// MAIN'S ROWS (2 and 3) each bring a record carrying that field alone. THE
+// repo_read KIND'S ROWS are each a repository's day — the kind's row, the
+// repository it names and its readers ride every one of them, all at version
+// 4 — with the field the row names set where the base repo_read record would
+// leave it out; THE CODE DAY'S is a seat's day carrying its changes and
+// reviews, at version 5, or its failed checks or ejections, at 6, which ride
+// the code day's own row. A row added to the table without a case here fails
+// the suite rather than passing unexamined: a record that did not carry the
+// field would be stamped below it and reported as the path being wrong, which
+// is a fixture fault dressed as a domain one.
 func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
+	switch field.Name {
+	case "Subject.Kind repo_read", "Subject.Repo", "Record.RepoReads", "Record.RepoName",
+		"Record.RepoReadersElided":
+		rec := suiteRepoRead("suite-carrying", "", 0)
+		switch field.Name {
+		case "Record.RepoName":
+			rec.RepoName = "platform"
+		case "Record.RepoReadersElided":
+			rec.RepoReadersElided = 3
+		}
+		return rec.Encode()
+	case "Record.Code", "Record.Code.ChecksFailed", "Record.Code.Ejections":
+		seat := usage.Record{
+			RecordEnvelope: usage.RecordEnvelope{Writer: "suite-node",
+				Subject: usage.Subject{Kind: usage.KindSeat, Node: "suite-node", Day: "2026-09-23",
+					Seat: "suite-carrying"}},
+			Handle: "dev", Turns: &usage.Turns{Count: 1},
+			Code: &usage.CodeDay{ChangesOpened: 1, ReviewsGiven: 2, FindingsReceived: 3},
+		}
+		switch field.Name {
+		case "Record.Code.ChecksFailed":
+			seat.Code = &usage.CodeDay{ChecksFailed: 2}
+		case "Record.Code.Ejections":
+			seat.Code = &usage.CodeDay{Ejections: 1}
+		}
+		return seat.Encode()
+	}
 	kind := usage.KindSeat
 	if strings.HasPrefix(field.Name, "Fire.") || field.Name == "Record.Superseded" {
 		kind = usage.KindSchedule
@@ -85,6 +125,18 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			"and nothing else versioned", field.Name)
 	}
 	return rec.Encode()
+}
+
+// suiteRepoRead is one unit repository's day on the suite's node: one reader,
+// a person's token fetching it, at version (zero for the encoder's stamp).
+func suiteRepoRead(repo, opID string, version int) usage.Record {
+	return usage.Record{
+		RecordEnvelope: usage.RecordEnvelope{V: version, OpID: opID, Writer: "suite-node",
+			Subject: usage.Subject{Kind: usage.KindRepoRead, Node: "suite-node", Day: "2026-09-23",
+				Repo: repo}},
+		RepoReads: []usage.RepoRead{{PrincipalKind: "operator", Principal: "pat:7", Seat: "maya",
+			Via: "git", Reads: 2, Bytes: 4096, LastAt: time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC)}},
+	}
 }
 
 // suiteWrite is one flush of the domain's own [usage.Publisher] — the only
@@ -187,6 +239,8 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		rec.Role = "Founder"
 		rec.Tokens = []usage.Tokens{{Phase: "auxiliary", Worker: "answer_knowledge",
 			Model: "m", Input: 40, Output: 2, Total: 42, Calls: 1}}
+	case usage.KindRepoRead:
+		return suiteRepoRead(id, opID, version).Encode()
 	}
 	rec.Subject = subject
 	return rec.Encode()

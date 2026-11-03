@@ -24,7 +24,8 @@ import (
 // # What each version added
 //
 //   - 1: the base format: a capture, an end, a retention delete, a seat's
-//     removal, and the framework's eviction, generation and barrier.
+//     removal, the trim's trimmed record, and the framework's eviction,
+//     generation and barrier.
 //   - 2: a turn's `begin` ([Begin]: its first read of its conversation and the
 //     base that read froze, which the row then holds), and a capture's
 //     context and cut-off ([Capture.ContextTokens], [Capture.Interrupted]).
@@ -100,11 +101,16 @@ const (
 
 	// OpBarrier is the read index's payload-free append.
 	OpBarrier OpKind = "barrier"
+
+	// OpTrimmed is the trim's payload-free record that removes the anchors
+	// below a floor (ADR-0080).
+	OpTrimmed OpKind = "trimmed"
 )
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
 	OpBegin, OpCapture, OpEnd, OpDelete, OpSeatDelete, OpEviction, OpGeneration, OpBarrier,
+	OpTrimmed,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -151,10 +157,13 @@ type RecordEnvelope struct {
 // envelope alone: a node's eviction, by its kind.
 func (e RecordEnvelope) InstallsGate() bool { return e.Subject.Kind.InstallsGate() }
 
-// readByEveryBuild reports a record every build must read: a gate, the barrier
-// and a reanchor's generation. None may carry a versioned field.
+// readByEveryBuild reports a record every build must read: a gate, the
+// barrier, the trim's trimmed record and a reanchor's generation. None may
+// carry a versioned field. An older node retains what it cannot read, and a
+// trimmed record it retained is every anchor it names kept on that node.
 func (e RecordEnvelope) readByEveryBuild() bool {
-	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpGeneration
+	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed ||
+		e.Op == OpGeneration
 }
 
 // MutationRecord is one committed mutation: the envelope, the typed payload as

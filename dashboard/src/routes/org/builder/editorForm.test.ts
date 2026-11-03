@@ -315,7 +315,7 @@ describe("a seat", () => {
     const initial = seatForm(dev(), "");
     const form = {
       ...initial,
-      githubTier: "review",
+      codeAccess: "review",
       githubRepos: ["acme/api"],
       project: " OPS ",
       space: "ENG",
@@ -325,7 +325,7 @@ describe("a seat", () => {
         type: "updateSeat",
         target: "seat:dev",
         set: [
-          { path: ["integrations", "github", "tier"], value: "review" },
+          { path: ["code", "access"], value: "review" },
           { path: ["integrations", "github", "repos"], value: ["acme/api"] },
           { path: ["project"], value: "OPS" },
           { path: ["space"], value: "ENG" },

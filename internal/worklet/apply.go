@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -35,30 +36,34 @@ import (
 //     on every node and stall the whole fleet's log.
 
 // Applier writes this node's copy of the tracker's state.
+//
+// It carries NO NODE IDENTITY, and that is the purity rule rather than an
+// omission: [statelog.Applier] forbids one, because an applier that could
+// read which node it runs on could write rows its peers do not. The eviction
+// gate needs none either — it compares the record's own
+// [statelog.Record.Writer] against the eviction rows in this transaction. What
+// it does hold of its node is a LISTENER, told after a commit whose inbox moved
+// on this node (internal/inbox's movement.go), and a listener writes no row:
+// every node's applier still writes the same rows from the same records.
 type Applier struct {
-	// NodeID is this node's own id, which the eviction gate compares a
-	// record's writer against.
-	NodeID string
+	// moved is told, after a committed batch, whose inbox moved on this
+	// node. Nil is legal and means nobody is listening.
+	moved func([]inbox.Movement)
 
-	// inbox is told, after a committed batch, whose inbox moved on this
-	// node — see inboxmove.go. Nil is legal and means nobody is listening.
-	inbox func([]InboxMovement)
-
-	// inboxed is filled inside Apply and drained by Committed. NOT guarded
-	// by a mutex, and the framework's contract is why: an applier is ONE
-	// writer, and Apply and Committed are called from the same goroutine
-	// with the commit in between.
-	inboxed map[[2]string]inboxNote
+	// inboxed is the notices the batch wrote or deleted, filled inside Apply
+	// and drained by Committed — see [inbox.Batch] for why it holds no lock.
+	inboxed inbox.Batch
 }
 
 // NewApplier builds the applier for one node.
 //
-// inbox is called after a COMMITTED batch with every inbox that batch moved.
-// After the commit and never inside the transaction: the store re-runs the
-// body of an attempt that failed transiently, and a movement announced from
-// inside it would announce a notice no row holds.
-func NewApplier(nodeID string, inbox func([]InboxMovement)) *Applier {
-	return &Applier{NodeID: nodeID, inbox: inbox}
+// moved is called after a COMMITTED batch with every inbox that batch moved,
+// each movement naming this domain as its source. After the commit and never
+// inside the transaction: the store re-runs the body of an attempt that failed
+// transiently, and a movement announced from inside it would announce a notice
+// no row holds.
+func NewApplier(moved func([]inbox.Movement)) *Applier {
+	return &Applier{moved: moved}
 }
 
 // Committed is the post-commit half.
@@ -70,17 +75,17 @@ func NewApplier(nodeID string, inbox func([]InboxMovement)) *Applier {
 // publish.
 //
 // What happens here is the one consequence no other node needs: telling THIS
-// node's open dashboards whose inbox just moved (inboxmove.go). Every data
-// node applies every record, and only a data node serves dashboards (ingress
-// requires `data`), so each one tells its own — and a node that dies before
-// telling them has no sockets left to tell.
+// node's open dashboards whose inbox just moved (internal/inbox's
+// movement.go). Every data node applies every record, and only a data node
+// serves dashboards (ingress requires `data`), so each one tells its own — and
+// a node that dies before telling them has no sockets left to tell.
 func (a *Applier) Committed(context.Context) {
 	// RESET BEFORE THE CALL, not after: the listener may take long enough
 	// for the next batch to be waiting behind it, and a set drained
 	// afterwards would be delivered twice or lost.
-	moved := a.drainInbox()
-	if len(moved) > 0 && a.inbox != nil {
-		a.inbox(moved)
+	moved := a.inboxed.Drain(Domain{}.Name())
+	if len(moved) > 0 && a.moved != nil {
+		a.moved(moved)
 	}
 }
 
@@ -199,6 +204,11 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		// THE READ INDEX'S OWN APPEND. It writes no row on any node, and
 		// that is its entire content: it exists so a linearizable read
 		// has a quorum-committed position to wait through.
+		return 0, nil
+	case KindTrimmed:
+		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
+		// below the floor its subject names, in this same transaction
+		// (ADR-0080); this domain writes nothing for it.
 		return 0, nil
 	case KindTurn:
 		return a.applyTurn(ctx, tx, at)

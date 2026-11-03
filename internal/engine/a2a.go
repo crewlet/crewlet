@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -96,7 +96,7 @@ func answeringRun(run sandbox.PendingRun) answeringTurn {
 }
 
 // colleagueAnswer is what the engine answered a colleague's ask with, for the
-// record of how the turn that answered it ended (executordomain.Ending's
+// record of how the turn that answered it ended (executorkeep.Ending's
 // Answer and Delivered): the turn's own record of its calls cannot say, since
 // the engine sent it, not the turn.
 type colleagueAnswer struct {
@@ -120,7 +120,7 @@ type colleagueAnswer struct {
 // onto records the answer on an ending: what the engine sent, and whether the
 // colleague waiting has it — which, for a turn that owed the engine's answer,
 // is the whole of whether its reply was delivered, and known either way.
-func (a colleagueAnswer) onto(ending *executordomain.Ending) {
+func (a colleagueAnswer) onto(ending *executorkeep.Ending) {
 	if !a.owed {
 		return
 	}
@@ -271,11 +271,13 @@ func (e *Engine) answeredBefore(ctx context.Context, channelID string) bool {
 // channel its first attempt closed ([a2a.ErrClosed]).
 //
 // AND IT ANSWERS HOW THE TURN ENDED — lost, whether its reply reached anybody
-// as the turn's own calls say, and what the engine told the colleague — which
-// the ending owes the executor log on the run's row and records there, where
-// the turn's row on the log keeps it beside the session it kept. No frame of
-// the turn is left to record it.
-func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun) executordomain.Ending {
+// as the turn's own calls say ([sandbox.RunCalls]), and what the engine told
+// the colleague — which the ending owes the executor log on the run's row and
+// records there, where the turn's row on the log keeps it beside the session
+// it kept. No frame of the turn is left to record it.
+func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun,
+	bridged sandbox.RunCalls) executorkeep.Ending {
+
 	company := e.Company()
 	var answered colleagueAnswer
 	switch {
@@ -292,7 +294,7 @@ func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun) exe
 		}
 		answered = e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, lost)
 	}
-	return e.runEnding(company, run, answered)
+	return e.runEnding(company, run, bridged, answered)
 }
 
 // runLostError is a turn ended by the loss of its executor's run: the reason

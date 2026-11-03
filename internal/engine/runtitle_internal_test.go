@@ -36,7 +36,7 @@ import (
 // case whose trigger fences somebody's words is red; list a turn that was
 // asked nothing under its ask alone, or a resumed segment's run under the
 // parked ask alone, and the silent message's case is.
-func TestACodingRunIsListedUnderWhatItsTurnWasAskedWithNoFence(t *testing.T) {
+func TestAnExecutorIsListedUnderWhatItsTurnWasAskedWithNoFence(t *testing.T) {
 	t.Parallel()
 	c, seat := executorCompany(t)
 	o := firstPartyChart(t)

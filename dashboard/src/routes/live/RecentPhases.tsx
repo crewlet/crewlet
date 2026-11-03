@@ -35,13 +35,15 @@
  *
  * # Older is the engine's cursor
  *
- * "Load 60 older" asks `phases` again with the `next` the last page carried.
+ * "Load 60 older" asks `phases` again with the `next` the last page carried,
+ * and the pager joins the first page to the older ones whenever it moves
+ * (`lib/usePaged.ts`).
  * It used to page the event LIST and then read every row back one `event` at
  * a time, because the listing carries no payload: sixty-one round trips for
  * sixty rows, filtered by a role name the listing matched against the actor.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import {
   Button,
   Card,
@@ -56,7 +58,7 @@ import {
   peekClickHandler,
 } from "@crewlethq/ui";
 import { BrainGlyph, SquareTerminalGlyph } from "@crewlethq/icons/glyphs";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { DataGridColumn } from "@crewlethq/ui";
@@ -66,6 +68,7 @@ import { href, useNavigator } from "~/app/router.tsx";
 import { useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { eventHistoryLabel, firstLine, plural, fmtCount } from "~/lib/format.ts";
 import {
   decisionLabel,
@@ -90,6 +93,23 @@ import { failureWords } from "~/lib/seats.ts";
 export const PHASE_PAGE = 60;
 
 const recordKey = (r: PhaseRecord) => r.key;
+
+/** A page's phases, and each phase record's id. */
+const phasesOf = (a: PhasesPage) => a.phases ?? [];
+const phaseIdOf = (row: EventRecord) => row.id;
+
+/**
+ * The cursor to the page after this one, or "" at the start of the record.
+ * The engine's is two halves, `before_time` and `before_id`, handed back
+ * VERBATIM; carried as their JSON, so the pager holds one opaque string.
+ */
+const phasesBefore = (a: PhasesPage) =>
+  a.exhausted || !a.next?.before_id
+    ? ""
+    : JSON.stringify({ before_time: a.next.before_time, before_id: a.next.before_id });
+
+/** The two halves a cursor carries, to ask with. */
+const phasesCursor = (cursor: string) => JSON.parse(cursor) as PhasesPage["next"];
 
 export function RecentPhases({
   seat,
@@ -121,22 +141,24 @@ export function RecentPhases({
   // `phases`, not `events?type=…`: the event listing deliberately never
   // selects the payload, and a phase record without one has no prompts, no
   // response, no tool calls and no decision.
-  const first = useQuery("phases", { limit: PHASE_PAGE, ...(seat ? { seat } : {}) });
-  // THE OLDER PAGES, keyed on the question they continue: a different seat
-  // is a different list, and its pages must not be appended to this one.
-  const [older, setOlder] = useState<{ for: string; pages: PhasesPage[] }>({ for: "", pages: [] });
-  const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
-  const pages = older.for === seat ? older.pages : [];
-  const last = pages.at(-1) ?? first.data;
+  const asked = useMemo(() => ({ limit: PHASE_PAGE, ...(seat ? { seat } : {}) }), [seat]);
+  // A DIFFERENT SEAT IS A DIFFERENT LIST, and its pages are never appended to
+  // this one; a first page read again on a reconnect, under phases that
+  // finished since, is joined to the pages under it (`lib/usePaged.ts`).
+  const first = useQuery("phases", asked);
+  const paged = usePaged(
+    first,
+    asked,
+    (cursor) => socket.query("phases", { ...asked, ...phasesCursor(cursor) }),
+    phasesOf,
+    phaseIdOf,
+    phasesBefore,
+  );
+  const { paging, pageError } = paged;
 
   const phaseEvents = usePhaseEvents();
   const { records, answeredKeys } = useMemo(() => {
-    const answered: EventRecord[] = [
-      ...(first.data?.phases ?? []),
-      ...pages.flatMap((p) => p.phases),
-    ];
-    const stored = answered
+    const stored = paged.items
       .map((row) => fromPhaseEvent(row))
       .filter((r): r is PhaseRecord => r !== null);
     // THE PHASES THAT FINISH AFTER THE PAGE WAS ANSWERED, off the push —
@@ -146,7 +168,7 @@ export function RecentPhases({
       records: mergePhases([...streamed, ...stored], []),
       answeredKeys: stored.map(recordKey),
     };
-  }, [first.data, pages, phaseEvents, seat, agentId]);
+  }, [paged.items, phaseEvents, seat, agentId]);
 
   const shown = useMemo(
     () => records.filter((r) => (!phase || r.phase === phase) && (!failed || r.failed)),
@@ -161,26 +183,6 @@ export function RecentPhases({
   // turn finished while the reader was down the list waits behind the button.
   const admitted = useMemo(() => [...runningKeys, ...answeredKeys], [runningKeys, answeredKeys]);
   const settled = useSettled(shown, recordKey, admitted);
-
-  const loadOlder = useCallback(async () => {
-    const next = last?.next;
-    if (!next?.before_id) return;
-    setPaging(true);
-    setPageError(null);
-    try {
-      const page = await socket.query("phases", {
-        limit: PHASE_PAGE,
-        ...(seat ? { seat } : {}),
-        before_time: next.before_time,
-        before_id: next.before_id,
-      });
-      setOlder((prev) => ({ for: seat, pages: [...(prev.for === seat ? prev.pages : []), page] }));
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : "query_failed");
-    } finally {
-      setPaging(false);
-    }
-  }, [socket, seat, last]);
 
   const openRow = useCallback(
     (r: PhaseRecord, e: DataGridActivationEvent) => {
@@ -324,7 +326,7 @@ export function RecentPhases({
     [nameOf, now],
   );
 
-  const exhausted = !!last && (last.exhausted || !last.next?.before_id);
+  const exhausted = paged.answers.length > 0 && !paged.more;
   const filtering = !!(phase || failed);
 
   return (
@@ -336,10 +338,7 @@ export function RecentPhases({
       >
         <Card.Title as="h3">Recent phases</Card.Title>
       </Card.Header>
-      <CoverageNote
-        coverage={[first.data?.coverage, ...pages.map((p) => p.coverage)]}
-        what="this list"
-      />
+      <CoverageNote coverage={paged.answers.map((p) => p.coverage)} what="this list" />
       {settled.pending > 0 && (
         <button type="button" className="new-rows" onClick={settled.flush}>
           {plural(settled.pending, "new phase")}. Show
@@ -374,17 +373,15 @@ export function RecentPhases({
         />
       )}
       <div className="live-card-foot">
-        {pageError ? (
-          <QueryState error={pageError} refusal={null} loading={false} />
-        ) : exhausted ? (
+        {exhausted ? (
           <span className="t-caption">Start of the record.</span>
         ) : (
           <>
             <Button
               size="small"
               variant="secondary"
-              onClick={() => void loadOlder()}
-              disabled={paging || !last?.next?.before_id}
+              onClick={paged.next}
+              disabled={paging || !paged.more}
               loading={paging}
             >
               {`Load ${PHASE_PAGE} older`}
@@ -392,6 +389,8 @@ export function RecentPhases({
             <span className="t-caption">{eventHistoryLabel(engine?.event_history_seconds)}</span>
           </>
         )}
+        {/* BESIDE THE CONTROL, which asks the page again. */}
+        {pageError && <PageFailed error={pageError} />}
       </div>
     </Card>
   );

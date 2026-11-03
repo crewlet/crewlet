@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -193,7 +194,7 @@ func TestAnAskBehindAParkIsOwedOnWhicheverNodeTheSweepRuns(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(ctx)) })
 	answerer := heldParks{owner: "node-a:1", local: holder.e.inboxParkedHere}
-	stop, err := q.Serve(ctx, topics.HeldPark, func(_ context.Context, raw []byte) ([]byte, error) {
+	stop, err := q.Serve(ctx, topics.HeldPark, queue.ConcurrentAnswers, func(_ context.Context, raw []byte) ([]byte, error) {
 		return answerer.answer(raw)
 	})
 	if err != nil {

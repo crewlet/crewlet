@@ -2,7 +2,10 @@ package statelog
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // LogEnds is both ends of a domain's log as ONE read of the stream reports
@@ -104,6 +107,19 @@ type ZeroFence struct {
 // expectation of zero is safe from this node, for a write whose snapshot was
 // taken at cursor — see [ZeroFence] for which comparison each position is
 // asked.
+//
+// THE FLOOR AND THE LOG ARE READ AT ONCE. Each is a round trip to a different
+// leader — the floor to the coordination bucket's, the ends to the log's — and
+// a write at an expectation of zero waits on the fence, so read one after the
+// other they cost the write their sum, and on a loaded fleet each is the slow
+// one in turn. Nothing orders them against each other: the floor theorem asks
+// only that the floor be read AFTER the write's own read of its subject, which
+// both are, and the bound is the HIGHER of the floor and the log's first
+// sequence, so a floor read on either side of the ends bounds every record
+// those ends show gone — the trim publishes a floor before the purge it
+// licenses. What is ordered stays ordered: the checkpoint is read immediately
+// before the ends, inside the same read. The eviction is still read first,
+// because it is the one answer that makes the other two moot.
 func (z ZeroFence) ClearForZero(ctx context.Context, cursor Position) error {
 	if z.Evicted == nil || z.Floor == nil || z.Ends == nil || z.Committed == nil {
 		// A WIRING MISTAKE, not a state of the fleet, so it is an error
@@ -122,8 +138,27 @@ func (z ZeroFence) ClearForZero(ctx context.Context, cursor Position) error {
 	if refusal := evictionRefusal(ctx, evicted, err); refusal != nil {
 		return refusal
 	}
-	floor, err := z.Floor(ctx, cursor.Generation)
-	if err != nil {
+	// THE FLOOR BESIDE THE LOG, never before it. Its read runs on a
+	// goroutine of its own and is always waited for, so nothing it starts
+	// outlives the call.
+	var (
+		floor    uint64
+		floorErr error
+		read     = make(chan struct{})
+	)
+	go func() {
+		defer close(read)
+		floor, floorErr = z.Floor(ctx, cursor.Generation)
+	}()
+	// THE NODE'S CHECKPOINT BEFORE THE LOG, and immediately before it —
+	// see [ZeroFence.Committed].
+	at := z.Committed()
+	ends, err := z.Ends(ctx)
+	<-read
+	// The floor's refusal before the log's, the order the two were judged
+	// in when they were read in turn: either unread leaves the bound
+	// unknown, and one refusal names one of them.
+	if floorErr != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -132,14 +167,10 @@ func (z ZeroFence) ClearForZero(ctx context.Context, cursor Position) error {
 			Detail: fmt.Sprintf("the published trim floor for %s could not be "+
 				"read: %v — a floor that cannot be read is not a floor that is "+
 				"low, and publishing at zero on the guess is a lost update nothing "+
-				"recovers; it clears when coordination answers", cursor.Stream, err),
-			Cause: err,
+				"recovers%s", cursor.Stream, floorErr, floorClears(floorErr)),
+			Cause: floorErr,
 		}
 	}
-	// THE NODE'S CHECKPOINT BEFORE THE LOG, and immediately before it —
-	// see [ZeroFence.Committed].
-	at := z.Committed()
-	ends, err := z.Ends(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -211,6 +242,31 @@ func (z ZeroFence) ClearForZero(ctx context.Context, cursor Position) error {
 			"write is decided again",
 			cursor.Stream, held, floor, ends.First, cursor.Seq, at.Seq, need.Seq),
 		Position: need,
+	}
+}
+
+// floorClears is what clears a refusal over a floor that could not be read, by
+// what kept it from being read — the clause the refusal ends with.
+//
+// BY CLASS, because the two causes clear in opposite ways
+// ([coord.ErrFloorUnreadable]): a store that does not answer clears by itself
+// when it answers again, while a row that does not read as its domain's floor
+// stays until somebody removes it, and the error carrying it names the key and
+// the command. Told "it clears when coordination answers" over such a row, a
+// refused write gave its reader two remedies in one sentence, and the one in
+// the fence's own words was the wrong one. A cause neither of those — a floor
+// published at a generation this decision's cursor is not on — is stated by
+// its own error and given no remedy here, rather than either of the wrong ones.
+func floorClears(err error) string {
+	switch {
+	case errors.Is(err, coord.ErrFloorUnreadable):
+		return "; it clears once that row is removed, as the error above says, " +
+			"and the next trim publishes the floor afresh — not when coordination " +
+			"answers, which it already does"
+	case errors.Is(err, coord.ErrUnavailable):
+		return "; it clears when coordination answers"
+	default:
+		return ""
 	}
 }
 

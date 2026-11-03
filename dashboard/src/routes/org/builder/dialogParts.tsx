@@ -604,8 +604,8 @@ export function placeOnFields(
 } {
   const id = (path: readonly Segment[]) => JSON.stringify(path);
   // The LONGEST field path a problem starts with owns it, so a problem at
-  // `integrations.github.tier` lands beside the tier rather than on a whole
-  // GitHub section that also happens to be a field.
+  // `code.access` lands beside the access rather than on a whole Code
+  // section that also happens to be a field.
   const owner = (p: PlacedProblem): string | undefined => {
     if (p.severity !== "problem" || p.field.length === 0) return undefined;
     const matches = fields.filter((path) => startsWith(p.field, path));

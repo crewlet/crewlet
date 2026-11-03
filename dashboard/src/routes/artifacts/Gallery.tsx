@@ -244,7 +244,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
         items={rows}
         view={view}
         name={`artifacts-${section}`}
-        loadMore={listing.after ? listing.loadMore : undefined}
+        loadMore={listing.more ? listing.loadMore : undefined}
         loadingMore={listing.loadingMore}
         total={listing.first.data?.total}
       />

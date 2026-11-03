@@ -366,6 +366,10 @@ func (unreachableRuns) ListActive(context.Context) ([]sandbox.PendingRun, error)
 	return nil, fmt.Errorf("sandbox: list runs: %w", coord.ErrUnavailable)
 }
 
+func (unreachableRuns) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+	return sandbox.BridgeLog{}, fmt.Errorf("sandbox: read the log: %w", coord.ErrUnavailable)
+}
+
 func (unreachableRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	return sandbox.PendingRun{}, false, fmt.Errorf("sandbox: read run: %w", coord.ErrUnavailable)
 }
@@ -463,15 +467,30 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 		Reply:     "chat:C1",
 		SessionID: "sess-9", CommandID: "cmd-3",
 		DelegationChain: []string{"agent-pm", "agent-swe"},
-		BridgeCalls: []sandbox.BridgeCall{
-			{Name: "get_work_item", Args: `{"id":"ENG-1"}`, At: called},
-			{Name: "code_commit_files", Args: `{"content":"(1.0 MiB not kept on the run's record, digest 1a2b3c4d)"}`,
-				ArgsBytes: 1 << 20, OutputBytes: 70 << 10, Digest: "d1", At: called},
-		},
-		BridgeCallsElided: 4,
-		ElidedCalls:       []sandbox.ElidedCall{{Name: "read_file", Digest: "d2", Calls: 4}},
-		TallyRound:        called,
 	})
+	// THE LOG BESIDE THE ROW, through the appends a box's calls make: the
+	// first call, a commit of a megabyte the log keeps part of, then reads
+	// past the bound, so four are cut from the middle.
+	seeded, _, err := store.Get(context.Background(), "t-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	launch := seeded.LaunchID
+	commit := `{"content":"` + strings.Repeat("a", 1<<20) + `"}`
+	for i := range sandbox.MaxBridgeCalls + 4 {
+		call := sandbox.BridgeCall{Name: "read_file", Args: `{"id":"ENG-1"}`, Digest: "d2", At: called}
+		switch i {
+		case 0:
+			call = sandbox.BridgeCall{Name: "get_work_item", Args: `{"id":"ENG-1"}`, At: called}
+		case 1:
+			call = sandbox.BridgeCall{Name: "code_commit_files", Args: commit,
+				Output: strings.Repeat("o", 70<<10), Digest: "d1", At: called}
+		}
+		if _, err := store.AppendBridgeCall(context.Background(), "t-1", sandbox.BridgeAppend{Launch: launch,
+			Call: call}); err != nil {
+			t.Fatalf("AppendBridgeCall: %v", err)
+		}
+	}
 	row := askRuns(t, store)[0]
 	switch {
 	case row["reply"] != "chat:C1":
@@ -485,7 +504,7 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 			"log that lies about what the run did", row["bridge_calls_elided"])
 	}
 	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
-	if !ok || len(calls) != 2 || calls[0].Name != "get_work_item" {
+	if !ok || len(calls) != sandbox.MaxBridgeCalls || calls[0].Name != "get_work_item" {
 		t.Fatalf("bridge_calls = %#v, want the run's own tool log", row["bridge_calls"])
 	}
 	// WHAT THE RECORD KEPT OF A CALL, on the wire: the sizes a reader decides
@@ -494,7 +513,8 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{`"args_bytes":1048576`, `"output_bytes":71680`, `"digest":"d1"`} {
+	for _, key := range []string{fmt.Sprintf(`"args_bytes":%d`, len(commit)), `"output_bytes":71680`,
+		`"digest":"d1"`} {
 		if !strings.Contains(string(wire), key) {
 			t.Errorf("the partly kept call is served as %s, want %s in it", wire, key)
 		}
@@ -645,7 +665,6 @@ func parkedRun() sandbox.PendingRun {
 			Options: []decision.Option{{ID: "main", Label: "main"}, {ID: "next", Label: "next"}}},
 		Reply:           "chat:C1",
 		AudienceHandles: []string{"ana"},
-		BridgeCalls:     []sandbox.BridgeCall{{Name: "get_work_item", Args: `{"id":"ENG-1"}`}},
 		WorkItem:        &types.WorkItem{Backend: "native", ID: "task-1", Key: "ENG-1"},
 		Launch:          sandbox.LaunchRecord{ProviderKey: "plan-zulu", Model: "opus"},
 		CreatedAt:       runBase,
@@ -667,6 +686,40 @@ func boardAs(ctx context.Context, t *testing.T, chart authz.Chart) map[string]an
 		t.Fatalf("the board holds %d runs, want one", len(rows))
 	}
 	return rows[0].(map[string]any)
+}
+
+// unreadableLog is a store whose runs read and whose logs do not.
+type unreadableLog struct{ fixedRuns }
+
+func (unreadableLog) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+	return sandbox.BridgeLog{}, fmt.Errorf("sandbox: read the log: %w", coord.ErrUnavailable)
+}
+
+// A RUN'S LOG IS READ ONLY FOR A READER SHOWN ITS CALLS, AND NEVER GUESSED.
+// The log is kept beside the row and holds up to two hundred calls with their
+// arguments and output, so a board answered to a reader the run's body is
+// withheld from reads none of them — it costs that reader nothing and cannot
+// fail on it. A reader shown the calls whose log cannot be read is answered
+// the store's failure, never a run that called nothing, which is what the
+// delivery check reads as a turn that did not act.
+//
+// Mutation: read the log for every reader, and the stranger's board fails;
+// answer an unreadable log as empty, and the admin's board answers.
+func TestARunsLogIsReadOnlyForAReaderShownItsCalls(t *testing.T) {
+	t.Parallel()
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Sandbox: unreadableLog{fixedRuns{parkedRun()}}, Chart: flatChart{}})
+	got, err := r.Answer(asSeat(t, "pat"), "executors", nil)
+	if err != nil {
+		t.Fatalf("a reader shown no calls was failed on the log it is never shown: %v", err)
+	}
+	if rows := got.(map[string]any)["runs"].([]any); len(rows) != 1 {
+		t.Fatalf("the board holds %d runs, want one", len(rows))
+	}
+	if _, err := r.Answer(asGrants(t, "", iam.GrantAdmin), "executors", nil); !errors.Is(err, coord.ErrUnavailable) {
+		t.Errorf("a reader shown the calls of a run whose log cannot be read was answered %v, "+
+			"want the store's failure rather than a run that called nothing", err)
+	}
 }
 
 // A RUN'S STATUS IS EVERYBODY'S AND ITS BODY IS ITS SEAT'S TRAIL (ADR-0033).

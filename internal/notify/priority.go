@@ -32,15 +32,24 @@ import (
 // WrittenByPerson reports whether the text a notification carries was written
 // by a person rather than by an agent or by the engine itself.
 //
-// THE KIND THE RECORD STATED FIRST ([BodyAuthorKindField]), because a source
-// the engine hosts names its writer's kind on every record, a person whose
-// seat has since gone included. Then the colleague the sender resolves to,
-// in the source's own namespace ([Parties.ByExternalID]): a seat is a person
-// or an agent. A sender nobody in the company holds is somebody outside it,
-// which on every surface a seat is reached on is a person; no sender at all
-// is nobody.
+// THE KIND THE RECORD STATED FIRST, because a source the engine hosts names
+// its writer's kind on every record, a person whose seat has since gone
+// included: the writer a first-party notice states ([Inbound.Writer]), else
+// the kind a parser put in the metadata ([BodyAuthorKindField]). Writer comes
+// first because it is the one statement every first-party producer makes —
+// the code host's wakes state their writer there alone, and read past it a
+// colleague's review comment on a change was a sender the registry could not
+// place, which this rule calls a person, so an agent's remark jumped the
+// lane. Then the colleague the sender resolves to, in the source's own
+// namespace ([Parties.ByExternalID]): a seat is a person or an agent. A
+// sender nobody in the company holds is somebody outside it, which on every
+// surface a seat is reached on is a person; no sender at all is nobody.
 func WrittenByPerson(reg Parties, n Inbound) bool {
-	switch iam.ActorKind(n.Metadata[BodyAuthorKindField]) {
+	kind := iam.ActorKind(n.Metadata[BodyAuthorKindField])
+	if n.Writer != nil {
+		kind = n.Writer.Kind
+	}
+	switch kind {
 	case iam.ActorHuman, iam.ActorOperator:
 		return true
 	case iam.ActorAgent, iam.ActorSystem:

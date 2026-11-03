@@ -630,14 +630,26 @@ func (b *directBox) ReadTail(ctx context.Context, path string, n int) (FileTail,
 	return tail, b.explain(path, rel, err)
 }
 
+// OpenTail implements [Sandbox] for a box on the engine host: a seek, then the
+// section to the end the open found.
+func (b *directBox) OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
+	rel, err := b.homeRel(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	r, size, err := openHomeTail(b.layout, rel, path, n)
+	return r, size, b.explain(path, rel, err)
+}
+
 // SetTimeout refreshes the box's keepalive stamp.
 //
 // This DOES have a counterpart here, and missing it was the bug: the orphan
 // reaper reclaims local boxes on a clock, so a running box that never says it
 // is alive is one the next Create on this host deletes. The waiter calls this
-// once per poll for exactly the boxes it is keeping alive, which is the same
-// contract a remote TTL refresh has. The argument is unused: a local box has
-// no provider-side deadline to extend, only a last-seen time to move forward.
+// once per poll for exactly the boxes it is keeping alive, and a launch for
+// the box it is provisioning, which is the same contract a remote TTL refresh
+// has. The argument is unused: a local box has no provider-side deadline to
+// extend, only a last-seen time to move forward.
 func (b *directBox) SetTimeout(ctx context.Context, seconds float64) error {
 	touchAlive(b.layout)
 	return nil
@@ -1145,6 +1157,16 @@ func (b *containerBox) ReadTail(ctx context.Context, path string, n int) (FileTa
 	return tail, b.explain(path, rel, err)
 }
 
+// OpenTail implements [Sandbox]: a seek on the host side of the mount.
+func (b *containerBox) OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
+	rel, err := b.homeRel(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	r, size, err := openHomeTail(b.layout, rel, path, n)
+	return r, size, b.explain(path, rel, err)
+}
+
 // openHomeFile is a local box's OpenFile once the path is mapped onto its home:
 // the file, or a reader that yields nothing for one that is not there yet.
 //
@@ -1166,6 +1188,33 @@ func openHomeFile(l boxLayout, rel, path string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("local sandbox: open %s: %w", path, err)
 	}
 	return f, nil
+}
+
+// openHomeTail is a local box's OpenTail once the path is mapped onto its
+// home: the file's last n bytes as its size stood at the open, a SECTION of it
+// for readHomeTail's reason, read in place and closed with the file.
+func openHomeTail(l boxLayout, rel, path string, n int64) (io.ReadCloser, int64, error) {
+	f, err := openHomeRegular(l, rel)
+	switch {
+	case absent(err):
+		return io.NopCloser(strings.NewReader("")), 0, nil
+	case err != nil:
+		return nil, 0, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, fmt.Errorf("local sandbox: stat %s: %w", path, err)
+	}
+	size := info.Size()
+	start := max(size-max(n, 0), 0)
+	return hostSection{Reader: io.NewSectionReader(f, start, size-start), Closer: f}, size, nil
+}
+
+// hostSection is a section of a file on the engine host, closed with it.
+type hostSection struct {
+	io.Reader
+	io.Closer
 }
 
 // readHomeTail is a local box's ReadTail once the path is mapped onto its home.
@@ -1341,9 +1390,15 @@ func ResolveContainerRuntime(preference string) (string, error) {
 				return found, nil
 			}
 		}
+		// NO RUNTIME FIELD IN THE REMEDY. Each value it takes is looked up
+		// on this same PATH, so naming docker or podman outright cannot find
+		// what this loop did not: it only trades this refusal for the one
+		// above. The directory is a remedy of its own because an engine
+		// started by a service manager can run with a narrower PATH than the
+		// login shell its operator checks with.
 		return "", localErrorf("run_in %q is set but neither "+
-			"docker nor podman is on the engine host's PATH. Install one, set "+
-			"providers.sandbox.local.runtime explicitly, or use run_in %q", Container, Direct)
+			"docker nor podman is on the engine host's PATH. Install one, put the "+
+			"directory that holds it on that PATH, or use run_in %q", Container, Direct)
 	default:
 		return "", localErrorf("providers.sandbox.local.runtime %q is not one of "+
 			`"auto", "docker" or "podman"`, preference)

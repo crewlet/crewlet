@@ -39,36 +39,42 @@ func (f *FleetStore) ListMCPRestarts(ctx context.Context) ([]coord.MCPRestart, e
 }
 
 // PutMCPRestart records a restart, keeping the later stamp: a read, then a
-// create or an update at the version read, retried on a lost race, as
-// [FleetStore.PutModelRetry] is.
+// create or an update at the version read, retried on a lost race.
+//
+// AT MOST [fleetCASAttempts] TIMES, not [maxRetryRounds] as
+// [FleetStore.PutModelRetry]'s person-paced record is: a restart is
+// recorded by every node that restarts the server, so its contenders are
+// the fleet's members, which the fleet's head count bounds.
 func (f *FleetStore) PutMCPRestart(ctx context.Context, r coord.MCPRestart) (coord.MCPRestart, error) {
 	if err := r.Validate(); err != nil {
 		return coord.MCPRestart{}, err
 	}
 	entry := r.Entry()
-	for range maxRetryRounds {
+	var stored coord.MCPRestart
+	settled, err := casRetry(ctx, &f.positionTrips, "record the MCP restart of "+entry, func() (bool, error) {
 		held, found, err := restartClass.read(ctx, f, entry)
 		if err != nil {
-			return coord.MCPRestart{}, err
+			return false, err
 		}
 		if found && !r.At.After(held.At) {
-			return held, nil
+			stored = held
+			return true, nil
 		}
 		var wrote bool
-		var stored coord.MCPRestart
 		if found {
 			stored, wrote, err = restartClass.update(ctx, f, entry, r, held.Version)
 		} else {
 			stored, wrote, err = restartClass.create(ctx, f, entry, r)
 		}
-		if err != nil {
-			return coord.MCPRestart{}, err
-		}
-		if wrote {
-			return stored, nil
-		}
+		return wrote, err
+	})
+	switch {
+	case err != nil:
+		return coord.MCPRestart{}, err
+	case !settled:
+		return coord.MCPRestart{}, contended("PutMCPRestart", entry)
 	}
-	return coord.MCPRestart{}, contended("PutMCPRestart", entry)
+	return stored, nil
 }
 
 // DeleteMCPRestart removes a restart at a version.

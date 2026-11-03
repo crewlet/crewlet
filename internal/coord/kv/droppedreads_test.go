@@ -74,19 +74,20 @@ func TestADroppedBucketLookupIsAskedAgainAfterAReadsTerm(t *testing.T) {
 	}
 }
 
-// droppingStatus is a bucket whose first status read is DROPPED, and whose
-// every later one is answered by the real bucket beneath it.
-type droppingStatus struct {
-	jetstream.KeyValue
+// droppingStreamReads is a broker that DROPS the first stream-info read it is
+// sent — what a bucket's status is read through — and answers every later one
+// from the real broker beneath it.
+type droppingStreamReads struct {
+	jetstream.JetStream
 	reads atomic.Int64
 }
 
-func (d *droppingStatus) Status(ctx context.Context) (jetstream.KeyValueStatus, error) {
+func (d *droppingStreamReads) Stream(ctx context.Context, name string) (jetstream.Stream, error) {
 	if d.reads.Add(1) == 1 {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return d.KeyValue.Status(ctx)
+	return d.JetStream.Stream(ctx, name)
 }
 
 // A REPLICA-COUNT READ NOBODY ANSWERED IS ASKED AGAIN RATHER THAN FAILING THE
@@ -112,10 +113,10 @@ func TestADroppedReplicaReadIsAskedAgainRatherThanFailingTheBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create the bucket whose replicas are read: %v", err)
 	}
-	bucket := &droppingStatus{KeyValue: made}
+	js := &droppingStreamReads{JetStream: jsOf(nc)}
 	cfg.Replicas = 3
 
-	_, _, err = observeBucket(t.Context(), bucket, cfg)
+	_, _, err = observeBucket(t.Context(), js, made, cfg)
 	if err == nil {
 		t.Fatal("a bucket replicated 1x was accepted by a node configured for 3x")
 	}
@@ -123,7 +124,7 @@ func TestADroppedReplicaReadIsAskedAgainRatherThanFailingTheBoot(t *testing.T) {
 		t.Fatalf("the replica count was never read — the dropped status read "+
 			"was not asked again, and the boot failed on the silence:\n%v", err)
 	}
-	if got := bucket.reads.Load(); got != 2 {
+	if got := js.reads.Load(); got != 2 {
 		t.Errorf("the status was read %d times, want 2: the dropped request "+
 			"once, and once more to be answered", got)
 	}

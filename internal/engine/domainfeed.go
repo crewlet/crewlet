@@ -7,9 +7,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -57,7 +59,7 @@ type domainFeed struct {
 	// every record in the company comes back undecodable, which the feed's
 	// own rule then acknowledges and skips. Every notification stops, and
 	// the only symptom is a log line blaming the record.
-	verify *statelog.Verifier
+	verify *recordseal.Verifier
 
 	// estate and applied are THIS NODE's replicated estate and the domain's
 	// own applier, for a translator that derives a wake from what the
@@ -82,10 +84,12 @@ var (
 	_ worklet.DomainConsumer = domainFeed{}
 	_ doclet.DomainConsumer  = domainFeed{}
 	_ chatlet.DomainConsumer = domainFeed{}
+	_ code.DomainConsumer    = domainFeed{}
 )
 
 // Consume implements each feed-declaring domain's DomainConsumer —
-// [worklet.DomainConsumer], [doclet.DomainConsumer] and [chatlet.DomainConsumer].
+// [worklet.DomainConsumer], [doclet.DomainConsumer], [chatlet.DomainConsumer]
+// and [code.DomainConsumer].
 //
 // A GROUP THIS OPEN CREATES starts after the fleet's recorded floor
 // ([feedPosition.start]), and every open records the floor as it advances
@@ -124,7 +128,7 @@ type domainRecords struct {
 	stream string
 
 	envel  func(payload []byte) (statelog.Envelope, error)
-	verify *statelog.Verifier
+	verify *recordseal.Verifier
 
 	// marker records the group's floor while it is open. Nil where no
 	// register is wired.
@@ -166,7 +170,7 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 		}
 		env, body, verdict, err := openRecord(r.verify, r.envel, delivery.Payload)
 		switch {
-		case verdict != statelog.Verified:
+		case verdict != recordseal.Verified:
 			// TAMPERED IS LOUDER THAN UNKNOWN because the two are
 			// different events: a key this node has not been given is
 			// an operator's pending change, and a MAC that fails under
@@ -176,7 +180,7 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 			detail := "acknowledged and skipped: the applier retains the record " +
 				"at its own position, and reprocesses it when this node is given " +
 				"the key it names"
-			if verdict == statelog.Tampered {
+			if verdict == recordseal.Tampered {
 				level = slog.LevelError
 				detail = "acknowledged and skipped, and NO wake is derived from " +
 					"it: the applier is what stops the node on a record this " +
@@ -340,18 +344,18 @@ func checkFeed(domain statelog.Domain, translator changefeed.Translator) error {
 // hand this a signed record, a record signed under a key it does not hold and
 // a record that is not this fleet's, and pin that a domain decoder is handed
 // the body on the first and nothing at all on the other two — which is what a
-// reader that skipped [statelog.Verifier.Open] would get wrong, silently, by
+// reader that skipped [recordseal.Verifier.Open] would get wrong, silently, by
 // handing the frame's magic bytes to a JSON decoder.
 //
 // The verdict is the caller's disposition and the error is the ENVELOPE's, so
-// the two are separate results: a [statelog.Verified] record with an error is
+// the two are separate results: a [recordseal.Verified] record with an error is
 // one this build cannot decode, and an unverified one is never decoded at all,
 // so it can never carry one.
-func openRecord(verify *statelog.Verifier, envel func([]byte) (statelog.Envelope, error),
-	payload []byte) (statelog.Envelope, []byte, statelog.Verdict, error) {
+func openRecord(verify *recordseal.Verifier, envel func([]byte) (statelog.Envelope, error),
+	payload []byte) (statelog.Envelope, []byte, recordseal.Verdict, error) {
 
 	body, verdict := verify.Open(payload)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		// NO BODY TRAVELS OUT OF AN UNVERIFIED RECORD even where the
 		// frame kept one: an unknown key leaves the bytes readable so
 		// the APPLIER can file the record under its own scope, and the

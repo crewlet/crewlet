@@ -963,7 +963,11 @@ func heads(toks []token, kind head, name string) []int {
 //
 // THE SUITES ARE EXCLUDED, or a case that quotes a constant to assert its
 // shape would count as a second declaration of it, and a call a test makes
-// would count as a screen reading a query. A file that does not scan FAILS the
+// would count as a screen reading a query. A benchmark (`.bench.`, which
+// `vitest bench` runs as `vitest run` runs a suite) is excluded with them: it
+// ships no more than a suite does, the dashboard's own walk
+// (`src/test/source.ts`) reads it as one, and two walks that disagree about
+// what a module is certify two different trees under one name. A file that does not scan FAILS the
 // read rather than being skipped: a gate that reads less than it thinks
 // reports a pass it did not earn.
 //
@@ -982,7 +986,7 @@ func scan(tree string) ([]file, error) {
 			return nil
 		case !strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx"):
 			return nil
-		case strings.Contains(entry.Name(), ".test."):
+		case strings.Contains(entry.Name(), ".test."), strings.Contains(entry.Name(), ".bench."):
 			return nil
 		}
 		source, err := os.ReadFile(path)

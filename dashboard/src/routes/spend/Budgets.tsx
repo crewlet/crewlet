@@ -99,7 +99,7 @@ import { scopeName, whoseCeiling, type CeilingScope, type Period } from "~/lib/c
 import { useArrivedSection, useSectionArrival } from "~/lib/arrival.ts";
 import { ASSISTANT_SECTION, COMPANY_SECTION, seatSection } from "~/lib/remedy.ts";
 import { useNow } from "~/lib/clock.ts";
-import { companyDateLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
+import { companyDateLabel, companyMonthLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -153,14 +153,18 @@ function stateWords(w: BudgetWindow): string {
       : "within the ceiling";
 }
 
-/** The label a window's span carries: `Sep 29`, `W40`, `September`. */
-function windowName(w: BudgetWindow, zone: string): string {
+/**
+ * The name a window's span carries: `Sep 29`, `Week 40`, `September`.
+ *
+ * ALL THREE FROM THE WINDOW'S LABEL, which the engine cut on the company's
+ * clock: naming one reads no clock here, so a company zone this browser
+ * cannot read names its windows as every other does (`companyMonthLabel`
+ * says why the month's first instant would not).
+ */
+function windowName(w: BudgetWindow): string {
   if (w.period === "day") return companyDateLabel(w.window);
   if (w.period === "week") return `Week ${w.window.slice(-2).replace(/^0/, "")}`;
-  const starts = Date.parse(w.starts_at);
-  return Number.isFinite(starts)
-    ? new Date(starts).toLocaleDateString(undefined, { month: "long", timeZone: zone || "UTC" })
-    : w.window;
+  return companyMonthLabel(w.window);
 }
 
 /**
@@ -211,7 +215,7 @@ function ScopeWindow({
     <section className="budget-tile" aria-label={`${name} ${HEADING[period].toLowerCase()}`}>
       <div className="budget-tile-head">
         <span className="budget-tile-title">{HEADING[period]}</span>
-        {w && <span className="t-caption muted">{windowName(w, zone)}</span>}
+        {w && <span className="t-caption muted">{windowName(w)}</span>}
       </div>
       {w ? (
         <>

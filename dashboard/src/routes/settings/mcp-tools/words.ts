@@ -358,6 +358,11 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
     detail: "Editors of the artifact who hold Artifacts access, and its owner.",
   },
   artifact_owner: { label: "Its owner", detail: "The artifact's owner." },
+  health_tools: {
+    label: "Health grant",
+    detail:
+      "Agents whose role carries the health_tools grant: the deployment's health is an admin's read.",
+  },
 };
 
 /** What an alarm row is about: the server by its title, and the agent or node it names. */

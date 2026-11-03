@@ -17,11 +17,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/executordomain"
-	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -92,7 +90,7 @@ import (
 //
 // How the turn ended — completed or failed, the reviewer's decision, whether
 // its reply reached the party waiting, who stopped it and why, what lost it —
-// is the account a transcript cannot hold ([executordomain.Ending]), recorded
+// is the account a transcript cannot hold ([executorkeep.Ending]), recorded
 // on the turn's row of the log beside the session it kept. Whatever ends the
 // turn writes it on the run's row ([PendingStore.OweEnd]): the engine's resumed
 // turn, and this package's endings that no frame of the turn reaches — a loss,
@@ -101,7 +99,7 @@ import (
 // before it deletes the row, which the delete refuses until then
 // ([ErrEndOwed]): after every capture of the turn has settled, so the end's
 // tombstone never refuses the turn's own last session, and with the turn's
-// NEWEST capture where it was not kept ([executordomain.Unkept]), so the log's
+// NEWEST capture where it was not kept ([executorkeep.Unkept]), so the log's
 // row never goes on naming an older session as the turn's last. On every frame
 // somebody waits on — a completion's resume, a stop, a seat's recovery — the
 // ending is decided there and the end recorded by the ending's own retry,
@@ -137,15 +135,144 @@ import (
 // records every end, which is the account and not the session; and a stop
 // still ends its job before its box goes, which is how a stop ends a job.
 
-// SessionWrites is the executor log's writes a coordinator records through: the
-// estate router's (internal/estate's ExecutorWrites), so a node without `data`
-// records through a data node, and a node with it through its own copy — never
-// a data node's local writer, which a seats-only node does not have.
+// SessionWrites is the executor log's writes a coordinator records through, in
+// this package's words. The engine answers them over the estate router's
+// writes (internal/estate's ExecutorWrites), so a node without `data` records
+// through a data node, and a node with it through its own copy — never a data
+// node's local writer, which a seats-only node does not have — and it states
+// each record as the log's: the author every executor record of this package
+// names, and the operation the record's place derives.
+//
+// IN THIS PACKAGE'S WORDS, NEVER THE LOG'S: the log's records and its answers
+// are the state log's types, and the sandbox links no state log (its
+// dependency gate), so the engine translates both ways — a record out, and the
+// log's answer back as what a coordinator does next ([LogAnswer]). What the two
+// sides must agree on byte for byte, the turn's ending and a session's bounds,
+// is internal/executorkeep's.
 type SessionWrites interface {
-	Begin(ctx context.Context, c executordomain.Call, n executordomain.NewBegin) (executordomain.BeginResult, error)
-	Capture(ctx context.Context, c executordomain.Call, n executordomain.NewCapture) (executordomain.CaptureResult, error)
-	End(ctx context.Context, c executordomain.Call, n executordomain.NewEnd) (statelog.Result, error)
+	// Begin records a turn's first read of its conversation — where its head
+	// was read, the turns the read handed out and the session it froze as the
+	// turn's base — under the one operation the turn derives at
+	// [BeginRecord.Minted], and answers whether the log, reading the turn's
+	// row back, holds that base for it.
+	Begin(ctx context.Context, b BeginRecord) (BeginAnswer, error)
+
+	// Capture records a stamped, uploaded capture of a turn's session, under
+	// the one operation its place derives — the turn, the launch it was
+	// taken from and its ordinal there, at the instant the turn's
+	// operations are minted at ([SessionCapture.Minted]) — so every attempt
+	// at one capture is one operation, and the next capture another.
+	Capture(ctx context.Context, c CaptureRecord) (LogAnswer, error)
+
+	// End records how a turn ended, and tombstones it, under the one
+	// operation the turn derives at [EndRecord.Minted]: every path that ends
+	// the turn derives the same one, so a turn ends once however many try.
+	End(ctx context.Context, e EndRecord) (LogAnswer, error)
 }
+
+// CaptureRecord is one capture of a turn's session, asked of the executor log.
+type CaptureRecord struct {
+	Handle          string
+	Turn            string
+	ConversationKey string
+	WorkKey         string
+
+	// Object is the sealed object the capture names, read off its stamp.
+	Object objstore.Object
+
+	// Stamp is the capture as the run's row stamps it: its place, the
+	// harness's session it holds, the keyring key that sealed it and the
+	// seat's budget the record carries.
+	Stamp SessionCapture
+
+	// ReadThrough and Absorbs are the turn's first read of its conversation
+	// as its first launch froze it ([ConversationBase]): where the head was
+	// read, packed, and the turns that read handed out, which the log keeps
+	// where no begin of the turn landed first. ReadThrough is 0 for a turn
+	// that read no conversation.
+	ReadThrough int64
+	Absorbs     []string
+}
+
+// BeginRecord is a turn's first read of its conversation, asked of the
+// executor log as the turn's begin.
+type BeginRecord struct {
+	Handle          string
+	Turn            string
+	ConversationKey string
+	WorkKey         string
+
+	// Minted is the instant the turn's derived operations are minted at
+	// ([SessionKeep.MintedAt]), which the begin's operation derives from.
+	Minted time.Time
+
+	// ReadThrough is where the head was read on the executor log, packed;
+	// Absorbs the turns the read handed out that the turn's brief told.
+	ReadThrough int64
+	Absorbs     []string
+
+	// BaseTurn and BaseObject are the session the read froze as the turn's
+	// base, which the begin holds against its release: "" and zero where the
+	// read froze none.
+	BaseTurn   string
+	BaseObject objstore.Object
+}
+
+// BeginAnswer is how the executor log settled a turn's begin: the log's answer
+// ([LogLanded] where it applied, or had the turn's first read already), and,
+// where it landed, whether the turn's row, read back, holds the base, and why
+// not where it holds none.
+type BeginAnswer struct {
+	Log  LogAnswer
+	Held bool
+	Why  string
+}
+
+// EndRecord is how one turn ended, asked of the executor log.
+type EndRecord struct {
+	Handle          string
+	Turn            string
+	ConversationKey string
+	WorkKey         string
+
+	// Minted is the instant the turn's derived operations are minted at
+	// ([SessionKeep.MintedAt]), which the end's operation derives from.
+	Minted time.Time
+
+	// Ask is what the turn was asked.
+	Ask string
+
+	Ending executorkeep.Ending
+}
+
+// LogAnswer is how the executor log settled one record a coordinator asked of
+// it: the four things a coordinator does differently next.
+type LogAnswer string
+
+const (
+	// LogLanded is a record the log has: a capture the turn's row names now,
+	// or an end the turn has — recorded now, or by another path that ended
+	// the turn first, since the paths that end one turn derive one
+	// operation and the log refuses a second end as already made.
+	LogLanded LogAnswer = "landed"
+
+	// LogPassedOver is a capture the log applied and the turn's row does not
+	// name: an end, a newer capture, the seat's removal or the seat's budget
+	// got there first. Never an end's answer.
+	LogPassedOver LogAnswer = "passed_over"
+
+	// LogRefused is a record the log refuses outright — a capture of a turn
+	// that ended, of an ordinal not newer than the row's, of an object
+	// uploaded too long ago, past the seat's budget or malformed; an end it
+	// cannot take as written — which no retry changes. Its error says why.
+	LogRefused LogAnswer = "refused"
+
+	// LogUnsettled is a record no answer settles yet — a node that did not
+	// answer, none that serves, an outcome still pending or unknown — which
+	// may land if asked again under the same operation. Its error says what
+	// was answered.
+	LogUnsettled LogAnswer = "unsettled"
+)
 
 // SessionKeep is what keeping a session needs of the engine beside the log's
 // writes, which this package cannot do for itself.
@@ -166,7 +293,7 @@ type SessionKeep interface {
 
 	// SealHanded seals the secrets a launch handed its box, encoded
 	// ([HandedSecrets]), for the run's row, bound to its turn
-	// ([PendingRun.Handed]); OpenHanded opens what it sealed, or says why it
+	// ([PendingStore.Handed]); OpenHanded opens what it sealed, or says why it
 	// cannot.
 	SealHanded(turnID string, handed []byte) (string, error)
 	OpenHanded(turnID, sealed string) ([]byte, error)
@@ -178,10 +305,11 @@ type SessionKeep interface {
 	MintedAt(ctx context.Context, turnID, workKey string, workSince time.Time) (time.Time, error)
 
 	// Seal streams archive sealed under the fleet keyring into dst, under an
-	// object key minted now (executordomain.SessionStore.Seal), and Upload
-	// puts what dst held into that object (executordomain.SessionStore.Upload).
-	Seal(handle, turn string, archive io.Reader, dst io.Writer) (executordomain.SealedSpool, error)
-	Upload(ctx context.Context, spool executordomain.SealedSpool, sealed io.Reader) (executordomain.SealedObject, error)
+	// object key minted now (the executor log's session store, Seal), and
+	// Upload puts what dst held into that object (its Upload). An archive
+	// past [executorkeep.SessionMaxBytes] is [executorkeep.ErrSessionTooLarge].
+	Seal(handle, turn string, archive io.Reader, dst io.Writer) (executorkeep.SealedSpool, error)
+	Upload(ctx context.Context, spool executorkeep.SealedSpool, sealed io.Reader) (executorkeep.SealedObject, error)
 }
 
 // SessionPolicy is the company's word on keeping sessions.
@@ -284,15 +412,17 @@ type SessionCapture struct {
 	// is not final.
 	Final bool `json:"final,omitempty"`
 
-	// BridgeSeq is the highest place of a bridged call ([BridgeCall.Seq]) the
-	// row held when the archive was packed, and BridgeOpen the places at or
-	// below it the row held NO call at then ([openPlaces]): a call the
-	// bridge numbers as it arrives is recorded only once its tool answers, so
-	// a place below the highest can still be a call in flight — one whose
-	// outcome the session may never have been handed. Together they say
-	// which of the round's calls the session had been answered: a launch
+	// BridgeSeq is the last bridged call ([BridgeCall.Seq]) the run's log
+	// held ([BridgeLog.LastSeq]) when the archive was packed, and BridgeOpen
+	// the places at or below it the log held NO call at then ([openPlaces]):
+	// a call the bridge numbers as it arrives is recorded only once its tool
+	// answers, so a place below the highest can still be a call in flight —
+	// one whose outcome the session may never have been handed. Together they
+	// say which of the round's calls the session had been answered: a launch
 	// that continues it is told every call past BridgeSeq or at a place
-	// BridgeOpen names, with its outcome.
+	// BridgeOpen names, with its outcome. On a REFUSED stamp a BridgeSeq of
+	// zero is "not known": the refusal came before the log was read, or the
+	// log could not be read ([Coordinator.refuseUnplaced]).
 	BridgeSeq  int   `json:"bridge_seq,omitempty"`
 	BridgeOpen []int `json:"bridge_open,omitempty"`
 
@@ -363,7 +493,7 @@ var ErrCaptureUnbounded = errors.New("sandbox: a capture stamp carries a field p
 // where it is within it: each text a box describes its session by — the
 // harness, the release that wrote it, its session id — the paths the box
 // names, and why a capture did not land, each within the bound the executor
-// log holds the same field to (internal/executordomain), and the open places
+// log holds the same field to (internal/executorkeep), and the open places
 // within [maxOpenPlaces].
 //
 // WHAT A BOX SAYS OF ITS SESSION IS THE BOX'S OWN DOING: a file its run's own
@@ -379,13 +509,13 @@ func (c SessionCapture) Bounded() error {
 		field, value string
 		max          int
 	}{
-		{"launch_id", c.Launch, executordomain.TurnIDMaxBytes},
-		{"reason", c.Reason, executordomain.UnkeptReasonMaxBytes},
-		{"harness", c.Harness, executordomain.HarnessMaxBytes},
-		{"harness_version", c.HarnessVersion, executordomain.HarnessVersionMaxBytes},
-		{"session_id", c.SessionID, executordomain.SessionIDMaxBytes},
-		{"home", c.Home, executordomain.PathMaxBytes},
-		{"workspace", c.Workspace, executordomain.PathMaxBytes},
+		{"launch_id", c.Launch, executorkeep.TurnIDMaxBytes},
+		{"reason", c.Reason, executorkeep.UnkeptReasonMaxBytes},
+		{"harness", c.Harness, executorkeep.HarnessMaxBytes},
+		{"harness_version", c.HarnessVersion, executorkeep.HarnessVersionMaxBytes},
+		{"session_id", c.SessionID, executorkeep.SessionIDMaxBytes},
+		{"home", c.Home, executorkeep.PathMaxBytes},
+		{"workspace", c.Workspace, executorkeep.PathMaxBytes},
 	} {
 		if len(f.value) > f.max {
 			return fmt.Errorf("sandbox: its %s is %d bytes, past the %d it may be: %w", f.field,
@@ -404,7 +534,7 @@ func (c SessionCapture) Bounded() error {
 // ([SessionCapture.Bounded]) — an error's text is the engine's and has no
 // bound of its own.
 func stampReason(why string) string {
-	return textcut.Within(redact.Secrets(why), executordomain.UnkeptReasonMaxBytes)
+	return textcut.Within(redact.Secrets(why), executorkeep.UnkeptReasonMaxBytes)
 }
 
 // newerThan reports whether c's place is after o's.
@@ -507,10 +637,6 @@ func (c *SessionCapture) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// sessionAuthor is who every executor record this package publishes names: the
-// engine's sandbox runtime, which no person and no model drives.
-var sessionAuthor = iam.Actor{Name: "sandbox", Kind: iam.ActorSystem}
-
 // sessionRecordBudget bounds one record of a capture or an end: every attempt
 // at it, under its one operation, together.
 //
@@ -557,9 +683,9 @@ const SessionTakeBudget = SessionPackWait + SessionScrubWait
 
 // SessionKeepBudget bounds a keep, off the read: the upload of a sealed session
 // at its bound at the object store's slowest pace (objstore.PaceFor of
-// executordomain.SealedMaxBytes: thirty-three mebibytes begun, at thirty
+// executorkeep.SealedMaxBytes: thirty-three mebibytes begun, at thirty
 // seconds each) and its record ([sessionRecordBudget]).
-var SessionKeepBudget = objstore.PaceFor(executordomain.SealedMaxBytes) + sessionRecordBudget
+var SessionKeepBudget = objstore.PaceFor(executorkeep.SealedMaxBytes) + sessionRecordBudget
 
 // SessionCaptureBudget is the most a capture takes from its take to its record:
 // a capture stamped begun longer ago than this is one whose node stopped, or
@@ -620,13 +746,13 @@ func readCapture(read BoxRead, result Result, over bool) capturePoint {
 // nothing, since no call is recorded at it.
 const maxOpenPlaces = 64
 
-// openPlaces is the places at or below last that run's row holds no call at —
-// calls in flight when its job's session was packed, and places that never
-// held one — the highest [maxOpenPlaces] of them, ascending
-// ([SessionCapture.BridgeOpen]).
-func openPlaces(run PendingRun, last int) []int {
-	held := make(map[int]bool, len(run.BridgeCalls))
-	for _, call := range run.BridgeCalls {
+// openPlaces is the places at or below last that the run's log holds no call
+// at in its round ([BridgeLog.Calls]) — calls in flight when its job's session
+// was packed, and places that never held one — the highest [maxOpenPlaces] of
+// them, ascending ([SessionCapture.BridgeOpen]).
+func openPlaces(calls BridgeLog, last int) []int {
+	held := make(map[int]bool, len(calls.Calls))
+	for _, call := range calls.Calls {
 		held[call.Seq] = true
 	}
 	var open []int
@@ -672,7 +798,7 @@ func notesHeld(run PendingRun, launch string, cutOff bool) int {
 type spooledCapture struct {
 	run   PendingRun
 	stamp SessionCapture
-	spool executordomain.SealedSpool
+	spool executorkeep.SealedSpool
 	file  string
 }
 
@@ -739,30 +865,44 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}
 	policy, err := c.keep.Policy(ctx)
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, by, run, current, at, fmt.Sprintf("the company's session "+
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, BridgeLog{}, fmt.Sprintf("the company's session "+
 			"policy could not be read off the revision the fleet runs: %v", err))
 	}
 	if !policy.Keep {
 		return nil, nil
 	}
+	// THE SESSION'S PLACE IN THE RUN'S LOG, read before the take: the last
+	// call the log holds is the last the session had been answered
+	// ([SessionCapture.BridgeSeq]). Kept beside the row rather than on it
+	// ([BridgeLog]), so a log the store could not read REFUSES the capture:
+	// a session whose place cannot be stated is one a launch that continues
+	// it could not tell what came after, and is not kept. Read as the job
+	// stands to hold it ([PendingStore.TurnLog]), so a log a relaunch has not
+	// yet opened to the row's job places the session where that opening
+	// will number from, never at 0.
+	calls, err := c.pending.TurnLog(ctx, current)
+	if err != nil {
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, BridgeLog{},
+			fmt.Sprintf("the run's bridged log could not be read: %v", err))
+	}
+	bridgeSeq := calls.LastSeq()
 	scrub, err := c.scrubValues(ctx, current, box)
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, by, run, current, at, err.Error())
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, calls, err.Error())
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
-		MaxBytes: executordomain.SessionMaxBytes})
+		MaxBytes: executorkeep.SessionMaxBytes})
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, by, run, current, at, takeRefusal(ctx, err))
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, calls, takeRefusal(ctx, err))
 	}
 	if taken.Body == nil {
 		return nil, nil
 	}
 	defer func() { _ = taken.Body.Close() }()
-	last := current.LastBridgeSeq()
 	stamp := SessionCapture{
 		LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current), Launch: run.LaunchID,
 		State: CaptureBegun, Final: at.final, Interrupted: at.cutOff,
-		BridgeSeq: last, BridgeOpen: openPlaces(current, last),
+		BridgeSeq: bridgeSeq, BridgeOpen: openPlaces(calls, bridgeSeq),
 		NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC(),
 		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
 		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
@@ -863,9 +1003,9 @@ func stampContext(ctx context.Context, by time.Time) (context.Context, context.C
 // as a deadline error.
 func takeRefusal(ctx context.Context, err error) string {
 	switch {
-	case errors.Is(err, executordomain.ErrSessionTooLarge):
+	case errors.Is(err, executorkeep.ErrSessionTooLarge):
 		return fmt.Sprintf("the session is past the %d bytes a session is kept at, sealed",
-			executordomain.SessionMaxBytes)
+			executorkeep.SessionMaxBytes)
 	case ctx.Err() != nil:
 		return fmt.Sprintf("the session could not be taken out of its box within the read's budget "+
 			"(at most %s): %v", SessionTakeBudget, err)
@@ -1001,8 +1141,8 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 // which its begin holds against the budget's release (each such base once,
 // however many turns froze it). The capturing turn's own base is not counted:
 // its capture lifts its hold in the same apply. The log decides again at the
-// record ([executordomain.ErrOverBudget]), which also counts a turn whose end
-// was lost. A listing that cannot be read decides nothing here.
+// record (a capture it refuses, [LogRefused]), which also counts a turn whose
+// end was lost. A listing that cannot be read decides nothing here.
 func (c *Coordinator) overBudget(ctx context.Context, run PendingRun, size, budget int64) string {
 	runs, err := c.pending.ListActiveForSeat(ctx, run.AgentHandle)
 	if err != nil {
@@ -1152,7 +1292,7 @@ func nextCaptureSeq(run PendingRun) int64 {
 const maxScrubBytes = 4 * MaxHandedBytes
 
 // scrubValues is every value a capture of run's box scrubs out by value: what
-// its launch handed the box ([PendingRun.Handed]), and its seeded logins as
+// its launch handed the box ([PendingStore.Handed]), and its seeded logins as
 // they are NOW, in the box and on the host, since a refresh mints values the
 // launch never saw. [ErrHandedUnknown] where they cannot be known — see
 // handed.go — which refuses the capture rather than scrub less; and refused
@@ -1160,11 +1300,15 @@ const maxScrubBytes = 4 * MaxHandedBytes
 // ([MaxHandedBytes]), or values past [maxScrubBytes] in all — since the box's
 // code can write its login and the scrub holds every value whole.
 func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandbox) ([]string, error) {
-	if run.Handed == "" {
+	sealed, err := c.pending.Handed(ctx, run)
+	if err != nil {
+		return nil, fmt.Errorf("%w: what its box was handed could not be read: %w", ErrHandedUnknown, err)
+	}
+	if sealed == "" {
 		return nil, fmt.Errorf("%w: the run's record keeps none for its job, so its session cannot be "+
 			"scrubbed of them", ErrHandedUnknown)
 	}
-	raw, err := c.keep.OpenHanded(run.TurnID, run.Handed)
+	raw, err := c.keep.OpenHanded(run.TurnID, sealed)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrHandedUnknown, err)
 	}
@@ -1230,14 +1374,16 @@ func loginValuesOf(raw []byte) []string {
 //
 // UNDER A CONTEXT OF ITS OWN, by by at the latest, asked again while the store
 // does not answer ([Coordinator.stampSettled]): the take's budget may be what
-// ended it, and the stamp is what says so.
+// ended it, and the stamp is what says so. calls is the run's log where the
+// refusal had read it, and empty where it had not: its stamp then names
+// place 0, "not known", and no open place ([SessionCapture.BridgeSeq]).
 func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, current PendingRun,
-	at capturePoint, why string) *SessionKept {
+	at capturePoint, calls BridgeLog, why string) *SessionKept {
 
-	last := current.LastBridgeSeq()
+	last := calls.LastSeq()
 	stamp := SessionCapture{LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current),
 		Launch: run.LaunchID, State: CaptureRefused, Reason: stampReason(why), Final: at.final,
-		Interrupted: at.cutOff, BridgeSeq: last, BridgeOpen: openPlaces(current, last),
+		Interrupted: at.cutOff, BridgeSeq: last, BridgeOpen: openPlaces(calls, last),
 		NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC()}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason)
@@ -1407,18 +1553,17 @@ func uploadRefusal(err error) string {
 	case errors.Is(err, objstore.ErrFull):
 		return "the object store's byte reservation is spent, so the session was not uploaded: " +
 			"raise store.objects' reservation or move the objects to a bucket"
-	case errors.Is(err, executordomain.ErrSessionTooLarge):
+	case errors.Is(err, executorkeep.ErrSessionTooLarge):
 		return fmt.Sprintf("the session's archive is past the %d bytes a session is kept at",
-			executordomain.SessionMaxBytes)
+			executorkeep.SessionMaxBytes)
 	}
 	return fmt.Sprintf("the session could not be uploaded: %v", err)
 }
 
 // recordCapture records a stamped, uploaded capture of run's turn on the
-// executor log under the operation its place derives
-// ([executordomain.CaptureOpID]), asked again under that same operation while
-// no answer settles it, within [sessionRecordBudget]: landed, refused (and
-// why), or unresolved.
+// executor log under the operation its place derives ([SessionWrites.Capture]),
+// asked again under that same operation while no answer settles it, within
+// [sessionRecordBudget]: landed, refused (and why), or unresolved.
 //
 // EVERY CAPTURE CARRIES THE TURN'S FIRST READ as its first launch froze it
 // ([PendingRun.Base]), never a read made now: the log keeps the read the turn's
@@ -1431,60 +1576,34 @@ func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp S
 	if err != nil {
 		return CaptureRefused, fmt.Sprintf("the capture names no object a record can: %v", err)
 	}
-	n := executordomain.NewCapture{
+	record := CaptureRecord{
 		Handle: handle, Turn: turn, ConversationKey: run.ConversationKey, WorkKey: run.WorkKey,
-		Harness: stamp.Harness, HarnessVersion: stamp.HarnessVersion, SessionID: stamp.SessionID,
-		Object:     objstore.Object{Key: key, Hash: objstore.Hash(stamp.ObjectHash), Size: stamp.ObjectSize},
-		ContentKey: stamp.ContentKey, ArchiveFormat: stamp.ArchiveFormat,
-		LaunchSeq: stamp.LaunchSeq, CaptureSeq: stamp.CaptureSeq,
-		Home: stamp.Home, Workspace: stamp.Workspace, SeatBudget: stamp.SeatBudget,
-		// WHAT ONLY THIS ROW KNEW OF THE SESSION, carried onto the log's row,
-		// which outlives it: a launch continuing the session after its turn
-		// ended has no run record to read them from.
-		ContextTokens: stamp.ContextTokens, Interrupted: stamp.Interrupted,
+		Object: objstore.Object{Key: key, Hash: objstore.Hash(stamp.ObjectHash), Size: stamp.ObjectSize},
+		Stamp:  stamp,
 	}
 	if read := run.Base; read != nil && read.ReadThrough > 0 {
-		n.ReadThrough = statelog.Unpack(executordomain.Domain{}.Stream().Name, read.ReadThrough)
-		n.Absorbs = read.Absorbs
+		record.ReadThrough, record.Absorbs = read.ReadThrough, read.Absorbs
 	}
-	call := executordomain.Call{By: sessionAuthor,
-		OpID: executordomain.CaptureOpID(stamp.Minted, handle, turn, stamp.Launch, stamp.CaptureSeq)}
 	var outcome CaptureState
 	var why string
 	c.askRecord(ctx, "capture", turn, c.recordBudget, func(ctx context.Context) (bool, error) {
-		res, err := c.sessions.Capture(ctx, call, n)
-		switch {
-		case err == nil && res.Outcome == statelog.OutcomeApplied && res.Recorded:
+		answer, err := c.sessions.Capture(ctx, record)
+		switch answer {
+		case LogLanded:
 			outcome = CaptureLanded
 			return true, nil
-		case err == nil && res.Outcome == statelog.OutcomeApplied:
+		case LogPassedOver:
 			outcome, why = CaptureRefused, "the log applied the capture and the turn's row names "+
 				"another: an end, a newer capture, the seat's removal or the seat's budget got there first"
 			return true, nil
-		case refusedCapture(err):
-			outcome, why = CaptureRefused, err.Error()
+		case LogRefused:
+			outcome, why = CaptureRefused, fmt.Sprint(err)
 			return true, nil
 		}
-		outcome, why = CaptureUnresolved, fmt.Sprintf("outcome %s: %v", res.Outcome, err)
+		outcome, why = CaptureUnresolved, fmt.Sprint(err)
 		return false, err
 	})
 	return outcome, why
-}
-
-// refusedCapture reports whether err is the log's definite refusal of a capture:
-// the turn ended or removed, a newer capture recorded, an object too old to
-// name, a seat budget the live turns fill, or a record it refuses outright.
-// Anything else — a node that did not answer, none that serves, a conversation
-// that kept changing — may land if asked again under the same operation.
-func refusedCapture(err error) bool {
-	for _, refusal := range []error{executordomain.ErrTurnEnded, executordomain.ErrStaleCapture,
-		executordomain.ErrUploadStale, executordomain.ErrOverBudget, executordomain.ErrInvalid,
-		executordomain.ErrSessionTooLarge, executordomain.ErrNotFound} {
-		if errors.Is(err, refusal) {
-			return true
-		}
-	}
-	return false
 }
 
 // beginRecordBudget bounds the record of a turn's begin: every attempt at it,
@@ -1503,9 +1622,8 @@ const beginRecordBudget = 15 * time.Second
 
 // recordBegin records run's turn's first read of its conversation on the
 // executor log — the read its first launch froze on the record ([PendingRun.Base])
-// — as the turn's begin ([executordomain.NewBegin]), under the one operation
-// the turn derives ([executordomain.BeginOpID]), asked again under it while no
-// answer settles it, within [beginRecordBudget]. A read that froze a base
+// — as the turn's begin ([SessionWrites.Begin]), under the one operation the
+// turn derives, asked again under it while no answer settles it, within [beginRecordBudget]. A read that froze a base
 // names it, whatever the launch then takes up, so a later relaunch can still
 // continue it. Logged, never failed on: a begin the log does not hold leaves
 // the turn's launches continuing no base ([BaseContinuityOf]), which is what
@@ -1513,7 +1631,7 @@ const beginRecordBudget = 15 * time.Second
 // records nothing.
 //
 // It answers whether the log read the turn's row back holding the base the read
-// froze ([executordomain.BeginResult.Held]): read on the serving data node once
+// froze ([BeginAnswer.Held]): read on the serving data node once
 // the begin applied, in log order, which is what a read of the row would say
 // now — nothing but the turn's own first capture or its end lifts a hold, and
 // neither comes before this launch's run starts — so the launch takes the
@@ -1531,10 +1649,9 @@ func (c *Coordinator) recordBegin(ctx context.Context, req LaunchRequest, opened
 				"executor log; its launches continue no session its conversation's last turn left")
 		return false
 	}
-	n := executordomain.NewBegin{Handle: req.Turn.AgentHandle, Turn: req.Turn.TurnID,
-		ConversationKey: req.Turn.ConversationKey, WorkKey: req.Turn.WorkKey,
-		ReadThrough: statelog.Unpack(executordomain.Domain{}.Stream().Name, read.ReadThrough),
-		Absorbs:     read.Absorbs}
+	record := BeginRecord{Handle: req.Turn.AgentHandle, Turn: req.Turn.TurnID,
+		ConversationKey: req.Turn.ConversationKey, WorkKey: req.Turn.WorkKey, Minted: minted,
+		ReadThrough: read.ReadThrough, Absorbs: read.Absorbs}
 	if base := read.Session; base != nil {
 		key, keyErr := objstore.ParseKey(base.Object)
 		if keyErr != nil {
@@ -1543,31 +1660,29 @@ func (c *Coordinator) recordBegin(ctx context.Context, req LaunchRequest, opened
 				"detail", "the base the turn's first read froze names no object a record can")
 			return false
 		}
-		n.BaseTurn = base.Turn
-		n.BaseObject = objstore.Object{Key: key, Hash: objstore.Hash(base.ObjectHash), Size: base.ObjectSize}
+		record.BaseTurn = base.Turn
+		record.BaseObject = objstore.Object{Key: key, Hash: objstore.Hash(base.ObjectHash), Size: base.ObjectSize}
 	}
-	call := executordomain.Call{By: sessionAuthor,
-		OpID: executordomain.BeginOpID(minted, req.Turn.AgentHandle, req.Turn.TurnID)}
 	var (
 		held    bool
 		why     string
 		settled bool
 	)
 	c.askRecord(ctx, "begin", req.Turn.TurnID, c.beginBudget, func(ctx context.Context) (bool, error) {
-		res, err := c.sessions.Begin(ctx, call, n)
-		switch {
-		case err == nil && res.Outcome == statelog.OutcomeApplied:
+		res, err := c.sessions.Begin(ctx, record)
+		switch res.Log {
+		case LogLanded:
 			// APPLIED, or nothing to publish: the turn's first read was
 			// recorded already, by an earlier attempt at this begin or a
 			// capture that landed first. Either way the row, read back,
 			// says what it holds.
 			held, why, settled = res.Held, res.Why, true
 			return true, nil
-		case refusedCapture(err):
-			why, settled = err.Error(), true
+		case LogRefused:
+			why, settled = fmt.Sprint(err), true
 			return true, nil
 		}
-		why = fmt.Sprintf("outcome %s: %v", res.Outcome, err)
+		why = fmt.Sprint(err)
 		return false, err
 	})
 	switch {
@@ -1576,9 +1691,9 @@ func (c *Coordinator) recordBegin(ctx context.Context, req LaunchRequest, opened
 			"agent", req.Turn.AgentHandle, "detail", redact.Secrets(why),
 			"outcome", "the launch continues no session its conversation's last turn left; the begin may "+
 				"still land, and holds no longer than the turn's first capture or its end")
-	case n.BaseTurn != "" && !held:
+	case record.BaseTurn != "" && !held:
 		log.InfoContext(ctx, "executor_begin_holds_no_base", "turn_id", req.Turn.TurnID,
-			"agent", req.Turn.AgentHandle, "base_turn", n.BaseTurn, "detail", redact.Secrets(why),
+			"agent", req.Turn.AgentHandle, "base_turn", record.BaseTurn, "detail", redact.Secrets(why),
 			"outcome", "the turn's launches continue no session its conversation's last turn left")
 	}
 	return settled && held
@@ -1709,10 +1824,10 @@ func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun,
 }
 
 // unkeptOf is the turn's newest capture where it is not one the turn's row on
-// the executor log names ([executordomain.Unkept]): refused, never answered,
+// the executor log names ([executorkeep.Unkept]): refused, never answered,
 // or begun and never finished — and newer than the one that landed, if any.
 // Nil where the newest landed, or the turn took none.
-func unkeptOf(run PendingRun) *executordomain.Unkept {
+func unkeptOf(run PendingRun) *executorkeep.Unkept {
 	newest := run.Capture
 	if newest == nil || newest.State == CaptureLanded {
 		return nil
@@ -1727,7 +1842,7 @@ func unkeptOf(run PendingRun) *executordomain.Unkept {
 	case CaptureBegun:
 		why = "it was begun and never finished: the node taking it stopped, or its budget ran out"
 	}
-	return &executordomain.Unkept{LaunchSeq: newest.LaunchSeq, CaptureSeq: newest.CaptureSeq,
+	return &executorkeep.Unkept{LaunchSeq: newest.LaunchSeq, CaptureSeq: newest.CaptureSeq,
 		Reason: redact.Secrets(why)}
 }
 
@@ -1746,11 +1861,11 @@ type TurnEnd struct {
 	// Ask is what the turn was asked, as a person reads it.
 	Ask string
 
-	Ending executordomain.Ending
+	Ending executorkeep.Ending
 }
 
 // turnEndOf is the end of the turn run's row belongs to, ending as ending.
-func turnEndOf(run PendingRun, ending executordomain.Ending) TurnEnd {
+func turnEndOf(run PendingRun, ending executorkeep.Ending) TurnEnd {
 	return TurnEnd{Handle: run.AgentHandle, TurnID: run.TurnID, ConversationKey: run.ConversationKey,
 		WorkKey: run.WorkKey, WorkSince: run.WorkSince, Ask: run.TaskDescription, Ending: ending}
 }
@@ -1771,13 +1886,13 @@ func turnEndOf(run PendingRun, ending executordomain.Ending) TurnEnd {
 // came to.
 //
 // FITTED TO THE EXECUTOR LOG'S BOUNDS BEFORE IT RIDES THE ROW
-// ([executordomain.Ending.Fit]): its prose is a model's and a guard's — a
+// ([executorkeep.Ending.Fit]): its prose is a model's and a guard's — a
 // reviewer's completed work, a failure's text — which nothing bounds before
 // here, and the row's budget measures an owed end as this writes it, every
-// prose field at its cap escaped at its worst (rowbytes.go,
+// field at its bound escaped at its worst (rowbytes.go,
 // TestTheWholeRowFitsItsBudget). The log fits it the same way when it records
 // it, so what the row owes is what the log will hold.
-func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executordomain.Ending) (bool, error) {
+func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executorkeep.Ending) (bool, error) {
 	raw, err := owedEnd(turnID, ending)
 	if err != nil {
 		return false, err
@@ -1792,19 +1907,20 @@ func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executor
 }
 
 // owedEnd is ending as the run's row owes it ([PendingRun.OwedEnd]): fitted to
-// the executor log's bounds, and refused where even fitted it is past the
-// largest record the log takes ([executordomain.MaxRecordBytes]) — which no
-// fitted ending is, the log's own caps test holds, and which the log would
-// refuse it for anyway — so the row never carries an end the log cannot
-// record, nor one past what its budget measured.
-func owedEnd(turnID string, ending executordomain.Ending) (json.RawMessage, error) {
-	raw, err := json.Marshal(ending.Fit())
+// the executor log's bounds, and refused where even fitted it is outside them
+// ([executorkeep.Ending.Within]) — an engine word past its bound, which the
+// log refuses rather than cuts, an outcome it does not know, an unkept capture
+// placed nowhere — so the row never carries an end the log cannot record, nor
+// one past what its budget measured.
+func owedEnd(turnID string, ending executorkeep.Ending) (json.RawMessage, error) {
+	fitted := ending.Fit()
+	if !fitted.Within() {
+		return nil, fmt.Errorf("sandbox: the end of turn %s is not one the executor log records: %w", turnID,
+			fitted.Validate())
+	}
+	raw, err := json.Marshal(fitted)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: encoding the end of turn %s: %w", turnID, err)
-	}
-	if len(raw) > executordomain.MaxRecordBytes {
-		return nil, fmt.Errorf("sandbox: the end of turn %s weighs %d bytes with its prose fitted, past the "+
-			"%d the executor log records", turnID, len(raw), executordomain.MaxRecordBytes)
 	}
 	return raw, nil
 }
@@ -1812,7 +1928,7 @@ func owedEnd(turnID string, ending executordomain.Ending) (json.RawMessage, erro
 // oweEnd is [Coordinator.OweEnd] for an ending's own step: the row as it stands
 // after the write, owing the end it decided or one decided before it, or
 // having recorded one already.
-func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executordomain.Ending) (PendingRun, error) {
+func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executorkeep.Ending) (PendingRun, error) {
 	raw, err := owedEnd(run.TurnID, ending)
 	if err != nil {
 		return PendingRun{}, err
@@ -1829,8 +1945,8 @@ func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executo
 	return owing, nil
 }
 
-// endKeys are the keys an [executordomain.Ending] this build writes may hold.
-var endKeys = wireKeys(reflect.TypeFor[executordomain.Ending]())
+// endKeys are the keys an [executorkeep.Ending] this build writes may hold.
+var endKeys = wireKeys(reflect.TypeFor[executorkeep.Ending]())
 
 // publishEnd records the end run's row owes on the executor log
 // ([Coordinator.recordEnd]) — after asking again a capture of the turn still
@@ -1843,7 +1959,7 @@ var endKeys = wireKeys(reflect.TypeFor[executordomain.Ending]())
 // A rolling upgrade mixes builds, and the seat can move from the node that
 // owed the end to one running this build. An end holding a key this build
 // does not know, or an outcome it does not know, is DEFERRED rather than
-// published: decoded into this build's [executordomain.Ending] and encoded
+// published: decoded into this build's [executorkeep.Ending] and encoded
 // again, the keys it could not read were dropped from the turn's account; and
 // an outcome it does not know, refused by this build's log as malformed, was
 // taken for an end the log will never take and cleared — the turn's end never
@@ -1853,7 +1969,7 @@ var endKeys = wireKeys(reflect.TypeFor[executordomain.Ending]())
 // is the rule every record of the fleet's builds keeps: what a build cannot read
 // is deferred, never dropped.
 func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRun, error) {
-	var ending executordomain.Ending
+	var ending executorkeep.Ending
 	unknown, err := unmarshalCarrying(run.OwedEnd, &ending, endKeys)
 	switch {
 	case err != nil:
@@ -1926,7 +2042,7 @@ func (c *Coordinator) EndTurn(ctx context.Context, end TurnEnd) error {
 
 // recordEnd records on the executor log how a turn ended — the account the
 // turn's row of the log keeps beside the session it kept — under the one
-// operation every path that ends the turn derives ([executordomain.EndOpID]),
+// operation every path that ends the turn derives ([SessionWrites.End]),
 // asked again under it while no answer settles it, within
 // [sessionRecordBudget]. Nil once the log has the turn's end — taken now, by an
 // earlier attempt, or refused as one it will never take, which is logged — and
@@ -1945,29 +2061,26 @@ func (c *Coordinator) recordEnd(ctx context.Context, end TurnEnd) error {
 		return fmt.Errorf("sandbox: the operations of turn %s could not be minted to record its end: %w",
 			end.TurnID, err)
 	}
-	call := executordomain.Call{By: sessionAuthor, OpID: executordomain.EndOpID(minted, end.Handle, end.TurnID)}
-	n := executordomain.NewEnd{Handle: end.Handle, Turn: end.TurnID, ConversationKey: end.ConversationKey,
-		WorkKey: end.WorkKey, Ask: end.Ask, Ending: end.Ending}
+	record := EndRecord{Handle: end.Handle, Turn: end.TurnID, ConversationKey: end.ConversationKey,
+		WorkKey: end.WorkKey, Minted: minted, Ask: end.Ask, Ending: end.Ending}
 	var lastErr error
 	ended := false
 	c.askRecord(ctx, "end", end.TurnID, c.recordBudget, func(ctx context.Context) (bool, error) {
-		res, err := c.sessions.End(ctx, call, n)
-		switch {
-		case err == nil && res.Outcome == statelog.OutcomeApplied:
+		answer, err := c.sessions.End(ctx, record)
+		switch answer {
+		case LogLanded:
+			// Taken now, or ANOTHER PATH ENDED IT FIRST — two frames that
+			// both end a turn derive the same operation, and the log takes
+			// the first.
 			ended = true
 			return true, nil
-		case errors.Is(err, executordomain.ErrTurnEnded):
-			// ANOTHER PATH ENDED IT FIRST — two frames that both end a
-			// turn derive the same operation, and the second is refused.
-			ended = true
-			return true, nil
-		case errors.Is(err, executordomain.ErrInvalid):
-			log.ErrorContext(ctx, "executor_turn_end_refused", "turn_id", end.TurnID, "error", err.Error(),
+		case LogRefused:
+			log.ErrorContext(ctx, "executor_turn_end_refused", "turn_id", end.TurnID, "error", fmt.Sprint(err),
 				"detail", "the executor log refused the turn's end as malformed, which no retry changes")
 			ended = true
 			return true, nil
 		}
-		lastErr = fmt.Errorf("outcome %s: %w", res.Outcome, err)
+		lastErr = err
 		return false, err
 	})
 	if !ended {

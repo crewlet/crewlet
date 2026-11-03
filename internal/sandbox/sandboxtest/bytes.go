@@ -16,17 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A run's row held to its byte budget: the cases [Run] drives for it.
+// A run's row and its log held to their byte budget: the cases [Run] drives for
+// it.
 //
-// EACH IS A PROPERTY OF THE WRITE THAT GROWS THE ROW. The row is one value in
-// the coordination store, held to the broker's payload bound (sandbox's
-// RowBytes), and the writes that grow it — a bridged call appended, a parked
-// state, a launch's title — each hold what they write to its share. A suite
-// that asserted the codec alone would certify the author's arithmetic and
-// nothing about what lands on the record, so the raw cases read the record's
-// own bytes.
+// EACH IS A PROPERTY OF THE WRITE THAT GROWS A VALUE. The row and the log beside
+// it are each one value in the coordination store, held to the broker's payload
+// bound (sandbox's RowBytes), and the writes that grow them — a bridged call
+// appended to the log, a parked state, a launch's title — each hold what they
+// write to its share. A suite that asserted the codec alone would certify the
+// author's arithmetic and nothing about what lands in the store, so the raw
+// cases read the values' own bytes.
 
-// bytesCases are the cases that read the row through the store.
+// bytesCases are the cases that read the row and its log through the store.
 var bytesCases = []struct {
 	name string
 	fn   func(*testing.T, sandbox.PendingStore)
@@ -47,14 +48,14 @@ var bytesCases = []struct {
 	{"AQuestionIsPutToTheFirstOfItsAudience", testAQuestionIsPutToTheFirstOfItsAudience},
 }
 
-// bytesRawCases are the cases that read the raw record.
+// bytesRawCases are the cases that read the raw record or the raw log.
 var bytesRawCases = []struct {
 	name string
 	fn   func(*testing.T, sandbox.PendingStore, coord.SandboxRuns)
 }{
 	{"ABridgedCallCarryingAMegabyteIsKeptWithinItsShare", testABridgedCallCarryingAMegabyteIsKeptWithinItsShare},
-	{"TwoHundredFullAnswersLeaveTheRowWithinItsBudget", testTwoHundredFullAnswersLeaveTheRowWithinItsBudget},
-	{"ATallyAnotherRoundLeftIsNoneOfThisRounds", testATallyAnotherRoundLeftIsNoneOfThisRounds},
+	{"TwoHundredFullAnswersLeaveTheLogWithinItsBudget", testTwoHundredFullAnswersLeaveTheLogWithinItsBudget},
+	{"CallsDroppedWithNoIdentityReadAsCallsOfNoKnownTool", testCallsDroppedWithNoIdentityReadAsCallsOfNoKnownTool},
 	{"ACaptureStampPastItsBoundsIsRefused", testACaptureStampPastItsBoundsIsRefused},
 }
 
@@ -85,33 +86,44 @@ func raw(t *testing.T, runs coord.SandboxRuns, turnID string) []byte {
 	return record.Value
 }
 
+// rawLog is the run's bridged call log as the coordination store holds it
+// beside the record.
+func rawLog(t *testing.T, runs coord.SandboxRuns, turnID string) []byte {
+	t.Helper()
+	record, found, err := runs.SandboxRunPart(t.Context(), turnID, coord.RunLog)
+	if err != nil || !found {
+		t.Fatalf("read the raw log of %s: %v %v", turnID, found, err)
+	}
+	return record.Value
+}
+
 // A BRIDGED CALL CARRYING A MEGABYTE IS KEPT WITHIN ITS SHARE. A commit's file
 // of a megabyte of markup is the arguments' largest value, so it is left out —
 // a marker naming its size and digest in its place — while the repository,
 // the branch and the file's path stay whole beside it; the call states the
 // size of what it was sent with, keeps its identity, and adds no more to the
-// record than its share.
+// log than its share.
 //
-// Mutation: record the call as the bridge handed it, and the record grows by
-// six megabytes of escapes; drop the identity, and a resumed run cannot count
-// the call it was.
+// Mutation: record the call as the bridge handed it, and the log grows by six
+// megabytes of escapes; drop the identity, and a resumed run cannot count the
+// call it was.
 func testABridgedCallCarryingAMegabyteIsKeptWithinItsShare(t *testing.T, s sandbox.PendingStore,
 	runs coord.SandboxRuns,
 ) {
 	ctx := t.Context()
 	r := run("t-bytes-commit")
 	launch := mustLaunched(t, s, r)
-	before := len(raw(t, runs, r.TurnID))
+	before := len(rawLog(t, runs, r.TurnID))
 	args := commitArgs(t, strings.Repeat("<", 1<<20))
 	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{Launch: launch,
 		Call: sandbox.BridgeCall{Name: "code_commit_files", Args: args, Output: "committed abc123",
 			Digest: digestOf(1), Seq: 1}}); err != nil || !recorded {
 		t.Fatalf("AppendBridgeCall = %v, %v", recorded, err)
 	}
-	if grew := len(raw(t, runs, r.TurnID)) - before; grew > sandbox.MaxBridgeCallBytes {
-		t.Errorf("one call grew the record by %d bytes, past its share %d", grew, sandbox.MaxBridgeCallBytes)
+	if grew := len(rawLog(t, runs, r.TurnID)) - before; grew > sandbox.MaxBridgeCallBytes {
+		t.Errorf("one call grew the log by %d bytes, past its share %d", grew, sandbox.MaxBridgeCallBytes)
 	}
-	got := mustGet(t, s, r.TurnID).BridgeCalls
+	got := mustLogged(t, s, r.TurnID).Log.Calls
 	if len(got) != 1 {
 		t.Fatalf("%d calls recorded, want the one", len(got))
 	}
@@ -122,7 +134,7 @@ func testABridgedCallCarryingAMegabyteIsKeptWithinItsShare(t *testing.T, s sandb
 	}
 	var kept map[string]any
 	if err := json.Unmarshal([]byte(call.Args), &kept); err != nil {
-		t.Fatalf("what the row kept is not the call's arguments: %v", err)
+		t.Fatalf("what the log kept is not the call's arguments: %v", err)
 	}
 	files, _ := kept["files"].([]any)
 	file, _ := firstFile(files)
@@ -143,17 +155,16 @@ func firstFile(files []any) (map[string]any, bool) {
 	return file, ok
 }
 
-// logBytes is what the bridged log weighs in a raw record: its three keys and
-// their values, as written.
-func logBytes(t *testing.T, record []byte) int {
+// callsBytes is what a raw log's calls weigh in it: the keys sandbox's
+// BridgeLogBytes is the share of, and their values, as written.
+func callsBytes(t *testing.T, log []byte) int {
 	t.Helper()
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(record, &fields); err != nil {
+	if err := json.Unmarshal(log, &fields); err != nil {
 		t.Fatal(err)
 	}
 	n := 0
-	for _, key := range []string{"bridge_calls", "bridge_calls_elided", "bridge_elided_calls",
-		"bridge_absorbed_calls", "bridge_tally_round"} {
+	for _, key := range []string{"calls", "elided", "elided_calls", "absorbed_calls"} {
 		if value, ok := fields[key]; ok {
 			n += len(`,"":`) + len(key) + len(value)
 		}
@@ -161,15 +172,18 @@ func logBytes(t *testing.T, record []byte) int {
 	return n
 }
 
-// TWO HUNDRED FULL ANSWERS LEAVE THE ROW WITHIN ITS BUDGET. A long run whose
+// TWO HUNDRED FULL ANSWERS LEAVE THE LOG WITHIN ITS BUDGET. A long run whose
 // every call answered a builtin's whole 64 KiB page — and sixty more past the
-// log's count, dropped from its middle — leaves a log that weighs no more than
-// its share of the row (sandbox's BridgeLogBytes), every call stating the size
-// it answered and the dropped ones counted by identity.
+// log's count, dropped from its middle — leaves a log whose calls weigh no
+// more than their share (sandbox's BridgeLogBytes) and which is a value the
+// broker takes (sandbox's RowBytes), every call stating the size it answered
+// and the dropped ones counted by identity; and the row beside it is a value
+// the broker takes too, every append having written nothing but its spend
+// there.
 //
 // Mutation: keep each call's output whole, and the log weighs 12.8 MiB of
-// pages before a byte of their escapes, past the whole row's budget.
-func testTwoHundredFullAnswersLeaveTheRowWithinItsBudget(t *testing.T, s sandbox.PendingStore,
+// pages before a byte of their escapes, past a value's budget.
+func testTwoHundredFullAnswersLeaveTheLogWithinItsBudget(t *testing.T, s sandbox.PendingStore,
 	runs coord.SandboxRuns,
 ) {
 	ctx := t.Context()
@@ -184,23 +198,26 @@ func testTwoHundredFullAnswersLeaveTheRowWithinItsBudget(t *testing.T, s sandbox
 			t.Fatalf("append %d = %v, %v", i, recorded, err)
 		}
 	}
-	record := raw(t, runs, r.TurnID)
-	if n := logBytes(t, record); n > sandbox.BridgeLogBytes {
-		t.Errorf("the log weighs %d bytes, past its share %d", n, sandbox.BridgeLogBytes)
+	logged := rawLog(t, runs, r.TurnID)
+	if n := callsBytes(t, logged); n > sandbox.BridgeLogBytes {
+		t.Errorf("the log's calls weigh %d bytes, past their share %d", n, sandbox.BridgeLogBytes)
 	}
-	if len(record) > sandbox.RowBytes {
+	if len(logged) > sandbox.RowBytes {
+		t.Errorf("the log weighs %d bytes, past a value's budget %d", len(logged), sandbox.RowBytes)
+	}
+	if record := raw(t, runs, r.TurnID); len(record) > sandbox.RowBytes {
 		t.Errorf("the record weighs %d bytes, past the row's budget %d", len(record), sandbox.RowBytes)
 	}
-	got := mustGet(t, s, r.TurnID)
-	for _, call := range got.BridgeCalls {
+	got := mustLogged(t, s, r.TurnID).Log
+	for _, call := range got.Calls {
 		if call.OutputBytes != len(page) || kept.Quoted(call.Output) > sandbox.MaxBridgeOutputBytes {
 			t.Fatalf("call %d keeps %d bytes of output stating %d, want at most %d stating %d", call.Seq,
 				kept.Quoted(call.Output), call.OutputBytes, sandbox.MaxBridgeOutputBytes, len(page))
 		}
 	}
-	if got.BridgeCallsElided != 60 || !got.ElisionKnown() {
+	if got.Elided != 60 || !got.ElisionKnown() {
 		t.Errorf("%d calls dropped, accounted %v; want 60, every one by identity",
-			got.BridgeCallsElided, got.ElisionKnown())
+			got.Elided, got.ElisionKnown())
 	}
 }
 
@@ -228,9 +245,9 @@ func testACallTheLogDropsKeepsItsIdentity(t *testing.T, s sandbox.PendingStore) 
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
-	got := mustGet(t, s, r.TurnID)
-	if got.BridgeCallsElided != 30 || len(got.BridgeCalls) != sandbox.MaxBridgeCalls {
-		t.Fatalf("%d kept and %d dropped, want %d and 30", len(got.BridgeCalls), got.BridgeCallsElided,
+	got := mustLogged(t, s, r.TurnID).Log
+	if got.Elided != 30 || len(got.Calls) != sandbox.MaxBridgeCalls {
+		t.Fatalf("%d kept and %d dropped, want %d and 30", len(got.Calls), got.Elided,
 			sandbox.MaxBridgeCalls)
 	}
 	// What was dropped is calls head..head+29 (the oldest after the head):
@@ -267,7 +284,7 @@ func testACallTheLogDropsKeepsItsIdentity(t *testing.T, s sandbox.PendingStore) 
 }
 
 // THE NEWEST SUBMISSION IS KEPT WHOLE FOR ITS REPLAY. The collection replays a
-// run's newest successful `submit_work` off its row as the round's outcome, so
+// run's newest successful `submit_work` off its log as the round's outcome, so
 // that one call keeps its arguments up to the larger share
 // (MaxSubmissionArgsBytes); the moment a newer one lands, the one before it is
 // held to every call's ordinary share, and a submission the surface refused,
@@ -298,7 +315,7 @@ func testTheNewestSubmissionIsKeptWholeForItsReplay(t *testing.T, s sandbox.Pend
 	}
 	whole := func(seq int) bool {
 		t.Helper()
-		for _, call := range mustGet(t, s, r.TurnID).BridgeCalls {
+		for _, call := range mustLogged(t, s, r.TurnID).Log.Calls {
 			if call.Seq == seq {
 				if call.ArgsBytes == 0 && call.Args != submission(seq) {
 					t.Errorf("submission %d states no cut and holds other arguments", seq)
@@ -310,7 +327,7 @@ func testTheNewestSubmissionIsKeptWholeForItsReplay(t *testing.T, s sandbox.Pend
 				return call.ArgsBytes == 0
 			}
 		}
-		t.Fatalf("submission %d is not on the record", seq)
+		t.Fatalf("submission %d is not in the log", seq)
 		return false
 	}
 	add(1, false)
@@ -334,10 +351,13 @@ func testTheNewestSubmissionIsKeptWholeForItsReplay(t *testing.T, s sandbox.Pend
 // the turn's earlier calls by name, which is what the run's own ending reads
 // to say whether the turn replied — a reply its log dropped from the middle
 // included, read off its identity, so the turn's record is not taken for
-// incomplete.
+// incomplete. The new round's log starts with neither tally: the identities of
+// the calls the last round dropped, and of the calls its calls' own work made,
+// are the last round's.
 //
 // Mutation: fold the kept calls alone, and the reply the log dropped is
-// missing from the turn's earlier calls.
+// missing from the turn's earlier calls; carry the tallies into the new
+// round's log, and the last round's work is seeded into the next.
 func testANewRoundFoldsTheDroppedCallsIntoTheTurnsEarlierCalls(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bytes-fold")
@@ -349,12 +369,16 @@ func testANewRoundFoldsTheDroppedCallsIntoTheTurnsEarlierCalls(t *testing.T, s s
 			name = "post_message"
 		}
 		if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{Launch: launch,
-			Call: sandbox.BridgeCall{Name: name, Digest: digestOf(i), Seq: i + 1}}); err != nil {
+			Call:     sandbox.BridgeCall{Name: name, Digest: digestOf(i), Seq: i + 1},
+			Absorbed: []sandbox.ElidedCall{{Name: "leave_channel", Digest: digestOf(i), Calls: 1}}}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
-	before := mustGet(t, s, r.TurnID)
-	for _, call := range before.BridgeCalls {
+	before := mustLogged(t, s, r.TurnID).Log
+	if len(before.ElidedCalls) == 0 || len(before.AbsorbedCalls) == 0 {
+		t.Fatal("the round kept no tally; the case needs both")
+	}
+	for _, call := range before.Calls {
 		if call.Name == "post_message" {
 			t.Fatal("the reply was kept; the case needs it dropped from the middle")
 		}
@@ -363,10 +387,10 @@ func testANewRoundFoldsTheDroppedCallsIntoTheTurnsEarlierCalls(t *testing.T, s s
 	if _, err := s.BeginLaunch(ctx, next, sandbox.Fence{}); err != nil {
 		t.Fatalf("relaunch: %v", err)
 	}
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != 0 || got.BridgeCallsElided != 0 || len(got.ElidedCalls) != 0 {
-		t.Errorf("the new round opened with %d calls, %d dropped and %d identities; want none",
-			len(got.BridgeCalls), got.BridgeCallsElided, len(got.ElidedCalls))
+	got := mustLogged(t, s, r.TurnID).Log
+	if len(got.Calls) != 0 || got.Elided != 0 || len(got.ElidedCalls) != 0 || len(got.AbsorbedCalls) != 0 {
+		t.Errorf("the new round opened with %d calls, %d dropped and %d and %d identities; want none",
+			len(got.Calls), got.Elided, len(got.ElidedCalls), len(got.AbsorbedCalls))
 	}
 	if !strings.Contains(strings.Join(got.PriorCalls, ","), "post_message") || got.PriorCallsElided {
 		t.Errorf("the turn's earlier calls are %v (incomplete %v); want the dropped reply among them, complete",
@@ -439,15 +463,15 @@ func testARunsTitleIsHeldToItsShare(t *testing.T, s sandbox.PendingStore) {
 }
 
 // callAt is a call the bridge ran at place seq, handed to the surface at
-// started, as an append hands it to the row.
+// started, as an append hands it to the log.
 func callAt(name string, seq int, started time.Time, digest string) sandbox.BridgeCall {
 	return sandbox.BridgeCall{Name: name, Seq: seq, StartedAt: started, Digest: digest}
 }
 
-// listed is how many times the row lists a call at place seq under name.
-func listed(run sandbox.PendingRun, name string, seq int) int {
+// listed is how many times the log lists a call at place seq under name.
+func listed(log sandbox.BridgeLog, name string, seq int) int {
 	n := 0
-	for _, c := range run.BridgeCalls {
+	for _, c := range log.Calls {
 		if c.Name == name && c.Seq == seq {
 			n++
 		}
@@ -458,7 +482,7 @@ func listed(run sandbox.PendingRun, name string, seq int) int {
 // AN APPEND CARRIES WHAT ITS SESSION OWED, WHOLE, AND LANDS ONCE. A bridged
 // call whose own append did not land is owed by its session as the append it
 // was — the call and what its own work absorbed — and a later append carries
-// it: the row LISTS it, as the call it is, beside the call that carried it,
+// it: the log LISTS it, as the call it is, beside the call that carried it,
 // so a resumed call log seeds it by its identity, the delivery checks read
 // its outcome, and the board shows it where it was made. An append that names
 // no call of its own — what a session sends once its job is over — carries
@@ -469,8 +493,8 @@ func listed(run sandbox.PendingRun, name string, seq int) int {
 //
 // Mutation: drop the owed appends, or what they absorbed, and a resumed run
 // counts fewer calls than its process did; count an owed call as a call the
-// row does not list, and the board says a call from the middle went missing
-// that the row could have shown; append a repeat again, and the calls and the
+// log does not list, and the board says a call from the middle went missing
+// that the log could have shown; append a repeat again, and the calls and the
 // tally double.
 func testAnAppendCarriesWhatItsSessionOwedWhole(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
@@ -491,20 +515,20 @@ func testAnAppendCarriesWhatItsSessionOwedWhole(t *testing.T, s sandbox.PendingS
 			t.Fatalf("append, attempt %d = %v, %v; want it recorded", attempt+1, recorded, err)
 		}
 	}
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != 3 || got.BridgeCallsElided != 0 || len(got.Elided()) != 0 {
-		t.Fatalf("the row lists %d calls and counts %d it does not list (%+v), want the call and the two "+
-			"it carried listed, and none unlisted", len(got.BridgeCalls), got.BridgeCallsElided, got.Elided())
+	got := mustLogged(t, s, r.TurnID).Log
+	if len(got.Calls) != 3 || got.Elided != 0 || len(got.Unlisted()) != 0 {
+		t.Fatalf("the log lists %d calls and counts %d it does not list (%+v), want the call and the two "+
+			"it carried listed, and none unlisted", len(got.Calls), got.Elided, got.Unlisted())
 	}
 	for _, want := range []struct {
 		name string
 		seq  int
 	}{{"comment_on_work_item", 1}, {"read_file", 2}, {"delegate", 3}} {
 		if n := listed(got, want.name, want.seq); n != 1 {
-			t.Errorf("the row lists %s at %d %d times, want once", want.name, want.seq, n)
+			t.Errorf("the log lists %s at %d %d times, want once", want.name, want.seq, n)
 		}
 	}
-	if !got.BridgeCalls[1].Failed {
+	if !got.Calls[1].Failed {
 		t.Error("the owed call that failed is listed as a success")
 	}
 	absorbed := got.Absorbed()
@@ -520,10 +544,10 @@ func testAnAppendCarriesWhatItsSessionOwedWhole(t *testing.T, s sandbox.PendingS
 	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, carry); err != nil || !recorded {
 		t.Fatalf("a carry naming no call = %v, %v; want it recorded", recorded, err)
 	}
-	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 4 || listed(got, sandbox.SubmitWorkTool, 4) != 1 {
-		t.Errorf("after the carry the row lists %+v, want the owed submission beside the three", got.BridgeCalls)
+	if got := mustLogged(t, s, r.TurnID).Log; len(got.Calls) != 4 || listed(got, sandbox.SubmitWorkTool, 4) != 1 {
+		t.Errorf("after the carry the log lists %+v, want the owed submission beside the three", got.Calls)
 	}
-	// AND A CARRY FOR A JOB THE ROW NO LONGER HOLDS is not recorded, and is
+	// AND A CARRY FOR A JOB THE LOG IS NOT OPEN FOR is not recorded, and is
 	// said so: a relaunch replaced the job its calls were made in.
 	carry.Launch = "another-job"
 	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, carry); err != nil || recorded {
@@ -535,12 +559,12 @@ func testAnAppendCarriesWhatItsSessionOwedWhole(t *testing.T, s sandbox.PendingS
 // that did not land from one that landed and lost every answer — the broker
 // took the write and the connection dropped before its acknowledgement — so it
 // owes both alike, whole, with what they carried, and a later append carries
-// them. The row lists each call it does not hold, and skips the one it does,
+// them. The log lists each call it does not hold, and skips the one it does,
 // with what that one absorbed and what it carried: all of it landed in the
 // write that listed it. So a call is listed once, and its work counted once,
 // however many appends carried it.
 //
-// Mutation: list or count an owed call without asking whether the row holds
+// Mutation: list or count an owed call without asking whether the log holds
 // it already, and the landed call is listed twice and its worker's call
 // counted twice.
 func testAnOwedAppendThatLandedIsListedOnce(t *testing.T, s sandbox.PendingStore) {
@@ -561,18 +585,18 @@ func testAnOwedAppendThatLandedIsListedOnce(t *testing.T, s sandbox.PendingStore
 		Owed: []sandbox.OwedAppend{c0, x}}); err != nil || !recorded {
 		t.Fatalf("Y's append = %v, %v; want it recorded", recorded, err)
 	}
-	got := mustGet(t, s, r.TurnID)
+	got := mustLogged(t, s, r.TurnID).Log
 	for _, want := range []struct {
 		name string
 		seq  int
 	}{{"read_page", 5}, {"delegate", 7}, {"post_message", 8}} {
 		if n := listed(got, want.name, want.seq); n != 1 {
-			t.Errorf("the row lists %s at %d %d times, want once", want.name, want.seq, n)
+			t.Errorf("the log lists %s at %d %d times, want once", want.name, want.seq, n)
 		}
 	}
-	if len(got.BridgeCalls) != 3 || got.BridgeCallsElided != 0 {
-		t.Errorf("the row lists %d calls and counts %d it does not list, want the three and none",
-			len(got.BridgeCalls), got.BridgeCallsElided)
+	if len(got.Calls) != 3 || got.Elided != 0 {
+		t.Errorf("the log lists %d calls and counts %d it does not list, want the three and none",
+			len(got.Calls), got.Elided)
 	}
 	if absorbed := got.Absorbed(); len(absorbed) != 1 || absorbed[0].Calls != 1 {
 		t.Errorf("X's own work is counted %+v, want its worker's one call once", absorbed)
@@ -580,11 +604,11 @@ func testAnOwedAppendThatLandedIsListedOnce(t *testing.T, s sandbox.PendingStore
 }
 
 // AN APPEND IS THE SAME CALL ONLY AT ITS PLACE, INSTANT, NAME AND IDENTITY. The
-// row knows a call it already holds by all four as it keeps them, so an append
-// asked again lands once; and a call that differs from one the row holds in
+// log knows a call it already holds by all four as it keeps them, so an append
+// asked again lands once; and a call that differs from one the log holds in
 // any ONE of them is another call, and is listed beside it. Each has a call
 // behind it that the other three cannot tell apart: a session opened again on
-// the job numbers its calls after the row's last, so a call the closed session
+// the job numbers its calls after the log's last, so a call the closed session
 // had in flight can land at a place the new one reuses (the place alone); a
 // model that makes the same call again in a reopened session makes it at
 // another instant (the instant); and calls made side by side, or one tool
@@ -616,17 +640,17 @@ func testAnAppendIsTheSameCallOnlyAtItsPlaceInstantNameAndIdentity(t *testing.T,
 		{"another tool", callAt("read_file", 5, base, digestOf(1))},
 		{"another identity", callAt("post_message", 5, base, digestOf(2))},
 	} {
-		before := len(mustGet(t, s, r.TurnID).BridgeCalls)
+		before := len(mustLogged(t, s, r.TurnID).Log.Calls)
 		appended(tc.call)
-		if after := len(mustGet(t, s, r.TurnID).BridgeCalls); after != before+1 {
-			t.Errorf("%s: the row lists %d calls after it, want %d: a call that differs from the landed "+
+		if after := len(mustLogged(t, s, r.TurnID).Log.Calls); after != before+1 {
+			t.Errorf("%s: the log lists %d calls after it, want %d: a call that differs from the landed "+
 				"one in %s alone was taken for its retry", tc.what, after, before+1, tc.what)
 		}
 	}
 	// AND THE LANDED CALL ASKED AGAIN is its retry, listed no more.
-	before := len(mustGet(t, s, r.TurnID).BridgeCalls)
+	before := len(mustLogged(t, s, r.TurnID).Log.Calls)
 	appended(landed)
-	if after := len(mustGet(t, s, r.TurnID).BridgeCalls); after != before {
+	if after := len(mustLogged(t, s, r.TurnID).Log.Calls); after != before {
 		t.Errorf("the landed call asked again left %d calls listed, want %d", after, before)
 	}
 }
@@ -634,12 +658,12 @@ func testAnAppendIsTheSameCallOnlyAtItsPlaceInstantNameAndIdentity(t *testing.T,
 // A WITHHELD CALL IS KEPT WITHOUT ITS IDENTITY. A call held for a person's
 // approval, and the call they approved, carry their arguments sealed on the
 // held call (ADR-0077): a digest of them in the clear on the call's record
-// would confirm a guess at what the seal hides. So the row keeps neither,
+// would confirm a guess at what the seal hides. So the log keeps neither,
 // whichever writer hands them — the bridge's append of the held call, the
 // resume's record of the approved one — and a resumed call log counts each as a
 // call of its tool whose arguments are not known.
 //
-// Mutation: keep a withheld call's digest, and the row holds it in the clear.
+// Mutation: keep a withheld call's digest, and the log holds it in the clear.
 func testAWithheldCallIsKeptWithoutItsIdentity(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bytes-withheld")
@@ -649,7 +673,7 @@ func testAWithheldCallIsKeptWithoutItsIdentity(t *testing.T, s sandbox.PendingSt
 			Digest: digestOf(7), Seq: 1}}); err != nil {
 		t.Fatalf("append the held call: %v", err)
 	}
-	held := mustGet(t, s, r.TurnID).BridgeCalls[0]
+	held := mustLogged(t, s, r.TurnID).Log.Calls[0]
 	if held.Digest != "" || held.Args != "" || !held.Held {
 		t.Errorf("the held call is kept as %+v, want it held, with neither its arguments nor their digest", held)
 	}
@@ -794,52 +818,33 @@ func testAQuestionIsPutToTheFirstOfItsAudience(t *testing.T, s sandbox.PendingSt
 	}
 }
 
-// A TALLY ANOTHER ROUND LEFT IS NONE OF THIS ROUND'S. An older build, which
-// knows neither tally, opens a new round by clearing the round's calls and
-// their count, and carries the tallies on as keys it does not know — where
-// they named the earlier round's calls as this one's: a reply this round never
-// made, and identities its log never held. And an older build that drops calls
-// from the middle counts them and keeps no identity. Read by this build, a
-// tally is the round's only where it was kept under the round's first call;
-// and calls counted and not accounted for read as calls whose tool is not
-// known — counted against every later call, and a record no reader of whether
-// the turn replied can read whole. The next append of this build starts the
-// round's tally over, from what it reads.
+// CALLS DROPPED WITH NO IDENTITY READ AS CALLS OF NO KNOWN TOOL. A build that
+// knows no tally drops calls from the log's middle and counts them, keeping no
+// identity of them — in a fleet mid-upgrade, an append of an older build on the
+// round's log. Read by this build, calls the log counts and its tally does not
+// account for are calls whose tool is not known: counted against every later
+// call, and a record no reader of whether the turn replied can read whole. The
+// next append of this build keeps the tally accounting for them, from what it
+// reads.
 //
-// Mutation: read the tallies off the row as they stand, and the earlier
-// round's reply answers this one, and its identities are seeded into it.
-func testATallyAnotherRoundLeftIsNoneOfThisRounds(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+// Mutation: read the tally off the log as it stands, and three calls the round
+// made are seeded as none and its record read as whole.
+func testCallsDroppedWithNoIdentityReadAsCallsOfNoKnownTool(t *testing.T, s sandbox.PendingStore,
+	runs coord.SandboxRuns,
+) {
 	ctx := t.Context()
-	r := run("t-bytes-stale")
+	r := run("t-bytes-unknown")
 	launch := mustLaunched(t, s, r)
-	for i := range sandbox.MaxBridgeCalls + 2 {
-		name := "read_file"
-		if i == sandbox.MaxBridgeCalls/2 {
-			name = "post_message"
-		}
-		if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{Launch: launch,
-			Call:     sandbox.BridgeCall{Name: name, Digest: digestOf(i), Seq: i + 1},
-			Absorbed: []sandbox.ElidedCall{{Name: "leave_channel", Digest: digestOf(i), Calls: 1}}}); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
+	if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{Launch: launch,
+		Call: sandbox.BridgeCall{Name: "read_file", Digest: digestOf(1), Seq: 1}}); err != nil {
+		t.Fatalf("append: %v", err)
 	}
-	// AN OLDER BUILD OPENS THE NEXT ROUND: its calls and their count go,
-	// and the keys it does not know stay as they were.
-	rewrite(t, runs, r.TurnID, func(row map[string]json.RawMessage) {
-		row["bridge_calls"] = json.RawMessage(`[{"name":"read_file","seq":1,"at":"2031-01-01T00:00:00Z"}]`)
-		delete(row, "bridge_calls_elided")
+	// AN OLDER BUILD DROPS THREE CALLS of the round, keeping no identity.
+	rewriteLog(t, runs, r.TurnID, func(log map[string]json.RawMessage) {
+		log["elided"] = json.RawMessage(`3`)
 	})
-	got := mustGet(t, s, r.TurnID)
-	if len(got.Elided()) != 0 || len(got.Absorbed()) != 0 || !got.ElisionKnown() {
-		t.Errorf("the next round reads %+v dropped and %+v absorbed (known %v), want none of the last round's",
-			got.Elided(), got.Absorbed(), got.ElisionKnown())
-	}
-	// AND DROPS THREE CALLS OF ITS OWN, keeping no identity of them.
-	rewrite(t, runs, r.TurnID, func(row map[string]json.RawMessage) {
-		row["bridge_calls_elided"] = json.RawMessage(`3`)
-	})
-	got = mustGet(t, s, r.TurnID)
-	if e := got.Elided(); len(e) != 1 || e[0].Name != "" || e[0].Calls != 3 || got.ElisionKnown() {
+	got := mustLogged(t, s, r.TurnID).Log
+	if e := got.Unlisted(); len(e) != 1 || e[0].Name != "" || e[0].Calls != 3 || got.ElisionKnown() {
 		t.Errorf("three calls dropped with no identity read %+v (known %v), want three calls of no known tool",
 			e, got.ElisionKnown())
 	}
@@ -847,31 +852,31 @@ func testATallyAnotherRoundLeftIsNoneOfThisRounds(t *testing.T, s sandbox.Pendin
 		Call: sandbox.BridgeCall{Name: "read_file", Digest: digestOf(500), Seq: 500}}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	got = mustGet(t, s, r.TurnID)
+	got = mustLogged(t, s, r.TurnID).Log
 	if e := got.ElidedCalls; len(e) != 1 || e[0].Name != "" || e[0].Calls != 3 || len(got.AbsorbedCalls) != 0 {
 		t.Errorf("this build's next append keeps %+v dropped and %+v absorbed, want the round's own: three "+
 			"calls of no known tool, nothing absorbed", e, got.AbsorbedCalls)
 	}
 }
 
-// rewrite changes turnID's raw record as a build that does not know some of its
-// keys would write it, through the store the record is held in.
-func rewrite(t *testing.T, runs coord.SandboxRuns, turnID string, change func(map[string]json.RawMessage)) {
+// rewriteLog changes turnID's raw log as a build that does not know some of its
+// keys would write it, through the store the log is held in.
+func rewriteLog(t *testing.T, runs coord.SandboxRuns, turnID string, change func(map[string]json.RawMessage)) {
 	t.Helper()
-	_, _, err := runs.MutateSandboxRun(t.Context(), turnID, func(record coord.Record) (coord.SandboxRunChange, error) {
-		var row map[string]json.RawMessage
-		if err := json.Unmarshal(record.Value, &row); err != nil {
-			return coord.SandboxRunChange{}, err
-		}
-		change(row)
-		raw, err := json.Marshal(row)
-		if err != nil {
-			return coord.SandboxRunChange{}, err
-		}
-		return coord.SandboxRunChange{Put: raw}, nil
-	})
+	_, _, err := runs.MutateSandboxRunPart(t.Context(), turnID, coord.RunLog,
+		func(record coord.Record, found bool) ([]byte, error) {
+			if !found {
+				return nil, errors.New("the run has no log to rewrite")
+			}
+			var log map[string]json.RawMessage
+			if err := json.Unmarshal(record.Value, &log); err != nil {
+				return nil, err
+			}
+			change(log)
+			return json.Marshal(log)
+		})
 	if err != nil {
-		t.Fatalf("rewrite the raw record of %s: %v", turnID, err)
+		t.Fatalf("rewrite the raw log of %s: %v", turnID, err)
 	}
 }
 

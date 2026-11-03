@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -26,7 +27,7 @@ func (r *writeRig) lastRecord() (statelog.ScopeSet, string) {
 		r.t.Fatalf("read record %d: %v (present %v)", last, err, ok)
 	}
 	body, verdict := r.verifier.Open(payload)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		r.t.Fatalf("record %d did not verify: %s", last, verdict)
 	}
 	env, err := iamdomain.DecodeEnvelope(body)
@@ -211,7 +212,7 @@ func (r *writeRig) scopeOf(op iamdomain.OpKind) statelog.ScopeSet {
 			continue
 		}
 		body, verdict := r.verifier.Open(payload)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			continue
 		}
 		env, err := iamdomain.DecodeEnvelope(body)

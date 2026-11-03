@@ -23,6 +23,7 @@ import { OrgNodeLabel } from "@crewlethq/ui";
 import { treeCanvasParts } from "~/testing.tsx";
 import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { vi } from "vitest";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider, type Viewer } from "~/lib/viewer.ts";
@@ -200,6 +201,11 @@ export function BuilderHarness({
         <ViewerProvider>
           <BuilderContext.Provider value={api}>{children}</BuilderContext.Provider>
         </ViewerProvider>
+        {/* THE ONE LIVE REGION, as the application mounts it beside the frame
+            (`app/announcer.tsx`): the editor's tag and list controls say
+            every add, remove and reorder into it, and with none mounted each
+            sentence went to the console instead. */}
+        <AppAnnouncer />
       </ClientContext.Provider>
     </Router>
   );
@@ -376,14 +382,17 @@ export class LayoutObserver {
     );
     LayoutObserver.instances = [];
     LayoutObserver.sizer = defaultSizer;
-    frames.length = 0;
+    frames.clear();
     // Before any suite render, for the reason `known` gives.
     parts ??= treeCanvasParts();
     globalThis.ResizeObserver = LayoutObserver as unknown as typeof ResizeObserver;
-    globalThis.requestAnimationFrame = ((frame: FrameRequestCallback) =>
-      frames.push(frame)) as typeof globalThis.requestAnimationFrame;
-    globalThis.cancelAnimationFrame = ((id: number) => {
-      frames[id - 1] = null;
+    globalThis.requestAnimationFrame = ((frame: FrameRequestCallback) => {
+      const handle = ++lastFrame;
+      frames.set(handle, frame);
+      return handle;
+    }) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((handle: number) => {
+      frames.delete(handle);
     }) as typeof globalThis.cancelAnimationFrame;
     return () => {
       globalThis.ResizeObserver = real;
@@ -394,21 +403,43 @@ export class LayoutObserver {
   }
 }
 
-/** The frames the chart asked for and has not been given: see [LayoutObserver.settle]. */
-const frames: (FrameRequestCallback | null)[] = [];
+/**
+ * The frames the chart asked for and has not been given, by handle: see
+ * [LayoutObserver.settle].
+ *
+ * A HANDLE NAMES ONE REQUEST FOR AS LONG AS THE PAGE LIVES, as the browser's
+ * does, so it is a counter that never goes back, across `install`s as well:
+ * the suite's file is one page. The queue used to be an array whose handle
+ * was the request's index, emptied as each batch ran, so the next batch handed
+ * the same handles out again: a component whose cleanup cancelled the frame it
+ * had asked for before the last batch dropped whichever frame another
+ * component had asked for since, and a frame cancelled by an earlier frame of
+ * its own batch ran anyway.
+ */
+const frames = new Map<number, FrameRequestCallback>();
+let lastFrame = 0;
 
-/** Runs every pending frame at `at`, as a browser does when it paints. */
+/**
+ * Runs every pending frame at `at`, as a browser does when it paints: the
+ * frames asked for before the batch began, each unless a frame before it in
+ * the batch cancelled it, and none asked for while the batch runs — those are
+ * the next paint's.
+ */
 export function runFrames(at: number): void {
-  const due = [...frames];
-  frames.length = 0;
+  const due = [...frames.keys()];
   act(() => {
-    for (const frame of due) frame?.(at);
+    for (const handle of due) {
+      const frame = frames.get(handle);
+      if (!frame) continue;
+      frames.delete(handle);
+      frame(at);
+    }
   });
 }
 
 /** Runs frames until nothing is travelling: a relayout takes well under a second. */
 function settleMotion(): void {
-  for (let round = 0; round < 4 && frames.some(Boolean); round++) {
+  for (let round = 0; round < 4 && frames.size > 0; round++) {
     runFrames(performance.now() + 1000);
   }
 }

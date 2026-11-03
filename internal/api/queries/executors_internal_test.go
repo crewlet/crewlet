@@ -9,8 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // EVERY KEY AN EXECUTOR'S ROW CARRIES IS CLASSIFIED, in both directions, and
@@ -32,7 +32,8 @@ func TestEveryExecutorRowKeyIsClassified(t *testing.T) {
 	// A RUN THAT ASKED WITH A CHOICE, about a call it holds, because
 	// `decision`, `held_call` and `held_arguments` are the keys the row
 	// leaves out rather than sends empty (absent, never null).
-	row := runRow(sandbox.PendingRun{Decision: &decision.Decision{}, HeldCall: &sandbox.HeldCall{}}, runOpened{})
+	row := runRow(sandbox.PendingRun{Decision: &decision.Decision{}, HeldCall: &sandbox.HeldCall{}},
+		sandbox.BridgeLog{}, runOpened{})
 	for key := range row {
 		shown, ok := runKeys[key]
 		if !ok {
@@ -76,7 +77,7 @@ func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 	run := sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe",
 		AudienceHandles: []string{"ana"}, Decision: &decision.Decision{},
 		HeldCall: &sandbox.HeldCall{ID: "held-1", Server: "tracker", Tool: "tr_close_issue"}}
-	status := serialiseRun(run, livestate.Reach{}, runOpened{})
+	status := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{}, runOpened{})
 	for key := range status {
 		if runKeys[key] != runStatus {
 			t.Errorf("a reader with no reach was shown %q, which is not status", key)
@@ -85,7 +86,7 @@ func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 	if status["body_withheld"] != true {
 		t.Errorf("body_withheld = %v for a reader shown no body", status["body_withheld"])
 	}
-	whole := serialiseRun(run, livestate.Reach{Body: true, Tracker: true, Config: true}, runOpened{})
+	whole := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Body: true, Tracker: true, Config: true}, runOpened{})
 	if got, want := slices.Sorted(maps.Keys(whole)), slices.Sorted(maps.Keys(runKeys)); !slices.Equal(got, want) {
 		t.Errorf("a reader with every reach was shown %v, want every key %v", got, want)
 	}
@@ -119,7 +120,7 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 	}
 	run.Answer = &answer
 	sources := Sources{RunAnswers: seal}
-	row := runRow(run, sources.opened(run))
+	row := runRow(run, sandbox.BridgeLog{}, sources.opened(run))
 	if got := row["answer_ids"]; !slices.Equal(got.([]string), []string{"a1"}) {
 		t.Errorf("answer_ids = %v, want the recorded answer's delivery", got)
 	}
@@ -142,7 +143,7 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 		t.Errorf("a node with no seal names %q as the answerer, want nobody", by)
 	}
 	unanswered := sandbox.PendingRun{TurnID: "t2", Status: sandbox.StatusAwaiting}
-	empty := runRow(unanswered, sources.opened(unanswered))
+	empty := runRow(unanswered, sandbox.BridgeLog{}, sources.opened(unanswered))
 	if got := empty["answer_ids"]; got == nil || len(got.([]string)) != 0 || empty["answered_by"] != "" {
 		t.Errorf("a run with no recorded answer shows %v by %v, want empty", got, empty["answered_by"])
 	}
@@ -151,7 +152,7 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 // answerSealOf is a fleet keyring's answer seal, under key material of its own.
 func answerSealOf(t *testing.T, material string) *sandbox.AnswerSeal {
 	t.Helper()
-	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", material))
+	seal, err := sandbox.NewAnswerSeal(recordseal.OneKey("answers", material))
 	if err != nil {
 		t.Fatalf("NewAnswerSeal: %v", err)
 	}

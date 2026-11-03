@@ -633,6 +633,35 @@ func withCallRound(ctx context.Context, round int) context.Context {
 	return context.WithValue(ctx, roundKey{}, prior+round)
 }
 
+// modelKey carries the model a tool call was made on; see [CallModel].
+type modelKey struct{}
+
+// CallModel is the model the tool call ctx carries was made on: in this loop's
+// own dispatch the ROUND's — the model the harness's record named for it, else the
+// provider's configured one, the precedence [Round.Model] records — and over
+// the MCP bridge, where a seat's executor makes the call, the model
+// the run's launch pointed that harness at; "" where neither set it, a bridged
+// call whose launch named no model and left the harness to choose its own.
+//
+// Read by a tool whose write has to say which model made it — a seat's code
+// write names it on its push row — and never by the loop itself. ONE VALUE
+// FOR A RUN WHICHEVER PATH MADE THE CALL: a dispatched round and a bridged call of
+// the same seat set it from the same source of truth for that path, so one
+// run's pushes name one model.
+func CallModel(ctx context.Context) string {
+	model, _ := ctx.Value(modelKey{}).(string)
+	return model
+}
+
+// WithCallModel is ctx carrying the model a tool call is made on — THE ONE
+// SETTER of [CallModel]: called by this loop's dispatch beside the round it
+// stamps, and by the MCP bridge for a call a harness made, with the model
+// the run's launch named. Two setters spelling the key would be two places a
+// call could carry a model the other path never sets.
+func WithCallModel(ctx context.Context, model string) context.Context {
+	return context.WithValue(ctx, modelKey{}, model)
+}
+
 // Narration is one round's model turn — what it said — KEPT ATTACHED TO ITS
 // ROUND.
 //

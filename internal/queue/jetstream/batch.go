@@ -243,8 +243,8 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 			// into a later redelivery of the same sequences, and the
 			// map would otherwise hold every sequence this seat ever
 			// failed for the life of the attachment. That is
-			// ordinary operation here — an answer a parked coding
-			// run is still owed is NAKed and acked on a later pass.
+			// ordinary operation here — an answer a parked executor
+			// is still owed is NAKed and acked on a later pass.
 			if md, err := d.msg.Metadata(); err == nil {
 				a.settled(md.Sequence.Stream)
 			}

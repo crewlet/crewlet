@@ -83,7 +83,7 @@ func (f *FleetStore) Follow(ctx context.Context, backend, handle, channel, threa
 	key := followKey(backend, handle, channel, thread)
 	what := fmt.Sprintf("%s thread %s for %s", backend, thread, handle)
 	var wrote string
-	err := f.retryRaces(ctx, "follow", what, func() (bool, error) {
+	settled, err := casRetry(ctx, &f.followTrips, "follow "+what, func() (bool, error) {
 		held, following, revision, err := f.readFollow(ctx, key)
 		if err != nil {
 			return false, unavailable("read the follow on "+what, err)
@@ -98,13 +98,22 @@ func (f *FleetStore) Follow(ctx context.Context, backend, handle, channel, threa
 			return false, unavailable("follow "+what, err)
 		}
 		if !landed {
-			return true, nil
+			return false, nil
 		}
 		wrote = reason
-		return false, nil
+		return true, nil
 	})
-	if err != nil {
+	switch {
+	case err != nil:
 		return "", err
+	case !settled:
+		// Every attempt lost means this key is being rewritten as fast as
+		// it is being read, which is not a state this engine produces: a
+		// follow is asserted by a message that names the seat in the
+		// thread, a collective address, or the seat's own post there.
+		// Reported rather than answered: an invented answer would tell the
+		// caller a reason was recorded that no record holds.
+		return "", contended("follow", what)
 	}
 	return wrote, nil
 }

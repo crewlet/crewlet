@@ -78,13 +78,16 @@ var historyClass = map[OpKind]HistoryClass{
 // and a missing map key is both. Each of these writes no trail for a reason
 // of its own:
 //
-//   - a BARRIER writes no row anywhere, by definition;
+//   - a BARRIER writes no row anywhere, by definition, and a TRIMMED record
+//     writes none of this domain's — the framework removes the log's
+//     anchors in its transaction, and an anchor is the framework's
+//     bookkeeping rather than anybody's identity;
 //   - a SWEEP's whole job is deleting trail rows, and a trail row per sweep
 //     would make the table grow from being swept;
 //   - an EVICTION and a GENERATION are facts about the LOG rather than about
 //     anybody's identity, and the state log has its own operator surface for
 //     both.
-var unrecorded = []OpKind{OpSweep, OpBarrier, OpEviction, OpGeneration}
+var unrecorded = []OpKind{OpSweep, OpBarrier, OpTrimmed, OpEviction, OpGeneration}
 
 // ClassOf is the history class one op's row falls under, and whether it writes
 // one at all.

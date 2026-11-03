@@ -19,7 +19,7 @@ var brokerStreams = map[placement.BrokerKind]string{
 		"coordination:\n  type: embedded-kv\n",
 	placement.BrokerLeaf: "stream:\n  leaf:\n    urls: [nats-leaf://data-a.example.com:7422]\n" +
 		"coordination:\n  type: embedded-kv\n",
-	placement.BrokerClient: "stream:\n  type: nats\n  url: nats://nats.example.com:4222\n" +
+	placement.BrokerClient: "stream:\n  type: nats\n  url: nats://nats.example.com:4222\n  credentials: /etc/crewlet/engine.creds\n" +
 		"coordination:\n  type: embedded-kv\n",
 }
 
@@ -50,6 +50,7 @@ func TestBrokerMembershipComesFromTheStreamBlock(t *testing.T) {
 		}, placement.BrokerLeaf},
 		{"an external cluster", func(s *Stream) {
 			s.Type, s.URL = StreamNATS, "nats://nats.example.com:4222"
+			s.Credentials = "/etc/crewlet/engine.creds"
 		}, placement.BrokerClient},
 	} {
 		// EVERY ROLE SET, the refused pairings included: the kind of a
@@ -79,22 +80,26 @@ func TestBrokerMembershipComesFromTheStreamBlock(t *testing.T) {
 // outcomes. Three pairings are refused — a data node on a leaf, a member
 // without data, and ingress or workers without data — because every data node
 // holds the whole estate as a member of the broker and a node without data
-// holds none; and each refusal has to NAME the data role it turns on, or an
-// operator is told what is wrong and not which of the two ways out is theirs.
+// holds none; and a fourth on every broker alike, git without the ingress
+// whose listener it is served on. Each refusal has to NAME the role it turns
+// on, or an operator is told what is wrong and not which of the two ways out
+// is theirs.
 func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 	t.Parallel()
-	type refusal struct{ path, kind string }
+	// says is what the refusal's message must name: the role it turns on.
+	type refusal struct{ path, kind, says string }
 	var (
 		ok               []refusal
-		leafDataNode     = refusal{"stream.leaf.urls", "conflict"}
-		datalessMember   = refusal{"stream.leaf.urls", "missing"}
-		statelessIngress = refusal{"node.roles", "conflict"}
+		leafDataNode     = refusal{"stream.leaf.urls", "conflict", `"data"`}
+		datalessMember   = refusal{"stream.leaf.urls", "missing", `"data"`}
+		statelessIngress = refusal{"node.roles", "conflict", `needs "data"`}
+		gitWithout       = refusal{"node.roles", "conflict", `"git" needs "ingress"`}
 	)
 	for _, kind := range placement.BrokerKinds() {
 		for _, tc := range []struct {
 			roles string
-			// want is the refusals this pairing earns, every one of them
-			// naming the data role.
+			// want is the refusals this pairing earns, each naming the
+			// role it turns on.
 			want map[placement.BrokerKind][]refusal
 		}{
 			{"", map[placement.BrokerKind][]refusal{
@@ -106,6 +111,16 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 			{"[data, ingress, workers]", map[placement.BrokerKind][]refusal{
 				placement.BrokerLeaf: {leafDataNode},
 			}},
+			{"[data, git, ingress]", map[placement.BrokerKind][]refusal{
+				placement.BrokerLeaf: {leafDataNode},
+			}},
+			// GIT WITHOUT INGRESS, on a data node too: the rule is asked
+			// before the data rules return.
+			{"[data, git]", map[placement.BrokerKind][]refusal{
+				placement.BrokerMember: {gitWithout},
+				placement.BrokerLeaf:   {gitWithout, leafDataNode},
+				placement.BrokerClient: {gitWithout},
+			}},
 			{"[seats]", map[placement.BrokerKind][]refusal{
 				placement.BrokerMember: {datalessMember},
 			}},
@@ -113,6 +128,19 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 				placement.BrokerMember: {datalessMember, statelessIngress},
 				placement.BrokerLeaf:   {statelessIngress},
 				placement.BrokerClient: {statelessIngress},
+			}},
+			// A NODE WITHOUT DATA NAMING GIT AND INGRESS is refused once,
+			// by the ingress rule: the git rule is about ingress, which it
+			// names.
+			{"[git, ingress]", map[placement.BrokerKind][]refusal{
+				placement.BrokerMember: {datalessMember, statelessIngress},
+				placement.BrokerLeaf:   {statelessIngress},
+				placement.BrokerClient: {statelessIngress},
+			}},
+			{"[git, seats]", map[placement.BrokerKind][]refusal{
+				placement.BrokerMember: {gitWithout, datalessMember},
+				placement.BrokerLeaf:   {gitWithout},
+				placement.BrokerClient: {gitWithout},
 			}},
 			{"[workers, seats]", map[placement.BrokerKind][]refusal{
 				placement.BrokerMember: {datalessMember, statelessIngress},
@@ -135,12 +163,16 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 				t.Parallel()
 				_, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
 				var got []refusal
-				for _, p := range Problems(err) {
-					got = append(got, refusal{p.Path, p.Kind})
-					if !strings.Contains(p.Message, "data") {
-						t.Errorf("%s is refused without naming the data role it turns "+
-							"on: %s", p.Path, p.Message)
+				for i, p := range Problems(err) {
+					r := refusal{path: p.Path, kind: p.Kind}
+					if i < len(want) {
+						r.says = want[i].says
+						if !strings.Contains(p.Message, r.says) {
+							t.Errorf("%s is refused without naming %s, the role it "+
+								"turns on: %s", p.Path, r.says, p.Message)
+						}
 					}
+					got = append(got, r)
 				}
 				if !slices.Equal(got, want) {
 					t.Fatalf("refusals %v, want %v\n%v", got, want, err)
@@ -278,6 +310,33 @@ func TestTheBrokerWarnings(t *testing.T) {
 				t.Fatalf("warnings at %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A LEASE TOO SHORT FOR AN UPLOAD ACROSS A LINK IS REFUSED BY THE LEASE
+// FLOOR. Under [LinkLeaseFloor] one message of an upload to the broker's
+// object store crosses a link at the floor in more than the lease's
+// heartbeat, so a leaf, a client of an external cluster or a member serving
+// leaves would lose its seats to its own upload. Nothing warns of that,
+// because [MinLeaseTTL] refuses every lease under it: this holds the floor
+// over the link's figure, and a leaf's document on a lease between the two is
+// refused at the field rather than accepted with a lease its uploads outrun.
+func TestALeaseTooShortForAnUploadAcrossALinkIsRefused(t *testing.T) {
+	t.Parallel()
+	if MinLeaseTTL < LinkLeaseFloor {
+		t.Fatalf("the lease floor is %v and an upload across a link needs %v: a lease between "+
+			"the two is accepted and loses a leaf its seats to its own upload, so either keep "+
+			"the floor over it or refuse such a lease where uploads cross a link",
+			MinLeaseTTL, LinkLeaseFloor)
+	}
+	doc := "node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
+		"stream:\n  leaf:\n    urls: [nats-leaf://data-a.example.com:7422]\n" +
+		"coordination:\n  type: embedded-kv\n  lease_ttl_seconds: 11\n"
+	_, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
+	problems := Problems(err)
+	if len(problems) != 1 || problems[0].Path != "coordination.lease_ttl_seconds" {
+		t.Fatalf("a leaf on an 11 s lease, under the %v an upload across its link needs: "+
+			"problems = %+v, want the lease refused", LinkLeaseFloor, problems)
 	}
 }
 

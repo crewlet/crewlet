@@ -124,6 +124,11 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindBarrier:
 		// THE READ INDEX'S OWN APPEND writes no row on any node.
 		return 0, nil
+	case KindTrimmed:
+		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
+		// below the floor its subject names, in this same transaction
+		// (ADR-0080); this domain writes nothing for it.
+		return 0, nil
 	case KindEviction:
 		return applyEviction(ctx, tx, c, payload)
 	case KindGeneration:

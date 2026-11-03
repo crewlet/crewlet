@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -270,10 +271,12 @@ func (n NewCapture) validate() error {
 		field, value string
 		max          int
 	}{
-		{"the harness", n.Harness, HarnessMaxBytes}, {"the harness's version", n.HarnessVersion, HarnessVersionMaxBytes},
-		{"the session id", n.SessionID, SessionIDMaxBytes},
+		{"the harness", n.Harness, executorkeep.HarnessMaxBytes},
+		{"the harness's version", n.HarnessVersion, executorkeep.HarnessVersionMaxBytes},
+		{"the session id", n.SessionID, executorkeep.SessionIDMaxBytes},
 		{"the content key", n.ContentKey, ContentKeyMaxBytes},
-		{"the home path", n.Home, PathMaxBytes}, {"the workspace path", n.Workspace, PathMaxBytes},
+		{"the home path", n.Home, executorkeep.PathMaxBytes},
+		{"the workspace path", n.Workspace, executorkeep.PathMaxBytes},
 	} {
 		if err := checkText(f.field, f.value, f.max); err != nil {
 			return err
@@ -313,9 +316,9 @@ func (n NewCapture) validate() error {
 	if err := n.Object.Validate(); err != nil {
 		return fmt.Errorf("%w: the capture's object: %w", ErrInvalid, err)
 	}
-	if n.Object.Size > SealedMaxBytes {
+	if n.Object.Size > executorkeep.SealedMaxBytes {
 		return invalid("the capture's object is %d bytes and a sealed session is at "+
-			"most %d", n.Object.Size, SealedMaxBytes)
+			"most %d", n.Object.Size, executorkeep.SealedMaxBytes)
 	}
 	return nil
 }
@@ -333,8 +336,8 @@ func checkTurn(handle, turn, conversationKey, workKey string) error {
 	switch {
 	case !iam.ValidSeatHandle(handle):
 		return invalid("%q is not a seat's handle", handle)
-	case len(turn) > TurnIDMaxBytes:
-		return invalid("the turn id is %d bytes and the maximum is %d", len(turn), TurnIDMaxBytes)
+	case len(turn) > executorkeep.TurnIDMaxBytes:
+		return invalid("the turn id is %d bytes and the maximum is %d", len(turn), executorkeep.TurnIDMaxBytes)
 	case !canonicalTurn(turn):
 		return invalid("the turn id %q is not a run id in its canonical spelling: "+
 			"a UUID, lowercase and dashed, as the engine mints one", turn)
@@ -719,7 +722,7 @@ type NewEnd struct {
 	// [AskExcerptMaxBytes], cut on a rune boundary.
 	Ask string
 
-	Ending Ending
+	Ending executorkeep.Ending
 }
 
 // End records how a turn ended, and tombstones it: no capture lands for it
@@ -736,8 +739,8 @@ func (w *Writer) End(ctx context.Context, c Call, n NewEnd) (statelog.Result, er
 	if err := checkTurn(n.Handle, n.Turn, n.ConversationKey, n.WorkKey); err != nil {
 		return statelog.Result{}, err
 	}
-	if err := n.Ending.validate(); err != nil {
-		return statelog.Result{}, err
+	if err := n.Ending.Validate(); err != nil {
+		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if !utf8.ValidString(n.Ask) {
 		return statelog.Result{}, invalid("the ask is not valid UTF-8")
@@ -812,7 +815,7 @@ func (w *Writer) EndLost(ctx context.Context, c Call, handle, conversationKey, t
 		return statelog.Result{}, err
 	}
 	n := NewEnd{Handle: handle, Turn: turn, ConversationKey: conversationKey,
-		Ending: Ending{Outcome: OutcomeLost, Failure: lostFailure}}
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeLost, Failure: lostFailure}}
 	if err := checkTurn(handle, turn, conversationKey, ""); err != nil {
 		return statelog.Result{}, err
 	}

@@ -3,7 +3,6 @@ package engine
 import (
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -50,46 +49,43 @@ func TestAnAskOnANodeWithNoRunStoreIsAnError(t *testing.T) {
 
 // A RESUMED ROUND IS CUT WHERE ITS ROW SAYS THE ANSWER CUT IT. The collection
 // reports only a submission made after a person's answer carried the round on,
-// and the place it cuts at is the row's own (sandbox.PendingRun.AnsweredThrough),
+// and the place it cuts at is the log's own (sandbox.BridgeLog.AnsweredThrough),
 // handed to the runner with the calls it cuts.
 //
 // Mutation: leave Answered unset, and the runner replays a submission the
 // asking job made before it knew the answer.
 func TestAResumeIsCutWhereTheAnswerCutTheRound(t *testing.T) {
 	t.Parallel()
-	got := runnerResume(resumeInput{Run: sandbox.PendingRun{
+	got := runnerResume(resumeInput{Bridged: sandbox.BridgeLog{
 		AnsweredThrough: 2,
-		BridgeCalls: []sandbox.BridgeCall{
+		Calls: []sandbox.BridgeCall{
 			{Name: runner.SubmitWorkTool, Seq: 1},
 			{Name: builtin.AskAndWaitTool, Seq: 2},
 			{Name: runner.SubmitWorkTool, Seq: 3},
 		},
 	}}, nil, nil)
 	if got.Answered != 2 || len(got.Bridged) != 3 {
-		t.Fatalf("the resume is cut at %d over %d calls, want 2 over the row's 3",
+		t.Fatalf("the resume is cut at %d over %d calls, want 2 over the log's 3",
 			got.Answered, len(got.Bridged))
 	}
 }
 
-// A RESUME IS SEEDED WITH WHAT ITS ROW COUNTS WITHOUT LISTING. A long run's row
-// keeps its calls' head and tail and tallies, under the round it kept them
-// for, the middle it dropped and the calls its calls' own work made; the
-// resume is handed both as the round's, which the turn's call log is seeded
-// with beside the listed calls and its delivery checks read — and a count the
-// tally does not account for, an older build's drop, as calls of no known
-// tool.
+// A RESUME IS SEEDED WITH WHAT ITS LOG COUNTS WITHOUT LISTING. A long run's log
+// keeps its calls' head and tail and tallies the middle it dropped and the
+// calls its calls' own work made; the resume is handed both, which the turn's
+// call log is seeded with beside the listed calls and its delivery checks read
+// — and a count the tally does not account for, a drop by a build without
+// tallies, as calls of no known tool.
 //
-// Mutation: hand the resume the row's listed calls alone, and the resumed
-// round's seed is short of every call the row dropped and every worker's call.
-func TestAResumeIsSeededWithWhatItsRowCountsWithoutListing(t *testing.T) {
+// Mutation: hand the resume the log's listed calls alone, and the resumed
+// round's seed is short of every call the log dropped and every worker's call.
+func TestAResumeIsSeededWithWhatItsLogCountsWithoutListing(t *testing.T) {
 	t.Parallel()
-	first := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
-	got := runnerResume(resumeInput{Run: sandbox.PendingRun{
-		BridgeCalls:       []sandbox.BridgeCall{{Name: "read_file", Seq: 1, At: first}},
-		BridgeCallsElided: 63,
-		ElidedCalls:       []sandbox.ElidedCall{{Name: "post_message", Digest: "d", Calls: 60, Failed: 1}},
-		AbsorbedCalls:     []sandbox.ElidedCall{{Name: "leave_channel", Digest: "w", Calls: 2}},
-		TallyRound:        first,
+	got := runnerResume(resumeInput{Bridged: sandbox.BridgeLog{
+		Calls:         []sandbox.BridgeCall{{Name: "read_file", Seq: 1}},
+		Elided:        63,
+		ElidedCalls:   []sandbox.ElidedCall{{Name: "post_message", Digest: "d", Calls: 60, Failed: 1}},
+		AbsorbedCalls: []sandbox.ElidedCall{{Name: "leave_channel", Digest: "w", Calls: 2}},
 	}}, nil, nil)
 	wantElided := []ledger.Elided{{Calls: 3}, {Name: "post_message", Digest: "d", Calls: 60, Failed: 1}}
 	wantAbsorbed := []ledger.Elided{{Name: "leave_channel", Digest: "w", Calls: 2}}

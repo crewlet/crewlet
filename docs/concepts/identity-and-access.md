@@ -285,7 +285,7 @@ hands an administrator private titles by that override.
 
 | App | What it opens |
 |---|---|
-| `worklet` | Every Worklet read and write: the board, a project, its files, its views and reading the workspace catalogue (writing it is admin's); filing, updating, commenting, merging and placing work; and every `work_*` question. A person's own **Inbox**, **My work** and person view, and the same for a report as their lead (or anybody, as an administrator). The `inbox_changed` push |
+| `worklet` | Every Worklet read and write: the board, a project, its files, its views and reading the workspace catalogue (writing it is admin's); filing, updating, commenting, merging and placing work; and every `work_*` question. A person's own **Inbox**, **My work** (every section but Reviews, which lists changes on the engine's own code host and needs no app) and person view, and the same for a report as their lead (or anybody, as an administrator). The `inbox_changed` push |
 | `doclet` | Reading, listing and searching the company's pages (`get_page`, `list_pages`, `search_knowledge`, and the `pages`, `page`, `containers`, `page_activity`, `page_revision` and `page_reads` questions); writing, saving and commenting on them (`write_page`, `save_page`, `comment_on_page`) |
 | `artifacts` | Authoring artifacts, beside the role each asks: creating one (`create_artifact`), and on an artifact somebody holds editor on, publishing a version (`publish_artifact`), renaming it (`update_artifact`), adding an asset (`upload_artifact_asset`), changing its datastore's schema (`set_artifact_schema`) and filing it in a folder (`move_artifact`, beside contributor on the folder); creating a folder inside one they may file in (`create_artifact_folder`); trashing and restoring one they own (`artifacts.trash`, `artifacts.restore`). **Nothing else**: opening an artifact, reading and writing its data, being present on it, sharing it and exporting it ask only the role |
 | `chatlet` | Every room a person may read and every word they say in one, where the company runs Chatlet: listing their rooms, reading and searching them (`list_channels`, `read_channel`, `search_messages`); posting, replying, a direct message, a reaction and moving their own membership (`post_message`, `reply_in_thread`, `send_dm`, `react_to_message`, `join_channel`, `leave_channel`); and a person's own gestures: making a room, opening a conversation, a room's settings, adding people to it and its whole membership, editing and taking back their own messages and their read state (`create_channel`, `open_dm`, `update_channel`, `add_channel_members`, `set_channel_members`, `edit_message`, `delete_message`, `mark_chat_read`). WHICH room is the chat's own rule: a private room is its members', and one a person cannot read answers as if it did not exist. Archiving a room is its creator's, its unit's lead's or an administrator's, and taking back somebody else's message is an administrator's, as moderation, which reaches a room the moderator is not in without showing it to them. The `chat_*` questions (`GET /chatlet/…`) and the `chat_*` pushes on the live socket |
@@ -406,10 +406,12 @@ reshapes it or reshares it. The company document's
 restores, purges, transfers or force-publishes anything: those verbs are a
 person's.
 
-**Who the agent is acting for.** Inside a turn somebody woke, every artifact
+**Who the agent is acting for.** Inside a turn somebody woke — with a message,
+an ask, or a change of theirs on a work item or a page, named by the kind its
+record holds — every artifact
 verb an agent takes is decided a second time for that requester, on the same
-artifact, and admitted only when both may take it: an agent never shows a
-requester an artifact the requester could not open, nor writes into one on
+artifact, and admitted only when both may take it: in that turn an agent shows
+a requester no artifact the requester could not open, and writes into none on
 their behalf what they could not write. The one exception is the agent's
 **edits to its own work** (publishing a fix, renaming it, adding an asset,
 reshaping or filling in its data, and creating a new one): anybody who can
@@ -418,7 +420,13 @@ work an agent owns. Reading its own artifact back, and sharing it, are never
 exempt, and neither is what such an edit hands back: the live files a stale
 publish answers with, and a conflicting data write's current rows, are shown
 only where the requester could read them. A turn woken by somebody the company does not know reaches only those
-edits; a turn nobody woke (a schedule, a watch) is bounded by the agent alone.
+edits, and so does one a credential acting as no seat woke with a change on a
+work item or a page, since no seat stands behind it; a turn nobody woke (a
+schedule, a watch, the engine's own notice, the outcome of the agent's own act
+such as a workflow its own push failed) is bounded by the agent alone. The
+bound is the turn's and no later one's: a colleague the agent asks reads for
+the agent, the turn the colleague's answer wakes is the agent's own, and what
+the agent already knows is no read at all ([Sharing](artifacts.md#sharing)).
 
 The decision is
 [ADR-0034](https://github.com/crewlet/crewlet/blob/main/adr/0034-an-artifact-is-shared-and-a-share-is-a-relation.md),
@@ -691,8 +699,8 @@ flowchart LR
 
 **Anonymous** is a finding: the resolver ran, and nobody presented a
 credential. It is a refusal on every guarded route — the probes, the webhook
-edge, the per-run token paths and the dashboard shell are the whole of what is
-served without one.
+edge, the per-run token paths, a coding box's git and the dashboard shell are
+the whole of what is served without one.
 
 **Unknown** is the absence of a finding: the identity store could not be
 reached, a session lookup failed, or nothing resolved the request at all.
@@ -1921,6 +1929,19 @@ signed in on their Account, with no browser holding it until its deadline. The
 invitation's screen says which session it is about to end before anything is
 pressed.
 
+**A sign-in or a sign-out empties the browser's cache.** Every sign-in's
+answer, and every response that clears the cookie — a sign-out, or a request
+presenting a session the engine no longer accepts — carries
+`Clear-Site-Data: "cache"`. An answer read by object id is kept by the browser
+under a key that holds no cookie, because the cookie's bytes move at every
+re-issue, five minutes of use apart, and a key holding them would miss
+everything kept by the next one. So what a browser keeps is held to who it is
+signed in as from the other side, by emptying it whenever that may change; a
+re-issue, and the session a step-up, an enrolment or a password change opens
+for the same person, empty nothing. What a browser honours, and what it costs,
+is under [Security headers on every
+response](../reference/api-endpoints.md#security-headers-on-every-response).
+
 Every field is there because a node has to answer with it and has no other way
 to know it:
 
@@ -2256,6 +2277,8 @@ or because a client must reach it to obtain a credential at all.
 | `/health`, `/ready` | Probes. An orchestrator holds no token, and a liveness check that answers 401 is a liveness check that fails. Exact paths, never prefixes — a `/health-admin` added later must not inherit this. |
 | `/webhooks/…` | Every one verifies a provider signature over the body before doing anything, which is a stronger check than a shared bearer. Includes the Slack OAuth landing page, which a browser reaches mid-install with no token in hand. |
 | `/otlp/…`, `/mcp/…` | The per-run signed token **in the path** is the credential. Both are reached from *inside a sandbox*, which is the one place the API's own token must never go: it reads the whole company, and the box is running generated code. |
+| `/box/git/…` | A box's git, from inside a sandbox for the same reason: a coding box's per-run signed token, or a check's box's per-check one, is the credential, as git's **Basic password**, the one way git presents one. The guard never reads it — the code host admits the box by its run's row, or its check's attempt's ([Code Host → Coding boxes](code-host.md#coding-boxes), [Check boxes](code-host.md#check-boxes)) — and neither this route nor a person's `/git/` takes the other's credential. |
+| `/box/code/…` | A check's box's reads of the commit its check measures, with the credential its git presents, admitted by the code host the same way. |
 | `/`, `/dashboard`, `/favicon.ico`, `/static/…` | The page that prompts for a credential cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch. |
 | `/auth/config`, `/auth/login`, `/auth/invite/…`, `/auth/reset/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link and a password reset link are each the credential. Exact paths plus the two prefixes, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
 | `/auth/logout` | Signing out of **this** session clears the cookie whatever the node can read — guarded, a node that could not read its identity estate answered it `503` before it ran, and a person left a shared machine still signed in. It verifies every bearer the browser holds itself and ends only a session its rows hold, and the origin check still judges it. Signing out everywhere and ending a named session stay guarded, because they act on a caller the guard resolved. |
@@ -2344,10 +2367,11 @@ an IPv6 zone, which no browser can address.
 Reads are never refused for their origin — refusing one would break every
 cross-origin dashboard the CORS allowance exists to serve, to prevent a request
 that alters nothing. The **server-to-server edges** are not refused either —
-`/webhooks/…`, `/otlp/…` and `/mcp/…`: a vendor's webhook delivery is a POST
-from a server carrying no `Origin` and verifying a signature of its own, a
-sandbox box presents the signed token in its path, and refusing either would
-take every integration off the air.
+`/webhooks/…`, `/otlp/…`, `/mcp/…`, `/box/git/…` and `/box/code/…`: a
+vendor's webhook delivery is a POST from a server carrying no `Origin` and
+verifying a signature of its own, a sandbox box presents the signed token in
+its path or as git's Basic password, and refusing either would take every
+integration off the air.
 
 **The sign-in routes are judged, although no credential guards them.** A login
 cannot require a login, so `POST /auth/login`, `/auth/invite/{id}` and
@@ -2397,7 +2421,7 @@ unlocks.
 
 | Rule | Covers | Decided by |
 |---|---|---|
-| **Everybody** | The overview's reads that a tool or a route asks about, such as who to ask (`lookup_colleague`) and who holds each human seat (`GET /iam/seats`); the route to a work item's thread (`work.thread`), which admits the request and leaves the decision to `comment_on_work_item` once the item is read; listing artifacts (`list_artifacts`), a filter answering only the artifacts reading admits; the dashboard source catalogue (`list_dashboard_sources`), which names reads and holds no row; and a browser's report that an artifact finished rendering (`artifacts.ready`) | Any principal whose stage may act |
+| **Everybody** | The overview's reads that a tool or a route asks about, such as who to ask (`lookup_colleague`) and who holds each human seat (`GET /iam/seats`); the route to a work item's thread (`work.thread`), which admits the request and leaves the decision to `comment_on_work_item` once the item is read; the code host's reads (`code.read`), its git transport (`code.git`) and the thirteen code tools a seat and a person's assistant read it through (`code_list_repos`, `code_get_repo`, `code_resolve`, `code_read`, `code_diff`, `code_compare`, `code_landed_in`, `code_log`, `code_blame`, a repository's changes, `code_list_changes` and `code_get_change`, a commit's checks, `code_get_check_failures`, and a search across every repository, `code_search`, which leaves each repository's decision to the git node that answers it), which admit the request and leave the decision to the repository's grant once the repository is read, on the node that answers it ([Who may read and push](code-host.md#who-may-read-and-push)) — and, inside a turn somebody woke, to that requester's too ([Reads made for somebody else](code-host.md#reads-made-for-somebody-else)); the ten code tools that change a branch or a repository (`code_commit_files`, `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`, `code_create_repo`, `code_update_repo`, `code_delete_repo`, `code_restore_repo`, `code_protect_branch`), on the git transport's footing: they admit every principal — a seat commits, and a token bound to nobody is refused by the tool before anything is routed — and leave the decision to the repository's grant where the change is decided, the git node and the repository's committer for a commit, the data node for a repository's lifecycle ([Engine-built commits](code-host.md#engine-built-commits), [Repositories made by tools](code-host.md#repositories-made-by-tools)) — and, inside a turn somebody woke, to that requester's too, but for the seat's own work ([Writes made for somebody else](code-host.md#writes-made-for-somebody-else)); the code tools that write a repository's changes (`code_open_change`, `code_update_change`, `code_close_change`), on the same footing, each decided by the repository's committer from its own chart — whoever may push a branch opens a change from it, and its owner, a maintainer or any person steers it ([Opening, editing and closing a change](code-host.md#opening-editing-and-closing-a-change)) — and their conversation (`code_request_review`, `code_review_change`, `code_comment_on_change`, `code_resolve_finding`, `code_apply_suggestions`, an engine write onto the change's branch judged as every engine write, `code_rebase_change`, a forced push of it judged the same, and `code_revert_change`, a new branch undoing a merged change whose push opens the revert's own change, judged the same; and `code_merge_change` and `code_dequeue_change`, a merge and a queue's entry decided by the committer from the target's gate), decided by the data node that commits the repository: who reviews the repository and did not write the change reviews it, an author answers a finding and its raiser, a maintainer or a person dismisses one ([Reviews and findings](code-host.md#reviews-and-findings)) — each of those change writes, inside a turn somebody woke, held to that requester too, at the access the write needs and but for the seat's own work ([Writes made for somebody else](code-host.md#writes-made-for-somebody-else)); a commit's checks — what one said (`code_get_check_failures`, decided as the code reads are) and an attempt run again (`code_rerun_checks`), decided by the repository's checks writer from its own chart: a person reruns any ended attempt, a seat only one its infrastructure ended and only where it may write the repository or wrote the change ([Who records a check](code-host.md#who-records-a-check)) — and a person's own CI's report of a check (`code_report_check`), marked **human-only** beside the class, since a seat runs no CI whose result it could report; a repository created from one at another host (`code_import_repo`), **human-only** too, since an import has the code host dial another host for the company — the grant is no question there, every person creating a project for any owner the chart holds; the deployment's health read for whoever woke a granted seat's turn (`fleet.health.read`), which `fleet_health` asks of them before it reads anything, so a seat whose role carries the health grant reads it for anybody of the company who may act and for nobody else; listing artifacts (`list_artifacts`), a filter answering only the artifacts reading admits; the dashboard source catalogue (`list_dashboard_sources`), which names reads and holds no row; and a browser's report that an artifact finished rendering (`artifacts.ready`) | Any principal whose stage may act |
 | **App** | Every Worklet and Doclet read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages. And using the chat: reading and searching rooms, saying something in one, reacting and moving one's own membership, and, a person's, making a room, opening a conversation, a room's topic, purpose and whole membership | The row's app (`worklet`, `doclet` or `chatlet`), which an administrator holds through `Expand`. WHICH room is the chat's own rule, decided where the write lands: a private room is its members' |
 | **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds (a token or a service account bound to none) is refused, because it runs on the bound seat's model | Any one of the apps the row names (here `worklet` or `doclet`, and no other): the answer searches the pages only for a `doclet` holder and the board only for a `worklet` holder |
 | **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `worklet`, or the person an open ask on the item names, and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
@@ -2410,7 +2434,7 @@ unlocks.
 | **Subtree** | The org chart — its seats and units — read and written through `/config` (`config.org.read`, `config.org.write`) | `admin` for any of it, or a person who **leads** the part concerned: a unit is in their subtree when they lead it or a unit above it, and a seat when its unit is. A write by a lead is judged change by change on **both sides** of it — see [A lead edits their own team](#a-lead-edits-their-own-team). The company root is nobody's subtree, and no agent takes either verb |
 | **Destructive** | Moving a task out of its project; removing a project's file | The project's lead, or admin, with `worklet` |
 | **Authored** | Editing and removing a comment, on a page or a work item; editing and taking back a chat message (`edit_message`, `delete_message`) | Whoever wrote it, or admin — with the remark's app. Admin is decided on the remark **unread**: a moderator takes a chat message down in a room they cannot read without being shown it, and anybody else reads it and is decided again on its author. An edit is still its author's alone — the chat's writer refuses anybody else one, because an edit puts words in somebody's mouth where a take-down only removes them |
-| **Admin** | Configuration, secrets, integrations, the deployment, the company-wide trail, the workspace catalogue, a page in the tool-skills container, every directory write, ending every session in the company, the purges (an artifact's among them, with a person present), what the company's artifacts hold against their quotas, and a public chat room taking in everybody the company takes on (`chat.channel.autojoin`, asked inside `update_channel`) | `admin` |
+| **Admin** | Configuration, secrets, integrations, the deployment (a verify of a git node's cache among it, and its health read through `fleet_health` and `code_status` — which an agent seat reads by its role's grant instead, below), the company-wide trail, who read a `visibility: unit` repository (`code_repo_readers`, the operator tool and `GET /code/repos/{name}/readers` alike — not the owning unit's leads, who read the repository itself: [Who read it](code-host.md#who-read-it)), the workspace catalogue, a page in the tool-skills container, every directory write, ending every session in the company, the purges (an artifact's among them, with a person present), what the company's artifacts hold against their quotas, and a public chat room taking in everybody the company takes on (`chat.channel.autojoin`, asked inside `update_channel`) | `admin` |
 | **Shared** | One artifact: reading it and its data, writing its data, publishing it, renaming it, its assets and schema, sharing it, trashing and restoring it, a forced publish, a transfer, a pin and an export | The caller's **role** on the artifact, the best of owning it, a share naming their seat, a unit they sit in or the whole company, and leading the agent that owns it; the verb names the least role it admits, and an authoring verb asks the `artifacts` app beside it. No relation is "not found". Admin through the admin path, marked elevated where nothing else admitted. An agent holds at most `contributor` on work it does not own unless the company allows more ([An artifact is opened by its shares](#an-artifact-is-opened-by-its-shares)) |
 | **Directory** | One person's directory row and what hangs off it — reading it, their credentials and sessions, minting and revoking their machine tokens, ending their sessions, changing how they prove who they are — and the directory's own listings: the people, the open invitations, `GET /iam/check` and the answering node's Tier A token labels joined to the rows holding their logins (`GET /iam/node-tokens`) | The person the row is about, by their **ID**, or admin |
 
@@ -2422,7 +2446,9 @@ and the instructions every seat obeys are not something a model decides inside
 a turn. The seat controls and the two answers carry it too: a seat that could
 pause a colleague, resume itself, steer another's turn or answer its own run's
 question would be overruling the people who run it, and a seat already has
-`search_knowledge` and a model of its own. The mark composes with the rule rather than
+`search_knowledge` and a model of its own. So does who read a unit's
+repository: a seat that could ask would be a model watching the people it
+works for. The mark composes with the rule rather than
 replacing it — archiving is still the project lead's, and a purge still needs
 `admin` — and it is checked **first**, so an agent is told it is a seat
 rather than that it lacks a permission it may well hold.
@@ -2450,6 +2476,24 @@ as their human seat
 after seat-only and before the rule, and a screen asking what it may offer an
 unbound credential is told the same, so it draws no control that every press of
 would be refused.
+
+**And two are an agent's only by its role's grant.** `fleet_health` and
+`code_status` are admin's, and a seat never holds admin, so their rows name a
+**seat grant** the role carries in the company document (`health_tools`): an
+agent seat whose role carries it is admitted — the reason `seat_grant` — and
+every other agent is refused `not_granted`, naming the grant and no
+permission, whatever it holds, while a person is decided by the rule as on
+any row. The grant is checked where the two marks are, before the rule, and
+the same decision is what a seat's surfaces ask before they offer it a tool,
+so an agent is offered the two exactly where a call would be admitted. The
+field is admin's to set, even on a seat inside a team the writer leads
+([A lead edits their own team](#a-lead-edits-their-own-team)), and no row
+names a grant beside either mark. In a turn somebody woke, the seat reads the
+two for that somebody only where they may act in the company: whoever woke it
+is decided on `fleet.health.read` (`fleet_health`) or `code.read`
+(`code_status`), rows everybody of the company holds, and never on the grant's
+own row, which no requester holds — so a turn a stranger woke is answered
+nothing. See [The health tools](../guides/fleet.md#the-health-tools).
 
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. And whether a seat
@@ -2517,6 +2561,7 @@ subtree:
 | A seat or unit **added** under a name another object's `lead:` or `manages:` entry already states | that object is inside their subtree before the write. A `lead:` may name a seat nobody has added yet, and a `manages:` entry naming a unit's key resolves to a seat of that handle first, so the addition would take the reference over without the object stating it changing at all — a seat added as `ghost` to the lead's team would lead an outside team whose `lead: ghost` was waiting, with the lead above every member of it |
 | A **project**, **space** or **channel**, or a seat's **email** or **contact identity**, set, cleared or changed | never: it takes `admin`. Each is how something outside the document finds the seat or unit — whoever leads the unit declaring a project or a space leads it, a channel's messages are routed to its unit, and a vendor's actions are attributed by an address or an account id — and who else holds it is not something the company document says: a project outlives the unit that declared it, in the tracker with every task in it, and an account exists at its vendor whether or not a seat names it. A lead declaring an orphaned project as their team's would become its lead |
 | A **credential** set, cleared or changed — a credential field (`mcp_env`, a sandbox's `env`, a setup file, a seat's own app tokens) compared whole, its keys as well as its values, and a `${VAR}` set, cleared or changed in **any** field | never: it takes `admin`, because a reference names any variable the engine can resolve — the company's secrets and the node's own keyring and tokens alike. Pointing a seat's tools at one hands it to a process the lead configures, and a seat's `email` and contact ids resolve one too and are recited to anybody who looks the seat up, so a lead naming a secret as their own Slack id would read it back. And a key decides something of its own: an `mcp_env` block naming a per-seat tool server starts that server for the seat, with the environment and headers its template declares, whatever the block holds — `github: {}` included |
+| A **grant** a seat's role carries — `health_tools` — set or cleared, on a seat edited or added | never: it takes `admin`. The grant hands a seat the administrator's view of the deployment ([The health tools](../guides/fleet.md#the-health-tools)), and a lead who could give one to a seat in their team would read that view through the seat's trail with no permission of their own; whether a seat watches the deployment is the administrator's decision either way |
 | An **MCP limit** (`mcp_limits`) lifted or loosened for any agent seat, as the seat is held to its own block and every enclosing unit's | never: it takes `admin`. A lead narrows the MCP servers an administrator granted their teams, and only that ([Narrowing a server for a team](../guides/tools-and-mcp.md#narrowing-a-server-for-a-team)): turning a server off for a team or holding a tool at `approve` or `blocked` is an ordinary field of the seat or unit, while lifting an `enabled: false`, loosening a tool, or moving a seat out from under a unit's limits hands the seat back what a limit held, which is a grant. Each such seat is named in the refusal (`why: widens`) |
 | A **setting** — anything outside `roles:` and `units:` | never: it takes `admin` |
 | **Nothing** — a write whose document is the one it replaces | never: storing it still makes a new revision and re-activates it on every node, rebuilding every seat's tools, providers and MCP children, which is `POST /config/reload`'s gesture and takes `admin`. Its dry run is answered for one seat or unit of theirs sent back to its own address, since a check stores nothing |
@@ -2641,8 +2686,8 @@ verb asks for one:
 
 | Window | Sized by | Asked by |
 |---|---|---|
-| none | — | Every read; every work, knowledge, artifact and chat verb but the three purges and chat's three destructions; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — purging a work item, a page or an artifact, and erasing or pruning a chat room or setting its horizon, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
+| none | — | Every read; every work, knowledge, artifact and chat verb but the three purges and chat's three destructions, and every code tool but a repository's purge; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — purging a work item, a page or an artifact, or a repository's unreachable objects (`code_purge_unreachable`), and erasing or pruning a chat room or setting its horizon, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
 **One window, not two.** It is the practice of GitHub's sudo mode — one window
 over every sensitive gesture — at the stricter end of it (GitHub's is two
@@ -2723,13 +2768,18 @@ account's — is refused there, and at the second-factor routes, `403 forbidden`
 it has no password or second factor to prove anything with, so a refusal asking
 for a fresher proof would send its client to a step-up that refuses it again.
 
-And **no tool** asks for a proof or needs a person present, nor does any verb a
-tool asks from inside itself once it has read what a gesture is about —
-archiving a project, renaming a page, re-routing a task. A seat has no
-keyboard, and the operator's assistant connects through a machine token to a
-surface that is not a step-up surface, so either would refuse every call that
-reached it. The build checks both, reading which verbs the tools ask off their
-code rather than off a list.
+And **no tool a seat may take** asks for a proof, and **no tool** needs a
+person present, nor does any verb a tool asks from inside itself once it has
+read what a gesture is about — archiving a project, renaming a page,
+re-routing a task. A seat has no keyboard, and the operator's assistant
+connects through a machine token, which is never a person present, so either
+would refuse every call that reached it. A tool only a person may take can ask
+a proof: `code_purge_unreachable` asks `step_up` as the other purges do. No
+seat is offered it, every credential that reaches the operator's MCP surface
+with nobody at a keyboard is fresh by construction, and a dashboard session
+whose proof has aged is asked to confirm who it is when it presses it. The
+build checks all three, reading which verbs the tools ask off their code
+rather than off a list.
 
 ### Every row says what Ask Crewlet may do with it
 

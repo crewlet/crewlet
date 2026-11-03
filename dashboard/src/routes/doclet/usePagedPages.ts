@@ -16,23 +16,24 @@
  * would multiply the listing's cost by its length. The same rule
  * `routes/worklet/usePagedItems.ts` keeps for the board, for the same reason.
  *
+ * THE SHARED PAGER (`lib/usePaged.ts`), not one of this file's own: a page
+ * filed into the first window's range pushes its last page off the polled
+ * window's foot — onto neither window, a hole drawn as continuity — and the
+ * pager joins a moved first window to the windows held before the listing is
+ * drawn again.
+ *
  * # A page is drawn once
  *
  * The cursor resumes strictly after the last row it was minted on, so a page
  * renamed between two asks can land on both windows. The merge keeps the FIRST
- * occurrence by id.
+ * occurrence by id (`lib/usePaged.ts`).
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useClient } from "~/lib/store-hooks.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
-import {
-  queryErrorCode,
-  type LogRefusal,
-  type PageSummary,
-  type PagesAnswer,
-  type QueryRefusal,
-} from "~/protocol/index.ts";
+import type { LogRefusal, PageSummary, PagesAnswer, QueryRefusal } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { SkillLoad } from "~/contract/pages.ts";
 
@@ -71,21 +72,10 @@ export interface PagedPages {
   loadedBy: Record<string, SkillLoad[]> | null;
 }
 
-/** Pages from several windows, each once, first occurrence kept. */
-export function mergeWindows(windows: readonly (readonly PageSummary[])[]): PageSummary[] {
-  const seen = new Set<string>();
-  const out: PageSummary[] = [];
-  for (const window of windows) {
-    for (const row of window) {
-      if (seen.has(row.id)) continue;
-      seen.add(row.id);
-      out.push(row);
-    }
-  }
-  return out;
-}
-
-const NO_WINDOWS: PagesAnswer[] = [];
+/** A window's pages, each page's id, and the cursor to the window after. */
+const pagesOf = (w: PagesAnswer) => w.pages ?? [];
+const pageIdOf = (row: PageSummary) => row.id;
+const pagesAfter = (w: PagesAnswer) => w.after ?? "";
 
 export function usePagedPages(
   params: Record<string, unknown>,
@@ -97,60 +87,35 @@ export function usePagedPages(
     pollMs: options.pollMs,
     enabled: options.enabled ?? true,
   });
-  const question = JSON.stringify(asked);
-  const [held, setHeld] = useState<{ question: string; windows: PagesAnswer[] } | null>(null);
-  const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<QueryErrorCode | null>(null);
-  const windows = held && held.question === question ? held.windows : NO_WINDOWS;
-  const last = windows.length > 0 ? windows[windows.length - 1] : first.data;
-  const after = last?.after ?? "";
-
-  const load = useCallback(async () => {
-    if (!after || paging) return;
-    setPaging(true);
-    setPageError(null);
-    try {
-      const window = await socket.query(
-        "pages",
-        withFloor("pages", JSON.stringify({ ...asked, after })),
-      );
-      setHeld((prev) =>
-        prev && prev.question === question
-          ? { question, windows: [...prev.windows, window] }
-          : { question, windows: [window] },
-      );
-    } catch (err) {
-      setPageError(queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed");
-    } finally {
-      setPaging(false);
-    }
-  }, [socket, asked, question, after, paging]);
-
-  const rows = useMemo(
-    () => mergeWindows([first.data?.pages ?? [], ...windows.map((w) => w.pages ?? [])]),
-    [first.data, windows],
+  const paged = usePaged(
+    first,
+    asked,
+    (after) => socket.query("pages", withFloor("pages", JSON.stringify({ ...asked, after }))),
+    pagesOf,
+    pageIdOf,
+    pagesAfter,
   );
 
   const loadedBy = useMemo(() => {
-    const answers = [first.data, ...windows].filter((w): w is PagesAnswer => Boolean(w));
-    if (!answers.some((w) => w.skill_loaded_by)) return null;
-    return Object.assign({}, ...answers.map((w) => w.skill_loaded_by ?? {})) as Record<
+    if (!paged.answers.some((w) => w.skill_loaded_by)) return null;
+    return Object.assign({}, ...paged.answers.map((w) => w.skill_loaded_by ?? {})) as Record<
       string,
       SkillLoad[]
     >;
-  }, [first.data, windows]);
+  }, [paged.answers]);
 
+  const data = paged.answers[0] ?? null;
   return {
     loadedBy,
-    data: first.data,
-    loading: first.loading,
-    error: first.error,
-    refusal: first.refusal,
-    rows,
-    total: first.data ? (first.data.total ?? rows.length) : null,
-    more: after !== "",
-    loadMore: () => void load(),
-    paging,
-    pageError,
+    data,
+    loading: paged.loading,
+    error: paged.error,
+    refusal: paged.refusal,
+    rows: paged.items,
+    total: data ? (data.total ?? paged.items.length) : null,
+    more: paged.more,
+    loadMore: paged.next,
+    paging: paged.paging,
+    pageError: paged.pageError,
   };
 }

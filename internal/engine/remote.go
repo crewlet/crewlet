@@ -44,6 +44,10 @@ type remoteNative struct {
 	tracker bool
 	wiki    bool
 	chat    bool
+
+	// built is the choices the three are derived from, which a later
+	// activation is compared against — see [native.built].
+	built builtWith
 }
 
 // startRemote brings up a stateless node's native runtime, over the router
@@ -53,16 +57,17 @@ func (e *Engine) startRemote(c *Company) error {
 		return errors.New("engine: this node holds no data and has no router " +
 			"to reach a node that does")
 	}
-	runs := remoteNative{
-		tracker: c.Config.TrackerBackendFor() == config.TrackerWorklet,
-		wiki:    c.Config.KnowledgeBackendFor() == config.KnowledgeDoclet,
-		chat:    c.Config.ChatBackendFor() == config.ChatChatlet,
-	}
-	e.remote.Store(&runs)
+	// THE HALVES DERIVED FROM THE CHOICES, so the two cannot disagree.
+	built := builtFrom(c.Config)
+	e.remote.Store(&remoteNative{
+		tracker: built.runsTracker(), wiki: built.runsWiki(), chat: built.runsChat(),
+		built: built,
+	})
 	log.Info("native_backends_remote", "node", e.id,
-		"tracker", runs.tracker, "knowledge", runs.wiki, "chat", runs.chat,
+		"tracker", built.runsTracker(), "knowledge", built.runsWiki(), "chat", built.runsChat(),
+		"code", built.runsCode(),
 		"detail", "this node holds no data: its seats read and write "+
-			"Worklet, Doclet and Chatlet through a data node")
+			"Worklet, Doclet, Chatlet and the code host through a data node")
 	return nil
 }
 
@@ -75,9 +80,12 @@ func (e *Engine) startRemote(c *Company) error {
 // lease in the fleet on every call — an O(fleet) read of the coordination
 // store, crossing the leaf link on a stateless node, per tool call and per
 // search — for an answer that changes only when a node joins, leaves or lets
-// its lease lapse. The view lists on the presence heartbeat's own cadence and
-// answers UNKNOWN rather than an old or an empty roster once its last listing
-// is older than a lease survives; see [coord.LeaseView] and [newDataView].
+// its lease lapse. The view lists on the presence heartbeat's own cadence,
+// hears every presence claim and release as it lands and lists again then —
+// so a node that joins, or leaves cleanly, is in or out of the roster within
+// about a second rather than a heartbeat later — and answers UNKNOWN rather
+// than an old or an empty roster once its last listing is older than a lease
+// survives; see [coord.LeaseView] and [newDataView].
 //
 // ONE FILTER FOR EVERY QUESTION ABOUT DATA NODES — [dataNodesOf], which the
 // trim and the eviction gate apply to a listing of their own — because a
@@ -94,6 +102,26 @@ func (e *Engine) dataRoster(context.Context) ([]string, error) {
 	return presenceRoster{view: e.dataView}.LiveDataNodes()
 }
 
+// RoutedDataNodes is every live data node this node's estate router asks, by
+// id and sorted — its placement's own answer ([Engine.estatePlacement]), so
+// the order a keyed operation is asked in (rendezvous.Order over these) is
+// computed from exactly this — or why the view it reads cannot say, never
+// "none".
+//
+// A LISTING, so a node that claimed its presence since the view last listed is
+// not in it yet: the view hears the claim and lists again within about a
+// second ([coord.LeaseView]), and until then routes without it — a push the
+// joining node's repositories would send there is committed by its runner-up,
+// which the broker's compare-and-set keeps correct and which is not the one
+// group commit the keyed order exists for. A fleet booted at once is that
+// second from each member naming the others, every first listing having been
+// taken before any presence lease existed. A caller that must see the fleet's
+// routing whole — a test asserting where pushes meet — waits for this to name
+// every member.
+func (e *Engine) RoutedDataNodes() ([]string, error) {
+	return e.estatePlacement().Holders()
+}
+
 // newDataView builds the watched view of the fleet's presence leases, or nil
 // where there is no coordination.
 //
@@ -103,7 +131,10 @@ func (e *Engine) dataRoster(context.Context) ([]string, error) {
 // new) and trusts a listing for one TTL (past which a lease it named may have
 // lapsed and one it missed may have been held all along). Neither is a knob
 // of its own: both move with `coordination.lease_ttl_seconds`, as the leases
-// do.
+// do. Between listings it WATCHES the presence leases, so a claim or a release
+// lists it again at once: what the cadence is left to catch is a lease that
+// lapsed, which is no write — a node that stopped without releasing, as it
+// leaves every roster.
 func newDataView(b *config.Bootstrap, backend coord.Backend) (*coord.LeaseView, error) {
 	if backend == nil {
 		return nil, nil
@@ -168,20 +199,58 @@ func dataNodesOf(held []coord.Lease) []string {
 	return out
 }
 
+// gitNodesOf is the nodes with the git role among a listing of presence
+// leases: the git nodes a repository's git work is asked of (ADR-0089). Read
+// as every role reads off a peer's row — one this build cannot read is every
+// role — so a peer whose row is unreadable is asked as a git node too, and
+// answers `no_backend` where it is none, which the walk asks last for half a
+// minute.
+func gitNodesOf(held []coord.Lease) []string {
+	out := make([]string, 0, len(held))
+	for _, lease := range held {
+		if node, ok := gitNodeOf(lease); ok {
+			out = append(out, node)
+		}
+	}
+	return out
+}
+
+// gitNodeOf is the node a presence lease names where it has the git role, by
+// the rule [gitNodesOf] states — the ONE rule a git listing
+// ([presenceRoster.GitListing]) reads a peer's row by too, so the git nodes a
+// repository's reads are asked of and those its maintenance is weighed among
+// are one set.
+func gitNodeOf(lease coord.Lease) (string, bool) {
+	profile, ok := placement.FromLease(lease)
+	if !ok || !profile.Roles.Has(placement.RoleGit) {
+		return "", false
+	}
+	return profile.ID, true
+}
+
 // serveEstate makes this data node answer the fleet from its copy of the
-// estate.
+// estate — and, where it has the git role, from its git half on the two git
+// lanes, the reads' and the engine writes' (estate's gitLanes).
 //
 // EVERY DATA NODE SERVES, whether or not another node asks yet — one joins
 // without anybody reconfiguring the others — and from BEFORE its native runtime
 // is up: the backend is resolved per request, so a request arriving first is
-// answered "not here" rather than refused.
+// answered "not here" rather than refused. So is the git half ([engineGit]),
+// and every git node holds data in this release (git needs ingress, and
+// ingress needs data), so every git node serves here: each of its git lanes
+// answers `no_backend` until its code host is built, a git read and an engine
+// write alike.
 func (e *Engine) serveEstate(ctx context.Context) error {
 	if e.local == nil || e.router == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
-	stop, err := estate.Serve(ctx, e.backends.Queue, estate.ServerOptions{
+	opts := estate.ServerOptions{
 		Self: e.id, Local: e.local, Seams: e.serverSeams(), Envelopes: e.envelopes,
-	})
+	}
+	if e.profile.Roles.Has(placement.RoleGit) {
+		opts.Git = e.localGit()
+	}
+	stop, err := estate.Serve(ctx, e.backends.Queue, opts)
 	if err != nil {
 		return fmt.Errorf("engine: serve the estate: %w", err)
 	}
@@ -239,6 +308,12 @@ func (e *Engine) stopKeeper(ctx context.Context) {
 // slices go first: a node that has decided to go away stops being asked
 // before it stops being able to answer, and the next request goes to a peer
 // rather than waiting out its budget here.
+//
+// AND BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every other
+// state-log publisher: every write a peer routes here, and every
+// linearizable read's barrier, is appended through this node's publishers,
+// and one appended once the admission is gone is a write a capacity
+// coordinator was told nobody was making.
 func (e *Engine) stopServingEstate(ctx context.Context) {
 	if e.stopEstate == nil {
 		return

@@ -39,7 +39,7 @@ func outlineCorpus() []outlined {
 				"your_turn", "escalation", KeyUntrustedText,
 				KeyThreadContext, KeyPersonalMemory, KeySynthesizedSkills,
 				KeyRelevantKnowledge, KeyEpisodeRecall, KeyCounterparty,
-				"workers",
+				"workers", KeyCodeHistory, KeyCodeSearch, KeyCodeWrites, KeyCodeMerging,
 			},
 			nested: map[string][]string{
 				KeyThreadContext:     {"## not a heading of ours"},

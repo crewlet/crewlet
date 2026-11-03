@@ -36,10 +36,9 @@ type Chat struct {
 	// because the company owns the messages rather than renting a place to
 	// put them.
 	//
-	// PRESENT ONLY ON A CHATLET COMPANY, and refused otherwise, for the
-	// reason [Tracker.Worklet] gives: a retention horizon on a company whose
-	// messages live in somebody else's product describes nothing, and the
-	// failure that produces is silence.
+	// PRESENT ONLY ON A CHATLET COMPANY, and refused otherwise: a retention
+	// horizon on a company whose messages live in somebody else's product
+	// describes nothing, and the failure that produces is silence.
 	Chatlet *ChatletConfig `yaml:"chatlet,omitempty" json:"chatlet,omitempty"`
 }
 
@@ -215,7 +214,7 @@ type ChatletConfig struct {
 	// existed to refuse. The same collapse here deletes a company's whole
 	// chat history a year after somebody asked for it to be kept for ever.
 	//
-	// NOTE THE CONTRAST WITH `tracker.worklet.inbox_retention_days`, whose 0
+	// NOTE THE CONTRAST WITH `inbox.retention_days`, whose 0
 	// means the opposite: there 0 is "take the default", because an inbox
 	// row is DERIVED from a record that answers for ever, so "keep the
 	// mailbox for ever" is not a setting anybody needs and a plain int

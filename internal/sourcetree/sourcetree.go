@@ -78,13 +78,17 @@
 // expression or a parser is not, and under the race detector it was most of
 // what the gates cost — a pattern with no literal prefix runs at about a
 // megabyte a second, and go/parser at three or four. So a gate may skip a file
-// that PROVABLY holds nothing its matcher could find, and the proof is here,
-// once: [Required] derives from a pattern's own syntax tree the substrings
-// every match contains, [LineLocal] says when the pattern may then run on the
-// admitted lines alone, and [Identifiers] skips Go source spelling none of the
-// identifiers a syntax-tree matcher compares. Each is exact, so a gate's
-// verdict does not change; what a gate counts as READ is still counted before
-// any is asked, so its floors measure the walk rather than the filter.
+// that PROVABLY holds nothing its matcher could find, and each proof is
+// written once. A regular expression's is [internal/regexlit]'s: its Required
+// derives from the pattern's own syntax tree the substrings every match
+// contains, and its LineLocal says when the pattern may then run on the
+// admitted lines alone — a package of its own, because a search outside the
+// tests plans a pattern from the same substrings and no production package
+// imports this one. A syntax-tree matcher's is [Identifiers], here: it skips
+// Go source spelling none of the identifiers the matcher compares. Each is
+// exact, so a gate's verdict does not change; what a gate counts as READ is
+// still counted before any is asked, so its floors measure the walk rather
+// than the filter.
 //
 // # One implementation, for the reason clientsource gives
 //
@@ -126,12 +130,13 @@ import (
 //
 // So ANY path a test takes out of its own package starts here: a page under
 // docs/, the examples, the schemas, the dashboard's build, another package's
-// sources, or the directory `go list ./...` must run in. Two anchors are not
-// this one, each for a reason of its own: the package's own directory — its
-// testdata, its own sources — because `go test` runs every test binary there
-// by contract, so a path relative to it has no depth to count; and the working
-// tree's top level that static's merge test asks git for, because
-// `git check-attr` resolves paths against exactly that.
+// sources, or the directory `go list ./...` must run in. One anchor is not this
+// one: the package's own directory — its testdata, its own sources — because
+// `go test` runs every test binary there by contract, so a path relative to it
+// has no depth to count. A test that hands git a path of this tree starts here
+// too, and has git confirm that this is the working tree's top level, which
+// `git check-attr` resolves paths against (gittest's ModuleCheckout, for
+// static's merge test).
 func Root(t testing.TB) string {
 	t.Helper()
 	root, err := ModuleRoot()

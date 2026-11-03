@@ -52,6 +52,8 @@ export interface Refusal {
   sentence: string;
   /** The engine's own remedy, where it sent one. */
   hint: string;
+  /** The code host's own word for the refusal, or `""` — see `ActResult`. */
+  hostRefusal: string;
   /**
    * The grants any one of which would have admitted this person, where the
    * refusal was on authority — empty otherwise. What would change the answer,
@@ -291,6 +293,7 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
             refusal: {
               sentence: result.sentence,
               hint: result.hint,
+              hostRefusal: result.hostRefusal,
               grants: result.grants,
               reason: result.reason,
               retryable: result.retryable,

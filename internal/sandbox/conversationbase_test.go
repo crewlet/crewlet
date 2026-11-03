@@ -13,9 +13,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // conversationLog is ONE executor log as the cases below play it: every node's
@@ -34,13 +33,25 @@ import (
 // coordinators do with them.
 type conversationLog struct {
 	mu       sync.Mutex
-	rows     map[string]executordomain.Session
+	rows     map[string]logRow
 	tombs    map[string]bool
 	archives map[string][]byte
-	seq      uint64
+	seq      int64
 
-	begins   []executordomain.NewBegin
-	captures []executordomain.NewCapture
+	begins   []BeginRecord
+	captures []CaptureRecord
+}
+
+// logRow is one turn's row on the conversationLog: what the restore reads of it
+// ([executorkeep.TurnRow]) and what the log keeps beside that — the turn's
+// first read and where its end landed.
+type logRow struct {
+	executorkeep.TurnRow
+	WorkKey     string
+	Ending      *executorkeep.Ending
+	EndedSeq    int64
+	ReadThrough int64
+	Absorbs     []string
 }
 
 var (
@@ -49,135 +60,131 @@ var (
 )
 
 func newConversationLog() *conversationLog {
-	return &conversationLog{rows: map[string]executordomain.Session{}, tombs: map[string]bool{},
+	return &conversationLog{rows: map[string]logRow{}, tombs: map[string]bool{},
 		archives: map[string][]byte{}}
 }
 
 // nextLocked is the log's next position.
-func (l *conversationLog) nextLocked() statelog.Position {
+func (l *conversationLog) nextLocked() int64 {
 	l.seq++
-	return statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Seq: l.seq}
+	return l.seq
 }
 
 // endedTurn seeds turn of the conversation `chat:D1` of seat swe as its capture
 // and its end left it: ended, naming a session sessionID whose archive is body.
-func (l *conversationLog) endedTurn(t *testing.T, turn, sessionID, body string) executordomain.Session {
+func (l *conversationLog) endedTurn(t *testing.T, turn, sessionID, body string) executorkeep.TurnRow {
 	t.Helper()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	key := objstore.KeyAt(time.Now())
-	row := executordomain.Session{Handle: "swe", Turn: turn, ConversationKey: "chat:D1", WorkKey: "wk-" + turn,
+	row := logRow{TurnRow: executorkeep.TurnRow{Handle: "swe", Turn: turn, ConversationKey: "chat:D1",
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: sessionID,
 		Object:     objstore.Object{Key: key, Hash: objstore.Hash(strings.Repeat("b", 64)), Size: int64(len(body))},
 		ContentKey: "k1", ArchiveFormat: FakeArchiveFormat, LaunchSeq: 1, CaptureSeq: 1,
-		Home: "/boxes/" + turn + "/home", ContextTokens: 42000,
-		Ending: &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}
-	row.EndedAt, row.EndedAtPosition = time.Now().UTC(), l.nextLocked()
+		Home: "/boxes/" + turn + "/home", ContextTokens: 42000, Ended: true, EndedAt: time.Now().UTC()},
+		WorkKey: "wk-" + turn, Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}
+	row.EndedSeq = l.nextLocked()
 	l.rows[turn], l.tombs[turn] = row, true
 	l.archives[key.String()] = []byte(body)
-	return row
+	return row.TurnRow
 }
 
 // readNow is the position a head read made now would be read at.
-func (l *conversationLog) readNow() statelog.Position {
+func (l *conversationLog) readNow() int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Seq: l.seq}
+	return l.seq
 }
 
-func (l *conversationLog) Begin(_ context.Context, _ executordomain.Call,
-	n executordomain.NewBegin) (executordomain.BeginResult, error) {
+// errTurnEnded is the log's refusal of a record of a turn it tombstoned.
+var errTurnEnded = errors.New("the turn has ended")
 
+func (l *conversationLog) Begin(_ context.Context, b BeginRecord) (BeginAnswer, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.tombs[n.Turn] {
-		return executordomain.BeginResult{}, fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
+	if l.tombs[b.Turn] {
+		return BeginAnswer{Log: LogRefused}, fmt.Errorf("%w: %s", errTurnEnded, b.Turn)
 	}
-	l.begins = append(l.begins, n)
-	row, found := l.rows[n.Turn]
+	l.begins = append(l.begins, b)
+	row, found := l.rows[b.Turn]
 	if !found {
-		row = executordomain.Session{Handle: n.Handle, Turn: n.Turn, ConversationKey: n.ConversationKey,
-			WorkKey: n.WorkKey}
+		row = logRow{TurnRow: executorkeep.TurnRow{Handle: b.Handle, Turn: b.Turn,
+			ConversationKey: b.ConversationKey}, WorkKey: b.WorkKey}
 	}
 	// THE TURN'S FIRST READ STANDS, whichever record carried it.
-	if row.ReadThrough.Seq == 0 {
-		row.ReadThrough, row.Absorbs = n.ReadThrough, slices.Clone(n.Absorbs)
-		if base, ok := l.rows[n.BaseTurn]; ok && n.BaseTurn != "" && base.Ended() &&
-			base.ConversationKey == n.ConversationKey && base.Object.Key == n.BaseObject.Key &&
-			base.Object.Hash == n.BaseObject.Hash {
-			row.BaseTurn = n.BaseTurn
+	if row.ReadThrough == 0 {
+		row.ReadThrough, row.Absorbs = b.ReadThrough, slices.Clone(b.Absorbs)
+		if base, ok := l.rows[b.BaseTurn]; ok && b.BaseTurn != "" && base.Ended &&
+			base.ConversationKey == b.ConversationKey && base.Object.Key == b.BaseObject.Key &&
+			base.Object.Hash == b.BaseObject.Hash {
+			row.BaseTurn = b.BaseTurn
 		}
 	}
-	l.rows[n.Turn] = row
-	held := n.BaseTurn != "" && row.BaseTurn == n.BaseTurn && row.LaunchSeq == 0
+	l.rows[b.Turn] = row
+	held := b.BaseTurn != "" && row.BaseTurn == b.BaseTurn && row.LaunchSeq == 0
 	why := ""
 	if !held {
 		why = "the base did not stand when the begin applied"
 	}
-	return executordomain.BeginResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied},
-		Held: held, Why: why}, nil
+	return BeginAnswer{Log: LogLanded, Held: held, Why: why}, nil
 }
 
-func (l *conversationLog) Capture(_ context.Context, _ executordomain.Call,
-	n executordomain.NewCapture) (executordomain.CaptureResult, error) {
-
+func (l *conversationLog) Capture(_ context.Context, c CaptureRecord) (LogAnswer, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.tombs[n.Turn] {
-		return executordomain.CaptureResult{}, fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
+	if l.tombs[c.Turn] {
+		return LogRefused, fmt.Errorf("%w: %s", errTurnEnded, c.Turn)
 	}
-	l.captures = append(l.captures, n)
-	row, found := l.rows[n.Turn]
+	l.captures = append(l.captures, c)
+	row, found := l.rows[c.Turn]
 	if !found {
-		row = executordomain.Session{Handle: n.Handle, Turn: n.Turn, ConversationKey: n.ConversationKey,
-			WorkKey: n.WorkKey}
+		row = logRow{TurnRow: executorkeep.TurnRow{Handle: c.Handle, Turn: c.Turn,
+			ConversationKey: c.ConversationKey}, WorkKey: c.WorkKey}
 	}
-	if row.ReadThrough.Seq == 0 && n.ReadThrough.Seq > 0 {
-		row.ReadThrough, row.Absorbs = n.ReadThrough, slices.Clone(n.Absorbs)
+	if row.ReadThrough == 0 && c.ReadThrough > 0 {
+		row.ReadThrough, row.Absorbs = c.ReadThrough, slices.Clone(c.Absorbs)
 	}
+	n := c.Stamp
 	row.Harness, row.HarnessVersion, row.SessionID = n.Harness, n.HarnessVersion, n.SessionID
-	row.Object, row.ContentKey, row.ArchiveFormat = n.Object, n.ContentKey, n.ArchiveFormat
+	row.Object, row.ContentKey, row.ArchiveFormat = c.Object, n.ContentKey, n.ArchiveFormat
 	row.LaunchSeq, row.CaptureSeq = n.LaunchSeq, n.CaptureSeq
 	row.Home, row.Workspace = n.Home, n.Workspace
 	row.ContextTokens, row.Interrupted = n.ContextTokens, n.Interrupted
-	l.rows[n.Turn] = row
-	return executordomain.CaptureResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied},
-		Recorded: true}, nil
+	l.rows[c.Turn] = row
+	return LogLanded, nil
 }
 
-func (l *conversationLog) End(_ context.Context, _ executordomain.Call,
-	n executordomain.NewEnd) (statelog.Result, error) {
-
+func (l *conversationLog) End(_ context.Context, e EndRecord) (LogAnswer, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.tombs[n.Turn] {
-		return statelog.Result{}, fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
+	if l.tombs[e.Turn] {
+		return LogLanded, nil
 	}
-	row, found := l.rows[n.Turn]
+	row, found := l.rows[e.Turn]
 	if !found {
-		row = executordomain.Session{Handle: n.Handle, Turn: n.Turn, ConversationKey: n.ConversationKey,
-			WorkKey: n.WorkKey}
+		row = logRow{TurnRow: executorkeep.TurnRow{Handle: e.Handle, Turn: e.Turn,
+			ConversationKey: e.ConversationKey}, WorkKey: e.WorkKey}
 	}
-	ending := n.Ending
-	row.Ending, row.EndedAt, row.EndedAtPosition = &ending, time.Now().UTC(), l.nextLocked()
-	l.rows[n.Turn], l.tombs[n.Turn] = row, true
+	ending := e.Ending
+	row.Ending, row.Ended, row.EndedAt, row.EndedSeq = &ending, true, time.Now().UTC(), l.nextLocked()
+	l.rows[e.Turn], l.tombs[e.Turn] = row, true
 	// ONLY A TURN THAT LANDED A CAPTURE ABSORBS what its first read handed
 	// out, and never a row a live turn holds.
 	if row.LaunchSeq > 0 {
 		for _, turn := range row.Absorbs {
-			if absorbed, ok := l.rows[turn]; ok && absorbed.Ended() && !l.heldLocked(turn) {
+			if absorbed, ok := l.rows[turn]; ok && absorbed.Ended && !l.heldLocked(turn) {
 				delete(l.rows, turn)
 			}
 		}
 	}
-	return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
+	return LogLanded, nil
 }
 
 // heldLocked reports whether a live row that has landed no capture holds turn
 // as its base.
 func (l *conversationLog) heldLocked(turn string) bool {
 	for _, row := range l.rows {
-		if row.BaseTurn == turn && !row.Ended() && row.LaunchSeq == 0 {
+		if row.BaseTurn == turn && !row.Ended && row.LaunchSeq == 0 {
 			return true
 		}
 	}
@@ -192,21 +199,20 @@ func (l *conversationLog) holds(turn string) bool {
 }
 
 // row is turn's row, and whether the log holds one.
-func (l *conversationLog) row(turn string) (executordomain.Session, bool) {
+func (l *conversationLog) row(turn string) (executorkeep.TurnRow, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	row, ok := l.rows[turn]
-	return row, ok
+	return row.TurnRow, ok
 }
 
 // head is the conversation's head: its newest ended row that names a session.
 func (l *conversationLog) head(conversationKey string) string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	var head executordomain.Session
+	var head logRow
 	for _, row := range l.rows {
-		if row.ConversationKey == conversationKey && row.Ended() && row.HasObject() &&
-			row.EndedAtPosition.Seq > head.EndedAtPosition.Seq {
+		if row.ConversationKey == conversationKey && row.Ended && row.HasObject() && row.EndedSeq > head.EndedSeq {
 			head = row
 		}
 	}
@@ -214,62 +220,59 @@ func (l *conversationLog) head(conversationKey string) string {
 }
 
 // begun is every begin recorded, in order.
-func (l *conversationLog) begun() []executordomain.NewBegin {
+func (l *conversationLog) begun() []BeginRecord {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return slices.Clone(l.begins)
 }
 
 // capturesOf is every capture of turn recorded, in order.
-func (l *conversationLog) capturesOf(turn string) []executordomain.NewCapture {
+func (l *conversationLog) capturesOf(turn string) []CaptureRecord {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	var out []executordomain.NewCapture
-	for _, n := range l.captures {
-		if n.Turn == turn {
-			out = append(out, n)
+	var out []CaptureRecord
+	for _, c := range l.captures {
+		if c.Turn == turn {
+			out = append(out, c)
 		}
 	}
 	return out
 }
 
-func (l *conversationLog) Session(_ context.Context, handle, turn string,
-	fresh statelog.Freshness) (executordomain.Session, error) {
-
+// Session answers a turn's row as the restore reads it: at the level a
+// relaunch reads (the engine's adapter's), so an end another node published is
+// seen.
+func (l *conversationLog) Session(_ context.Context, handle, turn string) (executorkeep.TurnRow, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	// AN END ANOTHER NODE PUBLISHED is seen only at linearizable.
-	if fresh.Level != statelog.ReadLinearizable {
-		return executordomain.Session{}, errors.New("read below the level another node's record is seen at")
-	}
 	row, ok := l.rows[turn]
 	if !ok || row.Handle != handle {
-		return executordomain.Session{}, executordomain.ErrNotFound
+		return executorkeep.TurnRow{}, ErrTurnRowNotFound
 	}
-	return row, nil
+	return row.TurnRow, nil
 }
 
-func (l *conversationLog) Fetch(_ context.Context, row executordomain.Session, dst io.Writer) error {
+func (l *conversationLog) Fetch(_ context.Context, row executorkeep.TurnRow, dst io.Writer) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	body, ok := l.archives[row.Object.Key.String()]
 	if !ok {
-		return executordomain.ErrUnreadable
+		return errors.New("the store holds no such object")
 	}
 	_, err := dst.Write(body)
 	return err
 }
 
-func (l *conversationLog) OpenSpooled(_ executordomain.Session, sealed io.Reader) (io.Reader, error) {
+func (l *conversationLog) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
 	return sealed, nil
 }
 
 // frozenReadOf is the read a turn's dispatch made of the conversation whose
 // head is base, at the log's position now, the brief having told base: what
 // the turn's first launch freezes.
-func frozenReadOf(l *conversationLog, base executordomain.Session) *ConversationBase {
-	return NewConversationBase(executordomain.Head{Session: &base, Position: l.readNow()},
-		[]string{base.Turn})
+func frozenReadOf(l *conversationLog, base executorkeep.TurnRow) *ConversationBase {
+	return NewConversationBase(executorkeep.ConversationHead{Session: &base, ReadThrough: l.readNow(),
+		Absorbs: []string{base.Turn}}, []string{base.Turn})
 }
 
 // continuingBase is turnID's first launch, its conversation's read frozen as
@@ -352,7 +355,7 @@ func TestATurnsFirstLaunchContinuesItsConversationsHead(t *testing.T) {
 	}
 	begins := logbook.begun()
 	if len(begins) != 1 || begins[0].Turn != "t2" || begins[0].BaseTurn != "b1" ||
-		begins[0].ReadThrough.Packed() != read.ReadThrough || !slices.Equal(begins[0].Absorbs, []string{"b1"}) ||
+		begins[0].ReadThrough != read.ReadThrough || !slices.Equal(begins[0].Absorbs, []string{"b1"}) ||
 		begins[0].BaseObject.Key != base.Object.Key {
 		t.Fatalf("the executor log was handed begins %+v, want the turn's one first read naming b1", begins)
 	}
@@ -367,7 +370,7 @@ func TestATurnsFirstLaunchContinuesItsConversationsHead(t *testing.T) {
 		Captured: &session.Archive})
 	collectHeld(t, rig, "t2")
 	captures := logbook.capturesOf("t2")
-	if len(captures) != 1 || captures[0].ReadThrough.Packed() != read.ReadThrough ||
+	if len(captures) != 1 || captures[0].ReadThrough != read.ReadThrough ||
 		!slices.Equal(captures[0].Absorbs, read.Absorbs) {
 		t.Fatalf("the turn's captures %+v carry another read than its first launch froze", captures)
 	}
@@ -457,18 +460,18 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 	}
 
 	// T3, which read B1 too, captures and ends.
-	if _, err := logbook.Capture(ctx, executordomain.Call{}, executordomain.NewCapture{Handle: "swe", Turn: "t3",
-		ConversationKey: "chat:D1", WorkKey: "wk-t3", Harness: "claude-code", SessionID: "s-t3",
+	if _, err := logbook.Capture(ctx, CaptureRecord{Handle: "swe", Turn: "t3",
+		ConversationKey: "chat:D1", WorkKey: "wk-t3",
 		Object: objstore.Object{Key: objstore.KeyAt(time.Now()), Hash: objstore.Hash(strings.Repeat("d", 64)),
 			Size: 3},
-		ArchiveFormat: FakeArchiveFormat, LaunchSeq: 1, CaptureSeq: 1,
-		ReadThrough: statelog.Unpack(executordomain.Domain{}.Stream().Name, read.ReadThrough),
-		Absorbs:     []string{"b1"}}); err != nil {
+		Stamp: SessionCapture{Harness: "claude-code", SessionID: "s-t3", ArchiveFormat: FakeArchiveFormat,
+			LaunchSeq: 1, CaptureSeq: 1},
+		ReadThrough: read.ReadThrough, Absorbs: []string{"b1"}}); err != nil {
 		t.Fatalf("T3's capture: %v", err)
 	}
-	if _, err := logbook.End(ctx, executordomain.Call{}, executordomain.NewEnd{Handle: "swe", Turn: "t3",
+	if _, err := logbook.End(ctx, EndRecord{Handle: "swe", Turn: "t3",
 		ConversationKey: "chat:D1", WorkKey: "wk-t3",
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
 		t.Fatalf("T3's end: %v", err)
 	}
 	if row, ok := logbook.row("b1"); !ok || row.Object.Key != b1.Object.Key {
@@ -482,7 +485,7 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 	// record and the same log.
 	resumer := &resumeSpy{}
 	nodeB, err := NewCoordinator(CoordinatorOptions{
-		Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager, Pushes: rig.pushes,
 		Resume: resumer, Audience: &audienceSpy{},
 		Lease: leased(Fence{Owner: "node-b:1", Epoch: 2}), Node: "node-b",
 		Sessions: logbook, Keep: keep, Restore: logbook, SpoolDir: t.TempDir(),
@@ -537,7 +540,7 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 	}
 	nodeB.keeping.Wait()
 	captures := logbook.capturesOf("t2")
-	if len(captures) != 1 || captures[0].ReadThrough.Packed() != read.ReadThrough ||
+	if len(captures) != 1 || captures[0].ReadThrough != read.ReadThrough ||
 		!slices.Equal(captures[0].Absorbs, []string{"b1"}) {
 		t.Fatalf("T2's captures %+v carry another read than its first launch froze", captures)
 	}
@@ -545,9 +548,9 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 		t.Fatal("T2's first capture left B1 held")
 	}
 	// AND T2'S END ABSORBS B1, the head it was handed.
-	if _, err := logbook.End(ctx, executordomain.Call{}, executordomain.NewEnd{Handle: "swe", Turn: "t2",
+	if _, err := logbook.End(ctx, EndRecord{Handle: "swe", Turn: "t2",
 		ConversationKey: "chat:D1", WorkKey: "wk-1",
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
 		t.Fatalf("T2's end: %v", err)
 	}
 	if row, ok := logbook.row("b1"); ok {
@@ -571,11 +574,11 @@ func TestWhetherABaseIsContinuedIsOneDecision(t *testing.T) {
 	key := objstore.KeyAt(time.Now()).String()
 	base := BaseSession{Turn: "b1", Object: key, ObjectHash: strings.Repeat("b", 64), ObjectSize: 14,
 		Harness: "claude-code", SessionID: "s-base", ArchiveFormat: FakeArchiveFormat}
-	holding := &executordomain.Session{Handle: "swe", Turn: "t2", BaseTurn: "b1"}
+	holding := &executorkeep.TurnRow{Handle: "swe", Turn: "t2", BaseTurn: "b1"}
 	captured := *holding
 	captured.LaunchSeq, captured.CaptureSeq = 1, 1
 	ended := *holding
-	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	ended.Ended = true
 	other := *holding
 	other.BaseTurn = "b0"
 	none := *holding
@@ -586,7 +589,7 @@ func TestWhetherABaseIsContinuedIsOneDecision(t *testing.T) {
 	ending := &PendingRun{TurnID: "t2", LaunchSeq: 2, OwedEnd: []byte(`{"outcome":"completed"}`)}
 	for name, tc := range map[string]struct {
 		base      BaseSession
-		own       *executordomain.Session
+		own       *executorkeep.TurnRow
 		run       *PendingRun
 		restorer  ArchiveRestorer
 		continues bool
@@ -700,10 +703,9 @@ func TestABaseIsContinuedOnlyInABoxOfItsOwn(t *testing.T) {
 			t.Parallel()
 			rig, logbook, _ := conversingRig(t)
 			read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
-			if _, err := logbook.Begin(t.Context(), executordomain.Call{}, executordomain.NewBegin{Handle: "swe",
+			if _, err := logbook.Begin(t.Context(), BeginRecord{Handle: "swe",
 				Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
-				ReadThrough: statelog.Unpack(executordomain.Domain{}.Stream().Name, read.ReadThrough),
-				Absorbs:     read.Absorbs, BaseTurn: "b1",
+				ReadThrough: read.ReadThrough, Absorbs: read.Absorbs, BaseTurn: "b1",
 				BaseObject: objstore.Object{Key: mustKey(t, read.Session.Object),
 					Hash: objstore.Hash(read.Session.ObjectHash), Size: read.Session.ObjectSize}}); err != nil {
 				t.Fatalf("Begin: %v", err)
@@ -734,90 +736,4 @@ func mustKey(t *testing.T, s string) objstore.Key {
 		t.Fatalf("ParseKey(%q): %v", s, err)
 	}
 	return key
-}
-
-// largestRead is the largest read of a conversation's head the executor log
-// admits, and the turns a brief that told all of it told: the most turns it
-// hands out and the most siblings it offers, each a turn and an object, and a
-// head whose every free-text field is at the log's bound and escapes at JSON's
-// worst. What [TestAFrozenReadFitsItsBound] holds the freeze to, and what the
-// worst run row freezes (rowbytes_internal_test.go).
-func largestRead() (executordomain.Head, []string) {
-	turn := func(i int) string { return fmt.Sprintf("0190f3a0-0000-7000-8000-%012d", i) }
-	// A CONTROL CHARACTER, which JSON escapes as six bytes: every free-text
-	// field at its bound, at the encoding's worst.
-	const worst = "\x01"
-	object := func() objstore.Object {
-		return objstore.Object{Key: objstore.KeyAt(time.Now()), Hash: objstore.Hash(strings.Repeat("f", 64)),
-			Size: executordomain.SealedMaxBytes}
-	}
-	head := executordomain.Session{Handle: "swe", Turn: turn(0), Object: object(),
-		ContentKey:     strings.Repeat(worst, executordomain.ContentKeyMaxBytes),
-		Harness:        strings.Repeat(worst, executordomain.HarnessMaxBytes),
-		HarnessVersion: strings.Repeat(worst, executordomain.HarnessVersionMaxBytes),
-		SessionID:      strings.Repeat(worst, executordomain.SessionIDMaxBytes),
-		Home:           strings.Repeat(worst, executordomain.PathMaxBytes),
-		Workspace:      strings.Repeat(worst, executordomain.PathMaxBytes),
-		ContextTokens:  1 << 40, Interrupted: true, ArchiveFormat: 1 << 20,
-		EndedAt: time.Now().UTC(), Ending: &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}
-	var endings []executordomain.Session
-	told := []string{head.Turn}
-	for i := 1; i <= executordomain.MaxEndings; i++ {
-		ended := executordomain.Session{Handle: "swe", Turn: turn(i),
-			Ending: &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}
-		if i <= executordomain.MaxSiblings {
-			ended.Object = object()
-		}
-		endings = append(endings, ended)
-		told = append(told, ended.Turn)
-	}
-	var siblings []executordomain.Session
-	for _, e := range endings {
-		if e.HasObject() {
-			siblings = append(siblings, e)
-		}
-	}
-	return executordomain.Head{Session: &head, Endings: endings, Siblings: siblings,
-		Position: statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1 << 22,
-			Seq: 1 << 39}}, told
-}
-
-// THE FREEZE FITS ITS BOUND, whatever the log admits: the largest read a head
-// can answer — the most turns it hands out and the most siblings it offers, each
-// a turn and an object, and a base whose every free-text field is at the log's
-// bound and escapes at JSON's worst — encodes within [ConversationBaseMaxBytes],
-// the share of the run's record the read is held to. And only what the brief
-// told is frozen: a turn its bound left out is neither absorbed nor offered,
-// and stays for the next read.
-//
-// Mutation: lower the bound below the largest read, or freeze what the brief
-// did not tell, and this goes red.
-func TestAFrozenReadFitsItsBound(t *testing.T) {
-	t.Parallel()
-	read, told := largestRead()
-	head, endings := *read.Session, read.Endings
-	largest := NewConversationBase(read, told)
-	raw, err := json.Marshal(largest)
-	if err != nil {
-		t.Fatalf("encoding the read: %v", err)
-	}
-	switch {
-	case len(largest.Absorbs) != executordomain.MaxAbsorbs || len(largest.Siblings) != executordomain.MaxSiblings:
-		t.Fatalf("the largest read absorbs %d and offers %d, want %d and %d", len(largest.Absorbs),
-			len(largest.Siblings), executordomain.MaxAbsorbs, executordomain.MaxSiblings)
-	case len(raw) > ConversationBaseMaxBytes:
-		t.Fatalf("the largest read encodes in %d bytes, past its bound of %d", len(raw), ConversationBaseMaxBytes)
-	}
-	t.Logf("the largest freeze is %d bytes of %d", len(raw), ConversationBaseMaxBytes)
-
-	// ONLY WHAT THE BRIEF TOLD: the head and the newest ending, the rest left
-	// out by the brief's bound.
-	partial := NewConversationBase(read, []string{head.Turn, endings[len(endings)-1].Turn})
-	if !slices.Equal(partial.Absorbs, []string{head.Turn, endings[len(endings)-1].Turn}) ||
-		len(partial.Siblings) != 0 || partial.Session == nil {
-		t.Fatalf("a read whose brief told two turns froze %+v", partial)
-	}
-	if untold := NewConversationBase(read, nil); untold.Session != nil || len(untold.Absorbs) != 0 {
-		t.Fatalf("a read whose brief told nothing froze %+v", untold)
-	}
 }

@@ -156,7 +156,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	for _, class := range classes {
 		var kept int
 		err := store.eachPositionKey(ctx, class, class,
-			func(key string, _ []byte) error {
+			func(key string, _ []byte, _ time.Time) error {
 				if segs, ok := coord.DocumentSegments(key); ok && segs[0] == class {
 					kept++
 				}

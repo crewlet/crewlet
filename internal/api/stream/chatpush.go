@@ -800,7 +800,7 @@ func (h *ChatHub) fan(ctx context.Context, batch []chatlet.Applied) {
 		})
 		return
 	}
-	at := statelog.Freshness{Level: statelog.ReadStale, MinPosition: batchPosition(batch)}
+	at := statelog.FloorAt(statelog.ReadStale, batchPosition(batch))
 	decided := map[seenKey]bool{}
 	targets := make([]*Client, 0, len(watchers))
 	for _, applied := range batch {
@@ -969,7 +969,7 @@ func chatPushKind(op chatlet.OpKind) (Kind, bool) {
 		return KindChatRoomChanged, true
 	case chatlet.OpMembers:
 		return KindChatMembershipChanged, true
-	case chatlet.OpEviction, chatlet.OpGeneration, chatlet.OpBarrier:
+	case chatlet.OpEviction, chatlet.OpGeneration, chatlet.OpBarrier, chatlet.OpTrimmed:
 		return "", false
 	}
 	return "", false

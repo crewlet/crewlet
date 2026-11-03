@@ -278,6 +278,38 @@ test("older changes are fetched, and the ones already loaded stay", async () => 
   expect(screen.getByText(/oldest change in this window/)).toBeTruthy();
 });
 
+// AN OLDER PAGE THAT FAILS LEAVES THE CONTROL THAT ASKS IT AGAIN, its failure
+// said beside it, never in its place: the cursor it was asked from is kept,
+// so the same press reads it. Mutation: draw the failure in the control's
+// place again, and there is no Load older changes to press.
+test("an older page of changes that fails keeps Load older changes, which asks it again", async () => {
+  let failures = 1;
+  const query = servingWith((what, params) => {
+    if (what !== "work_activity") return {};
+    if (!params?.cursor) {
+      return { records: [record({ id: "r1" })], next_cursor: "c1", complete: true };
+    }
+    if (failures-- > 0) throw new Error("unavailable");
+    return {
+      records: [record({ id: "r2", subject_key: "ENG-2", kind: "comment" })],
+      complete: true,
+    };
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("ENG-1")).toBeTruthy());
+  fireEvent.click(screen.getByRole("button", { name: "Load older changes" }));
+  expect(
+    await screen.findByText("Could not read the next page (unavailable). Try again."),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load older changes" }));
+  await waitFor(() => expect(screen.getByText("ENG-2")).toBeTruthy());
+  expect(screen.queryByText(/Could not read the next page/)).toBeNull();
+  const cursored = (query.mock.calls as unknown as [string, Record<string, unknown>?][]).filter(
+    ([what, params]) => what === "work_activity" && params?.cursor === "c1",
+  );
+  expect(cursored).toHaveLength(2);
+});
+
 // AND A NEW QUESTION THROWS THEM AWAY. Pages fetched under the previous window
 // are rows the server would never have answered for this one, and the cursor
 // walks the old query's history — the event log states both at length.

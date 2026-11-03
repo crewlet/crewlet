@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
 // A TURN LOST WITH ITS RUN IS HANDED TO THE ENGINE, as a step of the run's
@@ -30,6 +30,8 @@ type lostSpy struct {
 
 type lostCall struct {
 	run PendingRun
+	// calls is the turn's calls as the ending read them for the turn's end.
+	calls RunCalls
 	// recorded is whether the run's record still existed: a step made after
 	// the delete is lost to a crash between the two.
 	recorded bool
@@ -46,13 +48,13 @@ func watchLosses(rig *coordRig) *lostSpy {
 	return spy
 }
 
-func (s *lostSpy) lost(ctx context.Context, run PendingRun) executordomain.Ending {
+func (s *lostSpy) lost(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending {
 	_, recorded, _ := s.rig.pending.Get(ctx, run.TurnID)
 	announced := len(s.rig.announcements())
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.calls = append(s.calls, lostCall{run: run, recorded: recorded, announced: announced})
-	return executordomain.Ending{Outcome: executordomain.OutcomeLost}
+	s.calls = append(s.calls, lostCall{run: run, calls: calls, recorded: recorded, announced: announced})
+	return executorkeep.Ending{Outcome: executorkeep.OutcomeLost}
 }
 
 func (s *lostSpy) seen() []lostCall {
@@ -239,5 +241,80 @@ func TestOnlyALossHandsItsTurnToTheEngine(t *testing.T) {
 					"be told a turn that answered it was lost", len(calls))
 			}
 		})
+	}
+}
+
+// AN ENDING HANDS THE ENGINE THE TURN'S CALLS, as the store read them for it
+// ([Coordinator.runCalls]): a loss to [CoordinatorOptions.TurnLost], a person's
+// stop to [CoordinatorOptions.CloseStopped], each with the calls the turn made
+// — so the engine's account says the reply went out where it did — and, where
+// the store could not answer, with why ([RunCalls.Unread]), so the account says
+// the delivery is not known rather than that there was none.
+//
+// Mutation: hand either callback an empty RunCalls in endingOfRun, or let
+// runCalls drop the read's error, and this goes red.
+func TestAnEndingHandsTheEngineTheTurnsCalls(t *testing.T) {
+	t.Parallel()
+	for _, ending := range []string{"lost", "stopped"} {
+		for _, refused := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/refused=%v", ending, refused), func(t *testing.T) {
+				t.Parallel()
+				ctx := t.Context()
+				rig := newCoordRig(t)
+				var (
+					mu     sync.Mutex
+					handed []RunCalls
+				)
+				record := func(calls RunCalls) {
+					mu.Lock()
+					defer mu.Unlock()
+					handed = append(handed, calls)
+				}
+				rig.coordinator.turnLost = func(_ context.Context, _ PendingRun, calls RunCalls) executorkeep.Ending {
+					record(calls)
+					return executorkeep.Ending{Outcome: executorkeep.OutcomeLost}
+				}
+				rig.coordinator.closeStopped = func(_ context.Context, _ PendingRun, calls RunCalls) (executorkeep.Ending, error) {
+					record(calls)
+					return executorkeep.Ending{Outcome: executorkeep.OutcomeStopped}, nil
+				}
+				rig.launchAsked("t1")
+				row, ok, err := rig.pending.Get(ctx, "t1")
+				if err != nil || !ok {
+					t.Fatalf("Get = %v, %v", ok, err)
+				}
+				if ok, err := rig.pending.AppendBridgeCall(ctx, "t1", BridgeAppend{Launch: row.LaunchID,
+					Call: BridgeCall{Name: "vendor_post", Seq: 1, At: row.CreatedAt}}); err != nil || !ok {
+					t.Fatalf("AppendBridgeCall = %v, %v", ok, err)
+				}
+				if refused {
+					rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending,
+						refuse: []string{"TurnLog"}}
+				}
+				switch ending {
+				case "lost":
+					rig.loseOnCollect(t, "t1")
+				case "stopped":
+					rig.runner.Finish(Result{Text: "halfway through"})
+					if err := rig.coordinator.StopSeat(ctx, "swe", RunStop{By: "founder"}); err != nil {
+						t.Fatalf("StopSeat: %v", err)
+					}
+					rig.fireRetries()
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if len(handed) == 0 {
+					t.Fatalf("the %s run's ending handed the engine nothing", ending)
+				}
+				got := handed[0]
+				switch {
+				case refused && got.Unread == nil:
+					t.Fatalf("an ending whose log could not be read handed %+v, want why it was unread", got)
+				case !refused && (got.Unread != nil || !slices.ContainsFunc(got.Log.Calls,
+					func(c BridgeCall) bool { return c.Name == "vendor_post" })):
+					t.Fatalf("the ending handed %+v, want the turn's vendor_post among its calls", got)
+				}
+			})
+		}
 	}
 }

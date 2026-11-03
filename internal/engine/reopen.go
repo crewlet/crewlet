@@ -128,22 +128,31 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 
 	input, _, err := e.parkedTurnRunner(ctx, company, resumeInput{
 		Company: company, Run: run, State: state,
-		Turn: resumedTurn(run, seat, company.Org),
+		Turn: resumedTurn(run, seat, company.Org, e.rowHolds(run)),
 	})
 	if err != nil {
 		refuse("the run's turn could not be rebuilt here", "error", err.Error())
 		return
 	}
-	r, err := company.RunnerFor(handle, e.seatRegistry(company, handle), input)
+	r, err := company.RunnerFor(ctx, handle, e.seatRegistry(company, handle), input)
 	if err != nil {
 		refuse("the run's turn could not be rebuilt here", "error", err.Error())
+		return
+	}
+	// THE RUN'S CALLS SO FAR, off the log beside its row: what the reopened
+	// surface has executed, and where the session numbers the next call. A
+	// log that cannot be read refuses the opening rather than reopening a
+	// run that seems to have called nothing.
+	calls, err := rt.pending.BridgeLog(ctx, run)
+	if err != nil {
+		refuse("the run's bridged tool log could not be read", "error", err.Error())
 		return
 	}
 	// ITS GUARD THE SESSION'S ITS BOX STARTED, as the job's record says the box
 	// said it ([sandbox.LaunchRecord.SessionStart]): a box that has not said
 	// yet says it on its first request here, which the reopened run is told.
-	reopened, err := r.ReopenAgentRun(ctx, state, bridgedCalls(run.BridgeCalls),
-		identitiesOf(run.Elided()), identitiesOf(run.Absorbed()),
+	reopened, err := r.ReopenAgentRun(ctx, state, bridgedCalls(calls.Calls),
+		identitiesOf(calls.Unlisted()), identitiesOf(calls.Absorbed()),
 		bridgedOf(run.Launch.Bridged), run.Launch.SessionStart == sandbox.SessionStartContinued)
 	if err != nil {
 		refuse("the run's tool surface could not be rebuilt", "error", err.Error())
@@ -152,11 +161,17 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	ledger := newBridgeLedger(rt.pending, reopened.Meter)
 	ledger.nudge = e.nudgeRun
 	// THE RUN'S CALLS GO ON IN ITS OWN ORDER: the session numbers its calls
-	// after the last one the row records, and a resume reads them by it.
-	job := sandbox.OpenedJob{LaunchID: run.LaunchID, LastSeq: run.LastBridgeSeq()}
+	// after the last one the log records, and a resume reads them by it.
+	job := sandbox.OpenedJob{LaunchID: run.LaunchID, LastSeq: calls.LastSeq()}
 	session := &mcpbridge.Session{
 		RunID: run.TurnID, Handle: handle, Role: seat.Name,
 		Surface: reopened.Surface, Ledger: ledger,
+		// THE MODEL THE LAUNCH POINTED THE RUN'S CLI AT, as its row records
+		// it: the session the launch opened carried it ([mcpbridge.Session.Model]),
+		// and a session opened again without it would stamp every call the
+		// box makes from here on with no model, so a code write the run pushes
+		// after its seat moved named nobody's model.
+		Model: run.Launch.Model,
 		// AS THE LAUNCH OPENED IT, so the opening is refused or made on the
 		// same terms; the box already holds its endpoint and is never handed
 		// the one this opening mints.
@@ -186,7 +201,7 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		return
 	}
 	log.InfoContext(ctx, "bridge_reopened", "run_id", run.TurnID, "launch_id", run.LaunchID,
-		"seat", handle, "calls_before", len(run.BridgeCalls))
+		"seat", handle, "calls_before", len(calls.Calls))
 }
 
 // reopenedStarted is what the bridge session of run, taken over while it works,

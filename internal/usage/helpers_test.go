@@ -34,7 +34,7 @@ func caught() bool { return true }
 func unseen() (usage.Generations, bool) { return nil, false }
 
 // openStore is a fresh node with both estates migrated.
-func openStore(t *testing.T) *store.DB {
+func openStore(t testing.TB) *store.DB {
 	t.Helper()
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
@@ -178,6 +178,8 @@ func dump(t *testing.T, db *store.DB) map[string][]string {
 		"usage_schedule_superseded": "day, node, scope_type, scope_id, name, trace_id",
 		"usage_person_tokens":       "day, node, person, phase, worker, model, provider_key",
 		"usage_tool_calls":          "day, node, agent_id, server, tool",
+		"usage_repo_read_days":      "day, node, repo_id",
+		"usage_repo_reads":          "day, node, repo_id, principal_kind, principal, via, seat",
 	}
 	out := map[string][]string{}
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {

@@ -12,13 +12,13 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // hostRing is the keyring every node of a box-read case's fleet holds.
-var hostRing = statelog.OneKey("k1", "the box-read cases' fleet key material")
+var hostRing = recordseal.OneKey("k1", "the box-read cases' fleet key material")
 
 // hostNode is one node of a fleet for a box-read case: its own host — a backend
 // whose boxes only it holds — its coordinator over the fleet's one run store,
@@ -74,6 +74,7 @@ func hostFleetOn(t *testing.T) (store sandbox.PendingStore, a, b *hostNode, brok
 		}
 		n.reads.budget = flatBudget(2 * time.Second)
 		if n.coordinator, err = sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+			Pushes:  noPushes{},
 			Answers: testAnswers(),
 			Queue:   q, Pending: store, Manager: manager, Resume: nilResumer{},
 			Audience: nobodyAudience{}, Node: id, Boxes: n.reads,
@@ -81,7 +82,7 @@ func hostFleetOn(t *testing.T) (store sandbox.PendingStore, a, b *hostNode, brok
 			t.Fatalf("NewCoordinator: %v", err)
 		}
 		t.Cleanup(n.coordinator.Stop)
-		stop, err := q.Serve(t.Context(), topics.SandboxBoxRead, n.reads.answer)
+		stop, err := q.Serve(t.Context(), topics.SandboxBoxRead, queue.ConcurrentAnswers, n.reads.answer)
 		if err != nil {
 			t.Fatalf("serve: %v", err)
 		}
@@ -261,9 +262,9 @@ func TestABoxReadTheFleetDidNotSignReadsNothing(t *testing.T) {
 	// TWO FORGERIES: material that is not the fleet's under the fleet's key
 	// id — a MAC that fails — and a key id the fleet does not hold, whose
 	// body is still decoded, untrusted, for the refusal to name.
-	for _, ring := range []statelog.Keyring{
-		statelog.OneKey("k1", "not the fleet's key material"),
-		statelog.OneKey("k9", "a key the fleet does not hold"),
+	for _, ring := range []recordseal.Keyring{
+		recordseal.OneKey("k1", "not the fleet's key material"),
+		recordseal.OneKey("k9", "a key the fleet does not hold"),
 	} {
 		stranger, err := newBoxReads(ring, "node-x", nil, func() *sandbox.Coordinator { return nil })
 		if err != nil {
@@ -352,11 +353,11 @@ func TestOnlyTheAskedHostsSignedReplyIsTheAnswer(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		// ring seals the third party's reply, and node is the node it names.
-		ring statelog.Keyring
+		ring recordseal.Keyring
 		node string
 	}{
 		{"a reply naming another node", hostRing, "node-c"},
-		{"a reply the fleet did not sign", statelog.OneKey("k1", "not the fleet's key material"), "node-z"},
+		{"a reply the fleet did not sign", recordseal.OneKey("k1", "not the fleet's key material"), "node-z"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -379,7 +380,7 @@ func TestOnlyTheAskedHostsSignedReplyIsTheAnswer(t *testing.T) {
 				t.Fatalf("start queue: %v", err)
 			}
 			taken := signedask.NewGuard()
-			stop, err := q.Serve(t.Context(), topics.SandboxBoxRead, func(_ context.Context, raw []byte) ([]byte, error) {
+			stop, err := q.Serve(t.Context(), topics.SandboxBoxRead, queue.ConcurrentAnswers, func(_ context.Context, raw []byte) ([]byte, error) {
 				admitted := fleet.wire.Admit(raw, taken, time.Now())
 				if admitted.Disposition != signedask.Admitted {
 					return nil, errors.New(admitted.Why)

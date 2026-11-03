@@ -16,9 +16,18 @@ import (
 // Anchored to what provisioning actually is: a cold dependency install
 // (apt-get install, npm ci, uv sync) over a network is typically one to five
 // minutes, and a large monorepo clone or an image pull can reach ten. Ten
-// minutes covers those while still failing well inside the box TTL
-// (DefaultBoxTimeout, 900s), so a wedged command surfaces as a named setup
-// failure rather than as a box the provider reaps out from under the run.
+// minutes covers those, and a wedged command surfaces as a named setup
+// failure at its own budget.
+//
+// ONE COMMAND'S BUDGET, NEVER THE PROVISIONING'S. A launch runs the
+// harness's install and then every one of the operator's steps one after
+// another, and a check's box its git check and its clone, each to this budget
+// unless its step sets its own — so a launch whose operator declares a handful
+// of steps can provision for longer than the box's TTL ([DefaultBoxTimeout],
+// 900s, a step and a half of this budget). Nothing races the two: the launch keeps the box's timer refreshed for
+// as long as it provisions it ([keepProvisioning]), so the provider never
+// reaps a box out from under a step that is still within its budget, and
+// only that budget ends a slow step.
 //
 // It exists at all because provisioning is NOT a control-plane call: without
 // its own budget these commands inherited the backend's control timeout —
@@ -34,14 +43,23 @@ const DefaultSetupTimeout = 10 * time.Minute
 // provisioning is an ordered list of these — one unit each contributing files,
 // commands, env, and a paragraph of brief.
 //
-// Steps come ENTIRELY from company config, applied in order: providers.sandbox
-// .setup for every sandbox role, then role.sandbox.setup extras. THE ENGINE
-// SHIPS NONE OF ITS OWN — git auth included. What stays engine-side is only
-// what static config cannot know, expressed generically: the run env carries
-// the LLM credentials and the agent's identity as CREWLET_AGENT_HANDLE /
-// CREWLET_AGENT_EMAIL, never a tool-specific variable. External tokens are
-// declared in role.sandbox.env, and setup commands execute WITH the run env,
-// so a recipe maps the generic facts into tool shape itself.
+// A launch's steps come from company config, applied in order:
+// providers.sandbox.setup for every sandbox role, then role.sandbox.setup
+// extras. FOR ANY OTHER HOST THE ENGINE SHIPS NONE OF ITS OWN — git auth
+// included. What stays engine-side is only what static config cannot know,
+// expressed generically: the run env carries the LLM credentials and the
+// agent's identity as CREWLET_AGENT_HANDLE / CREWLET_AGENT_EMAIL, never a
+// tool-specific variable. External tokens are declared in role.sandbox.env,
+// and setup commands execute WITH the run env, so a recipe maps the generic
+// facts into tool shape itself.
+//
+// The one exception is the engine's OWN code host, whose repositories a run
+// is granted rather than told about: the commands that give a box one are the
+// engine's ([CodingSteps]: [GitVersionStep], a [CloneRecipe], the monitor's
+// [MonitorStep]), answered by the `code_checkout` that grants it for the run
+// to run itself, never applied at launch, and so is the git access they clone
+// with — the run's credential and the box's git configuration ([BoxGit],
+// ADR-0093), in the launch's own environment.
 type SetupStep struct {
 	// Name is a short identifier, used in logs and setup-failure errors.
 	Name string `yaml:"name" json:"name"`
@@ -175,8 +193,9 @@ func (e *SetupError) why() (Why, bool) {
 // recipe when to use it.
 const exitTempFail = 75
 
-// ApplySetup applies every step to a fresh box: write files, run commands, in
-// order.
+// ApplySetup applies every step to a box: write files, run commands, in order —
+// a fresh box's whole provisioning, or a check box's git floor and checkout
+// ([Manager.AcquireBox]).
 //
 // env is the run env the harness will get — commands run WITH it so a
 // recipe can reference the engine's identity facts and its own configured

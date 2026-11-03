@@ -43,10 +43,10 @@ func wantState(t *testing.T, s *livestate.LiveState, seat string, activity lives
 	}
 }
 
-// codingRun is one run as the durable record states it, launched by the seat
+// executorRecord is one run as the durable record states it, launched by the seat
 // with this agent id. Every run carries the SAME role name, which is what a
 // record looks like for a company whose seats share one.
-func codingRun(turnID, seat string, status livestate.ExecutorStatus, started time.Time) livestate.ExecutorRecord {
+func executorRecord(turnID, seat string, status livestate.ExecutorStatus, started time.Time) livestate.ExecutorRecord {
 	return livestate.ExecutorRecord{
 		Entry: livestate.ExecutorEntry{
 			TurnID: turnID, AgentID: seat, Role: "Engineer", AgentHandle: "coder", Status: status,
@@ -68,7 +68,7 @@ func TestARunParkedForThirteenHoursReadsNeeds(t *testing.T) {
 	s := sandboxState(t)
 	s.SetPlacement(map[string]bool{"Coder": true})
 	s.ReconcileExecutors([]livestate.ExecutorRecord{
-		codingRun("tn-old", "Coder", livestate.ExecutorAwaiting, fixtureNow.Add(-13*time.Hour)),
+		executorRecord("tn-old", "Coder", livestate.ExecutorAwaiting, fixtureNow.Add(-13*time.Hour)),
 	}, fixtureNow)
 
 	wantState(t, s, "Coder", livestate.ActivityNeeds, "")
@@ -87,12 +87,12 @@ func TestNeedsIsReadFromTheRunRecordNotTheParkedTurn(t *testing.T) {
 		"agent_id": "Coder", "turn_id": "tn-1", "suspended": true,
 	}))
 	s.ReconcileExecutors([]livestate.ExecutorRecord{
-		codingRun("tn-1", "Coder", livestate.ExecutorRunning, fixtureNow.Add(-time.Minute)),
+		executorRecord("tn-1", "Coder", livestate.ExecutorRunning, fixtureNow.Add(-time.Minute)),
 	}, fixtureNow)
 	wantState(t, s, "Coder", livestate.ActivityWorking, "")
 
 	s.ReconcileExecutors([]livestate.ExecutorRecord{
-		codingRun("tn-1", "Coder", livestate.ExecutorReseed, fixtureNow.Add(-time.Minute)),
+		executorRecord("tn-1", "Coder", livestate.ExecutorReseed, fixtureNow.Add(-time.Minute)),
 	}, fixtureNow.Add(time.Second))
 	wantState(t, s, "Coder", livestate.ActivityNeeds, "")
 
@@ -100,7 +100,7 @@ func TestNeedsIsReadFromTheRunRecordNotTheParkedTurn(t *testing.T) {
 	// engine is driving the resume it owes, so nobody is waited on — a
 	// seat still shown as needing someone would ask them to answer twice.
 	s.ReconcileExecutors([]livestate.ExecutorRecord{
-		codingRun("tn-1", "Coder", livestate.ExecutorAnswered, fixtureNow.Add(-time.Minute)),
+		executorRecord("tn-1", "Coder", livestate.ExecutorAnswered, fixtureNow.Add(-time.Minute)),
 	}, fixtureNow.Add(1500*time.Millisecond))
 	wantState(t, s, "Coder", livestate.ActivityWorking, "")
 
@@ -260,7 +260,7 @@ func TestAReconcileThatMovesARunPushesItsSeat(t *testing.T) {
 	s := sandboxState(t)
 	s.SetPlacement(map[string]bool{"Coder": true, "Lead": true})
 	change := s.ReconcileExecutors([]livestate.ExecutorRecord{
-		codingRun("tn-1", "Coder", livestate.ExecutorAwaiting, fixtureNow.Add(-time.Hour)),
+		executorRecord("tn-1", "Coder", livestate.ExecutorAwaiting, fixtureNow.Add(-time.Hour)),
 	}, fixtureNow)
 	if !change.Executors {
 		t.Error("the run set did not move")
@@ -347,7 +347,7 @@ func TestTwoSeatsSharingANameHaveTwoStates(t *testing.T) {
 	s := sandboxState(t)
 	s.SetPlacement(map[string]bool{"id-ada": true, "id-bob": false})
 	s.ReconcileExecutors([]livestate.ExecutorRecord{
-		codingRun("tn-ada", "id-ada", livestate.ExecutorAwaiting, fixtureNow.Add(-time.Minute)),
+		executorRecord("tn-ada", "id-ada", livestate.ExecutorAwaiting, fixtureNow.Add(-time.Minute)),
 	}, fixtureNow)
 
 	wantState(t, s, "id-ada", livestate.ActivityNeeds, "")

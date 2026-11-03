@@ -107,12 +107,16 @@ const (
 
 	// OpBarrier is the read index's payload-free append.
 	OpBarrier OpKind = "barrier"
+
+	// OpTrimmed is the trim's payload-free record that removes the anchors
+	// below a floor (ADR-0080).
+	OpTrimmed OpKind = "trimmed"
 )
 
-// OpKinds are the thirteen, in the order they are documented.
+// OpKinds are the fourteen, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPatch, OpRetention, OpMembers, OpPost, OpEdit, OpDelete, OpReact,
-	OpErase, OpPrune, OpEviction, OpGeneration, OpBarrier,
+	OpErase, OpPrune, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -140,6 +144,7 @@ var opRidesOn = map[OpKind]ObjectKind{
 	OpEviction:   KindEviction,
 	OpGeneration: KindGeneration,
 	OpBarrier:    KindBarrier,
+	OpTrimmed:    KindTrimmed,
 }
 
 // SubjectKind names the object kind whose subject an op is published on,
@@ -1010,11 +1015,18 @@ func DecodeMutation(rec MutationRecord) (Payload, error) {
 		}
 	case KindBarrier:
 		if rec.Op == OpBarrier {
-			// THE ONE PAYLOAD-FREE RECORD, and nil is its value
-			// rather than an absence: the applier's switch has a
-			// case for it that writes nothing, which is what keeps
+			// THE FIRST OF TWO PAYLOAD-FREE RECORDS, and nil is its
+			// value rather than an absence: the applier's switch has
+			// a case for it that writes nothing, which is what keeps
 			// "this kind wrote nothing" distinguishable from
 			// "nobody classified this kind".
+			return nil, nil
+		}
+	case KindTrimmed:
+		if rec.Op == OpTrimmed {
+			// THE SECOND, on the barrier's reasoning: the framework
+			// removes the anchors, and the applier's case for it
+			// writes nothing of this domain's.
 			return nil, nil
 		}
 	}
@@ -1077,6 +1089,46 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 			Op:      OpBarrier,
 			Scope:   ScopeSet{Subject: true},
 			Gen:     env.Gen,
+		},
+	})
+}
+
+// EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
+// ADR-0080) as a record this domain's applier decodes: the framework owns when
+// one is appended, what it removes and the floor its subject names, and the
+// domain owns what a record on its log looks like.
+//
+// THE WRITER TRAVELS, unlike a barrier's: a trimmed record removes rows, so the
+// eviction gate must be able to drop an evicted node's. NO OP ID, asserted: one
+// becomes a message id and a ledger row nothing resolves. And the floor is
+// CHECKED here, at the write, rather than in [Subject.Validate], which the read
+// path runs too: a refusal there would turn one malformed record into an
+// applier that stops on every node, where the framework's apply faults instead.
+func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.TrimmedKind || env.Subject.Kind != statelog.TrimmedKind {
+		return nil, fmt.Errorf("chatlet: a %q envelope on %q is not a trimmed record",
+			env.Kind, env.Subject)
+	}
+	if env.OpID != "" {
+		return nil, fmt.Errorf("chatlet: a trimmed record carries no op id and this " +
+			"one has one: an op id becomes a message id and a ledger row nothing " +
+			"resolves")
+	}
+	floor, err := statelog.TrimmedFloor(Domain{}.Stream().Name, env.Subject)
+	if err != nil {
+		return nil, fmt.Errorf("chatlet: %w", err)
+	}
+	return Encode(MutationRecord{
+		RecordEnvelope: RecordEnvelope{
+			// PINNED at the base version for ever: an older node retains
+			// a record it cannot read, and with it every anchor the
+			// record names.
+			V:       baseRecordVersion,
+			Subject: TrimmedSubject(floor),
+			Op:      OpTrimmed,
+			Scope:   ScopeSet{Subject: true},
+			Gen:     env.Gen,
+			Writer:  env.Writer,
 		},
 	})
 }

@@ -36,19 +36,27 @@ import (
 // experimental flag, and VACUUM INTO works.
 //
 // What it costs, measured against the pinned driver on a database under
-// continuous writes: the copy runs to completion, a concurrent writer commits
-// throughout with zero failures, and the result is a self-consistent
-// point-in-time image of the database as of some instant during the copy.
-// Crucially the copy is SELF-CONTAINED — it lands with no -wal beside it —
-// so restoring a node's store is moving one file into place rather than a
-// set that has to travel together.
+// continuous writes: the copy runs to completion and a concurrent writer
+// commits throughout with zero failures. Crucially the copy is
+// SELF-CONTAINED — it lands with no -wal beside it — so restoring a node's
+// store is moving one file into place rather than a set that has to travel
+// together.
 //
-// The copy is a snapshot of a MOMENT, not of the instant the call returned.
-// Nothing here pauses the engine, so rows committed while the copy ran may or
-// may not be in it. That is the correct trade for this store: it is the
-// node's own memory and audit index, its cross-node truth lives in the
-// coordination store, and a backup that stopped a company to take itself
-// would not be taken.
+// The copy is ONE MOMENT, the one it began at: it holds every commit that
+// returned before [DB.Backup] was called, and nothing a writer commits while
+// it runs. That is this package's doing and not the driver's: its VACUUM INTO
+// holds no view of its own, and it copied either an older view or a torn one
+// until [DB.vacuumInto] held one for it. Every caller leans on it. A donor
+// offers its snapshot at the checkpoint the copy holds, having judged before
+// the copy that nothing was deferred; and a fleet backup pins the log at the
+// position its node stood at just before its copy began, so a copy older than
+// that position would leave the records between the two pinned by nothing.
+//
+// Nothing here pauses the engine: a write made while the copy runs commits as
+// usual and lands after the copy's moment. That is the correct trade for this
+// store: it is the node's own memory and audit index, its cross-node truth
+// lives in the coordination store, and a backup that stopped a company to
+// take itself would not be taken.
 
 // backupPartSuffix names the in-progress copy.
 //
@@ -194,7 +202,8 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	// Also why this is an ExecContext rather than the [DB.Tx] every other
 	// write in this package goes through: VACUUM cannot run inside a
 	// transaction.
-	if err := d.vacuumInto(ctx, part); err != nil {
+	held, err := d.vacuumInto(ctx, part)
+	if err != nil {
 		_ = removeDatabaseFiles(part)
 		if tempDirRefused(err) {
 			return BackupInfo{}, fmt.Errorf("store: backup %s to %s: couldn't make "+
@@ -279,10 +288,14 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	if err != nil {
 		return BackupInfo{}, fmt.Errorf("store: backup: measure %s: %w", dest, err)
 	}
+	// HELD_LOG IS WHAT THE COPY HELD BACK on the live file's volume while it
+	// ran (copies.go): beside `took`, the two numbers an operator sizes that
+	// volume's room for the next copy against.
 	log.InfoContext(ctx, "store_backed_up",
 		"estate", string(d.estate),
 		"source", d.path, "path", dest, "bytes", info.Size(),
-		"took", took.String(), "migrations", len(migrations), "sha256", digest)
+		"took", took.String(), "held_log", held,
+		"migrations", len(migrations), "sha256", digest)
 	return BackupInfo{
 		Path:       dest,
 		SHA256:     digest,
@@ -387,7 +400,7 @@ func integrityCheck(ctx context.Context, pool *sql.DB) error {
 
 // databaseSidecars are the files a database grows beside itself. Named once,
 // because a list that is written twice is a list that stops matching.
-var databaseSidecars = []string{"-wal", "-shm", "-tshm"}
+var databaseSidecars = []string{walSidecar, "-shm", "-tshm"}
 
 // removeDatabaseFiles deletes a database path and every sidecar of it.
 func removeDatabaseFiles(path string) error {
@@ -420,20 +433,149 @@ func remove(path string) error {
 	return nil
 }
 
-// vacuumInto writes the copy to part through ONE CONNECTION DRAWN FROM THIS
-// HANDLE ([DB.conn]) rather than through the pool, so a close that lands after
-// [DB.Backup]'s guard — an adoption closing the replicated estate a snapshot
-// is being taken of — answers [ErrNoEstate], the state every caller
-// branches on, rather than database/sql's "database is closed", which none
-// does.
-func (d *DB) vacuumInto(ctx context.Context, part string) error {
+// vacuumInto writes the copy to part as ONE POINT IN TIME that holds every
+// commit which returned before it began.
+//
+// # The driver's VACUUM INTO holds no view of its own
+//
+// Its "implicit read transaction" is a DEFERRED `BEGIN`, which takes no
+// snapshot, and every read of the source after it is a nested statement,
+// which never begins one (tursogo v0.8.3, whose database engine is Turso
+// v0.8.3: op_vacuum_into in core/vdbe/execute.rs, where Turso's own test finds
+// the source pager holding no read lock after that BEGIN). So the copy is read
+// at whatever view the connection's PREVIOUS read transaction left behind, and
+// nothing holds that view while the copy runs. Two failures follow, both
+// measured against the pinned driver on the replicated estate, with a writer
+// committing on its pinned connection throughout:
+//
+//   - A copy MISSED commits that returned before it began. A pooled
+//     connection last used for a read taken before a commit carried that
+//     view into the copy: with four readers cycling the pool, 143 of 300
+//     copies held a view older than a commit that had returned before they
+//     began — each the view its connection's previous read had taken — while
+//     0 of 300 657 reads on the same pool did. That is the restored-reanchor
+//     case's "the copy's checkpoint is at 1, want the write's own 2", caught
+//     under load with the node's runner unmoved and its live checkpoint at 2
+//     across the copy; a donor's snapshot or a fleet backup taken just after a
+//     write misses it the same way.
+//   - A copy was TORN. With nothing holding the view, a checkpoint is free
+//     to backfill newer frames into the database file, or to restart the log,
+//     under it, and a page the view has no frame for is read as the file holds
+//     it now: with a TRUNCATE checkpoint forced every 20 ms, 6 of 150 copies
+//     held two tables written in ONE transaction at different values — a state
+//     the database never held, which a donor would have offered as its rows
+//     and its checkpoint. A read on the copying connection first, giving the
+//     copy a fresh view, cured the first failure and not this one: 0 of 150
+//     stale, 6 torn.
+//
+// # Hold, then take, then copy
+//
+// A read transaction is begun on a connection of its own and held until the
+// copy has returned: its read mark is what stops a checkpoint backfilling past
+// it or restarting the log, so a page the copy reads from the file is one that
+// no frame of its view supersedes. Only then is the copying connection's view
+// taken, so that view is the held one or newer and every frame it reads past
+// the held mark stays in the log for the whole copy ([DB.holdViewFor] does
+// both, in that order). Measured the same way: 0 of 150 copies stale, 0 torn.
+// THE ORDER IS THE RULE: a view taken before the hold may be older than the
+// held mark, and a checkpoint may then backfill the frames between the two
+// under it — which is why one function takes both steps rather than its
+// caller.
+//
+// THE HOLD IS OUTSIDE THE POOL ([DB.connector]), on a connection opened for it
+// and closed after it. Drawn from the pool beside the copying connection, one
+// copy would need two of the readers at once: on a node configured with one
+// it would wait for ever on its own hold, and two copies at once on the
+// replicated estate's floor of two would each hold one and wait for the other
+// — for ever in earnest, since the hold begins under [context.WithoutCancel].
+// TestACopyTakesOneConnectionFromItsPool stands both at their VACUUM INTO at
+// once.
+//
+// IT COSTS THE LOG ITS CHECKPOINTS for the copy's run: nothing past the held
+// mark is backfilled while it stands, so the write-ahead log grows by what the
+// writers commit during the copy and is folded in by the first checkpoint
+// after it. That is the price of any online copy that is one point in time;
+// mainline SQLite's own VACUUM INTO pays it the same way. So the copy is
+// LISTED while it holds the log ([DB.Copies]) and MEASURES how far the log grew
+// under it, before the hold ends ([DB.CopyHoldsBack]), which it answers as
+// held: copies.go says who reads each, and why.
+//
+// # Through one connection drawn from this handle
+//
+// The copy runs on ONE CONNECTION DRAWN FROM THIS HANDLE ([DB.conn]) rather
+// than through the pool, so a close that lands after [DB.Backup]'s guard — an
+// adoption closing the replicated estate a snapshot is being taken of —
+// answers [ErrNoEstate], the state every caller branches on, rather than
+// database/sql's "database is closed", which none does. It is drawn before
+// the hold, so a handle already closed opens nothing.
+func (d *DB) vacuumInto(ctx context.Context, part string) (held int64, err error) {
 	conn, err := d.conn(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = conn.Close() }()
+	release, err := d.holdViewFor(ctx, conn)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	copying := d.copies.begin(d.path, part)
 	_, err = conn.ExecContext(ctx, "VACUUM INTO "+sqlStringLiteral(part))
-	return err
+	// MEASURED HERE, before the deferred release ends the hold and lets a
+	// checkpoint fold the log back in ([copies.end]).
+	return d.copies.end(d.path, copying, err == nil), err
+}
+
+// holdViewFor holds a view for a copy conn is about to take, and returns what
+// ends the hold: a read transaction begun on a connection opened for it,
+// outside this handle's pool, and THEN conn's own view taken under it — see
+// [DB.vacuumInto] for what each step is for, why in this order, and why the
+// hold is outside the pool.
+//
+// The hold answers once its view is ESTABLISHED rather than merely begun: a
+// deferred BEGIN takes no snapshot, so the transaction reads once
+// ([takeView]), and its read mark stands from that read.
+//
+// THE TRANSACTION OUTLIVES ctx's CANCELLATION, for the reason a teardown takes
+// [context.WithoutCancel]: database/sql rolls a transaction back the moment
+// its context ends, and a hold ended while the copy it guards is still reading
+// leaves that copy reading under nothing, which is the torn copy the hold
+// exists to prevent. The release ends it, once the copy has returned.
+func (d *DB) holdViewFor(ctx context.Context, conn *sql.Conn) (release func(), err error) {
+	side := sql.OpenDB(d.connector)
+	side.SetMaxOpenConns(1)
+	tx, err := side.BeginTx(context.WithoutCancel(ctx), readTx)
+	if err != nil {
+		_ = side.Close()
+		return nil, fmt.Errorf("store: hold the copy's view of %s: %w", d.path, err)
+	}
+	release = func() {
+		_ = tx.Rollback()
+		_ = side.Close()
+	}
+	if holdErr := takeView(ctx, tx); holdErr != nil {
+		release()
+		return nil, fmt.Errorf("store: hold the copy's view of %s: %w", d.path, holdErr)
+	}
+	if takeErr := takeView(ctx, conn); takeErr != nil {
+		release()
+		return nil, fmt.Errorf("store: take the copy's view of %s: %w", d.path, takeErr)
+	}
+	return release, nil
+}
+
+// viewQuery is the read that makes a connection's view the newest there is: a
+// statement over a TABLE, so the driver begins a read transaction for it — of
+// sqlite_schema, which every database has, so any file a handle opens can take
+// one.
+const viewQuery = `SELECT COUNT(*) FROM sqlite_schema`
+
+// takeView makes q's view the newest there is, by reading through it.
+func takeView(ctx context.Context, q interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}) error {
+	var n int64
+	return q.QueryRowContext(ctx, viewQuery).Scan(&n)
 }
 
 // tempDirRefused reports a VACUUM INTO that failed because the driver could

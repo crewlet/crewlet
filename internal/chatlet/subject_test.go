@@ -29,6 +29,7 @@ var theClassification = map[chatlet.ObjectKind]classification{
 	chatlet.KindEviction:    {installsGate: true},
 	chatlet.KindGeneration:  {},
 	chatlet.KindBarrier:     {},
+	chatlet.KindTrimmed:     {},
 }
 
 // EVERY KIND IS CLASSIFIED BY EVERY CLOSED SET, AND A KIND ADDED LATER CANNOT

@@ -17,6 +17,7 @@ import {
   listed,
   fmtSetting,
   asSentence,
+  companyMonthLabel,
   configValueKind,
   elapsedMs,
   eventHistoryLabel,
@@ -36,6 +37,7 @@ import {
   parseUTC,
   plural,
   relTime,
+  sentence,
   splitConversationKey,
   conversationLabel,
   tsKey,
@@ -76,6 +78,17 @@ describe("timestamps", () => {
     expect(newestFirst(b, a)).toBeLessThan(0);
     expect(newestFirst(a, { ...a })).toBe(0);
     expect(oldestFirst(a, b)).toBeLessThan(0);
+  });
+
+  // A MONTH THE ENGINE CUT ON THE COMPANY'S CLOCK is named from its label,
+  // which reads no clock: the suite's Berlin, and any zone a browser cannot
+  // read, name it alike. Anything that is not a month is drawn as it came.
+  test("a company month label names its month without reading a clock", () => {
+    expect(companyMonthLabel("2026-09")).toBe("September");
+    expect(companyMonthLabel("2026-01")).toBe("January");
+    expect(companyMonthLabel("2026-13")).toBe("2026-13");
+    expect(companyMonthLabel("2026-09-29")).toBe("2026-09-29");
+    expect(companyMonthLabel("")).toBe("");
   });
 
   test("a sort through newestFirst is stable and idempotent", () => {
@@ -262,6 +275,23 @@ describe("text", () => {
     expect(humanize("agent_phase_completed")).toBe("Agent phase completed");
     expect(humanize("phase.tool_skill_blocked")).toBe("Phase tool skill blocked");
     expect(humanize("")).toBe("");
+  });
+
+  // A HINT IS A CLAUSE, and said before a sentence of a screen's own it has to
+  // end as one, or the two run together. A clause already stopped keeps its
+  // one mark, and an empty one is not a lone full stop.
+  test("a clause becomes a sentence of its own", () => {
+    expect(sentence("take the backup again")).toBe("Take the backup again.");
+    expect(sentence("  the S3 bucket; take the backup again ")).toBe(
+      "The S3 bucket; take the backup again.",
+    );
+    expect(sentence("Check the path. A route this build does not have.")).toBe(
+      "Check the path. A route this build does not have.",
+    );
+    expect(sentence("is it there?")).toBe("Is it there?");
+    expect(sentence("If-None-Match asks for a create")).toBe("If-None-Match asks for a create.");
+    expect(sentence("")).toBe("");
+    expect(sentence("   ")).toBe("");
   });
 });
 

@@ -5,15 +5,15 @@
 // # Bytes as the record holds them, never as the payload was sent
 //
 // A record that is ONE JSON VALUE in a store held to a byte ceiling — a
-// detached run's row in the coordination store, one broker message of at most
-// queue.MaxPayloadBytes — is bounded in the bytes its encoder writes, and the
-// encoder escapes: `<`, `>`, `&`, U+2028 and U+2029, an invalid byte and a
-// control byte cost six bytes each, a quote or a backslash two. A bound
-// measured on what was sent is therefore off by up to six-fold, and a tool's
-// arguments, which a record holds as JSON TEXT inside a JSON string, are
-// escaped twice. [Len] is the escape encoding/json writes (HTML escaping on, as
-// json.Marshal leaves it), so a cut here is measured rather than estimated, and
-// a test holds it to the encoder byte for byte.
+// detached run's row or its call log in the coordination store, each one broker
+// message of at most queue.MaxPayloadBytes — is bounded in the bytes its
+// encoder writes, and the encoder escapes: `<`, `>`, `&`, U+2028 and U+2029, an
+// invalid byte and a control byte cost six bytes each, a quote or a backslash
+// two. A bound measured on what was sent is therefore off by up to six-fold,
+// and a tool's arguments, which a record holds as JSON TEXT inside a JSON
+// string, are escaped twice. [Len] is the escape encoding/json writes (HTML
+// escaping on, as json.Marshal leaves it), so a cut here is measured rather
+// than estimated, and a test holds it to the encoder byte for byte.
 //
 // # A cut that reads as one
 //
@@ -40,11 +40,11 @@
 //
 // # A leaf
 //
-// The writer (internal/sandbox, a run's row) and the condensation of a parked
-// turn (internal/agent/execstate) sit at heights neither can import the other
-// from, and both state the same rule; so it lives here, importing the standard
-// library and internal/plainjson, which writes a call's arguments as the engine
-// records them. A test holds that.
+// The writer (internal/sandbox, a run's row and its log) and the condensation
+// of a parked turn (internal/agent/execstate) sit at heights neither can import
+// the other from, and both state the same rule; so it lives here, importing the
+// standard library and internal/plainjson, which writes a call's arguments as
+// the engine records them. A test holds that.
 package kept
 
 import (

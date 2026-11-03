@@ -176,6 +176,20 @@ func (r *foreignRead) fence(path fieldPath, src provenance.Source,
 	r.fences[path.id()] = r.label(src, writers, partial).Fence(r.boundary, text)
 }
 
+// fenceRepository registers the string at path in the answer as text read
+// out of a repository, or printed by a check of one of its commits, from src,
+// by [provenance.Repository]: naming nobody, at the least trust. Never
+// [foreignRead.fence], whose rule is a hosted surface's, which reads a text
+// nobody named as a colleague's. Empty text is not fenced.
+func (r *foreignRead) fenceRepository(path fieldPath, src provenance.Source, text string) {
+	if text == "" {
+		return
+	}
+	label := provenance.Repository(src)
+	r.trusts = append(r.trusts, label.Trust)
+	r.fences[path.id()] = label.Fence(r.boundary, text)
+}
+
 // fenceAt registers the string at path in the answer as text by writers, read
 // from src, at a trust its caller decided rather than one the writers earn:
 // [provenance.TrustCompany] for what an administrator adopted for everybody,
@@ -221,14 +235,32 @@ func (r *foreignRead) answer(ctx context.Context, tool string, v any, narrowWith
 		rendered, err = r.render(v)
 	}
 	if err != nil {
-		return faulted(ctx, tool, err, fmt.Sprintf("%s could not label what it "+
-			"read with who wrote it, so it is not answering at all: %s.", tool, faultSaid)), nil
+		return labelFault(ctx, tool, err), nil
 	}
 	res, err := jsonAnswer(rendered, narrowWith)
 	if err == nil && !res.Failed {
 		res.PersonReceipt = plain
 	}
 	return res, err
+}
+
+// page is [foreignRead.answer] for a code tool's answer, sent COMPACT
+// ([compactAnswer]): what it wraps is a page something below this package cut
+// by its own encoded bytes, and rendered indented it would arrive past the
+// bound it was cut to fit.
+func (r *foreignRead) page(ctx context.Context, tool string, v any, narrowWith string) (tools.Result, error) {
+	rendered, err := r.render(v)
+	if err != nil {
+		return labelFault(ctx, tool, err), nil
+	}
+	return compactAnswer(rendered, narrowWith)
+}
+
+// labelFault is the answer of a read whose labelling failed: the tool's own
+// fault, never the text unlabelled ([foreignRead]'s fail-closed rule).
+func labelFault(ctx context.Context, tool string, err error) tools.Result {
+	return faulted(ctx, tool, err, fmt.Sprintf("%s could not label what it "+
+		"read with who wrote it, so it is not answering at all: %s.", tool, faultSaid))
 }
 
 // render is [foreignRead.answer]'s encoding, kept apart so its refusals are

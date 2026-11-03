@@ -72,6 +72,23 @@ type Config struct {
 	Models   *phase.Registry
 	Caps     Caps
 
+	// Withheld are the first-party tools of Registry this seat is not
+	// offered on any surface of the turn — its executor's, which its harness
+	// reaches over the bridge, a resumed one's, its workers', its
+	// reviewer's and its onboarding pass's ([Runner.seatSnapshot]): the ones
+	// the authority table refuses the seat before any object is named, which
+	// the engine asks per turn (internal/agent/builtin's Withheld) — a tool
+	// whose row names a role grant this seat's role does not carry — and
+	// the code writes where the seat's code tier writes no repository at all
+	// (builtin's CodeWritesWithheld) — every one but the change conversation
+	// writes the tier reaches — every call of which its grant would refuse.
+	//
+	// THE REGISTRY IS THE EPOCH'S, shared by every seat, so a tool only some
+	// seats may call is registered for all of them and left off the surfaces
+	// of the rest here; offered and refused at every call, it is a tool a
+	// model reaches for round after round. Nil withholds nothing.
+	Withheld []string
+
 	// Judge decides round-cap extensions. Nil means every exhaustion goes
 	// straight to the rescue path.
 	Judge extension.Judge
@@ -226,6 +243,13 @@ type Config struct {
 	// runner built outside an engine.
 	Ask RunAsk
 
+	// Checkout is the tool the executor's run checks a repository of the
+	// company's own code host out through (`code_checkout`, ADR-0093),
+	// offered on that run's surface beside the ask: it grants a repository
+	// to the running job's row, which no other phase has. Nil offers none —
+	// a company that hosts no code, or a runner built outside an engine.
+	Checkout tools.Callable
+
 	// Hold is what records a call the executor's run makes to a tool at
 	// Needs approval as the question it parks on (internal/agent/builtin's
 	// CallHold, ADR-0077), installed on that run's surface alone. Nil holds
@@ -327,8 +351,8 @@ type Resume struct {
 	// launched, so its surface is fresh and has executed nothing.
 	Bridged []BridgedCall
 
-	// Elided is the round's calls the row does not list, by identity
-	// (sandbox.PendingRun.Elided): a long run's dropped middle. Calls of the
+	// Elided is the round's calls the log does not list, by identity
+	// (sandbox.BridgeLog.Unlisted): a long run's dropped middle. Calls of the
 	// round all the same, which the turn's call log is seeded with beside
 	// Bridged ([seedCalls]), the delivery checks count, and the round's record
 	// carries on ([turn.Work.Elided]).
@@ -336,14 +360,14 @@ type Resume struct {
 
 	// Absorbed is the calls the run's call log took in from the round's own
 	// calls' work — a delegated worker's under a bridged `delegate` — by
-	// identity (sandbox.PendingRun.Absorbed): seeded into the turn's call log
+	// identity (sandbox.BridgeLog.Absorbed): seeded into the turn's call log
 	// beside the round's calls ([seedCalls]) and carried on by the round's
 	// record ([turn.Work.Absorbed]), and read by nothing else.
 	Absorbed []ledger.Elided
 
 	// Answered is the place ([BridgedCall.Seq]) of the last call the round
 	// made before a person's answer carried it on, and zero where no answer
-	// has: off the run's row (sandbox.PendingRun.AnsweredThrough). Only a
+	// has: off the run's log (sandbox.BridgeLog.AnsweredThrough). Only a
 	// submission made after it is the round's ([sinceAnswer]).
 	Answered int
 
@@ -415,7 +439,7 @@ type BridgedCall struct {
 	// they finished in when it made several at once. One order for the
 	// round: a job opened again after a recovery, and a job carrying on one
 	// that asked a person ([Asked]), number theirs after the calls before
-	// them (sandbox.PendingRun.LastBridgeSeq).
+	// them (sandbox.BridgeLog.LastSeq).
 	Seq int
 
 	// StartedAt is when the call was handed to the seat's surface, and
@@ -499,6 +523,15 @@ type RunRecord struct {
 	// RefsElided is how many more the run reported than DeliveredRefs lists,
 	// which the coordinator bounds — said on the record rather than dropped.
 	RefsElided int
+
+	// Pushed is what the run's push record says it moved on the engine's own
+	// code host, PushedElided how many more refs that record names than
+	// Pushed lists, and PushedUnread why it could not be read — the
+	// engine's account beside the run's own refs above
+	// ([types.AgentPhaseCompleted.PushedRefs]).
+	Pushed       []types.PushedRefRecord
+	PushedElided int
+	PushedUnread string
 
 	// LaunchID is the job this resume collected — the pending-run row's
 	// [sandbox.PendingRun.LaunchID] when the claim took it. A turn can launch
@@ -828,7 +861,7 @@ func discoverable(s *tools.Surface) []string {
 // The rule that holds for some seats only is gated on the seat's surface:
 // `a2a_ask` named where the registry carries it at all.
 func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []ledger.Iteration) (turn.Review, error) {
-	snapshot := r.cfg.Registry.Snapshot()
+	snapshot := r.seatSnapshot()
 	_, offersA2A := snapshot.Lookup(toolname.A2AAsk)
 	submit := structured.New(SubmitReviewTool, submitReviewDescription, reviewSchema, decodeReview)
 	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Review, round, snapshot, submit, nil)
@@ -1624,6 +1657,16 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 		}
 		active = append(active, r.cfg.Ask.Name())
 	}
+	// AND ITS CHECKOUT, in the same funnel for the same reason: the surface
+	// a collection rebuilds holds the tool its run called.
+	if ph == phase.Execute && r.cfg.Checkout != nil {
+		var err error
+		snapshot, err = snapshot.With(tools.Entry{Tool: r.cfg.Checkout, Origin: tools.OriginBuiltin})
+		if err != nil {
+			return nil, fmt.Errorf("runner: %s: %w", ph, err)
+		}
+		active = append(active, r.cfg.Checkout.Name())
+	}
 
 	// The discovery pair reaches its surface through a closure, because
 	// there is a real cycle here: activate must mutate the same Surface the
@@ -1633,13 +1676,17 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	// the surface exists.
 	var surface *tools.Surface
 	if discovers(ph) {
-		for _, tool := range DiscoveryTools(func() *tools.Surface { return surface }) {
+		// AS THE ENTRIES DiscoveryTools BUILDS, hints and all: rewrapped
+		// here, the pair would reach the surface unannotated, and every
+		// reader of the hints, a worker's guard among them, would refuse
+		// its discovery as a write it could not classify.
+		for _, entry := range DiscoveryTools(func() *tools.Surface { return surface }) {
 			var err error
-			snapshot, err = snapshot.With(tools.Entry{Tool: tool, Origin: tools.OriginBuiltin})
+			snapshot, err = snapshot.With(entry)
 			if err != nil {
 				return nil, fmt.Errorf("runner: %s: %w", ph, err)
 			}
-			active = append(active, tool.Name())
+			active = append(active, entry.Name())
 		}
 	}
 
@@ -1808,6 +1855,14 @@ func promptPhase(ph phase.Phase) prompts.Phase {
 func catalogueSurface(surface *tools.Surface) prompts.Surface {
 	universe := surface.Universe()
 	return prompts.Surface{Tools: universe.Names(), MCPServers: universe.MCPServers()}
+}
+
+// seatSnapshot is the registry as THIS SEAT is offered it: every surface of the
+// turn is built from it rather than from the registry whole, so a tool the
+// seat is withheld ([Config.Withheld]) is on none of them — not offered, not
+// listed to discover, and not reachable by activating it.
+func (r *Runner) seatSnapshot() tools.Snapshot {
+	return r.cfg.Registry.Snapshot().Without(r.cfg.Withheld...)
 }
 
 // executorUniverse is the snapshot an executor's surface is built from: the

@@ -8,8 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/live"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE DASHBOARD ASSISTANT ACROSS THE FLEET: this node's half of a turn's
@@ -52,7 +52,7 @@ type assistantWires struct {
 // where the gate that holds every signed channel's domains apart reads them.
 // The keyring is required on every node, so this fails only on a bootstrap
 // [config.Bootstrap.Validate] would already have refused.
-func newAssistantWires(ring statelog.Keyring) (assistantWires, error) {
+func newAssistantWires(ring recordseal.Keyring) (assistantWires, error) {
 	var (
 		w   assistantWires
 		err error

@@ -197,7 +197,13 @@ func (s *stubWork) Flow(_ context.Context, q worklet.FlowQuery, _ time.Time,
 
 func (s *stubWork) CompanyFeed(_ context.Context, q worklet.FeedQuery) (worklet.FeedPage, error) {
 	s.feedQuery = q
-	return s.feed, s.err
+	// AT THE LEVEL ASKED, as the reader answers, so a case can tell which
+	// half of a composed feed set the answer's level.
+	page := s.feed
+	if page.Level == "" {
+		page.Level = q.Level
+	}
+	return page, s.err
 }
 
 func (s *stubWork) Decisions(_ context.Context, q worklet.DecisionsQuery, _ time.Time,
@@ -340,6 +346,7 @@ var personalQuestions = map[string]bool{
 	"work_person":  true,
 	"work_inbox":   true,
 	"decisions":    true,
+	"inbox":        true,
 	// The other half of `decisions`, scoped as it is.
 	"answered_decisions": true,
 }
@@ -1464,6 +1471,257 @@ func TestAroundReachesTheCallerAndIsNullWhenAbsent(t *testing.T) {
 	}
 }
 
+// sessionQuestion is one question this surface serves at a caller's floor:
+// the domains whose logs it reads — one, or each of the several an answer
+// composed from more than one log reads, each at its own floor — the
+// arguments it needs to answer at all, and where the stubs record the level it
+// was asked at and the staleness bound each of its readers was handed.
+type sessionQuestion struct {
+	what    string
+	domains []string
+	args    map[string]any
+	level   func(stubs) statelog.ReadLevel
+	// bounds are the staleness bounds the readers this question reads were
+	// handed, as the stubs recorded them: ONE PER READER, in the order of
+	// domains, so an answer composed of halves names each half's, and a half
+	// that dropped the caller's bound is seen as the half it is.
+	bounds func(stubs) []bound
+	// ready prepares stubs a question needs to answer rather than refuse
+	// (a revision has to be held to be read); nil for none.
+	ready func(stubs)
+}
+
+// bound is a staleness bound as one reader was handed it, in both of its
+// units.
+type bound struct {
+	maxLag    time.Duration
+	maxLagSeq uint64
+}
+
+// stubs are the readers one ask of a [sessionQuestion] is answered from — the
+// tracker's, the knowledge base's and the code host's — each recording what
+// it was asked.
+type stubs struct {
+	work  *stubWork
+	pages *stubPages
+	code  *stubCode
+}
+
+// newStubs are stubs nothing has asked yet, readied for q.
+func newStubs(q sessionQuestion) stubs {
+	s := stubs{work: &stubWork{}, pages: &stubPages{}, code: &stubCode{}}
+	if q.ready != nil {
+		q.ready(s)
+	}
+	return s
+}
+
+// sources are s as a registry is wired with them.
+func (s stubs) sources() queries.Sources {
+	return queries.Sources{Work: s.work, Pages: s.pages, Code: s.code}
+}
+
+// sessionQuestions are EVERY question on this surface that reads a
+// freshness — and therefore takes a write's position as its floor. One
+// table, walked by [TestEveryNativeQuestionResolvesTheCallersOwnLevel] for
+// the level, by [TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem] for
+// the bound and by [TestEverySessionQueryTakesAFreshnessFloor] against the
+// dashboard's own list, so the three cannot come to describe different sets.
+var sessionQuestions = []sessionQuestion{
+	{"work_items", []string{"tracker"}, map[string]any{},
+		func(s stubs) statelog.ReadLevel { return s.work.query.Level },
+		func(s stubs) []bound { return handed(s.work.query.MaxLag, s.work.query.MaxLagSeq) }, nil},
+	{"work_item", []string{"tracker"}, map[string]any{"id": "ENG-1"},
+		func(s stubs) statelog.ReadLevel { return s.work.taskLevel },
+		func(s stubs) []bound { return handedWhole(s.work.taskFresh) }, nil},
+	{"work_comments", []string{"tracker"}, map[string]any{"item": "ENG-1"},
+		func(s stubs) statelog.ReadLevel { return s.work.taskLevel },
+		func(s stubs) []bound { return handedWhole(s.work.taskFresh) }, nil},
+	{"work_item_turns", []string{"tracker"}, map[string]any{"id": "ENG-1"},
+		func(s stubs) statelog.ReadLevel { return s.work.taskFresh.Level },
+		func(s stubs) []bound { return handedWhole(s.work.taskFresh) }, nil},
+	{"work_views", []string{"tracker"}, map[string]any{"container": "workspace"},
+		func(s stubs) statelog.ReadLevel { return s.work.views.Level },
+		func(s stubs) []bound { return handed(s.work.views.MaxLag, s.work.views.MaxLagSeq) }, nil},
+	{"work_saved_views", []string{"tracker"}, map[string]any{},
+		func(s stubs) statelog.ReadLevel { return s.work.every.Level },
+		func(s stubs) []bound { return handed(s.work.every.MaxLag, s.work.every.MaxLagSeq) }, nil},
+	{"work_catalogue", []string{"tracker"}, map[string]any{},
+		func(s stubs) statelog.ReadLevel { return s.work.catalogueQuery.Level },
+		func(s stubs) []bound {
+			return handed(s.work.catalogueQuery.MaxLag, s.work.catalogueQuery.MaxLagSeq)
+		}, nil},
+	{"work_person", []string{"tracker"}, map[string]any{"handle": "ana"},
+		func(s stubs) statelog.ReadLevel { return s.work.personQuery.Level },
+		func(s stubs) []bound { return handed(s.work.personQuery.MaxLag, s.work.personQuery.MaxLagSeq) }, nil},
+	{"work_projects", []string{"tracker"}, map[string]any{},
+		func(s stubs) statelog.ReadLevel { return s.work.projectQuery.Level },
+		func(s stubs) []bound {
+			return handed(s.work.projectQuery.MaxLag, s.work.projectQuery.MaxLagSeq)
+		}, nil},
+	{"work_project", []string{"tracker"}, map[string]any{"key": "ENG"},
+		func(s stubs) statelog.ReadLevel { return s.work.detailQuery.Level },
+		func(s stubs) []bound { return handed(s.work.detailQuery.MaxLag, s.work.detailQuery.MaxLagSeq) }, nil},
+	{"work_workload", []string{"tracker"}, map[string]any{},
+		func(s stubs) statelog.ReadLevel { return s.work.workloadQuery.Level },
+		func(s stubs) []bound {
+			return handed(s.work.workloadQuery.MaxLag, s.work.workloadQuery.MaxLagSeq)
+		}, nil},
+	{"work_activity", []string{"tracker"}, map[string]any{"container": "workspace"},
+		func(s stubs) statelog.ReadLevel { return s.work.activityQuery.Level },
+		func(s stubs) []bound {
+			return handed(s.work.activityQuery.MaxLag, s.work.activityQuery.MaxLagSeq)
+		}, nil},
+	// OPERATOR-ONLY, and it is in this walk precisely because it
+	// is: `my_work` is somebody's whole day, and an operator
+	// reading it at a level nobody chose is the same defect with a
+	// credential in front of it.
+	{"work_my_work", []string{"tracker"}, map[string]any{"handle": "ana"},
+		func(s stubs) statelog.ReadLevel { return s.work.myWorkQuery.Level },
+		func(s stubs) []bound { return handed(s.work.myWorkQuery.MaxLag, s.work.myWorkQuery.MaxLagSeq) }, nil},
+	{"work_inbox", []string{"tracker"}, map[string]any{"handle": "ana"},
+		func(s stubs) statelog.ReadLevel { return s.work.inboxQuery.Level },
+		func(s stubs) []bound { return handed(s.work.inboxQuery.MaxLag, s.work.inboxQuery.MaxLagSeq) }, nil},
+	{"work_routing", []string{"tracker"}, map[string]any{"record_id": "r-1"},
+		func(s stubs) statelog.ReadLevel { return s.work.routingQuery.Level },
+		func(s stubs) []bound {
+			return handed(s.work.routingQuery.MaxLag, s.work.routingQuery.MaxLagSeq)
+		}, nil},
+	{"work_flow", []string{"tracker"}, map[string]any{},
+		func(s stubs) statelog.ReadLevel { return s.work.flowQuery.Level },
+		func(s stubs) []bound { return handed(s.work.flowQuery.MaxLag, s.work.flowQuery.MaxLagSeq) }, nil},
+	// TWO LOGS: the work is the tracker's and the pages the knowledge
+	// base's, each half at its own floor
+	// ([TestTheCompanyFeedWaitsOnTheFloorOfEachLogItReads]). Asked for a
+	// kind of each, so every walk reaches both halves, and each half's
+	// bound is its own ([statelog.Freshness.On] hands each a copy of the
+	// ask).
+	{"company_feed", []string{"tracker", "pages"}, map[string]any{"kinds": "completed,page"},
+		func(s stubs) statelog.ReadLevel { return s.work.feedQuery.Level },
+		func(s stubs) []bound {
+			return append(handed(s.work.feedQuery.MaxLag, s.work.feedQuery.MaxLagSeq),
+				handedWhole(s.pages.fresh)...)
+		}, nil},
+	{"decisions", []string{"tracker"}, map[string]any{"handle": "ana"},
+		func(s stubs) statelog.ReadLevel { return s.work.decisionsQuery.Level },
+		func(s stubs) []bound {
+			return handed(s.work.decisionsQuery.MaxLag, s.work.decisionsQuery.MaxLagSeq)
+		}, nil},
+	{"answered_decisions", []string{"tracker"}, map[string]any{"handle": "ana"},
+		func(s stubs) statelog.ReadLevel { return s.work.answeredQuery.Level },
+		func(s stubs) []bound {
+			return handed(s.work.answeredQuery.MaxLag, s.work.answeredQuery.MaxLagSeq)
+		}, nil},
+	{"pages", []string{"pages"}, map[string]any{},
+		func(s stubs) statelog.ReadLevel { return s.pages.level },
+		func(s stubs) []bound { return handedWhole(s.pages.fresh) }, nil},
+	{"page", []string{"pages"}, map[string]any{"id": "p1"},
+		func(s stubs) statelog.ReadLevel { return s.pages.level },
+		func(s stubs) []bound { return handedWhole(s.pages.fresh) }, nil},
+	{"containers", []string{"pages"}, map[string]any{},
+		func(s stubs) statelog.ReadLevel { return s.pages.level },
+		func(s stubs) []bound { return handedWhole(s.pages.fresh) }, nil},
+	{"page_activity", []string{"pages"}, map[string]any{},
+		func(s stubs) statelog.ReadLevel { return s.pages.level },
+		func(s stubs) []bound { return handedWhole(s.pages.fresh) }, nil},
+	{"page_revision", []string{"pages"}, map[string]any{"page": "p1", "version": 2},
+		func(s stubs) statelog.ReadLevel { return s.pages.level },
+		func(s stubs) []bound { return handedWhole(s.pages.fresh) },
+		func(s stubs) { s.pages.revisionHeld = true }},
+	// THE CODE HOST'S ROWS, each read back at the code log's floor once a
+	// write lands there and answers with where (code.go).
+	{"code_repos", []string{"code"}, map[string]any{},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_repo", []string{"code"}, map[string]any{"name": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_pushes", []string{"code"}, map[string]any{"name": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	// AND A CHANGE'S, read back at the code log's floor once a write to it
+	// lands there (codechange.go).
+	{"code_changes", []string{"code"}, map[string]any{"repo": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_change", []string{"code"}, map[string]any{"name": "web", "change": "1"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_change_routing", []string{"code"}, map[string]any{"name": "web", "change": "1"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_reviews", []string{"code"}, map[string]any{"reviewer": "dev"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	// AND A REPOSITORY'S CONTENT (codegit.go), which a screen reads its own
+	// push back through: its refs read at the caller's freshness; a tree, a
+	// file, a history, a blame, a diff and a comparison at HEAD — what `ref`
+	// defaults to, and what these ask — each ONE resolve of its refs at it,
+	// the default branch answered from the repository's row in the same read
+	// (code.HeadRef), with no read of the repository ahead of it; and a
+	// commit's changes, read first.
+	{"code_refs", []string{"code"}, map[string]any{"name": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_tree", []string{"code"}, map[string]any{"name": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.firstResolve().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.firstResolve().Fresh) }, nil},
+	{"code_blob", []string{"code"}, map[string]any{"name": "web", "path": "go.mod"},
+		func(s stubs) statelog.ReadLevel { return s.code.firstResolve().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.firstResolve().Fresh) }, nil},
+	{"code_log", []string{"code"}, map[string]any{"name": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.firstResolve().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.firstResolve().Fresh) }, nil},
+	{"code_blame", []string{"code"}, map[string]any{"name": "web", "path": "go.mod"},
+		func(s stubs) statelog.ReadLevel { return s.code.firstResolve().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.firstResolve().Fresh) }, nil},
+	{"code_diff", []string{"code"}, map[string]any{"name": "web", "base": "HEAD", "head": "HEAD"},
+		func(s stubs) statelog.ReadLevel { return s.code.firstResolve().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.firstResolve().Fresh) }, nil},
+	{"code_compare", []string{"code"}, map[string]any{"name": "web", "base": "HEAD", "head": "HEAD"},
+		func(s stubs) statelog.ReadLevel { return s.code.firstResolve().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.firstResolve().Fresh) }, nil},
+	{"code_commit", []string{"code"}, map[string]any{"name": "web", "sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904"},
+		func(s stubs) statelog.ReadLevel { return s.code.first().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.first().Fresh) }, nil},
+	// AND ITS MERGE QUEUES AND ITS CHECKS (codechecks.go): a screen's merge,
+	// enqueue or re-run is read back at the code log's floor — the attempt
+	// whose log a page reads included, so a re-run's new attempt is never
+	// answered "no such attempt" from before it applied.
+	{"code_queue", []string{"code"}, map[string]any{"repo": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_checks", []string{"code"}, map[string]any{"repo": "web", "state": "failed"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_check", []string{"code"}, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
+		"attempt": "1", "target": "refs/heads/main"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_check_log", []string{"code"}, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
+		"attempt": "1", "target": "refs/heads/main"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	// THE COMPOSED INBOX: the tracker's notices and the code host's, each
+	// half at the floor of its own log, so a "mark all read" that wrote a
+	// record on each is read back past both (inbox.go).
+	{"inbox", []string{"tracker", "code"}, map[string]any{"handle": "ana"},
+		func(s stubs) statelog.ReadLevel { return s.work.inboxQuery.Level },
+		func(s stubs) []bound {
+			return append(handed(s.work.inboxQuery.MaxLag, s.work.inboxQuery.MaxLagSeq),
+				handedWhole(s.code.last().Fresh)...)
+		}, nil},
+}
+
+// handed is the bound of a reader of one log, as its stub recorded the two
+// units off the reader's own query.
+func handed(maxLag time.Duration, maxLagSeq uint64) []bound {
+	return []bound{{maxLag: maxLag, maxLagSeq: maxLagSeq}}
+}
+
+// handedWhole is [handed] for a reader handed the ask whole.
+func handedWhole(f statelog.Freshness) []bound { return handed(f.MaxLag, f.MaxLagSeq) }
+
 // EVERY QUESTION ON THIS SURFACE RESOLVES THE CALLER'S OWN FRESHNESS, and the
 // one that did not was twelve of the thirteen.
 //
@@ -1478,122 +1736,49 @@ func TestAroundReachesTheCallerAndIsNullWhenAbsent(t *testing.T) {
 // The case is written as a WALK over the questions rather than one assertion
 // per reader, because the defect was never in one of them: it was that adding
 // the fourteenth question would inherit whatever the thirteenth typed.
-// sessionQuestion is one question this surface serves at a caller's floor:
-// the domain whose log it reads, the arguments it needs to answer at all, and
-// where the stub records the level it was asked at.
-type sessionQuestion struct {
-	what   string
-	domain string
-	args   map[string]any
-	level  func(*stubWork, *stubPages) statelog.ReadLevel
-	// ready prepares stubs a question needs to answer rather than refuse
-	// (a revision has to be held to be read); nil for none.
-	ready func(*stubWork, *stubPages)
-}
-
-// sessionQuestions are EVERY question on this surface that reads a
-// freshness — and therefore takes a write's position as its floor. One
-// table, walked by [TestEveryNativeQuestionResolvesTheCallersOwnLevel] for
-// the behaviour and by [TestEverySessionQueryTakesAFreshnessFloor] against
-// the dashboard's own list, so the two cannot come to describe different
-// sets.
-var sessionQuestions = []sessionQuestion{
-	{"work_items", "tracker", map[string]any{},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.query.Level }, nil},
-	{"work_item", "tracker", map[string]any{"id": "ENG-1"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
-	{"work_comments", "tracker", map[string]any{"item": "ENG-1"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
-	{"work_item_turns", "tracker", map[string]any{"id": "ENG-1"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskFresh.Level }, nil},
-	{"work_views", "tracker", map[string]any{"container": "workspace"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.views.Level }, nil},
-	{"work_saved_views", "tracker", map[string]any{},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.every.Level }, nil},
-	{"work_catalogue", "tracker", map[string]any{},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.catalogueQuery.Level }, nil},
-	{"work_person", "tracker", map[string]any{"handle": "ana"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.personQuery.Level }, nil},
-	{"work_projects", "tracker", map[string]any{},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.projectQuery.Level }, nil},
-	{"work_project", "tracker", map[string]any{"key": "ENG"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.detailQuery.Level }, nil},
-	{"work_workload", "tracker", map[string]any{},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.workloadQuery.Level }, nil},
-	{"work_activity", "tracker", map[string]any{"container": "workspace"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.activityQuery.Level }, nil},
-	// OPERATOR-ONLY, and it is in this walk precisely because it
-	// is: `my_work` is somebody's whole day, and an operator
-	// reading it at a level nobody chose is the same defect with a
-	// credential in front of it.
-	{"work_my_work", "tracker", map[string]any{"handle": "ana"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.myWorkQuery.Level }, nil},
-	{"work_inbox", "tracker", map[string]any{"handle": "ana"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.inboxQuery.Level }, nil},
-	{"work_routing", "tracker", map[string]any{"record_id": "r-1"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.routingQuery.Level }, nil},
-	{"work_flow", "tracker", map[string]any{},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.flowQuery.Level }, nil},
-	{"company_feed", "tracker", map[string]any{"kinds": "completed"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.feedQuery.Level }, nil},
-	{"decisions", "tracker", map[string]any{"handle": "ana"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.decisionsQuery.Level }, nil},
-	{"answered_decisions", "tracker", map[string]any{"handle": "ana"},
-		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.answeredQuery.Level }, nil},
-	{"pages", "pages", map[string]any{},
-		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
-	{"page", "pages", map[string]any{"id": "p1"},
-		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
-	{"containers", "pages", map[string]any{},
-		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
-	{"page_activity", "pages", map[string]any{},
-		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
-	{"page_revision", "pages", map[string]any{"page": "p1", "version": 2},
-		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level },
-		func(_ *stubWork, p *stubPages) { p.revisionHeld = true }},
-}
-
 func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 	t.Parallel()
 	for _, tc := range sessionQuestions {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
-			// THE DEFAULT FIRST: a caller who says nothing gets this
-			// surface's own level, not whatever the reader defaults to.
-			fresh := func() (*stubWork, *stubPages) {
-				work, pages := &stubWork{}, &stubPages{}
-				if tc.ready != nil {
-					tc.ready(work, pages)
-				}
-				return work, pages
-			}
-			work, pages := fresh()
-			src := queries.Sources{Work: work, Pages: pages}
 			ask := askNative
 			if personalQuestions[tc.what] {
 				ask = askAsOperator
 			}
-			if _, err := ask(t, src, tc.what, tc.args); err != nil {
+			// asked asks tc with params beside its own arguments, of stubs
+			// nothing has asked yet, which it answers with what they
+			// recorded.
+			asked := func(params map[string]any) (stubs, error) {
+				s := newStubs(tc)
+				all := map[string]any{}
+				for k, v := range params {
+					all[k] = v
+				}
+				for k, v := range tc.args {
+					all[k] = v
+				}
+				_, err := ask(t, s.sources(), tc.what, all)
+				return s, err
+			}
+
+			// THE DEFAULT FIRST: a caller who says nothing gets this
+			// surface's own level, not whatever the reader defaults to.
+			s, err := asked(nil)
+			if err != nil {
 				t.Fatalf("%s: %v", tc.what, err)
 			}
 			want := statelog.DefaultReadLevel(statelog.SurfaceDashboard)
-			if got := tc.level(work, pages); got != want {
+			if got := tc.level(s); got != want {
 				t.Errorf("%s read at %q with no ask, want this surface's "+
 					"default %q", tc.what, got, want)
 			}
 
 			// AND THE ASK IS HONOURED, which is the half twelve of these
 			// questions dropped on the floor.
-			work, pages = fresh()
-			src = queries.Sources{Work: work, Pages: pages}
-			asked := map[string]any{"read_level": "linearizable"}
-			for k, v := range tc.args {
-				asked[k] = v
-			}
-			if _, err := ask(t, src, tc.what, asked); err != nil {
+			if s, err = asked(map[string]any{"read_level": "linearizable"}); err != nil {
 				t.Fatalf("%s asking linearizable: %v", tc.what, err)
 			}
-			if got := tc.level(work, pages); got != statelog.ReadLinearizable {
+			if got := tc.level(s); got != statelog.ReadLinearizable {
 				t.Errorf("%s asked for linearizable and read at %q — a level "+
 					"the answer then reports back as the one asked for is a "+
 					"stale answer wearing a stronger name", tc.what, got)
@@ -1601,13 +1786,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 
 			// AND A BARE `session` IS REFUSED RATHER THAN QUIETLY
 			// SERVED: it waits for a position, and none was named.
-			work, pages = fresh()
-			src = queries.Sources{Work: work, Pages: pages}
-			bad := map[string]any{"read_level": "session"}
-			for k, v := range tc.args {
-				bad[k] = v
-			}
-			if _, err := ask(t, src, tc.what, bad); !errors.Is(err, queries.ErrBadParams) {
+			if _, err := asked(map[string]any{"read_level": "session"}); !errors.Is(err, queries.ErrBadParams) {
 				t.Errorf("%s accepted a bare read_level=session, answering %v",
 					tc.what, err)
 			}
@@ -1615,18 +1794,12 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			// WITH THE POSITION IT IS HONOURED, which is the whole of
 			// read-your-writes over this wire: a write answered with
 			// where it landed and the caller hands that back.
-			work, pages = fresh()
-			src = queries.Sources{Work: work, Pages: pages}
-			own := map[string]any{
+			if s, err = asked(map[string]any{
 				"read_level": "session", "min_position": "CREWLET_TRACKER_LOG@1:4711",
-			}
-			for k, v := range tc.args {
-				own[k] = v
-			}
-			if _, err := ask(t, src, tc.what, own); err != nil {
+			}); err != nil {
 				t.Fatalf("%s asking session with a floor: %v", tc.what, err)
 			}
-			if got := tc.level(work, pages); got != statelog.ReadSession {
+			if got := tc.level(s); got != statelog.ReadSession {
 				t.Errorf("%s asked for session with a floor and read at %q",
 					tc.what, got)
 			}
@@ -1642,85 +1815,29 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 // other question here had in both units because none of them read either key.
 // A tile declaring "at most twenty seconds behind" and rendering whatever came
 // back is a live screen showing an hour-old answer.
+//
+// THE POINT READS AND THE PAGE READS TOO. They handed over the level alone,
+// on the claim that a single row has no set for a bound to be enforced
+// against — but the bound is about this node's LAG, and a row is exactly as
+// far behind as a board.
+//
+// A WALK OVER [sessionQuestions], the one table of the questions this surface
+// serves at a caller's floor, rather than a list of its own: this walk kept
+// one, which stopped growing while the surface did, and `company_feed` — the
+// first answer read from two logs, each half handed an ask of its own
+// ([statelog.Freshness.On]) — was one it never asked, so a half that dropped
+// the bound passed this walk and every other case in the package. And EVERY
+// READER a question reads is held to it, one per log it reads: both halves of
+// the feed, each where its own stub recorded it.
+//
+// Mutation: build the feed's halves as `Freshness{Level: f.Level}` in
+// [statelog.Freshness.On] and `company_feed` goes red here, for both halves.
 func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 	t.Parallel()
 	args := map[string]any{"max_lag_seconds": "30", "max_lag_seq": "250"}
-	bounds := func(lag time.Duration, seq uint64) func(*testing.T, string) {
-		return func(t *testing.T, what string) {
-			t.Helper()
-			if lag != 30*time.Second {
-				t.Errorf("%s carried max_lag_seconds as %s", what, lag)
-			}
-			if seq != 250 {
-				t.Errorf("%s carried max_lag_seq as %d — the record count is "+
-					"the reading the broker actually answers", what, seq)
-			}
-		}
-	}
-	for _, tc := range []struct {
-		what  string
-		args  map[string]any
-		check func(*stubWork, *stubPages) func(*testing.T, string)
-	}{
-		{"work_items", nil, func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-			return bounds(w.query.MaxLag, w.query.MaxLagSeq)
-		}},
-		// THE POINT READ AND THE PAGE READS TOO. They handed over the
-		// level alone, on the claim that a single row has no set for a
-		// bound to be enforced against — but the bound is about this
-		// node's LAG, and a row is exactly as far behind as a board.
-		{"work_item", map[string]any{"id": "ENG-1"},
-			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-				return bounds(w.taskFresh.MaxLag, w.taskFresh.MaxLagSeq)
-			}},
-		{"work_my_work", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-				return bounds(w.myWorkQuery.MaxLag, w.myWorkQuery.MaxLagSeq)
-			}},
-		{"work_inbox", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-				return bounds(w.inboxQuery.MaxLag, w.inboxQuery.MaxLagSeq)
-			}},
-		{"pages", nil, func(_ *stubWork, p *stubPages) func(*testing.T, string) {
-			return bounds(p.fresh.MaxLag, p.fresh.MaxLagSeq)
-		}},
-		{"page", map[string]any{"id": "p1"},
-			func(_ *stubWork, p *stubPages) func(*testing.T, string) {
-				return bounds(p.fresh.MaxLag, p.fresh.MaxLagSeq)
-			}},
-		{"containers", nil, func(_ *stubWork, p *stubPages) func(*testing.T, string) {
-			return bounds(p.fresh.MaxLag, p.fresh.MaxLagSeq)
-		}},
-		{"work_views", map[string]any{"container": "workspace"},
-			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-				return bounds(w.views.MaxLag, w.views.MaxLagSeq)
-			}},
-		{"work_catalogue", nil, func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-			return bounds(w.catalogueQuery.MaxLag, w.catalogueQuery.MaxLagSeq)
-		}},
-		{"work_person", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-				return bounds(w.personQuery.MaxLag, w.personQuery.MaxLagSeq)
-			}},
-		{"work_projects", nil, func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-			return bounds(w.projectQuery.MaxLag, w.projectQuery.MaxLagSeq)
-		}},
-		{"work_project", map[string]any{"key": "ENG"},
-			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-				return bounds(w.detailQuery.MaxLag, w.detailQuery.MaxLagSeq)
-			}},
-		{"work_activity", map[string]any{"container": "workspace"},
-			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-				return bounds(w.activityQuery.MaxLag, w.activityQuery.MaxLagSeq)
-			}},
-		{"work_routing", map[string]any{"record_id": "r-1"},
-			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-				return bounds(w.routingQuery.MaxLag, w.routingQuery.MaxLagSeq)
-			}},
-	} {
+	for _, tc := range sessionQuestions {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
-			work, pages := &stubWork{}, &stubPages{}
 			ask := askNative
 			if personalQuestions[tc.what] {
 				ask = askAsOperator
@@ -1732,11 +1849,25 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			for k, v := range tc.args {
 				all[k] = v
 			}
-			src := queries.Sources{Work: work, Pages: pages}
-			if _, err := ask(t, src, tc.what, all); err != nil {
+			s := newStubs(tc)
+			if _, err := ask(t, s.sources(), tc.what, all); err != nil {
 				t.Fatalf("%s: %v", tc.what, err)
 			}
-			tc.check(work, pages)(t, tc.what)
+			got := tc.bounds(s)
+			if want := len(tc.domains); len(got) != want {
+				t.Fatalf("%s names the bounds of %d reader(s) and reads %d log(s) — "+
+					"name one per reader, or a half goes unchecked", tc.what, len(got), want)
+			}
+			for i, b := range got {
+				reader := fmt.Sprintf("%s's %s reader", tc.what, tc.domains[i])
+				if b.maxLag != 30*time.Second {
+					t.Errorf("%s carried max_lag_seconds as %s", reader, b.maxLag)
+				}
+				if b.maxLagSeq != 250 {
+					t.Errorf("%s carried max_lag_seq as %d — the record count is "+
+						"the reading the broker actually answers", reader, b.maxLagSeq)
+				}
+			}
 
 			// AND A BOUND AT A LEVEL THAT IS NOT STALE IS REFUSED
 			// rather than carried and ignored: it is not a level of its
@@ -1744,7 +1875,7 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			// it there is a caller who believes they asked for
 			// something they did not.
 			all["read_level"] = "linearizable"
-			if _, err := ask(t, src, tc.what, all); !errors.Is(err, queries.ErrBadParams) {
+			if _, err := ask(t, newStubs(tc).sources(), tc.what, all); !errors.Is(err, queries.ErrBadParams) {
 				t.Errorf("%s took a staleness bound at linearizable, answering %v",
 					tc.what, err)
 			}
@@ -1761,41 +1892,49 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 // same `read_level` — which is the shape the staleness bounds already shipped
 // in, so the walk is over every question rather than the one that goes
 // through the grammar.
+//
+// AND EVERY FLOOR REACHES IT, not the first: `min_position` repeats once per
+// log, and a question that read one log handed its reader only the floor it
+// found first would drop a second the caller named — a floor on another log,
+// which the reader refuses as the request's mistake
+// ([TestASingleLogReadRefusesAnotherLogsFloor]), and which a reader never
+// handed it cannot refuse.
 func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 	t.Parallel()
 	want := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711}
+	other := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 99}
 	for _, tc := range []struct {
-		what  string
-		args  map[string]any
-		floor func(*stubWork, *stubPages) statelog.Position
+		what   string
+		args   map[string]any
+		floors func(*stubWork, *stubPages) []statelog.Position
 	}{
-		{"work_items", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.query.MinPosition }},
+		{"work_items", nil, func(w *stubWork, _ *stubPages) []statelog.Position { return w.query.Floors }},
 		{"work_item", map[string]any{"id": "ENG-1"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.taskFresh.Floors }},
 		{"work_comments", map[string]any{"item": "ENG-1"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.taskFresh.Floors }},
 		{"work_item_turns", map[string]any{"id": "ENG-1"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.taskFresh.Floors }},
 		{"work_views", map[string]any{"container": "workspace"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.views.MinPosition }},
-		{"work_catalogue", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.catalogueQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.views.Floors }},
+		{"work_catalogue", nil, func(w *stubWork, _ *stubPages) []statelog.Position { return w.catalogueQuery.Floors }},
 		{"work_person", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.personQuery.MinPosition }},
-		{"work_projects", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.projectQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.personQuery.Floors }},
+		{"work_projects", nil, func(w *stubWork, _ *stubPages) []statelog.Position { return w.projectQuery.Floors }},
 		{"work_project", map[string]any{"key": "ENG"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.detailQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.detailQuery.Floors }},
 		{"work_activity", map[string]any{"container": "workspace"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.activityQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.activityQuery.Floors }},
 		{"work_my_work", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.myWorkQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.myWorkQuery.Floors }},
 		{"work_inbox", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.inboxQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.inboxQuery.Floors }},
 		{"work_routing", map[string]any{"record_id": "r-1"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.routingQuery.MinPosition }},
-		{"pages", nil, func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.routingQuery.Floors }},
+		{"pages", nil, func(_ *stubWork, p *stubPages) []statelog.Position { return p.fresh.Floors }},
 		{"page", map[string]any{"id": "p1"},
-			func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
-		{"containers", nil, func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
+			func(_ *stubWork, p *stubPages) []statelog.Position { return p.fresh.Floors }},
+		{"containers", nil, func(_ *stubWork, p *stubPages) []statelog.Position { return p.fresh.Floors }},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
@@ -1804,22 +1943,31 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 				ask = askAsOperator
 			}
 			for _, level := range []string{"", "linearizable", "session", "stale", "consistent_prefix"} {
-				work, pages := &stubWork{}, &stubPages{}
-				src := queries.Sources{Work: work, Pages: pages}
-				args := map[string]any{"min_position": want.String()}
-				if level != "" {
-					args["read_level"] = level
-				}
-				for k, v := range tc.args {
-					args[k] = v
-				}
-				if _, err := ask(t, src, tc.what, args); err != nil {
-					t.Fatalf("%s at read_level=%q with a floor: %v", tc.what, level, err)
-				}
-				if got := tc.floor(work, pages); got != want {
-					t.Errorf("%s at read_level=%q carried the floor as %v, want %v "+
-						"— a floor the reader never sees is one nothing waits for",
-						tc.what, level, got, want)
+				for _, named := range []struct {
+					value any
+					want  []statelog.Position
+				}{
+					{want.String(), []statelog.Position{want}},
+					{[]any{want.String(), other.String()}, []statelog.Position{want, other}},
+				} {
+					work, pages := &stubWork{}, &stubPages{}
+					src := queries.Sources{Work: work, Pages: pages}
+					args := map[string]any{"min_position": named.value}
+					if level != "" {
+						args["read_level"] = level
+					}
+					for k, v := range tc.args {
+						args[k] = v
+					}
+					if _, err := ask(t, src, tc.what, args); err != nil {
+						t.Fatalf("%s at read_level=%q with floors %v: %v", tc.what, level,
+							named.value, err)
+					}
+					if got := tc.floors(work, pages); !slices.Equal(got, named.want) {
+						t.Errorf("%s at read_level=%q carried the floors as %v, want %v "+
+							"— a floor the reader never sees is one nothing waits for",
+							tc.what, level, got, named.want)
+					}
 				}
 			}
 			// AND A MALFORMED ONE IS REFUSED AS BAD PARAMETERS, naming

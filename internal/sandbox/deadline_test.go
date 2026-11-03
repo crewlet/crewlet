@@ -61,8 +61,9 @@ func TestARunPastItsTurnsDeadlineIsEnded(t *testing.T) {
 // the row included — and the identities of those its log dropped from its
 // middle with them, which the resumed turn's call log is seeded by.
 //
-// Mutation: read back the calls without the identities of the dropped ones,
-// and the resumed turn counts two calls its run made as none.
+// Mutation: keep no identity of a call the log drops from its middle
+// ([BridgeLog.appendCall]), and the resumed turn counts two calls its run made
+// as none.
 func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -101,15 +102,15 @@ func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 		t.Errorf("the resume reads success %v and %q, want the run said to be cut off at its cap",
 			calls[0].Success, calls[0].Answer)
 	}
-	if !slices.ContainsFunc(calls[0].Run.BridgeCalls, func(c BridgeCall) bool {
+	if !slices.ContainsFunc(calls[0].Bridged.Calls, func(c BridgeCall) bool {
 		return c.Name == "comment_on_work_item"
 	}) {
 		t.Errorf("the resume judges the run on %+v, missing the call it made as it was ended",
-			calls[0].Run.BridgeCalls)
+			calls[0].Bridged.Calls)
 	}
-	if run := calls[0].Run; run.BridgeCallsElided != 2 || !run.ElisionKnown() {
+	if got := calls[0].Bridged; got.Elided != 2 || !got.ElisionKnown() {
 		t.Errorf("the resume reads %d calls dropped from the log's middle, accounted for by %+v; "+
-			"want the two with their identities", run.BridgeCallsElided, run.ElidedCalls)
+			"want the two with their identities", got.Elided, got.ElidedCalls)
 	}
 }
 

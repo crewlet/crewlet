@@ -39,6 +39,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from "@crewlethq/tokens";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { forgetFormatters } from "~/lib/formatters.ts";
 
 export type ThemeChoice = "system" | "light" | "dark";
 export type Density = "compact" | "normal" | "comfortable";
@@ -48,19 +49,85 @@ export const THEMES: ThemeChoice[] = ["system", "light", "dark"];
 export const DENSITIES: Density[] = ["compact", "normal", "comfortable"];
 
 /**
+ * Two instants half a year apart, a January and a July of the year the page
+ * opened: their local offsets are what the runtime's zone does to a date in
+ * each half of the year, so two zones that give either a different offset are
+ * told apart — a different standard offset, daylight saving in one and not
+ * the other, or in opposite halves of the year.
+ */
+const fingerprintAt = (() => {
+  const year = new Date().getUTCFullYear();
+  return [new Date(Date.UTC(year, 0, 15, 12)), new Date(Date.UTC(year, 6, 15, 12))];
+})();
+
+/** The runtime's zone as two offsets — see [fingerprintAt]. Builds no formatter. */
+function zoneFingerprint(): string {
+  return fingerprintAt.map((at) => at.getTimezoneOffset()).join(",");
+}
+
+/** The browser's zone as last read, and the fingerprint it was read under. */
+let ownZone: string | null = null;
+let ownFingerprint = "";
+
+/**
  * The zone the browser is in: a timestamp is rendered where the reader is.
+ *
+ * READ ONCE AND KEPT, because reading it builds a formatter, and every
+ * timestamp on a screen asks for it: a page of rows read it once per date and
+ * once per tooltip. But the system's zone can move under an open tab and no
+ * event says so — a laptop opened again across a border, a person changing it
+ * in another window, the system changing it as the network moves — so each ask
+ * first compares the runtime's [zoneFingerprint] with the one taken when the
+ * zone was read, which costs two offset lookups and builds nothing, and reads
+ * the zone again when they differ. A move the fingerprint cannot see is one
+ * between two zones that agree on both its instants; the zone is also read
+ * again whenever the page comes into view or takes the focus
+ * ([rereadBrowserZone]), which is where a person who changed it by hand comes
+ * back from. A zone that moved drops every kept formatter (`formatters.ts`):
+ * those built for the old zone are not asked for again.
+ */
+export function browserZone(): string {
+  const now = zoneFingerprint();
+  if (ownZone === null || now !== ownFingerprint) {
+    const was = ownZone;
+    ownZone = readBrowserZone();
+    ownFingerprint = now;
+    if (was !== null && was !== ownZone) forgetFormatters();
+  }
+  return ownZone;
+}
+
+/**
+ * The browser's zone, asked of `Intl`.
  *
  * WRAPPED, because `resolvedOptions()` is allowed to throw and has been known
  * to answer an empty string in a locked-down environment — and a dashboard
  * that failed to render a date because it could not name a zone would be
  * trading a working screen for a label.
  */
-export function browserZone(): string {
+function readBrowserZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   } catch {
     return "UTC";
   }
+}
+
+/** Read the zone again, whatever the fingerprint says: see [browserZone]. */
+function rereadBrowserZone(): void {
+  if (document.visibilityState !== "visible") return;
+  const next = readBrowserZone();
+  ownFingerprint = zoneFingerprint();
+  if (next === ownZone) return;
+  const was = ownZone;
+  ownZone = next;
+  if (was !== null) forgetFormatters();
+}
+
+// A suite in the node environment has no document.
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", rereadBrowserZone);
+  window.addEventListener("focus", rereadBrowserZone);
 }
 
 const THEME_KEY = STORAGE_KEYS.theme;
@@ -182,9 +249,13 @@ export function zone(): string {
   return pinnedZone || browserZone();
 }
 
-/** Test seam: draw every timestamp in `next`, or in the browser's zone again for "". */
+/**
+ * Test seam: draw every timestamp in `next`, or in the browser's zone again
+ * for "". Drops every kept formatter, as a zone that moved does.
+ */
 export function pinZoneForTest(next: string): void {
   pinnedZone = next;
+  forgetFormatters();
   announce();
 }
 

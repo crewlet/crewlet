@@ -317,6 +317,18 @@ export interface PhaseRecord {
   callsElided: number;
   elidedCalls: DroppedCalls[];
   /**
+   * The refs a launch moved on the engine's own code host, as ITS PUSH RECORD
+   * says — the engine's account, where `deliveredRefs` are the launch's own —
+   * each with the live change it heads once the launch was collected
+   * (`web!42`, empty for none). `pushedRefsElided` counts what the record
+   * names past them; `pushedRefsUnread` is why the record could not be read,
+   * which makes an empty list unknown rather than "nothing pushed". On a
+   * launch, and on the executor that resumed from one, as `deliveredRefs` are.
+   */
+  pushedRefs: PushedRef[];
+  pushedRefsElided: number;
+  pushedRefsUnread: string;
+  /**
    * The job a record reports: on a launch, the launch itself, and on the
    * executor that resumed from one, the launch it collected. A round can
    * launch more than once, so on a launch it is part of the record's identity
@@ -812,6 +824,9 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     deliveredRefsElided: 0,
     callsElided: 0,
     elidedCalls: [],
+    pushedRefs: [],
+    pushedRefsElided: 0,
+    pushedRefsUnread: "",
     launchId: "",
     harnessTurns: 0,
     transcript: "",
@@ -917,6 +932,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // THE CALLS THE RUN'S RECORD DID NOT KEEP, absent the same way.
     callsElided: num(p.calls_elided),
     elidedCalls: droppedCalls(p.elided_calls),
+    pushedRefs: pushedRefs(p.pushed_refs),
+    pushedRefsElided: num(p.pushed_refs_elided),
+    pushedRefsUnread: String(p.pushed_refs_unread ?? ""),
     launchId,
     harnessTurns: 0,
     transcript: "",
@@ -1023,6 +1041,12 @@ function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseReco
     // executor's record that collected it.
     callsElided: 0,
     elidedCalls: [],
+    // THE LAUNCH'S PUSHES ARE ON ITS OWN RECORD: one that parks on a question
+    // is resumed by an answer, which collects nothing, so they are here or
+    // nowhere.
+    pushedRefs: pushedRefs(p.pushed_refs),
+    pushedRefsElided: num(p.pushed_refs_elided),
+    pushedRefsUnread: String(p.pushed_refs_unread ?? ""),
     launchId,
     harnessTurns: num(p.harness_turns),
     transcript: String(p.activity_transcript ?? ""),
@@ -1107,6 +1131,36 @@ export function transcriptLength(
     return `${fmtExact(kept)} of ${plural(kept + r.transcriptElidedLines, "line")}`;
   }
   return `${plural(kept, "line")}, ${fmtBytes(r.transcriptElidedBytes)} left out`;
+}
+
+/**
+ * One ref an executor moved on the engine's own code host
+ * (`types.PushedRefRecord`): the repository by the name the launch was given
+ * it under, the ref, its value before the launch's first push and after its
+ * last — the zero object id where the launch created or deleted it — how many
+ * of the launch's pushes moved it, and the live change it heads (`web!42`),
+ * empty for none.
+ */
+export interface PushedRef {
+  repo: string;
+  ref: string;
+  old: string;
+  new: string;
+  pushes: number;
+  change: string;
+}
+
+/** A record's `pushed_refs`, each field read as what it is, or none. */
+function pushedRefs(raw: unknown): PushedRef[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[]).map((r) => ({
+    repo: String(r.repo ?? ""),
+    ref: String(r.ref ?? ""),
+    old: String(r.old ?? ""),
+    new: String(r.new ?? ""),
+    pushes: num(r.pushes),
+    change: String(r.change ?? ""),
+  }));
 }
 
 /**

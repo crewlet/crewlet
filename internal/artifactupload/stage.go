@@ -123,6 +123,11 @@ func (r *run) stageProduced(ctx context.Context) error {
 		stored, err := r.s.objects.PutMinted(ctx, g.Key, bytes.NewReader(f.text), g.Size, //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			objstore.PutMeta{ContentType: g.ContentType})
 		if err != nil {
+			if full, ok := errors.AsType[*objstore.Full](err); ok {
+				// A REFUSAL ([StoreFull]): the publish gives back what it
+				// staged and its reservation ([run.fail]).
+				return &StoreFull{Path: g.Path, Remedy: full.Remedy, Err: err}
+			}
 			return fmt.Errorf("artifactupload: store %q: %w", g.Path, err)
 		}
 		if stored != g.object() {

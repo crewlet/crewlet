@@ -231,10 +231,13 @@ const RUNTIME_ROW: Record<
 > = {
   // A TOOL CALL NAMES ITS TOOL AND NOTHING IT WAS CALLED WITH: the arguments
   // are the company's content, which lives in the history of whatever the call
-  // changed, never in the audit — so the empty cell says exactly that.
+  // changed, never in the audit — so the empty cell says exactly that. A GIT
+  // PUSH's subject is its repository: a refused push writes no row anywhere
+  // else, so the record's repository is the only place that says where it
+  // was refused.
   operator_acted: (row) => ({
     kind: row.tags?.tool ?? "tool call",
-    subject: "",
+    subject: row.tags?.repo ?? "",
     noSubject: "Not recorded",
   }),
   // A BACKUP'S SUBJECT IS WHERE IT WENT — a directory on the row's own node.
@@ -1055,15 +1058,27 @@ export function Audit() {
 
   // WHAT EACH SOURCE WITHHELD, said by its source: a socket read refused on
   // authority, with the grants its refusal named, and the two REST reads.
+  //
+  // EACH SENTENCE ONCE. A refusal naming no grant says no access
+  // (`authorityWords`) whichever source it refused, so a reader refused every
+  // source was told the same sentence five times — and the notice keys its
+  // lines by the sentence, so React drew five lines under one key.
   const withheld = [
-    ...reads
-      .filter(({ read }) => read.error === "unauthorized")
-      .map(({ read, gesture }) =>
-        authorityWords(gesture, read.refusal && !isLogRefusal(read.refusal) ? read.refusal : null),
-      ),
-    secrets.withheld,
-    identity.withheld,
-  ].filter((sentence) => sentence !== "");
+    ...new Set(
+      [
+        ...reads
+          .filter(({ read }) => read.error === "unauthorized")
+          .map(({ read, gesture }) =>
+            authorityWords(
+              gesture,
+              read.refusal && !isLogRefusal(read.refusal) ? read.refusal : null,
+            ),
+          ),
+        secrets.withheld,
+        identity.withheld,
+      ].filter((sentence) => sentence !== ""),
+    ),
+  ];
 
   const loading =
     work.loading || knowledge.loading || config.loading || runtime.loading || artifacts.loading;

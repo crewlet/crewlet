@@ -511,3 +511,58 @@ test("a join that drops the held pages waits for the older page out, which goes 
   expect(result.current.more).toBe(true);
   for (const items of drawn) expect(contiguous(items), items.join(",")).toBe(true);
 });
+
+// A NEW QUESTION DISCARDS WHAT THE LAST ONE HELD. Kept under its question,
+// A's pages came back the moment the reader returned to it, while the first
+// page was still B's answer (`useQuery` shows a question's last answer until
+// the next one lands): the join then read A from a cursor B minted. Mutation:
+// key what is held by the question alone, and the return asks a page.
+test("a question left and come back to starts again from its first page", async () => {
+  const a = { now: down(12, 1) };
+  const b = down(112, 101);
+  const page = vi.fn(async (cursor: string) => pageOf(a.now, cursor));
+  const view = renderHook(
+    ({ params, first }: { params: Record<string, unknown>; first: QueryResult<Answer> }) =>
+      usePaged(first, params, page, pick, idOf, cursorOf),
+    { initialProps: { params: { item: "a" }, first: answered(pageOf(a.now)) } },
+  );
+  act(() => view.result.current.next());
+  await waitFor(() => expect(view.result.current.items).toHaveLength(2 * PAGE));
+  const asked = page.mock.calls.length;
+
+  view.rerender({ params: { item: "b" }, first: answered(pageOf(b)) });
+  // TWO ARRIVE ON A while the reader looks at B; back on A, B's answer is the
+  // first page until A's lands.
+  a.now = down(14, 1);
+  view.rerender({ params: { item: "a" }, first: answered(pageOf(b)) });
+  view.rerender({ params: { item: "a" }, first: answered(pageOf(a.now)) });
+  await new Promise((r) => setTimeout(r, 20));
+  expect(ids(view.result.current.items)).toEqual(down(14, 10).map((n) => `e-${n}`));
+  expect(view.result.current.more).toBe(true);
+  expect(page).toHaveBeenCalledTimes(asked);
+  expect(view.result.current.pageError).toBeNull();
+});
+
+// A PAGE THAT FAILS KEEPS WHAT IS HELD, and the same press asks it again: the
+// cursor it was asked from is still the last held page's, so `next` reads it
+// and the list goes on with no entry left out — which is why a caller says
+// the failure beside its control (`PageFailed`), never in its place.
+// Mutation: drop the held pages when a page fails, and the reading the reader
+// paged back through is gone.
+test("a page that fails keeps the pages held, and next asks it again", async () => {
+  const { result, page } = await pagedBack(down(15, 1));
+  page.mockImplementationOnce(async () => {
+    throw new Error("unavailable");
+  });
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.pageError).toBe("unavailable"));
+  expect(result.current.paging).toBe(false);
+  expect(result.current.more).toBe(true);
+  expect(ids(result.current.items)).toEqual(down(15, 6).map((n) => `e-${n}`));
+
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.items).toHaveLength(3 * PAGE));
+  expect(page).toHaveBeenLastCalledWith("6");
+  expect(ids(result.current.items)).toEqual(down(15, 1).map((n) => `e-${n}`));
+  expect(result.current.pageError).toBeNull();
+});

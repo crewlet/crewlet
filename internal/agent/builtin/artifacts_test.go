@@ -420,6 +420,14 @@ func TestTheRequesterCeilingBoundsWhatAnAgentDoesForSomebody(t *testing.T) {
 		"artifact": private.ID.String()}); got.Failed {
 		t.Fatalf("the agent's own read failed: %s", got.Output)
 	}
+	// AND IN ONE THE OUTCOME OF ITS OWN ACT WOKE — a workflow its own push
+	// failed — which names the agent itself as the sender: its own work too.
+	itself := turnFor(t, "agent-cto")
+	itself.Senders = []types.CanonicalIdentity{{Handle: "agent-cto"}}
+	if got := r.call(t, itself, builtin.GetArtifactTool, map[string]any{
+		"artifact": private.ID.String()}); got.Failed {
+		t.Fatalf("the agent's read in a turn its own act woke failed, as a stranger's: %s", got.Output)
+	}
 
 	// THE AGENT'S OWN ARTIFACT, viewed by the founder: the founder may not
 	// publish over it, and may still ask the agent to (steerable).
@@ -624,8 +632,8 @@ func (b askedBoxes) Box(ctx context.Context, turn *turnctx.Turn) (builtin.Artifa
 }
 
 // A BOX IS READ FOR A SEAT'S OWN RUN, AND FOR NO OTHER CALLER. A person, or
-// their own assistant, calling through the operator catalogue has no coding
-// run: both box sources are refused `forbidden`, and the node's box source is
+// their own assistant, calling through the operator catalogue has no executor:
+// both box sources are refused `forbidden`, and the node's box source is
 // never asked, whatever box it could hand over. A seat's call on a node that
 // runs no sandbox is refused `unavailable`, never answered as though the seat's
 // run had stopped. Mutation: drop the caller check from fileSources.openBox and
@@ -893,38 +901,52 @@ func TestATurnPastItsGuardrailIsToldToStop(t *testing.T) {
 	}
 }
 
-// A FULL FILE STORE IS NO PUBLISH TO TRY AGAIN: the pipeline stores the page
-// through the object store, whose reservation can be spent, and no retry lands
-// until somebody makes room, so the model is told so and who makes it, as a
-// condition of the node rather than a fault with nothing to say. Mutation:
-// drop the ErrFull arm from publishFailure and this fails, the publish read as
-// internal_error.
-func TestAFullStoreIsNoPublishToTryAgain(t *testing.T) {
+// A PUBLISH THE OBJECT STORE HAS NO ROOM FOR IS REFUSED AS FULL: the store
+// refuses the same file the same way until an operator makes room, so the seat
+// is told that — the file, nothing published, and the room the store named —
+// under the class a person's surface answers 507, never the fault ("a fault in
+// this node itself") a failure nothing classified reads as, and never an
+// invitation to make the call again. The store's own words name its bucket and
+// stay in the node's log.
+//
+// Mutation: drop publishFailure's StoreFull case and this fails on the class
+// and the sentence; splice a room of the tool's own and it fails on the room.
+func TestAPublishTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
 	h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "x"})
-	r.f.publishErr = fmt.Errorf("artifactupload: store %q: %w", "index.html", objstore.ErrFull)
+	r.f.publishErr = &artifactupload.StoreFull{Path: "index.html", Remedy: caseRemedy, Err: &objstore.Full{
+		Remedy: caseRemedy, Err: errors.New("natsobj: put files/x: OBJ_crewlet_files holds as many bytes " +
+			"as it reserves")}}
 	got := r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
 		"artifact": h.ID.String(), "base_version": 1, "content": "y"})
-	if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable {
-		t.Fatalf("a full store answered %s %q, want unavailable", tools.RefusalOf(got), got.Output)
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalStoreFull || !errors.Is(got.Cause, objstore.ErrFull) {
+		t.Fatalf("a publish the store had no room for answered %q (refusal %q), want store_full over ErrFull",
+			got.Output, tools.RefusalOf(got))
 	}
-	for _, says := range []string{"file storage is full", "Don't try again", "an administrator"} {
-		if !strings.Contains(got.Output, says) {
-			t.Errorf("a full store answered %q, which does not say %q", got.Output, says)
-		}
+	switch out := strings.ToLower(got.Output); {
+	case !strings.Contains(got.Output, caseRemedy) || !strings.Contains(got.Output, "index.html"):
+		t.Errorf("a publish the store had no room for answered %q, which does not name the file and %q",
+			got.Output, caseRemedy)
+	case strings.Contains(out, "try again") || strings.Contains(out, "make the call again"):
+		t.Errorf("a publish the store had no room for answered %q, which invites the retry the full store "+
+			"refuses the same", got.Output)
+	case strings.Contains(got.Output, "OBJ_crewlet_files"):
+		t.Errorf("the store's own words reached the sentence: %q", got.Output)
 	}
-	if strings.Contains(got.Output, "reservation") || strings.Contains(got.Output, "objstore") {
-		t.Errorf("a full store answered %q, which names the store's own terms", got.Output)
-	}
+}
 
-	// AND A STORE THAT DID NOT ANSWER IS A CONDITION, invited back as
-	// write_project_file invites it, where this tool told it as a fault of
-	// the node. Mutation: drop the store's classification and this fails.
+// A STORE THAT DID NOT ANSWER A PUBLISH IS A CONDITION, invited back as
+// write_project_file invites it, where this tool told it as a fault of the
+// node. Mutation: drop the store's classification and this fails.
+func TestAPublishTheStoreDidNotAnswerIsACondition(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
+	h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "x"})
 	r.f.publishErr = fmt.Errorf("artifactupload: store %q: %w", "index.html",
 		fmt.Errorf("objstore: store the object: %w: %w", objstore.ErrUnanswered,
 			errors.New("s3: PutObject: 503 SlowDown")))
-	got = r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+	got := r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
 		"artifact": h.ID.String(), "base_version": 1, "content": "y"})
 	if tools.RefusalOf(got) != tools.RefusalUnavailable || !strings.Contains(got.Output, "Try again") ||
 		strings.Contains(got.Output, "SlowDown") {

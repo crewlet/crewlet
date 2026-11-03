@@ -66,10 +66,13 @@ type HeldCommit interface {
 	// Record records what the call returned — result, as the run that
 	// carries the work on is handed it — and the call itself as a call of the
 	// run's round, with what the surface that made it answered (answered:
-	// whether it failed and why, and who answered it), in one write
+	// whether it failed and why, and who answered it)
 	// ([sandbox.PendingStore.RecordHeldResult]): every reader of whether the
 	// turn replied reads the round's calls, and a call made and recorded
-	// nowhere among them was a reply that read as never sent.
+	// nowhere among them was a reply that read as never sent. The result and
+	// the call's entry land on the row in one write and the call reaches the
+	// round's log after it; an error after the row's write leaves the call to
+	// the next job's opening, which appends it ([sandbox.OwedCall]).
 	//
 	// WITHOUT ITS ARGUMENTS AND WITHOUT THEIR DIGEST: they ride the row
 	// sealed on the held call (ADR-0077), and a digest of them in the clear

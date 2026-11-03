@@ -24,8 +24,10 @@ nodes lives in the KV instead. See [Running a Fleet](fleet.md) and
 ## The single host
 
 **A keyring is required, on one node and on every node.** Every record on every
-state log is signed under it, because the broker has no auth of its own and a
-record is an instruction the next node applies. `crewlet secrets keygen` mints
+state log is signed under it, because a record is an instruction the next node
+applies and the broker's admission vouches for a connection, never a message
+(ADR-0031). An embedded fleet's broker admits only keys derived from it too
+(ADR-0094). `crewlet secrets keygen` mints
 one and prints the export line; a node without one refuses to start, naming the
 field. Every node of a fleet needs the **same** keyring — one keyed differently
 would refuse every peer's records, and every browser signed in against one
@@ -63,33 +65,99 @@ webhooks have to come from the internet and the dashboard must not, give them
 a listener of their own instead: see
 [Exposing webhooks without the admin API](#exposing-webhooks-without-the-admin-api).
 
-Give that proxy a **read timeout above fifty seconds** on the API port.
-Nearly every request is answered in well under a second, but a node eviction
-or readmission ([Retention](retention.md#eviction)) may take up to fifty
-seconds — twenty to judge it and thirty to write every log — and `crewlet
-retention evict` and the dashboard's evict dialog both wait a minute for its
-answer. nginx's `proxy_read_timeout` defaults to sixty, which is enough; a
-proxy set below fifty cuts those answers off with a 504. Nothing is lost when
-it does — the node finishes the gesture whatever happens to the connection,
-and both clients read an answer the engine did not write as one that never
-arrived, keeping the operation id to finish it with — but the operator then
-has to finish it to see what it did.
+Give that proxy at least **two minutes** of silence in either direction on
+the API port's REST and file routes. Requests to `/git/` on the same port
+have a sizing of their own, which can be longer — a cold cache sync before a
+request's first byte, sized by your largest repository, and three minutes for
+a push from a client that asks for no side-band — so give `/git/` its own
+location with what [The code host](#the-code-host) asks for. Nearly every
+other request is answered in well under a second; the slowest answer a REST
+or file route gives is a file upload whose object store fails or stops
+answering — about a minute and a half: a minute, then thirty seconds
+abandoning an upload made in parts (95 s measured against an S3 fake whose
+bucket hung the abandon too) — and the node stops reading the upload's body
+while it waits, so the silence runs both ways. nginx's `proxy_read_timeout`
+and `proxy_send_timeout`, both sixty seconds by default, each cut that answer
+to a `504`; the upload is not written either way, and the object the store
+may hold is collected a day later. A store that keeps throttling an upload
+holds it to the upload's own deadline — a throttle slows a request down and
+is never given up
+([Object store](../concepts/object-store.md#an-s3-bucket--s3)) — which a
+two-minute proxy also cuts: still not written, and the person uploads again.
+A node eviction or readmission ([Retention](retention.md#eviction)) may take
+up to fifty seconds — twenty to judge it and thirty to write every log — and
+`crewlet retention evict` and the dashboard's evict dialog both wait a minute
+for its answer; a proxy set below fifty cuts those answers off with a 504.
+Nothing is lost when it does — the node finishes the gesture whatever happens
+to the connection, and both clients read an answer the engine did not write
+as one that never arrived, keeping the operation id to finish it with — but
+the operator then has to finish it to see what it did. The one route whose
+work grows with what it reads — a check of a git node's copy of a repository
+(`POST /code/repos/{name}/verify`), about nine seconds a gigabyte — needs no
+longer timeout: it runs on the node's own time and answers within a quarter
+of a second — `200` with a small copy's report, `202` for a check still
+running — and a running check's outcome is read with
+`GET /code/repos/{name}/verify/{id}` until it ends
+([API reference](../reference/api-endpoints.md#post-codereposnameverify)).
+
+### Every machine's clock
+
+**Keep every machine's clock synchronised** — every node's, and every server's
+of an external NATS cluster. Two of the engine's deletions judge an instant
+one machine stamped by another machine's clock, and both assume every
+machine's clock keeps within an hour of the fleet's. The
+[object collector](../concepts/object-store.md#collection-and-audit) deletes an
+object no row names only once its key, minted by the node that uploaded it,
+and the store's own record of when it was written are both more than a day old
+by the clock of the node running the collector; and the code host's
+`code-retention` duty removes a
+[retired pack's](../concepts/object-store.md#live-retired-and-derived-references) row
+once the instant the broker stamped on its retirement is a day old by the
+clock of the node holding the duty. Each day leaves a margin past the longest
+upload or read it has to outlast — twelve hours for the collector, two hours
+and thirty-nine minutes for a retired pack — and a clock running ahead of the
+other by more than that deletes an object a write or a read still needs. NTP
+keeps machines within milliseconds of each other; a host without it drifts,
+and a virtual machine restored from a snapshot can come back hours off.
+
+Every data node reads the fleet's clocks on its position heartbeat, every ten
+seconds, off the position register in the coordination store, which it reads
+on that beat anyway. Each data node's row there carries the instant the node
+stamped on it and the instant the broker stored it at, so each row says how
+far that node's clock stands from the one broker member leading the register,
+which stores every row, and the median of them is the **fleet's clock**: the
+median of every data node's. A node whose own clock stands more than an hour
+from the fleet's raises [`clock_skew`](../reference/alarms.md) about itself,
+and every node raises it about the broker member once that member's clock does
+— on an embedded broker one of the data nodes, which then raises it about its
+own clock too; on an external NATS cluster the server leading the register's
+stream. So while no node raises it, every data node and that member keep
+within an hour of the fleet's clock, and any two of them — every member of an
+embedded broker among them — within two hours of each other, inside both
+margins. With two data nodes neither clock outvotes the other, so both are
+named once they stand more than two hours apart. The alarm names a clock that
+has already drifted rather than keeping one from drifting, and it cannot see
+the other servers of an external NATS cluster disagree with the one it reads,
+so run an NTP client (chrony, systemd-timesyncd) everywhere the engine or its
+broker runs. [Watching a fleet](fleet.md#watching-a-fleet) says how to read the
+alarm across the nodes.
 
 ### The room the stream's volume needs
 
-The engine keeps ten ordered logs on the stream: the tracker's mutation
-log, the vector changelog, the knowledge base's log, the identity estate's
-log, the usage log, the artifacts log, the artifact datastore's log,
-Ask Crewlet's log, the chat log and the executor log. Each log's byte ceiling is
-**reserved** on the volume holding `stream.store_dir` when its stream is
-created: the embedded broker grants a ceiling in full, up front, or refuses
-to create the stream at all. Its limit is `stream.store_max_bytes` where you
-set one, and otherwise three quarters of
+The engine keeps eleven ordered logs on the stream: the tracker's mutation
+log, the vector changelog, the knowledge base's log, the executor log, the code
+host's log, the identity estate's log, the usage log, the artifacts log, the
+artifact datastore's log, Ask Crewlet's log and the chat log. Each log's byte
+ceiling is **reserved** on the volume holding `stream.store_dir` when its stream is
+created: the embedded broker grants a ceiling in full, up front, or refuses to
+create the stream at all. Its limit is `stream.store_max_bytes` where you set
+one, and otherwise three quarters of
 that volume's free space.
 
-The node sizes the ceilings together to fit half of that limit. A log derived
-from the disk that would be scaled below 1 GiB is **held at 1 GiB** instead,
-Ask Crewlet's log and the executor log give way down to their own 64 MiB
+The node sizes the ceilings together to fit five eighths of what that limit
+leaves once the object store's `nats` bucket (below) has its reservation. A log
+derived from the disk that would be scaled below 1 GiB is **held at 1 GiB**
+instead, Ask Crewlet's log and the executor log give way down to their own 64 MiB
 floor, and any other log whose own default is smaller than a gibibyte is held
 at what it asked for, so a fresh node has a floor it cannot go below.
 
@@ -105,18 +173,19 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The artifacts log | 1 GiB | `stream.artifacts_log_max_bytes` |
 | The artifact datastore's log | 1 GiB | `stream.artifact_data_log_max_bytes` |
 | The chat log | 1 GiB | `stream.chat_log_max_bytes` |
+| The code host's log | 1 GiB | `stream.code_log_max_bytes` |
 | The usage log (a fixed default) | 1 GiB | `stream.usage_log_max_bytes` |
 | The identity estate's log (a fixed default) | 512 MiB | `stream.iam_log_max_bytes` |
 | Ask Crewlet's log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.assistant_log_max_bytes` |
 | The executor log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.executor_log_max_bytes` |
-| **The ten logs together** | **7.62 GiB** | |
-| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.54 GiB at the minimum | `store.objects.nats_max_bytes` |
+| **The eleven logs together** | **8.62 GiB** | |
+| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.87 GiB at the minimum | `store.objects.nats_max_bytes` |
 
-So the broker needs a limit of at least **10.17 GiB**, which an embedded
-broker sizing itself at three quarters of the volume reaches with **13.56 GiB
-free** on the volume holding `stream.store_dir` (about 14.6 GB). With the
+So the broker needs a limit of at least **11.50 GiB**, which an embedded
+broker sizing itself at three quarters of the volume reaches with **15.33 GiB
+free** on the volume holding `stream.store_dir` (about 16.5 GB). With the
 objects in S3 (`store.objects.backend: s3`) no bucket is reserved, and the
-logs' 7.62 GiB alone needs 10.17 GiB free. These are the least that **boots**:
+logs' 8.62 GiB alone needs 11.50 GiB free. These are the least that **boots**:
 the mailboxes, the coordination buckets and a joining node's snapshot reserve
 nothing and grow into whatever is left, so give a production host far more.
 
@@ -129,7 +198,7 @@ configuration reserves, split into the logs and the bucket.
 
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
-  limit of **8.62 GiB**, which three quarters of **11.50 GiB free** reaches.
+  limit of **9.62 GiB**, which three quarters of **12.83 GiB free** reaches.
   The bucket then holds at most 1 GiB of the company's files; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three
@@ -140,7 +209,7 @@ configuration reserves, split into the logs and the bucket.
 
 The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes`,
 `stream.usage_log_max_bytes`, `stream.assistant_log_max_bytes` and
-`stream.executor_log_max_bytes` accept 64 MiB. The other six fields accept no
+`stream.executor_log_max_bytes` accept 64 MiB. The other seven fields accept no
 less than 1 GiB, so setting them only moves the figure up.
 - **A floor is per log, not universal.** The identity estate's, the usage
   log's, Ask Crewlet's and the executor log's fields go down to 64 MiB, far
@@ -160,37 +229,49 @@ less than 1 GiB, so setting them only moves the figure up.
 - **More room buys longer logs, up to a point.** Unset, the mutation log and
   the vector changelog each ask for a quarter of the free space (4..64 GiB),
   the knowledge base's log, the artifacts log and the artifact datastore's
-  log each for a quarter of the mutation log's, the chat log for 8 GiB,
-  capped at a sixteenth of the free space (so the whole of it is asked from
-  128 GiB free), the identity estate's log, Ask Crewlet's and the executor
-  log for a flat 512 MiB each and the usage log for a flat 1 GiB — none of the
-  last four is derived from the disk at all, because the identity and Ask
-  Crewlet logs grow with headcount, the executor log with the turns the seats
-  run, and the usage log's size is a count of node-days rather than a rate, so
-  more disk buys them nothing. The chat log's ask does
-  not follow the mutation log's as the knowledge base's does, so if you set
-  `stream.tracker_log_max_bytes` for a long blocked trim, set
-  `stream.chat_log_max_bytes` for the same horizon (about 32 MB a day at the
-  declared census) or the chat log fills first.
-  They are scaled down together whenever they ask for more than the pool they
-  share — half of what the broker's three quarters leave once the object
-  bucket's quarter is reserved, so nine thirty-seconds of the free space —
-  which on a first boot is every volume with less than about 664 GiB free (at
-  their clamps the ten ask for 186.5 GiB, nine thirty-seconds of 664); from
-  there up each log gets what it asked for. With the objects in S3 no bucket
-  is reserved and the pool is three eighths of the free space, so from about
-  498 GiB free.
+  log each for a quarter of the mutation log's, the code log for two thirds
+  of the mutation log's, the chat log for 8 GiB, capped at a sixteenth of the
+  free space (so the whole of it is asked from 128 GiB free), the identity
+  estate's log, Ask Crewlet's and the executor log for a flat 512 MiB each
+  and the usage log for a flat 1 GiB — none of the last four is derived from
+  the disk at all, because the identity and Ask Crewlet logs grow with
+  headcount, the executor log with the turns the seats run, and the usage
+  log's size is a count of node-days rather than a rate, so more disk buys
+  them nothing. The chat log's ask does not follow the mutation log's as the
+  knowledge base's does, so if you set `stream.tracker_log_max_bytes` for a
+  long blocked trim, set `stream.chat_log_max_bytes` for the same horizon
+  (about 32 MB a day at the declared census) or the chat log fills first.
+  They are scaled down together whenever they ask for more than the logs'
+  share — five eighths of what the broker's limit leaves once the `nats`
+  bucket has taken its quarter of it, about 35 % of the free space on a first
+  boot — which is every volume with less than about 652 GiB free (with the
+  mutation log at its 64 GiB clamp the eleven ask for 229⅙ GiB: 64 + 64 +
+  16 + 16 + 16 + 42⅔ + 1 + ½ + ½ + 8 + ½); from there up each log gets what it
+  asked for. With the objects in S3 no bucket is reserved and the share is
+  five eighths of three quarters of the broker's limit, about 47 % of the free
+  space, so from about 489 GiB free.
+- **The code log's ask is paid whether or not anything pushes.** Below about
+  652 GiB free it comes out of the other logs' share: at 100 GiB free the
+  mutation log and the vector changelog are created at 9.1 GiB each rather
+  than 11.1, at 256 GiB at 24.9 rather than 30.6 — windows about a fifth
+  shorter for a blocked trim — and the knowledge base's, the artifacts and
+  the artifact datastore's logs by the same proportion. A company that hosts
+  no code and is short of room sets `stream.code_log_max_bytes: 1073741824`
+  before the first boot; the
+  [replication guide](replication.md#what-the-code-logs-reservation-costs)
+  has the table and what to do once the streams exist.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-  `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
-  `stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`,
-  `stream.assistant_log_max_bytes`, `stream.chat_log_max_bytes` or
-  `stream.executor_log_max_bytes` later, changes nothing about streams that
+  `stream.code_log_max_bytes`, `stream.artifacts_log_max_bytes`,
+  `stream.artifact_data_log_max_bytes`, `stream.iam_log_max_bytes`,
+  `stream.usage_log_max_bytes`, `stream.assistant_log_max_bytes`,
+  `stream.chat_log_max_bytes` or `stream.executor_log_max_bytes` later,
+  changes nothing about streams that
   already exist; `crewlet retention set-capacity` is what changes a running
   log's ceiling. A log derived from the disk that is created later — one a new
   version adds — is sized from what the existing logs' ceilings leave of that
-  half, so logs that already hold all of it leave it the 1 GiB floor.
+  share, so logs that already hold all of it leave it the 1 GiB floor.
 
 [Replication](replication.md#how-the-byte-ceilings-are-sized) has the whole
 arithmetic and the refusal's text.
@@ -262,20 +343,23 @@ coordination:
                                        #   broker; nothing else to set
 
 secrets:                               # the SAME keys on every member: each
-  active_key_id: "2026-01"             #   one verifies what the others sign
-  keys:
-    - id: "2026-01"
+  active_key_id: "2026-01"             #   one verifies what the others sign,
+  keys:                                #   and the broker admits only a peer
+    - id: "2026-01"                    #   presenting a key derived from them
       material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
 **Bind the route port to the network the peers are on.** `cluster.host` is the
 interface the route listener binds, and leaving it unset binds every
-interface. A route port is how a member JOINS — and a member that joins reads
-and writes every stream and every coordination bucket — so on a host with a
-public interface an unset `host` publishes unauthenticated access to the
-company's whole event history. Set it to the private address, or keep the port
-off the public interface with a firewall; the engine cannot tell which of a
-host's addresses is the private one, so it does not guess.
+interface. The route port admits only a member presenting a credential derived
+from `secrets.keys` ([below](#the-fleets-broker-admits-only-its-own-nodes)),
+but that credential crosses the network in clear once per connection — a NATS
+route carries a password or a certificate, never a signature — and so does
+every byte after it: the company's whole event history and every lease. On a
+host with a public interface an unset `host` publishes both. Set it to the
+private address, or keep the port off the public interface with a firewall; the
+engine cannot tell which of a host's addresses is the private one, so it does
+not guess.
 
 **A cluster block without a name is refused, because it would do nothing.**
 The embedded server takes its route port, its bind interface, its advertise
@@ -348,7 +432,7 @@ is counted as a member — see [Running a Fleet](fleet.md#what-a-fleet-needs).
 
 **A fresh cluster takes seconds to form, and the engine waits it out rather
 than hanging.** Accepting connections is not the same as being able to serve
-JetStream: a member answers its client port as soon as it is listening, while
+JetStream: a member accepts connections as soon as it is listening, while
 the metadata group takes seconds to elect a leader — measured at around eight
 on a quiet three-member cluster — and until it has one, creating a replicated
 stream *blocks* instead of failing.
@@ -433,7 +517,8 @@ Every data node keeps the company's **identity estate** — its people, their
 credentials and sessions — on a state log, and a domain's log is a stream. With
 `tracker.backend: worklet`, `knowledge.backend: doclet` or a chat that resolves
 to `chatlet` (all three the defaults), its work items, its pages and its
-messages are there too. An unset `store_dir` means the first restart recreates those logs
+messages are there too, and so are the pushes of a company that hosts its
+repositories in the engine (`code.native`). An unset `store_dir` means the first restart recreates those logs
 empty, and a node whose rows are ahead of a log that restarted from nothing
 stops serving for good. So the engine refuses to boot without one, and
 `crewlet validate` refuses it, naming `stream.store_dir`.
@@ -490,32 +575,111 @@ stream:
 
 It is measured once, at boot, on both paths: a volume that later grows or
 shrinks does not move the limit, and a node that should see a resized disk is
-restarted. Half of whatever is in force is what the state logs' derived
-ceilings may reserve between them; the other half is for the streams that
-reserve nothing and simply grow against it — the seats' mailboxes, the event
-log, the dead-letter stream, the memory changelog and every coordination
-bucket. A refusal names the ceiling that did not fit and the Tier A field
+restarted. Five eighths of whatever is in force is what the state logs'
+derived ceilings may reserve between them; the other three eighths are for the
+streams that reserve nothing and simply grow against it — the seats'
+mailboxes, the event log, the dead-letter stream, the memory changelog and
+every coordination bucket. A refusal names the ceiling that did not fit and the Tier A field
 that sets it on either topology; it adds the limit in force and what is already
 reserved only where this node can read them, which is the standalone one. On a
 fleet the room that refused is another member's disk, and no member can read
 another's.
 
-> **The clustered embedded broker has no authentication and no TLS. Run it on
-> a trusted network.**
->
-> A clustered member listens on two ports, on every interface: the route port
-> named in the config, and a client port the server picks for itself. Neither
-> carries a credential or a certificate. `credentials`, `token` and
-> `stream.tls` are **dial-side** options — they configure this process
-> connecting *out* to a URL — and an embedded server has no server-side
-> counterpart in Tier A at all. Anything that can reach those ports can
-> publish onto a seat's inbox, read every event the company produces, and
-> take its leases.
->
-> A private subnet, a security group or a WireGuard mesh between the nodes is
-> what makes this shape safe, and no configuration substitutes for one. A
-> deployment that needs the brokers themselves mutually authenticated runs
-> `stream.type: nats` against a NATS cluster it secures itself.
+#### The fleet's broker admits only its own nodes
+
+Every connection to an embedded broker presents a key derived from
+`secrets.keys`, and the broker admits exactly four kinds of connection
+([ADR-0094](../../adr/0094-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)):
+
+- a **route** from another member, presenting the route credential derived
+  from a key of its keyring;
+- a **leaf link** from a node without `data`, presenting the nkey derived from a
+  key of its keyring and signing the member's challenge;
+- an **operator** on a member's own host, on the member's loopback client
+  listener, presenting the operator key `crewlet fleet broker credential`
+  writes ([below](#reaching-an-embedded-fleets-broker-with-the-nats-tool));
+- the node's **own connections**, in process.
+
+Every node accepts every key of its keyring and presents the active one, so the
+keyring's [rotation runbook](../concepts/secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost)
+moves the broker with no step of its own. A clustered member listens on two
+ports: the route port on the configured interface, and a client port on
+loopback that NATS opens before it routes — the engine's own connections never
+dial it (they are in process), and no client is told where it is.
+
+A refused connection is counted in `crewlet.broker.peer.refusals`, by the
+listener it reached and what it presented — `none`, `unknown` (a key this node
+does not hold) or `invalid` (a key it holds, with a proof its material does not
+produce) — and logged as `broker_peer_refused`: a class's first refusal at once,
+then at most once a minute carrying the count since, naming the key presented
+and where it came from. `unknown` while a rotation is under way is a node whose
+keyring differs from this one's; `none` is a process that is not a node of this
+fleet. Every broker logs `broker_keys` when it starts: the key it presents, the
+keys it accepts and the listeners it opened.
+
+**What it does not do is encrypt.** `credentials`, `token` and `stream.tls` are
+**dial-side** options for an external cluster; an embedded broker's links carry
+no TLS. A route's credential crosses the network in clear once per connection —
+a NATS route carries a password or a certificate, never a signature — and every
+byte of the fleet's traffic after it: every event, every lease, every record.
+Neither end of a route or a link authenticates what answers at the address it
+dials either, so a route's credential goes to whatever holds a peer's address.
+A private subnet, a security group or a WireGuard mesh between the nodes is
+still what makes this shape safe, and no configuration substitutes for one;
+what an impostor on that network could forge is bounded by the signature every
+record and every instruction carries
+([ADR-0031](../../adr/0031-every-state-log-record-is-signed.md)).
+
+**A coding box on a member's host network can read that traffic.** A
+[container box](../concepts/code-sandbox.md#local-sandboxes) joins the Docker
+network `providers.sandbox.local.network` names (the runtime's default bridge
+when unset), and from there it reaches the broker's ports like any process
+outside the fleet — and is refused. Given the HOST's network instead
+(`providers.sandbox.local.network: host`, or a `--network host` run argument)
+on a member's host, it shares the member's network namespace: with Docker's
+default capabilities it can read the host's traffic, a route's credential at
+connect time included, and reach the loopback client listener, which admits
+only the operator's key. On a fleet node, keep coding boxes off the host
+network, or run them in `e2b`. A `direct` box is outside every network rule: it
+runs as the engine's own user
+([Code Sandbox → Security model](../concepts/code-sandbox.md#security-model)).
+
+### Reaching an embedded fleet's broker with the nats tool
+
+A few broker gestures have no engine verb — above all resizing every stream and
+bucket before a raised `stream.replicas` lets a node start
+([Replica count](#replica-count)) — and they are made with the
+[`nats` tool](https://github.com/nats-io/natscli) on a member's own host,
+through the member's loopback client listener, with the operator key:
+
+```bash
+# on a clustered member's host, with the token of a principal that holds admin
+export CREWLET_API_TOKEN=...
+crewlet fleet broker credential -o ./operator.nk
+# Wrote the operator key derived from secrets.keys id "2026-01" to ./operator.nk (0600).
+#
+#   nats --server nats://127.0.0.1:41234 --nkey ./operator.nk <command>
+
+nats --server nats://127.0.0.1:41234 --nkey ./operator.nk stream ls
+```
+
+The command derives the key from this host's own Tier A — the seed is written
+to a file created `0600`, never printed, and never over a file that exists —
+and asks this host's node, over `GET /fleet/broker` (which takes `admin`), for
+its client listener: its port is the OS's, chosen at every start, and on
+loopback it is reachable from that host alone. It refuses an answer from any
+other node (a `-api` naming a balancer or a peer), and a node with no client
+listener — a solo member, a member with only a leaf listener, a leaf — says so.
+A member that serves no API (`api.port: 0`) is asked nothing: the invocation is
+printed with the address left for you, and the node's `broker_keys` line names
+it. The key reaches every stream and bucket and never the system account —
+removing a member goes through
+[`crewlet fleet broker remove`](../reference/cli.md#crewlet-fleet-broker) — and
+it grants nothing its holder lacks: whoever reads this node's Tier A holds the
+keyring, which already decrypts the company's document and secrets. It is
+admitted until its key leaves `secrets.keys`; write it again after a rotation
+drops it. A member serves the plain JetStream API beside the fleet's domain, so
+the tool needs no `--js-domain`.
 
 ### An external NATS server
 
@@ -527,8 +691,10 @@ be secured, operated, or shared on a schedule of its own:
 stream:
   type: nats
   url: "nats://nats-1.internal:4222,nats://nats-2.internal:4222,nats://nats-3.internal:4222"
-  credentials: "/etc/crewlet/engine.creds"   # an NKey/JWT creds file
-  # token: "${CREWLET_NATS_TOKEN}"           # or a bearer token
+  credentials: "/etc/crewlet/engine.creds"   # an NKey/JWT creds file — one of
+  # token: "${CREWLET_NATS_TOKEN}"           #   credentials, token or tls.cert
+                                             #   (or a credential in url) is
+                                             #   required
   tls:
     ca: /etc/crewlet/ca.pem                  # the private CA to trust
     cert: /etc/crewlet/client.pem            # this engine's own certificate
@@ -554,12 +720,44 @@ engine writes repeats it: a failed dial, a refusal at boot and a log line each
 name a server by its scheme, host and port alone, and an address that does
 not parse is named as one rather than quoted.
 
-**Authentication is `credentials` or `token`.** `credentials` is a path to a
-NATS credentials file, the NKey/JWT pair a NATS account setup issues per
-user; `token` is a bearer token, and takes a `${VAR}` reference so the
-secret stays out of the file and out of the config revision history. Set
-whichever the broker asks for; both are dial options, and the engine stores
-neither.
+**Authentication is required, on both sides.** This node must present a
+credential: `credentials`, a path to a NATS credentials file (the NKey/JWT
+pair a NATS account setup issues per user); `token`, a bearer token, which
+takes a `${VAR}` reference so the secret stays out of the file and out of the
+config revision history; `tls.cert`, a client certificate; or a credential in
+any `url` entry's userinfo, which the client sends. Set whichever the broker
+asks for; each is a dial option, and the engine stores none of them. A Tier A
+that presents none of the four is refused at `stream.credentials`, because a
+node presenting nothing reaches only a server that authenticates nobody.
+
+And the server must authenticate its clients. Anything a NATS server admits
+reads every event this company publishes and writes on every subject it rides
+— a seat's mail, a lease, a state-log record (whose signature keeps a forged
+one from being applied, and nothing else) — so a server that admits anybody
+makes everything that can reach its port, a [container coding
+box](../concepts/code-sandbox.md#local-sandboxes) on a node's host among them,
+a reader and a writer of this company. The dial reads what the server says in
+the `INFO` line it sends first, and admits it only where that says
+`auth_required` — the server holds any authorization: a token, users, nkeys,
+an operator — or `tls_required` with `tls_verify`, where every client must
+present a certificate the server verifies before it says anything. Anything
+else refuses the boot, naming the server by host and port:
+
+```text
+engine: stream: connect nats: jetstream: an external NATS server must authenticate its clients: the NATS server at nats://nats-1.internal:4222 requires no authentication (it admits anonymous clients, or binds them to a no_auth_user), so anything that reaches it reads and writes this company: configure authorization, or tls { verify: true } without allow_non_tls, on every server of that cluster
+```
+
+A certificate this node presents does not count on its own: a server holding
+`tls { }` without `verify` never asks for one, and admits a client that
+presents nothing beside it. Neither does `verify` with `allow_non_tls`, which
+admits a plaintext client that presents no certificate at all. And a token the
+server does not require is no authentication either — the server admits
+everybody else as well — which is why the server's own word is read rather
+than this node's. The check judges the server each connection the node opens
+is on when its dial completes — the coordination store's and every second
+connection included — and not one a connection reconnects to later, so
+configure every server of the cluster alike: a client fails over to whichever
+answers.
 
 **`stream.tls` is the transport underneath that authentication**, and it is a
 separate question from who you are: a broker configured `tls { verify: true }`
@@ -590,11 +788,15 @@ entire point of that distinction. The coordination KV rides this same
 connection on purpose — one connection, one fate. An outage that outlasts the
 lease TTL (45 s unless `coordination.lease_ttl_seconds` says otherwise) does
 hand this node's seats to a peer, and that is the intended behaviour rather
-than something a reconnect policy should paper over. Each attempt — the dial,
-TLS and the NATS handshake — gets **2 seconds**, not the embedded member's
-listener budget: the loop tries the URLs in turn, and a member that silently
-drops packets holds every attempt at it for that long before a member that
-answers is asked, which is time the node spends not renewing its leases.
+than something a reconnect policy should paper over. Each attempt gets **2
+seconds** to connect, and 2 more for TLS and the NATS handshake, not the
+embedded member's listener budget: the loop tries the URLs in turn, and a
+member that silently drops packets holds every attempt at it for that long
+before a member that answers is asked, which is time the node spends not
+renewing its leases. A URL whose name resolves to several addresses — a
+headless Kubernetes service naming every pod of the cluster — shares those 2
+seconds among them, tried in a random order so a fleet's connections spread
+across the members, rather than taking 2 seconds for each.
 
 **A connection the client gives up on is a node restart.** Reconnecting for
 ever covers a server that goes away and comes back. It does not cover the
@@ -645,9 +847,9 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the ten state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the eleven state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_ARTIFACTS_LOG`,
+`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CODE_LOG`, `CREWLET_ARTIFACTS_LOG`,
 `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
 `CREWLET_EXECUTOR_LOG`), a stream per extra subject namespace a company
 publishes under, two durable consumers per seat mailbox (the inbox and its
@@ -663,12 +865,16 @@ tries to create.
 **A coordination read costs one ordered pass certified against the stream's
 key index, and an account needs the consumer, stream-info, message-get and
 purge APIs.** A node lists coordination records constantly — several
-fifteen-second duty loops on every tick, and the state-log write fence, which
-lists the published trim floors on every write at an expectation of zero, a
-subject's first write among them. Each listing is one pass over a temporary
+fifteen-second duty loops on every tick, and an operator's gestures such as a
+readmission or the retention report once each — but no state-log read and no
+seat's write waits on a listing: the state-log write fence, which reads the
+published trim floor on every write at an expectation of zero, a subject's
+first write among them, reads its own domain's floor by its key, one
+`$JS.API.STREAM.MSG.GET` to the `positions` stream's leader, and creates no
+consumer. Each listing is one pass over a temporary
 consumer, which on a replicated bucket is two metadata-raft proposals, and
-beside it one stream-info request narrowed to the listing's keys, which names
-every key that has a message. A pass alone cannot tell that it is complete — a
+beside it the stream's info narrowed to the listing's keys — one request for
+each hundred thousand keys — which names every key that has a message. A pass alone cannot tell that it is complete — a
 key rewritten under it can land behind the marker that ends it, and every renew
 is such a rewrite — so a key the index names that the pass missed, or delivered
 only as a delete marker, is read by itself from the **stream leader**
@@ -689,10 +895,21 @@ key written again since is untouched (see
 bucket's stream is **electing a leader**, a listing of it answers unavailable
 rather than a short list, since every member answers the index from its own
 store until one leads — the answer every caller already treats as a store
-that did not answer, never as "no records". A listing's one bound is
-the broker's page size for that index, **100,000 keys under one filter**; see
-[Coordination](../concepts/coordination.md#the-three-valued-answer) for what
-happens past it.
+that did not answer, never as "no records". A read only a leader answers — a
+stream's info, one of its messages, a consumer's info, a page of a listing — is
+asked again while nobody answers it: one more request every two seconds,
+whether a member that has not yet noticed its leader is gone dropped the first
+or the leader is only slow, and the broker processes each one. It is asked for
+as long as its caller waits — the caller's own deadline, or the client's five
+seconds where it set none, as it was when it was one request — and never past
+thirty seconds, fifteen requests nobody answers at most (see
+[Coordination](../concepts/coordination.md#the-three-valued-answer)). An
+election measured on a fleet of three cost a read about two seconds and one
+more request, not its caller's whole budget. Past the broker's page size for
+the key index, **100,000 keys under one filter**, the index is read a page at a
+time, each page its own read and the pages overlapping, so a key removed while
+it is read cannot hide another; see
+[Coordination](../concepts/coordination.md#the-three-valued-answer).
 The engine deliberately does **not** use the batched direct get that would
 avoid the consumer: it is served by any replica, and this estate has reads
 whose answer is acted on with nothing to arbitrate them. So a credential
@@ -780,10 +997,10 @@ indistinguishable, which is the one question a reader has about a fleet that
 did not form. Lines carry `server=` from `stream.cluster.name`'s member
 identity; a solo broker has no name to carry and the attribute is empty.
 
-**And it needs room for the state logs.** The ten state logs reserve their
-byte ceilings against the account's JetStream storage limit when their streams
-are created, and the node sizes them to half of what that limit has left. An
-untiered limit counts every replica, so a `replicas: 3` fleet needs three
+**And it needs room for the state logs.** Every state log reserves its byte
+ceiling against the account's JetStream storage limit when its stream is
+created, and the node sizes them to five eighths of what that limit has left.
+An untiered limit counts every replica, so a `replicas: 3` fleet needs three
 times the bytes; a tiered one needs its `R3` tier. An account that states no
 limit leaves the node nothing to size against but its own disk, and a server's
 own cap then refuses what does not fit, by name. See
@@ -794,9 +1011,10 @@ own cap then refuses what does not fit, by name. See
 **A `max_payload` of at least 8 MiB, on every server.** That is the largest
 single message the engine sends — an event, a webhook delivery, a state-log
 record at the largest its log declares (the tracker's, the knowledge base's,
-the vector changelog's and the usage log's are 8 MiB less 4 KiB, which is
-8 MiB on the wire once the record is signed) — and the embedded broker is configured at exactly
-that; nats-server's own default is 1 MiB. Set `max_payload: 8MB` in the
+the vector changelog's, the usage log's and the code log's are 8 MiB less
+4 KiB, which is 8 MiB on the wire once the record is signed) — and the
+embedded broker is configured at exactly that; nats-server's own default is
+1 MiB. Set `max_payload: 8MB` in the
 configuration of every server in the cluster (nats-server reads `MB` as
 mebibytes, so that is exactly the 8388608 bytes the engine needs). A server
 holds a connection to the **lowest** of its own `max_payload` and the payload
@@ -893,8 +1111,8 @@ two carry the same number and the opposite instruction, since one clears by
 somebody freeing room and these only by a change of configuration. A tier
 declared **unlimited** is neither again: it states its limit as a negative, the
 broker creates against it, and the engine sizes from three quarters of its own
-free disk as it
-does for any broker that states no limit.
+free disk, the cap a server running its defaults takes, as it does for any
+broker that states no limit.
 
 The broker refuses every stream, consumer and bucket create either way, but
 **not with the same words**, so the engine's own refusal carries the ones you
@@ -1023,6 +1241,8 @@ api:
 | `/webhooks/*` — every vendor delivery, the Slack OAuth landing, the GitHub App return | `api.public` only |
 | `/otlp/{token}/v1/{signal}` — sandbox telemetry | `api.public` only |
 | `/mcp/{token}` — the executors' tool bridge | `api.public` only |
+| `/box/git/*` — a box's git, a coding box's or a check's, on a node whose roles name `git` | `api.public` only |
+| `/box/code/*` — a check's box's reads of its commit, on a node whose roles name `git` | `api.public` only |
 | everything else: `/health`, `/ready`, `/dashboard` and its assets, the sign-in routes under `/auth`, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/iam/*`, `/operator/*`, `/backup`, `/fleet/*`, `/worklet/*`, `/doclet/pages/*` | `api.port` only |
 
 `api.port` answers a public route with `404 no_route` and a hint naming
@@ -1033,22 +1253,41 @@ a path nothing serves: the same `404`, the same generic hint, nothing that says
 an admin port exists behind it. It requires no credential and decides
 before the guard runs, so `/config` there is that same `404` whatever
 credential is sent. The split
-is the engine's own, from one list (the `/webhooks/`, `/otlp/` and `/mcp/`
-prefixes, the routes that authenticate by a provider signature or a signed
-per-run token rather than by a person's or a token's credential), so there is
-no allow-list to keep in step with the routes a release adds.
+is the engine's own, from one list (the `/webhooks/`, `/otlp/`, `/mcp/`,
+`/box/git/` and `/box/code/` prefixes, the routes that authenticate by a
+provider signature or a signed per-run or per-check token rather than by a
+person's or a token's credential), so there is no allow-list to keep in step
+with the routes a release adds.
 
 **Why the sandbox endpoints are public.** A remote sandbox (E2B's cloud) runs
 on somebody else's network and reaches only what you publish; it calls
-`/otlp/{token}` and `/mcp/{token}` with the signed per-run token in the path and
-never holds a credential of anybody's. Leaving them on `api.port` would force that
-port public for every company running remote sandboxes. Point
-`CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the public
-address. The proxy in front of it may pass the public `Host` on (Caddy's
+`/otlp/{token}` and `/mcp/{token}` with the signed per-run token in the path,
+and a box reaches the code host's `/box/git/*` — a coding box with its run's
+token as git's Basic password, a check's box with its check's — never holding
+a credential of anybody's; a check's box reads the one commit its check
+measures at `/box/code/*` with the same credential. Leaving them on `api.port`
+would force that port public for every company running remote sandboxes.
+Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the
+public address. The proxy in front of it may pass the public `Host` on (Caddy's
 default, or nginx's `proxy_set_header Host $host`) and reach the node on
 `127.0.0.1` or any other address: the bridge admits a call on the token in its
 path, whatever name the call arrives under
 ([The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
+**`/box/git/*` and `/box/code/*` are mounted only on a node
+whose roles name `git`**, so on a fleet the balancer in front of the public
+listener routes both prefixes to the git nodes, as it routes a person's
+`/git/` on `api.port` (see [Code Host → Coding boxes](../concepts/code-host.md#coding-boxes)
+and [Check boxes](../concepts/code-host.md#check-boxes)); a node without the
+role answers them the mux's `404`.
+`CREWLET_BOX_GIT_URL` is that route as a box reaches it — the public address
+with `/box/git` on the end, naming a git node or the balancer over them, since
+any git node serves any box — and every node that runs seats sets it when the
+company hosts code: it is what a launch hands its box as the base of every
+clone, and a node without it refuses a run asked to be given repositories
+(`sandbox_git_url_unset`) rather than give a box a repository it cannot reach.
+A run's git token rides each of those requests as git's Basic password, so the
+URL is `https://` wherever it leaves the box's own host (see
+[Code Sandbox → Security model](../concepts/code-sandbox.md#security-model)).
 
 **A proxy in front of the bridge needs a request timeout of at least 15
 seconds.** Beside a run's tool calls, the bridge serves the run's poll for its
@@ -1197,11 +1436,11 @@ both.
 - **`data`** holds the company's durable state — a copy of the replicated estate, the identity directory's included, and the node's own event log; `ingress` and `workers` need it, and a node without it is [stateless](fleet.md#nodes-that-hold-no-data)
 - **`seats`** runs the agents — claims seat leases, boots the instances, processes their turns
 - **`ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
-- **`workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the learning passes, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper and Chatlet's message horizon
+- **`workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the learning passes, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon and the code-retention duty
 
-They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. A `direct` box needs neither: a node that runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` hands its own boxes its listener on loopback for both. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, which every seat's [executor box](../concepts/llm-backends.md#the-tool-bridge) dials, is the same kind of value: the fleet's address — an `ingress` node, or a load balancer in front of several — and the same on every node. A bridge session lives in the process holding the run's seat, and the node a box's call lands on relays it there over the broker, so a `seats` node without `ingress` serves the network no bridge of its own. Only a `direct` box needs none of it: it dials its own node's listener on loopback — on a node without `ingress`, `api.port`, served to that host alone.
+They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. A `direct` box needs neither: a node that runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` hands its own boxes its listener on loopback for both. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, which every seat's [executor box](../concepts/llm-backends.md#the-tool-bridge) dials, is the same kind of value: the fleet's address — an `ingress` node, or a load balancer in front of several — and the same on every node. A bridge session lives in the process holding the run's seat, and the node a box's call lands on relays it there over the broker, so a `seats` node without `ingress` serves the network no bridge of its own. Only a `direct` box needs none of it: it dials its own node's listener on loopback — on a node without `ingress`, `api.port`, served to that host alone. `CREWLET_BOX_GIT_URL`, if the company hosts code, is the receiver's case again: each `seats` node sets it to the git nodes' public `/box/git` — any of them, or the balancer over them — because a run's git token is signed with the same keyring and admitted by the run's row, which every git node reads.
 
-Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, which answers `503` until the node has recovered what it holds and `200` from then on, while the rest of the boot runs and `/ready` stays `503`. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
+Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, which answers `503` until the node has recovered what it holds and `200` from then on, while the rest of the boot runs and `/ready` stays `503`. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain unless it is serving git (a git request already running is finished first; a new one is refused). So give such a pod a `preStop` sleep of a few seconds if you need its load balancer to have stopped sending it requests before the listener goes: Kubernetes takes a terminating pod out of its Service's endpoints as the hook begins, and sends the SIGTERM that starts the drain only once the hook has ended, so the sleep is the time that change has to reach every proxy in front of the pod. (A balancer that probes `/ready` itself sees the `503` only once the drain has begun, and acts on it after its own period and threshold.) For git the same window is the one the drain waits through: a git client sent to the pod once its drain has begun is refused at its first request and retries against a peer rather than being cut part way, but the upload `POST` of a fetch begun on a peer is served there, and waited for, for as long as such requests still arrive. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
 Both communicate through the stream, and through the coordination KV on the
 same broker — never with each other. Both accept `-debug` for verbose
@@ -1384,11 +1623,15 @@ rather than letting it take the next one down too.
 Give every pod a `terminationGracePeriodSeconds` of at least its longest turn
 plus 60 s, plus any `preStop` sleep you give it — Kubernetes starts the grace
 countdown before the hook runs, so the sleep is spent out of the same grace.
-The drain waits for the turns already running and has no bound of the engine's
-own, so the longest turn is the part of the grace it needs; what follows the
+The drain waits for the turns already running — and, on a pod that serves the
+engine's own git host, for the clones and pushes already running, which it
+finishes rather than cuts — and has no bound of the engine's own, so the
+longest turn (or the longest clone or push the pod should finish) is the part
+of the grace it needs; what follows the
 drain — giving its leases back, closing the HTTP listeners (five seconds each,
 which an open sandbox bridge session spends whole), flushing the auxiliary
-spend and the day's usage, closing the store — takes milliseconds on a healthy
+spend, the reads of unit repositories and the day's usage, closing the store —
+takes milliseconds on a healthy
 fleet but up to about 46 s on a member that has lost both its event stream and
 its coordination store, and about 50 s on a node without `data`, each step
 waiting out its own bound (see
@@ -1603,7 +1846,12 @@ draining, and rolling upgrades. The two things that bite hardest:
 > the fencing epochs and the company's secrets would be on fewer disks than
 > the config claims. Resize the objects deliberately (`nats stream update
 > --replicas=3`, which covers the buckets too — a bucket *is* a stream), or
-> stand the fleet up fresh.
+> stand the fleet up fresh. On an embedded fleet the order is: bring the fleet
+> up at the old count, resize every stream and bucket through one member's
+> client listener with the operator key
+> ([Reaching an embedded fleet's broker with the nats tool](#reaching-an-embedded-fleets-broker-with-the-nats-tool)),
+> then raise `stream.replicas` and restart — a node refuses to start while any
+> object is short, so the resize comes first.
 
 **An executor record the engine cannot read.** Every reader of the
 executors' records lists them: the boot's epoch floor (before a node claims a
@@ -1682,7 +1930,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
-- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the maintenance sweep, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper and Chatlet's message horizon. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the maintenance sweep and the trim, three hours for the learning passes).
+- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the maintenance sweep, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon and the code-retention duty. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the maintenance sweep and the trim, three hours for the learning passes).
 - *Unbounded table growth.* `scheduled_runs` answers a short-horizon question and is written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so is the chat read state of a human seat the company no longer has, which no age could tell from a person who simply has not opened chat for a while, forgotten 24 hours after a sweep first finds the seat gone — and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 Two things are still per-process. `max_concurrent`: Tier A's
@@ -1803,10 +2051,10 @@ past its size, while the one read that must never wait behind them — resolving
 who is acting — runs on the connection reserved for it below. See
 [Scaling Out § The socket's admission semaphore](../concepts/scaling.md#the-sockets-admission-semaphore).
 
-**The reserved connection is held, not merely counted.** Connections are handed
-out first-come-first-served, so a spare one nobody holds is taken by the first
-read burst that wants it. The store therefore **draws that connection at open
-and keeps it**, the same move a pinned writer makes, and only identity work
+**The reserved connection is held, not merely counted.** A free connection goes
+to whoever asks for one first, so a spare one nobody holds is taken by the
+first read burst that wants it. The store therefore **draws that connection at
+open and keeps it**, the same move a pinned writer makes, and only identity work
 ever runs on it — the one arrangement under which a socket storm cannot starve
 the lookups that answer who is acting. See
 [Scaling Out § The admission semaphore, and the connection it cannot take](../concepts/scaling.md#the-admission-semaphore-and-the-connection-it-cannot-take)
@@ -1843,6 +2091,353 @@ Everything else is either:
 - **In-memory** — agent runtime state, the execution tracker
 - **An external tool** — task state (Jira, GitLab issues)
 - **The event stream** — routing, with a durable per-subscription backlog
+
+## The code host
+
+A node with the `git` [role](../concepts/configuration.md#noderoles), for a
+company that sets [`code.native`](../concepts/code-host.md), serves the
+company's repositories on its API listener under `/git/`, from a disposable
+cache on its own disk. What such a node needs from its host:
+
+- **git 2.55 or newer on its `PATH`** — the node floor. The node runs the
+  host's own git as a subprocess per request and checks its version at boot:
+  an older one refuses the boot, naming the version and the path it found. The
+  code host's clients — a person's git, a CI runner's, a sandbox box's — need
+  only 2.40 or newer (the client floor). The published image does
+  not install Debian's git: it builds the newest git release from a pinned,
+  checksummed tarball ([`scripts/git-pin.env`](https://github.com/crewlet/crewlet/blob/main/scripts/git-pin.env)),
+  cross-compiled for each platform, with its HTTPS transport (libcurl, the
+  GnuTLS flavour Debian's own git uses) and zlib and nothing else — no
+  OpenSSL of its own (libcurl's own libssh2 and OpenLDAP still bring
+  OpenSSL 3, Debian's `libssl3t64`, into the image and into every
+  `git-remote-https`, as they do beside Debian's git), no PCRE
+  (`git grep -P`, `git log -P`) and no Perl, Python or Tcl programs
+  (`git send-email`, `git p4`, `gitk`). So a git security fix reaches a git
+  node only as an engine image built from a bumped pin — never as an update to
+  the base image's own packages — and the project checks the pin against
+  git's releases every week, verifying each release's signature, so the
+  engine release that carries a git fix is the one to take. It reads its
+  system configuration from `/etc/gitconfig` and `/etc/gitattributes`, where
+  Debian's git did, so an image you derive configures it there (`git var
+  GIT_CONFIG_SYSTEM` prints the path); the code host's own processes read
+  neither, whatever they hold. A local sandbox box
+  that runs as the engine (`run_in: direct`) on a node from that image runs this
+  git too, so a harness's `git grep -P` fails there; a `container` or
+  `e2b` box runs its own image's git. The node serves a clone with git's
+  single-pack reuse — the bitmap's preferred pack sent as it is stored, every
+  other object as git packs any object, a stored delta reused and a whole copy
+  searched for a delta — rather than multi-pack reuse, which every git
+  at the node floor could serve (2.44 to 2.47 sent a pack the client
+  refuses) but which costs a clone bytes: the cache keeps a pack a push, each
+  completed by receive-pack with whole copies of the objects the push's
+  deltas were made against, and multi-pack reuse sends as they are stored the
+  whole copies the multi-pack-index keeps — 8.5–9% more over a history of
+  pushes that add files and 48–57% more over one of pushes that edit them, for
+  more of the node's CPU too (measured over copies the cache made,
+  `internal/code/cache`'s `BenchmarkPackReuse`; the spread is which copy of
+  each edited object a copy's index happened to keep).
+- **A volume for `git.cache_dir`.** The cache holds every repository the node
+  serves, whole, and a cold sync writes everything it downloads at the speed
+  the object store delivers it — so a volume of its own is worth it: its own
+  filesystem with its own space, never a btrfs subvolume or a ZFS dataset
+  drawing on the store's pool, which shares that pool's space and is read as
+  shared. Its derived budget is then seven eighths of the volume (see
+  [`git`](../concepts/configuration.md#git)). On a volume it shares, the cache
+  first leaves an embedded broker storing its streams there everything that
+  broker may still write under its limit — three quarters of the volume's free
+  space unless `stream.store_max_bytes` says otherwise — and takes half of what
+  is left, so on the single-volume layout (the store, the streams and the cache
+  under one directory, as [the example](../getting-started/configuration.md)
+  has them) a first boot gives the cache an eighth of the free space, settling
+  near a fifth as the broker re-derives its own limit from what the cache has
+  since filled. Size for that, or set `stream.store_max_bytes` and
+  `git.cache_max_bytes` to divide the volume yourself; the node says what it
+  chose, and every figure it chose from, as `code_cache_sized`, at warning
+  level when the budget comes out under 1 GiB. Where the broker's claim, the
+  request spools (64 MiB for each of `git.max_transfers`) and the revision
+  facts' patch spools (512 MiB: two patches at once of up to 256 MiB each)
+  leave no room at all — on that layout, a cold cache whose quarter of the free
+  space is no more than the spools, as under 18 GiB free on a sixteen-core
+  node — the node
+  refuses to host code rather than fill the volume the store lives on, and the
+  error names the figures and each setting that gives the cache room. Behind
+  the serving, the node also reads every byte of each repository it serves
+  against its checksums — once after it restarts, then once a day while the
+  repository is used, one repository at a time — which is what finds a pack or
+  an index the disk damaged after it was written. It reads 1.13 times the
+  repository's pack bytes — about a second a gigabyte from the page cache, and
+  at the volume's own throughput read cold — so for 1 TB of packs all used
+  every day, at most 2.5 hours of a gp3 volume's 125 MB/s baseline a day
+  (10.5% of it) for the share read cold, and nothing for a repository nobody
+  reads. It is
+  never backed up, and a backup tool of your own skips it with
+  `--exclude-caches`.
+- **Nothing to set for `vm.max_map_count`.** A git node reads the runs of its
+  indexes of which push introduced each commit through memory it maps from
+  their files, and the kernel counts every mapping of the engine's process
+  against `vm.max_map_count`, one setting of the whole host — a pod cannot set
+  its own — past which the process can map nothing, its own heap included,
+  and stops. So the node holds at most a quarter of the count mapped (16 382
+  runs at Linux's default 65 530), reads the count at boot and names its
+  bound as `mapped_runs` on `code_cache_opened`; a host that raised the count
+  for something else raises the bound with it, and one that lowered it below
+  the default lowers what every process on it may map, this one's bound
+  included ([Which push landed a commit](../concepts/code-host.md#which-push-landed-a-commit)).
+- **A writable `$TMPDIR` short enough for a socket.** Every push's git hands its
+  ref updates back to the engine over a unix socket made under `$TMPDIR`, whose
+  path is held to 100 bytes (darwin takes 104, Linux 108): a node whose
+  `$TMPDIR` is longer refuses to start the host, and says to set a shorter one.
+  The engine passes the socket's path and a one-time token to the hook as
+  `CREWLET_HOOK_SOCKET` and `CREWLET_HOOK_TOKEN`
+  ([Environment variables](../reference/environment-variables.md#set-by-the-engine-never-by-you)).
+- **A balancer that does not cut a quiet git request.** git keeps a transfer
+  alive by itself while `upload-pack` counts, and the engine writes a
+  keepalive every 5 s on a push from its hook onward — so an idle timeout of a
+  minute or more on `/git/` is enough for both. Neither keepalive covers the
+  silence **before a request's first byte**, which has two parts. The first is
+  a cache sync: warm, a few
+  milliseconds; on a node that has never served the repository, or whose budget
+  evicted it, a **cold** sync downloads one object for every push the
+  repository ever took that carried objects — at most 2 048 of them, the live
+  packs a repository may hold
+  ([the pack bound](../concepts/code-host.md#limits)), since 10 000 would take
+  about 70 to 130 s from S3, which answers each request in about 100 to
+  200 ms — and on a node bringing up
+  hundreds of repositories at once it first waits its repository's turn to
+  read the rows, eight a node at a time
+  ([many repositories at once](../concepts/code-host.md#the-cache-on-a-git-node)):
+  on a node joining with fresh caches the downloads outlast it once its
+  repositories hold more than a handful of packs, and on a node restarted over
+  the cache it kept, which downloads nothing, it is the whole sync — about four
+  seconds for 500 repositories asked at once, each a full page of refs from a
+  data node of eight cores, which scans a full page in about 60 ms. The first
+  sync of each
+  repository after the node restarts also holds that repository's index files
+  — about a quarter of its pack bytes — to their checksums before it answers:
+  0.2 s a gigabyte of packs from the page cache, and at the volume's own
+  throughput read cold — 39 s for the largest repository the defaults admit
+  (20 GiB) at a gp3 volume's 125 MB/s baseline, shorter in proportion on a
+  volume provisioned faster. The second is the hold on a
+  fetch's answer until its pack begins: the host holds upload-pack's answer so
+  that a cache its `pack-objects` finds damaged can be repaired and the fetch
+  served, rather than failing it past the first byte. For a client using
+  side-band (every git since 1.6) that wait is at most a progress line (about a
+  second) or one upload-pack keepalive (5 s) — pack-objects' first word, unless
+  that word is an error it reports, which holds the answer until the process
+  ends — and a client that asks for no side-band waits until the raw pack's
+  first byte.
+  Either size the idle timeout to the cold sync of your largest repository, or
+  route `/git/<name>` by repository — a balancer hashing the path to a node,
+  with the next one in line when it is down — so each repository stays warm on
+  one or two nodes. Routing by repository is never required for correctness.
+  All of it holds for a coding box's `/box/git/<name>` on the public
+  listener's balancer as well: a box's clone meets the same cold sync and
+  the same holds, so give that balancer the same idle timeout, or route the
+  box prefix by repository the same way.
+  A fetch large enough to spool — a partial clone's checkout asking for more
+  than a mebibyte of objects — that finds the node's room for such requests in
+  use is silent too: it waits up to 55 s for its turn, a keepalive interval
+  inside the minute, and is answered 503 if its turn has not come, so an idle
+  timeout of a minute lets the node's own answer through rather than cutting
+  the request with the balancer's.
+  A client that does not ask for side-band (every git since 1.6 asks, so this
+  is a hand-built client) hears nothing during a push from the end of its
+  upload to its report: git's own keepalive (`receive.keepAlive`) and the
+  engine's travel in side-band only. That stretch is receive-pack indexing and
+  checking the pack, then the engine scanning it, storing it, proposing the
+  push and waiting for its row. For such clients keep the idle timeout at 3
+  minutes or more, whatever the push's size: the proposal is given two minutes
+  — a minute's write attempt at the repository's committer and another at its
+  runner-up, should the committer stop answering — and a row that resolved
+  pending a minute more. A large push adds what its pack's own work may take
+  before the engine gives it up: 10 s and a second a mebibyte for git's
+  indexing and for each of the engine's three scans of the pack (a coding
+  box's push four: its commits' committers are read too), and a minute and
+  30 s a mebibyte (the floor every transfer is held to) for the object store's
+  put — about 34 s a mebibyte in all, 35 s for a box's. A push into a large
+  repository adds what walking its history may take: a commit dated before
+  its parent — a clock that is behind — walks every commit of the repository in
+  receive-pack's own connectivity check, and, until the node has written the
+  repository's commit-graph, in each of the engine's listings and each branch
+  update's force check too, and each such walk is given 11 µs an object of the
+  repository: 33 s at three million objects, a gigabyte of source history,
+  which such a walk takes about two seconds to finish.
+- **A token for each CI runner.** A fetch large enough to spool — a blobless
+  checkout's lazy fetch, past a mebibyte of wants — holds its room from its
+  first spooled byte until git has read it and started answering, its sync
+  included, and one credential's may hold a quarter of the node's room at
+  once: 256 MiB on a four-core node, each up to 64 MiB, about 1.3 million
+  objects. Fetches past that quarter wait their turn behind the token's own,
+  up to 55 s each, and a lane's width of git transfer slots of them may wait
+  at once — 16 on a four-core node, past which the excess is answered 503 at
+  once. How long they wait is how long the ones ahead of them hold their
+  room: a moment on a node that holds the repository, and on one that does
+  not the cold sync above with each fetch's pack-objects — which can outlast
+  the wait, and the wait stays 55 s whatever idle timeout the balancer is
+  given, so on a cold node where it does the fetches past a token's quarter
+  are answered 503, and git does not retry a lazy fetch, so those checkouts
+  fail. N runners behind one token, each asking for
+  B bytes at once, meet that once N × B passes the quarter: thirteen lazy
+  fetches of 20 MB fill a four-core node's 256 MiB, and the fourteenth and
+  every one after it fail on such a cold sync. Give each runner a token of its
+  own, and the limit is the node's whole room — fifty-three such fetches on a
+  four-core node's gibibyte, which a cold sync can fill too; routing by
+  repository, above, keeps the syncs warm. A fetch whose body is still
+  arriving holds no turn: it holds what its client has sent, and the node
+  keeps one fetch's 64 MiB free of those behind the oldest still arriving, so
+  a slow client holds others up only once the fetches arriving hold all but
+  that of the room — 960 MiB of a four-core node's gibibyte, 192 MiB of a
+  token's quarter. `crewlet.code.host.spool.waits` by `outcome` shows the
+  waiting ([Metrics](../reference/metrics.md)), and a
+  `code_fetch_spool_unserved` line names the token behind any that was not
+  served and what held it back — git itself prints only
+  `error: RPC failed; HTTP 503`.
+- **Memory for its transfers, cores for its reads.** Each clone, fetch or push
+  holds a few hundred MiB while it runs (224 MiB at the defaults, plus about
+  240 bytes for every object of a repository it clones whole) and a core only
+  now and then, so `git.max_transfers` defaults to four a core and no more than
+  one for every 512 MiB of the node's memory; reads and background indexing
+  take a core each, `git.max_processes` of them. `crewlet.code.git.wait` by
+  `class` is the signal: a `transfer` wait climbing is a node serving as many
+  transfers as its memory backs, a `read` wait one out of cores
+  ([Metrics](../reference/metrics.md)). `crewlet.code.git.share_wait` by
+  `share` says whose transfers wait: `machine` climbing while `person` stays
+  flat is CI waiting behind CI, which the node's
+  [fair share](../concepts/code-host.md#fair-share) does on purpose, and both
+  climbing is a lane too narrow for its traffic. `crewlet.code.git.cpu` by
+  `class` is what each lane's work costs — every git process's CPU, its
+  children's included, counted whole as the process ends. A clone can run for
+  hours and a background index for a quarter of an hour, each landing in the
+  minute it ends in, so read its sum over hours, as the cost of a lane's work,
+  and never as how busy the node is now: that is the container's own CPU usage.
+  A transfer lane full while the node's CPU is low is transfers waiting on
+  something other than cores — clients slow to read, pushes waiting on the
+  code log or the object store — and one full with the CPU high is a node
+  short of cores.
+
+### Reaching other forges
+
+A git node dials out for three things: a repository's **import**, its **pull
+mirror**'s syncs and its **push mirror**'s pushes, each run by the
+repository's home git node ([Mirrors and
+imports](../concepts/code-host.md#mirrors-and-imports)). Every one goes out
+the same one way, which is what the node's network has to allow:
+
+- **HTTPS alone**, to the host the repository's settings name, on its port
+  (443 unless the URL says otherwise). No other scheme is dialed, and a
+  redirect is not followed: a forge that moved a repository is given its new
+  URL in the settings.
+- **Public addresses only, by default.** The node resolves the host itself
+  before git runs and refuses it when any address it resolves to is loopback,
+  link-local, private or unique-local, then hands git exactly the addresses it
+  judged, so a name cannot resolve one way when judged and another when
+  dialed. A forge on your own network is reached by setting
+  [`git.import_allow_private: true`](../concepts/configuration.md#git)
+  in that node's Tier A — on every git node, since any of them may become a
+  repository's home. It governs all three, pull and push alike, whatever its
+  name says.
+- **A proxy, if the node needs one, is the process's own**: the proxy
+  `HTTPS_PROXY` names for the forge's URL, less what `NO_PROXY` exempts, read
+  as the engine's own HTTP clients read them, is handed to git as its
+  `http.proxy`. Through a proxy it is the proxy that resolves and dials the
+  forge, so the address rule above is then the proxy's to hold — the wall is
+  yours there, as it is for every other outbound request of the engine.
+- **The certificate authorities are the process's own**: libcurl's own store,
+  or the bundle `SSL_CERT_FILE` names and the one directory `SSL_CERT_DIR`
+  names (several are refused, since libcurl reads one), which is how a forge
+  behind a private certificate authority is trusted. TLS is always verified:
+  no setting turns it off.
+- **Credentials are variables**, never values in the company file: each
+  mirror's or import's `credential` names a variable resolved from the
+  [secret store](../concepts/secret-store.md), then the node's environment, at
+  each dial, and sent to the forge in a header, never on git's command line.
+  A push mirror's is the token of the seat it pushes as at that forge, so set
+  it on every git node's secret store or environment.
+
+### Sizing git nodes
+
+Size ONE git node for publishing, and every other for serving. A repository's
+bitmapped index is written once, by its
+[maintainer](../concepts/code-host.md#who-maintains-a-repository), and
+installed by every other git node in a few MiB of memory: the maintainer is the
+first git node of the repository's order whose background budget — what the
+node can give its background work, which every git node advertises on its
+presence heartbeat — holds every step of the repository's maintenance: about
+840 bytes of memory an object of the repository for its publication (600 for
+the bitmap, 240 for a clone beside it;
+[Memory](../concepts/code-host.md#the-cache-on-a-git-node)), and under some six
+million objects more for a merge of every object — 790 bytes an object beside
+its delta window, six of the largest blob `max_blob_bytes` admits, 300 MiB by
+default. On a fleet of
+alike git nodes that is each repository's home, and a fleet whose repositories
+every node can publish needs nothing more. Where one repository's publication
+is past every node of ordinary size, give one git node the memory for it: every
+repository only that node can hold is published there, whatever its home, and
+the rest stay with their homes. A repository at the default `repo_max_bytes`,
+20 GiB or some 60 million objects of a source repository's history, needs
+about 50 GB: the LARGE git node — 96 GiB of memory and 16 cores, whose
+background budget at the default lanes is about 68 GiB once it keeps 224 MiB
+for each of its 64 transfers and 896 MiB for each core — publishes it with
+room to spare, and each routine publication of it, a layer over a base
+charged 350 bytes an object rather than the root's 600, reserves about 35 GB
+of that budget while it builds, and one such node is all the fleet needs for a bitmap of it
+everywhere. A repository NO git node can hold is still
+served, without a bitmap for what was pushed since its last publication, and
+its home raises [`code_maintenance_refused`](../reference/alarms.md), its
+`code_cache_maintenance_refused` line naming the repository and the charge.
+
+The node that publishes also holds:
+
+- **Every repository it maintains, in its cache.** Each merge and publication
+  syncs the repository first, so give that node a cache budget
+  ([`git`](../concepts/configuration.md#git)) that keeps the repositories it
+  maintains warm; otherwise each publication begins with a download of the
+  whole repository — 20 GiB at the default `repo_max_bytes`.
+- **About ten large repositories at their duty cycle.** It publishes one
+  repository at a time, each at most every ten times its last build, so past
+  about ten repositories whose builds take minutes each waits for the others,
+  its unpublished tail growing meanwhile
+  (`crewlet.code.publish.duration` against how often each is due). Give a
+  second git node the same memory, and the repositories spread over the two,
+  each in its own order.
+- **Its uploads' buffers.** A publication uploads up to sixteen parts of its
+  layer and sixteen outputs of its repack at once, and a merge beside it up to
+  sixteen outputs: on an `s3` store an 8 MiB first part each, 384 MiB at most,
+  256 MiB of them one publication's — out of what the node keeps back for
+  serving and the store, not its background budget.
+
+### Running checks on git nodes
+
+Every git node runs the company's [checks](../concepts/code-host.md#who-runs-a-check):
+each claims the queued attempts its repositories' git order ranks it first
+for, and a box of the company's sandbox catalogue runs each. A `container`
+check is a container on the git node's own machine — a repository's build or
+its tests, beside the code host's git — so **`git.max_checks`** bounds how many
+run there at once:
+
+```yaml
+git:
+  max_checks: 4      # unset: a quarter of the node's cores, at least one; 0: none
+```
+
+- **Unset**, a node runs one container check for every four cores
+  (GOMAXPROCS), and at least one: a check runs as many processes as it is let
+  — `go test ./...`, `make -j` — so four cores a check leave the node's own git
+  lanes (`max_processes`, a core a slot) three quarters of the machine, and a
+  parallel build room to be parallel. A node whose checks are most of its work
+  raises it; a node that should serve git and nothing else sets **`0`**, and
+  the fleet's other git nodes run its repositories' container checks two
+  seconds later, as the next of each repository's order.
+- **An `e2b` check runs on E2B's machines** and takes none of these; what a
+  company lets its remote checks spend is its own configuration's.
+- **A node needs `CREWLET_BOX_GIT_URL`** to run any check — the public
+  listener with `/box/git` on the end, where a check's box clones its commit,
+  and whose `/box/code` sibling a `checkout: none` check reads it at. A node
+  without it says `code_checks_not_run` once and runs none.
+- **`crewlet.code.checks.running{placement="container"}` pinned at
+  `git.max_checks`** while [`code_checks_backlog`](../reference/alarms.md)
+  stands is a fleet whose container cells are too few for its checks: raise
+  `max_checks` where the cores allow it, or add a git node.
 
 ---
 
@@ -1983,7 +2578,7 @@ from that map — a guard test fails if the two drift.
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `assistant_conversation_read`, `assistant_turn_completed`, `backup_requested`, `config_revision_activated`, `config_revision_applied`, `mcp_server_acted`, `model_acted`, `operator_acted`, `org_started`, `org_stopped`, `seat_access_drift_restored`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `executor_collected`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `seat_provider_parked`, `seat_provider_released`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `executor_collected`, `change_merged`, `change_opened`, `code_check_finished`, `code_expunged`, `code_fetched`, `code_imported`, `code_mirror_pushed`, `code_queue_ejected`, `code_target_broken`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `review_submitted`, `seat_provider_parked`, `seat_provider_released`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `executor_asked`, `executor_answered`, `executor_finished`, `executor_failed`, `executor_launched`, `executor_stopped`, `scheduled_fire_superseded`, `scheduled_task_fired`, `task_assigned` |
 | `webhook` | `inbound_delivery` — one row per delivery presented to one seat, from a [webhook route](../reference/api-endpoints.md) or a [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet). The row is filed under the delivery's own label (`webhook:<event>`, `forge:<event>`, `socket:posted`) rather than under `inbound_delivery`, with the provider's exact bytes as its payload |
 
@@ -2006,6 +2601,7 @@ decision as a value, so the rule below can be checked rather than remembered.
 | `a2a_message` | Already recorded | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
 | `executor_answer_given` | Already recorded | The command an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's control topic, and never a turn. What the answer became is **already** a row (`executor_answered`), and that a person gave it is their `operator_acted` row, same reason as `a2a_request`. |
 | `tool_skill_page_changed` | Already recorded | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
+| `operator_tools_changed` | Already recorded | A **nudge** between nodes that what one node's [operator catalogue](../reference/api-endpoints.md#operatormcp--your-own-assistant) is built from changed, so every node tells the MCP clients listening on it to list their tools again — the listing may reach any node, and the last nudge follows the last node's change. The apply that moved the catalogue is **already** a row (`config_revision_applied`), so a durable row per node per change would record one revision once more per member of the fleet. |
 | `reflection_due` | Already recorded | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`), and what reflecting on it did is its own (`reflection_completed`) — same reason as `a2a_request`. |
 | `custody_batch` | Already recorded | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
 | `seat_inbox_waiting` | Periodic snapshot | A **snapshot** of what waits in the inboxes of the seats one node holds, published every five seconds when a count moved and every thirty when none did, so a durable row per report is readings the next one supersedes; the live projection holds the current one. |
@@ -2047,6 +2643,11 @@ category.
 | Stored, not in the activity feed | Why |
 |---|---|
 | `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush ([Budgets and spend § Auxiliary spend](budgets-and-spend.md#auxiliary-spend)). A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
+| `code_check_finished` | **Counted, not watched**: one attempt of a check of a commit that ended, as its row on the code log keeps the ending, published once by the data node that wrote it ([Code Host § Who records a check](../concepts/code-host.md#who-records-a-check)). Every push of every change ends each check its repository defines, faster than anybody reads a feed. How a change's checks ended is read where it is asked — the change's checks, the repository's. |
+| `code_expunged` | **An audit, not activity**: what an expunge's commit took out of a repository — its objects and bytes, and until when the object store still holds them — published once a commit, by the maintainer that proposed it ([Code Host § Expunge](../concepts/code-host.md#expunge)). Most are the maintainer's weekly housekeeping, and a person's purge is already in the feed as that person's `operator_acted`. The repository's detail keeps only its latest expunge, so the event log is where every one is kept. |
+| `code_fetched` | **An audit, not activity**: one reader's reads of a `visibility: unit` repository's contents — fetches whose answers carried a pack, or a code tool's answers — coalesced per fifteen-second flush, with how many and their bytes ([Code Host § Who read it](../concepts/code-host.md#who-read-it)). A busy company's readers — a CI token fetching on every build, seats reading files a line range at a time — write a record each every flush, faster than anybody reads a feed. Who read a repository is answered by `GET /code/repos/{name}/readers` and by the operator catalogue's readers tool, summed across the fleet. |
+| `code_imported` | **An audit, not activity**: where a repository's contents came from — the source it was imported from, the chunks, refs and bytes that landed, and the error where it ended short of its source — published once an import, by the home git node that ended it ([Code Host § Mirrors and imports](../concepts/code-host.md#mirrors-and-imports)). A person's import is already in the feed as that person's `operator_acted`, and a declared one is the company document's. The repository's row keeps only its latest import, so the event log is where every one is kept. |
+| `code_mirror_pushed` | **An audit, not activity**: what a repository's home git node pushed to its push mirror at another forge — the refs it set and onto what, those it deleted and the protected branches it held back with no green commit, each list its first 16 refs beside the count of all of them — published once a push that moved something ([Code Host § Mirrors and imports](../concepts/code-host.md#mirrors-and-imports)). A busy repository's mirror pushes as often as once a minute, each where the repository's settings told it to, and nobody acts on one. A push that failed is no event: it is its home's state, which the mirror alarm ([Alarms](../reference/alarms.md)) raises once it outlasts the mirror's refresh. |
 
 #### Querying events
 
@@ -2461,6 +3062,17 @@ reaches the log whatever else is configured. Its boot narration ("Starting
 nats-server", the JetStream storage line, "Server is ready") is `debug`: a
 dozen lines describing infrastructure you deliberately did not deploy.
 
+One error line is `debug` too: the broker's own report of a connection it
+refused for its credential (`authentication error - User "…"`), which it
+writes once per attempt, carrying whatever name the peer sent. The engine
+reports every such refusal itself — counted in `crewlet.broker.peer.refusals`,
+and logged as `broker_peer_refused` once a minute a class, naming the key
+([The fleet's broker admits only its own nodes](#the-fleets-broker-admits-only-its-own-nodes))
+— so the broker's copy would be the same event twice, at whatever rate a peer
+chooses. The dialling side keeps its level: a member failing to join a peer
+(`Route Error 'Authorization Violation'`) is this node's own problem, and its
+operator needs it.
+
 Its **own debug output is a separate switch**, `stream.debug`, and it is off
 by default:
 
@@ -2563,7 +3175,8 @@ crewlet budgets show      # the durable counters, read from a running node
 It talks to a node rather than to a file: the counters are the fleet's, and on
 the default topology they live inside the running engine. `-api` names another
 node, and without it the address is taken from the `api` block of the config
-on the command line; the credential is `CREWLET_API_TOKEN`, never a flag.
+on the command line, which is not read at all when `-api` is given; the
+credential is `CREWLET_API_TOKEN`, never a flag.
 There is no reset command: a window's allowance comes back when the window
 turns over.
 
@@ -2597,9 +3210,12 @@ the turn's own `agent_turn_completed`. The refused round is **counted all the
 same**, on the seat's counter and the company's, because the vendor has
 already billed it: the refusing window reads past its ceiling by the round that
 crossed it, and every later round is refused against that figure until the
-window turns over or the ceiling is raised. Each scope's check is atomic, and
-nothing a charge counted is taken back: a seat write that fails after the
-company's landed stops the round as an outage and leaves it on the company,
+window turns over or the ceiling is raised. Each scope's check is atomic — and
+a node's charges on one counter are one write, decided in the order they
+arrived, so the company's counter is contended by the nodes charging it rather
+than by every round in flight — and nothing a charge counted is taken back: a
+seat write that fails after the company's landed stops the round as an outage
+and leaves it on the company,
 whose record of a billed round is true, so only that seat's own counter is
 short of it — logged as `coord_kv_budget_spend_uncounted` — until the window
 turns over. In a fleet the counters live in the coordination

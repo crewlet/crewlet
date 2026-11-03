@@ -52,6 +52,11 @@ func TestTheChatDomainIsACertifiedDomain(t *testing.T) {
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
 			EncodeGate: encodeSuiteGate,
+			// THE PRODUCTION ENCODER of the read index's barrier, which the
+			// suite holds to writing no row.
+			EncodeBarrier: chatlet.EncodeBarrier,
+			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0080).
+			EncodeTrimmed: chatlet.EncodeTrimmed,
 		}
 	})
 }
@@ -229,6 +234,8 @@ func suitePayload(kind chatlet.ObjectKind, id string) (chatlet.OpKind, any, chat
 		}, chatlet.ScopeSet{Subject: true}
 	case chatlet.KindBarrier:
 		return chatlet.OpBarrier, nil, chatlet.ScopeSet{Subject: true}
+	case chatlet.KindTrimmed:
+		return chatlet.OpTrimmed, nil, chatlet.ScopeSet{Subject: true}
 	}
 	return chatlet.OpPost, nil, chatlet.ScopeSet{Subject: true}
 }

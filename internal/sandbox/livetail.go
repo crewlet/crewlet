@@ -294,7 +294,7 @@ type TailAsker interface {
 
 // TailServer makes a process one of a subject's answerers.
 type TailServer interface {
-	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
+	Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
 // TailReader answers a tail request from the node that reads the run's box.
@@ -537,7 +537,7 @@ func ServeTail(ctx context.Context, q TailServer, owner, node string, pending Pe
 		logTailFailure(ctx, req.TurnID, req.LaunchID, failure, err)
 		return failure
 	}
-	return q.Serve(ctx, topics.ObserveExecutorTail, func(ctx context.Context, raw []byte) ([]byte, error) {
+	return q.Serve(ctx, topics.ObserveExecutorTail, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req tailRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, fmt.Errorf("sandbox: a tail request this build cannot read: %w", err)

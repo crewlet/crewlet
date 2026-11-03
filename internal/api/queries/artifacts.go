@@ -84,7 +84,7 @@ func registerArtifacts(r *Registry, src ArtifactsSource, now func() time.Time) {
 // adopted, through the one answer the brand route gives
 // ([artifactsapi.Gate.Brand]).
 func (s artifactsAnswers) brand(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func (s artifactsAnswers) read(ctx context.Context, what string, p Params, versi
 // default) or trashed, `pinned=true` and `work_item=` (the artifacts made for
 // that tracker item).
 func (s artifactsAnswers) list(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +217,7 @@ func (s artifactsAnswers) list(ctx context.Context, p Params) (any, error) {
 // they can see and their role on it, and how many artifacts they can see sit
 // in no folder they see.
 func (s artifactsAnswers) folders(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}

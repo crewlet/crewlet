@@ -304,6 +304,17 @@ func TestSummaries(t *testing.T) {
 		payload: CompactionCompleted{SkippedReason: CompactionAlreadyRunning},
 		source:  "eng",
 		want:    "eng compaction skipped (already_running)",
+	}, {
+		name: "an import's end names its source and what landed",
+		payload: CodeImported{RepoName: "web", URL: "https://example.com/acme/web.git", Chunks: 2, Refs: 1001,
+			Bytes: 4096, DefaultBranch: "main"},
+		want: "system imported web from https://example.com/acme/web.git: 1001 ref(s), 4096 bytes in 2 chunk(s)",
+	}, {
+		name: "an import ended short says so",
+		payload: CodeImported{RepoName: "web", URL: "https://example.com/acme/web.git", DefaultBranch: "main",
+			Error: "blob 0123abcd is past code.limits.max_blob_bytes"},
+		want: "system imported web from https://example.com/acme/web.git: 0 ref(s), 0 bytes in 0 chunk(s), " +
+			"ended short of its source",
 	}}
 
 	for _, tc := range cases {

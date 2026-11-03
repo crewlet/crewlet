@@ -158,7 +158,7 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 		boxed, _, err := c.boxResult(ctx, run, BoxReadCollect)
 		switch {
 		case err == nil:
-			result, read = c.fitText(ctx, run, cutOff(boxed, loss.Cause)), true
+			result, read = boxed, true
 		case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, ErrBoxHostSilent),
 			!c.collectGivenUp(run, err, c.now()):
 			return nil, c.collectFailed(ctx, run, err)
@@ -169,13 +169,25 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 					"is not charged; its round is carried on all the same")
 		}
 	}
-	// WHAT ITS SESSION STILL OWED THE JOB'S RECORD, carried before the round
-	// is carried on from it ([CoordinatorOptions.Settle]): the next job's
-	// launch is what ends that session, by which time the record holds the
-	// next job and takes nothing of this one's.
+	// WHAT ITS SESSION STILL OWED THE JOB'S LOG, carried before the round is
+	// carried on from it ([CoordinatorOptions.Settle]), with what those calls
+	// cost on the job's record: the next job's launch is what ends that
+	// session, by which time the log and the record hold the next job and
+	// take nothing of this one's.
 	if c.settle != nil && c.settle(ctx, run.TurnID, run.LaunchID) {
-		run = c.rereadCalls(ctx, run)
+		run = c.rereadSpend(ctx, run)
 	}
+	// WHAT IT PUSHED, read whether or not its box answered: the push record
+	// is the code host's, never the box's, so a job lost with its box still
+	// has its pushes on the record, and its report says what each became
+	// rather than that nothing was recorded ([Coordinator.readPushes]). A
+	// lost job did not finish, so no change it asked to open is opened. Held
+	// to the record's bound with the rest of the result ([Coordinator.fitText]).
+	result, err := c.readPushes(ctx, run, cutOff(result, loss.Cause))
+	if err != nil {
+		return nil, c.collectFailed(ctx, run, err)
+	}
+	result = c.fitText(ctx, run, result)
 	var outcome runOutcome
 	if read {
 		// THE BOX ANSWERED, which ends any run of failed reads behind this
@@ -196,6 +208,8 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 			CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		}
 	}
+	outcome.Pushed, outcome.PushedElided, outcome.PushedUnread = result.Pushed, result.PushedElided,
+		result.PushedUnread
 	outcome.Engine = run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed})
 	outcome.Lost = &LostRun{
 		Cause: loss.Cause, Why: loss.Cause.Why(),
@@ -209,11 +223,9 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 			"; its turn resumes to carry the round on")
 	// THE REPORT, for a round its job had already submitted: the turn
 	// collects that round from its calls rather than carrying it on, and
-	// files this as the run's account of itself ([ResumeRequest.Lost]).
-	if !read {
-		result = cutOff(Result{}, loss.Cause)
-	}
-	return &lostCarry{run: run, report: runReport(result), outcome: outcome}, nil
+	// files this as the run's account of itself ([ResumeRequest.Lost]) —
+	// cut off, as the result above was, whether or not its box was read.
+	return &lostCarry{run: run, report: runReport(run, result), outcome: outcome}, nil
 }
 
 // lostCarry is what a lost job's round is carried on with: the claimed run as

@@ -53,7 +53,7 @@ func TestAnOversizedRecordIsRefusedOnceAsTooLarge(t *testing.T) {
 				h = newHarnessFor(t, tc.domain)
 			} else {
 				srv := externaltest.Start(t, queue.MaxPayloadBytes)
-				h = newHarnessOn(t, tc.domain, js.Config{URL: srv.URL()})
+				h = newHarnessOn(t, tc.domain, js.Config{URL: srv.URL(), Token: externaltest.Token})
 				srv.Restart(tc.payload, h.q.Conn())
 			}
 			_, err := h.writeSized(probeSubject("a"), "op-large", tc.size)

@@ -195,6 +195,113 @@ that read as activity, and the fix for that is not a duller hue — it is none.
 `warning` and `danger` are separate because a seat parked on a question and a
 seat that fell over have both stopped, and only one of them is a failure.
 
+### Diffs carry no hue
+
+Every diff the dashboard draws is one component, `components/DiffView.tsx`,
+and no line of it is coloured: Settings › Configuration's Diff lens, a
+Doclet page's History and its editor's view of a colleague's save, the
+newest change on Doclet's landing, a principle somebody saved while it was
+being written, an artifact's versions compared by file and by line, and an
+MCP server's changed tool under review. A removed line is not a failure and an
+added one is not done, so the state hues are not spent on them; and on a
+screen that also draws a state, a red removed line beside a red failed check
+would make one red mean two things. The design system's own `DiffView`,
+`DiffSummary` and `DiffList` paint an added line in the success state's tint
+and a removed one in the danger state's, which is why the dashboard draws its
+own from the package's tokens, and draws none of the three.
+
+A line's kind is said three ways, each enough alone:
+
+- **The glyph gutter**: `+` for an added line and `−` for a removed one, with
+  *Added* or *Removed* read in its place, because a minus sign is announced as
+  anything from "minus" to nothing at all.
+- **Two surface steps off the diff's own ground.** The diff paints the card
+  rung inside the card's hairline wherever it stands, because a rung is right
+  only against the ground it was picked for. An added line is raised one rung
+  (`--color-surface-elevated`) and a removed one sunk one
+  (`--color-surface-background`, the sheet): steps the palette holds three ΔE
+  and 1.5 ΔE off the card in every theme, and opaque rungs, which every text
+  step is measured on.
+- **The word underline.** Where a removed line and an added line are one line
+  edited, the run of each that differs is underlined (`lib/wordDiff.ts`): ONE
+  run, between what the two lines share at their start and at their end, in
+  whole words, and none at all when all they share is spacing and
+  punctuation. A word-by-word diff would mark every word the edit moved past,
+  which makes a small edit prettier and a rewritten paragraph unreadable.
+  Which two lines are one line edited is read off the change, never guessed
+  from their words, because an underline says they are one: a setting's old
+  and new value under one path; in a text, the lines in the same place of a
+  change that removes as many lines as it adds (the one shape git's own
+  `contrib/diff-highlight` pairs), or one line against several, the first
+  of each. Any other change of a text underlines nothing: one of two lines
+  or more a side with unequal counts, where every pair after a line added
+  is two neighbours.
+
+Two texts are compared by the dashboard's one line diff, `lib/lineDiff.ts`,
+which every diff, preview and merge of a text compares with: the shortest edit
+between their lines (Myers' algorithm, the one git's own diff runs), in linear
+space, over lines interned to numbers, with the stretch the two share at their
+start and end walked once and compared no further, so what a comparison costs
+follows what changed rather than the length of the text. It is bounded, and
+says so: past 20,000 lines a side in what changed, or 4,000 lines removed and
+added, two texts are NOT compared, and the diff is a sentence saying which in
+place of every row, never a comparison drawn that was not made. The design
+system's own `diffLines` is why that matters: it fills a table quadratic in
+the two texts, so it stops at 2,000 lines a side, and there it answers every
+line of the older text removed and every line of the newer added, which drew a
+page edited on one line as a page rewritten.
+
+A diff of a text is numbered in both versions, in Geist Mono at the document's
+13px. A diff of SETTINGS — a configuration's paths, an artifact's files — is
+keyed instead: each line names its path where a text's carries its numbers,
+and a setting that changed is its old value removed and its new value added,
+so the underline finds what moved inside it. A hunk opens with a row saying
+how many unchanged lines it skipped, because a gap silently closed makes a
+document edited at both ends look like one rewritten in the middle. A diff is
+unified, or split — the older text beside the newer, each removed line beside
+the line that replaced it — only where it is at least 640px wide (the kit's
+phone breakpoint, read off the diff's own width), and a keyed diff is always
+unified. Past 1,000 rows it is windowed: only the blocks of 100 rows within a
+view of the screen hold their rows, measured against the diff's own scroller,
+and the rest keep the height they last had; under it every row is mounted,
+which keeps find-in-page and a screen reader's reading of the whole diff. The
+threshold is provisional: what decides it is the first paint of a 1,000-row
+split diff, held to 100 ms, and timing that needs a browser the dashboard's
+suites do not run. Whether to add one, keep the value unmeasured, or lower it
+to the window's own 300 rows is the maintainers' call.
+The window bounds the reading as well as the mounting: which line pairs
+with which is settled from the change's shape, and a pair's words are
+tokenized for its underline only once one of its lines is drawn, so the
+first paint of a long diff never reads every line it holds.
+Its rules are a sheet of its own, `diff.css`, which arrives with the first
+screen that draws a diff rather than in the first paint: every one of those
+screens is a lazy chunk.
+
+**A host can write on a diff.** A change's review is read in its diff, so the
+component takes what a host anchors to a line (`notes`, drawn under that
+line, and under its row across both sides of a split diff, once) and lets a
+host pick lines (`onPick`): each line's own number — its newer one, else its
+older, the number a finding names — becomes a button, Shift extending the
+host's pick from where it began, and a picked line is ruled at its edge
+(`picked`), never tinted, since a pick is the reader's place and not the
+line's. What is drawn under a line and what a pick does are the host's; a
+diff given neither draws exactly what it drew before. A host that opens on a
+line — a failed check's — hands the diff the line to bring into view
+(`reveal`) rather than looking for it on the page: past the window's first
+block the line has no element until its block is drawn, so the diff scrolls
+to that block's box, which brings it within the window, and then centres the
+line, once.
+
+`styles/diffs.test.ts` holds the rule in the sheets (no rule naming a diff
+spends a state's, a chart series' or an identity's hue), in the palette (the
+two steps are the rungs either side of the ground, measured off it in every
+state of every theme) and in the tree (nothing reaches the package's diffs —
+by name, by their own modules, or through a namespace, a dynamic import or a
+re-export of any module that hands them on in the package as installed — and
+no `VersionCompare` is handed the two texts that would make it draw one);
+`lib/lineDiff.test.ts` holds the same of the package's `diffLines`, which
+nothing compares with; `components/DiffView.test.tsx` holds what it draws.
+
 ---
 
 ## The palette is measured, not asserted
@@ -206,12 +313,15 @@ other import in `dashboard/src/main.tsx`. Above, because an import is
 evaluated in source order and the components carry their own stylesheets, and
 the baseline has to be the thing a component rule outranks rather than the
 other way round. The dashboard's own sheets (`tokens.css`, `base.css`,
-`components.css`, `frame.css`, `screens.css`) come last. One more is a
-screen's own: `create.css`, the create pages' rules, which
-`routes/artifacts/new/CreateShell.tsx` imports so that it arrives with their
-chunks rather than in the first paint. It lands after every other sheet, so it
-selects only the create pages' own classes (`styles/classes.test.ts`), and
-never a kit class (`TestNoLazyStylesheetCarriesTheDesignSystem`).
+`components.css`, `frame.css`, `screens.css`) come last. The rest are each a
+screen's own, imported by the module that draws it so that it arrives with
+that chunk rather than in the first paint: `create.css`, the create pages'
+(`routes/artifacts/new/CreateShell.tsx`), `charter.css`, the Principles
+editor's, `brand.css`, the brand's, `folders.css`, the folders', and
+`diff.css`, the one diff's (`components/DiffView.tsx`, which every screen
+drawing a diff reaches). Each lands after every other sheet, so it selects
+only its own classes (`styles/classes.test.ts`), and never a kit class
+(`TestNoLazyStylesheetCarriesTheDesignSystem`).
 
 **There is no alias layer.** Every stylesheet in `dashboard/src` reads the
 package's tokens under their own names — `--color-text-tertiary`,
@@ -673,9 +783,10 @@ what needs you, what reached you, what is yours. Then **Company**, what the
 company decides: who it is, the policies its agents read, its org chart, its
 schedules, the services and apps it runs, and, last, the ceilings it sets on
 what it spends. Then **Workspace**, what the company does with all of that:
-its work, what its people say to each other, what it knows, what it made and
-what is running. The engine stands beside the company's name in the head, and
-the foot is the reader, with Settings and Preferences as glyphs beside them.
+its work, its code, what its people say to each other, what it knows, what it
+made and what is running. The engine stands beside the company's name in the
+head, and the foot is the reader, with Settings and Preferences as glyphs beside
+them.
 
 | Row | Route | Figure |
 |---|---|---|
@@ -691,6 +802,7 @@ the foot is the reader, with Settings and Preferences as glyphs beside them.
 | **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
 | *Workspace* | | |
 | **Worklet** | `#/worklet` | none |
+| **Code** | `#/code` | none, and never a lock: no app gates code, every person reads every repository, and the engine holds each answer to the reader's own grant. Hidden where the company hosts no code in the engine (`code.native`). See [The Code workspace](#the-code-workspace) |
 | **Chatlet** | `#/chatlet/activity` (and `#/chatlet`) | the accent **badge**: what waits on you in Chatlet, the unread messages that name you (or the whole room) in a named room and every unread message in a direct conversation, in the rooms you have not muted; a floor ("100+") where a room counted to the engine's bound or the list was cut short, and none where the counts were not measured. Counted from the frame's ONE reading of your rooms (`lib/chatRooms.ts`), which the Chatlet screen draws too, so the badge and the list beside it cannot name two numbers; re-read on every live chat frame, at the room's rate while a surface draws the rooms and every two seconds at most while only the badge reads it. Locked, like Worklet, for a reader without Chatlet access; a reader who holds it but whose credential acts as no seat is answered by the screen itself, since every chat page is read as a seat |
 | **Doclet** | `#/doclet` | none |
 | **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
@@ -840,16 +952,19 @@ Home, Company › Principles and Brand, the Org chart (the chart, the roster,
 Teams and every seat page's status), Schedules, Budgets, Live › Now running and
 Executors, and Settings › Token spend: what every seat is doing, what it has spent,
 what it may spend and who answers to whom, which everybody who works here
-reads. An APP's sections need that app: Inbox, My work, Worklet and Settings ›
-Expensive tasks need Worklet, and Doclet needs Doclet, and every
-section of Chatlet is chat's. And the
+reads. An APP's sections need that app: Inbox, My work's Worklet sections,
+Worklet and Settings › Expensive tasks need Worklet, and Doclet needs Doclet,
+and every section of Chatlet is chat's; the code host's (Code, My work ›
+Reviews, a seat's Code tab) need none, since every person reads every
+repository (ADR-0088). And the
 company-wide TRANSCRIPTS (Live › Turns, Agent-to-agent and the Event log,
 Doclet › Agent diaries, and a seat's Turns and Memory tabs to anybody but its
 lead) and every other Settings page are admin's; Company › Integrations is
 every reader's, with an app's state and connecting kept for Admins on the page. Every comparison goes through
 `lib/access.ts`'s `holdsAny`, which counts every app an admin carries, so an
 administrator is never drawn a lock on an app. A sidebar row is
-locked only when NOTHING in its workspace is open, its title naming the access
+locked only when NOTHING in its workspace that the company runs is open (a
+section hidden for its service opens nothing), its title naming the access
 that would open it — what a reader would ask an admin for; a workspace only
 part of which is closed draws its locks where the closed part is, which for
 Settings is its column. So the foot's Settings is never locked: it carried a key
@@ -882,19 +997,25 @@ outage.
 
 **A service the company does not run is hidden, never locked.** A company
 runs Worklet, or Jira in its place, or no tracker; Doclet, or Confluence in
-its place, or no knowledge base; and Crewlet's own chat (Chatlet), or the
-Mattermost or Slack it declares, or none. The engine decides which from the
-company document and publishes it to every signed-in reader as `services` on
-the org projection, which the frame already reads (`lib/services.ts`). Where
-the company does not run one, the places that read
+its place, or no knowledge base; Crewlet's own chat (Chatlet), or the
+Mattermost or Slack it declares, or none; and hosts its git repositories in the
+engine (`code.native`) or does not. The engine decides which from the company
+document and publishes it to every signed-in reader as `services` on the org
+projection, which the frame already reads (`lib/services.ts`). Where the
+company does not run one, the places that read
 it are HIDDEN rather than locked, because there is nothing to ask an admin
 for and a lock would say there was (`serviceShown` in `nav.ts`): without
-Worklet, its workspace and My work leave the sidebar, the palette and the `g`
-chords, and so does every way to file or move a task (New task, the palette's
+Worklet, its workspace and My work's Worklet sections leave the sidebar, the
+palette and the `g` chords (My work itself leaves only where the engine hosts
+no code either, since its Reviews is the code host's, `workspaceShown`), and
+so does every way to file or move a task (New task, the palette's
 Create task, Ask an agent and Assign, a seat's Message and Assign, every
 create page's Ask an agent, and New design, whose one way to finish files a
 task); without Doclet, its workspace does; without Chatlet, Chatlet
-does, with a seat's Direct message and Chatlet's Home widgets. The Inbox stays, because
+does, with a seat's Direct message and Chatlet's Home widgets; and where the
+engine hosts no code, Code does, with My work › Reviews, a seat's Code tab, a
+task's Changes tab, Home's Code waiting on a person and Settings › Code. The
+Inbox stays, because
 the seat and budget conditions waiting on a person arrive under every
 backend: it draws those, and one line in place of its updates. Home leaves
 out the blocks and figures that cannot arrive, and each row of the board
@@ -1134,13 +1255,17 @@ and the tab.
 `g` then a letter jumps to a workspace: `g h`, `g i` and `g m` for the first
 run; `g c` for Company's Principles, `g e` for Brand, `g a` for the Org chart,
 `g d` for Schedules, `g n` for Integrations and `g b` for Budgets; `g w`,
-`g t` for Chatlet, `g k`, `g f` for Artifacts and `g l` for Live; `g s` for
-Settings, and `g u` for your Account. A chord to a hidden place is not
-answered, as its row is not drawn. A chord rather than a
-modifier, because every single-modifier combination worth having is already
-the browser's. `g r` is the one `g` sequence that is not a workspace: it
-watches the running turn when exactly one seat is working, and opens Live ›
-Now running — every running turn — when several are, or none. Every key the
+`g o` for Code (its initial is Company's, and `d` and `e` are Schedules' and
+Brand's, so `o` is the one letter of its name no other chord holds), `g t` for
+Chatlet, `g k`,
+`g f` for Artifacts and `g l` for Live; `g s` for Settings, and `g u` for
+your Account. A chord to a hidden place is not answered, as its row is not
+drawn. A chord rather than a modifier, because every single-modifier
+combination worth having is already the browser's. Two `g` sequences are not
+workspaces: `g r` watches the running turn when exactly one seat is working,
+and opens Live › Now running — every running turn — when several are, or
+none; and `g p` switches project
+([below](#worklets-scope-is-named-and-switched-in-the-trail)). Every key the
 dashboard answers is in [one table](#the-keys), and `?` shows it.
 
 ### Worklet's scope is named and switched in the trail
@@ -1218,16 +1343,27 @@ a screen, and every workspace and section the code declares is below.
 |---|---|---|
 | `#/` · `#/home` | **Home** — the landing screen: the company's day, the engine's one sentence, the pulse figures and what needs a decision | |
 | `#/inbox` | **Inbox**: what waits on your decision, and what reached you *(needs Worklet access)* | `row=` (which item the pane is on) |
-| `#/me` | **My work › Queue**: what one person holds, by due date or in the order somebody put it, reordered by dragging a row *(the whole of My work needs Worklet access)* | `order=due\|priorities` · `handle=` (whoever leads somebody, or an admin, reading their day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
+| `#/me` | **My work › Queue**: what one person holds, by due date or in the order somebody put it, reordered by dragging a row *(needs Worklet access, as every section of My work but Reviews does)* | `order=due\|priorities` · `handle=` (whoever leads somebody, or an admin, reading their day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
 | `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me (answered in place) · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
 | `#/me/asked-by-me` | **My work › Asked by me** — the work this person asked a question on that is still waiting for its answer: the work list, held to the asker | `handle=` · `shape=` and the filter grammar, with the asker LOCKED |
+| `#/me/reviews` | **My work › Reviews**: the code host's claims on this person: the changes asking their review, then their own changes waiting on their fix, each Code › Changes' grid over the engine's own listing, with no count on the tab *(no access needed; not offered where the company hosts no code)* | `handle=` |
 | `#/worklet` | **Worklet › Projects**: Worklet's landing, All projects' first lens: every project, its lead, its target date and its four counts *(the whole of Worklet needs Worklet access, but for a task somebody was asked about, which the person asked opens without it)*. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
 | `#/worklet/tasks` | **Worklet › Tasks**: All projects' Tasks lens: every task in the company, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
 | `#/worklet/views` · `#/worklet/views/{id}` | **Saved views**: the inventory, and one view run | |
 | `#/worklet/history` | **History**: All projects' History lens: Worklet's own log, on the log frame. One project's changes are that project's History lens | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` |
 | `#/worklet/search` | **Search**: the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/worklet/{KEY}` | **Project**: one project as Worklet's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
-| `#/worklet/{KEY}-{n}` · `#/worklet/{id}` | **Task**: description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
+| `#/worklet/{KEY}-{n}` · `#/worklet/{id}` | **Task**: description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost; and, where the company hosts code and a change names the task as its work item, a **Changes** tab listing every such change | `tab=task\|changes` (the strip is drawn only once a change is found) · `activity=all\|comments\|turns\|changes` · `list=` |
+| `#/code` | **Code › Changes**, Code's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, open findings and when it last moved — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer, a need or a window) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `window=24h\|7d\|30d` · `peek=change:{repo}!{n}` |
+| `#/code/repos` | **Code › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its page | `status=importing\|active\|archived\|deleted\|purging` (none is importing, active and archived) |
+| `#/code/repos/{name}` | **A repository**: its header (name, description, state, owner, default branch and head, which seats read it, last push, size) and tabs **Overview** (what it holds and the README at its default branch's root), **Files** (a directory's listing or a file's numbered lines at a revision, the lines picked ruled, its **Blame**, its **History** and a **Permalink** at the commit the revision resolved to), **Branches** (its live branches by name, each opening its files), **Commits** (the history at a revision, of a path or of every path, with who pushed each commit), **Pushes** (its push history), **Checks** (every attempt it keeps, newest ended first, each opening in the check pane) and **Settings** (its settings, rules, merge gates and path owners, shown and never edited here: a declared repository's lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=overview\|files\|branches\|commits\|pushes\|checks\|settings` · on Files and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Files, `lens=blame` and `lines=` (`12`, or `12-20`) |
+| `#/code/repos/{name}/commits/{sha}` | **A commit**, by its whole id: its header (subject, short id, repository, author, when it was authored and committed, its parents), who pushed it — the seat or the credential, when and how, and the turn, executor and work item behind a seat's push, as the engine recorded them — the changes it belongs to (those it merged, and those whose revision it heads), and what it changed against its first parent (a root commit's from git's empty tree) in the one `DiffView` *(hidden where the company hosts no code)*. An abbreviated id is Not Found | `file=` (a path) · `line=` (as on a comparison) · `layout=unified\|split` |
+| `#/code/repos/{name}/compare` | **A comparison** of two revisions: how they relate (ahead, behind, their merge base), what merging the compared into the base would do (merges cleanly, or conflicts in which paths), what it changed since the two parted in the one `DiffView`, and the page bar's **Open change**, which proposes the compared branch into the base branch, prefilled with its head's subject and the work item its push was charged to *(hidden where the company hosts no code)* | `base=` (none is the default branch) · `head=` (none asks for it) · `file=` · `line=` (a line of `file=`'s newer side, marked and scrolled to, the patch read on to the page holding it; opening another file drops it; a failed check links one) · `layout=unified\|split` |
+| `#/code/repos/{name}/changes/{n}` | **A change**, `web!42` in full: its header (reference, title, state, repository, branches, owner, revisions, work item) and the page bar's **Approve**, **Request changes**, **Comment**, **Request review** and **Close**/**Reopen**; on a live change, the merge controls above the tabs — where its gate stands, judged with the reader as the merger, **Merge** (or **Add to queue** where the target's gate requires a check) with its method, **Delete its branch** and **Close** its work item, sending the head on screen, held with the gate's sentence while it is unmet; **Override**, a person's alone with a reason; and **Re-run checks** — each refusal said by the code host's own word; tabs **Conversation** (its readiness, description, and its reviews, threads and revisions in the order their records landed, with a comment of the reader's own), **Files** (the revision's files and one file's patch in the one `DiffView`, every finding and thread under the line it is on, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head), **Commits** (its revisions and their facts), **Checks** (the attempts that judge it: its head's, checked for its target, each opening in the check pane), **Provenance** (who opened it, from which turn and executor, for which work item, and how it ended) and **Woke** (whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|files\|commits\|checks\|provenance\|woke` · on Files, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path), `layout=unified\|split`, `thread=` (a thread on a line, opening its file and its revision) |
+| `#/code/search` | **Code › Search**: the lines of the repositories the reader reads that match a search, by repository and then file, each line opening its file at the commit it was searched at with the line picked, under a Callout of what was not searched — asked when the reader presses Search | `q=` (the search, in the code host's grammar), `mode=literal\|regex\|word`, `repo=`, `path=`, `ref=` |
+| `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
+| `#/code/queue` | **Code › Queue**: the merge queues of gated branches, a band per repository and branch, its entries in queue order — the place, the change, who enqueued it and its state — and, once a repository is named, each entry's train base, a `SegmentedMeter` of the required checks of what it is tested in, its time queued against the slowest of their declared timeouts, and what the queue put out in the last day, in the danger tone with the reason and the checks or paths the engine found | `repo=` (a repository's name; without one, every repository's live entries) |
+| `#/code/checks` | **Code › Checks**: every repository's attempts that ended in the window, newest ended first — under a `TimeRangePicker`, the state and check-name `FacetRail`s and a `Histogram` of when they ended (the failed ones its foot), each counted over the attempts loaded — each row opening the **check pane**: what it was checking, its commit and branch, how long it ran, its exit code and why it ended, its failures (each `path:line` a link into the comparison of its base and its commit on that file, its line marked — `line=` — and, outside what the diff changes, the file at its commit offered on that line), its tail, and its log a page at a time on demand | `window=` (`1d` by default, `7d`, `30d`, or two instants) · `state=` · `name=` |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
 | `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the published (adopted) version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, publishing a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
 | `#/company/brand/setup` | **Brand › Set up**: the company's brand set up in six steps (Identity, Logos, Colours, Typography, Voice, Review) on a page of its own, never a dialog: a vertical step rail, the step's fields in one column under a lead sentence saying why the part matters, and the Brand page's preview beside them labelled "Preview of your draft" (under the content at 1024; a Preview disclosure and a horizontal step row on a phone). Every Continue saves the step into a draft version of the company's kit (a keyed publish, never an adoption; the first makes the kit, shared with the company to view), and opening the page again resumes at the first step not done. Colours carries the contrast panel: the pair that refuses an adoption (text on the light ground) in danger tone, the advisory pairs in warning tone with their reason, and one-click shades that keep the hue. Review lists a summary card per step with Edit, the full preview and an acknowledgement for each contrast warning; an Admin, a person, finishes with **Publish as the company brand**, and a person the kit is shared with to edit with **Save for review**. Entered from the Brand page's empty state, the Make row chip an Admin sees with no brand, the notice over an unpublished draft (**Finish draft**, or **Edit draft** once it is ready) and the Brand page's **Run setup again** | |
@@ -1235,7 +1371,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
 | `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the units and seats and the company's name are written; the company's node carries no Edit, and its principles are the toolbar's Edit principles, which opens Company › Principles, the one place its mission, vision and standing policies are written *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Worklet's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
-| `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|access\|settings` · `conversation=` · `session=` (Memory); human: overview · work · settings |
+| `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|code\|turns\|memory\|schedules\|access\|settings` · `conversation=` · `session=` (Memory); human: overview · work · code · settings — `code` only where the company hosts code |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Agents, Activity and Settings, its settings form opening in place; a service's counts, its projects or spaces each linking to the service's own list of them, then its Agents, Activity and Settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
@@ -1278,6 +1414,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/audit` | **Audit log**: every write a person or a token made, every call they made at runtime, the identity estate's own trail, every artifact's history (an administrator's read of somebody's private artifact said in words), and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs Admin access)*. No detail route | `window=` · `actor=` · `kind=worklet\|doclet\|config\|credentials\|runtime\|identity\|artifacts` |
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes**, leases (each seat's holder and **since** when), duties, config rollout, and the fleet broker's members as the nodes advertise them and as its metadata group counts them *(needs Admin access)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs Admin access)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
+| `#/settings/code` | **Settings › Code**, the company's own git host as an administrator runs it: the code log's row of the retention report (its ceiling, what it holds and the trim's terms, drawn as Backups & retention draws it), the code host's alarms firing on every node from the fleet's node rows, the longest-standing first, the configuration's scratch policy and identity domain, each unset field beside the default it reads as, and every protected repository's rules, a page at a time from the engine's listing of the protected repositories (`code_repos` with `protected`) — what each lets a push do and what its merge gate asks, the gate read from the repository's detail (asked for by name, `gates`) once, as its fold is first opened, who last set each rule and when (the same detail's `rule_sources`: a seat, a person or a credential, or the company document), and which surface sets its rules *(needs Admin access; not offered where the company hosts no code)*. Read-only | |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs Admin access)*. Domains live only under `backups/` | `at=alarms` (brings the alarm list into view) |
 | `#/settings/storage` | **File storage**, where the company's files are kept (the object store's backend, as a settings table row with its key), its collector's last passes from the fleet's own record, and the company's storage against the plan's quotas (`artifacts.limits`: artifact files, artifacts and datastores, each a figure over its ceiling with a bar, counted over every artifact, private ones and the trash included) *(needs Admin access)* | |
 | `#/account` | **Account**, the signed-in reader's own page, opened from the reader's own name in the user block at the sidebar's foot, from its menu (it has no sidebar row) or `g u`: the profile the directory holds and the reader's access, "Your access" (an administrator changes both), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted, the value shown once, and revoked). A credential that is not a person's, a Tier A token's session whether or not it is bound to a seat, is told what it is and offered none of it, and asks the directory nothing; the engine answers a seat-bound token's session with a person's `kind`, so the page reads the login's grammar (`ownsAccount` in `lib/login.ts`) | |
@@ -1415,6 +1552,18 @@ charged to yesterday. It moves with the clock like a duration, is charted in
 hours from its first, and its "previous" window is the same span before
 midnight. A screen offers it like any other window; the control draws it
 first.
+
+**A company zone this browser cannot read is read as UTC.** The engine takes
+any zone Go's time-zone database names, and a browser's own time-zone data can
+be older than the name. Every reading of the company's clock then reads UTC
+in its place (`lib/range.ts`'s `companyZone`): the day and the time a row is
+listed under, the days a window covers, the day a budget resets on (Home's
+"resets Mon" among them) and the snooze menu's tomorrow and next Monday, so
+none of them disagrees with another. A window the engine cut is named by its
+label (`2026-09` is September), which needs no clock at all. A schedule's next
+runs are the one exception, and are not listed at all: instants worked out on
+a clock the engine does not fire on would be wrong (see
+[A cron expression is read, not printed](#a-cron-expression-is-read-not-printed)).
 
 **The offered set is the screen's, not the vocabulary's.** A spend chart has
 nothing useful to say about fifteen minutes; a strip folded from the events the
@@ -1888,10 +2037,43 @@ sends them toward fewer and newer rows. So a log that fills its page offers
 **Load older**, holds the pages it has, and discards all of them together when
 the window or a server-side facet changes — pages fetched under the previous
 question are rows the engine would never have answered for this one, and the
-cursor walks that question's history. While a reader is paging back the first
-page is held still: the cursor was minted from its last row, so re-reading it
-under a poll pushes that row out and the changes between two pages belong to
-neither, which is a silent hole in the middle of a log.
+cursor walks that question's history. Discarded, never hidden under the old
+question: hidden, they came back when the reader returned to it, under a first
+page read since. The first page stays live while the reader pages on — polled,
+read again on reconnect and after the reader's own write — and that is why the
+pages after it have to be joined to it: the cursor of the second page was minted
+from the first page's last row, so a first page read again under newer rows
+pushes that row out, and the changes between the two pages would belong to
+neither, a silent hole in the middle of a log. So whenever the first page moves
+under pages loaded, the range between it and the next held page is read and
+spliced in before the list moves, and until it has been the list stays as it
+was drawn; the read is bounded by the pages held, and a gap longer than that,
+or one the read failed on, drops the later pages instead, so the reader pages on
+again from a list with no hole in it. The pager is one, `lib/usePaged.ts`,
+under every paged list — a list paged by a cursor in another order loses rows
+off its first page alike: Code's Repositories, Worklet's task lists, Doclet's
+listings, the Inbox's Snoozed and Earlier, and the artifact gallery and its
+folders. **An older page that fails is said beside the control that asks it,
+never in its place** (`PageFailed`: "Could not read the next page", with the
+code): the pager keeps what it holds and the cursor the page was asked from, so
+the same press reads it again. In its place, a footer left the reader nothing
+to press but reload — and a refusal's banner promises a retry the screen makes
+on its own, which a page the reader asked for once never gets. Live › Activity
+reads the first page of its window through the same control, so a first page
+refused before any answered is said as the refusal it was, with the control
+beside it.
+
+**A picker over what the engine pages asks the engine for what was typed.** Code's
+repository picker, the one Changes, Queue, Search and Pushes share
+(`routes/code/RepoPicker.tsx`), is a field over `code_repos`: typed text, in
+lowercase, is asked as the listing's `prefix` once it rests, which the engine
+reads as one range of its index by name, and Load more pages on under it. With
+nothing typed, the list is the listing from its first name, the screen's row for
+every repository above it. Each of the four used to be built from the
+listing's first page, so a company hosting more than a hundred repositories
+could not choose any past it. An opening no repository name could have is said
+in the list and never asked, and the chosen name stays a row where the pages
+loaded do not hold it, so an address naming any repository reads as itself.
 
 **A date is a band, not a wider cell.** A row's time column is sized for a wall
 clock, which is right for every row in a log but the first of each day — and
@@ -2880,6 +3062,26 @@ company did.** That is Home until its reader arranges it (see
   review ("Execute · in its box"), and the last call it made, each a way
   into its turn. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
+- **Code waiting on a person**, where the company hosts code: the changes an
+  agent cannot move. Two halves, the first three changes each of two of the
+  engine's own listings keeps: *Asking your review* (`code_changes?needs=review`, which names no
+  reviewer and so asks the reader's own seat; a reader bound to no seat is
+  told a review is asked of a seat, and asked nothing) and *Waiting on a
+  person* (`needs=person`: a change whose first unmet precondition only a
+  person can settle — a person's approval, a blocker a person raised), each
+  row its reference, title and the sentence its readiness leads with, opening
+  the change in the peek. Three rows, as Needs your decision draws, and
+  **Open Code** is Code › Changes narrowed to what waits on a person. A
+  listing is a page the engine read, never a total, so the card counts
+  nothing; and a page is the rows it read, not the rows it kept (a change of
+  a repository the reader may not read, one that has ended, one whose
+  readiness no longer waits on a person is dropped after the read), so an
+  empty page can still carry `next`. Each half follows `next` until it holds
+  its three or the listing ends, for at most four pages a poll
+  (`CHANGES_FILL_PAGES`), and says it found none only of a listing that
+  ended: a half that stops at that bound first draws what it found, or, with
+  nothing found, says none was among the newest read and links to the rest
+  in Code.
 - **Tasks completed** per company day over the last fourteen (today in the
   accent), **Tokens by team** over the window (tokens, never money), each
   team's bar split by the seats that spent in it and keyed under the bar (the
@@ -2905,8 +3107,10 @@ company did.** That is Home until its reader arranges it (see
 Worklet (see [the sidebar](#the-sidebar)), the *Tasks in progress* and
 *Completed* figures, **Tasks completed** and **Projects** are not drawn, nor
 offered in the tray, and New task leaves the page bar: a tile reading zero
-would claim a tracker that answered nothing. The decisions, the conditions,
-Live now and the tokens arrive under every backend and stay.
+would claim a tracker that answered nothing. Where it hosts no code, **Code
+waiting on a person** is neither drawn nor offered, for the same reason. The
+decisions, the conditions, Live now and the tokens arrive under every backend
+and stay.
 
 Five tiles sit in a row while the page column holds them — five tiles at their
 176px floor and four of the board's own 16px gaps, 944px, so the figures'
@@ -2999,7 +3203,8 @@ asks put to this person and the executors parked on a question to them
 (`decisions`, the read Home's figure counts), the seats the engine stopped on
 a spent token budget, and the conditions a person decides (`lib/attention.ts`,
 the subjects whose home is `seat`). **Updates** follows: what reached them and
-is not read yet (`work_inbox{unread, snoozed: exclude}`). Decisions are never
+is not read yet (`inbox{unread, snoozed: exclude}`, the tracker's notices and
+the code host's interleaved by when each happened). Decisions are never
 interleaved with updates by time, which would eventually rank "a task you
 watch moved" above the CEO asking whether to hold a release. An ask is ONE
 row: the notice that told the person they were asked rides on the decision it
@@ -3048,6 +3253,45 @@ executor or a link. An update's pane names what it did as its heading, quotes a
 comment whole under it, and says why it reached the reader where the heading
 does not ("· you follow this task", from the reason of an update that only
 informs, or "· snoozed until …").
+
+**A code notice is an intent-first card.** A notice the code host routed is
+a row named by its change (`web!42`), with the code mark as its badge, the
+change's title as its line, what the record said after it, and — as every
+row's task — the work item the change implements. Opened, the card says what
+the change is FOR before what happened to it: its title, "For" the work item,
+the opening of the description its author wrote (marked "…" where the engine
+cut it at a kibibyte), and only then what the record said, quoted. **Where it
+stands** follows: the engine's one sentence of where a live change's merge
+stands ("no approval counts on revision 2: it waits on ada"), or, for a
+change that merges nothing, what became of it (Merged, Closed); and the
+findings seats raised that stand open, by weight with the heaviest first
+("Open agent findings: Blocker 1 · Nit 2"), in words and never in a hue.
+**Open the diff** is one press to the change's page on its Files tab. The
+byline's note says why it reached the reader in the code host's own words
+("asked for your review", "asked to look again"), never the tracker's. The
+LIST ASKS NOTHING per card: every word above came with the list it was
+opened from, which asks the engine for its rows' cards (`inbox{cards: true}`):
+read once the page is composed, for the notices it keeps, no older than the
+page, the readiness judged for the reader there (`code.NoticeChange`) — so a
+page of fifty cards is one question and no card describes its change as it
+stood before the row beside it. Snoozed and Earlier ask for cards once each
+is opened; the badge's count, Home's Updates and the Snoozed link's count
+draw no card and ask for none, so a read behind every screen judges no merge
+gate. **Its gate** is read for the ONE card open,
+and only for a live change: `code_change` (its readiness, judged for the
+reader, and its revisions' facts) and `code_checks` of the change at each
+check's latest attempt (`latest`, every page of it, drawn only once whole) —
+so the card needs nothing of the engine besides, and never rebuilds what a
+check stands at from a page of its history.
+It says what the head revision's REQUIRED checks measured, each one's state
+and duration — never tokens — and only where the readiness judges a `check`
+precondition; the head revision's change classes (how many touched paths
+change only whitespace or only comments, and that the rest change code where
+every path was classified); and the human paths that asked for THIS reader —
+the `human_approval` precondition's sentence where it is unmet and waits on
+them. A change into an ungated branch draws no gate at all.
+Reviewing is the change's own page's; the card's controls are the reader's
+marks.
 
 **An ask is answered in one press, through the one write every surface uses.**
 The pane draws `AnswerAsk` in its `buttons` layout: each option is a button
@@ -3182,7 +3426,8 @@ there.", or that the company runs no work tracker.
 
 `#/me` is everything one person is expected to look at, as the SECTIONS of
 the page header: the **Queue**, **Asked of me**, **Asked by me**,
-**Unblocked**, **Collaborating**, **Watching** and **Checklist**. Every tab
+**Unblocked**, **Collaborating**, **Watching** and **Checklist** — the
+tracker's — and, where the company hosts code, **Reviews**. Every tracker tab
 carries the engine's own count of its claim — `work_my_work`'s `totals`, or
 `total_hint` for the two that are the work list — written as a floor (`20+`)
 only where the engine stopped counting, absent while its read is in flight, and
@@ -3190,9 +3435,31 @@ drawn at zero rather than hidden, because a tab that vanished when it was
 empty is what the page was rebuilt to stop. A section holds at most twenty
 rows of its claim, and one holding fewer than its count says which ones. The
 page opens straight on its sections, as the working screens do: no paragraph
-explains it, and each empty section says in its own words what would fill it. Every
-section is a question about work items, so where the company does not run
-Worklet, My work is hidden, never locked (see [the sidebar](#the-sidebar)).
+explains it, and each empty section says in its own words what would fill it.
+
+**Each section names its own service and permission; the page names none.**
+Every section but Reviews is a question about work items: it needs Worklet
+and is hidden where the company does not run Worklet. Reviews is the code
+host's, which no app gates: hidden where the company hosts no code, and open
+to everybody signed in. So My work is hidden, never locked, only where the
+company runs neither (see [the sidebar](#the-sidebar)); a reader without
+Worklet lands on Reviews, with Worklet's sections locked beside it; and
+where the engine hosts no code, Reviews opens nothing, so for that reader the
+row is locked naming Worklet rather than opening onto the Queue's refusal.
+
+**Reviews is the code host's claims on the person**: the changes asking their
+review (`code_changes?needs=review&reviewer=`), then their own changes waiting
+on their fix: a reviewer asked for changes, or a finding stands that no
+author answered (`needs=fix&owner=`). Each is Code › Changes' own grid over
+the engine's listing, held to the reader's grant on every repository, paged
+with Load more, and each row opens its change in the peek. Its tab carries no
+count: a listing of changes is a page the engine read, not a total it kept,
+and the length of a first page would be a figure nobody counted. On a reader
+Worklet does not answer, Reviews asks none of Worklet's questions, so no
+refusal is drawn over the code host's answer. A reader bound to no seat, on
+their own day, is asked nothing either: their day is kept under a login, and
+a review is asked of a seat and a change owned by one, so Reviews says so
+instead of drawing the engine's refusal of a login as a handle.
 
 **Every figure for one person's day counts one named thing.** The Queue's is
 the open work ASSIGNED to the person, and on your own day it is the same
@@ -3267,6 +3534,24 @@ when the task was opened from a list — by its row's link or through the peek's
 stepping to the task before and after it (the list's own two keys, standing
 aside while a grid on the page holds them), **Watch live** while a turn is running on it, Restore for a task
 in the trash, and a menu with **Open on the board**.
+
+**A task a change carries out has a Changes tab.** Where the company hosts
+code, the page asks the engine for one change naming the task as its work
+item (`code_changes?work=native:<id>&limit=1`, every state, since a listing by
+work item needs none), and only once it finds one does the column open with a
+**Task | Changes** strip (`tab=changes`). A page is the rows the engine read,
+not the rows it kept: a change of a repository the reader may not read, one
+deleted and not yet purged among them, is dropped after the read, so an empty
+page can still carry `next`. The probe follows `next` until it keeps one
+change, for at most four pages, and a probe that stops there with `next` still
+set opens the strip too, since a change may lie behind it and the tab's own
+listing pages to it. A task no change names carries no
+strip, so a company that proposes its code elsewhere never sees a tab that
+always says nothing, and an address naming the tab before the answer lands on
+the task. Changes lists every change of the task, merged and closed as well as
+open, in Code › Changes' own grid, paged with Load more, each row opening its
+change in the peek. The rail stays beside both tabs. The activity filter's
+**Changes** is the task's own history and a different thing.
 
 **The column is the task in the order a person reads one.** The exceptional
 flags only (in the trash, blocked, archived), the title (24px, edited in place),
@@ -3604,8 +3889,9 @@ budget", "Not placed", "Idle"); under it the line that places the seat
 head's own rule. The trail reads **Org chart › Engineering · Core › SWE**: the
 unit is a way to its team, and the seat's crumb wears its badge.
 
-**The kind decides the tabs.** An agent has Overview, Work, Turns, Memory,
-Schedules and Settings; a person has Overview, Work and Settings. Turns, Memory
+**The kind decides the tabs.** An agent has Overview, Work, Code, Turns,
+Memory, Schedules and Settings; a person has Overview, Work, Code and
+Settings, and Code is drawn on either only where the company hosts code. Turns, Memory
 and Schedules are properties of a RUNTIME, and the engine never spawns a
 person — so a person's profile asks nothing a runtime answers: no activity, no
 memory, no turn list, no phase history. A `tab=` naming a tab the seat has not
@@ -3669,8 +3955,10 @@ for a reader who cannot make it:
   holds still offers eight it could be handed.
 - **Pause** (agents only) asks why, and whether to **also stop the current
   turn**: without it the turn the seat is on finishes first, and only a ticked
-  box sends `stop_running`, which also ends the seat's executor in its box (see [pausing a
-  seat](../concepts/agent-runtime.md#pausing-a-seat)). A paused seat's profile
+  box sends `stop_running`, which also ends the seat's executor in its box.
+  Either way the seat's executor can push or change nothing until it is
+  resumed, and the box says so whether or not a turn is running (see [pausing
+  a seat](../concepts/agent-runtime.md#pausing-a-seat)). A paused seat's profile
   says who paused it, when and why, and offers **Resume**.
 
 "Events" (the [event log](#the-routes) narrowed to this seat) and "Edit in
@@ -3756,6 +4044,23 @@ opened their own page to find their password or second factor found neither —
 linking to [Account](#account-the-readers-own-page); the card decides for
 itself whose seat it is on, so the seat's peek carries it too, and a
 colleague's seat draws no such card.
+
+**Code** is what the seat does on the company's own code host, agent or
+person, each the engine's own question held to the reader's grant on every
+repository it names, so it is every reader's tab (no app gates code) and a
+repository the reader may not read is simply absent from its rows. Its open
+changes (`code_changes?owner=&state=open`, the owner's listing, which the
+engine keeps one state at a time), with **Open in Code** for Code › Changes
+narrowed to the owner, where the other states are; the reviews it gave
+(`code_reviews?reviewer=`, newest first), each row the change it judged, the
+verdict in words (a verdict is a judgement, not a state, so it carries no
+hue), the revision, the findings it raised and when, opening that change's
+page; and, for an agent seat, three figures from the same `seat_activity`
+answer the Overview's tiles read — **Changes opened**, **Reviews given** and
+**Findings received**, the last counted on the owner of the changes the
+findings were raised on. A person's openings and reviews count on no seat's
+day, so a human seat's tab draws no figures. The figures say how much
+happened; the reviews and the changes' readiness say how well.
 
 **Turns** is the seat's own turns (`turns{seat}`, the seat's TRAIL, which the
 engine answers to an admin and to whoever leads the seat, `audit.seat.read` —
@@ -4061,9 +4366,14 @@ would drift exactly as `textcut`'s four copies and `whsec`'s two did, and the
 clause that would go first is the fence.
 
 A page's history shows **what a save changed**, not only what one version
-said. `lib/diff.ts` is a line diff over the two revisions — Myers, by line,
-with no word-level refinement inside a changed line, because these documents
-are rewritten in paragraphs and a word diff makes a small edit prettier and a
+said. The two revisions are compared by the dashboard's one line diff (the
+shortest edit between their lines; past 20,000 lines a side in what changed,
+or 4,000 lines removed and added, a sentence saying the two were not compared
+line by line, and why, in place of any row) and drawn by the one
+`DiffView` ([Diffs carry no hue](#diffs-carry-no-hue)), over the count of
+lines added and removed against the revision before. Inside an edited line
+it underlines ONE run, never a word-by-word diff, because these documents are
+rewritten in paragraphs and a word diff makes a small edit prettier and a
 large one unreadable. Unchanged runs collapse to a row saying how many lines
 they stand for: a gap silently closed makes a document edited at both ends
 look like one rewritten in the middle. "This save did not change the body" is
@@ -4221,9 +4531,9 @@ It is the design system's `CommandPalette` — the combobox, the scope tabs, the
 answer's live region and the key legend are the kit's — and `app/palette/` is
 what it searches and what a row does.
 
-### Six scopes, three sigils
+### Seven scopes, three sigils
 
-A launcher with one index answers "where do I go", and five questions do not
+A launcher with one index answers "where do I go", and six questions do not
 fit that shape, so each is a tab under the field:
 
 | Scope | Searches | Sigil |
@@ -4232,6 +4542,7 @@ fit that shape, so each is a tab under the field:
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
 | **Artifacts** | `artifacts` with the term over everything the reader can open, eight hits, each row its kind | |
+| **Code** | `code_search` (where the company hosts code), asked once the term has rested and is three characters or more — the shortest the code host's plan looks up — eight lines, each `repo:path:line` opening its file at the commit it was searched at with the line picked, and a row to Code › Search with the term | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's status glyph from the agents push, then people and teams | `@` |
 | **Actions** | the per-browser commands (Change theme…, a step listing the themes in their groups, which a query narrows by name, tag or group, whose highlight previews behind the palette, whose Enter applies and closes with an Undo toast, and from which Escape or an empty Backspace goes back to Actions; the mode; density; copy link, the one place a page's address is copied from, a refusal said in a toast; sign in as somebody else; clear recents; the key legend; Switch project…) and the three changes; the legend names who they are made as | `>` |
 
@@ -4757,7 +5068,12 @@ only rises. From then on every question that reads that log
 `read_level=session&min_position=<floor>`, which the engine answers only once
 the serving node holds that position. So the list you just changed never comes
 back from a node that has not applied the change, whether the next read is the
-refetch your press fires or a poll a second later.
+refetch your press fires or a poll a second later. A question read from more
+than one log — Home's feed is Worklet's work and Doclet's pages — is listed under each of its domains, and names the floor of every one of
+them the tab has written, one `min_position` per log: a page you saved is in
+the feed drawn after the save, as a task you closed is, and each half of the
+answer waits for your write to its own log alone
+([One floor per log](../guides/consistency.md#one-floor-per-log)).
 
 **A retry is the same write.** `unknown` means nobody can vouch either way —
 the connection dropped after the request left, a gateway gave up, or the
@@ -7444,9 +7760,15 @@ it, so a link to one run landed on a board with the run below the fold.
     still answers: it reads the turn and draws every `executor_collected` its
     launches published — under *What the executor did*, or *What launch N of M
     did* — what each reported, what it delivered, its tokens and its transcript,
-    named by the task its `executor_launched` carried.
-  - Beside a peek the board keeps the seat and the task and drops the coding
-    agent, the placement and the box, in that order, saying so in its footer.
+    named by the task its `executor_launched` carried. A launch given a
+    repository on the engine's own code host it could push to adds **Pushed**
+    to its section: what its push record says it moved, a chip per ref
+    (`web:feature/x`), followed by the change that branch heads, named by its
+    reference (`web!42`) and opening the change's page; refs past the record's
+    bound are counted, and a record that could not be read says why rather than
+    reading as nothing pushed.
+  - Beside a peek the board keeps the seat and the task and drops the harness,
+    the placement and the box, in that order, saying so in its footer.
   - The page reads two sources, and "none" needs BOTH: only when the
     executor's record and the turn both answered and neither holds one does it
     say there is none, headed **No executor**. A source that could not be read is
@@ -7522,6 +7844,443 @@ vocabulary yet — falls back to the client's own line for that code, the same
 table the socket's query errors use.
 
 ---
+
+## The Code workspace
+
+Code is the company's git repositories as the engine hosts them
+([Code Host](../concepts/code-host.md)), and the changes proposed to them: a
+Workspace row after Worklet, `g o`, landing on **Changes** at `#/code`, its
+sections drawn as tabs in the page header. It is drawn only where the company hosts code in the engine —
+`services.code` on the org projection — and is hidden, never locked, where it
+is `none`, an address under it answered by the service notice. It names no
+app: every person reads every repository (ADR-0088), and the engine holds each
+answer to the reader's own grant on the repository, leaving out of a listing
+what a seat may not read, so nothing waits on the reader's access before a
+section mounts.
+
+A change and its conversation are the engine's ([Changes](../concepts/code-host.md#changes),
+[Reviews and findings](../concepts/code-host.md#reviews-and-findings)), and
+reviewing one here is walked through step by step in [Review a
+change](../guides/code.md#review-a-change). What a record about a change
+leaves a person is a notice in the Inbox, never a screen of this workspace
+([The Inbox is where you act](#the-inbox-is-where-you-act)), and who hears of
+what is the engine's routing ([Who a change
+wakes](../concepts/code-host.md#who-a-change-wakes)).
+
+- **Changes** is the engine's listing of changes, `code_changes`, a page at
+  a time in the order of the ONE index its filters lead — a work item's
+  changes, an owner's in a state, a repository's, the company's in a state, or
+  the changes waiting on somebody — so a page is what the engine READ, can be
+  short or empty with a cursor, and is never re-sorted. **The engine keeps no
+  index of every change**: a listing names a state, a repository, a work item,
+  a reviewer, what its changes wait on or a window they moved in, and is
+  refused naming none. So the
+  section lists the OPEN changes until told otherwise (`state=`, the engine's
+  `CHANGE_STATES`, held to `code.ChangeStates`), and **Every state** is offered
+  only where a repository, a work item, a reviewer, a need or a window narrows
+  the walk —
+  said in place, never sent, where nothing does. **Waiting on** is the
+  engine's `needs` (`CHANGE_NEEDS`, held to `code.Needs`): on me, on a review,
+  on a fix, on a person. **Moved** is the engine's `window` (`CHANGE_WINDOWS`,
+  held to `code.ChangeWindows`): the changes that moved within the last day,
+  week or month; beside every state, or a merged or closed one, and nothing
+  else narrowing the walk, the engine walks its two indexes of that instant
+  and the rows come newest move first, while beside a live state (the
+  default open, or draft) the engine walks that state's changes, tests the
+  window on each, and the rows come newest opening first. `repo=` is chosen in the bar from the repositories the
+  reader may read; `owner=`, `reviewer=` and `work=` arrive from a link (the
+  peek's owner and work item) and are said in the bar with a Clear. **A row's
+  readiness is the engine's judgement**, made again on the read that answered
+  it against its own chart (`code.ReadinessOf`): a Meter of the preconditions
+  met of how many, drawn as done only when every one is, and titled by the
+  engine's sentence of the first that is not; a change no longer live has
+  none. **Open findings** is the engine's count of the change's findings none
+  of its authors has answered (`code_conversations.open_findings`), and
+  **Updated** when it last moved: the later of its lifecycle's last record (an
+  open, an edit, a close, a merge, a push that moved its head) and the last
+  thing somebody wrote about it (an ask for review, a comment, a review, an
+  answer to a finding) — never the home's facts, so a target branch that moved
+  re-dates nothing. **Needs a person** is a band
+  above the grid: the first five changes the engine's `needs=person` listing
+  keeps, each with the sentence of what it waits on — a change whose first
+  unmet precondition waits on persons alone, which no agent will be woken to
+  move — and nothing at all where it found none. A page of that listing is the
+  rows the engine read, some of which it drops after (a change of a repository
+  the reader may not read, one whose readiness no longer waits on a person), so
+  the band follows `next` for at most four pages to keep its five. A row, and a band's reference, opens the
+  change in the peek (`peek=change:web!42`), which reads the change itself
+  (`code_change`): its branches, owner, revisions and work item (the owner's
+  other open changes, and every change of the item, one link each), its
+  readiness — every precondition in the engine's order (`PRECONDITION_KINDS`
+  and `PRECONDITION_STATES`, held to `code.PreconditionKinds` and
+  `code.PreconditionStates`) with where it stands and the engine's sentence —
+  its conversation's counts and its authors. A change's reference typed in
+  ⌘K (`web!42`) opens its page, parsed by the engine's grammar, and the
+  peek's Open leads there too.
+- **A change's page**, `#/code/repos/{name}/changes/{n}` — the address its
+  reference is short for, and the engine's own REST path — reads the change a
+  part at a time (`code_change`): its detail rides the first page of its
+  revisions, and each tab asks the part it draws, every one a code question at
+  the tab's floor. The detail is the one read on a clock, every minute; a part
+  is asked again only when the detail says what it reads moved — for a
+  revision's files and a file's patch, git reads on the repository's home git
+  node, the change's version and the revision's head and the base its facts
+  record (which a retarget's new facts move after the version), and the
+  change's and its conversation's versions for every other part.
+  **Conversation** is the readiness, the description, and the
+  timeline in the order the records landed on the code log — each review with
+  its verdict and summary, each thread by its first comment with its replies
+  under it, each revision pushed — never by a clock a node read, with the
+  reader's own comment below. The engine pages reviews and comments oldest
+  first, so what one page leaves out is the newest: **Load more** under the
+  timeline asks each part's page after the cursor its last one ended at, and
+  the timeline is built over every page loaded, so a reply on a later page
+  joins its root. Every page loaded is asked again only when somebody wrote
+  on the change (the conversation's `spoken_at`, beside the part's count),
+  never on a push or a mergeability its home recorded, which write no review
+  or comment: a busy target branch re-checks every live change into it, and
+  each held page would otherwise be read again on every push to it.
+  **Files** is the revision's files (`rev=`, the
+  head by default; `since=` reads what changed since an earlier revision, the
+  engine's interdiff), a page at a time — **Load more files** asks the page
+  after from the cursor the last one ended at — and one file's patch (`file=`) as git wrote it, read
+  into the one `DiffView` and drawn `layout=unified` or `split` — a patch
+  past one answer a page at a time, **Load more lines** asking the page
+  after from the cursor the last one ended at, and the hunks drawn from every
+  page read (`lib/patchPages.ts`); every finding
+  the engine placed in that revision (`code.PlaceFindings`, the rule a seat's
+  `code_get_change` reads by) is drawn under its last line, every thread on a
+  line of it under its line — the findings and comments past their first page
+  loaded by **Load more findings and comments** above the diff, each part's
+  next page at one press — and what has no line here — a finding whose own
+  lines changed (outdated), one whose file is gone, a thread on another
+  revision — is drawn above the diff under a Disclosure that counts it, never
+  dropped. **On the head, a reviewer picks lines by their numbers** and drafts
+  a finding under them — its weight and subject in the engine's words
+  (`FINDING_SEVERITIES`, `FINDING_CATEGORIES`, held to `code.Severities` and
+  `code.Categories`), a title, a body and, on the newer side, the lines it
+  suggests in their place — and a draft is the TAB'S, kept in
+  `sessionStorage` per change and revision, until **Approve**, **Request
+  changes** or **Comment** sends every draft of the head in ONE
+  `code_review_change` with the verdict, a summary and the reviewer's own
+  standing findings it carries (each checked, since a review of a later
+  revision supersedes every standing finding of the reviewer's it leaves out);
+  those are the engine's `standing` part, read to its last page, and the press
+  is held, with why, while that read is out or after it was refused, so no
+  review supersedes a finding the dialog never showed; the drafts are
+  forgotten only once the engine has taken it. Findings and comments are each
+  read a page of two hundred at a time, oldest first, and where either runs
+  past one the Files tab says so above the diff. An open finding
+  with a suggestion offers **Apply suggestion** (`code_apply_suggestions`,
+  against the head on screen), and every finding and thread a reply; a thread
+  **Resolve**. **Request review** asks reviewers by handle with a note
+  (`code_request_review`); **Close** and **Reopen** move the change against
+  the version on screen (`code_close_change`). Every write is the act
+  transport's, through `useAct` and a `WriteButton` — drawn for every reader,
+  held with the reason where it cannot act (a change no longer live takes no
+  review; a merged one is neither closed nor reopened), and never optimistic:
+  nothing moves until the engine answers, and the answer's position is the
+  floor the page is read at next. **Commits** lists the revisions and the
+  facts their home recorded; **Provenance** who opened the change and with
+  which credential, the turn and the executor behind it, its work item, its
+  authors and how it ended; **Woke** whom each record about it reached
+  (`code_change_routing`), newest first, each recipient with the one reason it
+  heard under in the voice of somebody else's notice (`CODE_PHRASES`' `about`,
+  held both ways to `code.Reasons`; `short` is the reader's own, for a notice
+  of theirs), and, where none is listed, whether nobody was told or the
+  notices were swept with the turn detail they named.
+- **Repositories** is the engine's listing, `code_repos`, by name and a page
+  at a time. A page is what the engine SCANNED, not what it kept, so one can
+  be short, or empty with a cursor, and the grid pages with Load more until no
+  cursor comes back, its first page kept live and joined to the pages loaded
+  ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)); the
+  order is the engine's and no head re-sorts the pages held. A row says its
+  state where it is not active (archived, deleted, being
+  purged), who owns it (a unit by its name, a seat by its badge), which seats
+  read it, its default branch and the commit it stands at, its last push, its
+  pushes, its size and how many protection rules it carries. `status=` is the
+  engine's own filter (`REPO_STATUSES`, held to `code.RepoStatuses`). A row
+  opens the repository's page. A declared repository's settings are the
+  company document's `code.repos`, and an empty listing offers the
+  configuration to a reader who may open it. The listing's one write is
+  **Import a repository**, a person's alone (`code_import_repo`, which the
+  authority table refuses every seat): a new project, named in the engine's
+  grammar and owned by a unit picked from the chart, filled from an https URL
+  at another host — with the token a variable NAMES (one
+  `code.remote_credentials` declares for its host), typed as the name and
+  never as the token, which the tool refuses — or made a pull mirror of it
+  (**Keep following it**). It is drawn for every reader and held, with the
+  sentence, for one holding no human seat; the dialog's Import is held until
+  the form is one the engine takes. The new repository reads `importing`
+  until its home git node has landed the source.
+- **A repository's page**, `#/code/repos/{name}`, is its row (`code_repo`,
+  read at the tab's floor and again every minute, the row alone: its path
+  owners and its rules' merge gates are its Settings tab's own ask,
+  `path_owners=true` and `gates=true`, read as the tab opens) and its CONTENT, which its
+  home git node answers: a directory's listing (`code_tree`, and `code_blob`
+  for a path under the root, which answers a directory's listing where the
+  path names one, so a path is one read), a file's lines (`code_blob`, a page
+  at a time, the pages concatenating to the file's bytes), its blame
+  (`code_blame`), its history (`code_log`) and its branches (`code_refs`). The
+  address is the place: `ref=` the revision (none is the default branch; a
+  branch by its name, a tag by its whole ref, which no branch of the same
+  name can shadow), `path=` the directory or the file, `lens=blame`, and
+  `lines=` the lines picked — pressing a line's number picks it, Shift
+  extends the run — drawn RULED, never tinted, as a picked line of a diff is.
+  An address that picks `lines=` — a Code › Search hit, a ⌘K hit or a
+  Permalink — OPENS AT THE LINE: the path's one read asks from fifty lines
+  before it (`code_blob`'s `start_line`), decided before anything is read,
+  because every read of a file streams the whole of it from git and answers
+  its line count, so a read from line 1 first would be a second stream that
+  nothing draws. A line inside the first page opens fifty lines above it too
+  (at line 1 where that is nearer).
+  The file is paged forward from there as before, the line
+  drawn picked and scrolled to the middle of the screen, and **Load earlier
+  lines** reads back towards line 1 fifteen hundred lines a press, a page's
+  worth (`start_line` and `end_line`, each step followed through its pages, so
+  it meets the lines after it; every step costs the git node one stream of
+  the whole file, however wide). The blame does the same through its own
+  `start_line`, its first range the one that holds the line, and reads a
+  range of at most `code.MaxBlameLines` (500) lines at a time, forward and
+  back, range after range, so **Load more lines** reaches a blame's last line.
+  A press picks a line on screen and so reads nothing; a line the file does
+  not have, which the engine refuses as a `start_line`, reads the file again
+  from line 1 and is said so beside its size.
+  The revision picker lists the first page of the branches and of the tags
+  (`code_refs`), read ONCE by the page while its Files or Commits tab is open
+  and handed to every picker it draws — a comparison's two pickers share one
+  read too — so a move between the root and a path, or between the two tabs,
+  asks neither listing again.
+  Opening a directory or a file is a new place in the history; picking lines,
+  the revision and the lens replace it. A read by a ref answers the commit the
+  ref resolved to, and the **Permalink** is the same place at that commit's
+  whole id: an address that says the same thing tomorrow, which the engine
+  answers immutably. **Overview** is what the repository holds, a rail of how
+  code search reads it and where it stands with other hosts — its search mode,
+  its import's progress (the chunks landed so far, or how it ended), the pull
+  mirror it follows and its last sync, the push mirror it pushes to and as
+  which seat, each from the repository's own row (`remotes`) — and the README
+  at its default branch's root, read at the commit that root was listed at
+  and rendered by the dashboard's own Markdown renderer, which builds every
+  element itself. While an import runs, the header's state pill says
+  `importing`, its title how far it went. **Commits** is the history at a revision, of the path the
+  address names or of every path, with who pushed each commit where the
+  answering node's index holds the push — who pushed, which the commit's own
+  author line is not. **Pushes** is the repository's push history, as Code ›
+  Pushes draws it. **Settings** shows the repository's settings, its
+  protection rules with their merge gates — a gate that requires a check
+  with how its queue lands a change (each change tested merged on the branch
+  before it lands) —
+  and its path owners, and makes three writes, each through `useAct` and a
+  WriteButton, never optimistic — the page is redrawn from the read the
+  write's position brings — and each drawn for every reader, held with the
+  sentence that says why: **Search mode** (`code_update_repo`'s `search`, a
+  button a mode of `REPO_SEARCH_MODES`, held to `code.SearchModes`: the mode
+  it has is no change, and a scratch repository is never indexed);
+  **Mirrors**, a person's alone (`code_update_repo`'s `mirror_from` and
+  `mirror_to`, each set whole from a dialog or removed — an https URL, the
+  credential as a variable's name, and a push mirror's seat and refs — and
+  refused every seat by the deciding data node); and **Unreachable
+  history**, where **Purge unreachable history** (`code_purge_unreachable`, a
+  person's alone, on a repository they maintain) opens a confirmation that
+  names, BEFORE the press, who keeps copies of what it drops — every git
+  node's copy until it syncs past the purge, every backup taken before it,
+  the object store for a day (a versioned S3 bucket for as long as its own
+  rules keep a deleted object), and every clone and fetch that already took
+  it (a person's, a coding box's, a CI runner's checkout), which nothing on
+  the server reaches — the repository's push mirror by its URL among them,
+  where it has one, since that host already holds whatever was pushed to it
+  ([Expunge](../concepts/code-host.md#expunge), "What still holds a purged
+  object") — and only its Purge asks the repository's maintainer; the
+  section says where the last purge stands. A declared
+  repository's search mode and mirrors are the company document's, settled
+  by every activation: they are held with that sentence and the tab leads to
+  Settings › Configuration, while its purge, which changes none of its
+  settings, is offered. Its other settings are changed by the code tools'
+  lifecycle requests (`code_update_repo`, `code_protect_branch`), which a
+  seat or a person's assistant makes. Content is not polled: a reader reading a file reads
+  the revision they opened. A commit of its history, and of a blame, opens
+  the commit's page; a branch offers a comparison with the default branch.
+- **A commit's page**, `#/code/repos/{name}/commits/{sha}`, names its commit
+  by its WHOLE id — the one spelling no push can move; an abbreviation is no
+  page, as `code_commit` takes none. It is the commit as the history lists it
+  beside what the ROWS say of it (`code_commit`): the push that introduced it,
+  by the answering git node's index of pushes and that push's row — who
+  pushed it, when and how, and the turn, the executor and the work item
+  behind a seat's push, as the engine recorded them, which a commit's own
+  author line is not — or, where the index names none, why; and the changes
+  it belongs to, those it merged and those whose revision it heads, each
+  linking its page. What it changed is read against its first parent, as git
+  shows a commit (a merge's change is what it brought into the branch it was
+  made on; a root commit's every file it holds, from git's empty tree), by
+  both whole ids, so every page of it is immutable: the files a page at a
+  time, and one file's patch (`file=`, the first where none is named) in the
+  one `DiffView`, `layout=unified` or `split`, a page at a time as a
+  change's is (**Load more lines**). The file `file=` names is read whether
+  or not a page of files read so far lists it — a link to a file past the
+  first page opens it — and is described by its patch's own answer (its
+  status, its modes, whether git calls it binary). A change's revisions link
+  their heads here.
+- **A comparison**, `#/code/repos/{name}/compare`, compares `head=` with
+  `base=` (none is the default branch), each named as a revision on the
+  repository's page; with no head it asks for one. `code_compare` resolves
+  both in one read and answers how the two commits relate — their merge base,
+  which contains which, how many commits each has that the other lacks — and
+  the merge preview, asked of the repository's home git node by the two whole
+  ids the comparison answered, the one merge a change's mergeability is
+  recorded by (where one commit contains the other that merge is clean, and
+  is answered so with nothing asked of the home): **Merges cleanly**, or
+  **Conflicts** with the paths, or that
+  the home could not decide it in a read's time. The merge preview is the one
+  state the page wears a tone for. What head changed is read from the merge
+  base to head (the three-dot reading every code host shows), both whole.
+  **Open change** is one `code_open_change` of the compared branch into the
+  base branch, prefilled with the subject of the commit head stands at and the
+  work item the push that brought it was charged to (`<tracker>:<key>`, as
+  the engine stamped it), each the reader's to change or clear, with reviewers
+  and a draft; it is drawn for every reader and held with the reason where
+  head is not a branch, base is not one, the two are one branch, head has no
+  commit base lacks, a live change already proposes head's commit (which it
+  then links), or that commit is still being read. Nothing moves until the
+  engine answers, and an applied open leads to the change it opened.
+- **Search**, `#/code/search`, is the lines of the repositories the reader
+  reads that match a search (`code_search`): `q=` in the code host's one
+  grammar ([Finding code](../guides/code.md#finding-code)), its `repo:`,
+  `path:` and `ref:` filters first, and the bar's `mode=` (`CODE_SEARCH_MODES`,
+  held to `codeindex.Modes`), `repo=`, `path=` and `ref=` beside it — the same
+  filters said as controls, every one in the address, so a search is a link.
+  It is asked when the reader presses Search, never as they type: a search
+  across the company is a request to every git node. A press is a step Back
+  takes, its phrase, path and ref pushed onto the history (the mode and the
+  repository narrow the search on screen and replace), and the boxes follow
+  the address whenever it moves, so they never show one search over the
+  lines of another. A reconnect asks again only a search that never reached
+  the engine, as ⌘K's Code tab does: a rolling restart reconnects every
+  socket, and each open search asked again would be one more request to
+  every git node for an answer that already names its commits. And it takes
+  no floor: it answers at the commit each repository was searched at (`tips`). The
+  lines are grouped by repository and then by file in the engine's order —
+  repository, path, line — never re-sorted; each line's number opens its file
+  on the repository's Files tab AT THAT COMMIT, by its whole id, with the line
+  picked (`ref=`, `path=`, `lines=`), so the link says tomorrow what the
+  search said today; a path that is not UTF-8 is drawn with no link, since no
+  address names it. **What was not searched is a Callout above the lines on
+  every answer, never hidden**: how many repositories were searched, then
+  each set the engine names — an index being built, a git node behind or not
+  answering, a grant a node refused, the lines cut — in the warning tone,
+  since lines may be missing, and in the quiet one what the search's own
+  terms left out: a repository read with git grep, the grep repositories a
+  search names no `repo:` for, a ref a repository does not hold, the files
+  passed over. ⌘K's **Code** scope asks the same question (see [⌘K: search,
+  answer, act](#k-search-answer-act)).
+- **Queue** is the merge queues, `code_queue`: a band per repository and
+  branch, its live entries in queue order. Unnarrowed the engine answers every
+  repository's live entries and no trains; what a train tests and what a
+  queue put out are a NAMED repository's (`repo=`), so the train base, the
+  meter of the required checks of the candidate an entry is tested in (one
+  `code_checks` of each candidate's tip for its band's branch, at each
+  check's latest attempt and every page of it, shared by every entry it
+  tests) and
+  the ejections appear once a repository is chosen. An ejection is the danger
+  tone with the reason in words and the checks or paths the engine found,
+  never a guess at blame. The engine answers fifty entries a page and one
+  branch's queue holds up to 1 024 waiting, so **Load more** follows `next`
+  through the pager every code listing shares, the newest page held still
+  from its press; each page answers the trains of the targets it reaches.
+- **Checks** is the window of `code_checks` naming no repository: the
+  attempts that ended at or after the window's start and before its end
+  (`since=`, `until=`), which the engine seeks from the end down, so a custom
+  interval in the past reads its own newest attempts first rather than every
+  attempt that ended after it. A state an attempt ended in — the window
+  holds none queued or running, and offers no chip for either — or a check's
+  name narrows on the ENGINE (`state=`, `name=`), and the chart
+  and the chips count the pages loaded and say so. The listing, the pane and
+  its log are one component every checks listing shares (`routes/code/checks`):
+  this section, a repository's Checks tab (its own listing, which takes no
+  window) and a change's (`change=`). The log is read by its object — an
+  immutable answer — a page at a time, never until the reader asks.
+- **Pushes** is one repository's history, `code_pushes`, newest first in the
+  order the pushes landed. The engine keeps a history per repository and none
+  that spans them, so the section is narrowed to one by `repo=` — chosen from
+  the repositories in its bar, or arriving from a link — and a
+  name no repository can have (`REPO_NAME`, held to `code.ValidName`) is said
+  in place rather than asked about. A row is when it landed, who pushed (the
+  seat, or the credential a person pushed through with the seat it acts as),
+  what became of its refs (created, moved, forced, deleted, unchanged, or
+  refused, in the danger tone with the engine's reason), the commits it
+  brought, a seat's turn and work item as the engine stamped them, how it was
+  built (a client's `git push`, or a commit the engine built from a tool's
+  call) and its pack. **The history is asked in brief** (`brief`): a push
+  carries up to a thousand ref updates — `crewlet code import -local` sends that many
+  at a time — and the commits it introduced, which no row draws, so read whole
+  a page of an imported repository was megabytes that every poll sent again,
+  and twenty thousand lines a render. A row draws five refs at most, its
+  refused ones first, and says what became of the rest in one line ("and 995
+  more: 990 created, 5 deleted", a refusal in the danger tone); **Show all**
+  reads that one push whole (`push`) at its own position — a copy behind the
+  page waits for it rather than answering that it holds no such push — and
+  draws every ref until **Show fewer**; a push that could not be read is said
+  beside **Show all**, which asks it again. The time a push landed reads the
+  clock itself and the refs are memoised on their row, so the second hand
+  re-renders one cell a row and no ref. It is a log, so it reaches its older
+  rows by fetching them and holds its first page still from the press of Load
+  older
+  ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)). It
+  draws no axis: the engine counts no series of pushes, and one folded from
+  the pages held would be true of those pages alone.
+
+**Code is read over REST, never on the socket** (`lib/useCodeQuery.ts`). Its
+questions are the registry's like every other, one answer on every transport,
+but the engine answers a socket's questions four at a time and queues the rest
+on that socket (`MaxInFlightQueries` in `internal/api/stream`), the frame's own
+reads among them, and a code answer is a page a reader scrolls or,
+once a repository's pages land, a tree, a file or a diff. So a code question
+is asked on the registry's generic REST form, `GET /query/{what}`, through the
+one REST loader (`useRest`): an answer belongs to its key, a refusal replaces
+what is on screen, and the engine's `Retry-After` is the retry. It keeps
+`useQuery`'s floor: a write this tab makes to the code log raises the floor
+there (`SESSION_QUERIES.code`), every ask of a code question names it, and the
+write asks again. An answer read by object id is immutable, a strong `ETag`
+and `Cache-Control: immutable`, and the TAB keeps it — the 64 most recently
+read (`IMMUTABLE_KEPT`), a page of 56 KiB at most each — so the same question
+asked again by any screen or pager (a diff's file read again, a Permalink
+come back to, a page of a patch) is answered with no request; the transport
+asks with `no-store`, so the browser's own cache answers none of it. An
+answer the tab has let go of while a screen still holds it is asked again
+naming its tag, and a `304` is the answer the screen holds. The engine's reader gates
+read a code question where it is asked, as they read every other:
+`useCodeQuery("…")`, and `codeRest.query("…")` for an older page.
+
+**Changes are listed outside Code in Code's own grid.** A task's Changes tab,
+a seat's Code tab and My work's Reviews each mount one fixed listing
+(`routes/code/ChangeList.tsx`): the filter is the screen's, so there is no bar
+to narrow it, and its rows are `ChangesGrid`, the very grid Code › Changes
+draws, paged the same way and read again every minute while its first page is
+the only one loaded. A change reads the same reference, readiness, owner and
+blockers wherever it is listed. A seat's reviews are the one listing of
+reviews (`code_reviews?reviewer=`), its rows naming the change each judged.
+
+**Settings › Code is the code host as an administrator runs it**
+(`#/settings/code`, Admin's, beside the rest of the Engine group, and hidden
+where the company hosts no code). It asks no question of its own: the code
+log's row of the retention report, drawn by Backups & retention's own row so
+the two pages cannot disagree about the log; the code host's alarms on every
+node, from the fleet's node rows (each node's own table at its last beat, the
+kinds `CODE_ALARM_KINDS` names, which `internal/code`'s gate holds to the
+engine's alarm table both ways), with a node that has evaluated no table yet
+named apart rather than counted as quiet; the company document's
+`code.scratch` and `code.identity_domain`, each unset field drawn beside the
+default it reads as (`CODE_SCRATCH_IDLE_DAYS`, `CODE_SCRATCH_MAX_PER_SEAT`,
+`CODE_IDENTITY_DOMAIN`, held to the engine's defaults); and the code host's
+own listing of the protected repositories (`code_repos` asked with
+`protected`, which the engine walks by an index of those alone), paged with
+Load more and never one page of every repository filtered here, each a fold
+whose rules' gates are read from the repository's detail (`code_repo` with
+`gates=true`) once, as it is first opened, and kept while the page is, with
+who last changed each rule and when from the same answer (`rule_sources`),
+drawn as a caption under the rule (`ruleSourceLine`, the wording the
+repository's Settings tab shares). It edits nothing: the policy is changed
+where the configuration is.
 
 ## Chatlet: a top bar, a Rooms panel, a room, and where you have read to
 
@@ -7807,7 +8566,9 @@ palette and the trail.
   (back-to-back saves of one page by one writer on one company day are one
   row, "saved it twice"), the lines the newest save changed as the page's
   History draws them (six at most, with the count of the rest and a link to
-  that save), and the page's opening, never ending on a heading with nothing
+  that save; a save the line diff did not compare says so and links it, rather
+  than listing the page's first lines as removed), and the page's opening,
+  never ending on a heading with nothing
   under it. That costs ONE `page` read, of the featured page alone, and the
   `page_revision` before the save; a change to a page since purged never
   leads. **Recently written** runs down the right with the rest of the same
@@ -7969,7 +8730,10 @@ page is one column and the outline is not drawn.
   before the person presses Save: the editor says "Somebody saved revision n
   while you edited", offers their change as a diff, and "Keep editing on top of
   it" MERGES their change into the draft by line before the base moves
-  (`lib/merge.ts`, a three-way merge over the revision the edit started from).
+  (`lib/merge.ts`, a three-way merge over the revision the edit started from,
+  each side compared with it by the dashboard's one line diff, so the merge
+  works on the edits "their change" shows; a side that diff does not compare
+  is one clash of the whole page, the person's to settle).
   A change only one side made is taken as it is; where both changed the same
   lines the base stays behind and each clash is shown, their lines beside the
   draft's, for the person to keep theirs, yours or both, with nothing
@@ -8517,8 +9281,9 @@ edits as one revision was declined. The source is
   charter back rather than sent twice.
 - **A colleague's change to the same part** is never written over unseen. The
   card says the part changed while the person was editing, shows what changed
-  line by line (the kit's `ConflictNote` and `DiffView`), keeps the draft, and
-  offers **Keep my draft** (save it over theirs knowingly) or **Use theirs**.
+  line by line (the kit's `ConflictNote` over the dashboard's one
+  [diff](#diffs-carry-no-hue)), keeps the draft, and offers **Keep my draft**
+  (save it over theirs knowingly) or **Use theirs**.
 - **Unsaved writing is never lost to a stray key.** Cancel or `Esc` on a part
   with changes asks first (*Discard your changes?*), and so does a move to
   another page (*Leave without saving?*) and a reload or a closed tab. Focus
@@ -9106,8 +9871,10 @@ answers instead.
 **A changed tool** (`?flow=drift`, opened by the Tools tab's **Review** and the
 alarm's fix) is reviewed in a dialog over the detail's `changes`: the changed
 tools in the kit's rail, one that now claims less risk first and flagged, and
-for the one chosen its title or description as a text diff, its arguments as a
-list diff and the hints that moved (the kit's `DiffList`); **Accept change**,
+for the one chosen its title or description as a text diff, its arguments a
+line each and the hints that moved keyed by the hint, its old word removed and
+its new one added, all in the one `DiffView`
+([Diffs carry no hue](#diffs-carry-no-hue)); **Accept change**,
 **Accept the new tool** or **Accept that it went**, and **Keep blocked**, each
 sent by the digest of the definition shown. On the Tools tab a changed tool is
 marked *Changed*, *New* or *Removed*, the changes are counted with **Review**,
@@ -9293,13 +10060,13 @@ row for each (the hourly
 collection and the daily audit) with when it ran and what it found: the
 objects a collection deleted because no file names them and the unfinished
 uploads it abandoned; the files an
-audit asked about and how many were missing or damaged. It reads
+audit asked about and how many were missing, damaged or unanswered. It reads
 the fleet's record rather than this node, so it says the same thing whichever
-node served the screen. **Files that are missing or damaged** are the one
-reading an operator opens it for: when the last audit to run to its end found any missing
-or damaged, a danger callout above the passes names the first of them — each
-file, whether it is missing or damaged, and its object — to restore from a
-backup or upload again; an audit that failed after it is said in its row and
+node served the screen. **Files that are missing, damaged or unanswered** are
+the one reading an operator opens it for: when the last audit to run to its end
+found any missing, damaged or unanswered, a danger callout above the passes
+names the first of them — each file, which of the three was found of it, and
+its object — to restore from a backup or upload again; an audit that failed after it is said in its row and
 never clears the callout. A collection that stopped judging keeps what it
 deleted first in its row, and a sweep of unfinished uploads the store refused
 is a warning naming the permissions an S3 identity needs. A record the coordination store would not give up is said as that, not
@@ -9348,8 +10115,15 @@ nothing is downloaded — and offers a fresh directory beside that node's last
 copy when it has one (stamped to the second, never one a backup already went
 to, and nothing when that copy sat directly under `/`); a relative path is
 refused before the round trip, and the engine's own refusal of a directory —
-occupied, or one its host cannot create or write — is said on the field. The request
-waits up to 30 minutes, the CLI's own wait, and closing the dialog does not
+occupied, or one its host cannot create or write — is said on the field; a backup
+already running on that node (`409 backup_running`) is said as that rather than as a
+failed copy, and a refusal the fleet's own state causes — an object store that did
+not answer (`503 objects_unreachable`), a newer build's record on a log the backup
+replays (`409 record_unreadable`), a record signed under a key the node does not
+hold (`409 record_unverified`), a copy keyed to a recreated log (`409
+log_recreated`) or a log missing records the copy needs (`503 log_gap`) — in the
+engine's own hint. The request
+waits up to 12 hours, the CLI's own wait, and closing the dialog does not
 stop the copy: the outcome arrives as a notice either way. Its figures are the
 oldest backup any log's trim reads (each log reads the newest counted backup
 that covers it, so under `operator` there is one per log acknowledged, and the
@@ -9405,11 +10179,15 @@ and a diff. **The Diff lens draws the changes first** and the revisions they
 are picked from under them — beneath fifteen rows of history the changes began
 off the screen, so **See its changes** landed on a list — and a revision
 pressed further down brings the changes back on screen (only when they are off
-it; focus stays in the list). **A change is drawn whole**: its mark (`+`, `−`,
-`~`, said as a word to a screen reader), its path wrapping rather than cut, and
-its value as JSON — an object or a list in the document's own indented shape —
-in tracks the whole list shares, so the values start at one edge; on a phone
-the value takes the line under its path. A revision's peek and its page say
+it; focus stays in the list). **A change is drawn whole**, as the one
+[diff](#diffs-carry-no-hue) draws a setting: an added setting is its new value
+added, a removed one its old value removed, and a changed one both — its old
+value removed and its new one added, the run that moved underlined — each with
+its mark (`+` or `−`, said as a word to a screen reader), its path wrapping
+rather than cut, and its value as JSON — an object or a list in the document's
+own indented shape — in tracks every line shares, so the values start at one
+edge; on a diff narrower than a phone's 640px the value takes the line under
+its path. A revision's peek and its page say
 each property once: the header carries its id, summary and state, and **Where
 it came from** its full id and parent (both in the mono face), Source, who
 created it, when, and when it was activated. In the history (and the Diff
@@ -9451,37 +10229,43 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/routes/<dir>/         one directory per group of framed screens, each
                             its own lazy chunk, as ScreenDir in
                             app/lazyScreen.ts declares them (home, inbox, me,
-                            worklet, chatlet, agents, live, doclet, artifacts,
-                            brand, spend, settings, account), with one file
-                            per screen inside it and an index.ts naming what
-                            its chunk exports. Four things sit outside that
-                            shape: NotFound, which belongs to no directory and
-                            is what the dispatch falls through to; routes/org/,
-                            the organization builder, one screen big enough to
-                            be a directory, and a chunk, of its own;
-                            routes/signin/, the screens drawn outside the
-                            frame, a chunk the idle prefetch leaves alone; and
+                            worklet, code, chatlet, agents, live, doclet,
+                            artifacts, brand, spend, settings, account), with
+                            one file per screen inside it and an index.ts
+                            naming what its chunk exports. Four things sit
+                            outside that shape: NotFound, which belongs to no
+                            directory and is what the dispatch falls through
+                            to; routes/org/, the organization builder, one
+                            screen big enough to be a directory, and a chunk,
+                            of its own; routes/signin/, the screens drawn
+                            outside the frame, a chunk the idle prefetch
+                            leaves alone; and
                             routes/artifacts/new/, where each kind's create
                             page is a chunk of its own, never prefetched either
                             (see below)
   src/styles/               tokens, base, components, shell, frame, screens —
                             what the design system does not draw
 static/dashboard/           THE BUILD OUTPUT — committed, and what the binary embeds
+static/artifacts/           the third build target's output — the page runtime and
+                            the artifact kit — committed and embedded beside it
+static/protocol/            the second's, the wire protocol alone — committed, and
+                            embedded nowhere (see below)
 ```
 
 **The build output is committed**, and that is deliberate: `go build ./...` and
 `go install …@latest` must work on a clean checkout with no Node on the machine,
 and an embed directive cannot run a bundler. A stale bundle would compile,
 embed, serve and pass every Go test while running code nobody wrote — so CI
-rebuilds it and fails on any difference from the commit (`make dashboard-check`),
-the same idiom as `go mod tidy -diff` and the generated `schema/`. A difference
+rebuilds all three trees, the Makefile's `UI_OUT`, and fails on any difference
+from the commit (`make dashboard-check`), the same idiom as `go mod tidy -diff`
+and the generated `schema/`. A difference
 includes a file the rebuild wrote that the commit does not carry at all: every
 emitted name is content-hashed, so a changed chunk is a new path, which
 `git diff` cannot see and `git commit -a` never stages.
 
 | To | Run |
 |---|---|
-| change the dashboard | `make dashboard && git add -A -- static/dashboard` — then commit it with your source change |
+| change the dashboard | `make dashboard && git add -A -- static/dashboard static/artifacts static/protocol` — then commit it with your source change |
 | develop against a running engine | `make dashboard-dev` (proxies to `localhost:8000`) |
 | run its suites | `make dashboard-test` |
 | check the committed bundle is current | `make dashboard-check` |
@@ -9542,8 +10326,9 @@ write control for every kind of reader. The gate these replaced checked a
 block of copyable tool calls; the block is gone, because the button is now
 the call.
 
-`static/dashboard/protocol.js` is a **second** build target: the protocol layer
-alone, unminified, importable by plain `node`. `internal/e2e/golden_test.go`
+`static/protocol/protocol.js` is a **second** build target: the protocol layer
+alone, unminified, importable by plain `node`, committed beside the served tree
+and never embedded in it, since no page loads it. `internal/e2e/golden_test.go`
 runs a real company, captures every frame its socket pushed, and replays those
 bytes through it — so the gate asks "does the client understand what the server
 sent", not "did the server send something". That is the gate that caught a full
@@ -9613,7 +10398,8 @@ made AS THE PERSON THE SESSION RESOLVES TO under its own operation key in
 a project through `POST /operator/act/set_pins` after the frames are taken, and
 the founder's first message in the room is `POST /operator/act/post_message`.
 The route is the node's own operator surface, the one `crewlet run` builds
-inside `api.NewHumanSurfaces`, so the harness wires no second catalogue, and
+inside `api.NewHumanSurfaces`, whose catalogue every call builds from what the
+node serves then, so the harness wires no second catalogue, and
 the viewer names each write among its `acts` before it is pressed. The Go half
 holds each answer to the read it promises: its `position` is in the grammar a
 read accepts back, and `GET /worklet/people/{handle}` (for the pin) or
@@ -9623,7 +10409,7 @@ holds the write. The replay hands the same answers, byte for byte, to the
 client's own `act` and one tab's `SessionFloors`: the `tracker` floor must be
 the pin's position and the `chat` floor the message's, and a read of
 `work_person` or `work_items` — or of `chat_messages` or `chat_channels` — must
-name its log's as its `min_position`. A floor the client could not parse raises
+name its log's as its one `min_position`. A floor the client could not parse raises
 nothing, and the screen that pressed the button would redraw from before the
 press with nothing to say so.
 
@@ -9680,10 +10466,20 @@ what is missing ("The Spend screens could not be loaded"), says "The engine was
 updated. Reload to continue.", and offers Reload, which is what fixes it, beside
 Try again for the other reason, a request the network dropped. Try again really asks
 again: a failed load is forgotten rather than cached for the life of the page
-the way `React.lazy` caches one — once its boundary has drawn it, so React's
-replay of the render that waited on it reads the same rejection rather than
-starting a request nobody reads. A load only a hover or the idle prefetch asked
-for has no render to deliver it to, and is forgotten as it fails.
+the way `React.lazy` caches one — once no place on the page can show the
+failure any more. A screen, a peek and each layer is such a place, and one
+stops being able to show a failure when it draws it, when it goes, or when the
+reader moves it on to another path or object. Until then React's replays of
+the render that waited on the load read the same rejection rather than each
+starting a request nobody reads, so a chunk that is gone costs one request
+rather than one for every render React makes before it gives up (five, and
+seven under the whole frame, when the cache forgot a failure as it happened) —
+or one for each of two places drawing it at once, a screen and the object
+peeked beside it. The reader's next attempt (Try again, another navigation, a
+layer opened again) is the one that asks. A load nobody was drawing, a hover's
+or the idle prefetch's, is forgotten as it fails, and so is one whose screen
+the reader left before it failed: nobody was told, so the next hover, prefetch
+or navigation asks afresh rather than being handed a failure nobody saw.
 
 **The bundle has a budget, measured as the engine sends it.** The split above is
 undone by one static import of a screen's module from the frame — the bundler
@@ -9693,10 +10489,10 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 382 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. Ask Crewlet took it to 336.4 KiB: the kit's Ask Crewlet pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose executor is in its box measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and an executor's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link. The Chatlet redesign (uilet 0.82.0) took it to 373.8 KiB: the one sheet carries 9.2 KiB more (the kit's conversation parts and the compact rail), the entry script 3.9 KiB more (the compact rail, the sidebar's reading of the reader's rooms for the Chatlet badge, and the toast stack's top edge), and the kit's shared chunks and SeatAvatar about 4.6 KiB. It moved to 374 KiB, which is 2.04 seconds on that link, past the two seconds every earlier move kept. The Chatlet follow-ups on uilet 0.83.0 took it to 375.6 KiB: the kit's shared chunks carry 1.4 KiB more (the rail's fold motion, which every page loads with the shell), the one sheet 0.4 KiB more (the fold's keyframes, the compact rail's status row and face, and the dock column's rules), and the entry's own files 0.2 KiB less. It moved to 376 KiB, 2.05 seconds on that link. uilet 0.84.0 took it to 378.5 KiB: the one sheet carries 2.4 KiB more (the inbox row's leave and its arrival wash, the reading pane's entrance, the rail's chevron and its flyout, the calmer ActionCard, the catalogue tiles' status and the fill screens' scrollbars), and the entry script and the kit's shared chunks 0.2 KiB more each. It moved to 379 KiB, 2.07 seconds on that link, and the conversation parts' rules moved into a lazy Chatlet sheet to bring it back under. uilet 0.86.1 took it from about 378.2 KiB to 380.3 KiB: the one sheet carries 1.5 KiB more (the inbox row's head with its time on the first line, a ListDetail list that scrolls, and the rules of 0.85.0 and 0.86.0's new components), the kit's shared chunks 1.0 KiB more, and the entry script 0.4 KiB less. It moved to 381 KiB, 2.08 seconds on that link. The MCP alarms in an administrator's Inbox took it to 380.8 KiB, and uilet 0.89.0 with Chatlet's membership screens to 381.0 KiB (390,120 bytes), inside it. The MCP sign-in (the Inbox's words for its two alarm kinds, which the entry carries as it carries every MCP kind's, and the settings code Rollup shares into the Access chunk) took it past 381.0 KiB by about 0.2 KiB, the entry script +105 bytes and the Access chunk +76 bytes gzipped, so it moved to 382 KiB, 2.09 seconds on that link |
+| The initial load: the entry, its static imports and the linked stylesheet | 387 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. Ask Crewlet took it to 336.4 KiB: the kit's Ask Crewlet pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose executor is in its box measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and an executor's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link. The Chatlet redesign (uilet 0.82.0) took it to 373.8 KiB: the one sheet carries 9.2 KiB more (the kit's conversation parts and the compact rail), the entry script 3.9 KiB more (the compact rail, the sidebar's reading of the reader's rooms for the Chatlet badge, and the toast stack's top edge), and the kit's shared chunks and SeatAvatar about 4.6 KiB. It moved to 374 KiB, which is 2.04 seconds on that link, past the two seconds every earlier move kept. The Chatlet follow-ups on uilet 0.83.0 took it to 375.6 KiB: the kit's shared chunks carry 1.4 KiB more (the rail's fold motion, which every page loads with the shell), the one sheet 0.4 KiB more (the fold's keyframes, the compact rail's status row and face, and the dock column's rules), and the entry's own files 0.2 KiB less. It moved to 376 KiB, 2.05 seconds on that link. uilet 0.84.0 took it to 378.5 KiB: the one sheet carries 2.4 KiB more (the inbox row's leave and its arrival wash, the reading pane's entrance, the rail's chevron and its flyout, the calmer ActionCard, the catalogue tiles' status and the fill screens' scrollbars), and the entry script and the kit's shared chunks 0.2 KiB more each. It moved to 379 KiB, 2.07 seconds on that link, and the conversation parts' rules moved into a lazy Chatlet sheet to bring it back under. uilet 0.86.1 took it from about 378.2 KiB to 380.3 KiB: the one sheet carries 1.5 KiB more (the inbox row's head with its time on the first line, a ListDetail list that scrolls, and the rules of 0.85.0 and 0.86.0's new components), the kit's shared chunks 1.0 KiB more, and the entry script 0.4 KiB less. It moved to 381 KiB, 2.08 seconds on that link. The MCP alarms in an administrator's Inbox took it to 380.8 KiB, and uilet 0.89.0 with Chatlet's membership screens to 381.0 KiB (390,120 bytes), inside it. The code host, merged beside it, adds about 3 KiB: its own changes to the frame (a refusal's sentence among the act errors, a wait said in hours, Not Found's hint said as a sentence), the formatter cache's frozen shapes, whose key it reads once rather than on every date and number a list draws, and the Code workspace's row, routes, trail, service notice and words in the entry, with the bundler regrouping what the first paint already loaded — the code screens reach the peek rail through the grid and nothing of the lazy-screen table beside it, so the two are compressed apart. On the code host's own branch they took the load from 322.6 KiB to 325.6 KiB; merged, it measured 381.7 KiB (390,899 bytes), so it moved to 382 KiB. The code host's next round, merged in (My work's sections read from the services that run them, a code host's own word on an act's refusal and its `not_ready` class among the act errors, and the service notice for My work's queue), took it to 382.2 KiB with no screen's module in the entry, so it moved to 383 KiB, still 2.08 seconds on that link. Code search, a repository's import, mirrors, index and purge, and the checks' latest attempts and window end took it to 382.5 KiB with no screen newly in the first paint: a seat's Code tab in the seats workspace the first paint loads, the frame's code routes, keys, palette hits and sheet rules, and two helpers split into chunks of their own beside a merge of two shared ones. Merged with main's uilet 0.86.1, its MCP alarms and sign-in and Chatlet's membership screens, each measured on its own side, the two add: the code host's 4.3 KiB over the 378.2 KiB both sides started from, on main's 381.2 KiB, is about 385.5 KiB, so it moved to 386 KiB. On main, the MCP sign-in (the Inbox's words for its two alarm kinds, which the entry carries as it carries every MCP kind's, and the settings code Rollup shares into the Access chunk) took it past 381.0 KiB by about 0.2 KiB, the entry script +105 bytes and the Access chunk +76 bytes gzipped, so main moved it to 382 KiB, 2.09 seconds on that link; main's 381.2 KiB the merge added to already counts it, so it stays 386 KiB. Main's kit 0.92.0 (a StatusDot's word that wraps) regroups the kit's shared code the first paint loads: two small chunks of its own (about 0.7 and 0.4 KiB gzipped) against about 0.6 KiB less entry script, and the wrap's rules in the one sheet. It took main's by about 0.7 KiB, which main's 382 KiB still held; merged, the same regrouping took it from about 385.6 KiB to 386.3 KiB, past 386 KiB by main's own growth alone, so it moved to 387 KiB, 2.11 seconds on that link |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load when it was 300 KiB, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
-| The whole of `static/dashboard`, which every binary and image carries | 5458 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. Ask Crewlet (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling Ask Crewlet what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's executor and steering a turn whose executor is in its box took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and an executor's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB, and from there the budget holds the tree to what each change says it costs. Per-seat integration access and its polish took it to 4951.1 KiB, under 4952 KiB. The Chatlet redesign on uilet 0.82.0 took it to 5214.2 KiB (+263.5 KiB): the Chatlet workspace and its lazy sheets +136.6 KiB, the one sheet +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script +13.0 KiB, less 3.8 KiB elsewhere, so it moved to 5215 KiB. The Chatlet follow-ups on uilet 0.83.0 (the rail's fold motion, its compact status row and face, the kit's dock column, stable trigger refs) took it to 5221.4 KiB (+7.2 KiB): the one sheet +3.8 KiB, the kit's shared chunks +3.7 KiB and the Chatlet chunk +0.2 KiB, less 0.5 KiB elsewhere, so it moved to 5222 KiB. uilet 0.84.0 and the round of Inbox and Chatlet fixes beside it took it to 5250.9 KiB (+29.5 KiB): the one sheet +24.2 KiB, the kit's shared chunks +3.5 KiB, the writes chunk +0.9 KiB and the entry script +0.8 KiB, all the kit's, and +0.2 KiB net elsewhere (the Inbox's answer motion +1.3 KiB, against the Overview tab Settings no longer draws, 1.0 KiB less, and My work's seat row, 0.4 KiB less), so it moved to 5251 KiB. The Inbox review fixes (a row answered here opened as answered, read-only until the engine lists it, the move guarded as it is written, the last answer opening Answered, an arrival washed once) took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk), so it moved to 5252 KiB. The Home polish on uilet 0.84.1 (one row a decision under a band per asker, the integration issue tile with its agents' chips, and the smaller status badge) took it to 5253.0 KiB (+1.9 KiB): the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB and Home +0.2 KiB, less 0.2 KiB in the one sheet, so it moved to 5254 KiB. Each executor's run drawn inside its round's Execute card took it to 5259.0 KiB (+5.5 KiB: the settled turn chunk +2.1 KiB, the phases module +2.1 KiB, the live screens +0.8 KiB and the wire protocol +0.6 KiB), so it moved to 5260 KiB. uilet 0.86.1 and Chatlet's Activity fixes took it from 5259.8 KiB to 5280.3 KiB (+20.5 KiB: the one sheet +11.5 KiB, the kit's chunks +8.2 KiB net, the lazy sheets +0.3 KiB and +0.6 KiB elsewhere), so it moved to 5281 KiB. The MCP alarms in an administrator's Inbox took it to 5282.3 KiB (+1.6 KiB, almost all of it the entry script), so it moved to 5283 KiB. uilet 0.89.0 (RoomRow, a row's own action and note, a Switch held with a reason or drawn without its label, DeliveryReceipt and the queued ThinkingIndicator) and Chatlet's membership screens (which agents get every message, the team room choice in New room, the star on a team's room read from outside it, the composer wherever the engine takes the post, Browse rows on RoomRow) took it to 5288.0 KiB (+5.7 KiB): the Chatlet chunk +3.5 KiB, the one sheet +2.7 KiB, the kit's chunks +0.6 KiB, the protocol +0.2 KiB and the remedy chunk +0.1 KiB, less 1.3 KiB of Chatlet's own sheet for the Browse rows the kit now draws, so it moved to 5288 KiB. Chatlet's delivery receipts (DeliveryReceipt under a person's message, and the composer's line saying whom a draft will reach) took it to 5290.7 KiB (+2.7 KiB, Chatlet's chunk), so it moved to 5291 KiB. Settings › MCP & tools rebuilt with page tabs, in place of the Tools screen, took it to 5328.2 KiB (+37.5 KiB): the settings chunk +31.0 KiB, its sheet +2.9 KiB, the Access chunk +3.0 KiB of shared settings code Rollup moved into it and the kit's chunks +1.0 KiB, less 0.4 KiB of the one sheet, so it moved to 5329 KiB. The Sessions view under an agent's Memory tab (a seat's executor sessions, and one session's transcript a page at a time) took it from 5328.4 KiB to 5338.0 KiB (+9.6 KiB, all of it the agents chunk, the initial load unchanged), so it moved to 5339 KiB. The MCP sign-in (its state, auth method, alarm kinds and fix in the page's and the Inbox's words, the Remove dialog's sentence and the contract's view) took it from 5338.8 KiB to 5340.1 KiB (+1.4 KiB: the settings chunk +0.7 KiB, the entry script +0.4 KiB and the Access chunk +0.3 KiB), so it moved to 5341 KiB. The changed-tools alarm (its kind and review fix in the Inbox's and the page's words, and the page's alarm row) took it from 5341.0 KiB to 5341.7 KiB (+0.8 KiB: the settings chunk +0.5 KiB, the entry script +0.2 KiB and the Access chunk +0.1 KiB), so it moved to 5342 KiB. Settings › MCP & tools' add and edit wizard and its Test and Replace value dialogs, net of the Add dialog they replace, took it from 5341.7 KiB to 5384.9 KiB (+43.2 KiB). Measured before the MCP sign-in, it was the settings chunk +40.2 KiB and its sheet +2.2 KiB, the kit's chunks +5.9 KiB net (the setup wizard, key and value rows, source editor and file drop it is the first settings screen to draw), less 5.6 KiB of shared code Rollup moved between chunks and of the Add dialog's rules out of the one sheet, the initial load unchanged, so it moved to 5385 KiB. A team's MCP limits in the Remove dialog took it to 5385.2 KiB (+0.2 KiB, the settings chunk), so it moved to 5386 KiB. Settings › MCP & tools' grants, levels, approvals and changed tools (the Access tab and its grant picker with each agent's team limits, the Tools tab's levels, Agent access, the wizard's Who gets it and Tool approvals steps, the held calls on a server's page, the review of its changed tools) and a held call answered from the Inbox's decision row took it from 5385.2 KiB to 5422.9 KiB (+37.7 KiB): the settings chunk +32.0 KiB and its sheet +1.1 KiB, the Access chunk +1.6 KiB of shared settings code Rollup moved into it, and the writes chunk +1.5 KiB and the decision row's +1.4 KiB (the held call's answers and row), the initial load unchanged, so it moved to 5423 KiB. Signing MCP servers in with OAuth and client credentials (the Sign in and Revoke dialogs, the Connection tab's sign-in card, a client's secret named as one, the sign-in alarm opening the dialog, and the wizard's OAuth and client-credentials choices) took it from 5422.9 KiB to 5436.1 KiB (+13.2 KiB): the settings chunk +11.8 KiB and its sheet +0.1 KiB, and useLatestHandlers a chunk of its own (+1.5 KiB) as Rollup moved 1.2 KiB of shared settings code into the Access chunk, so it moved to 5437 KiB. An executor whose ending is decided drawn as ending (the executors board, a run's page, the Inbox's busy seat and answer fates), and on a run's page the call a person approved and the call its run held for that approval each drawn as what it is, took it from 5436.4 KiB to 5437.3 KiB (+0.9 KiB: the Executors chunk +0.7 KiB, the inbox chunk +0.2 KiB and 44 bytes of the home, live and entry scripts), so it moved to 5438 KiB. The Cloudflare integration (its catalogue entry, story and Agents tab lane words, and the org builder reading a seat's vendor accounts from its access blocks) took it from 5437.3 KiB to 5438.6 KiB (+1.3 KiB: the integrations model chunk +1.0 KiB, the catalogue chunk +0.2 KiB and the settings chunk 72 bytes), so it moved to 5439 KiB. A session's row saying whether, and where, a relaunch would continue it, keyed by the engine's set of places a relaunch continues a session in, took it from 5438.6 KiB to 5439.3 KiB (+0.7 KiB, all of it the agents chunk, the initial load unchanged), 339 bytes past 5439 KiB, so it moved to 5440 KiB. The Expo integration (its catalogue entry, story and Agents tab words, the org builder's Expo facts, and uilet 0.90.0 for the Expo mark) took it from 5439.3 KiB to 5441.5 KiB (+2.2 KiB: the integrations model chunk +1.3 KiB, the icons chunk +0.6 KiB, the catalogue chunk +0.2 KiB and the rest under 0.1 KiB), so it moved to 5442 KiB. The integration connect polish and uilet 0.90.1 (secret fields that refuse saved logins) took it from 5441.5 KiB to 5443.7 KiB (+2.2 KiB: the settings chunk +1.1 KiB, the integrations model chunk and its sheet +0.6 KiB, the kit's chunks +0.3 KiB and the rest +0.1 KiB), so it moved to 5444 KiB. uilet 0.91.0 (the Scaleway and DigitalOcean marks) took it from 5443.7 KiB to 5444.6 KiB (+0.9 KiB: the icons chunk +1.4 KiB, less 0.4 KiB across the kit's renamed chunks, the shell page and the stylesheet), so it moved to 5445 KiB. The Agents tab's generic scope and tool mechanics (scope names, a list that could not be read, a required scope, an open connection's typed entries, a refusal drawn beside its control, each seat's box lines and a lane's two tool routes) took it from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, nearly all of it the integrations model chunk), so it moved to 5448 KiB. A level an agent cannot be given drawn disabled with its reason, a setup check's verdict that wraps, and uilet 0.92.0 (a StatusDot's word that wraps) took it from 5447.7 KiB to 5449.2 KiB (+1.5 KiB: the kit +1.4 KiB across its renamed chunks and its stylesheet, and the access and settings chunks 62 bytes), so it moved to 5450 KiB. The Expo handoff (the Set up sheet a person walks to make each agent's robot at Expo and paste its token, a rotate through it, the reminder of an old credential still at the vendor, keeping a turned-off robot, and the Cloud and Infrastructure group) took it from 5449.2 KiB to 5456.5 KiB (+7.3 KiB: the integrations model chunk +7.1 KiB, its stylesheet +0.1 KiB and 13 bytes across the chunks that import them, the initial load unchanged), so it moved to 5457 KiB. A conversation's next turn continuing the session its last turn left (the Sessions view saying which launch would continue each session, naming the session a turn's first launch was handed and whether its reply reached the party waiting), net of the Memory tab's Conversations section it replaces, took it from 5456.5 KiB to 5454.2 KiB (−2.3 KiB, all of it the agents chunk, the initial load unchanged), so it moved down to 5455 KiB. A bridged call the run's record keeps in part drawn as such on a run's page, a long log's dropped middle said by tool, a collected run's dropped calls said by tool on its execute card, a sealed call drawn as one wherever the turn page draws a call, and a collected executor's calls its record did not keep counted on the turn page and the executors board's rail, their failures in the rail's failure tag, took it from 5454.2 KiB to 5457.2 KiB (+2.9 KiB: the Executors chunk +0.8 KiB, the shared chunk the wording landed in +0.8 KiB, the live chunk +0.5 KiB, the settled chunk +0.5 KiB and the phases chunk +0.4 KiB, the initial load unchanged), so it moved to 5458 KiB. |
+| The whole of `static/dashboard`, which every binary and image carries | 5490 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. Ask Crewlet (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling Ask Crewlet what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's executor and steering a turn whose executor is in its box took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and an executor's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB, and from there the budget holds the tree to what each change says it costs. Per-seat integration access and its polish took it to 4951.1 KiB, under 4952 KiB. The Chatlet redesign on uilet 0.82.0 took it to 5214.2 KiB (+263.5 KiB): the Chatlet workspace and its lazy sheets +136.6 KiB, the one sheet +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script +13.0 KiB, less 3.8 KiB elsewhere, so it moved to 5215 KiB. The Chatlet follow-ups on uilet 0.83.0 (the rail's fold motion, its compact status row and face, the kit's dock column, stable trigger refs) took it to 5221.4 KiB (+7.2 KiB): the one sheet +3.8 KiB, the kit's shared chunks +3.7 KiB and the Chatlet chunk +0.2 KiB, less 0.5 KiB elsewhere, so it moved to 5222 KiB. uilet 0.84.0 and the round of Inbox and Chatlet fixes beside it took it to 5250.9 KiB (+29.5 KiB): the one sheet +24.2 KiB, the kit's shared chunks +3.5 KiB, the writes chunk +0.9 KiB and the entry script +0.8 KiB, all the kit's, and +0.2 KiB net elsewhere (the Inbox's answer motion +1.3 KiB, against the Overview tab Settings no longer draws, 1.0 KiB less, and My work's seat row, 0.4 KiB less), so it moved to 5251 KiB. The Inbox review fixes (a row answered here opened as answered, read-only until the engine lists it, the move guarded as it is written, the last answer opening Answered, an arrival washed once) took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk), so it moved to 5252 KiB. The Home polish on uilet 0.84.1 (one row a decision under a band per asker, the integration issue tile with its agents' chips, and the smaller status badge) took it to 5253.0 KiB (+1.9 KiB): the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB and Home +0.2 KiB, less 0.2 KiB in the one sheet, so it moved to 5254 KiB. Each executor's run drawn inside its round's Execute card took it to 5259.0 KiB (+5.5 KiB: the settled turn chunk +2.1 KiB, the phases module +2.1 KiB, the live screens +0.8 KiB and the wire protocol +0.6 KiB), so it moved to 5260 KiB. uilet 0.86.1 and Chatlet's Activity fixes took it from 5259.8 KiB to 5280.3 KiB (+20.5 KiB: the one sheet +11.5 KiB, the kit's chunks +8.2 KiB net, the lazy sheets +0.3 KiB and +0.6 KiB elsewhere), so it moved to 5281 KiB. The MCP alarms in an administrator's Inbox took it to 5282.3 KiB (+1.6 KiB, almost all of it the entry script), so it moved to 5283 KiB. uilet 0.89.0 (RoomRow, a row's own action and note, a Switch held with a reason or drawn without its label, DeliveryReceipt and the queued ThinkingIndicator) and Chatlet's membership screens (which agents get every message, the team room choice in New room, the star on a team's room read from outside it, the composer wherever the engine takes the post, Browse rows on RoomRow) took it to 5288.0 KiB (+5.7 KiB): the Chatlet chunk +3.5 KiB, the one sheet +2.7 KiB, the kit's chunks +0.6 KiB, the protocol +0.2 KiB and the remedy chunk +0.1 KiB, less 1.3 KiB of Chatlet's own sheet for the Browse rows the kit now draws, so it moved to 5288 KiB. Chatlet's delivery receipts (DeliveryReceipt under a person's message, and the composer's line saying whom a draft will reach) took it to 5290.7 KiB (+2.7 KiB, Chatlet's chunk), so it moved to 5291 KiB. Settings › MCP & tools rebuilt with page tabs, in place of the Tools screen, took it to 5328.2 KiB (+37.5 KiB): the settings chunk +31.0 KiB, its sheet +2.9 KiB, the Access chunk +3.0 KiB of shared settings code Rollup moved into it and the kit's chunks +1.0 KiB, less 0.4 KiB of the one sheet, so it moved to 5329 KiB. The Sessions view under an agent's Memory tab (a seat's executor sessions, and one session's transcript a page at a time) took it from 5328.4 KiB to 5338.0 KiB (+9.6 KiB, all of it the agents chunk, the initial load unchanged), so it moved to 5339 KiB. The MCP sign-in (its state, auth method, alarm kinds and fix in the page's and the Inbox's words, the Remove dialog's sentence and the contract's view) took it from 5338.8 KiB to 5340.1 KiB (+1.4 KiB: the settings chunk +0.7 KiB, the entry script +0.4 KiB and the Access chunk +0.3 KiB), so it moved to 5341 KiB. The changed-tools alarm (its kind and review fix in the Inbox's and the page's words, and the page's alarm row) took it from 5341.0 KiB to 5341.7 KiB (+0.8 KiB: the settings chunk +0.5 KiB, the entry script +0.2 KiB and the Access chunk +0.1 KiB), so it moved to 5342 KiB. Settings › MCP & tools' add and edit wizard and its Test and Replace value dialogs, net of the Add dialog they replace, took it from 5341.7 KiB to 5384.9 KiB (+43.2 KiB). Measured before the MCP sign-in, it was the settings chunk +40.2 KiB and its sheet +2.2 KiB, the kit's chunks +5.9 KiB net (the setup wizard, key and value rows, source editor and file drop it is the first settings screen to draw), less 5.6 KiB of shared code Rollup moved between chunks and of the Add dialog's rules out of the one sheet, the initial load unchanged, so it moved to 5385 KiB. The code host's screens (the Code workspace: its repositories, a repository's files and history, its changes with their reviews, checks and merge queue, and their words) took it to 5377.4 KiB (+124.4 KiB), nearly all in chunks fetched on opening Code, so it moved to 5378 KiB. The code host's next round (the merge queue's and the checks' screens, the merge controls on a change, Settings › Code and the changes on Home) took it to 5428.4 KiB (+50.9 KiB): the Code workspace +15.5 KiB, a change's page +7.7 KiB, Settings +6.1 KiB, the shared chunks +5.9 KiB, the change list +2.8 KiB, Home +2.6 KiB and the checks' screens +2.5 KiB, less 4.2 KiB in the entry, so it moved to 5429 KiB. Code search and a repository's import, mirrors, index and purge left it at 5271.9 KiB, because the bundle got smaller beside them: `protocol.js`, the wire protocol alone that `internal/e2e` replays frames through and no page loads, is built into `static/protocol` beside the tree rather than into it (about 124 KiB every binary had carried). Merged with main's executor launches, uilet 0.86.1 and 0.89.0, Chatlet's receipts and membership, the Sessions view and Settings › MCP & tools, each measured on its own side from about 5253 KiB, the two add: the code host's +28 KiB on main's 5384.9 KiB, less main's 0.8 KiB of wire protocol that `static/protocol` keeps out of the tree, measured 5412.5 KiB, so it moved to 5413 KiB. The code host's round merged on top (a change list's open findings, updated column and window, a change's reviews, comments and findings a page at a time, who set each protection rule, every protected repository and any repository found in the pickers, a file's earlier lines a page at a time) took it to 5415.6 KiB (+3.1 KiB: the changes chunk +1.7 KiB, the Code workspace +0.5 KiB, Settings +0.4 KiB, the quiet-input hook +0.3 KiB and the Inbox +0.2 KiB, less 0.3 KiB of the page-link module and +0.3 KiB net elsewhere), all of it fetched on opening Code or Settings, so it moved to 5416 KiB. The diff reader's next round (a failed check's line revealed wherever its window is, the patch read on to the page holding it, the line dropped when the reader opens another file, and a change's reviews and comments asked again only once spoken) took it to 5416.6 KiB (+1.0 KiB: the DiffView chunk +0.7 KiB and the Code workspace +0.2 KiB), all of it fetched on opening Code, so it moved to 5417 KiB. A team's MCP limits in the Remove dialog took it to 5385.2 KiB (+0.2 KiB, the settings chunk), so it moved to 5386 KiB. Settings › MCP & tools' grants, levels, approvals and changed tools (the Access tab and its grant picker with each agent's team limits, the Tools tab's levels, Agent access, the wizard's Who gets it and Tool approvals steps, the held calls on a server's page, the review of its changed tools) and a held call answered from the Inbox's decision row took it from 5385.2 KiB to 5422.9 KiB (+37.7 KiB): the settings chunk +32.0 KiB and its sheet +1.1 KiB, the Access chunk +1.6 KiB of shared settings code Rollup moved into it, and the writes chunk +1.5 KiB and the decision row's +1.4 KiB (the held call's answers and row), the initial load unchanged, so it moved to 5423 KiB. Signing MCP servers in with OAuth and client credentials (the Sign in and Revoke dialogs, the Connection tab's sign-in card, a client's secret named as one, the sign-in alarm opening the dialog, and the wizard's OAuth and client-credentials choices) took it from 5422.9 KiB to 5436.1 KiB (+13.2 KiB): the settings chunk +11.8 KiB and its sheet +0.1 KiB, and useLatestHandlers a chunk of its own (+1.5 KiB) as Rollup moved 1.2 KiB of shared settings code into the Access chunk, so it moved to 5437 KiB. An executor whose ending is decided drawn as ending (the executors board, a run's page, the Inbox's busy seat and answer fates), and on a run's page the call a person approved and the call its run held for that approval each drawn as what it is, took it from 5436.4 KiB to 5437.3 KiB (+0.9 KiB: the Executors chunk +0.7 KiB, the inbox chunk +0.2 KiB and 44 bytes of the home, live and entry scripts), so it moved to 5438 KiB. Merged with the code host, each measured on its own side (main's from 5384.9 KiB, the code host's at 5416.6 KiB), the two add: main's MCP grants, levels, held calls, changed tools, sign-in and ending executors are +52.4 KiB (the settings chunk +44.0 KiB and its sheet +1.2 KiB, the Access chunk +2.8 KiB, useLatestHandlers +1.5 KiB, the writes chunk +1.5 KiB, the decision row's +1.4 KiB and the Executors chunk +0.7 KiB, less 0.7 KiB net elsewhere), and the merge itself 158 bytes, almost all of it the changed tools' review drawn in the one `DiffView` rather than the package's diffs. It measured 5469.1 KiB, so it moved by main's own 53 KiB, from the code host's 5417 KiB to 5470 KiB. The Cloudflare integration (its catalogue entry, story and Agents tab lane words, and the org builder reading a seat's vendor accounts from its access blocks) took it from 5437.3 KiB to 5438.6 KiB (+1.3 KiB: the integrations model chunk +1.0 KiB, the catalogue chunk +0.2 KiB and the settings chunk 72 bytes), so it moved to 5439 KiB. A session's row saying whether, and where, a relaunch would continue it, keyed by the engine's set of places a relaunch continues a session in, took it from 5438.6 KiB to 5439.3 KiB (+0.7 KiB, all of it the agents chunk, the initial load unchanged), 339 bytes past 5439 KiB, so it moved to 5440 KiB. Merged again with those two, main's +2.0 KiB (2,060 bytes) took the merged tree from 5469.3 KiB to 5471.3 KiB, so it moved by main's own 2 KiB, from 5470 KiB to 5472 KiB. The Expo integration (its catalogue entry, story and Agents tab words, the org builder's Expo facts, and the kit's 0.90.0 for the Expo mark) took main's from 5439.3 KiB to 5441.5 KiB (+2.2 KiB: the integrations model chunk +1.3 KiB, the icons chunk +0.6 KiB, the catalogue chunk +0.2 KiB, the initial load unchanged), and the integration connect and access polish with the kit's 0.90.1 took it to 5443.7 KiB (+2.2 KiB: the settings chunk +1.1 KiB, the integrations model chunk and its sheet +0.6 KiB, the kit's chunks 313 bytes net). Merged again with those two (the Cloudflare configure level after them adds no byte to the bundle), main's +4.4 KiB (4,477 bytes) came to 4,424 bytes on the merged tree and took it from 5471.3 KiB to 5475.6 KiB, so it moved by main's own 4 KiB, from 5472 KiB to 5476 KiB. The kit's move to 0.91.0 (the Scaleway and DigitalOcean marks) took main's from 5443.7 KiB to 5444.6 KiB (+967 bytes: the icons chunk +1409 bytes for the two marks, less 442 bytes net across the kit's renamed chunks, the shell page and the stylesheet). Merged again with it, main's +967 bytes came to 1,022 bytes on the merged tree and took it from 5475.6 KiB to 5476.6 KiB, so it moved by main's own 1 KiB, from 5476 KiB to 5477 KiB. The Agents tab's generic scope and tool mechanics (scope names, a list that could not be read, a required scope, an open connection's typed entries, a refusal drawn beside its control, each seat's box lines and a lane's two tool routes) took main's from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, nearly all of it the integrations model chunk). Merged again with it, main's +3,165 bytes came to 3,163 bytes on the merged tree and took it from 5476.6 KiB to 5479.7 KiB, so it moved by main's own 3 KiB, from 5477 KiB to 5480 KiB. A level an agent cannot be given drawn disabled with its reason, a setup check's verdict that wraps, and uilet 0.92.0 (a StatusDot's word that wraps) took main's from 5447.7 KiB to 5449.2 KiB (+1.5 KiB: the kit +1.4 KiB across its renamed chunks and its stylesheet, and the access and settings chunks 62 bytes). Merged again with it, main's +1,529 bytes came to 1,508 bytes on the merged tree and took it from 5479.7 KiB to 5481.1 KiB, so it moved by main's own 2 KiB, from 5480 KiB to 5482 KiB. The Expo handoff (the Set up sheet a person walks to make each agent's robot at Expo and paste its token, a rotate through it, the reminder of an old credential still at the vendor, keeping a turned-off robot, and the Cloud and Infrastructure group) took main's from 5449.2 KiB to 5456.5 KiB (+7.3 KiB: the integrations model chunk +7.1 KiB, its stylesheet +0.1 KiB and 13 bytes across the chunks that import them, the initial load unchanged). Merged again with it, main's +7,475 bytes came to 7,477 bytes on the merged tree and took it from 5481.1 KiB to 5488.4 KiB, so it moved by main's own 7 KiB, from 5482 KiB to 5489 KiB. A conversation's next turn continuing the session its last turn left (the Sessions view saying which launch would continue each session, naming the session a turn's first launch was handed and whether its reply reached the party waiting), net of the Memory tab's Conversations section it replaces, took main's from 5456.5 KiB to 5454.2 KiB (−2.3 KiB, all of it the agents chunk, the initial load unchanged). Merged again with it, main's −2,367 bytes came to −2,380 bytes on the merged tree and took it from 5488.4 KiB to 5486.1 KiB, so it moved down by main's own 2 KiB, from 5489 KiB to 5487 KiB. A bridged call the run's log keeps in part drawn as such on a run's page, a long log's dropped middle said by tool, a collected run's dropped calls said by tool on its execute card, a sealed call drawn as one wherever the turn page draws a call, and a collected executor's calls its record did not keep counted on the turn page and the executors board's rail, their failures in the rail's failure tag, took it from 5486.1 KiB to 5489.1 KiB (+2.9 KiB: the Executors chunk +0.8 KiB, the shared chunk the wording landed in +0.8 KiB, the live chunk +0.5 KiB, the settled chunk +0.5 KiB and the phases chunk +0.4 KiB, the initial load unchanged), so it moved to 5490 KiB. |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from
@@ -9948,7 +10744,12 @@ brings that carries a design-system rule.
   package's: the badge, the panel, the empty state, the stat row, the
   skeleton, the select, the tab strip, the avatar, the banner, the disclosure,
   the search input, the button and the chip — and the ranked list, the legend,
-  the stacked bar, the activity strip and the sparkline with them.
+  the stacked bar, the activity strip and the sparkline with them. The one
+  peer the dashboard does not draw is the package's diff: its `DiffView`,
+  `DiffSummary` and `DiffList` paint by state, which a diff is not, so every
+  diff is `components/DiffView.tsx`, built from the package's tokens over the
+  dashboard's own line diff, since the package's stops comparing at 2,000
+  lines a side ([Diffs carry no hue](#diffs-carry-no-hue)).
 - **What is left of `src/ui/` is of three kinds, and none of them is a second
   recipe for something the package already draws.** A VOCABULARY the package
   does not have and should not — `Tone`, the six words the engine's own
@@ -10591,9 +11392,13 @@ to.
    tell two things apart, use their names. The third-party app marks in
    `@crewlethq/icons`, the org charts' toned agent nodes (Company › Org chart
    and Edit org), an agent's own profile icon, a Crewlet character in the
-   colour its author chose, and a QR code's black on white (`@crewlethq/ui`'s
-   `QrCode`, whose two inks are the fixed `color.qr` tokens) are
-   the four bounded exceptions (see "The one rule" above); nothing else is. The character and colour lists are the
+   colour its author chose, a QR code's black on white (`@crewlethq/ui`'s
+   `QrCode`, whose two inks are the fixed `color.qr` tokens) and a
+   collaborator's presence colour in an artifact are
+   the five bounded exceptions (see "The one rule" above); nothing else is.
+   **A diff carries no hue at all, not even a state's**: a line's kind is its
+   glyph, one of two surface steps and, on a line edited, an underline (see
+   [Diffs carry no hue](#diffs-carry-no-hue)). The character and colour lists are the
    contract's (`contract/avatar.ts`), held to the engine's and to the design
    system's, and one reading of them (`lib/avatar.ts`'s `avatarOf`) draws a
    part this build does not know as the default part rather than as nothing.
@@ -10749,9 +11554,10 @@ to.
     `--color-text-tertiary` (6.1–6.6:1). What is left on the faint rung is ten marks —
     two tree characters, a breadcrumb slash, four icons and three icon-only
     controls — each named in `styles/rungs.test.ts` with the reason it is one.
-17. **Run `make dashboard` and commit `static/dashboard` with the change —
-    `git add -A -- static/dashboard`, not `git add -u`.** CI rebuilds and
-    fails on a diff AND on an untracked file there (`make dashboard-check`),
+17. **Run `make dashboard` and commit every tree it writes with the change —
+    `git add -A -- static/dashboard static/artifacts static/protocol`, not
+    `git add -u`.** CI rebuilds and fails on a diff AND on an untracked file
+    in any of them (`make dashboard-check`),
     because a lazy chunk is a NEW hashed file every time its source changes:
     `git add -u` stages the entry that imports it and leaves the chunk behind,
     and a binary built from that commit serves a screen whose code is not in
@@ -10772,8 +11578,8 @@ to.
     `public, max-age=31536000, immutable`, so a browser holding a file there
     never asks for it again; that is correct only because the build names
     each one `<name>-<hash>.<ext>`, so different bytes are a different URL.
-    Emit a file with a fixed name anywhere but `assets/` — the fonts,
-    `protocol.js`, the notices and the brand marks do — and it is served
+    Emit a file with a fixed name anywhere but `assets/` — the fonts, the
+    notices and the brand marks do — and it is served
     `no-cache` and revalidated on every load, like the shell that names the
     hashed files. `TestEveryFileUnderAssetsIsContentHashed` fails on an
     unhashed name under `assets/`. Text is gzipped by the engine for a client
@@ -10809,5 +11615,5 @@ to.
     seat's Overview and Turns tabs and a turn over wire fixtures that carry a price everywhere
     the engine puts one, and reads text and attributes back for any trace of
     it; and the BUNDLE, where `TestTheDashboardRendersNoPrice` scans every
-    module the engine serves, lazy chunks and `protocol.js` included, because
-    the committed bundle is what a browser runs.
+    module the engine serves, lazy chunks included, because the committed
+    bundle is what a browser runs.

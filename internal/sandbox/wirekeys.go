@@ -29,7 +29,12 @@ import (
 // record, which grows a fact about the job with nearly every piece that touches
 // launching, and which every write but a relaunch's hands back. A section that
 // does not is extended the other way, with a key of its own at the top of the
-// record (as [PendingRun.Stop] is, beside [RecordedEnding]).
+// record (as [PendingRun.Stop] is, beside [RecordedEnding]). And the log kept
+// beside the record, [BridgeLog], is a value of its own with an Extra of its
+// own at its top, under the same rule. The handed set kept beside it too
+// ([handedSet]) needs none: it is never read, changed and written back, only
+// replaced whole by the attach of the job it names, so nothing another build
+// wrote into it is any later write's to keep.
 
 // wireKeys is every wire key a struct type declares, read off its own json tags
 // so a field added to the struct is known the moment it exists — a hand-kept
@@ -169,6 +174,26 @@ func (r *NoteRead) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// MarshalJSON writes the owed call with the keys a later build added to it.
+func (o OwedCall) MarshalJSON() ([]byte, error) {
+	type plain OwedCall
+	return marshalCarrying(plain(o), wireKeys(reflect.TypeFor[OwedCall]()), o.Extra)
+}
+
+// UnmarshalJSON reads the owed call and keeps the keys this build does not
+// know.
+func (o *OwedCall) UnmarshalJSON(raw []byte) error {
+	type plain OwedCall
+	p := plain(*o)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[OwedCall]()))
+	if err != nil {
+		return err
+	}
+	*o = OwedCall(p)
+	o.Extra = extra
+	return nil
+}
+
 // MarshalJSON writes the call with the keys a later build added to it.
 func (c BridgeCall) MarshalJSON() ([]byte, error) {
 	type plain BridgeCall
@@ -205,6 +230,25 @@ func (e *ElidedCall) UnmarshalJSON(raw []byte) error {
 	}
 	*e = ElidedCall(p)
 	e.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the log with the keys a later build added to it.
+func (l BridgeLog) MarshalJSON() ([]byte, error) {
+	type plain BridgeLog
+	return marshalCarrying(plain(l), wireKeys(reflect.TypeFor[BridgeLog]()), l.Extra)
+}
+
+// UnmarshalJSON reads the log and keeps the keys this build does not know.
+func (l *BridgeLog) UnmarshalJSON(raw []byte) error {
+	type plain BridgeLog
+	p := plain(*l)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[BridgeLog]()))
+	if err != nil {
+		return err
+	}
+	*l = BridgeLog(p)
+	l.Extra = extra
 	return nil
 }
 

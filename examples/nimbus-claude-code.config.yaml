@@ -106,9 +106,11 @@ logging:
 # refused a store_dir (docs/guides/satellite-nodes.md).
 #
 # `type: nats` dials an external NATS server or cluster instead, and takes
-# `url` (plus `credentials` / `token` / `tls` where the estate demands
-# them).  It is the same client code either way: embedded versus external
-# is a connection choice, not a second backend.
+# `url` and a credential: `credentials`, `token` or `tls.cert` — one is
+# required, and the node refuses a server that authenticates nobody
+# (`tls.ca` where the estate demands it).  It is the same client code
+# either way: embedded versus external is a connection choice, not a
+# second backend.
 stream:
   type: embedded
   store_dir: "./nimbus-data/stream"
@@ -158,7 +160,7 @@ coordination:
 # member a distinct, stable one.
 node:
   id: "${CREWLET_NODE_ID}"
-  # roles: [data, ingress, seats, workers]   # omit for all four; a node
+  # roles: [data, git, ingress, seats, workers]   # omit for all five; a node
                                        #   without data keeps nothing durable
                                        #   and needs store.scratch plus
                                        #   stream.leaf.urls — see

@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -330,7 +331,11 @@ type backgroundCloser interface {
 // A node that boots ON a revision does not arrive here nil: the caller reads
 // the active revision first and passes it, so the store opens at its width.
 // The one node holding a revision that arrives nil is the import above.
-func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (*Backends, error) {
+//
+// rec is the node's recorder, which a backend that counts what it does counts
+// into from its first request — the object store's bucket client, whose
+// check of the bucket is a request ([openObjects]). Nil counts nothing.
+func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company, rec *metrics.Recorder) (*Backends, error) {
 	if b == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
@@ -338,7 +343,7 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	var err error
 	switch b.Stream.Type {
 	case config.StreamNATS, config.StreamEmbedded, "":
-		out, err = openNATS(ctx, b)
+		out, err = openNATS(ctx, b, rec)
 	default:
 		err = fmt.Errorf("engine: unknown stream type %q", b.Stream.Type)
 	}
@@ -443,8 +448,10 @@ func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 // only in who owns the broker and therefore who owns the connection; what is
 // built on top of it is identical, and writing that twice is how one copy
 // ends up without a fleet store — which is not a startup error but a panic
-// hours later in whichever subsystem reached for it first.
-func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
+// hours later in whichever subsystem reached for it first. rec is the node's
+// recorder, handed on to the embedded broker's refusals ([openStream]) and to
+// the object store ([openObjects]).
+func openNATS(ctx context.Context, b *config.Bootstrap, rec *metrics.Recorder) (*Backends, error) {
 	cfg, err := streamConfig(b)
 	if err != nil {
 		return nil, err
@@ -455,7 +462,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	// store is written inline on the publishing node and a reader holding
 	// any one row or frame has only that to find the node whose store holds
 	// the rest — see events.Event.Node.
-	out, conn, err := openStream(ctx, b, cfg, queue.WithNode(nodeID))
+	out, conn, err := openStream(ctx, b, cfg, rec, queue.WithNode(nodeID))
 	if err != nil {
 		return nil, err
 	}
@@ -472,7 +479,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	if err = attachCoordination(ctx, b, out, js); err != nil {
 		return nil, out.abandon(ctx, err)
 	}
-	if err = openObjects(ctx, b, out, js); err != nil {
+	if err = openObjects(ctx, b, out, js, rec); err != nil {
 		return nil, out.abandon(ctx, err)
 	}
 	return out, nil
@@ -500,6 +507,18 @@ func streamConfig(b *config.Bootstrap) (jetstream.Config, error) {
 	if err != nil {
 		return jetstream.Config{}, fmt.Errorf("engine: stream: %w", err)
 	}
+	// THE BROKER'S CREDENTIALS ARE THE KEYRING'S, derived per key by the rule
+	// every consumer of secrets.keys follows (ADR-0094): every route, leaf link
+	// and operator connection of an embedded fleet presents one. Derived on
+	// every node, a solo member's too — it opens no fleet listener, so its are
+	// never presented — because which listeners a broker opens is the jetstream
+	// package's to decide from the rest of this config, and one derivation for
+	// every node is one fewer rule about which nodes need one.
+	fleet, err := jetstream.FleetAuthFrom(b.Secrets.TokenMaterial())
+	if err != nil {
+		return jetstream.Config{}, fmt.Errorf("engine: stream: the broker's credentials "+
+			"from secrets.keys: %w", err)
+	}
 	cfg := jetstream.Config{
 		URL:              b.Stream.URL,
 		StoreDir:         b.Stream.StoreDir,
@@ -518,6 +537,7 @@ func streamConfig(b *config.Bootstrap) (jetstream.Config, error) {
 		LeafPort:      b.Stream.Leaf.Port,
 		LeafHost:      b.Stream.Leaf.Host,
 		LeafAdvertise: b.Stream.Leaf.Advertise,
+		FleetAuth:     fleet,
 		ServerName:    nodeID,
 		Replicas:      b.Stream.Replicas,
 		Credentials:   b.Stream.Credentials,
@@ -546,6 +566,31 @@ func streamConfig(b *config.Bootstrap) (jetstream.Config, error) {
 	return cfg, nil
 }
 
+// ObjectStoreMismatchError is a node refused because its store.objects names
+// another object store than the one the fleet keeps its files in.
+//
+// A TYPE, carrying both identities, because the remedy is an edit of this
+// node's Tier A and which store is the FLEET'S is the one fact the operator
+// cannot read off the node they are editing. And because the setting fails in
+// other ways that name it too — the record unreadable, the bucket unreachable
+// at open — so a caller asking whether a boot was refused for THIS reason (a
+// restore that put the old store's record back, docs/guides/backup.md) asks
+// the type rather than a substring the other failures share.
+type ObjectStoreMismatchError struct {
+	// Configured is the identity this node's store.objects names.
+	Configured string
+	// Fleet is the identity the fleet recorded when its first node opened a
+	// store ([coord.Fleet.AgreeObjectBackend]).
+	Fleet string
+}
+
+func (e *ObjectStoreMismatchError) Error() string {
+	return fmt.Sprintf("engine: store.objects names %q and the fleet keeps its files in %q: "+
+		"every node must name the same object store, or the company's files split "+
+		"between the two — set store.objects on this node to match the others",
+		e.Configured, e.Fleet)
+}
+
 // openObjects opens the backend the company's files are kept in, once the
 // fleet has agreed it is the fleet's.
 //
@@ -555,7 +600,12 @@ func streamConfig(b *config.Bootstrap) (jetstream.Config, error) {
 // where the fleet uses a bucket — would split the company's files between two
 // stores, each side's uploads readable on that side alone, with nothing
 // failing. Refused here, by name, it is a node that does not start.
-func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
+//
+// An `s3` bucket's client counts its attempts, its requests and its throttle
+// gate into rec, the node's recorder, from its first request — the check of
+// the bucket below — so it is handed to the client's constructor rather than
+// set on the backend afterwards. Nil counts nothing.
+func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream, rec *metrics.Recorder) error {
 	objects := b.Store.Objects
 	identity := objects.Identity()
 	agreed, err := out.Fleet.AgreeObjectBackend(ctx, identity)
@@ -563,10 +613,7 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		return fmt.Errorf("engine: check store.objects against the fleet's object store: %w", err)
 	}
 	if agreed != identity {
-		return fmt.Errorf("engine: store.objects names %q and the fleet keeps its files in %q: "+
-			"every node must name the same object store, or the company's files split "+
-			"between the two — set store.objects on this node to match the others",
-			identity, agreed)
+		return &ObjectStoreMismatchError{Configured: identity, Fleet: agreed}
 	}
 	out.objectsIdentity = identity
 	switch objects.BackendOrDefault() {
@@ -575,6 +622,7 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		backend, err := s3obj.Open(ctx, s3obj.Config{
 			Endpoint: s3.Endpoint, Region: s3.Region, Bucket: s3.Bucket, Prefix: s3.Prefix,
 			PathStyle: s3.PathStyle, AccessKeyID: s3.AccessKeyID, SecretAccessKey: s3.SecretAccessKey,
+			Metrics: rec,
 		})
 		if err != nil {
 			return fmt.Errorf("engine: the object store (store.objects.s3): %w", err)
@@ -584,10 +632,22 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		openCtx, cancel := context.WithTimeout(ctx,
 			jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
 		defer cancel()
-		reservation, explicit := objectsReservation(ctx, b, out.Queue)
+		// ACROSS A LINK on every node whose connection is not to its own
+		// member — a leaf's, an external cluster's client — where the
+		// puts' window is sized by the lease renewals queued behind it,
+		// at the heartbeat the node's seat host renews them on: the TTL
+		// IN FORCE — the lease bucket's, which a fleet's first node set
+		// and which `coordination.lease_ttl_seconds` set here may not be
+		// ([effectiveLeaseTTL]) — over seat.HeartbeatRatio, as the host
+		// derives it. Sized against the shipped heartbeat instead, a
+		// 15-second lease (renewed every five) waited 20 s behind the
+		// window at the floor and lapsed.
+		reservation, explicit := objectsReservation(ctx, b, out.Queue, volumeFree)
 		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
 			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
 			MaxBytes: reservation, Explicit: explicit,
+			AcrossLink:     b.BrokerKind() != placement.BrokerMember,
+			LeaseHeartbeat: effectiveLeaseTTL(b, out.Coord) / seat.HeartbeatRatio,
 		})
 		if err != nil {
 			return fmt.Errorf("engine: the object store (store.objects.backend: nats): %w", err)
@@ -613,10 +673,11 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 // from what the broker has left once the bucket holds its reservation
 // ([logsGrantable]) and every restart divides the same remainder, which keeps
 // the logs' ceilings reproducible from boot to boot. That holds on a broker
-// that states no limit too: the free space standing in for the limit is
-// spent by the bucket's reservation, which the broker still reports, so the
-// bucket and the logs never reserve more between them than they would under a
-// stated limit of that size.
+// that states no limit too: the limit standing in for it ([unstatedLimit] of
+// the free space, the cap a server running its defaults takes) is the one both
+// are sized against, and the bucket's reservation, which the broker still
+// reports, comes off it before the logs are, so the bucket and the logs never
+// reserve more between them than they would under a stated limit of that size.
 
 // objectsCoordinationFloor is what the derived reservation always leaves the
 // broker beside the state logs' share: the mailboxes and coordination buckets
@@ -630,9 +691,12 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 const objectsCoordinationFloor int64 = 1 << 30
 
 // objectsBucketShare is the most of the broker's limit the derived reservation
-// takes: a quarter, the review's figure. Half of the limit is the state logs',
-// and a quarter left over keeps the coordination remainder as large as the
-// bucket however full the bucket gets.
+// takes: a quarter, the review's figure. The bucket is reserved first and the
+// state logs take [StreamBudgetShare] of the three quarters it leaves, so the
+// coordination remainder is (1 − share) of those three quarters — at five
+// eighths, nine thirty-seconds of the limit — and stays as large as the bucket
+// however full the bucket gets for any share up to two thirds
+// (TestTheLogsShareLeavesTheEstateTheBucketsRoom).
 const objectsBucketShare = 4
 
 // budgetReader is the broker as the bucket's reservation is sized against it:
@@ -644,9 +708,14 @@ type budgetReader interface {
 // objectsReservation is the byte reservation the nats bucket is created with,
 // and whether an operator wrote it (store.objects.nats_max_bytes). An unset
 // one is derived from the broker's limit ([derivedObjectsReservation]); where
-// the broker states none this node can read, from the cap such a server holds
-// ([unstatedLimit]), as the logs' sizing does.
-func objectsReservation(ctx context.Context, b *config.Bootstrap, q any) (int64, bool) {
+// the broker states none this node can read, from [unstatedLimit] of the
+// stream volume's free space, which is the one figure it has, exactly as the
+// logs' sizing stands it in ([logsGrantable]). freeOf measures that space
+// ([volumeFree] in production), handed in as the logs' sizing is handed its
+// figure, so the stand-in is a table row rather than whatever the machine
+// running the case has free.
+func objectsReservation(ctx context.Context, b *config.Bootstrap, q any,
+	freeOf func(dir string) (int64, error)) (int64, bool) {
 	if set := b.Store.Objects.NatsMaxBytes; set > 0 {
 		return set, true
 	}
@@ -666,7 +735,7 @@ func objectsReservation(ctx context.Context, b *config.Bootstrap, q any) (int64,
 	}
 	if limit < 0 {
 		volume := streamVolume(b)
-		free, err := volumeFree(volume)
+		free, err := freeOf(volume)
 		if err != nil {
 			log.WarnContext(ctx, "objects_reservation_free_space_unmeasured",
 				"path", volume, "error", err.Error(),
@@ -742,8 +811,12 @@ func derivedObjectsReservation(limit, declared int64) int64 {
 // EVERY QUEUE THIS OPENS CARRIES THE CALLER'S OPTIONS — the node every event
 // it publishes is stamped with ([queue.WithNode]) — on both branches, so an
 // event's origin names this node whichever broker topology it rode.
+//
+// AND THE BROKER IT STARTS COUNTS WHAT IT REFUSES into rec
+// ([countRefusals]): installed the moment the server has started, and handed
+// whatever it refused while it was still starting. Nil counts nothing.
 func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
-	opts ...queue.Option,
+	rec *metrics.Recorder, opts ...queue.Option,
 ) (*Backends, *nats.Conn, error) {
 	// A URL IS A BROKER SOMEBODY ELSE RUNS, and this branch is what makes
 	// `stream.type: nats` mean anything. Without it every path here
@@ -770,6 +843,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: stream: %w", err)
 	}
+	server.OnPeerRefused(countRefusals(rec))
 	q, err := server.Client(ctx, opts...)
 	if err != nil {
 		server.Shutdown()
@@ -792,6 +866,29 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 	// shares the queue's instead, which is why it leaves this nil.
 	out.conn = conn
 	return out, conn, nil
+}
+
+// countRefusals is the sink a node's embedded broker hands its refusals to:
+// crewlet.broker.peer.refusals, by the listener a refused connection reached
+// and what it presented ([jetstream.Server.OnPeerRefused]). A nil recorder
+// counts nothing.
+//
+// A COUNTER AND A LOG LINE, NEVER THE AUTHENTICATION TRAIL. The trail's rows
+// are the identity estate's doors — a person or a machine proving who it is —
+// and a connection to the fleet's broker is no principal: what it presented is
+// a key of the keyring or nothing, and a refused one has no author a row could
+// name. It also arrives at whatever rate the peer that reaches a port chooses,
+// which a row in every backup must not, for crewlet.auth.attempts.failed's
+// reason. The broker's own broker_peer_refused line, once a minute a class,
+// says which key and from where.
+func countRefusals(rec *metrics.Recorder) func(jetstream.PeerRefusal, uint64) {
+	return func(r jetstream.PeerRefusal, n uint64) {
+		if rec == nil {
+			return
+		}
+		rec.Add(metrics.BrokerPeerRefusals, n, metrics.Attrs{
+			"listener": string(r.Listener), "presented": string(r.Presented)})
+	}
 }
 
 // attachCoordination builds the fleet store and the lease slot on one

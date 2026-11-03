@@ -55,7 +55,114 @@ read as `Unknown`.
 
 First-party builtins declare their own annotations in code, registered
 with `tools.Registry.RegisterWith`, so the same classification works for
-them.
+them. The [code tools](../guides/tools-and-mcp.md#the-companys-code)' thirteen
+reads, for one, are each a proven, idempotent read: a worker may be handed any
+of them, a turn that only read code delivered nothing, and the operator
+catalogue records no call to one. Two of them read a repository's changes —
+`code_list_changes`, and `code_get_change`, a change a part at a time — and
+are reads like the rest: a reviewer [woken about a
+change](code-host.md#how-a-seat-is-woken) that has read its diff and its
+findings has delivered nothing yet, and only a write it makes in answer
+reaches anybody — a review, a comment or an answer to its findings, each of
+which tells whom it concerns in turn ([Who a change
+wakes](code-host.md#who-a-change-wakes); a person's side of the same
+conversation is [Review a change](../guides/code.md#review-a-change)). So is
+`code_get_check_failures`, what a check of a commit said and a page of its
+kept log: a seat that read why a check failed has delivered nothing until it
+fixes the code or reruns the check. And so is `code_search`, the lines
+matching a search across the repositories the caller may read that keep a
+search index, or those its `repo:` filters name: a seat that
+found where something lives has delivered nothing until it acts on it, and a
+worker may be handed the search as it may any read — each repository still
+judged by the grant of whoever the search is made as, on the git node that
+answers it. A seat holding it is told, in its executor prompt's
+`code_search` section, to search before reading whole trees. Each change tool also names, in one table its tests
+hold to the tool list, the access its call needs on the change's repository —
+of its caller, and in a turn a colleague seat woke of that seat too; a read's
+is read, which the node that answers judges both at, and a write's is the
+least access at which the node that decides it may admit the call — the rest
+is the relation that node judges from its own chart, which no access alone
+names (an open's push of its branch, a change's owner steering it). Their
+twenty-six writes — `code_commit_files`,
+`code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
+`code_create_repo`, `code_update_repo`, `code_delete_repo`,
+`code_restore_repo`, `code_protect_branch`, a change's `code_open_change`,
+`code_update_change` and `code_close_change`, and its conversation's
+`code_request_review`, `code_review_change`, `code_comment_on_change`,
+`code_resolve_finding`, its findings' `code_apply_suggestions` and its
+`code_rebase_change`, its `code_merge_change`, `code_dequeue_change` and
+`code_revert_change`, a commit's checks' `code_rerun_checks` and
+`code_report_check`, a repository's `code_purge_unreachable`, and
+`code_import_repo` — are each
+`read_only: false`
+with `open_world: true`: a branch, a repository or a change is a surface every
+colleague reads, so `mcp.WritesToSharedSurface` keeps every one from a worker,
+which would write under its parent's grant; each is registered as a delivery
+to the code host, so a turn woken about a repository that moved a branch or
+opened a change delivered; and each but two is `idempotent: true`, since every
+one is held to what its caller read — a commit to the head it names, a create
+to a free name, a change's edit and close to the version its caller read, an
+open to the one live change a branch may head, an ask of a reviewer already
+asked and an answer a finding already holds to nothing, a rerun to the
+attempt its caller read and a check's ending reported again to the ending its
+row holds — and the same call made again is the same operation. `code_review_change` and
+`code_comment_on_change` are `idempotent: false`: a review and a comment are
+additive, and two saying the same are two, as `comment_on_work_item`'s are —
+the engine makes a re-run of the same call the same write, but the hint
+describes the tool a model is offered. `code_delete_branch`,
+`code_delete_repo`, `code_resolve_finding` and `code_purge_unreachable` are
+also `destructive: true`: each takes away what somebody else made with
+nothing the same tool keeps to undo it — a finding dismissed is a reviewer's
+blocker cleared, which no write moves back, and a purged object is gone once
+the purge commits. `code_apply_suggestions` is a commit like `code_commit_files`,
+held to the head its caller read, and the CALLER's: whoever applies a
+review's suggestions becomes an author of the change, whose approval of it
+then counts for nothing, and answers the findings applied `resolved` — an
+author's answer, which leaves a blocker standing for its raiser to judge.
+`code_rebase_change` is a forced push of the change's branch, held to the
+head its caller read, whose replayed commits keep their own authors: the
+rebaser becomes an author of the change as any pusher of a revision does.
+`code_revert_change` is a commit on a new branch whose push opens the
+revert's own change, so it changes no target: the revert is merged as any
+change is, by the same call's `merge` or later.
+`code_merge_change` merges the change from the head its caller read, or puts
+it in its target's queue, and a change its target's gate does not allow yet
+is refused in a class of its own, `not_ready`, naming every unmet
+precondition and who it waits on — never `invalid`, since nothing about the
+call was wrong, and never a retry, since its people clear it and a
+`ready_to_merge` wake follows. A seat holding it is also told, in its
+executor prompt's `code_merging` section, to end its turn rather than wait.
+`code_report_check`, `code_purge_unreachable` and `code_import_repo` are the
+three code writes no seat is offered: each is human-only in the authority
+table — a report is a check result, and a seat runs no CI whose result it
+could report ([External
+CI](../guides/code.md#external-ci)); a purge drops history nothing brings
+back, which no model's say-so may erase, and it asks the person a fresh proof
+of who they are besides; and an import has the code host dial another host
+for the company, which a model's say-so would point at any URL a page it read
+named ([Imports and mirrors are a person's](../guides/code.md#import-from-github-or-gitlab)).
+An import is a create like `code_create_repo`, `idempotent: true` and not
+destructive: its repository's id comes from the call's operation, so the same
+call made again is the same create, and a mistaken one is deleted as any
+repository is. Its `credential` is the NAME of the variable holding the
+source's token — never the token, which the tool refuses for its shape before
+anything is sent, since every record of the repository's settings would carry
+it. A purge is `idempotent: true`: its request is the
+call's operation, so the same call made again is the same request, and a
+request asked while another is open widens that one rather than adding a
+second. A seat holding the
+writes is also told, in its executor prompt's `code_writes` section, the one
+choice no description can carry: a small change is committed on the server,
+and anything to build or test belongs in a checkout. The operator-only
+`code_repo_readers` beside them is a proven, idempotent read like the thirteen,
+which no seat's registry ever holds: annotations say what a tool does,
+never who may call it, and who read a unit's repository is an admin's — a
+person's — question, decided by the authority table before anything is read
+([Who read it](code-host.md#who-read-it)). And so are the
+[health tools](../guides/fleet.md#the-health-tools), `fleet_health` and
+`code_status`: proven, idempotent reads of the deployment, which every seat's
+registry holds and a seat is offered only where its role carries the health
+grant — again the authority table's decision, never an annotation's.
 
 ### Where annotations come from, and where they go
 

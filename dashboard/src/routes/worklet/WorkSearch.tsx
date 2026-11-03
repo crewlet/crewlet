@@ -64,9 +64,9 @@
  * corpus nobody made.
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { useParam, href } from "~/app/router.tsx";
+import { href, useDraft, useNavigator, useParam } from "~/app/router.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
@@ -110,16 +110,21 @@ export function WorkSearch() {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
   const searchBox = useRef<HTMLInputElement>(null);
   useSearchTarget(searchBox);
-  // THE QUERY IS IN THE URL, which is what makes a search shareable and what
-  // makes the back button walk a reader's searches rather than their
-  // keystrokes: it is a FILTER, so typing replaces the history entry.
-  const [q, setQ] = useParam("q", "", "filter");
+  // THE QUERY IS IN THE URL, which is what makes a search shareable, and a
+  // press of Search PUSHES it (`nav.submit`), which is what makes the back
+  // button walk a reader's searches rather than their keystrokes: typing
+  // writes only the box's draft, never the address. The draft is the
+  // address's again whenever the address moves (`useDraft`) — Back across a
+  // search, or a link opening another phrase on this screen — so the box
+  // never shows one phrase over the hits of another.
+  const nav = useNavigator();
+  const [q] = useParam("q", "", "filter");
   // THE MODE IS IN THE ADDRESS TOO, and a value this build does not draw
   // falls back to the default rather than meeting a `bad_params` refusal
   // over a whole screen because of one stale key.
   const [modeRaw, setMode] = useParam("mode", "hybrid", "filter");
   const mode = asSearchMode(modeRaw);
-  const [typed, setTyped] = useState(q);
+  const [typed, setTyped] = useDraft(q);
   // A PHRASE PAST THE ENGINE'S BOUND IS NOT SENT, and the screen says why in
   // place of the results — see `useSearchQuery`.
   const hits = useSearchQuery("work_search", { q, mode }, { enabled: q.trim() !== "" });
@@ -157,7 +162,7 @@ export function WorkSearch() {
         className="work-search-form"
         onSubmit={(e) => {
           e.preventDefault();
-          setQ(typed.trim());
+          nav.submit({ q: typed.trim() });
         }}
       >
         {/* THE NAME MOVES FROM A HIDDEN `<label>` ONTO THE FIELD ITSELF.

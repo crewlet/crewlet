@@ -88,11 +88,11 @@ type FlowQuery struct {
 	// 1..[MaxFlowPoints].
 	Points int
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
-	MaxLagSeq   uint64
+	Level     statelog.ReadLevel
+	Session   statelog.Position
+	Floors    []statelog.Position
+	MaxLag    time.Duration
+	MaxLagSeq uint64
 }
 
 // FlowPoint is one window of the series.
@@ -177,12 +177,12 @@ func (r *Reader) Flow(ctx context.Context, q FlowQuery, now time.Time,
 		// company reads every container, and a narrower closure would
 		// certify the answer complete while a deferred record held a
 		// change it should have undone.
-		Scope:       statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Scope:     statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		return readFlow(ctx, tx, q, now, loc, &out)
 	})

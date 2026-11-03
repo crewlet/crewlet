@@ -48,8 +48,14 @@ var Tiers = []Tier{TierReadOnly, TierReview, TierFullAccess}
 // access rather than costing the company its whole configuration. The second
 // result is what lets a validator refuse the typo anyway, at the one moment a
 // person is there to read the complaint.
+//
+// EXACT: each tier in its one spelling, with no case, space or hyphen folded.
+// A tier comes from a seat's role.code.access, which takes exactly these
+// three, so a reading that folded would be a second, more lenient idea of
+// what a tier is — and the one place a value the field refuses could still be
+// read as a tier rather than as the default.
 func ParseTier(raw string) (Tier, bool) {
-	value := Tier(strings.ToLower(strings.TrimSpace(strings.ReplaceAll(raw, "-", "_"))))
+	value := Tier(raw)
 	switch {
 	case value == "":
 		return DefaultTier, true

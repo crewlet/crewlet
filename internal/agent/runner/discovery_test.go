@@ -32,13 +32,13 @@ func discoverySurface(t *testing.T) (*tools.Surface, map[string]tools.Callable) 
 	snapshot := reg.Snapshot()
 	active := []string{"lookup_colleague", "reflect"}
 	pair := map[string]tools.Callable{}
-	for _, tool := range runner.DiscoveryTools(func() *tools.Surface { return surface }) {
+	for _, entry := range runner.DiscoveryTools(func() *tools.Surface { return surface }) {
 		var err error
-		if snapshot, err = snapshot.With(tools.Entry{Tool: tool, Origin: tools.OriginBuiltin}); err != nil {
-			t.Fatalf("With(%s): %v", tool.Name(), err)
+		if snapshot, err = snapshot.With(entry); err != nil {
+			t.Fatalf("With(%s): %v", entry.Name(), err)
 		}
-		active = append(active, tool.Name())
-		pair[tool.Name()] = tool
+		active = append(active, entry.Name())
+		pair[entry.Name()] = entry.Tool
 	}
 	surface = tools.NewSurface("onboarding", snapshot, active)
 	return surface, pair

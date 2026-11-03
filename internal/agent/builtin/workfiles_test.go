@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -119,9 +122,18 @@ type fakeObjects struct {
 	// corrupt makes every read answer the store's corruption sentinel.
 	corrupt bool
 
+	// full makes every put read its content and be refused as a store with
+	// no room refuses one ([objstore.Full]), through the store's own
+	// wrapping, naming [caseRemedy].
+	full bool
 	// putErr, when set, is every put's failure.
 	putErr error
 }
+
+// caseRemedy is the room a full [fakeObjects] names: a case's own, so a
+// sentence naming it spliced the store's remedy rather than a spelling of the
+// tool's own.
+const caseRemedy = "an operator makes room in this case's own bucket"
 
 func newFakeObjects() *fakeObjects { return &fakeObjects{objects: map[objstore.Key][]byte{}} }
 
@@ -141,6 +153,11 @@ func (o *fakeObjects) Put(_ context.Context, r io.Reader, limit int64,
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	k := objstore.KeyAt(time.Now())
+	if o.full {
+		return objstore.Object{}, fmt.Errorf("objstore: store the object: %w", &objstore.Full{
+			Remedy: caseRemedy, Err: fmt.Errorf("natsobj: put %s: OBJ_crewlet_files holds as many "+
+				"bytes as it reserves", k.Name())})
+	}
 	o.objects[k] = data
 	return objstore.Object{Key: k, Hash: objstore.HashOf(data), Size: int64(len(data))}, nil
 }
@@ -446,6 +463,81 @@ func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 	}
 }
 
+// A FILE THE OBJECT STORE HAS NO ROOM FOR IS REFUSED AS FULL: the store
+// refuses the same content the same way until an operator makes room, so the
+// seat is told that, with the room the store names — never "try again
+// shortly", which had it upload the same bytes into the same full bucket —
+// under the class a person's surface answers 507 rather than a 503 asking it
+// back. Nothing is recorded, and the store's own words, naming its bucket,
+// stay in the node's log. Over the fleet's own bucket's twin, and over the
+// store itself on S3 whose provider has no room (MinIO's drives at their
+// floor), through the production backend.
+//
+// Mutation: answer the full store through the catch-all (`unavailable`, "Try
+// again shortly") and this fails on the class and on the sentence; splice a
+// room of the tool's own and it fails on the room; drop s3obj's
+// classification and the s3fake arm fails.
+func TestAFileTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []struct {
+		name    string
+		objects func(t *testing.T) builtin.ObjectStore
+		// remedy is the room the store names, and said its own words.
+		remedy, said string
+	}{
+		{"the nats twin", func(*testing.T) builtin.ObjectStore {
+			objects := newFakeObjects()
+			objects.full = true
+			return objects
+		}, caseRemedy, "OBJ_crewlet_files"},
+		{"s3fake", func(t *testing.T) builtin.ObjectStore {
+			srv := s3fake.Start(t, "files")
+			b, err := s3obj.Open(t.Context(), s3obj.Config{
+				Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", PathStyle: true,
+				AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+			})
+			if err != nil {
+				t.Fatalf("opening the S3 fake: %v", err)
+			}
+			srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+			store, err := objstore.NewStore(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return store
+		}, s3obj.FullRemedy, "XMinioStorageFull"},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			files := newFakeFiles()
+			deps := fileDeps(files, newFakeObjects())
+			deps.Objects = arm.objects(t)
+			reg := workRegistry(t, deps)
+			got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
+				"path": "report.md", "content": "no room",
+			})
+			if !got.Failed || tools.RefusalOf(got) != tools.RefusalStoreFull ||
+				!errors.Is(got.Cause, objstore.ErrFull) {
+				t.Fatalf("a write the store had no room for answered %s (refusal %q, cause %v), want "+
+					"store_full over ErrFull", got.Output, tools.RefusalOf(got), got.Cause)
+			}
+			switch out := strings.ToLower(got.Output); {
+			case !strings.Contains(got.Output, arm.remedy):
+				t.Errorf("a write the store had no room for answered %s, which does not name the store's "+
+					"room %q", got.Output, arm.remedy)
+			case strings.Contains(out, "try again shortly") || strings.Contains(out, "make the same call again"):
+				t.Errorf("a write the store had no room for answered %s, which invites the retry the full "+
+					"store refuses the same", got.Output)
+			case strings.Contains(got.Output, arm.said):
+				t.Errorf("the object store's own words reached the sentence: %s", got.Output)
+			}
+			if files.puts != 0 {
+				t.Errorf("a write the store had no room for recorded %d rows", files.puts)
+			}
+		})
+	}
+}
+
 // AN UPLOAD TOO OLD TO RECORD IS ONE THE SAME CALL FIXES: the call uploads the
 // content anew, under a fresh key — so the seat is told to make it again,
 // rather than that the write failed. Its class is the upload's state, a
@@ -513,22 +605,20 @@ func TestAFileIsRemovedByItsProjectsLeadOnly(t *testing.T) {
 	}
 }
 
-// A FULL STORE IS NO WRITE TO TRY AGAIN SHORTLY: no retry lands until somebody
-// makes room, so the model is told to stop and say so, where every failed put
-// told it to try again shortly — a store that did not answer still is, and a
-// failure the store classed as neither is a fault of the node, as every other
+// A FAILED PUT IS TOLD BY ITS CAUSE: a store that did not answer is a
+// condition, invited back with "try again shortly", and a failure the store
+// classed as neither that nor full is a fault of the node, as every other
 // surface storing a file answers it (it was "try again shortly" here and a
-// fault on the artifact tools). Mutation: drop the full store's arm, or answer
-// a fault as a condition, and its row fails.
-func TestAFullStoreIsNoWriteToTryAgain(t *testing.T) {
+// fault on the artifact tools). A full store is its own class
+// (TestAFileTheStoreHasNoRoomForIsRefusedAsFull). Mutation: answer a
+// fault as a condition, and its row fails.
+func TestAFailedPutIsToldByItsCause(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		err        error
 		class      tools.Refusal
 		says, nots string
 	}{
-		"a full store": {fmt.Errorf("objstore: store the object: %w", objstore.ErrFull),
-			tools.RefusalUnavailable, "Don't try again", "Try again shortly"},
 		"a store that did not answer": {fmt.Errorf("objstore: store the object: %w: %w",
 			objstore.ErrUnanswered, errors.New("nats: timeout")),
 			tools.RefusalUnavailable, "Try again shortly", "Don't try again"},

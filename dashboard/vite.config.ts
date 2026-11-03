@@ -149,8 +149,8 @@ const SOURCE_NOTICES: readonly { heading: string; lead: string; file: string }[]
 // its license step among its own post-build plugins, which run after every user
 // plugin, so an ordinary generateBundle would look for the file before it
 // exists. Ordered handlers run after every unordered one, whatever the plugin
-// order. The second build (vite.protocol.config.ts) writes only protocol.js and
-// leaves this file as the first build wrote it.
+// order. The second build (vite.protocol.config.ts) writes only protocol.js,
+// into static/protocol, and leaves this file as the first build wrote it.
 function sourceNotices(): Plugin {
   return {
     name: "crewlet:source-notices",
@@ -427,6 +427,9 @@ export default defineConfig({
       // The adopted brand's files and its adoption (lib/brand/api.ts). The
       // brand itself is the socket's question.
       "/brand": { target: "http://localhost:8000" },
+      // The code host's questions, asked on the query registry's generic REST
+      // form rather than the socket (lib/useCodeQuery.ts).
+      "/query": { target: "http://localhost:8000" },
       // The Dashboard Assistant: its conversations, a turn's stream of
       // server-sent events, a stop, an approval and a table card's export
       // (protocol/assistant.ts).

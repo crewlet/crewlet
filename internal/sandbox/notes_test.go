@@ -228,7 +228,7 @@ func TestAFailedLaunchsEndingReportsTheNotesItsWriteHeld(t *testing.T) {
 	c, err := NewCoordinator(CoordinatorOptions{
 		Answers: rigAnswers(),
 		Queue:   rig.queue, Pending: rig.pending, Manager: rig.manager,
-		Resume: &resumeSpy{}, Audience: &audienceSpy{},
+		Resume: &resumeSpy{}, Audience: &audienceSpy{}, Pushes: &pushSpy{},
 		Lease:         leased(rigLease),
 		SteersExpired: spy.expired,
 	})

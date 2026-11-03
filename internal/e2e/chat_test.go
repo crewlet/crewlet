@@ -94,7 +94,7 @@ func room(t *testing.T, n *node, actor chatlet.Actor, in chatlet.NewChannel) cha
 		t.Fatalf("creating #%s resolved to %q on the node that made it",
 			in.Name, written.Outcome.Outcome)
 	}
-	if err := n.engine.WaitCommitted(t.Context(), written.Outcome.Position); err != nil {
+	if err := n.engine.WaitReached(t.Context(), written.Outcome.Position); err != nil {
 		t.Fatalf("wait for #%s to be applied: %v", in.Name, err)
 	}
 	return written
@@ -284,7 +284,7 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 	// them has not written yet is a missing create rather than a
 	// divergence — which would fail this claim for the wrong reason.
 	for i, n := range c.nodes {
-		if err := n.engine.WaitCommitted(t.Context(), created.Outcome.Position); err != nil {
+		if err := n.engine.WaitReached(t.Context(), created.Outcome.Position); err != nil {
 			t.Fatalf("member %d never applied the room: %v", i, err)
 		}
 	}
@@ -382,7 +382,7 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 	// before either and sits below both on the log.
 	for i, n := range c.nodes {
 		for _, at := range []statelog.Position{second.Outcome.Position, answered.Position} {
-			if err := n.engine.WaitCommitted(t.Context(), at); err != nil {
+			if err := n.engine.WaitReached(t.Context(), at); err != nil {
 				t.Fatalf("member %d never applied the room's record at %s: %v", i, at, err)
 			}
 		}
@@ -464,7 +464,7 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 		t.Fatalf("prune: %v", err)
 	}
 	for i, n := range c.nodes {
-		if err := n.engine.WaitCommitted(t.Context(), pruned.Outcome.Position); err != nil {
+		if err := n.engine.WaitReached(t.Context(), pruned.Outcome.Position); err != nil {
 			t.Fatalf("member %d never applied the prune: %v", i, err)
 		}
 		if left := transcript(t, n, "founder", made.ID); len(left.Messages) != 0 {
@@ -943,7 +943,7 @@ func TestASeatAnswersWhereItWasAsked(t *testing.T) {
 	// and the trigger free to arrive as fast as it likes.
 	earlier := say(t, n, speaker(t, "founder"), made.ID, "seat-chat-0",
 		"the staging deploy went out at 14:00")
-	if err := n.engine.WaitCommitted(t.Context(), earlier.Outcome.Position); err != nil {
+	if err := n.engine.WaitReached(t.Context(), earlier.Outcome.Position); err != nil {
 		t.Fatalf("wait for the first message: %v", err)
 	}
 
@@ -1111,6 +1111,7 @@ func coldEngine(t *testing.T, nodeID, storePath, streamDir string, ring keyring)
 	boot.Node.ID = nodeID
 	boot.Store.Path = storePath
 	brokertest.StoreIn(&boot.Stream, streamDir)
+	brokertest.CodeCacheIn(&boot.Git)
 	ring.hold(&boot)
 
 	n := bootNodeWith(t, nodeOptions(&boot, cfg, nil, ""), model)
@@ -1186,7 +1187,7 @@ func TestANodeThatWasNotRunningCatchesUpOnTheRoom(t *testing.T) {
 			fmt.Sprintf("catchup-chat-%d", i),
 			fmt.Sprintf("line %d of something nobody was listening to", i))
 	}
-	if err := wrote.engine.WaitCommitted(t.Context(), last.Outcome.Position); err != nil {
+	if err := wrote.engine.WaitReached(t.Context(), last.Outcome.Position); err != nil {
 		t.Fatalf("the writing node never applied its own last message: %v", err)
 	}
 	// AND THE LAST ONE SAID AGAIN UNDER ITS OWN KEY, as a person's retry

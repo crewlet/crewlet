@@ -104,13 +104,13 @@ type ViewQuery struct {
 
 	Level statelog.ReadLevel
 
-	// Session is the caller's own high-water mark, MinPosition an explicit
-	// floor it names, and MaxLag what a stale read says it will accept —
+	// Session is the caller's own high-water mark, Floors the explicit
+	// floors it names, and MaxLag what a stale read says it will accept —
 	// the three the framework's own query takes, carried through unchanged
 	// so this read makes no freshness decision of its own.
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
+	Session statelog.Position
+	Floors  []statelog.Position
+	MaxLag  time.Duration
 
 	// MaxLagSeq is the same bound counted in RECORDS, which is what
 	// the broker actually answers — the duration above is derived
@@ -201,13 +201,13 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 
 	var listing ViewListing
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       stripScope(q),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Level:     q.Level,
+		Scope:     stripScope(q),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		pinned, err := pinnedViews(ctx, tx, q.Viewer)
 		if err != nil {

@@ -278,6 +278,58 @@ func (s *flakyStore) AppendBridgeCall(_ context.Context, _ string, a sandbox.Bri
 	return true, nil
 }
 
+// spendlessStore is a pending store whose log takes every append and whose
+// record takes none of the spend beside it: the call is in the log, and the
+// write of what it cost failed after it ([sandbox.PendingStore.AppendBridgeCall]
+// answers both).
+type spendlessStore struct {
+	sandbox.PendingStore
+	mu    sync.Mutex
+	asked []sandbox.BridgeAppend
+}
+
+func (s *spendlessStore) AppendBridgeCall(_ context.Context, _ string, a sandbox.BridgeAppend) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asked = append(s.asked, a)
+	return true, errors.New("the record took the call's log but not its spend")
+}
+
+// A CALL THE LOG TOOK IS NEVER OWED, WHATEVER BECAME OF ITS SPEND. An append is
+// one write of the run's log and then, where the call moved the job's spend,
+// one of its record; a store that took the first and refused the second
+// answers the call recorded beside the error. The call is in the log, so it is
+// not owed — owed, the session's next append would carry a call the log
+// already lists, and its end would name it on no record — and the run's waiter
+// is still nudged for a submission that landed; the spend is cumulative, so
+// the next append that lands carries it.
+//
+// Mutation: owe a call on any error the append answers, and the next append
+// carries the submission the log already holds; nudge only on an append that
+// answered no error, and the waiter is not told the run's work is in.
+func TestACallTheLogTookIsNeverOwedWhateverBecameOfItsSpend(t *testing.T) {
+	t.Parallel()
+	store := &spendlessStore{}
+	l := newBridgeLedger(store, nil)
+	l.bind("launch-1")
+	var nudged []sandbox.Nudge
+	l.nudge = func(_ context.Context, n sandbox.Nudge) { nudged = append(nudged, n) }
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: sandbox.SubmitWorkTool},
+		Seq: 1, Digest: "d1"}); err == nil {
+		t.Fatal("an append whose spend did not land answered no error")
+	}
+	if n := l.owing(); n != 0 {
+		t.Errorf("the ledger owes %d appends of a call the log took, want none", n)
+	}
+	if len(nudged) != 1 || nudged[0].Why != sandbox.NudgeSubmitted {
+		t.Errorf("the waiter was nudged %+v, want once for the submission that landed", nudged)
+	}
+	_ = l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"}, Seq: 2, Digest: "d2"})
+	if last := store.asked[len(store.asked)-1]; len(last.Owed) != 0 {
+		t.Errorf("the next append carried %+v, a call the log already held", last.Owed)
+	}
+}
+
 // A BRIDGED CALL'S RECORD THAT DID NOT LAND IS TRIED AGAIN, AND THEN OWED,
 // WHOLE. The call has run and its answer goes back to the box whatever the row
 // says, but a call missing from the row is one a resumed segment's call log
@@ -468,20 +520,24 @@ func (r *bridgeEndRig) submission(t *testing.T) {
 	}
 }
 
-// row is the job's row as the store holds it.
-func (r *bridgeEndRig) row(t *testing.T) sandbox.PendingRun {
+// logged is the job's log as the store holds it beside the job's row.
+func (r *bridgeEndRig) logged(t *testing.T) sandbox.BridgeLog {
 	t.Helper()
 	run, found, err := r.store.Get(t.Context(), r.turnID)
 	if err != nil || !found {
 		t.Fatalf("Get: %v %v", found, err)
 	}
-	return run
+	logged, err := r.store.BridgeLog(t.Context(), run)
+	if err != nil {
+		t.Fatalf("BridgeLog: %v", err)
+	}
+	return logged
 }
 
 // A SESSION THAT ENDS OWING CALLS CARRIES THEM FIRST. A job's last call — its
 // submission — has no later call of its own to carry it, so when its append
 // meets a store's blip, the session's end carries it: the bridge's close of the
-// run waits on the ledger's carry of what it still owes, and the row lists the
+// run waits on the ledger's carry of what it still owes, and the log lists the
 // call once the close returns, though no call came after it.
 //
 // Mutation: end the session without the ledger's carry, and the submission the
@@ -490,26 +546,26 @@ func TestASessionThatEndsOwingCallsCarriesThemFirst(t *testing.T) {
 	t.Parallel()
 	r := newBridgeEndRig(t)
 	r.submission(t)
-	if n := len(r.row(t).BridgeCalls); n != 0 {
-		t.Fatalf("the row lists %d calls before the session ended, want the submission still owed", n)
+	if n := len(r.logged(t).Calls); n != 0 {
+		t.Fatalf("the log lists %d calls before the session ended, want the submission still owed", n)
 	}
 	r.bridge.Close(r.turnID)
-	row := r.row(t)
-	if len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != sandbox.SubmitWorkTool ||
-		row.BridgeCalls[0].Seq != 1 || row.BridgeCallsElided != 0 {
-		t.Errorf("once the session ended the row lists %+v (%d unlisted), want the submission it owed",
-			row.BridgeCalls, row.BridgeCallsElided)
+	logged := r.logged(t)
+	if len(logged.Calls) != 1 || logged.Calls[0].Name != sandbox.SubmitWorkTool ||
+		logged.Calls[0].Seq != 1 || logged.Elided != 0 {
+		t.Errorf("once the session ended the log lists %+v (%d unlisted), want the submission it owed",
+			logged.Calls, logged.Elided)
 	}
 	if n := r.ledger.owing(); n != 0 {
 		t.Errorf("the ledger still owes %d appends once its session ended", n)
 	}
 }
 
-// AND THE RUN'S COLLECTION HAS IT CARRIED BEFORE IT READS THE JOB'S RECORD. A
-// job's session lives until its run settles or its next job replaces it, both
-// after the collection has read what the job did; so the collection asks the
-// job's own session to carry what it owes, and the record it reads holds the
-// submission whose append met the blip. A job the session does not serve —
+// AND THE RUN'S COLLECTION HAS IT CARRIED BEFORE ITS RESUME READS THE JOB'S
+// LOG. A job's session lives until its run settles or its next job replaces it,
+// both after the collection has read what the job did; so the collection asks
+// the job's own session to carry what it owes, and the log its resume reads
+// holds the submission whose append met the blip. A job the session does not serve —
 // the run's next one, or another run's — is owed nothing here.
 //
 // Mutation: answer the collection's ask without the ledger's carry, or carry
@@ -521,14 +577,14 @@ func TestARunsCollectionHasItsJobsOwedCallsCarriedFirst(t *testing.T) {
 	if r.bridge.Settle(t.Context(), r.turnID, "another-job") {
 		t.Error("a job the session does not serve was answered as carried")
 	}
-	if n := len(r.row(t).BridgeCalls); n != 0 {
-		t.Fatalf("the row lists %d calls after an ask for another job", n)
+	if n := len(r.logged(t).Calls); n != 0 {
+		t.Fatalf("the log lists %d calls after an ask for another job", n)
 	}
 	if !r.bridge.Settle(t.Context(), r.turnID, r.launch) {
 		t.Fatal("the job's own session carried nothing it owed")
 	}
-	if row := r.row(t); len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != sandbox.SubmitWorkTool {
-		t.Errorf("the record the collection reads lists %+v, want the submission", row.BridgeCalls)
+	if logged := r.logged(t); len(logged.Calls) != 1 || logged.Calls[0].Name != sandbox.SubmitWorkTool {
+		t.Errorf("the log the collection's resume reads lists %+v, want the submission", logged.Calls)
 	}
 	if r.bridge.Live() != 1 {
 		t.Error("the collection's ask ended the job's session, which lives until its run settles")

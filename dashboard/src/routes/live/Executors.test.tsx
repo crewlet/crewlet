@@ -32,6 +32,7 @@ import { BridgeLog, BridgeSummary, ExecutorScreen } from "./Executors.tsx";
 import type { ExecutorRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 afterEach(() => {
@@ -490,7 +491,7 @@ function mountPage(answers: Record<string, unknown>, outcome = "pending") {
     asked.push({ what, params: params ?? {} });
     const all: Record<string, unknown> = {
       viewer: JANE,
-      work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
+      inbox: { handle: "jane", notices: [], primary_reasons: [] },
       ...answers,
     };
     // A FUNCTION ANSWERS FROM THE QUESTION, for a case whose answers move.
@@ -521,9 +522,7 @@ function mountPage(answers: Record<string, unknown>, outcome = "pending") {
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 // A PARKED RUN IS ANSWERED ON ITS PAGE, BY ITS TURN.

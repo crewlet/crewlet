@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,20 +16,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// sessionWrites is the executor log's writes as a case plays them: every
-// capture and end asked, in the order asked, and what each attempt answers. An
-// END TOMBSTONES ITS TURN, as the log's does: a capture of an ended turn is
-// refused ([executordomain.ErrTurnEnded]), so a case can see an end that came
-// before the turn's last capture.
+// sessionWrites is the executor log's writes as a case plays them, answered as
+// the engine answers them ([LogAnswer]): every capture and end asked, in the
+// order asked, and what each attempt answers. An END TOMBSTONES ITS TURN, as
+// the log's does: a capture of an ended turn is refused, so a case can see an
+// end that came before the turn's last capture; and a second end of a turn
+// lands as the first, as the log's refusal of an end already made does.
 type sessionWrites struct {
 	mu       sync.Mutex
 	captures []capturedRecord
-	ends     []endedRecord
+	ends     []EndRecord
 	order    []string
 	ended    map[string]bool
 	// refuse answers every capture attempt while it is set, as a log that
@@ -40,59 +42,57 @@ type sessionWrites struct {
 // has not ended, as the log does where nothing moved the base before it landed.
 // What a begin carries is the conversation cases' to read (conversationLog);
 // these cases launch turns that read no conversation.
-func (w *sessionWrites) Begin(_ context.Context, _ executordomain.Call,
-	n executordomain.NewBegin) (executordomain.BeginResult, error) {
+func (w *sessionWrites) Begin(_ context.Context, b BeginRecord) (BeginAnswer, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.ended[n.Turn] {
-		return executordomain.BeginResult{}, fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
+	if w.ended[b.Turn] {
+		return BeginAnswer{Log: LogRefused}, fmt.Errorf("the turn has ended: %s", b.Turn)
 	}
-	return executordomain.BeginResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied},
-		Held: n.BaseTurn != ""}, nil
+	return BeginAnswer{Log: LogLanded, Held: b.BaseTurn != ""}, nil
 }
 
 type capturedRecord struct {
-	call executordomain.Call
-	n    executordomain.NewCapture
-	err  error
+	CaptureRecord
+	err error
 }
 
-type endedRecord struct {
-	call executordomain.Call
-	n    executordomain.NewEnd
+// operation is what the capture's operation derives from
+// ([SessionWrites.Capture]): two attempts with one operation are one capture.
+func (r capturedRecord) operation() string {
+	return fmt.Sprint(r.Stamp.Minted.UTC(), "/", r.Handle, "/", r.Turn, "/", r.Stamp.Launch, "/",
+		r.Stamp.CaptureSeq)
 }
 
-func (w *sessionWrites) Capture(_ context.Context, c executordomain.Call,
-	n executordomain.NewCapture) (executordomain.CaptureResult, error) {
+func (w *sessionWrites) Capture(_ context.Context, c CaptureRecord) (LogAnswer, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.order = append(w.order, "capture")
 	switch {
 	case w.refuse != nil:
-		w.captures = append(w.captures, capturedRecord{call: c, n: n, err: w.refuse})
-		return executordomain.CaptureResult{Result: statelog.Result{Outcome: statelog.OutcomeUnknown}}, w.refuse
-	case w.ended[n.Turn]:
-		err := fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
-		w.captures = append(w.captures, capturedRecord{call: c, n: n, err: err})
-		return executordomain.CaptureResult{}, err
+		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, err: w.refuse})
+		return LogUnsettled, w.refuse
+	case w.ended[c.Turn]:
+		err := fmt.Errorf("the turn has ended: %s", c.Turn)
+		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, err: err})
+		return LogRefused, err
 	}
-	w.captures = append(w.captures, capturedRecord{call: c, n: n})
-	return executordomain.CaptureResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}, Recorded: true}, nil
+	w.captures = append(w.captures, capturedRecord{CaptureRecord: c})
+	return LogLanded, nil
 }
 
-func (w *sessionWrites) End(_ context.Context, c executordomain.Call, n executordomain.NewEnd) (statelog.Result, error) {
+func (w *sessionWrites) End(_ context.Context, e EndRecord) (LogAnswer, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.order = append(w.order, "end")
 	if w.ended == nil {
 		w.ended = map[string]bool{}
 	}
-	if w.ended[n.Turn] {
-		return statelog.Result{}, fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
+	if w.ended[e.Turn] {
+		return LogLanded, nil
 	}
-	w.ended[n.Turn] = true
-	w.ends = append(w.ends, endedRecord{call: c, n: n})
-	return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
+	w.ended[e.Turn] = true
+	w.ends = append(w.ends, e)
+	return LogLanded, nil
 }
 
 func (w *sessionWrites) answer(err error) {
@@ -107,10 +107,10 @@ func (w *sessionWrites) captured() []capturedRecord {
 	return append([]capturedRecord(nil), w.captures...)
 }
 
-func (w *sessionWrites) endedRecords() []endedRecord {
+func (w *sessionWrites) endedRecords() []EndRecord {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return append([]endedRecord(nil), w.ends...)
+	return append([]EndRecord(nil), w.ends...)
 }
 
 func (w *sessionWrites) calls() []string {
@@ -164,22 +164,22 @@ func (k *sessionKeep) MintedAt(context.Context, string, string, time.Time) (time
 	return time.Date(2026, 8, 23, 11, 0, 0, 0, time.UTC), nil
 }
 
-func (k *sessionKeep) Seal(_, _ string, archive io.Reader, dst io.Writer) (executordomain.SealedSpool, error) {
+func (k *sessionKeep) Seal(_, _ string, archive io.Reader, dst io.Writer) (executorkeep.SealedSpool, error) {
 	n, err := io.Copy(dst, archive)
 	if err != nil {
-		return executordomain.SealedSpool{}, err
+		return executorkeep.SealedSpool{}, err
 	}
 	k.mu.Lock()
 	sealErr := k.sealErr
 	k.mu.Unlock()
 	if sealErr != nil {
-		return executordomain.SealedSpool{}, sealErr
+		return executorkeep.SealedSpool{}, sealErr
 	}
-	return executordomain.SealedSpool{Key: objstore.KeyAt(time.Now()), ContentKey: "k1", Size: n}, nil
+	return executorkeep.SealedSpool{Key: objstore.KeyAt(time.Now()), ContentKey: "k1", Size: n}, nil
 }
 
-func (k *sessionKeep) Upload(ctx context.Context, spool executordomain.SealedSpool,
-	sealed io.Reader) (executordomain.SealedObject, error) {
+func (k *sessionKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool,
+	sealed io.Reader) (executorkeep.SealedObject, error) {
 
 	k.mu.Lock()
 	gate := k.gate
@@ -188,21 +188,21 @@ func (k *sessionKeep) Upload(ctx context.Context, spool executordomain.SealedSpo
 		select {
 		case <-gate:
 		case <-ctx.Done():
-			return executordomain.SealedObject{}, ctx.Err()
+			return executorkeep.SealedObject{}, ctx.Err()
 		}
 	}
 	body, err := io.ReadAll(sealed)
 	if err != nil {
-		return executordomain.SealedObject{}, err
+		return executorkeep.SealedObject{}, err
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.putErr != nil {
-		return executordomain.SealedObject{}, k.putErr
+		return executorkeep.SealedObject{}, k.putErr
 	}
 	k.uploaded = append(k.uploaded, body)
 	sum := sha256.Sum256(body)
-	return executordomain.SealedObject{ContentKey: spool.ContentKey, Object: objstore.Object{
+	return executorkeep.SealedObject{ContentKey: spool.ContentKey, Object: objstore.Object{
 		Key: spool.Key, Hash: objstore.Hash(hex.EncodeToString(sum[:])), Size: int64(len(body)),
 	}}, nil
 }
@@ -229,11 +229,11 @@ func keepingRig(t *testing.T) (*coordRig, *sessionWrites, *sessionKeep) {
 	// ITS SPOOLS ITS OWN, so what a case leaves in them is the case's to see.
 	rig.coordinator.spoolDir = t.TempDir()
 	// THE ENGINE'S ACCOUNTS OF A STOP AND A LOSS, as its hooks answer them.
-	rig.coordinator.closeStopped = func(_ context.Context, run PendingRun) (executordomain.Ending, error) {
-		return executordomain.Ending{Outcome: executordomain.OutcomeStopped, StoppedBy: run.Stop.By}, nil
+	rig.coordinator.closeStopped = func(_ context.Context, run PendingRun, _ RunCalls) (executorkeep.Ending, error) {
+		return executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, StoppedBy: run.Stop.By}, nil
 	}
-	rig.coordinator.turnLost = func(context.Context, PendingRun) executordomain.Ending {
-		return executordomain.Ending{Outcome: executordomain.OutcomeLost}
+	rig.coordinator.turnLost = func(context.Context, PendingRun, RunCalls) executorkeep.Ending {
+		return executorkeep.Ending{Outcome: executorkeep.OutcomeLost}
 	}
 	rig.runner.Session = &FakeSession{
 		Archive: SessionArchive{Harness: "claude-code", SessionID: "s-1", Format: 1, Version: "2.1.310",
@@ -243,8 +243,8 @@ func keepingRig(t *testing.T) (*coordRig, *sessionWrites, *sessionKeep) {
 	return rig, writes, keep
 }
 
-// handOver writes onto turnID's row the secrets its launch handed its box, as
-// the launch's attach does ([PendingRun.Handed]).
+// handOver writes beside turnID's row the secrets its launch handed its box,
+// named for the row's job, as the launch's attach does ([PendingStore.Handed]).
 func (r *coordRig) handOver(t *testing.T, turnID string, handed HandedSecrets) {
 	t.Helper()
 	raw, err := handed.encode()
@@ -255,12 +255,22 @@ func (r *coordRig) handOver(t *testing.T, turnID string, handed HandedSecrets) {
 	if err != nil {
 		t.Fatalf("sealing the handed secrets: %v", err)
 	}
-	if _, _, err := r.pending.mutateAny(t.Context(), turnID, func(run *PendingRun) bool {
-		run.Handed = sealed
-		return true
-	}); err != nil {
-		t.Fatalf("writing the handed secrets: %v", err)
+	run := r.get(turnID)
+	r.pending.writeHanded(t.Context(), turnID, handedSet{Launch: run.LaunchID, LaunchSeq: run.LaunchSeq, Sealed: sealed})
+	if got := r.handedOf(t, turnID); got != sealed {
+		t.Fatalf("the handed secrets beside the row read %q, want the seal written", got)
 	}
+}
+
+// handedOf reads what turnID's job's box was handed, sealed, as a capture
+// reads it ([PendingStore.Handed]).
+func (r *coordRig) handedOf(t *testing.T, turnID string) string {
+	t.Helper()
+	sealed, err := r.pending.Handed(t.Context(), r.get(turnID))
+	if err != nil {
+		t.Fatalf("reading what the box was handed: %v", err)
+	}
+	return sealed
 }
 
 // launchKept launches turnID's job with what its launch handed its box on the
@@ -342,22 +352,30 @@ func TestEachLaunchOfATurnIsNumberedPastTheOneBefore(t *testing.T) {
 	}
 }
 
-// A NEW ROUND FOLDS WHAT ITS TURN'S EARLIER LAUNCHES CALLED INTO THE ROW'S PRIOR
+// A NEW ROUND FOLDS WHAT ITS TURN'S EARLIER LAUNCHES CALLED INTO THE LOG'S PRIOR
 // CALLS, by name and only where the call succeeded, and says so where calls had
-// been elided; a launch that carries a round on keeps its calls where they were.
+// been elided, in the opening that starts the new round's log afresh; a launch
+// that carries a round on keeps its calls where they were.
 //
-// Mutation: drop the fold from the relaunch, or fold a failed call, and a stop
-// of the next round reads an earlier round's delivered reply as never made, or
-// a failed post as one that went.
-func TestANewRoundFoldsItsTurnsEarlierCallsIntoTheRow(t *testing.T) {
+// Mutation: drop the fold from the log's opening, or fold a failed call, and a
+// stop of the next round reads an earlier round's delivered reply as never
+// made, or a failed post as one that went.
+func TestANewRoundFoldsItsTurnsEarlierCallsIntoTheLog(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	ctx := t.Context()
 	rig.launch("t1")
-	if _, _, err := rig.pending.mutateAny(ctx, "t1", func(run *PendingRun) bool {
-		run.BridgeCalls = []BridgeCall{{Name: "chat_post", Seq: 1}, {Name: "ticket_comment", Failed: true, Seq: 2}}
-		run.BridgeCallsElided = 3
-		return true
+	if _, _, err := rig.pending.runs.MutateSandboxRunPart(ctx, "t1", coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
+		if !found {
+			return nil, errors.New("the launch opened no log to seed")
+		}
+		var held BridgeLog
+		if err := json.Unmarshal(current.Value, &held); err != nil {
+			return nil, fmt.Errorf("decoding the log the launch opened: %w", err)
+		}
+		held.Calls = []BridgeCall{{Name: "chat_post", Seq: 1}, {Name: "ticket_comment", Failed: true, Seq: 2}}
+		held.Elided = 3
+		return json.Marshal(held)
 	}); err != nil {
 		t.Fatalf("seeding the round's calls: %v", err)
 	}
@@ -365,11 +383,14 @@ func TestANewRoundFoldsItsTurnsEarlierCallsIntoTheRow(t *testing.T) {
 		Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
 		t.Fatalf("relaunch: %v", err)
 	}
-	run := rig.get("t1")
-	if !slices.Equal(run.PriorCalls, []string{"chat_post"}) || !run.PriorCallsElided || len(run.BridgeCalls) != 0 {
-		t.Fatalf("the new round's row holds prior %v (elided %v) and calls %v, want the earlier "+
-			"round's successful post folded in, and its elision said", run.PriorCalls,
-			run.PriorCallsElided, run.BridgeCalls)
+	logged, err := rig.pending.BridgeLog(ctx, rig.get("t1"))
+	if err != nil {
+		t.Fatalf("reading the new round's log: %v", err)
+	}
+	if !slices.Equal(logged.PriorCalls, []string{"chat_post"}) || !logged.PriorCallsElided || len(logged.Calls) != 0 {
+		t.Fatalf("the new round's log holds prior %v (elided %v) and calls %v, want the earlier "+
+			"round's successful post folded in, and its elision said", logged.PriorCalls,
+			logged.PriorCallsElided, logged.Calls)
 	}
 }
 
@@ -461,7 +482,7 @@ func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItAfter(t *testing.T) {
 	if len(takes) != 1 || takes[0].Pack {
 		t.Fatalf("takes %+v, want one take of the archive the run's script packed", takes)
 	}
-	if !slices.Contains(takes[0].Scrub, handedToken) || takes[0].MaxBytes != executordomain.SessionMaxBytes {
+	if !slices.Contains(takes[0].Scrub, handedToken) || takes[0].MaxBytes != executorkeep.SessionMaxBytes {
 		t.Errorf("the take scrubs %v within %d bytes, want what the launch handed the box within the "+
 			"session's bound", takes[0].Scrub, takes[0].MaxBytes)
 	}
@@ -472,9 +493,10 @@ func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItAfter(t *testing.T) {
 	if len(captures) != 1 {
 		t.Fatalf("recorded %d captures, want 1", len(captures))
 	}
-	got := captures[0].n
-	if got.LaunchSeq != 1 || got.CaptureSeq != 1 || got.SessionID != "s-1" || got.Harness != "claude-code" ||
-		got.Object.Size != int64(len(session.Body)) || got.SeatBudget != 64<<20 || got.ContentKey != "k1" {
+	got := captures[0].CaptureRecord
+	if stamp := got.Stamp; stamp.LaunchSeq != 1 || stamp.CaptureSeq != 1 || stamp.SessionID != "s-1" ||
+		stamp.Harness != "claude-code" || got.Object.Size != int64(len(session.Body)) ||
+		stamp.SeatBudget != 64<<20 || stamp.ContentKey != "k1" {
 		t.Errorf("the capture recorded %+v", got)
 	}
 	if uploads := keep.uploads(); len(uploads) != 1 || string(uploads[0]) != "the transcript" {
@@ -535,8 +557,14 @@ func TestAJobTakenOnceItHadEndedIsNotTakenAgain(t *testing.T) {
 // that same operation before it records the end, and the next launch's capture
 // is another operation.
 //
-// Mutation: derive the operation per attempt, skip the end's ask, or derive it
-// from the turn alone, and the operations below stop matching or collide.
+// The operation is derived from the record's place by the engine, which states
+// the record as the log's (internal/engine's
+// TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives); here,
+// every attempt carries the one place.
+//
+// Mutation: stamp the place anew per attempt, skip the end's ask, or keep the
+// last launch's place for the next, and the places below stop matching or
+// collide.
 func TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd(t *testing.T) {
 	t.Parallel()
 	rig, writes, _ := keepingRig(t)
@@ -551,8 +579,8 @@ func TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd(t *testing.T) {
 		t.Fatalf("the capture was asked %d times, want it asked again", len(asked))
 	}
 	for _, again := range asked[1:] {
-		if again.call.OpID != asked[0].call.OpID {
-			t.Fatalf("asked again under %s, want the first attempt's %s", again.call.OpID, asked[0].call.OpID)
+		if again.operation() != asked[0].operation() {
+			t.Fatalf("asked again under %s, want the first attempt's %s", again.operation(), asked[0].operation())
 		}
 	}
 	if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureUnresolved || run.Kept != nil {
@@ -562,19 +590,19 @@ func TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd(t *testing.T) {
 
 	writes.answer(nil)
 	ctx := t.Context()
-	if owed, err := rig.coordinator.OweEnd(ctx, "t1", executordomain.Ending{
-		Outcome: executordomain.OutcomeCompleted}); err != nil || !owed {
+	if owed, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
+		Outcome: executorkeep.OutcomeCompleted}); err != nil || !owed {
 		t.Fatalf("OweEnd = %v, %v", owed, err)
 	}
 	if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
 		t.Fatalf("publishEnd: %v", err)
 	}
 	all := writes.captured()
-	if last := all[len(all)-1]; last.call.OpID != asked[0].call.OpID {
-		t.Fatalf("the end asked the capture under %s, want its own %s", last.call.OpID, asked[0].call.OpID)
+	if last := all[len(all)-1]; last.operation() != asked[0].operation() {
+		t.Fatalf("the end asked the capture under %s, want its own %s", last.operation(), asked[0].operation())
 	}
 	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].n.Ending.Outcome != executordomain.OutcomeCompleted || ends[0].n.Ending.Unkept != nil {
+	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeCompleted || ends[0].Ending.Unkept != nil {
 		t.Fatalf("ends %+v, want the turn's one end after its capture landed, naming nothing unkept", ends)
 	}
 	if run := rig.get("t1"); run.Kept == nil || run.Kept.State != CaptureLanded || len(run.OwedEnd) != 0 {
@@ -587,9 +615,9 @@ func TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd(t *testing.T) {
 		AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
 		t.Fatalf("relaunch: %v", err)
 	}
-	next := executordomain.CaptureOpID(time.Date(2026, 8, 23, 11, 0, 0, 0, time.UTC), "swe", "t1",
-		rig.get("t1").LaunchID, 1)
-	if next == asked[0].call.OpID {
+	next := capturedRecord{CaptureRecord: CaptureRecord{Handle: "swe", Turn: "t1", Stamp: SessionCapture{
+		Minted: asked[0].Stamp.Minted, Launch: rig.get("t1").LaunchID, CaptureSeq: 1}}}
+	if next.operation() == asked[0].operation() {
 		t.Fatal("the next launch's first capture derives the operation the last launch's did")
 	}
 }
@@ -625,8 +653,8 @@ func TestARefusedUploadIsRecordedAsRefusedAndRidesTheEnd(t *testing.T) {
 		t.Errorf("the launch's record is %+v, want it to say the session was taken to be kept", recs)
 	}
 	ctx := t.Context()
-	if _, err := rig.coordinator.OweEnd(ctx, "t1", executordomain.Ending{
-		Outcome: executordomain.OutcomeCompleted}); err != nil {
+	if _, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
+		Outcome: executorkeep.OutcomeCompleted}); err != nil {
 		t.Fatalf("OweEnd: %v", err)
 	}
 	if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
@@ -636,7 +664,7 @@ func TestARefusedUploadIsRecordedAsRefusedAndRidesTheEnd(t *testing.T) {
 	if len(ends) != 1 {
 		t.Fatalf("recorded %d ends, want the turn's one", len(ends))
 	}
-	unkept := ends[0].n.Ending.Unkept
+	unkept := ends[0].Ending.Unkept
 	if unkept == nil || unkept.LaunchSeq != 1 || unkept.CaptureSeq != 1 ||
 		!strings.Contains(unkept.Reason, "reservation is spent") {
 		t.Fatalf("the end names %+v unkept, want the launch's refused capture and why", unkept)
@@ -663,7 +691,7 @@ func TestTheSwitchOffKeepsNothingAndStillEndsTheTurn(t *testing.T) {
 		t.Fatalf("Launch: %v", err)
 	}
 	rig.suspend("t1")
-	if handed := rig.get("t1").Handed; handed != "" {
+	if handed := rig.handedOf(t, "t1"); handed != "" {
 		t.Fatalf("the launch sealed %q for a scrub with the switch off", handed)
 	}
 	rig.runner.Finish(Result{Text: "halfway through"})
@@ -681,7 +709,7 @@ func TestTheSwitchOffKeepsNothingAndStillEndsTheTurn(t *testing.T) {
 		t.Fatalf("recorded %d captures with the switch off", len(captures))
 	}
 	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].n.Ending.Outcome != executordomain.OutcomeStopped {
+	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeStopped {
 		t.Fatalf("recorded %+v with the switch off, want the stopped turn's one end", ends)
 	}
 	if _, found, _ := rig.pending.Get(ctx, "t1"); found {
@@ -719,7 +747,7 @@ func TestAStopTakesItsSessionOffTheFrameAndBeforeTheReclaim(t *testing.T) {
 		t.Fatalf("takes %+v, want the stopped job's session taken as its end left it", takes)
 	}
 	captures := writes.captured()
-	if len(captures) != 1 || captures[0].n.LaunchSeq != launched.LaunchSeq || captures[0].err != nil {
+	if len(captures) != 1 || captures[0].Stamp.LaunchSeq != launched.LaunchSeq || captures[0].err != nil {
 		t.Fatalf("recorded %+v, want the stopped launch's capture landed", captures)
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != launched.SandboxID {
@@ -833,7 +861,7 @@ func TestAReadThatFailsWhileACaptureIsKeptIsNoAnswer(t *testing.T) {
 	if captures := writes.captured(); len(captures) != 1 || captures[0].err != nil {
 		t.Fatalf("recorded %+v, want the stop's capture landed", captures)
 	}
-	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].n.Ending.Unkept != nil {
+	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].Ending.Unkept != nil {
 		t.Fatalf("ended %+v, want the turn's one end naming nothing unkept", ends)
 	}
 }
@@ -859,8 +887,8 @@ func TestAnEndNamesWhatItsAskOfAnUnresolvedCaptureSettled(t *testing.T) {
 	}
 	writes.answer(nil)
 	ctx := t.Context()
-	if owed, err := rig.coordinator.OweEnd(ctx, "t1", executordomain.Ending{
-		Outcome: executordomain.OutcomeCompleted}); err != nil || !owed {
+	if owed, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
+		Outcome: executorkeep.OutcomeCompleted}); err != nil || !owed {
 		t.Fatalf("OweEnd = %v, %v", owed, err)
 	}
 	owing := rig.get("t1")
@@ -869,7 +897,7 @@ func TestAnEndNamesWhatItsAskOfAnUnresolvedCaptureSettled(t *testing.T) {
 		t.Fatalf("publishEnd: %v", err)
 	}
 	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].n.Ending.Unkept != nil {
+	if len(ends) != 1 || ends[0].Ending.Unkept != nil {
 		t.Fatalf("ended %+v, want the turn's one end naming nothing unkept: its capture landed", ends)
 	}
 	if run := rig.get("t1"); run.Kept == nil || run.Kept.State != CaptureLanded {

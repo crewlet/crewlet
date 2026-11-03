@@ -45,11 +45,15 @@ const (
 	// records before committing.
 	//
 	// It is what turns a stream of single records into batches, and it is
-	// given up the instant somebody is waiting: a linearizable read
-	// appends a barrier and then waits for it, so lingering on a batch
-	// that already contains that barrier makes the read pay the whole
-	// linger — a hundred times the append it is waiting on, and on an idle
-	// company EVERY barrier is a partial batch.
+	// given up the instant somebody is waiting for a ROW the batch already
+	// holds: a write waits for its own record, and a linearizable read for
+	// the record before its barrier, so lingering on a batch that already
+	// contains that record makes the caller pay the whole linger — a
+	// hundred times the append it is waiting on, and on an idle company
+	// EVERY record is a partial batch. A caller waiting on a BARRIER with
+	// no row before it left to commit pays none of it: the batch reaches
+	// such a barrier, and releases whoever waits on it, the moment it is
+	// admitted ([Runner.Reached]).
 	ApplyLinger = 250 * time.Millisecond
 
 	// FetchMessages and FetchBytes bound one pull from the broker, and one
@@ -84,12 +88,32 @@ const (
 	// asked, or to the next one. A record the broker handed over and the
 	// loop never took is a hole for an ack window, on every pull.
 	//
-	// FOUR THOUSAND, which is [ApplyTxRowBudget]: the loop estimates a row
-	// per record when it decides whether another pull could fit, so a
-	// consumer that can hand over one transaction's worth of records in
-	// flight is one whose every pull the loop can commit whole. Larger
-	// buys nothing, because the run closes at the budget; smaller commits
-	// more often than the budget asks.
+	// FOUR THOUSAND, and the number has two jobs, because the same count is
+	// the broker-side consumer's MaxAckPending: how many delivered records
+	// may wait unacknowledged.
+	//
+	//   - BATCHING: it is [ApplyTxRowBudget]. The loop estimates a row per
+	//     record when it decides whether another pull could fit, so a
+	//     consumer that can hand over one transaction's worth of records in
+	//     flight is one whose every pull the loop can commit whole; smaller
+	//     commits more often than the budget asks.
+	//   - HOW FAR THE REACHED POSITION RUNS AHEAD OF A STALLED COMMIT
+	//     ([Runner.Reached]). Barriers are reached the moment they are
+	//     decoded and acknowledged only once the checkpoint transaction
+	//     beside the loop commits them, so while a disk's fsync stalls every
+	//     barrier delivered meanwhile is in flight; at this many the broker
+	//     withholds the next, and the reads resting on it wait for the
+	//     stalled commit — refused `behind` at [ReadBudget] if it outlasts
+	//     that, never answered from rows that are not current. Sized
+	//     against the l1 reproduction (wf_abebd46b-b70): reads follow one
+	//     another a median 13.4 ms apart, about 75 barriers a second from a
+	//     loaded node, and every node applies every node's barriers, so four
+	//     thousand ride out about 53 s of one node's barriers or 18 s of
+	//     three nodes' — against fsync stalls measured at 2.1–9.3 s. A
+	//     larger ceiling would ride out longer stalls and add nothing to a
+	//     transaction, which closes at the budget whatever the pull holds;
+	//     it is not raised, because what it would cover is a stall nobody
+	//     has measured, and past it reads only wait as they always did.
 	//
 	// 28 MiB OF BYTES, and the floor under it is not a preference: a pull
 	// whose byte bound is smaller than the next record is REFUSED by the
@@ -114,9 +138,11 @@ const (
 	// indistinguishable from an ordinary partial batch closing. THE
 	// CEILING IS FIVE SECONDS, which is a broker election's own scale
 	// and the write path's resolve budget: a broker that has not
-	// answered in five seconds is one without a quorum rather than a
-	// slow one, and asking it more often than that adds load to the
-	// thing that is failing. Against [ApplyRetryBudget] the ceiling
+	// answered in five seconds is one that cannot rather than a slow
+	// one — without a quorum where several members store the log, its
+	// own write stalled where one does ([DefaultBarrierBudget]) — and
+	// asking it more often than that adds load to the thing that is
+	// failing. Against [ApplyRetryBudget] the ceiling
 	// leaves a fault at least six attempts before it is reported, so a
 	// single failed call never takes a copy out of service.
 	ApplyRetryBeat    = ApplyLinger

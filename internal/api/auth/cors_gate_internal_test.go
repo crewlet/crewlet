@@ -143,7 +143,9 @@ var unexposedResponse = map[string]string{
 	"Origin-Agent-Cluster":         "the browser's to enforce",
 	"X-Robots-Tag":                 "a crawler's to obey, never a page's script's to read",
 	"Vary":                         "a cache's key, never a client's next request",
-	"Content-Encoding":             "the browser decodes the body itself",
+	"WWW-Authenticate": "git's own credential challenge on the git transport, " +
+		"which git answers with a person's token and no page's script reads",
+	"Content-Encoding": "the browser decodes the body itself",
 	"X-Accel-Buffering": "a reverse proxy's to obey — the assistant's event stream " +
 		"asks it not to buffer — never a page's script's to read",
 	"Access-Control-Allow-Origin": "the CORS protocol's own, read by the " +

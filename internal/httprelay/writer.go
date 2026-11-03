@@ -143,10 +143,12 @@ func (w *writer) failed() {
 
 // next waits for the next frame to send — the header once it is committed and
 // wantHeader asks for it, the body written since, the end — or for beat to
-// pass with nothing, which is a heartbeat's empty frame. It reports false once
-// ctx is done.
-func (w *writer) next(ctx context.Context, beat time.Duration, wantHeader bool) (frameRequest, bool) {
-	timer := time.NewTimer(beat)
+// pass on clock with nothing, which is a heartbeat's empty frame. It reports
+// false once ctx is done.
+func (w *writer) next(ctx context.Context, clock timeSource, beat time.Duration, wantHeader bool) (frameRequest,
+	bool) {
+
+	timer := clock.NewTimer(beat)
 	defer timer.Stop()
 	w.mu.Lock()
 	for {
@@ -172,7 +174,7 @@ func (w *writer) next(ctx context.Context, beat time.Duration, wantHeader bool) 
 		w.mu.Unlock()
 		select {
 		case <-wait:
-		case <-timer.C:
+		case <-timer.C():
 			return frameRequest{}, true
 		case <-ctx.Done():
 		}

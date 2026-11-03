@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -53,7 +54,7 @@ const memberStoreBytes = 1 << 30
 const dataLogCeiling = 256 << 20
 
 // spikeRing is the fleet keyring every node of a spike holds.
-var spikeRing = statelog.OneKey("k1", "the artifacts spikes' fleet key material")
+var spikeRing = recordseal.OneKey("k1", "the artifacts spikes' fleet key material")
 
 // brokers is a running broker topology and one client per data node, each on
 // its own member, as each engine in a fleet talks to the member it embeds.
@@ -171,11 +172,11 @@ func joinData(tb testing.TB, q *js.Queue, id string) *dataNode {
 	if !found {
 		checkpoint.At.Generation = 1
 	}
-	verifier, err := statelog.NewVerifier(d.Name(), spikeRing)
+	verifier, err := recordseal.NewVerifier(d.Name(), spikeRing)
 	if err != nil {
 		tb.Fatalf("%s: build the verifier: %v", id, err)
 	}
-	signer, err := statelog.NewSigner(d.Name(), spikeRing)
+	signer, err := recordseal.NewSigner(d.Name(), spikeRing)
 	if err != nil {
 		tb.Fatalf("%s: build the signer: %v", id, err)
 	}

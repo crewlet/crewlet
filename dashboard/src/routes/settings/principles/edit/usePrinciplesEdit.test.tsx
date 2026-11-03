@@ -10,6 +10,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
@@ -24,6 +25,7 @@ import { InertWebSocket } from "~/test/client.tsx";
 import { fakeCharterEngine, type CharterEngine } from "~/test/charterEngine.ts";
 import type { CharterPart, PrincipleCardEdit } from "../PrincipleCard.tsx";
 import { usePrinciplesEdit } from "./usePrinciplesEdit.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 const ACME = {
   name: "Acme",
@@ -117,6 +119,7 @@ function mount(grants: string[] = ["admin"], org: Record<string, unknown> = ACME
       <SessionReading>
         <ViewerProvider>
           <ToastProvider>
+            <AppAnnouncer />
             <Router>
               <Page />
             </Router>
@@ -455,7 +458,7 @@ test("moving between the Company landing and Principles keeps the writing withou
     act(() => {
       location.hash = hash;
     });
-    await act(async () => {});
+    await afterMicrotasks();
     expect(screen.queryByRole("alertdialog"), hash).toBeNull();
     expect(missionBox()).toHaveProperty("value", "Half a thought");
   }

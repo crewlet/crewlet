@@ -49,18 +49,20 @@ import (
 // again on the record as it then stands. That is what makes the SECOND writer
 // see the first one's decision instead of overwriting it.
 //
-// # A lost race is the store's to retry, for its patience
+// # A lost race is the store's to retry
 //
-// Not a count of attempts made here. A run's record has more writers than a
-// count can be set for: every tool call its box makes over the bridge appends
-// to it — from as many as twenty subagents at once, Claude Code's default —
-// beside its seat's own turns, a peer recovering it, a person's answer and a
-// person's stop, so the sixteen immediate attempts this file once made could
-// report a healthy, busy record as one that "kept changing" and drop the
-// write. The store retries a lost race after a jittered wait for as long as
-// its patience allows (internal/coord/kv's race.go: a lost race measures load,
-// not health), and answers [coord.ErrUnavailable] only once a write has lost
-// for all of it. What the coordinator still loops on here is never a lost race
+// Never a count of attempts made here. A run's record has many writers:
+// every tool call its box makes over the bridge appends to it — from as many
+// as twenty subagents at once, Claude Code's default — beside its seat's own
+// turns, a peer recovering it, a person's answer and a person's stop, so the
+// sixteen immediate attempts this file once made could report a healthy,
+// busy record as one that "kept changing" and drop the write. The store
+// decides a lost race again on the record as it then stands, within the bound
+// every fleet key shares (internal/coord/kv's casRetry: twice the writers a
+// fleet key is sized for, each attempt after a loss waiting a window of round
+// trips), which outlasts the overlap of the calls one run's box can make at
+// once, and answers [coord.ErrUnavailable] only once a write has lost every
+// attempt of it. What the coordinator still loops on here is never a lost race
 // but an OUTCOME — a decision refused, a row gone between two operations — and
 // each such loop carries a bound of its own, with its reason.
 type CoordStore struct {
@@ -96,7 +98,10 @@ func (s *CoordStore) clock() time.Time {
 // A round repeats only when the row VANISHED between the create that found it
 // and the reset that read it — the turn's previous run finishing in that
 // window — and the next create then wins, unless another launch of the same
-// turn created the row first, which the next reset takes. So an ordinary
+// turn created the row first, which the next reset takes. A row that vanishes
+// once the launch's own create or reset has landed never repeats one: that
+// row names this launch, and only its own ending removes it ([ErrRunEnding]).
+// So an ordinary
 // launch takes one round, a launch that met a finishing run two, and one that
 // also met a racing launch three; a fourth needs the row to vanish again
 // inside the next create-to-reset window, which nothing in this engine does
@@ -111,6 +116,14 @@ const launchRounds = 3
 // of, so the create is tried again: the turn's previous run finishing as this
 // one opens ends the row underneath the reset, and a reset that found nothing
 // used to report the launch open on a row that did not exist.
+//
+// A ROW THAT VANISHES ONCE THE LAUNCH'S OWN WRITE LANDED is a different thing,
+// and never created again: that row names this launch, its reset refused any
+// decided ending, so what removed it is an ending decided for this launch's
+// own job — a person's stop — and its finish. The launch is refused
+// [ErrRunEnding], as a reset the ending refused is. Created again, the row
+// would carry no ending, and the launch would start a box for a turn that
+// was stopped.
 func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error) {
 	if run.TurnID == "" {
 		return PendingRun{}, fmt.Errorf("sandbox: a pending run needs a turn id")
@@ -119,6 +132,18 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	if run.CreatedAt.IsZero() {
 		run.CreatedAt = now
 	}
+	// THE JOB'S LAUNCH FLOOR IS THE FLOOR IT OPENS AT, never the caller's to
+	// set apart: what the run pushed is read above it, so one written from
+	// anything else would hide a push or count another job's.
+	run.CodeLaunch = run.CodeFloor
+	// THE TURN'S CODE HOLDS, each once and within the row's bound: a create
+	// writes them as handed, a reset unions them ([CoordStore.resetLaunch]).
+	holds, fits := unionHolds(nil, run.CodeHolds)
+	if !fits {
+		return PendingRun{}, fmt.Errorf("sandbox: begin launch %s: %d holds: %w", run.TurnID,
+			len(holds), ErrCodeHoldsFull)
+	}
+	run.CodeHolds = holds
 	// Not the caller's to choose: a row exists to be launched into, and
 	// the only status that can mean is launching.
 	run.Status = StatusLaunching
@@ -147,6 +172,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// [PendingStore.BeginLaunch]. Nothing else of the caller's: a record made
 	// here holds no note it was not handed.
 	created := run
+	// A CREATED ROW OPENS A ROUND, named by its first job, which no answer
+	// has cut yet ([PendingRun.Round]).
+	created.Round, created.AnsweredJob = run.LaunchID, ""
 	created.Steer = RunSteer{Seat: bytes.Clone(run.Steer.Seat)}
 	openNotes(&created.Steer, run, run.LaunchID, now)
 	// A TRIGGER'S WORDS, HELD TO THEIR SHARE OF THE ROW ([MaxRunTitleBytes]):
@@ -170,6 +198,17 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 			return PendingRun{}, fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err)
 		}
 		if made {
+			// AND THE JOB'S LOG, a new run's: whatever a key of that
+			// name held is no call of this run's.
+			last, opened, openErr := s.openLog(ctx, run.TurnID, run.LaunchID,
+				logOpening{round: created.Round})
+			if openErr != nil {
+				return PendingRun{}, openErr
+			}
+			if !opened {
+				return PendingRun{}, endedUnderLaunch(run.TurnID)
+			}
+			created.OpenedAfter = last
 			return created, nil
 		}
 		opened, reset, err := s.resetLaunch(ctx, run, fence)
@@ -213,18 +252,70 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 // Answered as a launch, either would start a job in a box the row did not
 // record — killed under it by the ending, or billed and named by nothing.
 func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, bool, error) {
-	var prior PriorBox
+	full := false
+	var (
+		prior   PriorBox
+		opening logOpening
+	)
+	// WHAT THE BOX WAS HANDED is kept beside the row ([CoordStore.Handed]),
+	// so it is read before the reset and taken inside it only where it names
+	// the job the reset replaces. A set of an earlier job, none, or one that
+	// job's attach wrote only after this read carries nothing: the launch's
+	// carry then refuses its job's captures rather than scrub less than its
+	// box holds ([Coordinator.sealHanded]) — never another job's set carried
+	// as the box's.
+	handed, err := s.readHanded(ctx, run.TurnID)
+	if err != nil {
+		return PendingRun{}, false, fmt.Errorf("sandbox: begin launch %s: %w", run.TurnID, err)
+	}
 	opened, reset, err := s.mutateFenced(ctx, run.TurnID, fence, func(existing *PendingRun) bool {
 		// READ BEFORE THE RESET, inside the same compare-and-swap, so the
 		// box handed to the launch is exactly the one the write replaced.
 		prior = PriorBox{
 			SandboxID: existing.SandboxID, Placement: existing.Placement,
 			Harness: existing.Harness, Status: existing.Status,
-			LaunchNode: existing.LaunchNode, Handed: existing.Handed,
+			LaunchNode: existing.LaunchNode, Since: existing.BoxSince,
+			Handed: handed.of(existing.LaunchID),
 		}
-		// And whether the job it replaces asked, which the reset clears
-		// below and the round's cut is decided by.
-		continuesAnswer := run.Continues && existing.asked()
+		// THE TURN'S CODE HOLDS ARE UNIONED, never reset with the rest: a
+		// relaunch's turn may still depend on what an earlier job, or an
+		// earlier half of the turn, named — and once it parks, this row is
+		// the only place the code host's expiry can read that from.
+		holds, fits := unionHolds(existing.CodeHolds, run.CodeHolds)
+		if !fits {
+			full = true
+			return false
+		}
+		existing.CodeHolds = holds
+		// THE ROUND THE JOB BELONGS TO, and the answer its log is still to
+		// be cut for — decided here, in the reset's own write, so the
+		// opening that follows, or the next relaunch's where that opening
+		// never lands, keeps what the round made ([PendingRun.Round]).
+		// Whether the replaced job asked is read before the reset clears
+		// its question below, and the round its held call was made in
+		// before it moves on.
+		heldRound := existing.Round
+		switch {
+		case !run.Continues:
+			existing.Round, existing.AnsweredJob = run.LaunchID, ""
+		case existing.asked():
+			existing.AnsweredJob = existing.LaunchID
+		}
+		// THE CALL A PERSON APPROVED IN THE REPLACED JOB, which the reset
+		// clears with its held call below, is carried to the opening in
+		// this write, so a log its own append never reached still takes
+		// it ([OwedCall]); an owed call an earlier reset carried stays
+		// only while the job it carried it to never launched — one that
+		// did had its opening land, and the call with it.
+		owed := existing.OwedCall
+		if existing.Status != StatusLaunching {
+			owed = nil
+		}
+		if h := existing.HeldCall; h != nil && h.Made() && h.Call != nil {
+			owed = &OwedCall{Round: heldRound, Call: *h.Call}
+		}
+		existing.OwedCall = owed
+		opening = logOpening{round: existing.Round, answered: existing.AnsweredJob, owed: owed}
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		// ONE PAST THE ROW'S, in the write that names the job, so the
@@ -235,6 +326,15 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// The turn's cap is the turn's, the same on every launch of it —
 		// written anyway, so the row says what this launch was told.
 		existing.Deadline = run.Deadline
+		// THE JOB'S GRANTS AND FLOORS ARE ITS OWN, replaced rather than kept:
+		// the previous job's repositories are not this job's, and a box of
+		// the previous job that is still pushing is refused by the launch id
+		// it was minted for. Unlike the holds above, which the turn may still
+		// depend on whichever job named them. And the colleague the job
+		// works for is the one its own resolution read for.
+		existing.Repos = run.Repos
+		existing.CodeFloor, existing.CodeLaunch = run.CodeFloor, run.CodeLaunch
+		existing.CodeCeiling = run.CodeCeiling
 		// THE BOX'S HOST STAYS WITH THE BOX: the row still names the
 		// previous job's box, which is on the host of the node that
 		// launched that job, and the attach that names this job's box names
@@ -255,10 +355,11 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		}
 		existing.Lost = nil
 		// AND THE PREVIOUS JOB'S COMMAND AND SESSION ARE NOT THIS JOB'S, nor
-		// what its box was handed: the launch writes its own, carrying the
-		// previous job's forward where it continues in the same box
-		// ([PriorBox.Handed]).
-		existing.CommandID, existing.SessionID, existing.Handed = "", "", ""
+		// what its box was handed: the set beside the row names the job it
+		// was written for, so from here it reads as none for this one, and
+		// the launch's attach writes its own, carrying the previous job's
+		// forward where it continues in the same box ([PriorBox.Handed]).
+		existing.CommandID, existing.SessionID = "", ""
 		// A hold was on the previous job's resume, which is over.
 		existing.HeldFor, existing.HeldUntil = "", time.Time{}
 		if fence.Fenced() {
@@ -290,38 +391,11 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// answer drives, which has happened by the time a new job opens.
 		existing.ParkedInputTokens, existing.ParkedOutputTokens = 0, 0
 		existing.ParkedCacheReadTokens, existing.ParkedCacheWriteTokens = 0, 0
-		// NOR ARE THE PREVIOUS JOB'S TOOL CALLS THIS JOB'S. The bridged
-		// log is the whole record a run's resume rebuilds its phase
-		// from, and a second executor round under the same turn id — what
-		// a reviewer's self_iterate produces — would otherwise replay the
-		// FIRST round's submit_work: a round that in fact submitted
-		// nothing would report the previous round's outcome instead of
-		// being rescued, and its deliveries would satisfy this round's
-		// delivery check.
-		//
-		// EXCEPT FOR A JOB THAT CONTINUES ONE THAT ASKED: that is the same
-		// round carried on, and the calls made before the question are its
-		// calls ([PendingRun.Continues]).
-		//
-		// AND WHERE THE ANSWER CUT THE ROUND: a job that continues one which
-		// asked starts after every call the row holds now
-		// ([PendingRun.AnsweredThrough]). A job that continues a lost one
-		// keeps the cut it had, and a new round has none.
-		//
-		// WHAT A NEW ROUND TAKES OFF THE ROW IS FOLDED INTO THE TURN'S
-		// EARLIER CALLS FIRST ([PendingRun.PriorCalls]): by name and outcome,
-		// the calls it kept and the identities of the ones it dropped, which
-		// is all the run's own ending needs to know whether an earlier round
-		// delivered the turn's reply.
-		switch {
-		case !run.Continues:
-			existing.PriorCalls, existing.PriorCallsElided = foldPriorCalls(*existing)
-			existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
-			existing.ElidedCalls, existing.AbsorbedCalls, existing.TallyRound = nil, nil, time.Time{}
-			existing.AnsweredThrough = 0
-		case continuesAnswer:
-			existing.AnsweredThrough = existing.LastBridgeSeq()
-		}
+		// NOR ARE THE PREVIOUS JOB'S TOOL CALLS THIS JOB'S, unless it is
+		// the same round carried on — decided by the write that opens the
+		// job's log, once this reset has landed, which folds a replaced
+		// round's calls into the turn's earlier ones in the same write
+		// ([CoordStore.openLog], [BridgeLog.PriorCalls]).
 		// AND THE PREVIOUS JOB'S CHARGE IS NOT THIS JOB'S. Carried over,
 		// it would tell this job's completion that its spend is already
 		// counted, and the company would never be billed for it.
@@ -341,13 +415,200 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		openNotes(&existing.Steer, run, run.LaunchID, s.clock())
 		return true
 	})
-	if err != nil {
+	switch {
+	case err != nil:
 		return PendingRun{}, false, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID, err)
+	case full:
+		return PendingRun{}, false, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID,
+			ErrCodeHoldsFull)
 	}
-	if reset {
-		opened.Prior = prior
+	if !reset {
+		return opened, false, nil
 	}
-	return opened, reset, nil
+	opened.Prior = prior
+	// THEN THE LOG IS OPENED TO THE JOB, never before: a reset the row
+	// refused must leave the replaced job's log as it was. Between the two
+	// writes the log still takes the replaced job's late calls, which are
+	// the round's when the job carries it on — counted before the answer's
+	// cut, which the opening takes off the same write — and are dropped
+	// with the rest when it does not.
+	last, logged, err := s.openLog(ctx, run.TurnID, opened.LaunchID, opening)
+	switch {
+	case err != nil:
+		return PendingRun{}, false, err
+	case !logged:
+		return PendingRun{}, false, endedUnderLaunch(run.TurnID)
+	}
+	opened.OpenedAfter = last
+	return opened, true, nil
+}
+
+// endedUnderLaunch is [CoordStore.BeginLaunch]'s refusal of a launch whose
+// own row was removed before its log was opened to it.
+func endedUnderLaunch(turnID string) error {
+	return fmt.Errorf("sandbox: begin launch %s: the run ended under its launch: %w",
+		turnID, ErrRunEnding)
+}
+
+// logOpening is what the write that opens a job's log keeps of the round
+// before it, as the row's create or reset decided it — see
+// [CoordStore.openLog].
+type logOpening struct {
+	// round is the round the job belongs to ([PendingRun.Round]).
+	round string
+
+	// answered is the job whose answered question the round is cut for
+	// ([PendingRun.AnsweredJob]); empty for a round no answer carried on.
+	answered string
+
+	// owed is the call a person approved that its round's log is owed
+	// ([PendingRun.OwedCall]), nil for none: appended in the opening's own
+	// write where the log lacks it, before the opening decides what the job
+	// keeps.
+	owed *OwedCall
+}
+
+// opened is l as the opening o of job launch leaves it — see
+// [CoordStore.openLog], whose one write it decides.
+func (l BridgeLog) opened(launch string, o logOpening) BridgeLog {
+	if o.owed != nil {
+		l, _ = l.withApproved(o.owed.Round, o.owed.Call)
+	}
+	next := BridgeLog{Launch: launch, Round: o.round}
+	next.PriorCalls, next.PriorCallsElided = l.priorFor(o.round)
+	if l.Round == o.round {
+		next = l
+		next.Launch = launch
+		if o.answered != "" && l.CutFor != o.answered {
+			next.AnsweredThrough, next.CutFor = l.LastSeq(), o.answered
+		}
+	}
+	return next
+}
+
+// openLog opens turnID's log to job launch, answering the place of the last
+// call it keeps from before the job ([BridgeLog.LastSeq]) and whether it was
+// written — false for a run whose record is gone.
+//
+// ONE COMPARE-AND-SWAP OF THE LOG decides what the job keeps and moves the log
+// onto it, so no append of the replaced job can land between the two: an append
+// that read the log before this write loses its race and is decided again on a
+// log that takes the new job's calls alone.
+//
+// A NEW ROUND STARTS THE LOG AFRESH, so a second executor round under the same
+// turn id — what a reviewer's self_iterate produces — never replays the FIRST
+// round's submit_work: a round that in fact submitted nothing would report the
+// previous round's outcome instead of being rescued, and its deliveries would
+// satisfy this round's delivery check. A job that CONTINUES the round keeps its
+// calls ([PendingRun.Continues]) and, carried on by a person's answer, cuts it
+// after the last of them; one carried on after a loss keeps the cut it had.
+//
+// BY THE ROUND, NEVER BY THE JOB BEFORE: what the log keeps is decided by the
+// round the row's own write named ([PendingRun.Round]) and the answer it is
+// cut for ([PendingRun.AnsweredJob]). An opening that failed, or that its node
+// stopped before, leaves the log on an earlier job of the round; the next
+// relaunch that carries the round on still keeps its calls, and still takes
+// the cut that opening owed. A log of another round is started afresh.
+//
+// AND WHAT A NEW ROUND TAKES OUT OF THE LOG IS FOLDED INTO THE TURN'S EARLIER
+// CALLS IN THE SAME WRITE ([BridgeLog.PriorCalls]): by name and outcome — the
+// calls the log kept and the identities of the ones it dropped — which is all
+// the run's own ending needs to know whether an earlier round delivered the
+// turn's reply. The new round's log keeps neither tally of the old one's: both
+// are that round's. One compare-and-swap, so a crash never leaves a round's
+// calls gone from the log and missing from the fold. The call a person approved
+// that the log is owed ([OwedCall]) is appended first, in the same write, so it
+// is kept with its round or folded with it.
+func (s *CoordStore) openLog(ctx context.Context, turnID, launch string, o logOpening) (int, bool, error) {
+	last := 0
+	_, opened, err := s.runs.MutateSandboxRunPart(ctx, turnID, coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
+		next := BridgeLog{Launch: launch, Round: o.round}
+		if found {
+			var held BridgeLog
+			if err := json.Unmarshal(current.Value, &held); err != nil {
+				return nil, fmt.Errorf("sandbox: decode the log of run %s: %w", turnID, err)
+			}
+			next = held.opened(launch, o)
+		}
+		last = next.LastSeq()
+		return json.Marshal(next)
+	})
+	if err != nil {
+		return 0, false, fmt.Errorf("sandbox: open the log of run %s to its job: %w", turnID, err)
+	}
+	return last, opened, nil
+}
+
+// unionHolds is held with keys added — each key once, in the order first
+// taken — and whether the union fits [MaxCodeHolds].
+func unionHolds(held, keys []string) ([]string, bool) {
+	out := make([]string, 0, len(held)+len(keys))
+	seen := make(map[string]bool, len(held)+len(keys))
+	for _, list := range [][]string{held, keys} {
+		for _, key := range list {
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, key)
+			}
+		}
+	}
+	return out, len(out) <= MaxCodeHolds
+}
+
+// AddCodeHolds adds keys to a live run's code holds. See the contract on
+// [PendingStore].
+func (s *CoordStore) AddCodeHolds(ctx context.Context, turnID string, keys []string) (bool, error) {
+	if len(keys) == 0 || slices.Contains(keys, "") {
+		return false, fmt.Errorf("sandbox: a hold on run %s names no key", turnID)
+	}
+	full, already := false, false
+	_, wrote, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		holds, fits := unionHolds(run.CodeHolds, keys)
+		switch {
+		case !fits:
+			full = true
+			return false
+		case len(holds) == len(run.CodeHolds):
+			// EVERY KEY ALREADY HELD: the row says it, and nothing is
+			// written.
+			already = true
+			return false
+		}
+		run.CodeHolds = holds
+		return true
+	})
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("sandbox: hold %d keys on run %s: %w", len(keys), turnID, err)
+	case full:
+		return false, fmt.Errorf("sandbox: hold %d keys on run %s: %w", len(keys), turnID, ErrCodeHoldsFull)
+	}
+	return wrote || already, nil
+}
+
+// RaiseCodeFloor raises a live run's code floor while the row holds launch.
+// See the contract on [PendingStore].
+func (s *CoordStore) RaiseCodeFloor(ctx context.Context, turnID, launchID string,
+	raise func(current string) (string, bool),
+) (bool, error) {
+	if launchID == "" {
+		return false, fmt.Errorf("sandbox: a floor raise on run %s names no launch", turnID)
+	}
+	_, wrote, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launchID {
+			return false
+		}
+		next, ok := raise(run.CodeFloor)
+		if !ok || next == "" || next == run.CodeFloor {
+			return false
+		}
+		run.CodeFloor = next
+		return true
+	})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: raise the code floor of run %s: %w", turnID, err)
+	}
+	return wrote, nil
 }
 
 // Get returns one run by turn id.
@@ -434,18 +695,18 @@ func (s *CoordStore) ClearEnd(ctx context.Context, turnID string, owed json.RawM
 }
 
 // foldPriorCalls is the turn's earlier successful calls, by name, with the
-// successful ones of run's round added — the calls its row kept and the
+// successful ones of l's round added — the calls the log kept and the
 // identities of the ones it dropped — and whether any call of the turn's is
-// not accounted for by name ([PendingRun.PriorCalls]).
+// not accounted for by name ([BridgeLog.PriorCalls]).
 //
 // A SET OF NAMES, sorted, never a log: whether a round delivered is whether a
 // call to a delivering tool succeeded, which a name and an outcome answer, and
 // a set is bounded by the seat's catalogue rather than by how many calls a
 // turn makes — and held to [MaxPriorCalls] all the same, past which it says
 // its record is incomplete rather than grow.
-func foldPriorCalls(run PendingRun) ([]string, bool) {
-	names := slices.Clone(run.PriorCalls)
-	incomplete := run.PriorCallsElided || !run.ElisionKnown()
+func foldPriorCalls(l BridgeLog) ([]string, bool) {
+	names := slices.Clone(l.PriorCalls)
+	incomplete := l.PriorCallsElided || !l.ElisionKnown()
 	add := func(name string) {
 		switch {
 		case name == "" || slices.Contains(names, name):
@@ -455,12 +716,12 @@ func foldPriorCalls(run PendingRun) ([]string, bool) {
 			names = append(names, name)
 		}
 	}
-	for _, call := range run.BridgeCalls {
+	for _, call := range l.Calls {
 		if !call.Failed {
 			add(call.Name)
 		}
 	}
-	for _, e := range run.Elided() {
+	for _, e := range l.Unlisted() {
 		if e.Calls > e.Failed {
 			add(e.Name)
 		}
@@ -770,30 +1031,29 @@ func (s *CoordStore) MarkHeldCall(ctx context.Context, turnID, launch string, fe
 	return held, won, nil
 }
 
-// RecordHeldResult records what a marked held call came to: its result, and the
-// call in its round's log. See the contract on [PendingStore].
+// RecordHeldResult records what a marked held call came to: its result and the
+// call as its round's log keeps it, on the row, then the call in that log. See
+// the contract on [PendingStore].
 func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string, made HeldMade,
 	fence Fence) (bool, error) {
 
 	claimed, already := false, false
+	var (
+		held  HeldCall
+		round string
+	)
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if claimed = heldClaim(*run, launch, fence) && run.HeldCall.Calling(); !claimed {
 			return false
 		}
-		if already = run.HeldCall.Made(); already {
+		held, round = *run.HeldCall, run.Round
+		if already = held.Made(); already {
 			return false
 		}
-		now := s.clock()
-		held := *run.HeldCall
-		held.Result, held.MadeAt = made.Result, now
+		held.Result, held.MadeAt = made.Result, s.clock()
+		call := approvedCall(made.Call, held)
+		held.Call = &call
 		run.HeldCall = &held
-		call := made.Call
-		call.Name, call.Approved, call.At = held.Tool, true, now
-		// ITS ARGUMENTS AND THEIR DIGEST WITHHELD, as the held call's were
-		// ([BridgeCall.Withheld]): they ride the row sealed beside it.
-		call.Args, call.Output, call.Held, call.Digest = "", "", false, ""
-		call.Seq = run.LastBridgeSeq() + 1
-		run.appendCall(call, nil)
 		return true
 	})
 	switch {
@@ -801,8 +1061,47 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 		return false, err
 	case !claimed:
 		return false, fmt.Errorf("%w: run %s, launch %s", ErrHeldCallUnclaimed, turnID, launch)
+	case !won && !already:
+		return false, nil
+	case held.Call == nil:
+		// A RESULT A BUILD WITHOUT THE CALL'S ENTRY RECORDED: nothing to
+		// append, and the result stands.
+		return true, nil
 	}
-	return won || already, nil
+	// THE CALL, AFTER ITS RESULT, in its round's log and once by the held
+	// call's id: the attempt that recorded the result, or the retry that
+	// found it recorded by one that stopped before this append. Where this
+	// write never lands, the next job's opening appends it ([OwedCall]).
+	if _, _, err := s.runs.MutateSandboxRunPart(ctx, turnID, coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
+		if !found {
+			return nil, nil
+		}
+		var log BridgeLog
+		if err := json.Unmarshal(current.Value, &log); err != nil {
+			return nil, fmt.Errorf("sandbox: decode the log of run %s: %w", turnID, err)
+		}
+		next, appended := log.withApproved(round, *held.Call)
+		if !appended {
+			return nil, nil
+		}
+		return json.Marshal(next)
+	}); err != nil {
+		return false, fmt.Errorf("sandbox: append run %s's approved call to its log: %w", turnID, err)
+	}
+	return true, nil
+}
+
+// approvedCall is the call a person approved as its round's log keeps it
+// ([HeldCall.Call]): answered as made says, named the held call's tool and
+// id, stamped with the instant its result was recorded, marked approved, and
+// with no arguments, no digest of them and no output, which ride the row
+// sealed ([BridgeCall.Withheld]) — every other field held to a call's share
+// ([keptCall]), as the log holds it and as the row carries it, on the held
+// call and on to the reset that owes it to the log ([OwedCall]).
+func approvedCall(made BridgeCall, held HeldCall) BridgeCall {
+	made.Name, made.Approved, made.At, made.HeldID = held.Tool, true, held.MadeAt, held.ID
+	made.Args, made.Output, made.Held, made.Seq, made.Digest = "", "", false, 0, ""
+	return keptCall(made, MaxBridgeArgsBytes)
 }
 
 // OweHandBack lets go of the recorded answer a run whose ending is decided still
@@ -1051,7 +1350,7 @@ func (s *CoordStore) ExpirePause(ctx context.Context, turnID string) (bool, erro
 		// state a reader can see, in which a reseeded run still names
 		// the box an arriving answer would be told to continue in.
 		run.SandboxID, run.CommandID = "", ""
-		run.PausedAt = time.Time{}
+		run.PausedAt, run.BoxSince = time.Time{}, time.Time{}
 		return true
 	})
 	return won, err
@@ -1105,7 +1404,16 @@ func (s *CoordStore) MarkLost(ctx context.Context, turnID, launch string, loss J
 // fencing it ([Coordinator.RecoverSeat]), so that move reaches the attach as
 // the ending, or as no record at all, rather than as a newer lease.
 func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
+	var job handedSet
 	_, attached, err := s.mutateFenced(ctx, turnID, fence, func(run *PendingRun) bool {
+		job = handedSet{}
+		// A BOX THE ROW DID NOT NAME IS DATED HERE, and one it already
+		// names keeps its date — see [PendingRun.BoxSince]: a job continued
+		// in its turn's kept box attaches that box again, twice, and a
+		// re-dated box would never age past [KeptBoxMaxAge].
+		if run.SandboxID != box.SandboxID {
+			run.BoxSince = s.clock()
+		}
 		run.SandboxID = box.SandboxID
 		run.CommandID = box.CommandID
 		// A COMMAND IS A JOB THAT STARTED, recorded on the job's own record
@@ -1114,10 +1422,13 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		// names no command, and unsays nothing.
 		if box.CommandID != "" {
 			run.Launch.Started = true
-			// AND WHAT THE JOB WAS HANDED, with the job: what a capture
-			// of its box scrubs out ([PendingRun.Handed]); and which brief
-			// ([LaunchRecord.Brief]).
-			run.Handed = box.Handed
+			// AND WHAT THE JOB WAS HANDED, named for the job: what a
+			// capture of its box scrubs out, written beside the row once
+			// this write has landed ([CoordStore.Handed]).
+			if box.Handed != "" {
+				job = handedSet{Launch: run.LaunchID, LaunchSeq: run.LaunchSeq, Sealed: box.Handed}
+			}
+			// And which brief ([LaunchRecord.Brief]).
 			run.Launch.Brief = box.Brief
 			// AND THE SESSION ITS SCRIPT STARTS OF ITS OWN in a continued
 			// one's place, for which of the two its box said it ran
@@ -1150,7 +1461,102 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 	case !attached:
 		return fmt.Errorf("sandbox: attach box %s to run %s: the run has no record", box.SandboxID, turnID)
 	}
+	if job.Launch != "" {
+		s.writeHanded(ctx, turnID, job)
+	}
 	return nil
+}
+
+// handedSet is the part kept beside a run's row holding what its job's box
+// was handed, sealed ([CoordStore.Handed]), named for the job it was written
+// for.
+//
+// BESIDE THE ROW, NEVER ON IT ([coord.RunHanded]): up to [MaxHandedBytes]
+// before sealing — a launch whose environment holds a large file comes near
+// it — which every read of the row would carry, every git request of a coding
+// box and every listing among them, though only a capture of the job's
+// session and the next launch's opening read it.
+type handedSet struct {
+	// Launch is the job the set was written for ([PendingRun.LaunchID]): a
+	// set read for another job is none.
+	Launch string `json:"launch"`
+	// LaunchSeq is that job's ordinal in its turn ([PendingRun.LaunchSeq]),
+	// so a write that arrives after a later job's never replaces the later
+	// job's set.
+	LaunchSeq int64 `json:"launch_seq"`
+	// Sealed is the set as [SessionKeep.SealHanded] sealed it.
+	Sealed string `json:"sealed"`
+}
+
+// of is the sealed set where it was written for launch, and "" otherwise.
+func (h handedSet) of(launch string) string {
+	if launch == "" || h.Launch != launch {
+		return ""
+	}
+	return h.Sealed
+}
+
+// readHanded reads the handed set beside turnID's run — the zero set where
+// there is none.
+func (s *CoordStore) readHanded(ctx context.Context, turnID string) (handedSet, error) {
+	record, found, err := s.runs.SandboxRunPart(ctx, turnID, coord.RunHanded)
+	switch {
+	case err != nil:
+		return handedSet{}, fmt.Errorf("read what run %s's box was handed: %w", turnID, err)
+	case !found:
+		return handedSet{}, nil
+	}
+	var held handedSet
+	if err := json.Unmarshal(record.Value, &held); err != nil {
+		return handedSet{}, fmt.Errorf("decode what run %s's box was handed: %w", turnID, err)
+	}
+	return held, nil
+}
+
+// writeHanded writes job's set beside turnID's run, once the attach that
+// names the job has landed — never before it: a set written for a job whose
+// attach then did not land would be read by the next launch's opening as
+// what the box the row still names was handed, and carried forward in place
+// of what that box does hold.
+//
+// NEVER OVER A LATER JOB'S: a set a later launch wrote is left as it is.
+//
+// A FAILURE IS LOGGED, NOT RETURNED: the attach has landed and its job runs,
+// and an attach answered as refused would abandon a box the row names. A job
+// whose set is not beside its row has every capture refused
+// ([ErrHandedUnknown]), which is what a launch that could not seal its set
+// gets: the session is not kept, rather than kept scrubbed of less than its
+// box was handed.
+func (s *CoordStore) writeHanded(ctx context.Context, turnID string, job handedSet) {
+	raw, err := json.Marshal(job)
+	if err == nil {
+		_, _, err = s.runs.MutateSandboxRunPart(ctx, turnID, coord.RunHanded,
+			func(current coord.Record, found bool) ([]byte, error) {
+				if found {
+					var held handedSet
+					if json.Unmarshal(current.Value, &held) == nil && held.LaunchSeq > job.LaunchSeq {
+						return nil, nil
+					}
+				}
+				return raw, nil
+			})
+	}
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_handed_not_kept", "turn_id", turnID, "launch", job.Launch,
+			"error", err.Error(),
+			"detail", "the job runs, and every capture of its session is refused, since what its box "+
+				"was handed cannot be read back to scrub it out")
+	}
+}
+
+// Handed reads what run's job's box was handed, sealed. See the contract on
+// [PendingStore].
+func (s *CoordStore) Handed(ctx context.Context, run PendingRun) (string, error) {
+	held, err := s.readHanded(ctx, run.TurnID)
+	if err != nil {
+		return "", fmt.Errorf("sandbox: %w", err)
+	}
+	return held.of(run.LaunchID), nil
 }
 
 // MarkBoxPaused stamps the box as snapshotted, with the instant the pause TTL
@@ -1170,8 +1576,10 @@ func (s *CoordStore) MarkBoxPaused(ctx context.Context, turnID string, at time.T
 func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		// Both together — a paused_at pointing at no box is a snapshot
-		// the reaper looks for every tick and never finds.
+		// the reaper looks for every tick and never finds. And the box's
+		// date with it, which is the box's and no later one's.
 		run.SandboxID, run.CommandID, run.PausedAt = "", "", time.Time{}
+		run.BoxSince = time.Time{}
 		return true
 	})
 	return err
@@ -1183,13 +1591,20 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 // decision — a claim, a status flip, a pause — and a node whose lease has
 // moved must not make one. This is a LOG APPEND: the call already ran and its
 // effect already happened, and refusing to record it because the seat moved
-// mid-run would lose evidence of something that is true either way. The row's
+// mid-run would lose evidence of something that is true either way. The log's
 // own version still guards the write, so two concurrent appends serialise
 // rather than clobbering each other.
 //
-// A run whose row is gone is not an error: the run ended while a late call was
+// ON THE LOG ALONE: the condition — the log is open for the call's job — is
+// the log's own field, so the call is one compare-and-swap of one key, and the
+// run's record is neither read nor written for it. The job's spend is the one
+// fact the record keeps of an append, written after the call is in the log and
+// only where the total moved: a call answered by a builtin costs the engine
+// nothing, and its append leaves the record alone.
+//
+// A run whose log is gone is not an error: the run ended while a late call was
 // in flight, which is the ordinary shape of a box shutting down. Nor is a job
-// the row has moved on from, or an append naming no job at all (see the pin on
+// the log has moved on from, or an append naming no job at all (see the pin on
 // [PendingStore]). The append is simply dropped, and the caller — which must
 // not fail the box's call over telemetry — goes on as it would have.
 func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
@@ -1203,65 +1618,122 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		return call
 	}
 	// SET ON EVERY ASK OF decide, which runs again on a lost race: whether the
-	// row as the last attempt read it holds the job the append names.
-	held := false
-	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
-		if held = a.Launch == run.LaunchID; !held {
-			return false
+	// log as the last attempt read it is open for the job the append names,
+	// and whether that attempt had anything to write.
+	held, wrote := false, false
+	_, won, err := s.runs.MutateSandboxRunPart(ctx, turnID, coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
+		held, wrote = false, false
+		if !found {
+			return nil, nil
+		}
+		var logged BridgeLog
+		if err := json.Unmarshal(current.Value, &logged); err != nil {
+			return nil, fmt.Errorf("sandbox: decode the log of run %s: %w", turnID, err)
+		}
+		if held = logged.Launch == a.Launch; !held {
+			return nil, nil
 		}
 		// WHAT THE SESSION OWED FIRST, in the order it was owed: each call
-		// the row does not list yet, listed with what its own work absorbed
+		// the log does not list yet, listed with what its own work absorbed
 		// — and one it lists already, which landed after all and lost its
 		// answer, skipped with what it absorbed, which landed beside it.
-		changed := false
 		for _, owed := range a.Owed {
-			if run.lists(owed.Call) {
+			if logged.lists(owed.Call) {
 				continue
 			}
-			// HELD TO THE LOG'S SHARE OF THE ROW, as the call this append
-			// names is ([PendingRun.appendCall]).
-			run.appendCall(stamped(owed.Call), owed.Absorbed)
-			changed = true
+			// HELD TO THE LOG'S BUDGET, as the call this append names is
+			// ([BridgeLog.appendCall]).
+			logged.appendCall(stamped(owed.Call), owed.Absorbed)
+			wrote = true
 		}
-		// AND THE CALL ITSELF, where the append names one and the row does
+		// AND THE CALL ITSELF, where the append names one and the log does
 		// not hold it already: an append ASKED AGAIN — one that landed and
 		// whose answer was lost, which its session tries again — writes
-		// nothing, the call and what it carried being on the row once.
-		if a.Call.Name != "" && !run.lists(a.Call) {
-			run.appendCall(stamped(a.Call), a.Absorbed)
-			changed = true
+		// nothing, the call and what it carried being in the log once.
+		if a.Call.Name != "" && !logged.lists(a.Call) {
+			logged.appendCall(stamped(a.Call), a.Absorbed)
+			wrote = true
 		}
-		if !changed {
+		if !wrote {
+			return nil, nil
+		}
+		return json.Marshal(logged)
+	})
+	switch {
+	case err != nil:
+		return false, err
+	case !held, wrote && !won:
+		// NO LOG OPEN FOR THE JOB, or one the run's end removed under the
+		// write that landed in it, which the store undid: a run that is
+		// gone, or a job that is over.
+		return false, nil
+	}
+	// Onto THIS job's record, and only while the row holds it: a spend the
+	// row's next job would pay as its own is dropped with the job. Written
+	// whether or not this append moved the log: one asked again finds its
+	// calls there and may be the first whose spend reaches the record.
+	_, _, err = s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		if a.Launch != run.LaunchID {
 			return false
 		}
-		// Onto THIS job's record: the append names the job the row holds,
-		// or it was dropped above.
-		run.Launch.Bridged = run.Launch.Bridged.Newest(a.Spent)
+		newest := run.Launch.Bridged.Newest(a.Spent)
+		if newest == run.Launch.Bridged {
+			return false
+		}
+		run.Launch.Bridged = newest
 		return true
 	})
-	return won || (err == nil && held), err
+	if err != nil {
+		return true, fmt.Errorf("sandbox: record what run %s's bridged calls cost: %w", turnID, err)
+	}
+	return true, nil
 }
 
-// lists reports whether the row's log holds call already: the same place
-// ([BridgeCall.Seq]), the same instant the bridge handed it to the surface,
-// and the same name and identity, all as the row keeps them ([keptCall]).
-//
-// ALL FOUR, because each alone is some other call's. A place alone could be a
-// call numbered by a session opened again on the job while one of the closed
-// session's calls was still in flight, which reuses it; an instant alone is
-// not set on a call nothing ran; and the same tool called with other arguments
-// at the same place and instant is another call, as is another tool. A call
-// with no place is never one the row holds: the bridge numbers every call it
-// records.
-func (r PendingRun) lists(call BridgeCall) bool {
-	if call.Seq <= 0 {
-		return false
+// BridgeLog reads the bridged tool log of run's job. See the contract on
+// [PendingStore].
+func (s *CoordStore) BridgeLog(ctx context.Context, run PendingRun) (BridgeLog, error) {
+	none := BridgeLog{Launch: run.LaunchID, Round: run.Round}
+	record, found, err := s.runs.SandboxRunPart(ctx, run.TurnID, coord.RunLog)
+	switch {
+	case err != nil:
+		return BridgeLog{}, fmt.Errorf("sandbox: read the log of run %s: %w", run.TurnID, err)
+	case !found:
+		return none, nil
 	}
-	kept := keptCall(call, MaxBridgeArgsBytes)
-	return slices.ContainsFunc(r.BridgeCalls, func(c BridgeCall) bool {
-		return c.Seq == kept.Seq && c.StartedAt.Equal(kept.StartedAt) && c.Name == kept.Name &&
-			c.Digest == kept.Digest
-	})
+	var held BridgeLog
+	if err := json.Unmarshal(record.Value, &held); err != nil {
+		return BridgeLog{}, fmt.Errorf("sandbox: decode the log of run %s: %w", run.TurnID, err)
+	}
+	if held.Launch != run.LaunchID {
+		return none, nil
+	}
+	return held, nil
+}
+
+// TurnLog reads the calls of run's turn as its job stands to hold them. See
+// the contract on [PendingStore].
+func (s *CoordStore) TurnLog(ctx context.Context, run PendingRun) (BridgeLog, error) {
+	record, found, err := s.runs.SandboxRunPart(ctx, run.TurnID, coord.RunLog)
+	switch {
+	case err != nil:
+		return BridgeLog{}, fmt.Errorf("sandbox: read the log of run %s: %w", run.TurnID, err)
+	case !found:
+		return BridgeLog{Launch: run.LaunchID, Round: run.Round}, nil
+	}
+	var held BridgeLog
+	if err := json.Unmarshal(record.Value, &held); err != nil {
+		return BridgeLog{}, fmt.Errorf("sandbox: decode the log of run %s: %w", run.TurnID, err)
+	}
+	// THE CALL A PERSON APPROVED IN THIS JOB, recorded on the row and not
+	// yet in the log: a call of the round all the same.
+	held = held.withHeld(run)
+	// AND THE LOG AS THE JOB'S OPENING LEAVES IT, where that opening has not
+	// landed: the round's calls and the turn's earlier ones, never none.
+	if held.Launch != run.LaunchID {
+		held = held.opened(run.LaunchID, logOpening{round: run.Round, answered: run.AnsweredJob,
+			owed: run.OwedCall})
+	}
+	return held, nil
 }
 
 // RecordAsk records the question a running job asked. See the contract on
@@ -1327,7 +1799,7 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 
 // appendBounded adds one call and drops from the MIDDLE past the cap,
 // answering the calls it dropped so their identities are kept
-// ([PendingRun.appendCall]).
+// ([BridgeLog.appendCall]).
 //
 // The start and the end are what explain a run (how it set about the work and
 // how it finished), so a log truncated to its last N loses the half a reader
@@ -1398,6 +1870,12 @@ func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspensio
 		return true
 	})
 	return won, err
+}
+
+// ListRuns returns every run the store holds, whatever its status. See the
+// contract on [PendingStore].
+func (s *CoordStore) ListRuns(ctx context.Context) ([]PendingRun, error) {
+	return s.list(ctx, func(PendingRun) bool { return true })
 }
 
 // MarkSessionStart records which session a job's box said it started. See the

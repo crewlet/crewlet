@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 // ---- WebP ----------------------------------------------------------------- //
@@ -21,8 +22,10 @@ import (
 
 // webpChunks are the chunks a stored WebP may hold; EXIF and XMP are read and
 // dropped.
-var webpChunks = map[string]bool{"VP8X": true, "ICCP": true, "ALPH": true, "VP8 ": true, "VP8L": true,
-	"EXIF": true, "XMP ": true}
+var webpChunks = sync.OnceValue(func() map[string]bool {
+	return map[string]bool{"VP8X": true, "ICCP": true, "ALPH": true, "VP8 ": true, "VP8L": true,
+		"EXIF": true, "XMP ": true}
+})
 
 // The extended header's flags (WebP container spec, "Extended file format").
 const (
@@ -61,7 +64,7 @@ func sanitizeWebP(data []byte) ([]byte, int, int, error) {
 		switch {
 		case kind == "ANIM" || kind == "ANMF":
 			return nil, 0, 0, errors.New("the WebP is animated: a logo is one frame, export a still image")
-		case !webpChunks[kind]:
+		case !webpChunks()[kind]:
 			return nil, 0, 0, fmt.Errorf("the WebP holds a %q chunk, which a still WebP does not define", kind)
 		}
 		chunks = append(chunks, webpChunk{kind: kind, data: b[8 : 8+n]})

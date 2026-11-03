@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -78,6 +79,25 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 // bridgedRig is [launchBridged]'s run before its first launch.
 func bridgedRig(t *testing.T, turnID string, offered ...tools.Callable) bridgedRun {
 	t.Helper()
+	c, seat := executorCompany(t)
+	return bridgedRigOn(t, c, launcherOn(nil, c, seat, turnID).turn, offered...)
+}
+
+// launchBridgedOn is [launchBridged] for turn, a turn of c's seat, as the
+// engine builds the turn it launches — its holds included, where a case gives
+// it some.
+func launchBridgedOn(t *testing.T, c *Company, turn *turnctx.Turn, offered ...tools.Callable) bridgedRun {
+	t.Helper()
+	return bridgedRigOn(t, c, turn, offered...).launch(t, nil)
+}
+
+// bridgedRigOn is [launchBridgedOn]'s run before its first launch.
+func bridgedRigOn(t *testing.T, c *Company, turn *turnctx.Turn, offered ...tools.Callable) bridgedRun {
+	t.Helper()
+	seat := turn.Seat
+	if turn.Org == nil {
+		turn.Org = c.Org
+	}
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
 	bridge := bridgeFor(t, mcpbridge.Options{
@@ -87,7 +107,6 @@ func bridgedRig(t *testing.T, turnID string, offered ...tools.Callable) bridgedR
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	server.Config.Handler = mux
 
-	c, seat := executorCompany(t)
 	e, jobs := launchRig(t, c, bridge)
 	reg := tools.NewRegistry()
 	var names []string
@@ -97,7 +116,7 @@ func bridgedRig(t *testing.T, turnID string, offered ...tools.Callable) bridgedR
 		}
 		names = append(names, tool.Name())
 	}
-	launcher := launcherOn(e, c, seat, turnID)
+	launcher := &agentLauncher{engine: e, company: c, seat: seat, turn: turn}
 	run := bridgedRun{engine: e, handle: seat.Handle(), pending: e.sandbox.Load().pending,
 		launcher: launcher, jobs: jobs,
 		// BOUND TO THE LAUNCHER'S OWN TURN, as the runner binds every
@@ -155,6 +174,16 @@ func (b bridgedRun) call(t *testing.T, name string) {
 	}
 }
 
+// calls is the bridged tool log of turnID's run, as the row's job reads it.
+func (b bridgedRun) calls(t *testing.T, turnID string) sandbox.BridgeLog {
+	t.Helper()
+	log, err := b.pending.BridgeLog(t.Context(), b.row(t, turnID))
+	if err != nil {
+		t.Fatalf("the run's log: %v", err)
+	}
+	return log
+}
+
 func (b bridgedRun) row(t *testing.T, turnID string) sandbox.PendingRun {
 	t.Helper()
 	row, found, err := b.pending.Get(t.Context(), turnID)
@@ -203,7 +232,7 @@ func TestALaunchedRunsCallsStopWhenAPersonStopsItsSeat(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("a call ran on a seat a person had asked to stop")
 	}
-	calls := run.row(t, "t-fenced").BridgeCalls
+	calls := run.calls(t, "t-fenced").Calls
 	if len(calls) != 2 {
 		t.Fatalf("the run recorded %d calls, want the one made before the stop and the one refused after it", len(calls))
 	}
@@ -230,9 +259,10 @@ func TestALaunchedRunsBridgedCallIsFiledUnderItsJob(t *testing.T) {
 
 	run.call(t, "read_page")
 	row := run.row(t, "t-bound")
-	if row.LaunchID != job || len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != "read_page" {
+	logged := run.calls(t, "t-bound")
+	if row.LaunchID != job || len(logged.Calls) != 1 || logged.Calls[0].Name != "read_page" {
 		t.Fatalf("the job's log after one bridged call: job %q (was %q), calls %+v",
-			row.LaunchID, job, row.BridgeCalls)
+			row.LaunchID, job, logged.Calls)
 	}
 }
 
@@ -283,11 +313,11 @@ func TestALaunchHandsItsHarnessItsSkillsAndHearsTheirLoads(t *testing.T) {
 		Arguments: map[string]any{"skill": "crewlet:chat-conventions"}}); err != nil {
 		t.Fatalf("the hook's report: %v", err)
 	}
-	row := run.row(t, "t-skills")
-	if len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != toolname.LoadToolSkill ||
-		row.BridgeCalls[0].Args != `{"key":"chat-conventions"}` {
-		t.Fatalf("the run's row holds %+v, want the reported load as its load_tool_skill call",
-			row.BridgeCalls)
+	calls := run.calls(t, "t-skills").Calls
+	if len(calls) != 1 || calls[0].Name != toolname.LoadToolSkill ||
+		calls[0].Args != `{"key":"chat-conventions"}` {
+		t.Fatalf("the run's log holds %+v, want the reported load as its load_tool_skill call",
+			calls)
 	}
 }
 
@@ -313,9 +343,9 @@ func TestACarriedOnRunsCallsAreNumberedAfterTheAskingRuns(t *testing.T) {
 	carried := asking.launch(t, &runner.Continuation{SessionID: "sess-ask", Brief: "use main"})
 	carried.call(t, "read_page")
 
-	row := carried.row(t, "t-carried")
+	logged := carried.calls(t, "t-carried")
 	var seqs []int
-	for _, call := range row.BridgeCalls {
+	for _, call := range logged.Calls {
 		seqs = append(seqs, call.Seq)
 	}
 	if !slices.Equal(seqs, []int{1, 2, 3}) {
@@ -326,15 +356,15 @@ func TestACarriedOnRunsCallsAreNumberedAfterTheAskingRuns(t *testing.T) {
 	// A NEW ROUND'S RUN COUNTS FROM ONE: its row starts the log afresh.
 	next := carried.launch(t, nil)
 	next.call(t, "read_page")
-	if calls := next.row(t, "t-carried").BridgeCalls; len(calls) != 1 || calls[0].Seq != 1 {
+	if calls := next.calls(t, "t-carried").Calls; len(calls) != 1 || calls[0].Seq != 1 {
 		t.Fatalf("the next round's log is %+v, want its one call numbered 1", calls)
 	}
 }
 
 // A SESSION'S FIRST CALL, OUTLIVING ITS JOB, IS NOT THE NEXT JOB'S.
 //
-// The case a session that learned its job from the row got wrong: the coding
-// agent opens with a delegate call, which is still running engine-side when the
+// The case a session that learned its job from the row got wrong: the harness
+// opens with a delegate call, which is still running engine-side when the
 // box is collected and the reviewer relaunches the run — the row now holds the
 // next job. A session that had not yet landed an append learned that job's
 // name from the row and filed the late call, and its spend, on the next job's
@@ -367,11 +397,12 @@ func TestABridgedSessionsFirstCallOutlivingItsJobIsNotTheNextJobs(t *testing.T) 
 	<-answered
 
 	row := run.row(t, "t-late")
+	logged := run.calls(t, "t-late")
 	if row.LaunchID != next.LaunchID {
 		t.Fatalf("the row holds job %q, want the relaunch's %q", row.LaunchID, next.LaunchID)
 	}
-	if len(row.BridgeCalls) != 0 || row.Launch.Bridged != (sandbox.EngineSpend{}) {
+	if len(logged.Calls) != 0 || row.Launch.Bridged != (sandbox.EngineSpend{}) {
 		t.Fatalf("the next job took the last one's late call: calls %+v, spend %+v",
-			row.BridgeCalls, row.Launch.Bridged)
+			logged.Calls, row.Launch.Bridged)
 	}
 }

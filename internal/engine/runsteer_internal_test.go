@@ -21,9 +21,9 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A note on a run's record, as this node opens it. Every case here is about what
@@ -33,7 +33,7 @@ import (
 
 // steersOver is a node's run steers over store under ring, and what it
 // publishes.
-func steersOver(t *testing.T, ring statelog.Keyring, store sandbox.PendingStore) (*runSteers, *pub) {
+func steersOver(t *testing.T, ring recordseal.Keyring, store sandbox.PendingStore) (*runSteers, *pub) {
 	t.Helper()
 	seals, err := newSteerSeals(ring)
 	if err != nil {
@@ -263,8 +263,8 @@ func TestANoteSealedForAnotherTurnIsNotDelivered(t *testing.T) {
 func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 	logs := captureSteerLogs(t)
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
-	oldRing := statelog.OneKey("k-old", "the old fleet key material")
-	newRing := statelog.OneKey("k-new", "the new fleet key material")
+	oldRing := recordseal.OneKey("k-old", "the old fleet key material")
+	newRing := recordseal.OneKey("k-new", "the new fleet key material")
 	sealer, _ := steersOver(t, oldRing, store)
 	reader, p := steersOver(t, newRing, store)
 	launch := workingRun(t, store, reader, "run-1")
@@ -296,7 +296,7 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 		t.Errorf("a note under an unheld key was reported as one that does not verify:\n%s", logged)
 	}
 	// A NODE THAT HOLDS THE KEY READS IT.
-	both := statelog.Keyring{ActiveID: "k-new", Keys: append(slices.Clone(newRing.Keys), oldRing.Keys...)}
+	both := recordseal.Keyring{ActiveID: "k-new", Keys: append(slices.Clone(newRing.Keys), oldRing.Keys...)}
 	rotated, _ := steersOver(t, both, store)
 	if got := boundInbox(t, rotated, store, "run-1", launch).Take(t.Context(), mcpbridge.SteerEventFinish); !strings.Contains(got, "use staging") {
 		t.Errorf("a node holding the key did not read the note: %q", got)
@@ -321,7 +321,7 @@ func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 	t.Parallel()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
 	runs, _ := steersOver(t, steerRing, store)
-	stranger, _ := steersOver(t, statelog.OneKey("k-x", "another fleet's key material"), store)
+	stranger, _ := steersOver(t, recordseal.OneKey("k-x", "another fleet's key material"), store)
 	for _, tc := range []struct {
 		name   string
 		anchor func(turnID string) []byte
@@ -372,7 +372,7 @@ func TestAnAnchorUnderAnUnheldKeyNamesTheHeldKeysInTheLog(t *testing.T) {
 	logs := captureSteerLogs(t)
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
 	runs, _ := steersOver(t, steerRing, store)
-	stranger, _ := steersOver(t, statelog.OneKey("k-x", "another fleet's key material"), store)
+	stranger, _ := steersOver(t, recordseal.OneKey("k-x", "another fleet's key material"), store)
 	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE",
 		Harness: "claude-code", Steer: sandbox.RunSteer{Seat: stranger.anchor("run-1", sweAgent, "swe")},
@@ -788,7 +788,7 @@ func TestARunsRecordIsASteerSource(t *testing.T) {
 // more of a note than its words and who sent it, and this goes red.
 func TestANoteAtItsWorstFitsWhatARunsRowKeepsOfOne(t *testing.T) {
 	t.Parallel()
-	runs, _ := steersOver(t, statelog.OneKey("k-1", "the fleet key material"), nil)
+	runs, _ := steersOver(t, steerRing, nil)
 	note, err := runs.seal(strings.Repeat("t", 64), steer.Note{
 		ID: "0190f3a8-0000-7000-8000-000000000001", Text: strings.Repeat("<", steer.MaxNoteRunes),
 		By: strings.Repeat("a", iam.MaxLogin), ByKind: iam.ActorKind(strings.Repeat("k", 32)),

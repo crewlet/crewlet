@@ -213,12 +213,12 @@ func (r *Reader) AnsweredAsks(ctx context.Context, q DecisionsQuery, now time.Ti
 		Level: q.Level,
 		// THE DOMAIN, for [Reader.Decisions]' reason: an ask can be on any
 		// task in any container.
-		Scope:       statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Scope:     statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		anchor, err := period.Resolve("today", now, loc)
 		if err != nil {

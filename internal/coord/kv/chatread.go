@@ -174,24 +174,28 @@ func (f *FleetStore) SetChatReadAbsence(ctx context.Context, handle string, sinc
 //
 // # How long it races
 //
-// For the fleet store's patience ([FleetStore.retryRaces]), never for a count
-// of rounds. A person's record has writers nothing bounds — every tab and
-// device they read in, and the reconcile — and each flushes again as soon as
-// it has landed, so a count measured how many of them were flushing rather
-// than whether the store answered: sixteen rounds held sixteen writers with
-// one to spare at three replicas, and a seventeenth tab was an outage on a
-// store answering every write. Each round reads the record again and applies
-// the change again, which is safe because a flush is an idempotent merge and
-// a stamp keeps the first one: the change is exactly as true against the
-// winner's record as it was against the one it lost to.
+// Within the bound every fleet key shares ([casRetry], [fleetCASAttempts]),
+// which is counted in the nodes that write a key rather than in the calls. A
+// person's record has writers nothing else bounds — every tab and device they
+// read in, and the reconcile — and each flushes again as soon as it has
+// landed, so a count sized for the calls measured how many of them were
+// flushing rather than whether the store answered: sixteen rounds held
+// sixteen writers with one to spare at three replicas, and a seventeenth tab
+// was an outage on a store answering every write. Twice [fleetWriters]
+// rounds, each after a loss waiting a window of the round trips this node
+// measures on the bucket, outlast every tab a person can hold open. Each
+// round reads the record again and applies the change again, which is safe
+// because a flush is an idempotent merge and a stamp keeps the first one: the
+// change is exactly as true against the winner's record as it was against
+// the one it lost to.
 //
 // A round is lost only to a write the leader DECIDED — the bucket handle
 // waits out its in-flight answer inside the write ([settled]) — so every round
-// lost is another writer's write that landed, and the jittered wait between
+// lost is another writer's write that landed, and the jittered window between
 // rounds spreads the writers that lost to one winner rather than sending them
-// back together. Raced out, the change is [outwaited]: unavailable, and a
-// DEFINITE "did not land", since every write it made had been answered and
-// refused.
+// back together. Lost at every round, the change is [contended]: unavailable,
+// and a DEFINITE "did not land", since every write it made had been answered
+// and refused.
 //
 // # Which failures may have written
 //
@@ -199,7 +203,7 @@ func (f *FleetStore) SetChatReadAbsence(ctx context.Context, handle string, sinc
 // when the write's budget ran out ([writeUnknown], marked
 // [coord.ErrWriteUnknown]). A read that failed, a merge that refused, a first
 // write's create that was refused and then could not re-read or was refused
-// on every round ([FleetStore.putChatReadAt]), a patience raced out and a
+// on every round ([FleetStore.putChatReadAt]), every round lost and a
 // caller that hung up between rounds all return before any put landed —
 // every put made was refused — so they are this store's condition and nothing
 // more, and a caller told so may say nothing was recorded. A caller told the
@@ -214,14 +218,14 @@ func (f *FleetStore) mutateChatRead(ctx context.Context, what, handle string, cr
 		result coord.ChatReadState
 		exists bool
 	)
-	err := f.retryRaces(ctx, what+" the chat read state", handle, func() (bool, error) {
+	settled, err := casRetry(ctx, &f.chatReadTrips, what+" the chat read state for "+handle, func() (bool, error) {
 		stored, revision, err := f.chatReadAt(ctx, handle)
 		if err != nil {
 			return false, err
 		}
 		if revision == 0 && !create {
 			result, exists = coord.ChatReadState{}, false
-			return false, nil
+			return true, nil
 		}
 		next, changed, err := change(stored)
 		if err != nil {
@@ -230,7 +234,7 @@ func (f *FleetStore) mutateChatRead(ctx context.Context, what, handle string, cr
 		if !changed {
 			next.Revision = revision
 			result, exists = next, true
-			return false, nil
+			return true, nil
 		}
 		// THE REVISION IS NOT PART OF THE RECORD: it is where the write
 		// lands, which only the answer to the write can say.
@@ -252,14 +256,17 @@ func (f *FleetStore) mutateChatRead(ctx context.Context, what, handle string, cr
 		case !written:
 			// SOMEBODY ELSE GOT THERE FIRST — another tab, or the
 			// reconcile. Read again and apply again.
-			return true, nil
+			return false, nil
 		}
 		next.Revision = landed
 		result, exists = next, true
-		return false, nil
+		return true, nil
 	})
-	if err != nil {
+	switch {
+	case err != nil:
 		return coord.ChatReadState{}, false, err
+	case !settled:
+		return coord.ChatReadState{}, false, contended(what+" the chat read state", handle)
 	}
 	return result, exists, nil
 }
@@ -327,7 +334,7 @@ func (f *FleetStore) putChatReadAt(ctx context.Context, what, key string, raw []
 // AT THE REVISION IT JUDGED ([FleetStore.purgeChatReadAt]), so the stamp it
 // read is the stamp it acts on: a person a peer's sweep has just found back,
 // or a flush landing between the read and the purge, moves the record on and
-// the purge is refused — and the next round ([FleetStore.retryRaces], for
+// the purge is refused — and the next round ([casRetry], for
 // [FleetStore.mutateChatRead]'s reason) judges the record as it now stands
 // rather than removing one this call never read. A purge the leader never
 // decided ([settled]) is a removal that may have happened, and is marked so.
@@ -337,14 +344,14 @@ func (f *FleetStore) ForgetChatRead(ctx context.Context, handle string, absentBy
 	}
 	key := chatReadKey(handle)
 	var removed bool
-	err := f.retryRaces(ctx, "forget the chat read state", handle, func() (bool, error) {
+	settled, err := casRetry(ctx, &f.chatReadTrips, "forget the chat read state for "+handle, func() (bool, error) {
 		stored, revision, err := f.chatReadAt(ctx, handle)
 		if err != nil {
 			return false, err
 		}
 		if revision == 0 || !stored.AbsentBy(absentBy) {
 			removed = false
-			return false, nil
+			return true, nil
 		}
 		purged, err := f.purgeChatReadAt(ctx, key, revision)
 		switch {
@@ -353,13 +360,16 @@ func (f *FleetStore) ForgetChatRead(ctx context.Context, handle string, absentBy
 				fmt.Sprintf("forget the chat read state for %s", handle), err)
 		case !purged:
 			// Moved or gone under the read: judge it again.
-			return true, nil
+			return false, nil
 		}
 		removed = true
-		return false, nil
+		return true, nil
 	})
-	if err != nil {
+	switch {
+	case err != nil:
 		return false, err
+	case !settled:
+		return false, contended("forget the chat read state", handle)
 	}
 	return removed, nil
 }

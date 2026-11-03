@@ -51,6 +51,11 @@ func (chatChart) LeadsContainer(context.Context, string, string) (bool, error) {
 func (chatChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 	return actor == "cto", nil
 }
+
+// SeatGranted answers that no role carries a grant: no chat verb names one.
+func (chatChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
+}
 func (chatChart) MemberOf(context.Context, string, string) (bool, error) {
 	return false, nil
 }

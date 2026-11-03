@@ -761,9 +761,9 @@ func testNotesRideABridgedCallStorm(t *testing.T, s sandbox.PendingStore) {
 	if want := []string{"n-1", "n-2", "n-3", "n-4", "n-5"}; !slices.Equal(ids, want) {
 		t.Errorf("the takes handed over %v, want every note exactly once", ids)
 	}
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != writers*each+notes {
-		t.Errorf("the record holds %d calls, want %d", len(got.BridgeCalls), writers*each+notes)
+	got := mustLogged(t, s, r.TurnID)
+	if len(got.Log.Calls) != writers*each+notes {
+		t.Errorf("the record holds %d calls, want %d", len(got.Log.Calls), writers*each+notes)
 	}
 	if len(got.Steer.Notes) != notes || got.Steer.Seq != notes || got.Steer.Pulled != launch {
 		t.Errorf("the record holds notes %+v, want %d numbered 1 to %d, pulled by %s",
@@ -908,13 +908,15 @@ func testNotesSurviveEveryWriteThatIsNotTheirs(t *testing.T, s sandbox.PendingSt
 // field a newer build adds to the notes section, to one note, to where a note
 // was read, to a bridged call, to the identity of a call the log dropped or to
 // the job's own record is gone the moment this build writes the record back —
-// unless every level that can grow keeps what it does not know. Seeded at each
-// of those six levels at once, as a
-// newer build would write them, and read back off the raw record after every
-// kind of write this build makes: a status write, a lease, a bridged call, a
-// filing, a take, a pull, a claim and its release, a park, and a relaunch's
-// reset that carries the round on — which replaces the job's record whole, so
-// the key a later build added to it goes with the job it was about.
+// unless every level that can grow keeps what it does not know. And the log
+// beside the record ([sandbox.BridgeLog]) is rewritten whole by every append,
+// so the same holds at its top, in each of its calls and in each identity it
+// keeps. Seeded at each of those seven levels at once, as a newer build would
+// write them, and read back off the raw record and the raw log after
+// every kind of write this build makes: a status write, a lease, a bridged
+// call, a filing, a take, a pull, a claim and its release, a park, and a
+// relaunch's reset that carries the round on — which replaces the job's record
+// whole, so the key a later build added to it goes with the job it was about.
 //
 // Mutation: drop any one section's Extra from its decode or its encode, and the
 // key at that level is gone after the first write; carry the job's record's
@@ -944,6 +946,7 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		"a note's read":     `"hook"`,
 		"a bridged call":    `{"span":"s-1"}`,
 		"a dropped call":    `{"span":"s-3"}`,
+		"the log":           `{"kept":"all"}`,
 		"the job's record":  `{"span":"s-2"}`,
 	}
 	if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
@@ -956,19 +959,27 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		first := section["notes"].([]any)[0].(map[string]any)
 		first["priority"] = json.RawMessage(seeded["a note"])
 		first["read"].(map[string]any)["carrier"] = json.RawMessage(seeded["a note's read"])
-		row["bridge_calls"].([]any)[0].(map[string]any)["trace"] = json.RawMessage(seeded["a bridged call"])
-		// A DROPPED CALL'S IDENTITY as a later build writes one: the row's
-		// count says one call was dropped, and its tally names it, kept
-		// under the round its first recorded call began.
-		row["bridge_calls_elided"] = 1
-		row["bridge_elided_calls"] = []any{map[string]any{"name": "read_page", "digest": "d1", "calls": 1,
-			"trace": json.RawMessage(seeded["a dropped call"])}}
-		row["bridge_tally_round"] = row["bridge_calls"].([]any)[0].(map[string]any)["at"]
 		row["launch_record"].(map[string]any)["trace"] = json.RawMessage(seeded["the job's record"])
 		raw, err := json.Marshal(row)
 		return coord.SandboxRunChange{Put: raw}, err
 	}); err != nil || !ok {
 		t.Fatalf("seed the newer build's keys: %v %v", ok, err)
+	}
+	if _, ok, err := runs.MutateSandboxRunPart(ctx, turn, coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
+		var log map[string]any
+		if err := json.Unmarshal(current.Value, &log); err != nil {
+			return nil, err
+		}
+		log["retention"] = json.RawMessage(seeded["the log"])
+		log["calls"].([]any)[0].(map[string]any)["trace"] = json.RawMessage(seeded["a bridged call"])
+		// A DROPPED CALL'S IDENTITY as a later build writes one: the log's
+		// count says one call was dropped, and its tally names it.
+		log["elided"] = 1
+		log["elided_calls"] = []any{map[string]any{"name": "read_page", "digest": "d1", "calls": 1,
+			"trace": json.RawMessage(seeded["a dropped call"])}}
+		return json.Marshal(log)
+	}); err != nil || !ok {
+		t.Fatalf("seed the newer build's keys in the log: %v %v", ok, err)
 	}
 
 	// sameJob says the step leaves the job the seed was written under on the
@@ -990,19 +1001,29 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 					} `json:"read"`
 				} `json:"notes"`
 			} `json:"steer"`
-			Calls []struct {
-				Name  string          `json:"name"`
-				Trace json.RawMessage `json:"trace"`
-			} `json:"bridge_calls"`
-			Dropped []struct {
-				Name  string          `json:"name"`
-				Trace json.RawMessage `json:"trace"`
-			} `json:"bridge_elided_calls"`
 			Job struct {
 				Trace json.RawMessage `json:"trace"`
 			} `json:"launch_record"`
 		}
-		if err := json.Unmarshal(record.Value, &row); err != nil {
+		if derr := json.Unmarshal(record.Value, &row); derr != nil {
+			t.Fatalf("%s: %v", step, derr)
+		}
+		logged, found, err := runs.SandboxRunPart(ctx, turn, coord.RunLog)
+		if err != nil || !found {
+			t.Fatalf("%s: read the raw log: %v %v", step, found, err)
+		}
+		var log struct {
+			Retention json.RawMessage `json:"retention"`
+			Calls     []struct {
+				Name  string          `json:"name"`
+				Trace json.RawMessage `json:"trace"`
+			} `json:"calls"`
+			Dropped []struct {
+				Name  string          `json:"name"`
+				Trace json.RawMessage `json:"trace"`
+			} `json:"elided_calls"`
+		}
+		if err := json.Unmarshal(logged.Value, &log); err != nil {
 			t.Fatalf("%s: %v", step, err)
 		}
 		got := map[string]string{"the notes section": string(row.Steer.Quorum)}
@@ -1015,11 +1036,12 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 				got["a note's read"] = string(n.Read.Carrier)
 			}
 		}
-		if len(row.Calls) > 0 && row.Calls[0].Name == "read_page" {
-			got["a bridged call"] = string(row.Calls[0].Trace)
+		got["the log"] = string(log.Retention)
+		if len(log.Calls) > 0 && log.Calls[0].Name == "read_page" {
+			got["a bridged call"] = string(log.Calls[0].Trace)
 		}
-		if len(row.Dropped) > 0 && row.Dropped[0].Name == "read_page" {
-			got["a dropped call"] = string(row.Dropped[0].Trace)
+		if len(log.Dropped) > 0 && log.Dropped[0].Name == "read_page" {
+			got["a dropped call"] = string(log.Dropped[0].Trace)
 		}
 		got["the job's record"] = string(row.Job.Trace)
 		for level, want := range seeded {

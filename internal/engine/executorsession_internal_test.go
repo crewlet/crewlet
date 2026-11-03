@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -183,7 +184,7 @@ func TestAResumedTurnsEndIsRecordedWithItsOwnDecision(t *testing.T) {
 	}
 	end := ends[0]
 	if end.Handle != "swe" || end.WorkKey != "wk-1" || end.Ending.Decision != decision ||
-		!end.Ending.Outcome.Valid() || end.Ending.Outcome == executordomain.OutcomeStopped {
+		!end.Ending.Outcome.Valid() || end.Ending.Outcome == executorkeep.OutcomeStopped {
 		t.Fatalf("the end is %+v, want the turn's own decision %q", end, decision)
 	}
 }
@@ -206,7 +207,7 @@ func TestAStoppedParkedTurnEndsAsStoppedOnTheExecutorLog(t *testing.T) {
 	if len(ends) != 1 {
 		t.Fatalf("recorded %d ends of the stopped turn, want 1", len(ends))
 	}
-	if ending := ends[0].Ending; ending.Outcome != executordomain.OutcomeStopped ||
+	if ending := ends[0].Ending; ending.Outcome != executorkeep.OutcomeStopped ||
 		ending.StoppedBy != "jane" || ending.StopReason != "wrong repository" {
 		t.Fatalf("the end is %+v, want the turn stopped by Jane for her reason", ending)
 	}
@@ -237,7 +238,7 @@ func TestALaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce(t *testing.T) {
 		t.Fatalf("runTurn = %v, want the turn stopped", err)
 	}
 	ends := awaitEnds(t, spy, "run-1", 1)
-	if len(ends) != 1 || ends[0].Ending.Outcome != executordomain.OutcomeStopped ||
+	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeStopped ||
 		ends[0].Ending.StoppedBy != "jane" {
 		t.Fatalf("recorded %+v, want the turn's one end, stopped by Jane", ends)
 	}
@@ -275,7 +276,7 @@ func TestALostTurnEndsAsLostOnTheExecutorLog(t *testing.T) {
 		t.Fatalf("recorded %d ends of the lost turn, want 1", len(ends))
 	}
 	end := ends[0]
-	if end.Ending.Outcome != executordomain.OutcomeLost || !strings.Contains(end.Ending.Failure, "lost") ||
+	if end.Ending.Outcome != executorkeep.OutcomeLost || !strings.Contains(end.Ending.Failure, "lost") ||
 		end.WorkKey != "wk-1" || end.Handle != "swe" {
 		t.Fatalf("the end is %+v, want the turn lost, its seat and its unit of work", end)
 	}
@@ -283,14 +284,16 @@ func TestALostTurnEndsAsLostOnTheExecutorLog(t *testing.T) {
 
 // A STOP'S ACCOUNT OF WHETHER THE TURN REPLIED READS EVERY ROUND'S CALLS: a turn
 // that replied in an earlier round and was stopped in a later one replied, and
-// one whose calls were elided from the record, the kept ones showing none, is
-// not known to have — never "did not reply" off half a record. Unless the
-// record kept the dropped calls' identities: a reply among them replied, and a
-// tally of other tools is a turn known not to have.
+// one whose calls were elided from the log, the kept ones showing none, or
+// whose log the ending could not read, is not known to have — never "did not
+// reply" off half a log, or none. Unless the log kept the dropped calls'
+// identities: a reply among them replied, and a tally of other tools is a
+// turn known not to have.
 //
-// Mutation: read the current round's calls alone, or answer an elided record
-// with a definite no, and the turn's end says a reply that went out did not;
-// ignore the identities, and a reply from the middle of a long run is unknown.
+// Mutation: read the current round's calls alone, answer an elided log with a
+// definite no, or read an unread log as an empty one, and the turn's end says
+// a reply that went out did not; ignore the identities, and a reply from the
+// middle of a long run is unknown.
 func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 	t.Parallel()
 	e, _ := loggingEngine(t)
@@ -301,48 +304,37 @@ func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 	}
 	reply := turn.Reply{Kind: turn.ReplyTool, Surface: "vendor"}.String()
 	stop := &sandbox.RunStop{By: "jane"}
-	earlier := e.runEnding(company, sandbox.PendingRun{AgentHandle: "swe", Reply: reply,
-		PriorCalls: []string{"vendor_post"}, Stop: stop}, colleagueAnswer{})
-	if earlier.Outcome != executordomain.OutcomeStopped || !earlier.Delivered || earlier.DeliveryUnknown {
+	run := sandbox.PendingRun{AgentHandle: "swe", Reply: reply, Stop: stop}
+	earlier := e.runEnding(company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{
+		PriorCalls: []string{"vendor_post"}}}, colleagueAnswer{})
+	if earlier.Outcome != executorkeep.OutcomeStopped || !earlier.Delivered || earlier.DeliveryUnknown {
 		t.Fatalf("a turn that replied in an earlier round ended %+v, want its reply delivered", earlier)
 	}
-	none := e.runEnding(company, sandbox.PendingRun{AgentHandle: "swe", Reply: reply, Stop: stop},
-		colleagueAnswer{})
+	none := e.runEnding(company, run, sandbox.RunCalls{}, colleagueAnswer{})
 	if none.Delivered || none.DeliveryUnknown {
 		t.Fatalf("a turn that never replied ended %+v, want its reply known not to have gone", none)
 	}
-	elided := e.runEnding(company, sandbox.PendingRun{AgentHandle: "swe", Reply: reply,
-		BridgeCallsElided: 4, Stop: stop}, colleagueAnswer{})
+	elided := e.runEnding(company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Elided: 4}}, colleagueAnswer{})
 	if elided.Delivered || !elided.DeliveryUnknown {
-		t.Fatalf("a record whose calls were elided ended %+v, want whether it replied not known", elided)
+		t.Fatalf("a log whose calls were elided ended %+v, want whether it replied not known", elided)
 	}
-	// THE ROUND'S TALLY, kept under the round its first recorded call began.
-	began := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
-	round := []sandbox.BridgeCall{{Name: "read_file", Seq: 1, At: began}}
-	tallied := e.runEnding(company, sandbox.PendingRun{AgentHandle: "swe", Reply: reply, BridgeCallsElided: 4,
-		BridgeCalls: round, TallyRound: began,
-		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 3},
-			{Name: "vendor_post", Digest: "b", Calls: 1}}, Stop: stop}, colleagueAnswer{})
-	if !tallied.Delivered || tallied.DeliveryUnknown {
-		t.Fatalf("a record whose dropped calls hold the reply ended %+v, want its reply delivered", tallied)
-	}
-	reads := e.runEnding(company, sandbox.PendingRun{AgentHandle: "swe", Reply: reply, BridgeCallsElided: 4,
-		BridgeCalls: round, TallyRound: began,
-		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 4}}, Stop: stop},
+	unread := e.runEnding(company, run, sandbox.RunCalls{Unread: errors.New("the store is down")},
 		colleagueAnswer{})
-	if reads.Delivered || reads.DeliveryUnknown {
-		t.Fatalf("a record whose dropped calls are all reads ended %+v, want it known not to have replied", reads)
+	if unread.Delivered || !unread.DeliveryUnknown {
+		t.Fatalf("a log the ending could not read ended %+v, want whether it replied not known", unread)
 	}
-	// A TALLY ANOTHER ROUND LEFT IS NONE OF THIS ONE'S: an older build that
-	// opened a new round cleared its calls and carried the tally on, and the
-	// reply it names is the earlier round's — so the dropped calls it counts
-	// for this round are not known, never a reply this round made.
-	stale := e.runEnding(company, sandbox.PendingRun{AgentHandle: "swe", Reply: reply, BridgeCallsElided: 4,
-		BridgeCalls: []sandbox.BridgeCall{{Name: "read_file", Seq: 1, At: began.Add(time.Hour)}},
-		TallyRound:  began, ElidedCalls: []sandbox.ElidedCall{{Name: "vendor_post", Digest: "b", Calls: 4}},
-		Stop: stop}, colleagueAnswer{})
-	if stale.Delivered || !stale.DeliveryUnknown {
-		t.Fatalf("a record holding another round's tally ended %+v, want whether it replied not known", stale)
+	// THE ROUND'S TALLY of the calls its log dropped, by identity.
+	round := []sandbox.BridgeCall{{Name: "read_file", Seq: 1}}
+	tallied := e.runEnding(company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Calls: round, Elided: 4,
+		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 3},
+			{Name: "vendor_post", Digest: "b", Calls: 1}}}}, colleagueAnswer{})
+	if !tallied.Delivered || tallied.DeliveryUnknown {
+		t.Fatalf("a log whose dropped calls hold the reply ended %+v, want its reply delivered", tallied)
+	}
+	reads := e.runEnding(company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Calls: round, Elided: 4,
+		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 4}}}}, colleagueAnswer{})
+	if reads.Delivered || reads.DeliveryUnknown {
+		t.Fatalf("a log whose dropped calls are all reads ended %+v, want it known not to have replied", reads)
 	}
 }
 
@@ -356,7 +348,7 @@ func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 // trace of it. A reply that went out was recorded as one that did not, and the
 // next turn told so.
 //
-// Mutation: drop the call from the write that records its result
+// Mutation: drop the call's append to the log after its result is recorded
 // ([sandbox.PendingStore.RecordHeldResult]), or have heldCommit record it as
 // failed whatever the surface answered, and both readers say the turn did not
 // reply.
@@ -437,9 +429,13 @@ func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
 	// them. The record says the call's identity is withheld, which a later
 	// segment's call log counts as a call of its tool whose arguments are not
 	// known.
-	if row, _, err := store.Get(ctx, "run-1"); err != nil || len(row.BridgeCalls) == 0 {
-		t.Fatalf("the approved call's record = %+v (%v)", row.BridgeCalls, err)
-	} else if made := row.BridgeCalls[len(row.BridgeCalls)-1]; made.Digest != "" || made.Args != "" ||
+	recorded, _, err := store.Get(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("reading the run the call was approved on: %v", err)
+	}
+	if logged, err := store.BridgeLog(ctx, recorded); err != nil || len(logged.Calls) == 0 {
+		t.Fatalf("the approved call's record = %+v (%v)", logged.Calls, err)
+	} else if made := logged.Calls[len(logged.Calls)-1]; made.Digest != "" || made.Args != "" ||
 		!made.Approved || !made.Withheld() {
 		t.Fatalf("the approved call is recorded as %+v, want it approved with its arguments and their "+
 			"digest withheld", made)
@@ -456,16 +452,22 @@ func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
 		t.Fatalf("the carried-on row = %+v, %v, %v, want it found with no held call", got.HeldCall, found, err)
 	}
 
-	// A STOP'S ACCOUNT reads the round's calls...
+	// A STOP'S ACCOUNT reads the round's calls, off the run's log as the
+	// ending reads it...
+	logged, err := store.BridgeLog(ctx, got)
+	if err != nil {
+		t.Fatalf("reading the carried-on run's log: %v", err)
+	}
 	stopped := got
 	stopped.Stop = &sandbox.RunStop{By: "jane"}
-	if ending := e.runEnding(company, stopped, colleagueAnswer{}); !ending.Delivered || ending.DeliveryUnknown {
+	if ending := e.runEnding(company, stopped, sandbox.RunCalls{Log: logged}, colleagueAnswer{}); !ending.Delivered ||
+		ending.DeliveryUnknown {
 		t.Fatalf("a turn whose reply was the approved call ended %+v, want its reply delivered", ending)
 	}
 	// ...and so does the collection's own delivery check, over the bridged
 	// log the resumed turn's record is built from.
 	var calls []ledger.Call
-	for _, call := range bridgedCalls(got.BridgeCalls) {
+	for _, call := range bridgedCalls(logged.Calls) {
 		calls = append(calls, call.Call)
 	}
 	if !turn.Answered(calls, deliverySurface(e.seatRegistry(company, "swe")), turn.ParseReply(reply)) {
@@ -494,7 +496,7 @@ func TestTheEndCarriesTheTurnsOwnDecisionAndBreach(t *testing.T) {
 	}
 	reply := turn.Reply{Kind: turn.ReplyTool, Surface: "chatlet"}
 	ending := endingOf(res, reply, colleagueAnswer{})
-	if ending.Outcome != executordomain.OutcomeFailed || ending.Decision != string(phase.Failed) ||
+	if ending.Outcome != executorkeep.OutcomeFailed || ending.Decision != string(phase.Failed) ||
 		!strings.Contains(ending.Failure, string(types.GuardDepthCap)) || ending.CompletedWork != "MR !42 is up" ||
 		ending.BlockedOn != "waiting on the founder" || !ending.Delivered || ending.DeliveredTo != "chatlet" {
 		t.Fatalf("the ending is %+v", ending)
@@ -506,12 +508,12 @@ func TestTheEndCarriesTheTurnsOwnDecisionAndBreach(t *testing.T) {
 	}
 	abandoned := abandonedEnding(turn.Result{}, reply, colleagueAnswer{}, "it acted and broke",
 		errors.New("push failed: "+leakedToken))
-	if abandoned.Outcome != executordomain.OutcomeFailed || strings.Contains(abandoned.Failure, leakedToken) {
+	if abandoned.Outcome != executorkeep.OutcomeFailed || strings.Contains(abandoned.Failure, leakedToken) {
 		t.Fatalf("the abandoned turn's ending is %+v, want it failed, its error redacted", abandoned)
 	}
 	launchEnd := launchAbandonedEnding(turn.Result{}, reply, colleagueAnswer{},
 		errors.New("the box refused to start its job: "+leakedToken))
-	if launchEnd.Outcome != executordomain.OutcomeFailed ||
+	if launchEnd.Outcome != executorkeep.OutcomeFailed ||
 		!strings.Contains(launchEnd.Failure, "abandoned after its run was recorded") ||
 		!strings.Contains(launchEnd.Failure, "the box refused to start its job") ||
 		strings.Contains(launchEnd.Failure, leakedToken) {
@@ -520,7 +522,7 @@ func TestTheEndCarriesTheTurnsOwnDecisionAndBreach(t *testing.T) {
 	}
 	stop := &stopError{pause: coord.SeatPause{By: "jane", Reason: "wrong repository", StopRunning: true}}
 	stopped := stoppedEnding(turn.Result{Decision: phase.Done}, reply, stop, colleagueAnswer{})
-	if stopped.Outcome != executordomain.OutcomeStopped || stopped.StoppedBy != "jane" ||
+	if stopped.Outcome != executorkeep.OutcomeStopped || stopped.StoppedBy != "jane" ||
 		stopped.StopReason != "wrong repository" || stopped.Failure != "" {
 		t.Fatalf("the stopped ending is %+v", stopped)
 	}
@@ -629,7 +631,7 @@ func TestAResumedTurnStoppedAtItsFirstRoundEndsAsStopped(t *testing.T) {
 		t.Logf("the stopped resume's delivery answered %v", err)
 	}
 	ends := awaitEnds(t, spy, "run-1", 1)
-	if len(ends) != 1 || ends[0].Ending.Outcome != executordomain.OutcomeStopped ||
+	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeStopped ||
 		ends[0].Ending.StoppedBy != "jane" || ends[0].Ending.StopReason != "wrong repository" {
 		t.Fatalf("recorded %+v, want the turn's one end, stopped by Jane for her reason", ends)
 	}
@@ -663,7 +665,7 @@ func TestARelaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce(t *testing.T) {
 		t.Logf("the stopped relaunch's delivery answered %v", err)
 	}
 	ends := awaitEnds(t, spy, "run-1", 1)
-	if len(ends) != 1 || ends[0].Ending.Outcome != executordomain.OutcomeStopped ||
+	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeStopped ||
 		ends[0].Ending.StoppedBy != "jane" {
 		t.Fatalf("recorded %+v, want the turn's one end, stopped by Jane", ends)
 	}
@@ -787,7 +789,7 @@ func TestAResumedTurnThatPanicsOnceBegunEndsFailed(t *testing.T) {
 				}
 				return
 			}
-			if len(ends) != 1 || ends[0].Ending.Outcome != executordomain.OutcomeFailed ||
+			if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeFailed ||
 				!strings.Contains(ends[0].Ending.Failure, "panicked") ||
 				strings.Contains(ends[0].Ending.Failure, leakedToken) {
 				t.Fatalf("recorded %+v, want the turn failed, saying it panicked, redacted", ends)

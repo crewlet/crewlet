@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -41,12 +42,12 @@ type roundTrip struct {
 	// held here too for the cases that append a record by hand — another
 	// build's, a barrier — which the fleet's own writer would have signed
 	// just the same, and which every reader refuses unsigned.
-	signer *statelog.Signer
+	signer *recordseal.Signer
 
 	// verifier opens a record's frame, because this harness replays the
 	// log exactly as the framework's own loop does and that loop verifies
 	// before any domain decodes.
-	verifier *statelog.Verifier
+	verifier *recordseal.Verifier
 
 	consumed uint64
 }
@@ -225,7 +226,7 @@ func newRoundTripReserving(t *testing.T, log *js.DomainLog, db store.ReplicatedH
 	}
 	r := &roundTrip{
 		t: t, db: db, log: log, store: kb,
-		applier: doclet.NewApplier(nodeID, nil, nil),
+		applier: doclet.NewApplier(nil, nil),
 		reader:  reader, waiter: waiter,
 		signer: signer, verifier: verifier,
 	}
@@ -262,7 +263,7 @@ func (r *roundTrip) drain() {
 		// as JSON, which is what this harness did for one commit and
 		// what every reader of a signed log has to get right.
 		body, verdict := r.verifier.Open(payload)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			r.t.Fatalf("record %d did not verify: %s", seq, verdict)
 		}
 		env, err := doclet.DecodeEnvelope(body)
@@ -429,12 +430,16 @@ func (w *testWaiter) Committed() statelog.Position {
 	return w.at
 }
 
+// Reached is Committed: this rig moves its position when it applies a record,
+// in one step, so it reaches nothing its commit has not.
+func (w *testWaiter) Reached() statelog.Position { return w.Committed() }
+
 // StreamIdentity is always the live stream: this harness never rebuilds its
 // log, so every position the waiter holds is a sequence on it.
 func (w *testWaiter) StreamIdentity() error { return nil }
 func (w *testWaiter) Truncated() error      { return nil }
 
-func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *testWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
 		if w.Committed().Packed() >= p.Packed() {
 			return nil
@@ -471,7 +476,7 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 
 func (w *testWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
 	p statelog.Position) error {
-	return w.WaitCommitted(ctx, p)
+	return w.WaitReached(ctx, p)
 }
 
 func author(handle string) doclet.Actor {
@@ -491,9 +496,9 @@ func ptr[T any](v T) *T { return &v }
 // fleet would refuse one at a time, on every node, for ever. The key is a
 // fixture: what these cases are about is what the domain writes, and the
 // signature's own rules are certified in [statelog].
-func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
+func testSigner(t *testing.T, d statelog.Domain) *recordseal.Signer {
 	t.Helper()
-	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -501,9 +506,9 @@ func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
 }
 
 // testVerifier opens what [testSigner] sealed.
-func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
+func testVerifier(t *testing.T, d statelog.Domain) *recordseal.Verifier {
 	t.Helper()
-	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

@@ -26,10 +26,10 @@ import (
 // A WATCH IS DECIDED LIKE THE INBOX QUESTION ABOUT THE SAME SEAT.
 //
 // A watch installs this node's routing for a seat's `inbox_changed` frames —
-// whose inbox moved, when, under which reason — so it takes the rule the
-// `work_inbox` question takes about that seat: the seat's own holder, whoever
-// leads it through the chart, or an admin — each with the tracker, whose
-// frames these are. Any resolved caller could
+// whose inbox moved, in which domain, when, under which reason — so it takes
+// the rule the composed `inbox` question takes about that seat: the seat's own
+// holder, whoever leads it through the chart, or an admin, with no app, since
+// the frames announce every native domain's notices. Any resolved caller could
 // watch any seat before, which made the routing index a way to follow somebody
 // else's inbox the question itself refused.
 //
@@ -245,6 +245,14 @@ func (c *leadChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 // MemberOf answers that nobody sits in any unit: no case here shares an
 // artifact with a team.
 func (c *leadChart) MemberOf(context.Context, string, string) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	return false, nil
+}
+
+// SeatGranted answers that no role carries a grant: no watch names one.
+func (c *leadChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
 	if c.err != nil {
 		return false, c.err
 	}

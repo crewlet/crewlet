@@ -35,6 +35,11 @@ func TestTheAssistantDomainIsACertifiedDomain(t *testing.T) {
 			Rows:       assistantdomain.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
+			// THE PRODUCTION ENCODER of the read index's barrier, which the
+			// suite holds to writing no row.
+			EncodeBarrier: assistantdomain.EncodeBarrier,
+			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0080).
+			EncodeTrimmed: assistantdomain.EncodeTrimmed,
 		}
 	})
 }

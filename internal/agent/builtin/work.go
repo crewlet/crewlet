@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -333,10 +334,11 @@ type WorkDeps struct {
 	// wall clock in the wrong zone names a different week.
 	//
 	// Zone is READ PER CALL, for the reason the chart seams are: the
-	// operator surface is built once at startup and never rebuilt, so a
-	// zone captured there answered every assistant's "due friday" on the
-	// clock the company booted with — and before that, on UTC, since that
-	// surface was given none at all. Nil is UTC.
+	// operator surface is built again only when what it serves changes,
+	// never for a new clock, so a zone captured there answered every
+	// assistant's "due friday" on the clock the company booted with — and
+	// before that, on UTC, since that surface was given none at all. Nil
+	// is UTC.
 	Now  func() time.Time
 	Zone func() *time.Location
 
@@ -371,18 +373,11 @@ type WorkDeps struct {
 	// exists is the one answer that produces a duplicate.
 	Await func(ctx context.Context, at statelog.Position) error
 
-	// callerOperations is whether a caller with no turn holds the id of
-	// the operation each call is: every write answers with it as `op_id`,
-	// and a call that brings it back is that operation again rather than
-	// a new one. See [WorkDeps.bindOperation].
-	//
-	// UNEXPORTED AND SET BY [OperatorTools] ALONE, because it is a fact
-	// about the SURFACE rather than a setting: the operator's MCP is the
-	// one caller with no turn to derive an operation from, and a seat's
-	// registry that took an id from its arguments would let a model name
-	// another write's operation — answered as that write, whatever it
-	// asked for.
-	callerOperations bool
+	// ops is how a call here names its operation where neither a turn nor a
+	// request's key does — the one rule every family of write tools takes
+	// ([operations]), set by [OperatorTools] alone. Its zero value takes no
+	// `op_id`, which is every surface but the operator's.
+	ops operations
 }
 
 // Actor is who a write is attributed to.
@@ -723,6 +718,22 @@ func turnIdentity(turn *turnctx.Turn) Actor {
 	}
 	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey, WorkSince: turn.WorkSince,
 		RebasedTo: turn.RebasedTo, Calls: turn.CallLog()}
+}
+
+// runIdentity is the turn's RUN as the identity a derived id is seeded from —
+// never its unit of work, which [turnIdentity] prefers where there is one — for
+// an operation that has to be one per run whatever work the run serves: a hold
+// record ([holdOpID]). As an [Actor] for [turnIdentity]'s reason: its instant
+// is the one rule's for a run ([Actor.OperationSince]) — the instant the engine
+// rebased the attempt onto where it did ([turnctx.Turn.RebasedTo]), else the
+// run's own start, which its id carries — rather than a second spelling of that
+// choice, which a rebase taught to one copy and not the other left minting at
+// a start no node's ledger can vouch for.
+func runIdentity(turn *turnctx.Turn) Actor {
+	if turn == nil {
+		return Actor{}
+	}
+	return Actor{TurnID: turn.RunID, RebasedTo: turn.RebasedTo}
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.
@@ -1477,7 +1488,7 @@ func (t *createWorkItem) Description() string {
 }
 
 func (t *createWorkItem) Parameters() map[string]any {
-	return t.deps.operationParam(scheduleInto(map[string]any{
+	return t.deps.ops.param(scheduleInto(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"title": map[string]any{
@@ -2513,7 +2524,7 @@ func (t *updateWorkItem) Description() string {
 }
 
 func (t *updateWorkItem) Parameters() map[string]any {
-	return t.deps.operationParam(scheduleInto(map[string]any{
+	return t.deps.ops.param(scheduleInto(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -3355,7 +3366,7 @@ const commentToolDescription = "Post a comment on a work item. Everyone " +
 	"`choice` answers one."
 
 func (t *commentOnWorkItem) Parameters() map[string]any {
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -3996,12 +4007,13 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		// read that answer, never to send this one again.
 		return out(tools.RefusalAlreadyAnswered, fmt.Sprintf("%s was "+
 			"refused: %s. Nothing was posted.", name, worklet.Sentence(err)))
-	case errors.Is(err, worklet.ErrInboxFull):
+	case errors.Is(err, inbox.ErrFull):
 		// NOT A SMALLER GESTURE BUT A DIFFERENT ONE: the sentence names
 		// `read_through`, which marks everything up to a notice in one move
-		// and is what empties the lists this refusal is about.
+		// and is what empties the lists this refusal is about. The inbox
+		// rules' own sentence, without the Go error's "inbox:" in front.
 		return out(tools.RefusalInboxFull, fmt.Sprintf("%s was refused: "+
-			"%s.", name, worklet.Sentence(err)))
+			"%s.", name, inbox.Sentence(err)))
 	case errors.Is(err, estate.ErrOutcomeUnknown):
 		// SENT, AND NO DATA NODE ANSWERED. The router asked every one under
 		// this call's operation and each that stayed silent may have run
@@ -4230,126 +4242,13 @@ func capitalize(clause string) string {
 	return string(clause[0]-'a'+'A') + clause[1:]
 }
 
-// opIDArg is the argument a caller on the operator's surface brings an
-// operation back in, and the field every answer there carries it in.
-const opIDArg = "op_id"
-
-// bindOperation settles which operation this call is, or answers the refusal.
-//
-// # Why a caller with no turn needs one at all
-//
-// A seat's writes derive their ids from its turn, so the same call made again
-// — a re-run, or a repeat after an `unknown` — is the same operation, and the
-// ledger answers what landed. The operator's assistant has no turn: every call
-// minted every id afresh, so the one thing an `unknown` or a gesture stopped
-// part of the way through asks for — the same operation again — was
-// unreachable. A create repeated filed a second item, and an update
-// conditioned on a version was refused as stale by its own first copy.
-//
-// So each call there IS an operation ([Actor.Operation]): one minted for it
-// and answered as `op_id` ([withOperation]), or the one the caller brought
-// back, held to the same rule every surface that takes one holds it to
-// ([statelog.CheckCallerOpID]). Every write the call makes derives from it.
-//
-// # Why a brought-back id must come with its own call
-//
-// The id is minted NAMING the call — the tool and a digest of its arguments
-// ([callName]) — and brought back it is accepted only with that call. With any
-// other it is refused before a single write: see [callName] for the second
-// items and the half-applied gestures a looser rule let through.
-//
-// # Why a turn's call is refused one
-//
-// Because the turn is already the identity, and an id a model could name
-// would be answered as whichever write it named, whatever this call asked for.
-// Refused rather than ignored: ignored, it reads as a promise the call keeps.
-// The same holds for any caller that already carries an operation seed
-// ([Actor.OperationSeed]) — a request's own operation key, which the act
-// transport and the HTTP write surface carry, is its identity exactly as a
-// turn is.
-//
-// AN EMPTY `op_id` IS NONE — it names no operation, and a model filling an
-// optional field writes one.
+// bindOperation settles which operation this call is, or answers the refusal
+// ([operations.bindActor]).
 func (d WorkDeps) bindOperation(actor Actor, tool string,
 	args map[string]any) (Actor, string) {
 
-	raw, brought := args[opIDArg]
-	if text, _ := argval.String(raw); text == "" {
-		brought = false
-	}
-	if !d.callerOperations || actor.OperationSeed() != "" {
-		if brought {
-			return actor, fmt.Sprintf("%s takes no `op_id` here: these writes "+
-				"derive their operation from the turn or the request that "+
-				"carries them, so the same call made again is already the "+
-				"same operation. Leave it out.", tool)
-		}
-		return actor, ""
-	}
-	call := callName(tool, args)
-	if !brought {
-		actor.Operation = statelog.NewOpID(time.Now(), call)
-		return actor, ""
-	}
-	op, _ := argval.String(raw)
-	if err := statelog.CheckCallerOpID(op); err != nil {
-		return actor, fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
-	}
-	if !statelog.OpNamed(op, call) {
-		return actor, fmt.Sprintf("%s refused that `op_id`, and nothing was "+
-			"written: it was answered for another call — another tool, or "+
-			"this one with other arguments — and an op_id finishes only the "+
-			"call it was answered for. To finish that call, send its "+
-			"arguments unchanged with it; to make this one, leave `op_id` out.",
-			tool)
-	}
-	actor.Operation = op
-	return actor, ""
+	return d.ops.bindActor(actor, tool, args)
 }
-
-// callName is the name an operator's operation id carries — minted, or brought
-// back: the tool, and a digest of the arguments of the call it is for.
-//
-// # Why the arguments are in the operation
-//
-// Because an `op_id` promises that nothing is made twice, and a brought-back
-// id with other arguments cannot keep that promise any other way. Its steps
-// are named by the objects the call writes ([opIDFor]), so the same id sent
-// with another project derived another operation and filed a second item; and
-// named without them, the steps that DID match were answered as the first
-// call's while the ones that did not — a dependency mirror on a blocker the
-// first call never named, a subtask re-parented onto another canonical item,
-// a tag declared that the first call never asked for — landed as a write
-// nothing had authored. Refused whole, before the first append, none of those
-// can happen: the id is that call, or it is nothing.
-//
-// A DIGEST, not the arguments, because an id is at most
-// [statelog.MaxCallerOpIDBytes] and travels in every record and ledger row its
-// steps write; sixteen hex digits of [turnctx.ArgsDigest] tell an accidental
-// change apart with certainty, which is all this check is for — a caller can
-// mint any id that carries an instant anyway, so this is not a credential.
-// The `op_id` itself is left out of it, since the first call carried none.
-//
-// JOINED BY A DASH, because the name is one segment of the grammar and a dot
-// begins a step: joined by one, the name was escaped whole and an operator
-// reading the ledger could no longer see which tool an id was minted for.
-func callName(tool string, args map[string]any) string {
-	rest := make(map[string]any, len(args))
-	for key, value := range args {
-		if key != opIDArg {
-			rest[key] = value
-		}
-	}
-	return tool + "-" + turnctx.ArgsDigest(rest)[:callDigestLen]
-}
-
-// callDigestLen is how many hex digits of the arguments' digest an operator's
-// operation id carries: 64 bits, far past any accidental collision, in an id
-// of at most 74 bytes with the longest tool that offers one
-// (comment_on_work_item: 36 + 1 + 20 + 1 + 16) — well inside
-// [statelog.MaxCallerOpIDBytes], and a name well inside one segment
-// ([statelog.MaxOpSegmentBytes]).
-const callDigestLen = 16
 
 // withOperation puts the call's operation on its answer, where it has one:
 // the `op_id` a caller brings back to make this call again as the same
@@ -4365,26 +4264,6 @@ func withOperation(answer map[string]any, actor Actor) map[string]any {
 		answer[opIDArg] = actor.Operation
 	}
 	return answer
-}
-
-// operationParam offers `op_id` in a write tool's schema, on the surface whose
-// callers bring one back ([WorkDeps.bindOperation]) and nowhere else.
-func (d WorkDeps) operationParam(schema map[string]any) map[string]any {
-	if !d.callerOperations {
-		return schema
-	}
-	props, _ := schema["properties"].(map[string]any)
-	props[opIDArg] = map[string]any{
-		"type": "string",
-		"description": "Leave it out for a new write. To finish one an earlier " +
-			"answer from this tool left `unknown` or part of the way through, " +
-			"send back the `op_id` that answer carried, unchanged, with exactly " +
-			"the same arguments: the call is then that same operation, and is " +
-			"answered with what landed. An op_id belongs to that one call: " +
-			"sent with this tool and any other argument, or with another " +
-			"tool, it is refused before anything is written.",
-	}
-	return schema
 }
 
 // now and zone are the clock a query resolves against, defaulted here so a
@@ -4460,6 +4339,21 @@ func openGroups() []string {
 func positionOf(at statelog.Position) any {
 	if at.IsZero() {
 		return nil
+	}
+	return at.String()
+}
+
+// positionText is [positionOf] for a typed answer: the position a write
+// landed at as the string every write tool's answer states it in
+// (`<stream>@<generation>:<sequence>`), "" for none. THE ACT TRANSPORT READS
+// IT AS THAT STRING (operator.receiptOf), lifting it beside the answer as the
+// position the dashboard's read floor rises to — an answer that spelled it as
+// the position's object was one whose outcome and position the transport
+// could not read at all, so a pending write was reported applied and the
+// reads after it were asked at no floor.
+func positionText(at statelog.Position) string {
+	if at.IsZero() {
+		return ""
 	}
 	return at.String()
 }

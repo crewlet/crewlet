@@ -28,7 +28,7 @@ import { managedSentence } from "~/protocol/configAnswer.ts";
 import type { ServicesRun } from "./services.ts";
 
 /** A company running every service built into Crewlet. */
-const EVERY: ServicesRun = { tracker: true, knowledge: true, chat: true };
+const EVERY: ServicesRun = { tracker: true, knowledge: true, chat: true, code: true };
 
 const BOUND: ViewerState = {
   login: "jane.founder",
@@ -250,13 +250,13 @@ test("messaging your own seat is held after everything a person can clear", () =
 // the first two read `can: true`.
 test("a change into a service the company does not run is held, and says why", () => {
   const acting = { ...BOUND, acts: ["create_work_item", "write_page", "pause_seat"] };
-  const jira: ServicesRun = { tracker: false, knowledge: true, chat: true };
+  const jira: ServicesRun = { tracker: false, knowledge: true, chat: true, code: true };
   expect(writeAccess("create_work_item", acting, "open", jira)).toEqual({
     can: false,
     block: "held",
     reason: SERVICE_OFF_REASONS.tracker,
   });
-  const confluence: ServicesRun = { tracker: true, knowledge: false, chat: true };
+  const confluence: ServicesRun = { tracker: true, knowledge: false, chat: true, code: true };
   expect(writeAccess("write_page", acting, "open", confluence)).toEqual({
     can: false,
     block: "held",
@@ -302,7 +302,7 @@ test("a direct message is offered only where Chatlet runs, and held on your own 
 // `can: true`.
 test("a change into a room is held where the company runs no Chatlet", () => {
   const acting = { ...BOUND, grants: ["chatlet"], chatlet: true, acts: ["post_message"] };
-  const slack: ServicesRun = { tracker: true, knowledge: true, chat: false };
+  const slack: ServicesRun = { tracker: true, knowledge: true, chat: false, code: true };
   expect(writeAccess("post_message", acting, "open", slack)).toEqual({
     can: false,
     block: "held",
