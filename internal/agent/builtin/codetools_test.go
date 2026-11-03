@@ -1695,8 +1695,8 @@ func widestGate(t *testing.T) code.MergeGate {
 // — its remotes and its expunge at their widest among it — a page of
 // its branches and as many of its rules as fit, and the rest of the rules a
 // page at a time through protections_next, every rule once, in order and with
-// its gate — each answer within ToolAnswerBytes, and each making progress on
-// its list.
+// its gate and its source — who last set it, a login at iam.MaxLogin — each
+// answer within ToolAnswerBytes, and each making progress on its list.
 //
 // A row whose rules alone are past an answer, which the bounds no longer make
 // at today's limits, is held with rules past them, as a raised limit would
@@ -1706,7 +1706,8 @@ func widestGate(t *testing.T) code.MergeGate {
 // `next`, as code_list_repos did — zed is listed by nobody, red; drop
 // protections_next — the rules past the first answer are answered by nobody,
 // red; cut the first page's rules with no room kept for a branch — it answers
-// no branch, red.
+// no branch, red; leave a rule's source off either page — its rule reads as
+// set by nobody, red.
 func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 	t.Parallel()
 	wide := func(n int) string { return strings.Repeat(`"`, n) }
@@ -1720,6 +1721,8 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 			AllowDelete: true, DirectPush: code.DirectPersons}
 		d.Protections = append(d.Protections, rule)
 		d.Gates = append(d.Gates, code.RuleGate{Pattern: rule.Pattern, Gate: gate})
+		d.RuleSources = append(d.RuleSources, code.RuleSource{Pattern: rule.Pattern, SetBy: wide(iam.MaxLogin),
+			SetByKind: code.ActorOperator, SetAt: time.Date(2026, 10, 30, 9, i, 0, 0, time.UTC)})
 	}
 	// ITS REMOTES AND ITS EXPUNGE AT THEIR WIDEST TOO, which the detail answers
 	// beside its row: each address at code.MaxRemoteURLBytes and each variable at
@@ -1824,8 +1827,14 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 	}
 
 	// THE DETAIL: its first page, then its rules a page at a time.
+	type answeredRule struct {
+		code.Protection
+		SetBy     string         `json:"set_by"`
+		SetByKind code.ActorKind `json:"set_by_kind"`
+		SetAt     time.Time      `json:"set_at"`
+	}
 	type rulesPage struct {
-		Protections     []code.Protection `json:"protections"`
+		Protections     []answeredRule    `json:"protections"`
 		ProtectionsNext string            `json:"protections_next"`
 		Branches        []json.RawMessage `json:"branches"`
 	}
@@ -1871,6 +1880,10 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 		if r.PushRule != d.Protections[i] || r.Gate == nil || !r.Gate.Equal(gate) {
 			t.Fatalf("rule %d answered as %s with a gate %v, want %s with its gate", i, r.Pattern, r.Gate != nil,
 				d.Protections[i].Pattern)
+		}
+		if src := d.RuleSources[i]; r.SetBy != src.SetBy || r.SetByKind != src.SetByKind || !r.SetAt.Equal(src.SetAt) {
+			t.Fatalf("rule %d (%s) answered as set by %q (%s) at %s, want its source, %q (%s) at %s", i, r.Pattern,
+				r.SetBy, r.SetByKind, r.SetAt, src.SetBy, src.SetByKind, src.SetAt)
 		}
 	}
 
