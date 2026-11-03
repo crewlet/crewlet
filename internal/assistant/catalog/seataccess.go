@@ -43,12 +43,13 @@ const (
 	accessWriteRoute = "PUT /setup/integrations/{kind}/access"
 )
 
-// laneTitles are each lane's vendor, by its own name, for the card.
-var laneTitles = map[seataccess.Lane]string{
-	seataccess.LaneDatadog: "Datadog", seataccess.LaneGitHub: "GitHub",
-	seataccess.LaneGitLab: "GitLab", seataccess.LaneJira: "Jira",
-	seataccess.LaneConfluence: "Confluence", seataccess.LaneSlack: "Slack",
-	seataccess.LaneMattermost: "Mattermost",
+// laneTitle is a lane's vendor by its own name, for the card, or "" for a
+// value off the wire that is no lane.
+func laneTitle(lane seataccess.Lane) string {
+	if !lane.Valid() {
+		return ""
+	}
+	return seataccess.LaneName(lane)
 }
 
 // githubGrantWords are GitHub's own words for a permission's grant.
@@ -113,7 +114,7 @@ func seatAccessWrite() Tool {
 		Preview: seatAccessPreview,
 		Label: func(a map[string]any) string {
 			args := Args(a)
-			title := laneTitles[seataccess.Lane(args.String("integration"))]
+			title := laneTitle(seataccess.Lane(args.String("integration")))
 			if handle := args.String("handle"); handle != "" && len(handle) <= nameBytes &&
 				title != "" {
 				return "Preparing a change to " + handle + "'s " + title + " access"
@@ -135,7 +136,7 @@ func seatAccessPreview(ctx context.Context, read proposal.Read, _ time.Time,
 	if !lane.Valid() {
 		return proposal.Preview{}, fmt.Errorf("%w: no integration %q", ErrInvalidArguments, lane)
 	}
-	title := laneTitles[lane]
+	title := laneTitle(lane)
 	path := map[string]string{"kind": string(lane.Kind())}
 	readReq, err := get(accessReadRoute, path, nil)
 	if err != nil {

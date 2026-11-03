@@ -4082,13 +4082,14 @@ link, so the dashboard asks the begin route above for one and submits a form.
 
 ### Each agent's access to an integration
 
-Every integration the engine creates an account per agent on (Slack,
-Mattermost, Atlassian for Jira and Confluence, GitHub, GitLab and Datadog)
-has an Agents tab, and these four routes are what it reads and writes. Each
-agent seat's setting lives in the company document under
+Every integration the engine creates an account or a credential per agent on
+(Slack, Mattermost, Atlassian for Jira and Confluence, GitHub, GitLab, Datadog
+and Cloudflare) has an Agents tab, and these four routes are what it reads and
+writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
-Datadog role id, a GitLab access level, a Jira project role id), GitHub's
+Datadog role id, a GitLab access level, a Jira project role id; Cloudflare's
+`read` or `operate`, each a fixed set of permission groups), GitHub's
 permissions, and the scope it is narrowed to. A lane is the block's key:
 `atlassian` has two, `jira` and `confluence`, over one account per agent, and
 every other integration has one named after itself. Jira and Confluence asked
@@ -9328,8 +9329,11 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   ([A relaunch continues the turn's
   session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session))
   — over the row as a relaunch reads it. **The member is the one the node
-  holding the seat would pick**, which sits its own spent plans out: the node
-  answering asks it, once a page, itself where it holds the seat. **`continues_in`**
+  holding the seat would pick**, which sits its own spent plans out, off the
+  chain of the revision the turn's relaunch runs on — for a turn whose resumed
+  segment is running there, the revision that segment was admitted under: the
+  node answering asks it, once a page, turn by turn, itself where it holds the
+  seat. **`continues_in`**
   says where: `any_box`, from that kept capture in whichever box the relaunch
   gets; or `parked_box`, where the kept capture is not continued but a
   person's answer would carry the turn's parked run on in the box it parked in,
@@ -9348,17 +9352,20 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   yet; so is one whose run's ending is decided. `null` where it cannot be said
   now — the turn's run record, or its row read as a relaunch reads it, could
   not be read; the job a relaunch would follow is still working, or a claim on
-  it has not yet taken its final capture; its capture is still being kept;
-  what a relaunch is launched on cannot be said (every member of the seat's
-  chain sitting out its plan, no node holding the seat, the node holding it not
-  answering); or only the resume of a collected job decides the relaunch (a
-  round lost a second time, or carried on in its box only where its sign-in was
-  replaced) — which `not_continuable` then says. A page reads the coordination
-  store once, and a live turn's record alone where the listing does not hold
-  it, and not at all where every row on it has ended, and is answered whether
-  or not it answers; it reads a row again at `linearizable` only where the
-  page was read below that and the row names another capture than its run's
-  record keeps.
+  it has neither taken its final capture nor begun its turn; its capture is
+  still being kept; what a relaunch is launched on cannot be said (every member
+  of the seat's chain sitting out its plan, no node holding the seat, the node
+  holding it not answering); or only the resume of a collected job decides the
+  relaunch, and its turn has not begun (a round lost a second time, or carried
+  on in its box only where its sign-in was replaced) — which `not_continuable`
+  then says. A resumed turn says, as it begins, whether it collects its job or
+  carries the round on, and from then on, its review included, the row is
+  decided on that. A page reads the coordination store once for its runs, and a
+  live turn's record alone where the listing does not hold it, and once more
+  for the seat's lease where a live row asks the node holding the seat, and not
+  at all where every row on it has ended, and is answered whether or not it
+  answers; it reads a row again at `linearizable` only where the page was read
+  below that and the row names another capture than its run's record keeps.
 - **Paged by where each row began**, which nothing moves, so a page never skips
   or repeats a row that was captured again or ended between two reads.
   `next_cursor` is absent on the last page. `complete: false` says the
@@ -11696,9 +11703,9 @@ trace anywhere except the provider's own delivery UI.
 }
 ```
 
-`tools` is **one roll-up per tool** this build serves — `slack`, `mattermost`,
-`atlassian` (the organization, Confluence, Jira and the Forge relay),
-`github`, `gitlab`, `datadog` — whether or not the company configured it, so a
+`tools` is **one roll-up per tool** this build serves (`slack`, `mattermost`,
+`atlassian` for the organization, Confluence, Jira and the Forge relay,
+`github`, `gitlab`, `datadog`, `cloudflare`), whether or not the company configured it, so a
 reader never invents a state for a missing one. `state` is `attention` (a
 person has to act), `not_connected` (configured and not working yet, with
 nobody owing anything — or this node could not read the status),

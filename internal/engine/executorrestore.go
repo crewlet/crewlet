@@ -238,14 +238,15 @@ func (c *Company) relaunchTarget(seat *org.Role, manager *sandbox.Manager, node 
 }
 
 // localRelaunchTarget is what a relaunch of the seat handle's turn would be
-// launched on, as the company this node runs picks it now ([Company.relaunchTarget])
-// — and, where the company keeps no session, that a relaunch continues no kept
-// one, by the keep the coordinator's launch asks ([executorKeep.Keeps]). A node
-// running no company, or none that reaches a sandbox cell, and a handle the
-// company holds no seat under, have no member to say anything of, which the
-// target says.
-func (e *Engine) localRelaunchTarget(handle string) sandbox.RelaunchTarget {
-	company := e.Company()
+// launched on, as the company revision that relaunch runs on picks it now
+// ([Engine.relaunchCompany], [Company.relaunchTarget]) — and, where the company
+// keeps no session, that a relaunch continues no kept one, by the keep the
+// coordinator's launch asks ([executorKeep.Keeps]), which reads the revision
+// this node runs. A node running no company, or none that reaches a sandbox
+// cell, and a handle the company holds no seat under, have no member to say
+// anything of, which the target says.
+func (e *Engine) localRelaunchTarget(handle, turn string) sandbox.RelaunchTarget {
+	company := e.relaunchCompany(turn)
 	if company == nil || company.catalogue == nil || company.Org == nil {
 		return sandbox.RelaunchTarget{Node: e.id, Why: "the node holding the seat runs no company whose " +
 			"seats launch in a box"}
@@ -260,6 +261,21 @@ func (e *Engine) localRelaunchTarget(handle string) sandbox.RelaunchTarget {
 		target.NoKept = sandbox.NoKeptSession
 	}
 	return target
+}
+
+// relaunchCompany is the company revision a relaunch of turn would be launched
+// under on this node: the one a resumed segment of the turn running here was
+// admitted under ([resumeInput.Company]) — its reviewer's send-back and the
+// round it carries on are launched from that segment's pinned epoch, which an
+// apply landing mid-segment does not move — and otherwise the revision this
+// node runs now, which a segment admitted later pins.
+func (e *Engine) relaunchCompany(turn string) *Company {
+	if turn != "" {
+		if pinned, ok := e.resumedSegments.Load(turn); ok {
+			return pinned.(*Company)
+		}
+	}
+	return e.Company()
 }
 
 // sandboxSession is a relaunch's kept session in the sandbox layer's terms, nil

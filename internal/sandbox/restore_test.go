@@ -845,14 +845,19 @@ func TestACutOffSessionIsHandedAgainTheNotesItsJobTookLast(t *testing.T) {
 // and only that, in a company that keeps no session. A lost job's box continues
 // nothing. And it is undecided, never a no, wherever a relaunch would not decide
 // now either: a job still working, or a claim whose read has not taken the job's
-// final capture, a capture still being kept, a target that cannot be said, a
-// round lost a second time, and a collected job's resume, which carries its
-// round on in its box only where its sign-in was replaced while it ran.
+// final capture and whose turn has not begun, a capture still being kept, a
+// target that cannot be said, a round lost a second time, and a collected job's
+// resume, which carries its round on in its box only where its sign-in was
+// replaced while it ran — each until the resumed turn says, as it begins, what
+// it does with the round: from then on, its review included, the row is decided
+// on what it said, whether or not its read took a capture. A claim of a
+// person's answer reads no box, and is decided whatever its job kept.
 //
 // Mutation: drop the parked box's half or any test of it — its host, the session
 // it ran — read any undecided state as a no, read a claim whose read took the
-// final capture as one still collecting, or let a box of another harness or
-// cell count as the parked one, and a case goes red.
+// final capture, or whose turn has said what it does, as one still collecting,
+// leave a turn that said it undecided, or let a box of another harness or cell
+// count as the parked one, and a case goes red.
 func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
@@ -908,6 +913,37 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			run: func(r *PendingRun) { r.Status, r.Launch.Collected = StatusRunning, true }},
 		"a collected job's resume, its capture no other box continues": {target: older, whyHolds: "sign-in",
 			run: func(r *PendingRun) { r.Status, r.Launch.Collected = StatusRunning, true }},
+		"a claim whose turn collects the job, its capture no other box continues": {target: older,
+			decided: true, whyHolds: "collects its job", run: func(r *PendingRun) {
+				r.Status, r.Capture, r.Kept, r.Launch.ResumeCarry = StatusResumed, &final, &final, ResumeCollects
+			}},
+		"a claim whose turn carries the round on in its box": {target: older, decided: true,
+			in: ContinuesInParkedBox, whyHolds: "older than", run: func(r *PendingRun) {
+				r.Status, r.Capture, r.Kept, r.Launch.ResumeCarry = StatusResumed, &final, &final, ResumeCarriesOn
+			}},
+		"a claim whose turn began, its read having taken no capture": {target: target, decided: true,
+			in: ContinuesInAnyBox, run: func(r *PendingRun) {
+				r.Status, r.Launch.ResumeCarry = StatusResumed, ResumeCollects
+			}},
+		"a claim whose turn said what this build does not read": {target: older, whyHolds: "does not read",
+			run: func(r *PendingRun) {
+				r.Status, r.Capture, r.Kept, r.Launch.ResumeCarry = StatusResumed, &final, &final, "later"
+			}},
+		"an answer's claim whose job kept no capture": {target: target, decided: true,
+			in: ContinuesInParkedBox, whyHolds: "kept no capture", run: func(r *PendingRun) {
+				r.Status, r.Capture, r.Kept = StatusResumed, nil, nil
+				r.Answer = &RecordedAnswer{EventIDs: []string{"ev-1"}}
+			}},
+		"a round lost a second time, its turn collecting what it submitted": {target: target, decided: true,
+			in: ContinuesInAnyBox, run: func(r *PendingRun) {
+				r.Status, r.RoundLosses, r.Launch.ResumeCarry = StatusResumed, 1, ResumeCollects
+				r.Lost = &JobLoss{Cause: LossBoxGone}
+			}},
+		"a round lost a second time, its turn carrying it on": {target: target, decided: true,
+			whyHolds: "in a session of its own", run: func(r *PendingRun) {
+				r.Status, r.RoundLosses, r.Launch.ResumeCarry = StatusResumed, 1, ResumeCarriesOn
+				r.Lost = &JobLoss{Cause: LossBoxGone}
+			}},
 		"a round lost a second time": {target: target, whyHolds: "lost a second time", run: func(r *PendingRun) {
 			r.Status, r.Launch.Collected, r.RoundLosses = StatusRunning, true, 1
 			r.Lost = &JobLoss{Cause: LossBoxGone}
@@ -1084,12 +1120,19 @@ func TestACompanyThatKeepsNoSessionContinuesNoneItKeptBefore(t *testing.T) {
 
 // silentStamps is a run store whose stamps of a capture are never answered, as
 // a coordination store in an outage does: each waits out its caller's context.
+// Where only is set, only stamps in that state go unanswered, and every other
+// is the store's: a reservation the store never answers, say, and the settle
+// of its place after it.
 type silentStamps struct {
 	PendingStore
+	only  CaptureState
 	asked atomic.Int32
 }
 
-func (s *silentStamps) StampCapture(ctx context.Context, _ string, _ SessionCapture) (bool, error) {
+func (s *silentStamps) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	if s.only != "" && stamp.State != s.only {
+		return s.PendingStore.StampCapture(ctx, turnID, stamp)
+	}
 	s.asked.Add(1)
 	<-ctx.Done()
 	return false, ctx.Err()
@@ -1127,7 +1170,9 @@ func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
 		t.Parallel()
 		rig, _, _ := keepingRig(t)
 		run := rig.launchKept(t, "t1")
-		silent := &silentStamps{PendingStore: rig.coordinator.pending}
+		// SILENT ON THE RESERVATION ALONE: the settle of the place after it is
+		// answered, so the take's time is the reservation's to spend.
+		silent := &silentStamps{PendingStore: rig.coordinator.pending, only: CaptureBegun}
 		rig.coordinator.pending, rig.coordinator.recordBudget = silent, time.Minute
 		// A READ WITH A DEADLINE, whose take ends two seconds from now and
 		// whose by a pause's grace after that.
@@ -1143,6 +1188,9 @@ func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
 		if spooled != nil || silent.asked.Load() == 0 {
 			t.Errorf("the take spooled %+v after %d reservations, want none spooled, the place asked for",
 				spooled, silent.asked.Load())
+		}
+		if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
+			t.Errorf("the place the take asked for stands %+v, want it settled refused", c)
 		}
 	})
 }

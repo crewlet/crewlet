@@ -68,6 +68,8 @@ func (c *Company) SeatAccessConnected(kind string) bool {
 		return in.GitHub != nil
 	case "slack":
 		return in.Slack != nil
+	case "cloudflare":
+		return in.Cloudflare != nil
 	}
 	return false
 }

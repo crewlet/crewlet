@@ -16,6 +16,7 @@ import { LayerHost } from "@crewlethq/ui";
 import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import {
+  cloudflareAnswer,
   confluenceAnswer,
   datadogAnswer,
   githubAnswer,
@@ -194,6 +195,57 @@ test("the review says the change as one line and the steps by who takes them", a
   expect(review.querySelector(".crewlet-change-list--inline")).toBeTruthy();
   expect(within(review).getByText("Off").closest(".crewlet-tag")).toBeTruthy();
   expect(screen.queryByText(/the next sync will:/)).toBeNull();
+});
+
+// CLOUDFLARE'S ACCOUNT IS THE TOKEN ITSELF: the details name it, the level it
+// holds in the tab's own words, and the variable it is sealed in, never a value.
+test("a Cloudflare seat's details name its token, its permissions and its tool", () => {
+  draw(cloudflareAnswer());
+  details("SRE", "Cloudflare");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on Cloudflare"]')!);
+  expect(facts.getByText("crewlet-gophrase-sre")).toBeTruthy();
+  expect(facts.getByText("Token permissions")).toBeTruthy();
+  expect(facts.getByText("Operate")).toBeTruthy();
+  expect(facts.getByText("CLOUDFLARE_API_TOKEN_SRE")).toBeTruthy();
+  expect(facts.getByText("Live, Cloudflare MCP server, one per agent")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Rotate credential" })).toBeTruthy();
+});
+
+test("an off Cloudflare seat says turning it on mints a token limited to the company's zones", () => {
+  draw(cloudflareAnswer());
+  details("PM", "Cloudflare");
+  expect(
+    screen.getByText(
+      "Off. Turning it on mints an account API token for the agent with the chosen permissions, limited to the company's zones.",
+    ),
+  ).toBeTruthy();
+});
+
+// A CLOUDFLARE TOKEN IS DELETED, NOT DISABLED: nothing is left at Cloudflare
+// to turn back on, so the review says a new token is minted instead.
+test("turning a Cloudflare seat off says the token is deleted and a new one minted on return", async () => {
+  draw(cloudflareAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "SRE on Cloudflare" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      /Crewlet disables the agent's API token, so it stops working at once, then deletes it/,
+    ),
+  ).toBeTruthy();
+});
+
+test("rotating a Cloudflare token says it is rolled, and the old value stops working", async () => {
+  draw(cloudflareAnswer());
+  details("SRE", "Cloudflare");
+  fireEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
+  const dialog = screen.getByRole("alertdialog", { name: "Rotate SRE's Cloudflare credential?" });
+  expect(within(dialog).getByText(/rolls the token to a new value/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Rotate credential" }));
+  await waitFor(() =>
+    expect(calls.act).toEqual([
+      { kind: "cloudflare", handle: "sre", lane: "cloudflare", action: "rotate" },
+    ]),
+  );
 });
 
 test("turning a seat off says in the review what that does at the vendor", async () => {

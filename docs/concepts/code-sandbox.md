@@ -607,9 +607,9 @@ Every word in it that somebody else wrote is fenced or defused under the relaunc
 
 Whether a restore succeeds is the box's to find out, as its run starts, and the skill guard has to be the session's the run is in before the bridge admits a single call. So a launch that continues a session hands its box the seat's tools under **two bridge tokens of the job**: one for the session it continues, and one for a session of its own its script starts in that one's place. Once its restore has come to whatever it came to, the run's script installs the one of the session it started — Claude Code's MCP configuration, OpenCode's configured values — and removes the other from the box, before its harness starts. So the token the harness dials is the box's word on which session it started, read by the [bridge](#the-tool-bridge--a-seats-own-tools-from-inside-a-box) where it reads every request's token:
 
-- **On the run's first request, before any call.** The first request on either token — the harness's MCP handshake as often as not — holds the run's guard to the session the box started before it is served, and every request arriving meanwhile waits for that: the guard the launch armed for a continued session where the box took it up, an empty one where it started its own. In that case the node that launched the run states, as the round's opening frame, the fresh brief the run was handed in the continuation's place — published beside the request rather than on its path, so a broker's slow moment never holds the harness's handshake past its connect timeout, and given up if the broker has not taken it within five seconds, which leaves the continuation as the round's opening frame; the run's collection still says it started a session of its own (`harness_session_continued` false, with `harness_session_fell_back`'s reason). A node that took the run over before its box first reached the bridge holds the run to that empty guard all the same and writes what the box said on the job's record, but holds no copy of the brief the launch wrote: there the round's opening frame stays the continuation, and the run's collection says it started a session of its own (`harness_session_continued` false, with `harness_session_fell_back`'s reason). A later request on the other token is refused: the box started one session, and holds that token no longer. A box whose harness never reaches its bridge makes no call, and no guard is asked.
+- **On the run's first request, before any call.** The first request on either token — the harness's MCP handshake as often as not — holds the run's guard to the session the box started before it is served, and every request arriving meanwhile waits for that: the guard the launch armed for a continued session where the box took it up, an empty one where it started its own. In that case the node that launched the run states, as the round's opening frame, the fresh brief the run was handed in the continuation's place — published beside the request rather than on its path, so a broker's slow moment never holds the harness's handshake past its connect timeout — and so, on such a moment, possibly after a later frame of the round, its completion included, since nothing on the engine's path waits for it — and given up if the broker has not taken it within five seconds, which leaves the continuation as the round's opening frame; the run's collection still says it started a session of its own (`harness_session_continued` false, with `harness_session_fell_back`'s reason). A node that took the run over before its box first reached the bridge holds the run to that empty guard all the same and writes what the box said on the job's record, but holds no copy of the brief the launch wrote: there the round's opening frame stays the continuation, and the run's collection says it started a session of its own (`harness_session_continued` false, with `harness_session_fell_back`'s reason). A later request on the other token is refused: the box started one session, and holds that token no longer. A box whose harness never reaches its bridge makes no call, and no guard is asked.
 - **Not something the run's model can forge.** The session is in what the fleet signs, and by the time the model can read a file the box holds only the token of the session it is in. The script's own record of its restore, which the collection reads into the run's `executor_collected` (`harness_session_fell_back`, which stays its record there), is a file in the box the model could rewrite, and is never what a guard is built from.
-- **Kept on the job's record.** What the box said is written on the run's record, and every later rebuild of the run's guard reads it: the collection's, a relaunch that carries the run on after a person's answer, a loss or a replaced sign-in, a reviewer's send-back that continues the run's session, and a node taking the run over while it works. The skills the launch armed are the session's only where the box said it took that session up. And it names **the session the job ran**: every runner names its run's session before its harness starts — the one it continues, or one it mints — and, beside one it continues, the session its script starts of its own in that one's place, so a person's answer or a replaced sign-in carries the round on, in the box it parked or was refused in, in whichever of the two the box said it started — never the one the launch chose where the box fell back, whose transcript never read the skills the job loaded, and never one a file in the box names, such as the session record the run's collection reads, which the run's model could rewrite. A launch that continued nothing ran the session it named. A row that says nothing — a box that has not reached its bridge, a record the coordination store did not take — reads as a session of the job's own for its guard: the safe direction, since a guard short of a skill asks the run to load it again, where one holding a skill its session never read would let through a call the skill exists to hold back. And for a launch that continued a session, such a row names neither of the two as the session its box ran, so an answer or a replaced sign-in carries the round on from the turn's kept capture, or in a session of its own, never in that box.
+- **Kept on the job's record.** What the box said is written on the run's record, and every later rebuild of the run's guard reads it: the collection's, a relaunch that carries the run on after a person's answer, a loss or a replaced sign-in, a reviewer's send-back that continues the run's session, and a node taking the run over while it works. The skills the launch armed are the session's only where the box said it took that session up. And it names **the session the job ran**: every runner names its run's session before its harness starts — the one it continues, or one it mints — and, beside one it continues, the session its script starts of its own in that one's place. So where a person's answer or a replaced sign-in carries the round on in the box it parked or was refused in **without the turn's kept capture** — none kept, or none the relaunch's runner restores — it continues there whichever of the two the box said it started: never the one the launch chose where the box fell back, whose transcript never read the skills the job loaded, and never one a file in the box names, such as the session record the run's collection reads, which the run's model could rewrite. A launch that continued nothing ran the session it named. A row that says nothing — a box that has not reached its bridge, a record the coordination store did not take — reads as a session of the job's own for its guard: the safe direction, since a guard short of a skill asks the run to load it again, where one holding a skill its session never read would let through a call the skill exists to hold back. And for a launch that continued a session, such a row names neither of the two as the session its box ran, so no relaunch continues either of them by that word: an answer or a replaced sign-in carries the round on from the turn's kept capture, or in a session of its own. **A kept capture names its session as its take read it**: off the session record the run's script writes as its harness exits, naming the session it started, for which the archive is packed and which the executor log's row then names. A relaunch continuing that capture continues that session — restored into whichever box it gets, or, in the very box it was taken in after a clean exit, as that box's own copy, whatever the box said. The record is a file the run's model could rewrite, as it could the transcript the session is, so the name is the box's no less than the content is; what the box's word decides there is the guard, which such a relaunch arms with the job's own loads through the capture, and with the skills the job's launch armed only where the box said it took that session up.
 
 ### What a continued launch costs
 
@@ -1333,12 +1333,16 @@ reads it, the turn's run record in the coordination store and the job that
 record names as the one a relaunch would follow, and the member of the seat's
 executor chain a relaunch would be launched on now — the first not sitting out
 its plan — with the cell its run lands in and its runner. **The member is the
-one the node holding the seat would pick**: which members sit out a spent plan
-is what that node's own calls have met, and which company revision says
-sessions are kept is the revision it runs, and a relaunch is decided there. So
-the node answering asks it — itself where it holds the seat, and otherwise the
-node the seat's lease names, once a page — and is answered with that node's
-pick and whether that member's runner restores each session the page holds.
+one the node holding the seat would pick**, off the chain of the company
+revision the turn's relaunch runs on: which members sit out a spent plan is what
+that node's own calls have met, which company revision says sessions are kept
+is the revision it runs, a resumed segment of the turn running there relaunches
+— its reviewer's send-back, the round it carries on — on the revision it was
+admitted under, whatever an apply has put live since, and a relaunch is decided
+there. So the node answering asks it — itself where it holds the seat, and
+otherwise the node the seat's lease names, once a page — and is answered, turn
+by turn, with that node's pick and whether that member's runner restores the
+turn's session.
 `any_box` where the turn is live and not ending, the newest capture of that job
 was kept and is the one the row names, and that runner restores its harness,
 format and release; a round whose job was lost a second time is carried on in a
@@ -1361,18 +1365,28 @@ run's ending is decided is ending, from the decision on. **An unknown is never
 a no**: `continuable` is null, with its reason, where the run record or the
 row at the relaunch's level could not be read, and where a relaunch would not
 decide now either — the job it would follow still working, or a claim on it
-whose read has not yet taken its final capture (a claim whose read has is
-decided as any other, its review included); that job's capture still being
-kept; what a relaunch is launched on not to be said (every member of the
-seat's chain sitting out its plan, no node holding the seat, the node holding
-it not answering within two seconds); and a relaunch only the resume of a
-collected job decides — whether its round is carried on in its box, which it
-is where the job's sign-in was replaced while it ran. A page reads the
-coordination store once, one listing of the seat's live runs — and one turn's
-record alone for a live row the listing does not hold, a record of a status
-this build does not know or one it could not decode — and not at all where
-every turn on it has ended; where the store does not answer, a live turn's row
-says so, and the page is answered all the same. **A row is read again at the
+whose read is still under way, one that has neither taken the job's final
+capture nor begun its turn; that job's capture still being kept; what a
+relaunch is launched on not to be said (every member of the seat's chain
+sitting out its plan, no node holding the seat, the node holding it not
+answering within two seconds); and a relaunch only the resume of a collected
+job decides, until its turn begins — whether its round is carried on in its
+box, which it is where the job's sign-in was replaced while it ran, and whether
+a round lost a second time is carried on in a session of its own or reviewed
+from the work it submitted. **A resumed turn says what it does with the round
+as it begins**, on the job's record — collects the job, or carries the round on
+— and from then on, its review included, the claim is decided on that, whether
+or not its read took any capture: a turn that collects its job is reviewed, and
+its send-back continues nothing in the job's box; one that carries the round on
+in that box continues it there. A claim of a person's answer reads no box, and
+is decided whatever its job kept. A page reads the coordination store once for
+its runs, one listing of the seat's live runs — and one turn's record alone for
+a live row the listing does not hold, a record of a status this build does not
+know or one it could not decode — and once more for the seat's lease, to find
+the node holding the seat, wherever a live row asks it, that node's own pages
+included; and not at all where every turn on it has ended. Where the store does
+not answer, a live turn's row says so, and the page is answered all the
+same. **A row is read again at the
 relaunch's level** (`linearizable`) only where the page was read below it and
 the row names another capture than the one its run's record keeps — a copy of
 the log behind the record, which would read a capture a relaunch continues as

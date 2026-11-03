@@ -639,6 +639,14 @@ type Engine struct {
 	// launcher ([agentLauncher.launch]).
 	abandonedLaunches sync.Map
 
+	// resumedSegments are the turns a resumed segment of which is running on
+	// this node, by run id, each with the company the segment was admitted
+	// under ([resumeInput.Company]): the revision a relaunch it makes runs on,
+	// which a reader of whether a relaunch would continue the turn's session is
+	// answered from ([Engine.relaunchCompany]). Set by [Engine.resumeTurn] for
+	// as long as it runs.
+	resumedSegments sync.Map
+
 	// envelopes sign every estate request this node sends and every reply
 	// it answers a peer with, and verify both directions — one value for
 	// the router and the server alike; see [estateEnvelopes].

@@ -185,6 +185,11 @@ func (p *datadogPass) seatPlan(c *Company) (*provision.Plan, error) {
 	return p.engine.seatAccessPlan(c, integration.KindDatadog)
 }
 
+// seatPlan is every agent that is on at Cloudflare.
+func (p *cloudflarePass) seatPlan(c *Company) (*provision.Plan, error) {
+	return p.engine.seatAccessPlan(c, integration.KindCloudflare)
+}
+
 // seatPlan is every agent that is on at Slack, whose bot token the access sync
 // seals once a person approves its app's install.
 func (p *slackPass) seatPlan(c *Company) (*provision.Plan, error) {

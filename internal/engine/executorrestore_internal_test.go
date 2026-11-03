@@ -434,7 +434,7 @@ func TestAResumeReadsWhichSessionTheJobsBoxStarted(t *testing.T) {
 }
 
 // A RELAUNCH IS TARGETED AT THE MEMBER IT WOULD BE LAUNCHED ON, as the node
-// holding the seat picks it ([Engine.RelaunchTarget], which a node with no
+// holding the seat picks it ([Engine.RelaunchTargets], which a node with no
 // broker, the whole fleet, answers from its own pick): the seat's first member
 // with an in-box runner that is not sitting out its plan there, the cell its
 // run lands in, that node, and its runner — never the runner of the harness
@@ -476,7 +476,11 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 			if !ok {
 				t.Fatal("the seat has no agent id")
 			}
-			got := e.RelaunchTarget(t.Context(), id, seat.Handle(), nil)
+			targets := e.RelaunchTargets(t.Context(), id, seat.Handle(), []sandbox.RelaunchAsk{{Turn: "t1"}})
+			if len(targets) != 1 {
+				t.Fatalf("one turn asked about was answered %d targets", len(targets))
+			}
+			got := targets[0]
 			if tc.undecided {
 				if !got.Undecided || got.Restorer != nil || !strings.Contains(got.Why, "sitting out its plan") {
 					t.Fatalf("a chain sitting out is targeted %+v, want it undecided, saying so", got)
@@ -498,9 +502,61 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 	e, _ := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
-	if got := e.localRelaunchTarget("nobody"); got.Restorer != nil || got.Undecided ||
+	if got := e.localRelaunchTarget("nobody", "t1"); got.Restorer != nil || got.Undecided ||
 		!strings.Contains(got.Why, "no seat") {
 		t.Errorf("a handle no seat holds is targeted %+v, want no member, said", got)
+	}
+}
+
+// A RESUMED TURN'S RELAUNCH IS TARGETED FROM THE REVISION IT RUNS ON. A resumed
+// segment pins the company revision it was admitted under, and a reviewer's
+// send-back from it is launched on that revision's chain whatever an apply put
+// live since; so the node running it answers what that turn's relaunch is
+// launched on from the segment's revision, while a turn with no segment running
+// here — whose next one is admitted under the revision live when it comes — is
+// answered from the live one. Two turns of the seat, one page, two answers.
+//
+// Mutation: answer every turn from the revision the node runs, and the open
+// segment's row is decided for a member its send-back is never launched on.
+func TestAResumedTurnsRelaunchIsTargetedFromTheRevisionItRunsOn(t *testing.T) {
+	t.Parallel()
+	pinned, seat := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
+	e, _ := launchRigRestoring(t, pinned, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}), &keptLog{rows: map[string]executordomain.Session{}, archives: map[string][]byte{}})
+	// THE TURN'S SEGMENT IS RUNNING ON THIS NODE, pinned to the revision it
+	// was admitted under, as [Engine.resumeTurn] registers it.
+	e.resumedSegments.Store("t-open", pinned)
+	// AN APPLY SINCE: the seat's llm is now an OpenCode entry in the
+	// container cell, under the same catalogue.
+	applied, _ := chainCompany(t, chainMember{key: "oc", agent: "opencode",
+		model: "anthropic/claude-sonnet-5", runIn: config.Placement(sandbox.Container)})
+	applied.catalogue = pinned.catalogue
+	e.epoch.current.Store(applied)
+	id, ok := pinned.Org.AgentIDFor(seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	got := e.RelaunchTargets(t.Context(), id, seat.Handle(), []sandbox.RelaunchAsk{
+		{Turn: "t-open"}, {Turn: "t-parked"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("two turns asked about were answered %d targets", len(got))
+	}
+	if open := got[0]; open.Undecided || open.Harness != "claude-code" || open.Placement != sandbox.Direct {
+		t.Errorf("the open segment's turn is targeted %+v, want the claude-code member of the revision it "+
+			"was admitted under, in the direct cell", open)
+	}
+	if parked := got[1]; parked.Undecided || parked.Harness != "opencode" || parked.Placement != sandbox.Container {
+		t.Errorf("a turn with no segment open is targeted %+v, want the opencode member of the revision "+
+			"live now, in the container cell", parked)
+	}
+	// AND ONCE THE SEGMENT ENDS, the turn's next one is admitted under the
+	// live revision, which answers it.
+	e.resumedSegments.Delete("t-open")
+	if after := e.RelaunchTargets(t.Context(), id, seat.Handle(),
+		[]sandbox.RelaunchAsk{{Turn: "t-open"}}); after[0].Harness != "opencode" {
+		t.Errorf("a turn whose segment ended is targeted %+v, want the live revision's member", after[0])
 	}
 }
 
@@ -538,7 +594,7 @@ func TestARelaunchTargetSaysWhetherTheCompanyKeepsSessions(t *testing.T) {
 				}
 				e.objects = &objectStore{store: store}
 			}
-			got := e.localRelaunchTarget(seat.Handle())
+			got := e.localRelaunchTarget(seat.Handle(), "t1")
 			if (got.NoKept == sandbox.NoKeptSession) != tc.noKept || (!tc.noKept && got.NoKept != "") {
 				t.Fatalf("the target says %q of keeping sessions, want kept none %v", got.NoKept, tc.noKept)
 			}
@@ -642,6 +698,82 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 	}
 	if len(decided) != 1 || decided[0].Continues {
 		t.Fatalf("the runner was told %+v, want once: a session of its own", decided)
+	}
+}
+
+// A BOX ON ANOTHER NODE'S HOST ADDS NOTHING TO A LAUNCH'S FLOOR. The job
+// before's own session in its box counts toward a relaunch's floor only where
+// the launch can continue in that box, and a box in a cell on an engine host is
+// continued in by the node that launched it and no other: a seat that moved
+// since leaves the box to that node, and its relaunch here starts a session of
+// its own in a fresh box. So the relaunch is held to the static floor, and is
+// launched, fresh, where the box's session would not have fit.
+//
+// Mutation: drop the host test from the floor's reckoning of the job's box, and
+// the relaunch is refused below a floor its run never needs.
+func TestABoxOnAnotherNodesHostAddsNothingToALaunchsFloor(t *testing.T) {
+	t.Parallel()
+	// A DAY OF 100000 WITH 70000 SPENT: room for the static floor (25000),
+	// and none for the box's session, which sends 40000 first.
+	k := newKeptLaunch(t, 40000, 100000, 70000)
+	k.claimed(t)
+	// THE SEAT MOVED: this node is node-b, whose coordinator launches here,
+	// and the job's direct box is on the host of the node that launched it.
+	rt := k.e.sandbox.Load()
+	moved, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers: testAnswers(), Audience: noAudience{}, Queue: k.e.backends.Queue, Pending: rt.pending,
+		Manager: k.l.company.catalogue, Resume: &resumer{engine: k.e}, Node: "node-b",
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	t.Cleanup(moved.Stop)
+	k.e.useSandbox(rt.pending, moved)
+	k.e.id = "node-b"
+	decided, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", ContextTokens: 40000},
+		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
+	if err != nil {
+		t.Fatalf("a relaunch on another node than its job's box's: %v, want it launched on the static floor", err)
+	}
+	if len(decided) != 1 || decided[0].Continues {
+		t.Fatalf("the runner was told %+v, want once: a session of its own", decided)
+	}
+	started := k.jobs.Started()
+	if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" {
+		t.Fatalf("the relaunch started with session %q and brief %q, want a session of its own on the "+
+			"fresh brief", last.Resume, last.Brief)
+	}
+}
+
+// unreadRuns is the run store a launch reads its turn's record from, whose read
+// of a record fails, as a coordination store having a bad moment answers it.
+type unreadRuns struct{ sandbox.PendingStore }
+
+func (unreadRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+	return sandbox.PendingRun{}, false, errors.New("the coordination store did not answer")
+}
+
+// A JOB'S BOX WHOSE RECORD CANNOT BE READ HOLDS A LAUNCH TO ITS SESSION. Whether
+// a relaunch can continue in the job before's box is read off the run's record,
+// and where that read fails nothing says it cannot: the box's session counts
+// toward the floor, the safe direction for a floor — a launch held back on room
+// it may not need, never one started that its budget cannot carry.
+//
+// Mutation: read an unreadable record as a box the launch cannot continue in,
+// and the launch goes out on the static floor.
+func TestAJobsBoxWhoseRecordCannotBeReadHoldsTheLaunchToItsSession(t *testing.T) {
+	t.Parallel()
+	k := newKeptLaunch(t, 40000, 100000, 70000)
+	k.claimed(t)
+	rt := k.e.sandbox.Load()
+	k.e.useSandbox(unreadRuns{PendingStore: rt.pending}, rt.coordinator)
+	_, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", ContextTokens: 40000},
+		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
+	var refused *floorRefusal
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) || !errors.As(err, &refused) ||
+		refused.floor.context != 40000 {
+		t.Fatalf("a relaunch whose job's record cannot be read = %v, want a budget refusal on the box "+
+			"session's floor", err)
 	}
 }
 

@@ -358,22 +358,31 @@ func TestANewRoundFoldsItsTurnsEarlierCallsIntoTheRow(t *testing.T) {
 	}
 }
 
-// A CAPTURE'S PLACE ONLY GROWS ON THE ROW. A newer capture takes the row, the
-// same one moves on only to its outcome, nothing older or backwards lands, and
-// a capture that landed is the turn's kept one wherever it is newer than that
-// — an unresolved capture answered after a newer one began included.
+// A CAPTURE'S PLACE ONLY GROWS ON THE ROW, AND IS ITS TAKE'S. A newer capture
+// takes the row, the same one moves on only to its outcome and only by the
+// take that reserved it — the instant it stamped the place at — nothing older
+// or backwards lands, and a capture that landed is the turn's kept one
+// wherever it is newer than that — an unresolved capture answered after a newer
+// one began included. A take's own stamp asked again, the store's answer to
+// the first lost, is answered taken: the place is its own.
 //
-// Mutation: let an equal place take any state, or keep only the newest
-// attempt, and a late `begun` takes a landed capture back, or the answered
-// older capture is never kept.
+// Mutation: let an equal place take any state, or any take's stamp, keep only
+// the newest attempt, or answer a stamp the row holds already as not taken, and
+// a late `begun` takes a landed capture back, another read's refusal settles a
+// place it never held, the answered older capture is never kept, or a take
+// reads its own reservation as another read's.
 func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	ctx := t.Context()
-	stamp := func(launch, seq int64, state CaptureState) bool {
+	// TWO TAKES OF THE ONE JOB, each stamping at an instant of its own, as a
+	// stop's read and a collection's at once do.
+	first := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	second := first.Add(time.Second)
+	stamp := func(launch, seq int64, state CaptureState, at time.Time) bool {
 		took, err := rig.pending.StampCapture(ctx, "t1", SessionCapture{LaunchSeq: launch, CaptureSeq: seq,
-			State: state, Launch: "job", Object: "o"})
+			State: state, Launch: "job", Object: "o", At: at})
 		if err != nil {
 			t.Fatalf("StampCapture: %v", err)
 		}
@@ -382,21 +391,24 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 	for _, step := range []struct {
 		launch, seq int64
 		state       CaptureState
+		at          time.Time
 		take        bool
 	}{
-		{1, 1, CaptureBegun, true},
-		{1, 1, CaptureBegun, false},
-		{1, 1, CaptureUnresolved, true},
-		{1, 2, CaptureBegun, true},
-		{1, 1, CaptureLanded, true}, // the older answer lands as the kept one
-		{1, 1, CaptureRefused, false},
-		{1, 2, CaptureRefused, true},
-		{1, 2, CaptureLanded, false},
-		{2, 1, CaptureLanded, true},
+		{1, 1, CaptureBegun, first, true},
+		{1, 1, CaptureBegun, first, true},      // its own reservation, asked again
+		{1, 1, CaptureBegun, second, false},    // another read's, of the same place
+		{1, 1, CaptureRefused, second, false},  // and that read's refusal of a place it never held
+		{1, 1, CaptureUnresolved, first, true}, // the take's own outcome
+		{1, 2, CaptureBegun, second, true},
+		{1, 1, CaptureLanded, first, true}, // the older answer lands as the kept one
+		{1, 1, CaptureRefused, first, false},
+		{1, 2, CaptureRefused, second, true},
+		{1, 2, CaptureLanded, second, false},
+		{2, 1, CaptureLanded, first, true},
 	} {
-		if got := stamp(step.launch, step.seq, step.state); got != step.take {
-			t.Fatalf("stamping (%d, %d) %s was taken %v, want %v", step.launch, step.seq, step.state,
-				got, step.take)
+		if got := stamp(step.launch, step.seq, step.state, step.at); got != step.take {
+			t.Fatalf("stamping (%d, %d) %s at %s was taken %v, want %v", step.launch, step.seq, step.state,
+				step.at.Format(time.TimeOnly), got, step.take)
 		}
 	}
 	run := rig.get("t1")
