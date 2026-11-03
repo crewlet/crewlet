@@ -4219,6 +4219,11 @@ answers the name and when it was minted, never the value.
 }
 ```
 
+A level the company's connection cannot grant yet carries `unavailable`, the
+sentence saying what it waits on ("The Configure level is unavailable until the
+provisioner token holds Zone Settings: Edit and Response Compression: Edit"),
+and the tab offers it disabled with that reason.
+
 Each seat lane's `tool` says whether the agent can use its credential through
 a tool right now: `live`, `waiting` (a server reads it and it is not sealed
 yet), `builtin` (Jira and Confluence, whose credential the engine's own tools

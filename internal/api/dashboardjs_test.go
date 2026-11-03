@@ -1257,7 +1257,15 @@ const (
 	// own side above, the two add: the code host's 4.3 KiB over the 378.2 KiB
 	// both sides started from, on main's 381.2 KiB, is about 385.5 KiB, so it
 	// moved to 386 KiB.
-	initialBudget = 386 << 10
+	// Main's kit 0.92.0 (a StatusDot's word that wraps) regroups the kit's
+	// shared code the first paint loads: two small chunks of its own (about
+	// 0.7 and 0.4 KiB gzipped, each its own gzip stream) against about
+	// 0.6 KiB less entry script, and the wrap's rules in the one sheet. It
+	// took main's by about 0.7 KiB, which main's 382 KiB still held. Merged,
+	// the same regrouping took this from about 385.6 KiB to 386.3 KiB, past
+	// 386 KiB by main's own growth alone, so it moved to 387 KiB, which is
+	// 2.11 seconds on that link.
+	initialBudget = 387 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1756,7 +1764,15 @@ const (
 	// on the merged tree, taking it from 5476.6 KiB (5,608,025 bytes) to
 	// 5479.7 KiB (5,611,188 bytes). It moved by main's own 3 KiB, from
 	// 5477 KiB: 5480 KiB.
-	treeBudget = 5<<20 + 360<<10
+	// A level an agent cannot be given drawn disabled with its reason, a
+	// setup verdict that wraps, and the kit's move to 0.92.0 (a StatusDot's
+	// word that wraps) took main's from 5447.7 KiB to 5449.2 KiB (+1.5 KiB,
+	// 1529 bytes): the kit +1467 bytes net across its renamed chunks and its
+	// stylesheet, and the access and settings chunks +62 bytes. Merged again
+	// with it, main's +1529 bytes came to 1,508 bytes on the merged tree,
+	// taking it from 5479.7 KiB (5,611,188 bytes) to 5481.1 KiB (5,612,696
+	// bytes). It moved by main's own 2 KiB, from 5480 KiB: 5482 KiB.
+	treeBudget = 5<<20 + 362<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

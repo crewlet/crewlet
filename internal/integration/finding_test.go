@@ -13,7 +13,8 @@ import (
 // integration rather than something blocking it. They are listed rather than
 // derived so a kind added without deciding whether it blocks fails a test.
 var advisories = []FindingKind{
-	FindingCredentialExpiring, FindingGrantExcess, FindingRegistrationOrphaned, FindingCoveragePartial,
+	FindingCredentialExpiring, FindingGrantExcess, FindingLevelUnavailable, FindingRegistrationOrphaned,
+	FindingCoveragePartial,
 }
 
 // isAdvisory reports a kind from the list above.
@@ -34,6 +35,7 @@ var knownKinds = []FindingKind{
 	FindingContactUnknown,
 	FindingContactMoved,
 	FindingGrantExcess,
+	FindingLevelUnavailable,
 	FindingRegistrationOrphaned,
 	FindingCoveragePartial,
 }
@@ -368,6 +370,7 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 		// only note with a deadline on it.
 		FindingCredentialExpiring,
 		FindingGrantExcess,
+		FindingLevelUnavailable,
 		FindingRegistrationOrphaned,
 		FindingCoveragePartial,
 	}

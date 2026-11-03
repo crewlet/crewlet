@@ -83,7 +83,10 @@ const GITLAB_OPTIONS: AccessOptions = {
   scope_open: true,
 };
 
-/** Cloudflare's two fixed levels, each a set of permission groups the engine resolves. */
+/**
+ * Cloudflare's three fixed levels, each a set of permission groups the engine
+ * resolves; Configure waits on groups the provisioner token does not hold.
+ */
 const CLOUDFLARE_OPTIONS: AccessOptions = {
   lane: "cloudflare",
   tool_server: "cloudflare",
@@ -92,6 +95,12 @@ const CLOUDFLARE_OPTIONS: AccessOptions = {
   levels: [
     { id: "read", name: "Read" },
     { id: "operate", name: "Operate" },
+    {
+      id: "configure",
+      name: "Configure",
+      unavailable:
+        "The Configure level is unavailable until the provisioner token holds Zone Settings: Edit and Response Compression: Edit",
+    },
   ],
 };
 
