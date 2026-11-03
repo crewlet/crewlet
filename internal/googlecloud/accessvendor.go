@@ -316,15 +316,27 @@ func (s *accessSession) observe(ctx context.Context, rec seataccess.Record) (sea
 }
 
 // lastWrite is when the engine last wrote this seat's account: its creation,
-// or the last sync of its lane that took a step.
+// the last sync of its lane that took a step, or the write its recorded
+// settling waits on.
+//
+// THE SETTLING IS THE DURABLE MARK: a quiet pass after a write replaces the
+// lane's sync with one that took no step, and the write it waits on is still
+// the last one, so a stale read then is still inside the bound.
 func lastWrite(rec seataccess.Record) time.Time {
 	var at time.Time
 	if rec.Account != nil {
 		at = rec.Account.CreatedAt
 	}
-	if lr, ok := rec.Lanes[seataccess.LaneGoogleCloud]; ok && lr.Sync != nil &&
-		slices.ContainsFunc(lr.Sync.Steps, func(s seataccess.StepOutcome) bool { return s.Done }) && lr.Sync.At.After(at) {
+	lr, ok := rec.Lanes[seataccess.LaneGoogleCloud]
+	if !ok {
+		return at
+	}
+	if lr.Sync != nil && lr.Sync.At.After(at) &&
+		slices.ContainsFunc(lr.Sync.Steps, func(s seataccess.StepOutcome) bool { return s.Done }) {
 		at = lr.Sync.At
+	}
+	if written := writtenAt(lr.Settling); written.After(at) {
+		at = written
 	}
 	return at
 }
@@ -451,7 +463,46 @@ func mapKeysOf[V any](m map[string]V) func(func(string) bool) {
 	}
 }
 
+// writes is what one step wrote at Google, which decides what the seat's tool
+// waits on after it ([settleFor]): a grant, any other change, or nothing.
+type writes struct {
+	granted, changed bool
+	// at is when the last write was made.
+	at time.Time
+}
+
+// note records a write made at at: a grant of access, or any other change.
+// A nil writes records nothing, for a step whose seat is turned off.
+func (w *writes) note(grant bool, at time.Time) {
+	if w == nil {
+		return
+	}
+	if grant {
+		w.granted = true
+	} else {
+		w.changed = true
+	}
+	w.at = at
+}
+
+// result is the step's answer: what the seat's tool waits on, from the last
+// write, or nothing where the step wrote nothing.
+func (w *writes) result() seataccess.StepResult {
+	switch {
+	case w.granted:
+		return seataccess.StepResult{Settling: settleFor(ReasonGranting, w.at)}
+	case w.changed:
+		return seataccess.StepResult{Settling: settleFor(ReasonApplying, w.at)}
+	}
+	return seataccess.StepResult{}
+}
+
 // Apply takes one step at Google, chosen by its op and its place in the op.
+//
+// A STEP THAT WROTE SAYS WHAT THE SEAT WAITS ON ([seataccess.StepResult.Settling]):
+// Google is still creating a new account, still applying a grant, which its
+// token waits on, or still applying any other change. The sync ends OK all
+// the same, since nobody owes a step.
 func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	switch in.Step.Op {
 	case seataccess.OpCreate:
@@ -460,7 +511,9 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 			return s.create(ctx, in)
 		case 1:
 			return s.withAccount(ctx, in, func(sa ServiceAccount) (seataccess.StepResult, error) {
-				return seataccess.StepResult{}, s.delegate(ctx, sa)
+				var w writes
+				err := s.delegate(ctx, sa, &w)
+				return w.result(), err
 			})
 		default:
 			return s.grantLevel(ctx, in)
@@ -474,7 +527,7 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 			return s.disable(ctx, in)
 		}
 		return s.withAccount(ctx, in, func(sa ServiceAccount) (seataccess.StepResult, error) {
-			return seataccess.StepResult{}, s.converge(ctx, sa.Email, seataccess.Desired{}, known(in))
+			return seataccess.StepResult{}, s.converge(ctx, sa.Email, seataccess.Desired{}, known(in), nil)
 		})
 	case seataccess.OpRemove:
 		return s.remove(ctx, in)
@@ -490,6 +543,7 @@ func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (s
 	email := AccountEmail(id, s.client.IdentityProject())
 	sa, err := s.client.CreateServiceAccount(ctx, id, displayName(s.company, in.Seat.Handle),
 		description(s.company, in.Seat.Handle))
+	made := s.client.clock.now()
 	switch {
 	case Status(err) == http.StatusConflict && recordedAs(in.Record, email):
 		// THE ACCOUNT THIS SEAT HAD, still being deleted at Google: the
@@ -511,7 +565,8 @@ func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (s
 	}); err != nil {
 		return seataccess.StepResult{AccountID: sa.UniqueID, Account: sa.Email}, s.refused(err, "")
 	}
-	return seataccess.StepResult{AccountID: sa.UniqueID, Account: sa.Email}, nil
+	return seataccess.StepResult{AccountID: sa.UniqueID, Account: sa.Email,
+		Settling: settleFor(ReasonCreating, made)}, nil
 }
 
 // recordedAs reports a ledger record whose account had email.
@@ -521,16 +576,22 @@ func recordedAs(rec *seataccess.Record, email string) bool {
 
 // delegate grants the provisioner Token Creator on the seat's account alone,
 // waiting out a new account its own policy does not know yet, and until the
-// grant reads back.
-func (s *accessSession) delegate(ctx context.Context, sa ServiceAccount) error {
+// grant reads back. A grant it writes is noted in w, since the seat's token
+// waits on it.
+func (s *accessSession) delegate(ctx context.Context, sa ServiceAccount, w *writes) error {
 	prov := member(s.client.Provisioner())
 	if _, err := s.client.clock.awaitObserved(ctx, readDelegated, func() (bool, error) {
+		wrote := false
 		err := s.client.EditAccountPolicy(ctx, sa.Email, func(p *Policy) bool {
-			return grant(p, prov, []string{tokenCreator})
+			wrote = grant(p, prov, []string{tokenCreator})
+			return wrote
 		})
 		switch Status(err) {
 		case http.StatusNotFound, http.StatusBadRequest, http.StatusConflict:
 			return false, err
+		}
+		if err == nil && wrote {
+			w.note(true, s.client.clock.now())
 		}
 		return true, err
 	}); err != nil {
@@ -550,10 +611,12 @@ func (s *accessSession) grantLevel(ctx context.Context, in seataccess.ApplyInput
 		if err := s.grantable(ctx, in.Want.Level); err != nil {
 			return seataccess.StepResult{}, err
 		}
-		if err := s.delegate(ctx, sa); err != nil {
+		var w writes
+		if err := s.delegate(ctx, sa, &w); err != nil {
 			return seataccess.StepResult{}, err
 		}
-		return seataccess.StepResult{}, s.converge(ctx, sa.Email, in.Want, known(in))
+		err := s.converge(ctx, sa.Email, in.Want, known(in), &w)
+		return w.result(), err
 	})
 }
 
@@ -598,7 +661,11 @@ func known(in seataccess.ApplyInput) []string {
 //
 // A ROLE NO LEVEL GRANTS IS NOT CREWLET'S TO TAKE: the provisioner's
 // conditions refuse revoking it, so it is left and named after the rest.
-func (s *accessSession) converge(ctx context.Context, email string, want seataccess.Desired, projects []string) error {
+//
+// Each write is noted in w: a list granted, or a list taken off.
+func (s *accessSession) converge(
+	ctx context.Context, email string, want seataccess.Desired, projects []string, w *writes,
+) error {
 	who := member(email)
 	var foreign []string
 	for _, project := range projects {
@@ -622,12 +689,12 @@ func (s *accessSession) converge(ctx context.Context, email string, want seatacc
 			if i > top {
 				break
 			}
-			if err := s.writeList(ctx, project, email, lists[i], true); err != nil {
+			if err := s.writeList(ctx, project, email, lists[i], true, w); err != nil {
 				return err
 			}
 		}
 		for i := len(lists) - 1; i > top; i-- {
-			if err := s.writeList(ctx, project, email, lists[i], false); err != nil {
+			if err := s.writeList(ctx, project, email, lists[i], false, w); err != nil {
 				return err
 			}
 		}
@@ -663,20 +730,32 @@ func (s *accessSession) converge(ctx context.Context, email string, want seatacc
 
 // writeList is one write of one level list on project: on, so email holds
 // every role of it unconditionally, or off, so it holds none of it. A write
-// that changes nothing is not made.
-func (s *accessSession) writeList(ctx context.Context, project, email string, list []string, on bool) error {
+// that changes nothing is not made; one that is made is noted in w.
+func (s *accessSession) writeList(
+	ctx context.Context, project, email string, list []string, on bool, w *writes,
+) error {
 	who := member(email)
+	wrote := false
 	edit := func(p *Policy) bool {
 		if !on {
-			return revoke(p, who, list)
+			wrote = revoke(p, who, list)
+		} else {
+			wrote = clearConditional(p, who, list) || grant(p, who, list)
 		}
-		return clearConditional(p, who, list) || grant(p, who, list)
+		return wrote
+	}
+	write := func() error {
+		err := s.client.EditProjectPolicy(ctx, project, edit)
+		if err == nil && wrote {
+			w.note(on, s.client.clock.now())
+		}
+		return err
 	}
 	if !on {
-		return s.refused(s.client.EditProjectPolicy(ctx, project, edit), project)
+		return s.refused(write(), project)
 	}
 	_, err := s.client.clock.awaitObserved(ctx, readGrantable, func() (bool, error) {
-		err := s.client.EditProjectPolicy(ctx, project, edit)
+		err := write()
 		return !accountNotYet(err, email), err
 	})
 	return s.refused(err, project)
@@ -690,18 +769,21 @@ func (s *accessSession) enable(ctx context.Context, in seataccess.ApplyInput) (s
 		if err := s.grantable(ctx, in.Want.Level); err != nil {
 			return seataccess.StepResult{}, err
 		}
+		var w writes
 		if sa.Disabled {
 			if err := s.client.EnableServiceAccount(ctx, sa.Email); err != nil {
 				return seataccess.StepResult{}, s.refused(err, "")
 			}
+			w.note(false, s.client.clock.now())
 			if err := s.awaitDisabled(ctx, sa.UniqueID, false); err != nil {
 				return seataccess.StepResult{}, err
 			}
 		}
-		if err := s.delegate(ctx, sa); err != nil {
+		if err := s.delegate(ctx, sa, &w); err != nil {
 			return seataccess.StepResult{}, err
 		}
-		return seataccess.StepResult{}, s.converge(ctx, sa.Email, in.Want, known(in))
+		err := s.converge(ctx, sa.Email, in.Want, known(in), &w)
+		return w.result(), err
 	})
 }
 
@@ -749,7 +831,7 @@ func (s *accessSession) remove(ctx context.Context, in seataccess.ApplyInput) (s
 	case !found:
 		return done, nil
 	}
-	if err := s.converge(ctx, sa.Email, seataccess.Desired{}, known(in)); err != nil {
+	if err := s.converge(ctx, sa.Email, seataccess.Desired{}, known(in), nil); err != nil {
 		return seataccess.StepResult{}, err
 	}
 	if err := s.client.DeleteServiceAccount(ctx, sa.Email); err != nil {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // Google's IAM reads are eventually consistent after a write: a new account
@@ -61,12 +63,44 @@ const (
 	readLastWrites readBack = "the account to read back as the last sync left it"
 )
 
-// The two sentences a seat's tool waits on while Google settles, which the
-// Agents tab draws as "Waiting: <reason>".
+// The sentences a seat's tool waits on while Google settles, which the Agents
+// tab draws as "Waiting: <reason>".
 const (
 	ReasonCreating = "Google is still creating the agent's account"
+	ReasonGranting = "Google is still applying the grant"
 	ReasonApplying = "Google is still applying the change"
 )
+
+// GrantSettle is how long after Crewlet grants a seat's access Google may
+// still refuse the token: the live runs' first mint took up to 1 min 36 s,
+// and Google documents a grant as typically applied in 2 and up to 7 minutes.
+const GrantSettle = 10 * time.Minute
+
+// settleWindows is how long a seat's tool waits after each kind of write.
+// A new account and any other change read back within the read-back bound; a
+// grant is waited out for [GrantSettle], since the token waits on it.
+//
+//nolint:gochecknoglobals // an immutable table, not state
+var settleWindows = map[string]time.Duration{
+	ReasonCreating: observeBudget,
+	ReasonGranting: GrantSettle,
+	ReasonApplying: observeBudget,
+}
+
+// settleFor is what a seat's tool waits on after a write for reason at at.
+func settleFor(reason string, at time.Time) *seataccess.Settling {
+	return &seataccess.Settling{Reason: reason, Until: at.Add(settleWindows[reason])}
+}
+
+// writtenAt is when the write a recorded settling waits on was made. A
+// reason this build does not know is taken as written at its end, the later
+// mark, so a newer peer's write is never judged drift early.
+func writtenAt(s *seataccess.Settling) time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	return s.Until.Add(-settleWindows[s.Reason])
+}
 
 // reason is what a seat waits on while this read settles.
 func (r readBack) reason() string {
