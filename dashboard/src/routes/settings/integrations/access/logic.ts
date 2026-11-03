@@ -21,6 +21,7 @@ import type {
 } from "~/contract/access.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
+import { integrationDocHref } from "../docs.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
 type Tone = "success" | "neutral" | "warning" | "danger" | "info";
@@ -346,17 +347,28 @@ export function scopeChoices(lane: Lane, held: string[] | undefined): ScopeChoic
   });
 }
 
+/** What a scope picker says in place of itself, and where a person makes an entry to offer. */
+export interface ScopeUnavailable {
+  words: string;
+  link?: { label: string; href: string };
+}
+
 /**
  * What a scope picker says where it has nothing to offer, or null where it
  * offers something or takes typed entries (`scope_open`): the vendor's list
- * could not be read, or it was read and holds nothing.
+ * could not be read, or it was read and holds nothing, with the lane's docs
+ * section on making one where it names one.
  */
-export function scopeUnavailable(lane: Lane, held: string[] | undefined): string | null {
+export function scopeUnavailable(lane: Lane, held: string[] | undefined): ScopeUnavailable | null {
   if (lane.scope_open || scopeChoices(lane, held).length > 0) return null;
   const words = laneWords(lane.key).scope;
   const noun = (words?.noun ?? "Scope").toLowerCase();
-  if (!lane.scope_live) return `Crewlet could not read your ${noun}`;
-  return words?.none ?? `No ${noun} to choose from`;
+  if (!lane.scope_live) return { words: `Crewlet could not read your ${noun}` };
+  const none = { words: words?.none ?? `No ${noun} to choose from` };
+  const link = words?.noneLink;
+  return link
+    ? { ...none, link: { label: link.label, href: integrationDocHref(link.doc, link.anchor) } }
+    : none;
 }
 
 export interface Status {
@@ -399,10 +411,27 @@ export function boxLines(saved: AccessSeatLane): AccessBoxLine[] {
   return (saved.box?.env ?? []).filter((line) => line.by === "you");
 }
 
-/** The settings Crewlet puts in a seat's box itself, by name, or null where it puts none. */
+/**
+ * The settings Crewlet puts in a seat's box itself, its variables by name and
+ * then its files by path, or null where it puts none.
+ */
 export function boxSettings(saved: AccessSeatLane): string | null {
-  const names = (saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name);
+  const names = [
+    ...(saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name),
+    ...(saved.box?.files ?? []).filter((f) => f.by === "crewlet").map((f) => f.path),
+  ];
   return names.length > 0 ? andList(names) : null;
+}
+
+/**
+ * What the details say after a seat's credential variable: who provides it,
+ * that Crewlet issues it at use for an hour (never sealed, so no time is a
+ * fleet fact), or when it was minted.
+ */
+export function credentialNote(lane: Lane, o: AccessObserved, now: number): string {
+  if (providedExternally(lane, o)) return ", provided externally";
+  if (o.credential?.source === "issued") return ", issued for an hour at a time, at use";
+  return o.credential?.minted_at ? `, minted ${relTime(o.credential.minted_at, now)}` : "";
 }
 
 /** The tool, as one value: whether it works, and what it works through. */
@@ -419,7 +448,11 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
     case "builtin":
       return through;
     case "waiting":
-      return `Waiting for the credential, ${through}`;
+      // THE ENGINE'S REASON WHERE IT SENDS ONE (Google applying a new grant),
+      // since a wait the person did not cause should say who it is on.
+      return saved.tool_reason
+        ? `Waiting: ${saved.tool_reason}, ${through}`
+        : `Waiting for the credential, ${through}`;
     case "no_server":
       return names && !lane.tool_server
         ? `Not set up: its sandbox env does not set ${names}`

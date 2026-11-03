@@ -1,3 +1,5 @@
+import type { DocSection } from "../docs.ts";
+
 /**
  * What the Agents tab says about each lane that the engine's answer does not
  * carry: the product's name, the label the details give the access a seat
@@ -30,11 +32,24 @@ export interface LaneWords {
   /**
    * What a seat's scope is: its column heading, a single item, an empty list,
    * where an empty list is literal the hint under a seat that is on with none,
-   * and where the vendor has none to offer, what the picker says instead.
+   * and where the vendor has none to offer, what the picker says instead and
+   * the docs section that says how to make one there.
    */
-  scope?: { noun: string; singular: string; empty: string; emptyOn?: string; none?: string };
+  scope?: {
+    noun: string;
+    singular: string;
+    empty: string;
+    emptyOn?: string;
+    none?: string;
+    noneLink?: DocSection & { label: string };
+  };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
+  /**
+   * What the details add beside the settings Crewlet puts in a seat's box,
+   * where the CLI they serve has to come with the box image (gcloud).
+   */
+  boxNote?: string;
   /** Where a person approves a seat's install at the vendor through a fresh link, its button label. */
   install?: string;
   /**
@@ -210,6 +225,28 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     },
     retired: { one: "An old token", many: "old tokens" },
     release: "Keep the robot at Expo",
+  },
+  google_cloud: {
+    name: "Google Cloud",
+    access: "Roles on its projects",
+    turnOn:
+      "Turning it on creates a Google Cloud service account for the agent and grants it the chosen level's roles on its projects.",
+    off: "Crewlet disables the agent's service account, so it loses Google Cloud at once, and removes its roles on every chosen project. The account and its audit history stay, so turning it back on keeps the same identity.",
+    remove: "Crewlet deletes the service account. Cloud Audit Logs keep its entries.",
+    rotate: "Google issues the agent's token for an hour at a time, so there is nothing to rotate.",
+    scope: {
+      noun: "Projects",
+      singular: "project",
+      empty: "No project",
+      none: "No projects are set up for Crewlet yet",
+      noneLink: {
+        label: "Prepare a project",
+        doc: "google-cloud",
+        anchor: "prepare-a-project-for-crewlet",
+      },
+    },
+    tool: "Google Cloud MCP servers, one set per agent",
+    boxNote: "gcloud token file provided; the Google Cloud CLI must be in the box image",
   },
 };
 

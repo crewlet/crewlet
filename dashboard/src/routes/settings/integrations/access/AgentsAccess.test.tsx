@@ -26,6 +26,7 @@ import {
   expoWaitingAnswer,
   githubAnswer,
   gitlabAnswer,
+  googleCloudAnswer,
   jiraAnswer,
   mattermostAnswer,
   offLane,
@@ -1203,4 +1204,77 @@ test("an agent's details name the settings Crewlet puts in its box, and only tho
   draw(expoAnswer());
   details("QA", "Expo");
   expect(screen.queryByText("Set by Crewlet")).toBeNull();
+});
+
+// A GOOGLE CLOUD SEAT IS A SERVICE ACCOUNT WITH A TOKEN NOBODY HOLDS: the
+// details name the account, the level, a token issued at use rather than a
+// time no node shares, and what Crewlet sets in the box for gcloud, which the
+// box image has to carry. There is nothing to rotate.
+test("a Google Cloud seat's details name its account, an issued token and what Crewlet sets for gcloud", () => {
+  draw(googleCloudAnswer());
+  details("SRE", "Google Cloud");
+  const list = document.querySelector<HTMLElement>('dl[aria-label="SRE on Google Cloud"]')!;
+  const facts = within(list);
+  expect(
+    facts.getByText("crewlet-sre-3f9a@gophrase-crewlet-id.iam.gserviceaccount.com"),
+  ).toBeTruthy();
+  expect(facts.getByText("Roles on its projects")).toBeTruthy();
+  expect(facts.getByText("Operator")).toBeTruthy();
+  expect(facts.getByText("GOOGLE_CLOUD_ACCESS_TOKEN_SRE").parentElement!.textContent).toBe(
+    "GOOGLE_CLOUD_ACCESS_TOKEN_SRE, issued for an hour at a time, at use",
+  );
+  expect(facts.getByText("Live, Google Cloud MCP servers, one set per agent")).toBeTruthy();
+  const box = facts.getByText(
+    "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE, CLOUDSDK_CORE_PROJECT and .config/crewlet/gcloud-token",
+  );
+  expect(box.parentElement!.textContent).toContain(
+    ". gcloud token file provided; the Google Cloud CLI must be in the box image",
+  );
+  expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
+});
+
+// GOOGLE'S DELAY IS NOT A PERSON'S STEP: a grant Google has not applied yet
+// reads as the tool waiting, in the engine's words, and never as Needs you.
+test("a Google Cloud seat waiting on Google says so in its tool, never Needs you", () => {
+  draw(googleCloudAnswer({ tool: "waiting", tool_reason: "Google is still applying the grant" }));
+  expect(screen.queryByText("Needs you")).toBeNull();
+  details("SRE", "Google Cloud");
+  const facts = within(
+    document.querySelector<HTMLElement>('dl[aria-label="SRE on Google Cloud"]')!,
+  );
+  expect(
+    facts.getByText(
+      "Waiting: Google is still applying the grant, Google Cloud MCP servers, one set per agent",
+    ),
+  ).toBeTruthy();
+});
+
+// A PROJECT IS NAMED AS GOOGLE NAMES IT, and a company with none set up for
+// Crewlet is pointed at the docs section that sets one up.
+test("a Google Cloud project reads by its name, and none set up links to preparing one", () => {
+  const { redraw } = draw(googleCloudAnswer());
+  expect(screen.getByText("GoPhrase Production")).toBeTruthy();
+  const none = googleCloudAnswer(undefined, { scope: [], scope_names: {} });
+  none.seats[1]!.lanes.google_cloud!.desired.scope = [];
+  redraw(none);
+  // EVERY ROW SAYS IT, the off one too, since its picker is where it would be.
+  expect(screen.getAllByText(/No projects are set up for Crewlet yet/)).toHaveLength(2);
+  for (const link of screen.getAllByRole("link", { name: /Prepare a project/ })) {
+    expect(link.getAttribute("href")).toBe(
+      "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#prepare-a-project-for-crewlet",
+    );
+  }
+});
+
+// TURNING A GOOGLE CLOUD SEAT OFF KEEPS ITS IDENTITY: the account is disabled
+// and its roles removed, so it loses access at once and comes back as itself.
+test("turning a Google Cloud seat off says the account is disabled and kept", async () => {
+  draw(googleCloudAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "SRE on Google Cloud" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      /Crewlet disables the agent's service account, so it loses Google Cloud at once/,
+    ),
+  ).toBeTruthy();
 });

@@ -196,7 +196,8 @@ export type Tool =
   | "datadog"
   | "atlassian"
   | "cloudflare"
-  | "expo";
+  | "expo"
+  | "google_cloud";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -210,6 +211,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   atlassian: "Atlassian",
   cloudflare: "Cloudflare",
   expo: "Expo",
+  google_cloud: "Google Cloud",
 };
 
 /**
@@ -406,8 +408,8 @@ export function toolServersOf(seat: ConfigRole, home: DraftUnit | undefined): Se
 
 /**
  * The seat blocks each provisioning vendor keeps an account for, by their key
- * under `roles[].integrations` (`config.SeatAccessLanes`): GitLab's and
- * Datadog's own, and Atlassian's two products over its one account. A seat is
+ * under `roles[].integrations` (`config.SeatAccessLanes`): GitLab's, Datadog's
+ * and Google Cloud's own, and Atlassian's two products over its one account. A seat is
  * enrolled with a vendor by having one of them on. Its `mcp_env` says nothing
  * about it: the engine seals each account's credential under a name of its own
  * and refuses one written there for a managed integration.
@@ -416,6 +418,7 @@ const VENDOR_LANES = {
   gitlab: ["gitlab"],
   datadog: ["datadog"],
   atlassian: ["jira", "confluence"],
+  google_cloud: ["google_cloud"],
 } as const;
 
 /**
@@ -436,6 +439,9 @@ const VENDOR_LANES = {
  *
  * NOTHING FOR EXPO: a seat's robot user is all it has there, and the engine
  * deletes it once the seat is off or gone, so nothing is left to decommission.
+ *
+ * GOOGLE CLOUD'S SERVICE ACCOUNT STAYS: the engine disables it when the seat
+ * goes, and deletes it only when somebody removes it on the Agents tab.
  */
 export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
   if (isMintedKey(seat.key)) return [];
@@ -461,6 +467,9 @@ export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[]
     out.push("its Datadog service account");
   }
   if (isConnected(company, "atlassian") && enrolled("atlassian")) out.push("its Atlassian account");
+  if (isConnected(company, "google_cloud") && enrolled("google_cloud")) {
+    out.push("its Google Cloud service account");
+  }
   return out;
 }
 

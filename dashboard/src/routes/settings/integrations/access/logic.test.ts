@@ -9,12 +9,14 @@ import {
   CONFLUENCE_LANE,
   DATADOG_LANE,
   EXPO_LANE,
+  GOOGLE_CLOUD_LANE,
   JIRA_LANE,
   GITHUB_LANE,
   MATTERMOST_LANE,
   datadogAnswer,
   expoAnswer,
   expoWaitingAnswer,
+  googleCloudAnswer,
   offLane,
   onLane,
 } from "./fixtures.ts";
@@ -28,6 +30,7 @@ import {
   joinLevels,
   levelName,
   boxSettings,
+  credentialNote,
   noToolRemedy,
   onlyScope,
   productOnly,
@@ -413,10 +416,10 @@ describe("a scope entry's name", () => {
 // connection takes typed entries, so it always has something to offer.
 test("a scope picker with nothing to offer says whether the list was read", () => {
   const empty: Lane = { ...GITHUB_LANE, scope: undefined };
-  expect(scopeUnavailable({ ...empty, scope_live: false }, [])).toBe(
-    "Crewlet could not read your repositories",
-  );
-  expect(scopeUnavailable(empty, [])).toBe("No repositories to choose from");
+  expect(scopeUnavailable({ ...empty, scope_live: false }, [])).toEqual({
+    words: "Crewlet could not read your repositories",
+  });
+  expect(scopeUnavailable(empty, [])).toEqual({ words: "No repositories to choose from" });
   expect(scopeUnavailable({ ...empty, scope_open: true }, [])).toBeNull();
   expect(scopeUnavailable({ ...empty, scope_live: false }, ["gophrase/backend"])).toBeNull();
   expect(scopeUnavailable(GITHUB_LANE, [])).toBeNull();
@@ -509,4 +512,75 @@ test("a box lane that also has a tool server names both routes, the server first
   );
   expect(toolWords(EXPO_LANE, qa)).toBe("Not set up: its sandbox env does not set EXPO_TOKEN");
   expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).not.toMatch(/tool server/);
+});
+
+// A LANE WHOSE ENTRIES A PERSON PREPARES AT THE VENDOR points an empty list at
+// the docs section that says how, and only where the list was read: a list
+// that could not be read says nothing about what exists.
+test("an empty project list links to preparing one, only once the list was read", () => {
+  const none: Lane = { ...GOOGLE_CLOUD_LANE, scope: [], scope_names: {} };
+  expect(scopeUnavailable(none, [])).toEqual({
+    words: "No projects are set up for Crewlet yet",
+    link: {
+      label: "Prepare a project",
+      href: "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#prepare-a-project-for-crewlet",
+    },
+  });
+  expect(scopeUnavailable({ ...none, scope_live: false }, [])).toEqual({
+    words: "Crewlet could not read your projects",
+  });
+  expect(scopeUnavailable(GOOGLE_CLOUD_LANE, [])).toBeNull();
+});
+
+// WHAT CREWLET PUTS IN THE BOX FOR A CLI names its files too, after its
+// variables, so the token file gcloud reads is said where it lives.
+test("the settings Crewlet puts in a box name its files after its variables", () => {
+  const sre = googleCloudAnswer().seats[1]!.lanes.google_cloud!;
+  expect(boxSettings(sre)).toBe(
+    "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE, CLOUDSDK_CORE_PROJECT and .config/crewlet/gcloud-token",
+  );
+  expect(boxSettings({ ...sre, box: { env: [], files: sre.box!.files } })).toBe(
+    ".config/crewlet/gcloud-token",
+  );
+});
+
+// A CREDENTIAL CREWLET ISSUES AT USE has no time any node shares, so it reads
+// as how it is issued; a minted one keeps its time, and one provided from
+// outside says so.
+test("a credential reads as issued at use, minted when, or provided externally", () => {
+  const now = Date.now();
+  const sre = googleCloudAnswer().seats[1]!.lanes.google_cloud!;
+  expect(credentialNote(GOOGLE_CLOUD_LANE, sre.observed, now)).toBe(
+    ", issued for an hour at a time, at use",
+  );
+  const minted = onLane({ variable: "DATADOG_APP_KEY_SRE" }).observed;
+  expect(credentialNote(DATADOG_LANE, minted, now)).toBe(", minted 1d ago");
+  expect(
+    credentialNote(
+      DATADOG_LANE,
+      { ...minted, credential: { ...minted.credential!, source: "external" } },
+      now,
+    ),
+  ).toBe(", provided externally");
+});
+
+// A WAIT THE ENGINE CAN NAME says whose it is, so Google applying a grant is
+// never read as a credential somebody owes.
+test("a tool waiting with the engine's reason says the reason", () => {
+  const sre = googleCloudAnswer().seats[1]!.lanes.google_cloud!;
+  expect(
+    toolWords(GOOGLE_CLOUD_LANE, {
+      ...sre,
+      tool: "waiting",
+      tool_reason: "Google is still creating the agent's account",
+    }),
+  ).toBe(
+    "Waiting: Google is still creating the agent's account, Google Cloud MCP servers, one set per agent",
+  );
+  expect(toolWords(GOOGLE_CLOUD_LANE, { ...sre, tool: "waiting" })).toBe(
+    "Waiting for the credential, Google Cloud MCP servers, one set per agent",
+  );
+  expect(statusOf(GOOGLE_CLOUD_LANE, { ...sre, tool: "waiting" }, false, false).label).toBe(
+    "In sync",
+  );
 });
