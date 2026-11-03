@@ -413,7 +413,7 @@ func TestARunEnvironmentCarriesTheSeatsAppToken(t *testing.T) {
 	}}
 	run := e.runEnvironment(t.Context(), c, builder,
 		&org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "${GITHUB_APP_TOKEN_BUILDER}"}},
-		defaults)
+		defaults, nil)
 	if run.gap != nil {
 		t.Fatalf("the run lacks %s", run.gap.reason())
 	}

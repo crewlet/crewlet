@@ -468,6 +468,14 @@ func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, e
 	if !ok || (!spec.Levels && !spec.Scoped) {
 		return nil, nil
 	}
+	if spec.ScopeRequired && len(d.Scope) == 0 {
+		// NOTHING TO REACH, judged before the vendor is asked anything.
+		return &Failure{
+			Step: VerbScope, Actor: ByYou,
+			Said:   fmt.Sprintf("no %s scope is chosen for this agent, so it can reach nothing", LaneName(lane)),
+			Remedy: "Choose at least one on the integration's Agents tab",
+		}, nil
+	}
 	opts, ok := s.options[lane]
 	if !ok {
 		var err error
