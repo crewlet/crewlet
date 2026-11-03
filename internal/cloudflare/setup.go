@@ -84,17 +84,6 @@ func Requirements(in *config.Cloudflare, resolve func(string) (string, bool)) []
 	return reqs
 }
 
-// provisionerRequirement is the provisioner token's field, whose rule the Test
-// button applies to a typed value before anything is sent.
-func provisionerRequirement() setup.Requirement {
-	for _, r := range Requirements(nil, nil) {
-		if r.Field == "api_token" {
-			return r
-		}
-	}
-	panic("cloudflare: the setup form has no api_token field")
-}
-
 // Summary is the sentence the connect form opens with.
 func Summary() string {
 	return "Crewlet gives each agent its own Cloudflare account API token at the level you " +

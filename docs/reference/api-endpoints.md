@@ -3662,9 +3662,13 @@ What each surface checks, and with what:
 Refusals: `400 invalid_body` for an unknown key; `400 invalid_input` when
 `field` is not a requirement of that surface (or seat) or is not a `secret`,
 when `value` is empty, when a key in `values` is not a field of the surface,
-when a `${NAME}` names no stored secret ("There is no secret NAME."), and when
-the check cannot be made from what was given (Datadog's other key, a site
-address, an organization id), each with a sentence saying what is missing;
+when a `${NAME}` names no stored secret ("There is no secret NAME."), when a
+typed value is one its field refuses, as a save would refuse it (whitespace or
+an invisible character inside a credential, a space inside an address or an
+identifier, a character outside the vendor's alphabet where the field declares
+one), with `field` and `path` and before any vendor is asked, and when the
+check cannot be made from what was given (Datadog's other key, a site address,
+an organization id), each with a sentence saying what is missing;
 `404 unknown_kind`; `404 invalid_input` for a seat that takes no per-seat
 setup; `409 no_active_revision`; `409` under one of the five codes for a
 revision this node [cannot open](#a-revision-this-node-cannot-open-is-refused-whichever-route-reads-it).

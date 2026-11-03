@@ -41,6 +41,8 @@ Do not use a token with the Owner role: Admin is all Crewlet needs. Expo shows a
 
 The form offers **Test key** under the provisioner token. It runs read-only queries against Expo's GraphQL API (`https://api.expo.dev/graphql`) in order and stops at the first that fails, so the result names what to fix. Nothing is stored by a test.
 
+Before any query, a token holding a space, a line break or an invisible character is refused beside the field, naming the character's position, and nothing is sent. Saving refuses the same values. Expo does not document its tokens' alphabet, so nothing else about a token's characters is checked.
+
 | Stage | What it reads | What a failure means |
 |---|---|---|
 | The token works | The user or robot the token belongs to | The token is wrong or revoked |

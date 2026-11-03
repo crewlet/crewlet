@@ -543,12 +543,8 @@ func normalise(reqs []Requirement, values map[string]string) (map[string]string,
 	for field, value := range values {
 		trimmed := strings.TrimSpace(value)
 		if r, ok := byField[field]; ok {
-			// THE FIELD'S OWN RULE ([Requirement.ValueProblem]), which the
-			// vendor's Test button applies too. A Tight kind's refusal
-			// quotes the value, an address or an identifier; a secret's
-			// never does.
-			if problem := r.ValueProblem(trimmed); problem != "" {
-				return nil, &ValueError{Field: field, ConfigPath: r.ConfigPath, Problem: problem}
+			if refused := r.Refusal(trimmed); refused != nil {
+				return nil, refused
 			}
 		}
 		out[field] = trimmed
@@ -566,6 +562,16 @@ type ValueError struct {
 }
 
 func (e *ValueError) Error() string { return "setup: " + e.ConfigPath + ": " + e.Problem }
+
+// Refusal is value refused by this field's own rule ([Requirement.ValueProblem]),
+// or nil for a value it takes. Saving and the Test button both ask it, so the
+// two refuse the same values in the same words.
+func (r Requirement) Refusal(value string) *ValueError {
+	if problem := r.ValueProblem(value); problem != "" {
+		return &ValueError{Field: r.Field, ConfigPath: r.ConfigPath, Problem: problem}
+	}
+	return nil
+}
 
 // typed turns a submitted string into the JSON value its kind is.
 //

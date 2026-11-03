@@ -2421,12 +2421,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	case errors.As(err, &managed):
 		configapi.RefuseManaged(w, managed)
 	case errors.As(err, &value):
-		// A VALUE ITS FIELD REFUSES, before anything was written: the
-		// caller's input, located at the field it was typed into, as a
-		// literal in the config is. Its sentence never holds a credential.
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
-			"detail": value.Problem, "field": value.Field, "path": value.ConfigPath,
-		})
+		refuseValue(w, value)
 	case errors.As(err, &literal):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeLiteralInConfig, map[string]string{
 			"path": literal.Path,
@@ -2772,4 +2767,13 @@ func (s *Service) stateFor(
 		return state, false
 	}
 	return withLoopFindings(state, s.loopFindings(ctx, kind)), true
+}
+
+// refuseValue answers a value its field refuses, before anything was written
+// or sent: the caller's input, located at the field it was typed into, as a
+// literal in the config is. Its sentence never holds a credential.
+func refuseValue(w http.ResponseWriter, value *setup.ValueError) {
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
+		"detail": value.Problem, "field": value.Field, "path": value.ConfigPath,
+	})
 }
