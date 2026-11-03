@@ -13,11 +13,14 @@ import (
 // [seataccess.BoxDefaulter] supplies reaches the box of every seat with any of
 // its lanes on, beneath every layer a person writes, so which vendors supply
 // one is held here, each with why: a vendor that starts to fails this test
-// until it is named. None does in this build. Every vendor is registered here
-// (scoperequired_test.go), so the list is checked against all of them.
+// until it is named. Every vendor is registered here (scoperequired_test.go),
+// so the list is checked against all of them.
 func TestAVendorGainsBoxDefaultsOnlyByAReviewedChange(t *testing.T) {
 	t.Parallel()
-	reviewed := map[integration.Kind]string{}
+	reviewed := map[integration.Kind]string{
+		integration.KindGoogleCloud: "gcloud reads the agent's own token from a file the poll keeps " +
+			"current, and its first project as the default; neither signs a harness in",
+	}
 	var supplying []integration.Kind
 	registered := seataccess.Registered()
 	for _, v := range registered {

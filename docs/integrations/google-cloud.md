@@ -178,7 +178,7 @@ Each level is a fixed set of Google's roles, granted on each of the agent's proj
 
 Each reads the agent's own token as a bearer `Authorization` header. The Agents tab shows the tool as live once one of them is declared for the agent.
 
-**The Google Cloud CLI works in the agent's box too.** Crewlet writes the token to `.config/crewlet/gcloud-token` in every Google Cloud agent's box, keeps it current, and sets `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` to it and `CLOUDSDK_CORE_PROJECT` to the agent's first project. Install the Google Cloud CLI in your box image to use it: Crewlet never downloads binaries.
+**The Google Cloud CLI works in the agent's box too.** Crewlet writes the token to `.config/crewlet/gcloud-token` under the home of every Google Cloud agent's box, keeps it current while the run lasts, and sets `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` to its path in the box and `CLOUDSDK_CORE_PROJECT` to the agent's first project. A setting of the same name in the agent's own sandbox environment wins. The Agents tab lists these as provided by Crewlet. Install the Google Cloud CLI in your box image to use it: Crewlet never downloads binaries, and the tool reads live only for a Google Cloud MCP server, since Crewlet cannot see whether the CLI is installed.
 
 ### Agents in GKE clusters
 
