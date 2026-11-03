@@ -186,13 +186,15 @@ func TestTheProjectDirectoryIsANameClaudeCodeTakes(t *testing.T) {
 // session is forked. A session the box holds is resumed wherever a release
 // filed it — under the pinned project directory, or under the one an older
 // release named after the box's working directory — and one the box does not
-// hold is never resumed: the run starts the session minted for it instead,
-// says why on its error stream and in what it reports, and reports that it did
-// not continue.
+// hold is never resumed: the run starts the session minted for it instead —
+// the one its start named as the session it starts of its own — says why on
+// its error stream and in what it reports, and reports that it did not
+// continue.
 //
 // Mutation: pass --session-id beside --resume, resume a session the box does
-// not hold, look for it under the pinned directory alone, or report no reason,
-// and a row goes red.
+// not hold, look for it under the pinned directory alone, report no reason, or
+// name in the run's handle a session of its own other than the one it falls
+// back to, and a row goes red.
 func TestAFreshRunNamesItsSessionAndAContinuedOneResumesIt(t *testing.T) {
 	t.Parallel()
 	const asked = "0f1e2d3c-4b5a-4968-8776-655443322110"
@@ -240,6 +242,18 @@ func TestAFreshRunNamesItsSessionAndAContinuedOneResumesIt(t *testing.T) {
 			if tc.resume != "" && handle.SessionID != asked {
 				t.Errorf("Start named the session %q, want the one it was asked to continue, %q",
 					handle.SessionID, asked)
+			}
+			// AND THE SESSION ITS SCRIPT STARTS OF ITS OWN in the continued
+			// one's place, which only a run that continues one names: the one
+			// a run that fell back was started under.
+			switch {
+			case tc.resume == "" && handle.FreshSessionID != "":
+				t.Errorf("a fresh run's start named a second session, %q", handle.FreshSessionID)
+			case tc.resume != "" && (handle.FreshSessionID == "" || handle.FreshSessionID == asked):
+				t.Errorf("a continuing run's start named %q as the session it starts of its own", handle.FreshSessionID)
+			case tc.fellBack != "" && starts != handle.FreshSessionID:
+				t.Errorf("the run fell back to %q, and its start named %q as the session it starts of its own",
+					starts, handle.FreshSessionID)
 			}
 			stderr := boxFile(t, b, paths(b).Err())
 			if said := strings.Contains(stderr, "starts a new session"); said != (tc.fellBack != "") ||

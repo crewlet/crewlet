@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -125,11 +126,16 @@ func bridgeAt(token string) map[string]sandbox.MCPServer {
 // is neither held nor restorable, on the second — so the token it dials is its
 // box's word to the bridge on which session it started. Either way the other is
 // gone from the box before the harness starts, so nothing the run's model reads
-// hands it the token of a session it is not in.
+// hands it the token of a session it is not in. AND THE RUN'S START NAMES BOTH
+// SESSIONS AS ITS HARNESS RUNS THEM: the one it continues, which a box that took
+// it up ran, and the one its script starts of its own, which a box that fell
+// back ran — what a relaunch carrying the job's round on in its box reads which
+// session that box holds from ([sandbox.PendingRun.SessionRan]).
 //
 // Mutation: start the harness on the continued session's token whatever its
-// restore came to, or leave the other configuration in the box, and a row goes
-// red.
+// restore came to, leave the other configuration in the box, or name in the
+// run's handle a session of its own other than the one its script starts, and a
+// row goes red.
 func TestARunIsWiredToTheSessionItsBoxStarted(t *testing.T) {
 	t.Parallel()
 	runner, box := realBox(t)
@@ -137,11 +143,12 @@ func TestARunIsWiredToTheSessionItsBoxStarted(t *testing.T) {
 	_, first := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "begin", MCPServers: bridgeAt("first-job")})
 	for _, tc := range []struct {
 		name, resume, want string
+		continued          bool
 	}{
-		{name: "its session held", resume: first.SessionID, want: "continued-token"},
+		{name: "its session held", resume: first.SessionID, want: "continued-token", continued: true},
 		{name: "a session it cannot take up", resume: uuid.NewString(), want: "fresh-token"},
 	} {
-		runToEnd(t, runner, box, sandbox.RunRequest{Brief: "carry on where you stopped",
+		handle, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "carry on where you stopped",
 			FreshBrief: "the task, from the top", Resume: tc.resume, MCPServers: bridgeAt("continued-token"),
 			FreshWiring: &sandbox.Wiring{MCPServers: bridgeAt("fresh-token")}})
 		if seen := boxFile(t, box, box.Home()+"/mcp-seen"); !strings.Contains(seen, tc.want) {
@@ -151,6 +158,62 @@ func TestARunIsWiredToTheSessionItsBoxStarted(t *testing.T) {
 			t.Errorf("%s: the other session's configuration was in the box as the harness started (%q)",
 				tc.name, left)
 		}
+		if handle.SessionID != tc.resume || handle.FreshSessionID == "" || handle.FreshSessionID == tc.resume {
+			t.Fatalf("%s: the run's start named %q and %q, want the session it continues and another of "+
+				"its own", tc.name, handle.SessionID, handle.FreshSessionID)
+		}
+		ran := handle.FreshSessionID
+		if tc.continued {
+			ran = handle.SessionID
+		}
+		if res.Continued != tc.continued || res.SessionID != ran {
+			t.Errorf("%s: the harness ran session %q (continued %v), want %q, the one the start named",
+				tc.name, res.SessionID, res.Continued, ran)
+		}
+	}
+}
+
+// strippedBox is a box from which path is gone by the time the run's script
+// starts: a run whose start wrote less than it should have.
+type strippedBox struct {
+	sandbox.Sandbox
+	path string
+}
+
+func (b strippedBox) StartBackground(ctx context.Context, cmd string, opts sandbox.ExecOptions) (string, error) {
+	if _, err := b.Exec(ctx, "rm -f "+shQuote(b.path), sandbox.ExecOptions{}); err != nil {
+		return "", err
+	}
+	return b.Sandbox.StartBackground(ctx, cmd, opts)
+}
+
+// A CLAUDE CODE RUN WHOSE FRESH WIRING IS MISSING DOES NOT START. Every run that
+// continues a session is written both wirings of the seat's tools, so a run
+// whose box falls back to a session of its own and finds only the continued
+// session's is one whose start did not finish writing the other: it ends before
+// its harness starts, saying so — never started on the continued session's
+// token, which would tell the bridge it took that session up and arm the guard
+// with skills the new session never read.
+//
+// Mutation: carry on past a move that failed, and the harness starts on the
+// continued session's wiring.
+func TestAClaudeCodeRunWhoseFreshWiringIsMissingDoesNotStart(t *testing.T) {
+	t.Parallel()
+	runner, box := realBox(t)
+	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude", wiredHarness("2.1.310"))
+	stripped := strippedBox{Sandbox: box, path: executor.PathsFor(box).MCPConfigFresh()}
+	_, res := runToEnd(t, runner, stripped, sandbox.RunRequest{Brief: "carry on where you stopped",
+		FreshBrief: "the task, from the top", Resume: uuid.NewString(), MCPServers: bridgeAt("continued-token"),
+		FreshWiring: &sandbox.Wiring{MCPServers: bridgeAt("fresh-token")}})
+	if res.Success {
+		t.Fatalf("a fall back with no fresh wiring succeeded: %+v", res)
+	}
+	if stderr := boxFile(t, box, executor.PathsFor(box).Err()); !strings.Contains(stderr,
+		"could not be wired to the tools of its seat") {
+		t.Errorf("the run's error stream does not say why it did not start:\n%s", stderr)
+	}
+	if argv := boxFile(t, box, box.Home()+"/argv"); argv != "" {
+		t.Errorf("the harness started, on %q", argv)
 	}
 }
 
