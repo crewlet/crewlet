@@ -68,9 +68,9 @@ The form offers **Test key** under the provisioner token. It runs read-only call
 | It can manage tokens | `GET /accounts/{account_id}/tokens/permission_groups` | It lacks Account API Tokens Write |
 | It can see the zones | `GET /zones?account.id={account_id}` | It lacks Zone Read, or a zone in `provisioning.zones` is not in the account |
 | Every level resolves | the permission groups read above | A permission group a level names is not offered to this account |
-| It holds what it grants | `GET /accounts/{account_id}/tokens/{token_id}` (its own policy) | The provisioner lacks a permission group a level grants, so a seat token it mints could fall short |
+| It holds what it grants | `GET /accounts/{account_id}/tokens/{token_id}`, the token's own policy | It lacks a permission group a level grants, and the result names it |
 
-When every stage passes, the result names the account and the number of zones agents will reach, and the token's expiry where it has one. The last stage is skipped only when Cloudflare does not show the token its own policy. The first agent's token minted then proves it.
+The last stage is skipped only when Cloudflare will not show the token its own policy. When every stage passes, the result reads "Works. The token is active, reads 3 zones in the account and holds every permission an agent level grants.", followed by the token's expiry where it has one. Once connected, each pass makes the same check, and a group the provisioner has lost is reported as `grant_short`.
 
 ## Giving each agent its own Cloudflare token
 
@@ -109,13 +109,13 @@ DNS Write, WAF Write and Zone Settings Write are deliberately in no level. An ag
 
 | You do | Crewlet does at Cloudflare |
 |---|---|
-| Turn a seat on | Creates an account API token named `crewlet-<company>-<handle>` with the level's permission groups on the company's zones and an expiry 90 days out (`POST /accounts/{account_id}/tokens`), then seals its value. |
+| Turn a seat on | Creates an account API token named `crewlet-<company>-<handle>` (the company name in lowercase, with anything that is not a letter or digit turned into `-`) with the level's permission groups on the company's zones and an expiry 90 days out (`POST /accounts/{account_id}/tokens`), then seals its value. |
 | Change its level | Rewrites the token's policies to the new level's groups (`PUT /accounts/{account_id}/tokens/{token_id}`). The value does not change, so the agent's tool keeps working. |
 | Change the zones | Rewrites every agent's token to the new zones on the next pass, the same way. |
-| Turn it off | Disables the token, so the agent stops at once, then deletes it (`DELETE /accounts/{account_id}/tokens/{token_id}`) and clears the sealed value. A delete that fails is retried on every pass. |
+| Turn it off | Disables the token, so the agent stops at once, then deletes it (`DELETE /accounts/{account_id}/tokens/{token_id}`) and clears the sealed value. If the delete fails, the token stays disabled and the next pass deletes it. |
 | Turn it back on | Mints a new token. No person is needed. |
 | Remove it (only while off) | Nothing at Cloudflare: the token is already deleted. Crewlet stops tracking it. |
-| Rotate its token | Rolls the token to a new value (`PUT /accounts/{account_id}/tokens/{token_id}/value`) and seals it. The old value stops working at once. |
+| Rotate its token | Rolls the token to a new value (`PUT /accounts/{account_id}/tokens/{token_id}/value`), seals it and moves its expiry 90 days out. The old value stops working at once. |
 
 Crewlet only ever changes tokens it created. It records the ID of every token it mints and never touches another token in the account, even one under a `crewlet-` name.
 
@@ -125,7 +125,7 @@ The token's value is sealed under one name the engine derives for the seat, `CLO
 
 ### Expiry and rotation
 
-Every agent token expires **90 days** after it is minted. When fewer than **30 days** remain, the next pass rolls it to a new value, seals that value and moves the expiry 90 days out. An agent's token therefore never lapses while the integration is connected and passing, and a leaked value is useful for at most 90 days.
+Every agent token expires **90 days** after it is minted. When fewer than **30 days** remain, the next pass rolls it to a new value, seals that value and moves the expiry 90 days out. A token that has already expired (because the integration was paused, say) is replaced in the same pass and the expired one deleted. An agent's token therefore never lapses for long while the integration is connected, and a leaked value is useful for at most 90 days.
 
 **Rotate credential** on the Agents tab does the same roll on demand, for a value you believe has leaked.
 
@@ -153,11 +153,12 @@ The Agents tab reports per seat whether the tool is live, waiting for its token,
 
 Each pass reads every token this engine manages, including the token of a seat that has since left the document.
 
-- **A token's permissions or zones changed at Cloudflare** by somebody else are restored to the seat's level and reported as `drift_restored`, with the before and after.
-- **A token deleted at Cloudflare** is dropped from the engine's records, and the next pass mints a fresh one if the seat is on.
+- **A token's permissions or zones changed at Cloudflare** by somebody else are restored to the seat's level and recorded as a `drift_restored` event, with the before and after.
+- **A token deleted at Cloudflare** is dropped from the engine's records, and the same pass mints a fresh one if the seat is on.
 - **A token somebody disabled** at Cloudflare is never turned back on by a pass, in case it was incident response. The tab offers **Turn back on** or **Keep off**.
-- **A seat that leaves the document** is treated as off: its token is deleted.
-- **Editing `provisioning.zones`** re-narrows every agent's token on the next pass. In this release each one is reported as `drift_restored`, because the zone list is the company's rather than a seat's.
+- **A seat that leaves the document** is treated as off: its token is disabled, then deleted.
+
+One known limitation: when you edit `provisioning.zones`, the next pass re-narrows every token to the new list and records each as `drift_restored`, although nobody changed anything at Cloudflare.
 
 A refusal names the step that failed, Cloudflare's own reason, what to do about it and who does it, with a link to the account's API tokens page. The step is retried on every pass and on **Retry**.
 
@@ -197,7 +198,7 @@ These are Cloudflare's, not Crewlet's, and an agent meets them as a refusal from
 | API requests | 1,200 per 5 minutes for each token | Each agent has its own token, so one agent's burst never slows another, or the provisioner |
 | Account API tokens | 500 per account | One for the provisioner, one per agent that is on, and every token people made by hand |
 
-A `429` from Cloudflare carries `retry-after`, which the engine's own calls honour before they try again.
+A `429` from Cloudflare carries `retry-after`. The engine's own calls honour it, waiting up to 30 seconds and up to 3 times; a longer wait is left to the next pass.
 
 ## What is not supported yet
 
@@ -211,14 +212,15 @@ The card's findings, and what clears each:
 
 | Finding | What it says | What clears it |
 |---|---|---|
-| `credential_missing` | `integrations.cloudflare.provisioning.api_token` resolved to nothing | Seal the provisioner token as `CLOUDFLARE_API_TOKEN`, or point `api_token` at the variable that holds it |
-| `credential_rejected` | Cloudflare refused the provisioner token: it is wrong, disabled or expired, belongs to another account, or was refused a read it needs (the detail names the read and its permission) | Create a new token with the [permissions above](#creating-the-provisioner-token) and replace it with **Replace key** |
-| `grant_short` | The provisioner token does not hold every permission group the levels can grant, so a seat token it mints could fall short | Edit the provisioner token at Cloudflare to add the groups the detail lists, over the account and its zones |
+| `credential_missing` | The `provisioning` block is missing, `integrations.cloudflare.provisioning.api_token` resolved to nothing, or `integrations.cloudflare.provisioning.account_id` does not resolve to an account ID | Add the block, seal the provisioner token as `CLOUDFLARE_API_TOKEN` (or point `api_token` at the variable that holds it), or correct the account ID |
+| `credential_rejected` | Cloudflare refused the provisioner token: it is wrong, disabled or expired, belongs to another account, or lacks Account API Tokens Write, Account Settings Read or Zone Read | Create a new token with the [permissions above](#creating-the-provisioner-token) and replace it with **Replace key** |
 | `credential_expiring` | The provisioner token expires within 14 days | Create a new token and replace it before the date the finding names |
-| `unknown_tier` | A zone in `provisioning.zones` is not in the account, or a permission group a level names is not offered to the account | Correct the zone name, or remove it from the list. For a permission group, check the account can use that product |
+| `grant_short` | The provisioner token lacks a permission group a level grants | Add the group the finding names to the provisioner token, at Cloudflare |
+| `unknown_tier` | A zone in `provisioning.zones` is not in the account (subject `integrations.cloudflare.provisioning.zones`), or a permission group a level names is not offered to the account (subject `cloudflare level read` or `cloudflare level operate`) | Correct the zone name, or remove it from the list. For a permission group, check the account can use that product |
 | `registration_orphaned` | Cloudflare holds active account tokens named like this company's agent tokens (`crewlet-<company>-...`) that the engine has no record of | Delete the ones nobody uses at Cloudflare. Crewlet never deletes a token it did not create |
-| `identity_failed` | An agent's token could not be minted, narrowed or rolled. Cloudflare's reason is in the detail; the usual one is a provisioner that does not hold a group the agent's level grants | Add the missing group to the provisioner token, then **Retry** on the agent's row |
+| `identity_failed` | An agent's token could not be minted, narrowed or rolled; its level names a permission group the account does not offer, so it is not minted; somebody disabled it at Cloudflare; or Cloudflare would not read it back. Cloudflare's reason, or the missing group, is in the detail | Fix what the detail names, then **Retry** on the agent's row. For a token disabled at Cloudflare, choose **Turn back on** or **Keep off** |
+| `identity_missing` | For up to about a minute after you first connect, "access migration has not finished": the one-time step every per-agent integration passes through | Nothing; it clears by itself |
 
-An agent's own failures (a token that could not be minted or rolled, or one disabled at Cloudflare) are also reported on that agent's row on the **Agents** tab, with the control that answers them.
+An agent's own failures are also reported on that agent's row on the **Agents** tab, with the control that answers them.
 
 If an agent says its tool refuses every call, check the token has no IP address filter (the MCP server refuses one) and that Account Settings Read is on the provisioner, so every level can grant it.

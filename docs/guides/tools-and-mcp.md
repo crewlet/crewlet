@@ -1237,8 +1237,8 @@ document with everything that names it, in one revision.
 the server, each located where it is written; sent with `"clear": true` it
 removes the server and clears all of them. An `mcp_env` block the engine reads
 for an integration under the same name (`github`, `gitlab`, `datadog`,
-`cloudflare`, `atlassian`, `jira`, `confluence`) stays, since the integration
-still reads it once the server is gone.
+`atlassian`, `jira`, `confluence`) stays, since the integration still reads it
+once the server is gone.
 
 The values a server and its blocks read are `${VAR}` references into the
 credential store. Once it is gone some of them are read by nothing, and the

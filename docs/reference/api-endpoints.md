@@ -2482,8 +2482,8 @@ both are sent.
   and `mcp_limits` block keyed on it, a seat's or a unit's, and each
   `sandbox.mcp.servers` entry listing it. A mapping left empty is dropped, and so is a seat's
   `sandbox` that held nothing else. An `mcp_env` block the engine reads by its
-  own name (`github`, `gitlab`, `datadog`, `atlassian`, `jira`,
-  `confluence`) is the integration's as well as the server's, so it stays.
+  own name (`github`, `gitlab`, `datadog`, `atlassian`, `jira`, `confluence`)
+  is the integration's as well as the server's, so it stays.
 - **`delete_secrets`** names values in the
   [credential store](#secrets--the-companys-credentials-auth-gated) to delete
   once the removal is written, each once. Each must be one nothing reads once
