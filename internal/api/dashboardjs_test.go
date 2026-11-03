@@ -1602,7 +1602,13 @@ const (
 	// the settings chunk +1134 bytes, the integrations model chunk +485 bytes
 	// and its sheet +179 bytes, the kit's chunks +313 bytes net, the Problems
 	// chunk +66 bytes, and 72 bytes across the rest. 5444 KiB.
-	treeBudget = 5<<20 + 324<<10
+	// A bridged call the run's record keeps in part drawn as such on a run's
+	// page (its "partly kept" tag, and over its arguments and its result how
+	// much the call sent and answered) and a long log's dropped middle said by
+	// tool in its callout took it from 5443.7 KiB to 5444.7 KiB (+1.0 KiB,
+	// 1008 bytes), all of it the Executors chunk; every other chunk kept its
+	// size. The initial load did not grow. 5445 KiB.
+	treeBudget = 5<<20 + 325<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -928,8 +928,29 @@ export interface ExecutorRow {
    * what the run did.
    */
   bridge_calls_elided?: number;
+
+  /**
+   * What those dropped calls were: one entry per tool and argument digest,
+   * with how many calls had it and how many of those failed. The count
+   * bound costs the board the calls themselves, never which tools the run
+   * called how often. Always beside `bridge_calls`, empty where nothing was
+   * dropped or an older engine dropped it without keeping this. Past its own
+   * share of the run's record an entry gives up its digest, and then its
+   * tool too: the count is kept either way.
+   */
+  bridge_elided_calls?: ElidedCall[];
   /** The engine withheld this run's body from this reader — see [task_description]. */
   body_withheld?: boolean;
+}
+
+/** Calls a run's record dropped from the middle of its log, by identity. */
+export interface ElidedCall {
+  /** The tool. Absent where not even the tool was kept. */
+  name?: string;
+  /** The digest of the calls' whole arguments. Absent where it was not kept. */
+  digest?: string;
+  calls: number;
+  failed?: number;
 }
 
 /**
@@ -947,10 +968,25 @@ export interface ExecutorEnding {
 /** One call a bridged run made. */
 export interface BridgeCall {
   name: string;
-  /** What the caller passed, as JSON TEXT — never a decoded map. */
+  /**
+   * What the caller passed, as JSON TEXT — never a decoded map. As the run's
+   * record keeps it: past its share the largest values are left out, each a
+   * string marker naming its size, and [args_bytes] says so.
+   */
   args?: string;
+  /** What the call answered; past its share, its opening and a marker ([output_bytes]). */
   output?: string;
   failed?: boolean;
+  /**
+   * The size in bytes of what the call was sent with and of what it answered,
+   * set ONLY where the run's record keeps less than the whole: the board
+   * decides "partly kept" by these and never by reading a marker. Absent: the
+   * payload above is the whole.
+   */
+  args_bytes?: number;
+  output_bytes?: number;
+  /** The call's identity: the digest of its whole arguments, as the run counts its calls. */
+  digest?: string;
   /** When the row recorded the call, on the store's clock. Always present. */
   at: string;
   /**
