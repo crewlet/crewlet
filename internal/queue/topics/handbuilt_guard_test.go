@@ -54,7 +54,9 @@ import (
 // SHAPE instead — the literal is exactly the marker, or is made only of the
 // characters a wire name may contain — because "agent-" is also ordinary
 // English hyphenation and "agent-only field set on a human seat" is a
-// sentence, not a consumer group.
+// sentence, not a consumer group. A word of another system's vocabulary
+// spelled in those characters (OpenCode's `agent-switched`) has a group's
+// shape all the same, and is declared in [anotherVocabulary] where it is one.
 //
 // # Coverage boundary
 //
@@ -206,7 +208,11 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	}
 
 	for _, v := range found.hits {
-		if _, known := acknowledgedDrift[driftKey{v.pkg, v.literal}]; known {
+		key := driftKey{v.pkg, v.literal}
+		if _, known := acknowledgedDrift[key]; known {
+			continue
+		}
+		if _, theirs := anotherVocabulary[key]; theirs {
 			continue
 		}
 		t.Errorf("%s: package %s builds the subject %q by hand.\n"+
@@ -215,9 +221,9 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 			v.pos, v.pkg, v.literal)
 	}
 
-	// The allowance is exact in BOTH directions. An entry whose drift has
-	// been fixed must be deleted, or the list becomes a place where a future
-	// violation can hide behind a stale excuse.
+	// Both lists are exact in BOTH directions. An entry whose drift has been
+	// fixed, or whose word is no longer written, must be deleted, or the list
+	// becomes a place where a future violation can hide behind a stale excuse.
 	seen := map[driftKey]bool{}
 	for _, v := range found.hits {
 		seen[driftKey{v.pkg, v.literal}] = true
@@ -228,10 +234,16 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 				"longer finds it. Delete the entry — it was: %s", key.literal, key.pkg, why)
 		}
 	}
+	for key, whose := range anotherVocabulary {
+		if !seen[key] {
+			t.Errorf("anotherVocabulary still declares %q in package %s, but the walk no "+
+				"longer finds it. Delete the entry — it was: %s", key.literal, key.pkg, whose)
+		}
+	}
 
 	t.Logf("scanned %d files / %d string literals in internal/ and cmd/: "+
-		"%d hand-built names, %d of them acknowledged drift",
-		found.files, found.literals, len(found.hits), len(acknowledgedDrift))
+		"%d hand-built names, %d of them acknowledged drift and %d another vocabulary's words",
+		found.files, found.literals, len(found.hits), len(acknowledgedDrift), len(anotherVocabulary))
 }
 
 // driftKey names a known hand-built literal by its package rather than its
@@ -246,6 +258,24 @@ type driftKey struct{ pkg, literal string }
 // spelled by hand — are built from topics.NotificationsPrefix and
 // topics.ConfigPrefix now, like the other three stream subjects beside them.
 var acknowledgedDrift = map[driftKey]string{}
+
+// anotherVocabulary is every literal the walk flags that is a word of ANOTHER
+// SYSTEM'S vocabulary, naming no subject or group of this engine's, keyed as
+// drift is, each with whose word it is and what reads it.
+//
+// It is not drift, and nothing here excuses a hand-built name. A dotless marker
+// is matched by shape ([violation]), and another system's names are spelled in
+// the same characters as a wire name, so where one carries a marker no shape
+// tells it from a hand-built group: `agent-switched` is as much a seat's group
+// by shape as `agent-alice`. Such a word is declared here, where the guard
+// reads, rather than respelled where it is used to slip past the guard. Exact
+// in both directions, as drift is: an entry the walk no longer finds fails, so
+// a declaration goes with its literal.
+var anotherVocabulary = map[driftKey]string{
+	{"executor", "agent-switched"}: "OpenCode 2's kind of message for a switch of a session's " +
+		"agent (`SessionMessage.Info`'s `type`), which a session's transcript reads off its " +
+		"export (internal/sandbox/executor/transcript.go) and this engine never publishes",
+}
 
 type hit struct {
 	pos     string

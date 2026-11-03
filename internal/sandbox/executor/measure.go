@@ -201,23 +201,18 @@ func lastExportInput(r io.Reader) (int64, error) {
 
 // exportMessageInput reads one message of an export and answers the input its
 // request measured where it is an assistant message that measured one without
-// an error, zero otherwise. Every field but its type, its tokens and its error
-// is passed over a token at a time, so a message's parts are never held whole.
+// an error, zero otherwise.
+//
+// THE MESSAGE IS THE ONE EVERY READER OF AN EXPORT TAKES ([openCodeMessage]),
+// so this and a session's transcript never disagree about what a message is,
+// its kind or its failure. Only its type, its tokens and its error are decoded
+// into it; every other field is passed over a token at a time, so a message's
+// content is never held whole.
 func exportMessageInput(dec *json.Decoder) (int64, error) {
 	if err := expectDelim(dec, '{'); err != nil {
 		return 0, err
 	}
-	var (
-		kind   string
-		failed bool
-		tokens *struct {
-			Input int64 `json:"input"`
-			Cache struct {
-				Read  int64 `json:"read"`
-				Write int64 `json:"write"`
-			} `json:"cache"`
-		}
-	)
+	var m openCodeMessage
 	for dec.More() {
 		key, err := dec.Token()
 		if err != nil {
@@ -225,13 +220,11 @@ func exportMessageInput(dec *json.Decoder) (int64, error) {
 		}
 		switch key {
 		case "type":
-			err = dec.Decode(&kind)
+			err = dec.Decode(&m.Type)
 		case "tokens":
-			err = dec.Decode(&tokens)
+			err = dec.Decode(&m.Tokens)
 		case "error":
-			var raw json.RawMessage
-			err = dec.Decode(&raw)
-			failed = len(raw) > 0 && string(raw) != "null"
+			err = dec.Decode(&m.Error)
 		default:
 			err = skipValue(dec)
 		}
@@ -242,10 +235,10 @@ func exportMessageInput(dec *json.Decoder) (int64, error) {
 	if err := expectDelim(dec, '}'); err != nil {
 		return 0, err
 	}
-	if kind != "assistant" || failed || tokens == nil {
+	if m.Type != openCodeAssistant || !absent(m.Error) || m.Tokens == nil {
 		return 0, nil
 	}
-	return max(tokens.Input, 0) + max(tokens.Cache.Read, 0) + max(tokens.Cache.Write, 0), nil
+	return max(m.Tokens.Input, 0) + max(m.Tokens.Cache.Read, 0) + max(m.Tokens.Cache.Write, 0), nil
 }
 
 // skipValue passes over the next value whole, a token at a time.

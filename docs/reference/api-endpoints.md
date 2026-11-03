@@ -9399,7 +9399,7 @@ session, as a page of `GET /agents/{id}/sessions` says it; a later page leaves
   ],
   "from": 0,
   "cut": "entries",
-  "next_cursor": "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3.1.200",
+  "next_cursor": "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3.2.200",
   "bounds": { "entries": 200, "bytes": 1048576, "entry_bytes": 16384,
               "line_bytes": 33554432, "read_bytes": 268435456 },
   "read_level": "stale",
@@ -9411,7 +9411,8 @@ session, as a page of `GET /agents/{id}/sessions` says it; a later page leaves
 **The archive is read as its harness recorded it**, through the runner's own
 knowledge of the format it packs: Claude Code's transcript and each subagent's
 own (its sidecar, every entry of which names the subagent in `thread`, after
-the run's own), and OpenCode's session export. Each entry is one of:
+the run's own), and OpenCode's session export, each message by the kind
+OpenCode 2 gives it (its `type`). Each entry is one of:
 
 | `kind` | What it is |
 |---|---|
@@ -9421,11 +9422,16 @@ the run's own), and OpenCode's session export. Each entry is one of:
 | `tool_call` | A tool the model called, its input as JSON, the tool in `tool` |
 | `tool_result` | What the tool answered, `failed` where the harness recorded an error |
 | `summary` | A compaction summary: the harness's own account of the conversation before it, which the model read in its place |
-| `unread` | A part of the record the read could not read — a line past the bound one may hold, one that is no record, a record or a message of no shape the read knows, a transcript that is no plain file in the archive (a link), a message of an export past the bound — said where it was, so a gap never reads as continuity |
+| `unread` | A part of the record the read could not read — a line past the bound one may hold, one that is no record, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a message of an export past the bound — said where it was, so a gap never reads as continuity |
 
 The harness's bookkeeping (a session's title, a snapshot of the files it
 edited, its system notices), the model's thinking and a tool result Claude Code
-spilled to a file are no entry. `at` is when the harness recorded the entry,
+spilled to a file are no entry. Nor are the messages OpenCode writes for itself:
+its notices in the person's turn (a background job's ending, a reminder, an
+instruction file it loaded), an update of the run's instructions, a skill or a
+shell command a person ran in the session, the end of an execution, a switch of
+the session's agent, model or directory, and a compaction that handed the model
+no summary. `at` is when the harness recorded the entry,
 absent where its record says no time, or one outside the years 0 to 9999 —
 all RFC 3339 can spell, and a box's own agent can write any instant into what
 its run packs.

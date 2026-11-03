@@ -1,0 +1,1131 @@
+{
+  "info": {
+    "id": "ses_0123456789abcdef0123456789abcdef",
+    "projectID": "53a9f227169abaa77c762f8a6c14c9516bba2b94",
+    "agent": "build",
+    "model": {
+      "id": "stub-model",
+      "providerID": "stub",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 14119,
+      "output": 420,
+      "reasoning": 0,
+      "cache": {
+        "read": 2800,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1793667924041,
+      "updated": 1793667953159,
+      "idle": 1793667953164
+    },
+    "title": "crewlet",
+    "location": {
+      "directory": "/work/proj2"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_19ef08060001YkN45ayZQvjO0j",
+      "time": {
+        "created": 1793667924217
+      },
+      "text": "Fix the flaky test in ENG-7.",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_19ef08104001ZTxX2hBLRpxvLG",
+      "time": {
+        "created": 1793667924240,
+        "streamed": 1793667924283,
+        "completed": 1793667924336
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "the race is in the cache",
+          "state": {
+            "reasoningField": "reasoning_content"
+          },
+          "time": {
+            "created": 1793667924264,
+            "completed": 1793667924274
+          }
+        },
+        {
+          "type": "text",
+          "text": "Running the tests first."
+        },
+        {
+          "type": "tool",
+          "id": "call_shell",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "echo ok-from-shell"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "ok-from-shell\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1793667924270,
+            "ran": 1793667924279,
+            "completed": 1793667924333
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 1001,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0817c001v0PYyXlu2NMI4n",
+      "time": {
+        "created": 1793667924362,
+        "streamed": 1793667929390,
+        "completed": 1793667929401
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_read",
+          "name": "read",
+          "executed": false,
+          "state": {
+            "status": "error",
+            "input": {
+              "path": "/nonexistent/missing.go"
+            },
+            "error": {
+              "type": "tool.execution",
+              "message": "File not found: /nonexistent/missing.go"
+            }
+          },
+          "time": {
+            "created": 1793667929378,
+            "ran": 1793667929387,
+            "completed": 1793667929399
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 1002,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef08260001qq123hgGURQQQU",
+      "time": {
+        "created": 1793667929410
+      },
+      "text": "## A note from ada, sent while this turn was running\nada sent this through Crewlet while the work was under way.\n\nTarget the release branch.",
+      "type": "user"
+    },
+    {
+      "id": "msg_19ef09548001kIXd2aE0xu1d06",
+      "time": {
+        "created": 1793667929427,
+        "streamed": 1793667929442,
+        "completed": 1793667929457
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_bg",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "sleep 2; echo bg-done",
+              "background": true
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Command moved to the background (shell ID: sh_19ef09569001P7B28Q0Oi8rLUu).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef09569001P7B28Q0Oi8rLUu.out"
+              },
+              {
+                "type": "text",
+                "text": "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes."
+              }
+            ],
+            "metadata": {
+              "status": "running",
+              "truncated": false,
+              "shellID": "sh_19ef09569001P7B28Q0Oi8rLUu"
+            }
+          },
+          "time": {
+            "created": 1793667929434,
+            "ran": 1793667929439,
+            "completed": 1793667929455
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 1003,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0957c001j86Eb9IoJSyxGs",
+      "time": {
+        "created": 1793667929478,
+        "streamed": 1793667929495,
+        "completed": 1793667929562
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_task",
+          "name": "subagent",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "agent": "general",
+              "description": "find the race",
+              "prompt": "Look for the race."
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "<subagent sessionID=\"ses_e610f6a65ffeOjQwqt6izZ1zDk\" state=\"completed\">\nThe cache map is written unlocked.\n</subagent>"
+              }
+            ],
+            "metadata": {
+              "sessionID": "ses_e610f6a65ffeOjQwqt6izZ1zDk",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793667929489,
+            "ran": 1793667929493,
+            "completed": 1793667929560
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 1004,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef095e5001jF14itGbSN1Dzs",
+      "time": {
+        "created": 1793667929584,
+        "streamed": 1793667929601,
+        "completed": 1793667929603
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Fixed: the cache takes its lock."
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 1006,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef09607001Ujb6JupxdN6TXO",
+      "time": {
+        "created": 1793667929607
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_19ef0956e00170uvmwhD1dSxaJ",
+      "metadata": {
+        "source": "shell",
+        "shellID": "sh_19ef09569001P7B28Q0Oi8rLUu",
+        "jobID": "sh_19ef09569001P7B28Q0Oi8rLUu",
+        "state": "completed",
+        "truncated": false,
+        "exit": 0
+      },
+      "time": {
+        "created": 1793667931467
+      },
+      "text": "<shell id=\"sh_19ef09569001P7B28Q0Oi8rLUu\" state=\"completed\" command=\"sleep 2; echo bg-done\">\nbg-done\n\n</shell>",
+      "description": "sleep 2; echo bg-done",
+      "type": "synthetic"
+    },
+    {
+      "id": "msg_19ef09d51001LIK435L8FpPmNN",
+      "time": {
+        "created": 1793667931483,
+        "streamed": 1793667931494,
+        "completed": 1793667931495
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Fixed: the cache takes its lock."
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 1007,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef09d6a001TPU3RyRdD8SKFl",
+      "time": {
+        "created": 1793667931498
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_19ef0aad5001Gk2664RFdmtCU8",
+      "metadata": {
+        "background": true
+      },
+      "time": {
+        "created": 1793667934933,
+        "completed": 1793667934936
+      },
+      "type": "shell",
+      "shellID": "sh_19ef0aacf001P7iToSfsU6Q80R",
+      "command": "echo from-a-person",
+      "status": "exited",
+      "exit": 0,
+      "output": {
+        "output": "from-a-person\n",
+        "cursor": 14,
+        "size": 14,
+        "truncated": false
+      }
+    },
+    {
+      "id": "msg_19ef0b317001GZzlHucutpf7EF",
+      "time": {
+        "created": 1793667937047
+      },
+      "type": "skill",
+      "skill": "crewlet-demo",
+      "name": "crewlet-demo",
+      "text": "Read the cache code before changing it.\n"
+    },
+    {
+      "id": "msg_19ef0b377001sWu0wMAF159efs",
+      "time": {
+        "created": 1793667937143
+      },
+      "type": "agent-switched",
+      "agent": "plan"
+    },
+    {
+      "id": "msg_19ef0b3d9001pDHSiqajesWBdq",
+      "time": {
+        "created": 1793667937241
+      },
+      "type": "agent-switched",
+      "agent": "build",
+      "previous": "plan"
+    },
+    {
+      "id": "msg_19ef0b4420012UeUJldn2dIEea",
+      "time": {
+        "created": 1793667937346
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "stub-model-b",
+        "providerID": "stub"
+      },
+      "previous": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      }
+    },
+    {
+      "type": "compaction",
+      "id": "msg_19ef0b4a70016wg3C2nPBIdgEY",
+      "time": {
+        "created": 1793667937453
+      },
+      "status": "completed",
+      "reason": "manual",
+      "model": {
+        "id": "stub-model-b",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "summary": "## Objective\n- Fix the flaky cache test.\n\n## Work State\n### Completed\n- The cache takes its lock.\n\n## Next Move\n1. (none)",
+      "recent": "[User]: ## A note from ada, sent while this turn was running\nada sent this through Crewlet while the work was under way.\n\nTarget the release branch.\n\n[Assistant tool call]: shell({\"command\":\"sleep 2; echo bg-done\",\"background\":true})\n[Tool result]: Command moved to the background (shell ID: sh_19ef09569001P7B28Q0Oi8rLUu).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef09569001P7B28Q0Oi8rLUu.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.\n\n[Assistant tool call]: subagent({\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"})\n[Tool result]: <subagent sessionID=\"ses_e610f6a65ffeOjQwqt6izZ1zDk\" state=\"completed\">\nThe cache map is written unlocked.\n</subagent>\n\n[Assistant]: Fixed: the cache takes its lock.\n\n[Synthetic context]: <shell id=\"sh_19ef09569001P7B28Q0Oi8rLUu\" state=\"completed\" command=\"sleep 2; echo bg-done\">\nbg-done\n\n</shell>\n\n[Assistant]: Fixed: the cache takes its lock.\n\n[Skill activated: crewlet-demo]\nRead the cache code before changing it.\n",
+      "cost": 0,
+      "tokens": {
+        "input": 1008,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0aa64001XCLXL2hURA8Zwm",
+      "time": {
+        "created": 1793667937485
+      },
+      "text": "A notice the harness wrote into the conversation.",
+      "description": "a notice",
+      "type": "synthetic"
+    },
+    {
+      "id": "msg_19ef0aada001cD72XBAplYCf7r",
+      "metadata": {
+        "source": "shell",
+        "shellID": "sh_19ef0aacf001P7iToSfsU6Q80R",
+        "state": "completed",
+        "truncated": false,
+        "exit": 0
+      },
+      "time": {
+        "created": 1793667937486
+      },
+      "text": "The following shell command was executed by the user:\n<shell id=\"sh_19ef0aacf001P7iToSfsU6Q80R\" state=\"completed\" command=\"echo from-a-person\">\nfrom-a-person\n\n</shell>",
+      "type": "synthetic"
+    },
+    {
+      "id": "msg_19ef0b3790012HivAk061Y5rA3",
+      "time": {
+        "created": 1793667937487
+      },
+      "text": "<system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\n/home/crewlet/.opencode/plan\n\nDo not modify any other files or ask a subagent to do so.\n\nYou remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents.\n</system-reminder>",
+      "type": "synthetic"
+    },
+    {
+      "id": "msg_19ef0b3db001uVYLdUUhpiBywd",
+      "time": {
+        "created": 1793667937488
+      },
+      "text": "<system-reminder>\nYou are NO LONGER in Plan mode. The previous Plan restrictions no longer apply. Any Plan mode instructions from earlier in this conversation are no longer active.\n</system-reminder>",
+      "type": "synthetic"
+    },
+    {
+      "id": "msg_19ef0b4d4001n2y457QIExQrK7",
+      "time": {
+        "created": 1793667937501,
+        "streamed": 1793667937527,
+        "completed": 1793667937538
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model-b",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "the race is in the cache",
+          "state": {
+            "reasoningField": "reasoning_content"
+          },
+          "time": {
+            "created": 1793667937509,
+            "completed": 1793667937516
+          }
+        },
+        {
+          "type": "text",
+          "text": "Running the tests first."
+        },
+        {
+          "type": "tool",
+          "id": "call_shell",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "echo ok-from-shell"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "ok-from-shell\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1793667937514,
+            "ran": 1793667937522,
+            "completed": 1793667937536
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 1009,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0b50c001mBGf9HYVNAzA4P",
+      "time": {
+        "created": 1793667937556,
+        "streamed": 1793667942575,
+        "completed": 1793667942581
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model-b",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_read",
+          "name": "read",
+          "executed": false,
+          "state": {
+            "status": "error",
+            "input": {
+              "path": "/nonexistent/missing.go"
+            },
+            "error": {
+              "type": "tool.execution",
+              "message": "File not found: /nonexistent/missing.go"
+            }
+          },
+          "time": {
+            "created": 1793667942570,
+            "ran": 1793667942574,
+            "completed": 1793667942580
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 1010,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0c8c1001kG3Fswxu0ZGDi2",
+      "time": {
+        "created": 1793667942605,
+        "streamed": 1793667942616,
+        "completed": 1793667942628
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model-b",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_bg",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "sleep 2; echo bg-done",
+              "background": true
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Command moved to the background (shell ID: sh_19ef0c8dc001MG47WOOvZy9DkQ).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef0c8dc001MG47WOOvZy9DkQ.out"
+              },
+              {
+                "type": "text",
+                "text": "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes."
+              }
+            ],
+            "metadata": {
+              "status": "running",
+              "truncated": false,
+              "shellID": "sh_19ef0c8dc001MG47WOOvZy9DkQ"
+            }
+          },
+          "time": {
+            "created": 1793667942611,
+            "ran": 1793667942615,
+            "completed": 1793667942625
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 1011,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0c8ef001nY6XW0gKETr1dF",
+      "time": {
+        "created": 1793667942649,
+        "streamed": 1793667942661,
+        "completed": 1793667942734
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model-b",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_task",
+          "name": "subagent",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "agent": "general",
+              "description": "find the race",
+              "prompt": "Look for the race."
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "<subagent sessionID=\"ses_e610f36f8ffe990Up6BlAISSPP\" state=\"completed\">\nThe cache map is written unlocked.\n</subagent>"
+              }
+            ],
+            "metadata": {
+              "sessionID": "ses_e610f36f8ffe990Up6BlAISSPP",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793667942655,
+            "ran": 1793667942659,
+            "completed": 1793667942732
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 1012,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0c958001CncQ2elDi6XMyS",
+      "time": {
+        "created": 1793667942760,
+        "streamed": 1793667942773,
+        "completed": 1793667942774
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model-b",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Fixed: the cache takes its lock."
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 1014,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0c978001ZiFXNot0kyQxwe",
+      "time": {
+        "created": 1793667942776
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_19ef0cd9a001V8PVn2LuXXZfRI",
+      "time": {
+        "created": 1793667943834
+      },
+      "type": "agent-switched",
+      "agent": "build",
+      "previous": "build"
+    },
+    {
+      "id": "msg_19ef0cda0001oZXQ8rt71Ks1vp",
+      "time": {
+        "created": 1793667943840
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub"
+      },
+      "previous": {
+        "id": "stub-model-b",
+        "providerID": "stub",
+        "variant": "default"
+      }
+    },
+    {
+      "id": "msg_19ef0ce64001ljDiSk3sluypte",
+      "metadata": {
+        "notice": "instructions",
+        "instructionSources": [
+          "core/instructions"
+        ]
+      },
+      "time": {
+        "created": 1793667944036
+      },
+      "type": "system",
+      "text": "The instructions changed:\nInstructions from: /work/instructions.md\nYou are a seat of the Acme company. Work in the checkout, and keep each commit small.\n",
+      "description": "Instructions updated: core/instructions"
+    },
+    {
+      "id": "msg_19ef0cd32001jEltaMrqEIV684",
+      "time": {
+        "created": 1793667944039
+      },
+      "text": "Carry on.",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_19ef0ce700011LLoKdSaNG3ULY",
+      "time": {
+        "created": 1793667944060,
+        "streamed": 1793667944084,
+        "completed": 1793667944086
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Carried on: nothing is left to do."
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 1015,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0ce99001MPC2dB9Jlm1SnE",
+      "time": {
+        "created": 1793667944089
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_19ef0cf0e001K0zKncdtsek6TA",
+      "time": {
+        "created": 1793667944206
+      },
+      "type": "agent-switched",
+      "agent": "build",
+      "previous": "build"
+    },
+    {
+      "id": "msg_19ef0cf0c001lxceSqDTCBnKdB",
+      "time": {
+        "created": 1793667944224
+      },
+      "text": "Fail now.",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_19ef0cf26001J2IvGeh9ZqSQ21",
+      "time": {
+        "created": 1793667944240,
+        "completed": 1793667944250
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [],
+      "finish": "error",
+      "error": {
+        "type": "provider.invalid-request",
+        "message": "the stub refuses this request",
+        "status": 400,
+        "response": {
+          "body": "{\"error\":{\"message\":\"the stub refuses this request\",\"type\":\"invalid_request_error\"}}"
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0cf3d001t0DuiJNnRTBXPW",
+      "time": {
+        "created": 1793667944253
+      },
+      "type": "idle",
+      "outcome": "failed",
+      "error": {
+        "type": "provider.invalid-request",
+        "message": "the stub refuses this request",
+        "status": 400,
+        "response": {
+          "body": "{\"error\":{\"message\":\"the stub refuses this request\",\"type\":\"invalid_request_error\"}}"
+        }
+      }
+    },
+    {
+      "id": "msg_19ef0cfa90017C9IIrdsriEFt7",
+      "time": {
+        "created": 1793667944361
+      },
+      "type": "agent-switched",
+      "agent": "build",
+      "previous": "build"
+    },
+    {
+      "id": "msg_19ef0cfa80016T2WSTp2x2LeRs",
+      "time": {
+        "created": 1793667944376
+      },
+      "text": "Wait for it.",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_19ef0cfbe001OGhswQm8Dq517n",
+      "time": {
+        "created": 1793667944391,
+        "streamed": 1793667944406,
+        "completed": 1793667947636
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_sleep",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "error",
+            "input": {
+              "command": "sleep 30; echo woke"
+            },
+            "error": {
+              "type": "aborted",
+              "message": "Tool execution interrupted"
+            },
+            "metadata": {
+              "shellID": "sh_19ef0cffe001UQsnj9b5JaJ7x6"
+            }
+          },
+          "time": {
+            "created": 1793667944401,
+            "ran": 1793667944404,
+            "completed": 1793667947632
+          }
+        }
+      ],
+      "finish": "error",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 1017,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 0
+        }
+      },
+      "error": {
+        "type": "aborted",
+        "message": "Step interrupted"
+      }
+    },
+    {
+      "id": "msg_19ef0dc77001WhGtLXVeLwxSn4",
+      "time": {
+        "created": 1793667947639
+      },
+      "type": "idle",
+      "outcome": "interrupted"
+    },
+    {
+      "id": "msg_19ef0dcef001seEFPVSiTiVJt5",
+      "time": {
+        "created": 1793667947759
+      },
+      "type": "agent-switched",
+      "agent": "build",
+      "previous": "build"
+    },
+    {
+      "id": "msg_19ef0dced001uxiNQcaPvMmfH4",
+      "time": {
+        "created": 1793667947774
+      },
+      "text": "Write slowly.",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_19ef0dd02001T2cnt1IijvsoAo",
+      "time": {
+        "created": 1793667947788,
+        "streamed": 1793667950971,
+        "completed": 1793667950977
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_write",
+          "name": "write",
+          "executed": false,
+          "state": {
+            "status": "error",
+            "input": {},
+            "error": {
+              "type": "aborted",
+              "message": "Tool execution interrupted"
+            }
+          },
+          "time": {
+            "created": 1793667947798,
+            "completed": 1793667950975
+          }
+        }
+      ],
+      "finish": "error",
+      "error": {
+        "type": "aborted",
+        "message": "Step interrupted"
+      }
+    },
+    {
+      "id": "msg_19ef0e9830014kvdnsZ9Gr6Qs3",
+      "time": {
+        "created": 1793667950979
+      },
+      "type": "idle",
+      "outcome": "interrupted"
+    },
+    {
+      "id": "msg_19ef0f207002Z1D2vBCJnnhkqe",
+      "time": {
+        "created": 1793667953159
+      },
+      "type": "location-switched",
+      "projectID": "53a9f227169abaa77c762f8a6c14c9516bba2b94",
+      "subpath": "",
+      "location": {
+        "directory": "/work/proj2"
+      },
+      "previous": {
+        "location": {
+          "directory": "/work/proj"
+        },
+        "projectID": "53a9f227169abaa77c762f8a6c14c9516bba2b94",
+        "subpath": ""
+      }
+    },
+    {
+      "id": "msg_19ef0f20c001bDll1pPi54shtS",
+      "time": {
+        "created": 1793667953164
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}
