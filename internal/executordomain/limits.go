@@ -26,14 +26,11 @@ const (
 	// bytes, and the bound refuses anything that is plainly not one.
 	TurnIDMaxBytes = 64
 
-	// HarnessMaxBytes and HarnessVersionMaxBytes bound the harness's name and its
-	// version as the box reported it.
-	HarnessMaxBytes        = 32
-	HarnessVersionMaxBytes = 64
-
-	// SessionIDMaxBytes bounds the harness's own session id: Claude Code's is a
-	// UUID, OpenCode's a `ses_` prefix and twenty-six characters.
-	SessionIDMaxBytes = 128
+	// HarnessMaxBytes bounds the harness's name as the box reported it. Its
+	// version's bound and the session id's are internal/executorkeep's
+	// (HarnessVersionMaxBytes, SessionIDMaxBytes), because the sandbox holds
+	// what a box names to them before a launch's record carries it.
+	HarnessMaxBytes = 32
 
 	// PathMaxBytes bounds the writer box's home and workspace paths, which a
 	// resumed launch maps onto its own box. The engine lays a box out under

@@ -351,6 +351,7 @@ func TestAServerIsRecognisedByItsAddressOrItsCommand(t *testing.T) {
 		{remote("https://mcp.atlassian.com/v1/mcp/authv2"), "rovo"},
 		{remote("https://mcp.sentry.dev/mcp/my-org"), "sentry"},
 		{remote("https://docs.mcp.cloudflare.com/mcp"), ""},
+		{remote("https://mcp.expo.dev/mcp"), "expo"},
 		{stdio("uvx", "postgres-mcp==0.3.0", "--access-mode=restricted"), "postgres"},
 		{stdio("npx", "-y", "tavily-mcp@0.2.22"), "tavily"},
 		{stdio("mcp.linear.app"), ""},
@@ -360,5 +361,22 @@ func TestAServerIsRecognisedByItsAddressOrItsCommand(t *testing.T) {
 		if ok != (tc.id != "") || e.ID != tc.id {
 			t.Errorf("%+v is recognised as %q (%v), want %q", tc.launch, e.ID, ok, tc.id)
 		}
+	}
+}
+
+// EXPO'S SERVER SIGNS IN WITH OAUTH AND BINDS NO SEAT'S TOKEN: it is its own
+// authorization server, and an agent's Expo token reaches its box as
+// EXPO_TOKEN instead.
+func TestExpoServerBindsNoSeatCredential(t *testing.T) {
+	t.Parallel()
+	e, ok := catalogue.Recognise(remote("https://mcp.expo.dev/mcp"))
+	if !ok || e.Integration != "" || !slices.Equal(e.Auth, []catalogue.AuthMethod{catalogue.AuthOAuth}) {
+		t.Fatalf("expo = %+v, want an OAuth sign-in and no integration", e)
+	}
+	if _, _, bound := catalogue.SeatKeysFor(remote("https://mcp.expo.dev/mcp")); bound {
+		t.Error("Expo's server binds a seat credential")
+	}
+	if _, bound := catalogue.BindingFor("expo"); bound {
+		t.Error("the expo integration has a recognised tool binding")
 	}
 }

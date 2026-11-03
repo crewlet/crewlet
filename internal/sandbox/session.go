@@ -38,11 +38,19 @@ import (
 //     (one its turn's cap ended while it still ran, one that failed before it
 //     packed, one lost with its engine whose box is still there), one packed
 //     now;
-//   - a stop's read of what the run had spent, packed now;
+//   - a stop's read of what the run had spent, which first ENDS THE JOB
+//     ([Coordinator.endJob]): its script, asked, stops its harness and packs
+//     the session as its own exit does, and the archive it left is taken —
+//     one packed now where it left none, the job killed past the wait;
 //   - the ending of a run LOST with its box still there (a launch whose engine
-//     restarted before its turn could park), packed now, before the ending
-//     reclaims the box — on this node's host, or asked of the host the box is
-//     on ([BoxReadLoss]).
+//     restarted before its turn could park), whose job is ended the same way
+//     before the ending reclaims the box — on this node's host, or asked of the
+//     host the box is on ([BoxReadLoss]).
+//
+// So a capture is FINAL wherever its job ended — by itself, asked, or killed —
+// and taken as it stands, not final, only where the job still works: one its
+// turn's cap ended, which the pause after the read stops, and one a box would
+// not end.
 //
 // A box that is GONE — lost with its host, or with a node that left the fleet —
 // has nothing left to read, and keeps nothing.
@@ -111,7 +119,8 @@ import (
 // nothing for one: no launch seals what it handed its box, and no loss asks
 // another node's host to read a box, holding the seat's mail for a take that
 // would keep nothing ([Coordinator.capturing], this node's word). It still
-// records every end, which is the account and not the session.
+// records every end, which is the account and not the session; and a stop
+// still ends its job before its box goes, which is how a stop ends a job.
 
 // SessionWrites is the executor log's writes a coordinator records through, in
 // this package's words. The engine answers them over the estate router's
@@ -593,23 +602,21 @@ type capturePoint struct {
 	cutOff bool
 }
 
-// readCapture is the capture a box read takes: the archive the run's script
-// packed where its job ended and packed one, and one packed now otherwise — a
-// job still working (one its turn's cap ended, one a person stopped), which is
-// not final, or one that ended without packing (a crash, a loss with its box
-// left), which is. CUT OFF wherever the engine packs it, and where the script
-// packed it after a harness that did not exit cleanly ([Result.HarnessCutOff]):
-// a harness killed while its wrapper lived on is packed by the script all the
-// same, its transcript ending wherever the kill found it.
-func readCapture(read BoxRead, result Result, running bool) capturePoint {
-	pack := running || result.Captured == nil
-	return capturePoint{name: string(read), pack: pack, final: !running, cutOff: pack || result.HarnessCutOff}
+// readCapture is the capture a box read takes of a job that is OVER — by
+// itself, or ended by the read ([Coordinator.endJob]) — or still working:
+// over, the archive its script packed where it left one and one packed now
+// where it left none ([SessionTake.Pack]), FINAL; working (one its turn's cap
+// ended, one a box would not end), one packed now as it stands, not final. CUT
+// OFF wherever the engine packs it — result names no archive the script left,
+// which is every loss's read, collecting nothing — where the script packed it
+// after a harness that did not exit cleanly ([Result.HarnessCutOff]): a harness
+// killed while its wrapper lived on is packed by the script all the same, its
+// transcript ending wherever the kill found it; and where its job was ended on
+// request ([Result.JobEnd]), a harness told to stop mid-step whatever its exit.
+func readCapture(read BoxRead, result Result, over bool) capturePoint {
+	return capturePoint{name: string(read), pack: !over, final: over,
+		cutOff: !over || result.Captured == nil || result.HarnessCutOff || result.JobEnd != ""}
 }
-
-// lossCapture is a lost run's box, read before its ending reclaims it: its job
-// went with its host, so what its box holds is final, and its harness was cut
-// off.
-var lossCapture = capturePoint{name: "loss", pack: true, final: true, cutOff: true}
 
 // maxOpenPlaces bounds [SessionCapture.BridgeOpen]: the most places below a
 // capture's highest call it names, the highest of them.
@@ -1040,10 +1047,11 @@ func (c *Coordinator) overBudget(ctx context.Context, run PendingRun, size, budg
 // keepLostSession keeps the session of a run whose ending is a LOSS where its box
 // may still be read — a launch whose engine restarted before its turn could
 // park, reaped as the seat is recovered — before the ending reclaims the box:
-// the last read of it anything makes. On this node's host it is attached and
-// taken here; on another node's it is asked of that host ([BoxReadLoss]), which
-// takes it there. A box that is gone, and a job of this launch already taken
-// whole, are passed over.
+// the last read of it anything makes, which ends the job first, as a stop's
+// does ([Coordinator.endJob]). On this node's host it is attached and taken
+// here; on another node's it is asked of that host ([BoxReadLoss]), which ends
+// the job and takes its session there. A box that is gone, and a job of this
+// launch already taken whole, are passed over.
 //
 // ATTACHED, NEVER CONNECTED: a box about to be reclaimed is not woken to be
 // read, and one its backend cannot read paused is passed over.
@@ -1061,14 +1069,14 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun) {
 		}
 		result, _, err := c.boxes.ReadBox(ctx, run, BoxReadLoss)
 		if err != nil {
-			log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", lossCapture.name,
+			log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
 				"node", run.LaunchNode, "error", err.Error(),
 				"detail", "the lost run's box is on another node's host, which did not read it before "+
 					"its ending reclaims it")
 			return
 		}
 		if kept := result.Kept; kept != nil && kept.NotKept != "" {
-			log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", lossCapture.name,
+			log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
 				"node", run.LaunchNode, "detail", kept.NotKept)
 		}
 		return
@@ -1077,8 +1085,12 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun) {
 	c.keepLater(spooled)
 }
 
-// readLost is the take of a lost run's box on this node's host — for this node's
-// own ending, or asked by the node ending it ([BoxReadLoss]).
+// readLost is the read of a lost run's box on this node's host — for this
+// node's own ending, or asked by the node ending it ([BoxReadLoss]): the box
+// attached, never woken; its job ended, where it still works
+// ([Coordinator.endJob]); and its session taken, final wherever the job
+// ended. Nothing else of the box is read: what a lost job spent is no
+// question a loss asks.
 func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCapture, *SessionKept) {
 	manager := c.mgr()
 	if manager == nil {
@@ -1087,11 +1099,12 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 	box, runner, err := manager.Attach(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		why := fmt.Sprintf("the lost run's box could not be read before it was reclaimed: %v", err)
-		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", lossCapture.name,
+		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
 			"detail", why)
 		return nil, &SessionKept{NotKept: why}
 	}
-	return c.takeCapture(ctx, run, box, runner, lossCapture)
+	over := c.endJob(ctx, run, box, runner)
+	return c.takeCapture(ctx, run, box, runner, readCapture(BoxReadLoss, Result{}, over))
 }
 
 // capturesLoss reports whether a lost run's ending reads its box for its
@@ -1106,13 +1119,6 @@ func (c *Coordinator) capturesLoss(run PendingRun) bool {
 	return run.Lost == nil || run.Lost.Cause.leavesBox()
 }
 
-// capturesStop reports whether a stopped run's read takes its session: a
-// company that keeps sessions ([Coordinator.capturing]), and a job that started
-// in a box.
-func (c *Coordinator) capturesStop(run PendingRun) bool {
-	return c.capturing() && run.SandboxID != "" && run.CommandID != ""
-}
-
 // keepsSessions reports whether this coordinator records on an executor log: an
 // engine's, never a test's built without one. It is the WIRING, which every
 // turn's end needs whatever the company says; whether a session is worth
@@ -1122,10 +1128,10 @@ func (c *Coordinator) keepsSessions() bool { return c.sessions != nil && c.keep 
 // capturing reports whether a capture is worth PREPARING: a coordinator that
 // records on an executor log, of a company that keeps sessions as this node's
 // revision says ([SessionKeep.Keeps]). With the switch off, a launch seals
-// nothing for a scrub no capture would make, a loss asks no other node's host
-// to read a box for a take that would keep nothing — holding the seat's mail
-// for the minutes a silent host costs — and a stop reads its run's spend on
-// the frame that decided it, as it did before sessions were kept. The take
+// nothing for a scrub no capture would make, and a loss asks no other node's
+// host to read a box for a take that would keep nothing — holding the seat's
+// mail for the minutes a silent host costs. A stop's read is the ending's own
+// retry's whatever the switch says, since it ends the job it reads. The take
 // itself keeps nothing until the fleet's revision says so
 // ([SessionKeep.Policy]).
 func (c *Coordinator) capturing() bool { return c.keepsSessions() && c.keep.Keeps() }

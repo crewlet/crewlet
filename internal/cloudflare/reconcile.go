@@ -129,7 +129,7 @@ func reconcileError(err error) error {
 		return fmt.Errorf("cloudflare: integrations.cloudflare.provisioning.api_token: %w: %w",
 			integration.ErrCredentialRejected, err)
 	}
-	rejected := integration.Reject(err, Status(err))
+	rejected := reject(err)
 	if errors.Is(rejected, integration.ErrCredentialRejected) && needs != "" {
 		return fmt.Errorf("cloudflare: the provisioner token in integrations.cloudflare."+
 			"provisioning.api_token was refused reading %s, which needs %s: %w", where, needs, rejected)
@@ -208,7 +208,7 @@ func (r *Result) Findings() []integration.Finding {
 			Detail: "The provisioner token does not hold " + integration.Count(len(r.Unheld), "permission group") +
 				" an agent level grants, and Crewlet grants an agent nothing the token does not hold itself",
 			Remedy:    "Edit the provisioner token at Cloudflare to add them over the account and its zones",
-			ActionURL: r.TokensURL, Subjects: r.Unheld,
+			ActionURL: r.TokensURL, Subjects: dashboardList(r.Unheld),
 		})
 	}
 	return out

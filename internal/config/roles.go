@@ -408,6 +408,23 @@ func (s *RoleSandbox) validate(path Path) error {
 	return p.err()
 }
 
+// EnvValue is what this seat's own settings set key to in its box, as a launch
+// layers them: its env, else the last of its setup steps that sets key. Nil-safe.
+func (s *RoleSandbox) EnvValue(key string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	if v, ok := s.Env[key]; ok {
+		return v, true
+	}
+	for i := len(s.Setup) - 1; i >= 0; i-- {
+		if v, ok := s.Setup[i].Env[key]; ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // RoleIntegrations is a seat's own identity on external surfaces: the chat
 // apps it speaks as (Slack, Mattermost) and the GitHub App it acts as.
 //
@@ -428,13 +445,14 @@ type RoleIntegrations struct {
 	Jira       *RoleJira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
 	Confluence *RoleConfluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
 	Cloudflare *RoleCloudflare `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"This seat's own Cloudflare account API token: whether it is on and its level."`
+	Expo       *RoleExpo       `yaml:"expo,omitempty" json:"expo,omitempty" desc:"This seat's own Expo robot user: whether it is on and its level."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
 	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
 		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil &&
-		r.Cloudflare == nil
+		r.Cloudflare == nil && r.Expo == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.

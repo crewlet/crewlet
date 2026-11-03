@@ -122,7 +122,7 @@ func (s *Service) refuseServerGesture(w http.ResponseWriter, r *http.Request, na
 		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNoSuchSeat,
 			httpjson.Detail{"detail": "the organization has no agent seat " + quoted(seat)})
 	case errors.Is(err, ErrSeatNotGranted):
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict,
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeSeatNotGranted,
 			httpjson.Detail{"detail": "seat " + quoted(seat) + " is not granted MCP server " +
 				quoted(name) + ", so it runs no instance of it"})
 	default:

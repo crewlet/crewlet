@@ -295,6 +295,11 @@ type LaneSpec struct {
 	// rotate revokes the bot token and waits for a person to approve the
 	// reinstall.
 	Rotatable bool
+
+	// BoxEnv is the variable a CLI in the seat's executor box reads the
+	// lane's credential from (Expo's EXPO_TOKEN); empty where its tool is a
+	// server. The seat's own box settings set it to the sealed name.
+	BoxEnv string
 }
 
 // PermissionSpec is one permission a GitHub App can hold.

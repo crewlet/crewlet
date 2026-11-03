@@ -336,6 +336,63 @@ func (s *E2BSandbox) Job(ctx context.Context, commandID string) (JobState, error
 	return remoteJob(ctx, s, commandID)
 }
 
+// EndJob implements [Sandbox]: script is a pid inside the VM, signalled there
+// as the box's user ([endByKill]).
+func (s *E2BSandbox) EndJob(ctx context.Context, _ string, script int) error {
+	return endByKill(ctx, s, script)
+}
+
+// KillJob implements [Sandbox]: EVERY PROCESS OF THE BOX'S USER, `kill -1` as
+// `user` ([killUserScript]). envd starts a job with no process group of its
+// own — in envd's, which no signal may reach — so the job's tree has no group
+// to address; envd runs as root, out of the user's reach, and spared with it;
+// and the box is the run's alone and reclaimed right after, so a template's
+// own service running as the user goes a few seconds early.
+//
+// THE SCRIPT'S SHELL IS THE PROCESS ENVD ANSWERS BY, and kill(-1) spares its
+// caller: envd starts a command as `/bin/sh -c` of a line that sets its OOM
+// score and then execs — through ionice and nice, which exec in turn — the
+// `/bin/bash -l -c` of the script (e2b-dev/infra's envd, its process
+// handler), one process all the way down, so the call returns once the script
+// has run its waits. Whether what it killed is over is the job's poll to say.
+func (s *E2BSandbox) KillJob(ctx context.Context, _ string) error {
+	if _, err := s.Exec(ctx, killUserScript(), ExecOptions{Cwd: DefaultHome}); err != nil {
+		return fmt.Errorf("e2b: ending the job in box %s: %w", s.id, err)
+	}
+	return nil
+}
+
+// killUserScript is [E2BSandbox.KillJob]'s script: every process of the box's
+// user, `kill -1`, in [killScript]'s shape — each wait over as soon as no
+// process of the user's is left but the script itself ([userLive]), and NOT
+// once `kill -0 -1` fails, which in a VM it never does. kill(-1) counts every
+// process it is refused as well as every one it reaches, and answers success
+// wherever it counted one (the kernel's kill_something_info); a VM's kernel
+// threads and envd, root's, are always there to refuse it, so waited on that,
+// every kill of an E2B job — a sweep after a clean end included — ran both its
+// graces out, ten seconds of every stop's and every loss's read. The user's id
+// is the shell's own, read as the walk reads every process's.
+func killUserScript() string {
+	return `u=; while read -r k v r; do [ "$k" != Uid: ] || { u=$v; break; }; done < /proc/$$/status
+` + userLive("/proc") + killAndAwait("-1", "userlive")
+}
+
+// userLive defines the shell function `userlive`, which answers whether root —
+// a /proc — holds a process other than the shell itself that kill(-1), sent
+// by user id $u, reaches and that has not exited: one whose real or saved
+// user id is $u, which are the ids the kernel lets a sender of that id signal,
+// and that is no zombie, which has nothing left to signal. Builtins alone, so
+// the walk forks nothing it would then find; a record that goes as it is read
+// is a process that went.
+func userLive(root string) string {
+	quoted := "'" + strings.ReplaceAll(root, "'", `'\''`) + "'"
+	return `userlive() { for d in ` + quoted + `/[0-9]*; do [ "${d##*/}" != "$$" ] || continue; z= m=; ` +
+		`while read -r k a b c r; do case "$k" in State:) [ "$a" != Z ] || z=1 ;; ` +
+		`Uid:) if [ "$a" = "$u" ] || [ "$c" = "$u" ]; then m=1; fi; break ;; esac; done < "$d/status"; ` +
+		`[ -z "$m" ] || [ -n "$z" ] || return 0; done 2> /dev/null; return 1; }
+`
+}
+
 // WriteFile implements [Sandbox]: the file is REPLACED whole, never uploaded
 // over in place, which is how envd writes an upload ([envdClient.writeFile]).
 func (s *E2BSandbox) WriteFile(ctx context.Context, path string, content []byte) error {

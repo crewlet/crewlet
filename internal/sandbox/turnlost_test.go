@@ -186,6 +186,7 @@ func TestOnlyALossHandsItsTurnToTheEngine(t *testing.T) {
 		{"stopped by a person", func(t *testing.T, rig *coordRig) {
 			rig.launchAsked("t1")
 			rig.stop(t)
+			rig.fireRetries()
 		}, false},
 		{"its resume abandoned after its turn ran", func(t *testing.T, rig *coordRig) {
 			rig.launchAsked("t1")

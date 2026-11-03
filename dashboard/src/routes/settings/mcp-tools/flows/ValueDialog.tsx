@@ -173,7 +173,6 @@ export function ValueDialog({
               aria-invalid={field.invalid || undefined}
               error={field.invalid}
               type="password"
-              autoComplete="new-password"
               spellCheck={false}
               placeholder={value?.set ? "Stored. Type a new value to replace it" : undefined}
               value={text}

@@ -46,6 +46,18 @@
 // What each harness's archive holds, and never holds, is the harness's own: see
 // carry.go, [ClaudeCode] and [OpenCode].
 //
+// # A run ends on request
+//
+// The read that takes a stopped or lost job's session first asks the job to
+// end: SIGUSR1 to the run's script, by the pid it recorded in its box before it
+// did anything else ([Paths.JobScript], [Runner.AskEnd]). The script ends its
+// harness — SIGTERM, then SIGKILL after the grace; an OpenCode run first
+// interrupts its session through its own server, so the step in flight is
+// settled in what it exports — packs the session as its own exit packs it,
+// records that it was ended and how ([Paths.JobEnded]), and exits with its
+// harness's status, which the collection never reads as a success
+// ([sandbox.Result.JobEnd]). See end.go.
+//
 // It touches only the [sandbox.Sandbox] interface, so the in-process fake is a
 // faithful substitute and every runner is testable without a real harness.
 package executor
@@ -220,6 +232,23 @@ func (p Paths) Done() string { return p.WorkDir() + "/done" }
 
 // ExitCode is the wrapper's status, surfaced on collect to explain a crash.
 func (p Paths) ExitCode() string { return p.WorkDir() + "/exit_code" }
+
+// JobScript is where a run's script records, before it does anything else, the
+// end protocol it speaks and its own pid — `1 <pid>` — once it has set the
+// handler that ends its job on SIGUSR1 (end.go): what the read that ends a
+// stopped or lost job sends the request to ([Runner.AskEnd]). Moved into place
+// whole, so a reader finds the record or none; removed by the clear before
+// every run ([Runner.ClearArtifacts]), so a run is never asked through the last
+// one's.
+func (p Paths) JobScript() string { return p.WorkDir() + "/job-script" }
+
+// JobEnded is where a run's script records that its job was ended on request,
+// and how — `asked` (its harness told to stop went), `killed` (it outlived its
+// grace) or `before` (the request came before its harness started) — as soon
+// as its harness is over and before it packs, so the record stands where the
+// pack is cut short; read by the collection ([sandbox.Result.JobEnd]) and
+// removed by the clear before every run.
+func (p Paths) JobEnded() string { return p.WorkDir() + "/job-ended" }
 
 // BinDir is the box's own bin directory, first on the run's PATH
 // ([withBoxBin]): where a setup step installs an executable for the run, a

@@ -4,6 +4,8 @@ package procgroup
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -66,4 +68,27 @@ func signal(pid int, sig syscall.Signal) error {
 		return nil
 	}
 	return err
+}
+
+// signalMember holds pid — a pidfd on Linux, the pid elsewhere
+// ([os.FindProcess]) — checks it is a living member of l's group, and signals
+// what it holds; see [Leader.SignalMember].
+func signalMember(l Leader, pid int, sig os.Signal) error {
+	// os.FindProcess never fails on unix: a process that is already gone is
+	// one whose signal answers os.ErrProcessDone.
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("procgroup: holding pid %d: %w", pid, err)
+	}
+	defer func() { _ = proc.Release() }()
+	if err := l.memberOf(pid); err != nil {
+		return err
+	}
+	if err := proc.Signal(sig); err != nil {
+		if errors.Is(err, os.ErrProcessDone) {
+			return fmt.Errorf("%w: pid %d ended before it was signalled", ErrNotMember, pid)
+		}
+		return fmt.Errorf("procgroup: signalling pid %d: %w", pid, err)
+	}
+	return nil
 }

@@ -14,13 +14,15 @@ import (
 // A run's session, TAKEN out of its box to be kept (sandbox.SessionTaker).
 //
 // TWO ROADS IN, ONE OUT. The archive a run's script packed when its harness
-// exited ([Runner.OpenCapture]) is taken as it is; a job that never got to pack
-// — stopped, cut off at its turn's cap while it still ran, lost with its engine
-// with its box left behind — is packed now, by the very pack its script runs
-// ([Runner.PackCapture]). Either way the archive leaves the box through ONE
-// scrub ([scrubArchive]): every value the engine put in the box taken out, and
-// every file redacted, each read and written as what it is, so what is kept is
-// the session minus the secrets and still the archive its harness restores.
+// exited ([Runner.OpenCapture]) — at its own end, or at the end a stop or a
+// loss asked of it (end.go) — is taken as it is; a job that never got to pack
+// — killed before it could, cut off at its turn's cap while it still ran, lost
+// with its engine with its box left behind — is packed now, by the very pack
+// its script runs ([Runner.PackCapture]). Either way the archive leaves the box
+// through ONE scrub ([scrubArchive]): every value the engine put in the box
+// taken out, and every file redacted, each read and written as what it is, so
+// what is kept is the session minus the secrets and still the archive its
+// harness restores.
 //
 // AND THE BOX IS TOLD WHAT WAS KEPT. A box keeps the digest of every archive its
 // own copy of the session holds ([Paths.SessionDigests]), and a restore never
@@ -33,10 +35,11 @@ import (
 var _ sandbox.SessionTaker = (*Runner)(nil)
 
 // TakeSession streams the session the box's last run worked in, as a capture
-// keeps it ([sandbox.SessionTaker]): packed now where take says so, scrubbed of
-// take's values and redacted, a piece at a time, within the bounds take's
-// archive bound sets ([scrubBounds]). The zero value where the box holds no
-// session: a harness this runner carries none for, a run whose record names
+// keeps it ([sandbox.SessionTaker]): packed now where take says so, and else
+// the archive the run's script left, or — where it left none — one packed now;
+// scrubbed of take's values and redacted, a piece at a time, within the bounds
+// take's archive bound sets ([scrubBounds]). The zero value where the box holds
+// no session: a harness this runner carries none for, a run whose record names
 // none, or one whose harness wrote nothing to pack. An error where it holds one
 // that cannot be taken: a pack that failed, or an archive the box describes as
 // past take's bound, refused before a byte of it is read.
@@ -51,11 +54,21 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, errors.New("executor: a take names no bound on the archive it keeps, " +
 			"and a session is never read out of a box unbounded")
 	}
-	open := r.OpenCapture
-	if take.Pack {
-		open = r.PackCapture
+	// A JOB THAT IS OVER IS TAKEN AS ITS SCRIPT LEFT IT where its script
+	// packed it, and packed now where it did not — one that crashed before
+	// its pack, one killed part way through it, one lost with its engine —
+	// by the same pack; a job still working is packed now as it stands.
+	var (
+		archive sandbox.SessionArchive
+		body    io.ReadCloser
+		err     error
+	)
+	if !take.Pack {
+		archive, body, err = r.OpenCapture(ctx, box)
 	}
-	archive, body, err := open(ctx, box)
+	if err == nil && body == nil {
+		archive, body, err = r.PackCapture(ctx, box)
+	}
 	if err != nil || body == nil {
 		return sandbox.TakenSession{}, err
 	}
@@ -277,7 +290,7 @@ const (
 // holds ([Paths.SessionDigests]): the line a run's script writes for an archive
 // it packed or restored, written here for the archive a capture kept.
 func keepDigest(ctx context.Context, box sandbox.Sandbox, paths Paths, session, digest string) error {
-	if !validSessionID(session) {
+	if !sandbox.ValidSessionID(session) {
 		return fmt.Errorf("executor: %q is not a session id a digest may be kept under", session)
 	}
 	res, err := box.Exec(ctx, "printf '%s\\n' "+sandbox.ShellQuote(session+" "+digest)+" >> "+

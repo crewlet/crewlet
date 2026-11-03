@@ -714,9 +714,7 @@ func TestANoteLeftWaitingWhenARunEndsIsRecordedExpiredByTheEnginesCoordinator(t 
 
 	pause := janeStops()
 	c.e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
-	if _, found, _ := c.e.sandbox.Load().pending.Get(t.Context(), "run-1"); found {
-		t.Fatal("the stopped run is still on the record")
-	}
+	stopFinished(t, c.e, "run-1")
 
 	got := c.awaitSteered(t, 1)
 	if len(got) != 1 || got[0].NoteID != "req-1" || got[0].TurnID != "run-1" ||

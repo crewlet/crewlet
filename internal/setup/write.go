@@ -542,24 +542,35 @@ func normalise(reqs []Requirement, values map[string]string) (map[string]string,
 	out := make(map[string]string, len(values))
 	for field, value := range values {
 		trimmed := strings.TrimSpace(value)
-		if r, ok := byField[field]; ok && r.Kind.Tight() && strings.ContainsAny(trimmed, " \t\r\n") {
-			// THE VALUE, not the field name: the name is already the
-			// first argument and by construction has no space in it, so
-			// quoting it twice asserted something false about the one
-			// identifier shown and withheld the only thing an operator
-			// needs to see. Every kind that reaches here is Tight —
-			// a URL, an id or an email — and KindSecret is deliberately
-			// not, so nothing echoed here is a credential.
-			return nil, fmt.Errorf(
-				"setup: %s cannot contain a space, and %q has one inside it: "+
-					"an address, an identifier and an email are each a single "+
-					"token, so a space in the middle is a value nothing "+
-					"answers to rather than an untidy one",
-				r.ConfigPath, trimmed)
+		if r, ok := byField[field]; ok {
+			if refused := r.Refusal(trimmed); refused != nil {
+				return nil, refused
+			}
 		}
 		out[field] = trimmed
 	}
 	return out, nil
+}
+
+// ValueError is a submitted value its field refuses, before anything is
+// written: the field, where it lands in the document, and the sentence saying
+// what is wrong, which never holds a credential.
+type ValueError struct {
+	Field      string
+	ConfigPath string
+	Problem    string
+}
+
+func (e *ValueError) Error() string { return "setup: " + e.ConfigPath + ": " + e.Problem }
+
+// Refusal is value refused by this field's own rule ([Requirement.ValueProblem]),
+// or nil for a value it takes. Saving and the Test button both ask it, so the
+// two refuse the same values in the same words.
+func (r Requirement) Refusal(value string) *ValueError {
+	if problem := r.ValueProblem(value); problem != "" {
+		return &ValueError{Field: r.Field, ConfigPath: r.ConfigPath, Problem: problem}
+	}
+	return nil
 }
 
 // typed turns a submitted string into the JSON value its kind is.

@@ -253,7 +253,8 @@ export function needsAttention(status: Status): boolean {
 
 /** The tool, as one value: whether it works, and what it works through. */
 export function toolWords(lane: Lane, saved: AccessSeatLane): string {
-  const through = laneWords(lane.key).tool;
+  const words = laneWords(lane.key);
+  const through = words.tool;
   switch (saved.tool) {
     case "live":
       return `Live, ${through}`;
@@ -262,12 +263,27 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
     case "waiting":
       return `Waiting for the credential, ${through}`;
     case "no_server":
-      return `Not set up: no ${laneWords(lane.key).server} tool server is declared`;
+      return words.boxEnv
+        ? `Not set up: its sandbox env does not set ${words.boxEnv.name}`
+        : `Not set up: no ${words.server} tool server is declared`;
     case "server_off":
-      return `Not running: the ${laneWords(lane.key).server} tool server is turned off`;
+      return `Not running: the ${words.server} tool server is turned off`;
     case "off":
       return "None while off";
   }
+}
+
+/**
+ * What agents with an account and no tool lack, and how to give them one, said
+ * once above the table after "... nothing to use it with: ".
+ */
+export function noToolRemedy(laneKey: string): string {
+  const words = laneWords(laneKey);
+  if (words.boxEnv) {
+    const { name, value } = words.boxEnv;
+    return `its sandbox env does not set ${name}. Add ${name}: "${value}" to each agent's sandbox.env in the company document, and its tool signs in as the agent.`;
+  }
+  return `the company declares no ${words.server} tool server. Add it under Settings › MCP & tools as one instance per agent, and each agent's own credential is sent with it.`;
 }
 
 /** The last sync, as one value. */

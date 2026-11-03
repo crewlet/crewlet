@@ -96,6 +96,7 @@ import (
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -996,6 +997,15 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "Mattermost",
 			s.passes.Serves(kind))
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindExpo:
+		// NO ROSTER HERE: no seat names an Expo credential in its document,
+		// and each agent's robot is listed on the integration's Agents tab
+		// from the access ledger.
+		block := company.Integrations.Expo
+		summary = expo.Summary()
+		reqs = expo.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:
@@ -2389,6 +2399,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	var managed *configapi.ManagedError
 	var unanswered *configapi.ActivationUnknownError
 	var seal *setup.SealError
+	var value *setup.ValueError
 	var entity *configapi.EntityError
 	// THE NAMES SEALED BEFORE THE WRITE FAILED, on every answer to a write
 	// that failed after its first credential was sealed — a lost race, a
@@ -2410,6 +2421,8 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	switch {
 	case errors.As(err, &managed):
 		configapi.RefuseManaged(w, managed)
+	case errors.As(err, &value):
+		refuseValue(w, value)
 	case errors.As(err, &literal):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeLiteralInConfig, map[string]string{
 			"path": literal.Path,
@@ -2755,4 +2768,13 @@ func (s *Service) stateFor(
 		return state, false
 	}
 	return withLoopFindings(state, s.loopFindings(ctx, kind)), true
+}
+
+// refuseValue answers a value its field refuses, before anything was written
+// or sent: the caller's input, located at the field it was typed into, as a
+// literal in the config is. Its sentence never holds a credential.
+func refuseValue(w http.ResponseWriter, value *setup.ValueError) {
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
+		"detail": value.Problem, "field": value.Field, "path": value.ConfigPath,
+	})
 }

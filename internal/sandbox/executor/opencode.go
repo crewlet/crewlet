@@ -76,14 +76,6 @@ const openCodeMCPWait = 60 * time.Second
 // mid-run already makes rare.
 const openCodeLoginSync = 30 * time.Second
 
-// openCodeStopWait bounds how long the script waits for a process of its own
-// — its server, its login exporter — to go once told to, before it kills it.
-// Bounded, because the done marker waits on the script: a server that ignored
-// SIGTERM would otherwise hold the run open for ever. Measured on 2.0.32, the
-// server goes in a tenth of a second, and in three with a stdio MCP server
-// still connecting, which it stops itself; five is room above that.
-const openCodeStopWait = 5 * time.Second
-
 // OpenCode drives OpenCode 2 headless — the `@opencode/cli` package. 1.x cannot
 // run this script: it has no `serve` it can be pointed at, refuses the 2.0
 // config format, and keeps its login where 2.0 does not look; the script says
@@ -206,16 +198,27 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 // AND, FOR A RUN WIRED TO ITS NOTES, NO STEER LEFT PENDING: once the run has
 // ended, every note the plugin admitted and OpenCode never delivered is
 // cancelled in the session, before the server stops ([openCodeLeftoverSteers]).
+//
+// AND IT ENDS ON REQUEST (end.go): the script traps SIGUSR1 before it records
+// its pid, and runs `opencode run` in the background, waited for. The request
+// interrupts the run's session through its own server — which settles the step
+// in flight, so the export the run's own tail makes holds it — ends the run's
+// client within the grace, records the end, and goes on to that tail as a run
+// that ended by itself does: the usage asked, the session exported and the
+// login exported through the server, then the server stopped. A request before
+// the server listens starts no server and no run; one while the run waits for
+// its MCP servers starts no run. A SIGTERM, SIGINT or SIGHUP is a teardown's,
+// as it always was.
 func (OpenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
 	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeTimes{
-		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: openCodeStopWait,
+		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: sandbox.JobStopGrace,
 	}))
 }
 
 // openCodeTimes is how long a run's script waits for its server to listen
 // ([openCodeListenWait]) and for its MCP servers to connect
 // ([openCodeMCPWait]), how often it exports a login ([openCodeLoginSync]), and
-// how long it gives a process of its own to go ([openCodeStopWait]): a value
+// how long it gives a process of its own to go ([sandbox.JobStopGrace]): a value
 // rather than the constants read inline, so a case about a wait runs it at a
 // length that case can tell apart — a bound run out at one a test can afford,
 // or a stop stretched to one no prompt end could be mistaken for.
@@ -378,6 +381,21 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
+	// THE END PROTOCOL BEFORE ANYTHING ELSE (end.go), and the run's own end of
+	// its harness: the session interrupted through the run's own server first,
+	// which settles the step in flight — the tool call it was running marked
+	// interrupted, the message finished — so the export the end goes on to
+	// holds it, and which ends the run's client by itself within a fifth of a
+	// second; then the client ended within the grace. Ended alone, the client
+	// went at once and the server worked on: the session's export, right after
+	// and five seconds on, held nothing of the step, and its tool call still
+	// ran in the box (measured on 2.0.32 and 2.1.4, whose API names the call
+	// `session.interrupt` and answers `session.abort`, the first release's
+	// name, with "Operation not found"). url is the run's server's, which the
+	// harness never runs without.
+	b.WriteString(endPrologue(paths, times.stop))
+	b.WriteString(endHarness(`[ -z "$url" ] || opencode api --server "$url" session.interrupt --param sessionID="$sid" < /dev/null > /dev/null 2>&1`))
+
 	// ABSENT AND FAILING ARE TWO ANSWERS. One sentence for any failure of
 	// `--version` told a run whose opencode was installed but could not start
 	// (not executable, busy, crashing) to install it, and dropped the words it
@@ -396,20 +414,23 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// to the server alone.
 	line(`config=$(cat %s) && [ -n "$config" ] || { echo 'crewlet: the run has no OpenCode configuration at '%s >&2; exit 1; }`,
 		cfg, cfg)
-	line(`imported= spid= xpid= xout=%s`, loop)
-	b.WriteString(openCodeStops(times.stop))
+	line(`imported= spid= xpid= xout=%s url=`, loop)
+	b.WriteString(openCodeStops())
 	// holds: the file is a whole, non-empty JSON array.
 	line(`holds() { t=$(tr -d '[:space:]' < "$1") || return 1; case "$t" in '['*']') [ "$t" != '[]' ];; *) return 1;; esac; }`)
 	// keep FILE FLAGS...: one export into FILE, moved over the document only
 	// where it holds a login and differs from what the document holds.
 	line(`keep() { f=$1; shift; if opencode auth export "$@" < /dev/null > "$f" 2> /dev/null && holds "$f" && [ "$(cat "$f")" != "$(cat %s)" ]; then mv -f "$f" %s; else rm -f "$f"; fi; }`, doc, doc)
-	// quit: a signal's end — the loop stopped, the login exported once more
-	// beside a server that is going with the group, then the server stopped.
-	// The EXIT trap goes with the others, because quit has done everything it
-	// would: left set, the `exit` ran its stops a second time, over processes
-	// quit had already stopped — under busybox ash, before end tested for an
-	// empty pid, ten seconds of waiting for nothing.
-	line(`quit() { trap - EXIT TERM INT HUP; unsync; [ -z "$imported" ] || keep %s --standalone; stop; exit "$1"; }`, next)
+	// quit: a signal's end — a teardown's, never an end request's — with the
+	// end request ignored from here on; the run's client ended (it runs in
+	// the background, so the group's signal has not stopped the script's wait
+	// for it); the loop stopped, the login exported once more beside a server
+	// that is going with the group, then the server stopped. The EXIT trap goes
+	// with the others, because quit has done everything it would: left set,
+	// the `exit` ran its stops a second time, over processes quit had already
+	// stopped — under busybox ash, before end tested for an empty pid, ten
+	// seconds of waiting for nothing.
+	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; unsync; [ -z "$imported" ] || keep %s --standalone; stop; exit "$1"; }`, next)
 	line(`trap 'unsync; stop' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
 	line(`if [ -s %s ]; then`, doc)
@@ -417,6 +438,19 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`  imported=1`)
 	line(`fi`)
 	b.WriteString(openCodeSessionGate(session, paths, req.FreshWiring != nil))
+	// THE RECORD, before the server and the run, so a run killed — or asked
+	// to end — before it reported anything still says which session it took
+	// up, and why it began again where it did. The release last, as the
+	// harness printed it ([parseSessionRecord]).
+	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`,
+		sandbox.ShellQuote(paths.SessionRecord()))
+	// A REQUEST BEFORE THE SERVER LISTENS starts no server and no run: the
+	// job is recorded as ended before its harness started, and the script
+	// goes, the server it started stopped by its EXIT trap. There is nothing
+	// to export the session through, and a session the box holds is packed by
+	// the read that asked, beside a database no server holds any more.
+	line(`endbefore() { endedas=before; %s; exit 143; }`, strings.TrimSuffix(recordEnded(paths), "\n"))
+	line(`[ -z "$endasked" ] || endbefore`)
 
 	// ON THE SERVER ALONE: it runs the session, so it is the one process
 	// that reads the run's configuration — and, for a run wired to its notes,
@@ -432,6 +466,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`spid=$!`)
 	line(`deadline=$(( $(date +%%s) + %d ))`, int(times.listen.Seconds()))
 	line(`until grep -q '^server listening on ' %s 2> /dev/null && grep -q '^server password ' %s 2> /dev/null; do`, srv, srv)
+	line(`  [ -z "$endasked" ] || endbefore`)
 	line(`  if ! kill -0 "$spid" 2> /dev/null; then echo 'crewlet: opencode serve exited before it listened:' >&2; cat %s >&2; exit 1; fi`, srv)
 	line(`  if [ "$(date +%%s)" -ge "$deadline" ]; then`)
 	line(`    if grep -q '^server listening on ' %s 2> /dev/null; then echo 'crewlet: opencode serve listened but printed no server password within %s' >&2; else echo 'crewlet: opencode serve did not say where it listens within %s' >&2; fi`,
@@ -451,6 +486,9 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	if checks := openCodeReadiness(req.MCPServers); checks != "" {
 		line(`deadline=$(( $(date +%%s) + %d ))`, int(times.mcp.Seconds()))
 		line(`while :; do`)
+		// A REQUEST HERE starts no run, and leaves the run's own tail to
+		// export the session through the server that is up.
+		line(`  [ -z "$endasked" ] || break`)
 		line(`  s=$(opencode api --server "$url" mcp.list < /dev/null 2> /dev/null)`)
 		line(`  ready=1`)
 		b.WriteString(checks)
@@ -469,13 +507,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		line(`if [ "$k" = yes ]; then before=$(opencode api --server "$url" session.get --param sessionID="$sid" < /dev/null 2> /dev/null) && case "$before" in '{'*) printf '{"type":"%s","report":%%s}\n' "$before";; esac; fi`,
 			openCodeUsageBefore)
 	}
-	// THE RECORD, before the run, so a run killed before it reported anything
-	// still says which session it took up, and why it began again where it
-	// did. The release last, as the harness printed it ([parseSessionRecord]).
-	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`,
-		sandbox.ShellQuote(paths.SessionRecord()))
-	line(`%s`, strings.Join(run, " "))
-	line(`code=$?`)
+	b.WriteString(launchHarness(strings.Join(run, " "), paths))
 	// NOTHING THE PLUGIN ADMITTED IS LEFT IN THE SESSION once the run has
 	// ended: see [openCodeLeftoverSteers].
 	if req.Steer.Set() {
@@ -483,7 +515,12 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	}
 	line(`report=$(opencode api --server "$url" session.get --param sessionID="$sid" < /dev/null 2> /dev/null) && case "$report" in '{'*) printf '{"type":"%s","report":%%s}\n' "$report";; esac`,
 		openCodeUsageEvent)
+	// NOTHING TO EXPORT of a session the run never started: a request before
+	// its client started leaves a session of its own — never run — that
+	// OpenCode does not hold, and only a continued one to export.
+	line(`if [ "$endedas" != before ] || [ "$k" = yes ]; then`)
 	b.WriteString(openCodeCapture(paths))
+	line(`fi`)
 	line(`unsync`)
 	line(`[ -z "$imported" ] || keep %s --server "$url"`, next)
 	line(`stop; trap - EXIT TERM INT HUP`)
@@ -679,17 +716,9 @@ func openCodePack(paths Paths, staged, server string) string {
 	return b.String()
 }
 
-// openCodeStops is the script's three stops: end, which stops one process of
-// the script's own, bounded by stop ([openCodeStopWait]) and killing it only
-// if it is still there at the end of the wait; and stop and unsync, which end
-// its server and its login exporter ([openCodeExporter]).
-//
-// NO PROCESS IS NOTHING TO STOP, and it is TESTED rather than left to `kill`
-// refusing an empty operand: dash and bash refuse it, but busybox ash — the
-// sh of an Alpine image, which OpenCode 2's musl builds are for — answers both
-// `kill ""` and `kill -0 ""` with success and signals nothing, so an end with
-// no process waited out the whole bound: five seconds at the end of every run
-// given no login, where the exporter never started, and ten after a signal.
+// openCodeStops is the script's two stops beside end ([endFunction], which
+// every run's script defines first): stop and unsync, which end its server and
+// its login exporter ([openCodeExporter]).
 //
 // THE EXPORTER IS TOLD AGAIN until it goes (end's second operand), because
 // the first SIGTERM can be lost. The exporter is a subshell forked while the
@@ -703,11 +732,12 @@ func openCodePack(paths Paths, staged, server string) string {
 // bash, each waiting out the whole bound and then killing the exporter with
 // its sleep still running, which left that sleep in the job's group for an
 // interval. The loss is certain only while the fork has not run, so under
-// load, where it often runs first, fewer are lost. A repeat goes only to a pid
-// `kill -0` still finds, as every probe of end's does, so it shares end's one
-// residual: a pid the script reaped during the tenth of a second before the
-// probe, which the system could hand out again only by wrapping its whole pid
-// space within that tenth.
+// load, where it often runs first, fewer are lost.
+//
+// AND NO PROCESS IS NOTHING TO STOP, which end tests for: without it, under
+// busybox ash, an end with no process waited out the whole bound — five
+// seconds at the end of every run given no login, where the exporter never
+// started, and ten after a signal.
 //
 // UNSYNC DROPS THE EXPORTER'S FILE ITSELF ($xout) once end has returned,
 // whatever ended the exporter: one that heard the stop drops it as it goes
@@ -719,11 +749,10 @@ func openCodePack(paths Paths, staged, server string) string {
 // but a signal in its first instant, where a lost SIGTERM costs the bound and
 // then the kill, and a repeat would tell a server that is already shutting
 // down, stopping its own MCP servers, to stop again.
-func openCodeStops(stop time.Duration) string {
-	return fmt.Sprintf(`end() { [ -n "$1" ] || return 0; kill "$1" 2> /dev/null || return 0; i=0; while kill -0 "$1" 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); [ -z "$2" ] || { kill -0 "$1" 2> /dev/null && kill "$1" 2> /dev/null; }; done; kill -0 "$1" 2> /dev/null && kill -9 "$1" 2> /dev/null; return 0; }
-stop() { end "$spid"; spid=; }
+func openCodeStops() string {
+	return `stop() { end "$spid"; spid=; }
 unsync() { end "$xpid" again; xpid=; [ -z "$xout" ] || rm -f "$xout"; }
-`, int(stop/(100*time.Millisecond)))
+`
 }
 
 // openCodeExporter is the login exporter: a subshell that exports the login

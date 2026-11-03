@@ -54,6 +54,19 @@ func parkOnRun(t *testing.T, e *Engine) {
 	}
 }
 
+// stopFinished waits for the stop of run turnID to be finished, its row gone:
+// a job that started in a box is ended by the stop's read, which waits for it
+// (internal/sandbox's endJob), so wherever the stop reaches the seat it is only
+// decided there, and the ending's own retry finishes it, at once and off that
+// frame.
+func stopFinished(t *testing.T, e *Engine, turnID string) {
+	t.Helper()
+	eventually(t, "the stop of "+turnID+" to be finished, its row gone", func() bool {
+		_, found, err := e.sandbox.Load().pending.Get(t.Context(), turnID)
+		return err == nil && !found
+	})
+}
+
 // stopRecords is every record of one turn's end the queue carried, in order:
 // its completions, its turn_completed and its stop.
 type stopRecords struct {
@@ -137,9 +150,7 @@ func TestAStopEndsTheSeatsParkedRunAndClosesItsTurnAsStopped(t *testing.T) {
 	pause := janeStops()
 	e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
 
-	if _, found, _ := e.sandbox.Load().pending.Get(t.Context(), "run-1"); found {
-		t.Fatal("the stopped run is still on the record")
-	}
+	stopFinished(t, e, "run-1")
 	got := closedAsStopped(t, q, "run-1")
 	if len(got.stops) != 1 {
 		t.Fatalf("published %d agent_turn_stopped, want one", len(got.stops))
@@ -265,6 +276,7 @@ func TestALaunchStoppedBeforeItsParkClosesItsOwnTurnAsStopped(t *testing.T) {
 		t.Fatal("the turn's park was published after its park was written, so a stop that " +
 			"landed in between is older than the park it closes")
 	}
+	stopFinished(t, e, "run-1")
 	closedAsStopped(t, q, "run-1")
 	// AND THE TASK SAYS SO: the close is a segment of its own, never one
 	// the tracker's ledger collapses into the park.
@@ -306,9 +318,7 @@ func TestASeatAcquiredUnderAStopEndsTheRunsItsLastHolderLeft(t *testing.T) {
 		t.Fatalf("prepareSeatSandbox: %v", err)
 	}
 
-	if _, found, _ := e.sandbox.Load().pending.Get(t.Context(), "run-1"); found {
-		t.Fatal("the seat was taken with its stopped run still running")
-	}
+	stopFinished(t, e, "run-1")
 	closedAsStopped(t, q, "run-1")
 }
 
@@ -324,9 +334,7 @@ func TestACompleteReadOfThePausesEndsTheRunsAStopAskedFor(t *testing.T) {
 
 	e.adoptSeatPauses(t.Context(), map[uuid.UUID]coord.SeatPause{pause.Seat: pause})
 
-	if _, found, _ := e.sandbox.Load().pending.Get(t.Context(), "run-1"); found {
-		t.Fatal("a complete read of a stop left the seat's run running")
-	}
+	stopFinished(t, e, "run-1")
 	closedAsStopped(t, q, "run-1")
 }
 
@@ -430,6 +438,7 @@ func TestALaunchStoppedBeforeItsParkIsClosedAsStoppedOnceTheSeatIsResumed(t *tes
 	store.before = func() {
 		pause := janeStops()
 		e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
+		stopFinished(t, e, "run-1")
 		e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat})
 	}
 

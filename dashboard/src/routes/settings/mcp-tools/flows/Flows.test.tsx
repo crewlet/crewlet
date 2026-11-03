@@ -267,6 +267,9 @@ test("a replaced value is tested before it is stored, and a refused one says why
   expect(screen.getByRole("heading", { name: "Replace Authorization" })).toBeDefined();
   const field = screen.getByLabelText("New value") as HTMLInputElement;
   expect(field.type).toBe("password");
+  // A SECRET TO STORE, so no saved login is offered into it (uilet's Input).
+  expect(field.getAttribute("autocomplete")).toBe("new-password");
+  expect(field.hasAttribute("data-1p-ignore")).toBe(true);
   fireEvent.change(field, { target: { value: "Bearer lin_not_real" } });
   fireEvent.click(screen.getByRole("button", { name: "Test and save" }));
   await settle();

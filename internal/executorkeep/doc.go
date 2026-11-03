@@ -1,7 +1,9 @@
 // Package executorkeep is what keeping an executor's work is said in, apart
 // from the log that records it (ADR-0073): how a turn ENDED ([Ending]), the
-// bounds a kept SESSION is held to ([SessionMaxBytes], [SealedMaxBytes]) and
-// the shapes it is sealed and uploaded as ([SealedSpool], [SealedObject]).
+// bounds a kept SESSION is held to ([SessionMaxBytes], [SealedMaxBytes]), the
+// bounds of the harness's release and session id a box names
+// ([HarnessVersionMaxBytes], [SessionIDMaxBytes]) and the shapes it is sealed
+// and uploaded as ([SealedSpool], [SealedObject]).
 //
 // # Why it is not internal/executordomain's
 //

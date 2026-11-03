@@ -20,6 +20,11 @@
 // time is read differently on every platform, and a second reader is a second
 // definition of "the same process".
 //
+// And how ONE process the caller did not start is signalled: a pid the job
+// itself wrote down — a run's script records its own, so that its end can be
+// asked of it — reaches its process only while that process is a living member
+// of the group the caller recorded ([Leader.SignalMember]), because the job
+// could have written any pid of its user's there.
 // And one figure about a group: the CPU its members have spent ([GroupCPU]),
 // read from the same process records, because a group signalled as one dies
 // without its leader reaping the rest, and the leader's own usage then counts

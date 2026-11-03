@@ -54,8 +54,16 @@
 // So is a STOPPED one — a person's pause with `stop_running` ends the seat's
 // launching and running runs at once ([Coordinator.StopSeat]) — as a stop and
 // never as a loss, with who stopped it recorded in the deciding write
-// ([PendingRun.Stop]), its spend read off the box and charged before the box
-// goes, and the turn parked on it closed as stopped ([CoordinatorOptions.CloseStopped]).
+// ([PendingRun.Stop]), its job ENDED and its spend read off the box and charged
+// before the box goes, and the turn parked on it closed as stopped
+// ([CoordinatorOptions.CloseStopped]).
+//
+// AND A STOPPED OR LOST JOB IS ENDED BEFORE ITS SESSION IS TAKEN: the read
+// sends its script a request to end it — SIGUSR1 to the pid the script recorded
+// in its box ([Sandbox.EndJob], [JobEnder]) — which stops its harness and packs
+// its session as its own end does, and kills what is left past the wait
+// ([Sandbox.KillJob]), so what is taken is final wherever the job ended. See
+// endjob.go.
 //
 // The reap fences the row to its lease before it revives or lets go of
 // anything — and the revival stamps that lease on the row itself — and a take
@@ -140,6 +148,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -584,8 +593,8 @@ type Result struct {
 	CostUSD          float64
 
 	// SessionID is the harness session the run worked in, as its harness reported it
-	// or, where it reported nothing, as the run's script recorded it before
-	// the harness started.
+	// or, where it reported nothing — or nothing shaped as a harness's session
+	// id — as the run's script recorded it before the harness started.
 	SessionID string
 
 	// Continued says the run continued the session it was asked to
@@ -605,12 +614,15 @@ type Result struct {
 	// carried in could not be restored — so whoever reads what the run did
 	// learns why it began again rather than finding a new session id alone.
 	// "" for a run that continued its session, and for one asked to start
-	// one.
+	// one. ONE SENTENCE, redacted and cut to [MaxFellBackBytes] where the
+	// runner reads it and again as the launch's record is published
+	// ([BoundFellBack]): the line it is read from is a file in the box.
 	FellBack string
 
 	// HarnessVersion is the release of the harness that ran, as its `--version` gave
 	// it ("2.1.310"), read by the run's script in the box; "" where it
-	// recorded none this build can read.
+	// recorded none this build can read, one longer than the executor log
+	// records a release at included.
 	HarnessVersion string
 
 	// Captured is the run's session as its box packed it when the harness
@@ -628,6 +640,15 @@ type Result struct {
 	// no result, as one the engine packs of a job still working does
 	// ([SessionCapture.Interrupted]).
 	HarnessCutOff bool
+
+	// JobEnd is how the job was ended on request, as its script recorded it
+	// ([JobEnder], internal/sandbox/executor's Paths.JobEnded): a harness told
+	// to stop, one killed past its grace, or a request that came before the
+	// harness started; "" for a job nobody asked to end, and for a word this
+	// build does not know. A run ended so did not finish, whatever it wrote:
+	// it never reads as a success, and its failure says first that it was
+	// ended.
+	JobEnd JobEnd
 
 	// Kept is what the read that collected this result kept of the job's
 	// session ([Coordinator.takeCapture]), made on the node whose host the
@@ -788,6 +809,51 @@ type Sandbox interface {
 	// error means the box could not be asked, which is not proof of any
 	// answer.
 	Job(ctx context.Context, commandID string) (JobState, error)
+
+	// EndJob asks the job commandID names to END: SIGUSR1 to script, ONE
+	// process of it — the run's script, by the pid it recorded in the box
+	// (internal/sandbox/executor's Paths.JobScript). The script ends its
+	// harness and packs its session as its own exit does ([JobEnder],
+	// endjob.go). SIGUSR1 and not SIGTERM, which is a teardown's to every
+	// process of the job at once, server and exporter with it, where an end
+	// needs them alive to pack through.
+	//
+	// [ErrNotJobProcess] where script is no living process of the job: on the
+	// engine host, no member of the job's recorded process group, held to it
+	// engine-side ([procgroup.Leader.SignalMember]), since the pid is the job's
+	// word and the job runs as the engine's own user; in a container or a VM,
+	// no process of that pid in the box's own namespace. A pid below 2 is
+	// refused unsent everywhere: 1 is the namespace's init, which in a
+	// container forwards a signal to the container's main process. Any other
+	// error is a box that could not be asked.
+	EndJob(ctx context.Context, commandID string, script int) error
+
+	// KillJob ends every process of the job commandID names and KEEPS the box
+	// and its files for the read that follows: SIGTERM, [JobStopGrace] for
+	// them to go, SIGKILL, [JobStopGrace] for the kernel to take them
+	// ([JobKillWait]). On the engine host that is the job's recorded group,
+	// continued first as Close continues it. In a container it is the job's
+	// group in its container — recorded on the engine host as the job
+	// started, or, for a job an older build started, which recorded none, read
+	// off the job's first process where an exec's own session leads it — never
+	// every process the box's user may signal, which would take the
+	// container's main process and stop the container the read still execs
+	// its pack in. In an E2B VM it is every process of the box's user: envd
+	// starts a job in envd's own process group, which no signal may reach,
+	// and runs as root, out of reach of the user's; and the box is reclaimed
+	// right after.
+	//
+	// NEVER A PART OF THE JOB FOR THE WHOLE: a box that can name no process
+	// group of the job's own signals nothing of it and answers [ErrNoJobGroup].
+	// The job's first process alone is no kill of the job — the run's script
+	// and its harness are that process's children, and go on without it — and
+	// it is the process a box answers [Sandbox.Job] by, so a kill of it alone
+	// had a job still working read as one that had ended.
+	//
+	// A job that is already over is nothing to kill. Any other error is a box
+	// that could not be asked; whether what it killed is over is the job's
+	// poll to say.
+	KillJob(ctx context.Context, commandID string) error
 
 	// WriteFile puts content at path whole, by REPLACING the file there: the
 	// content is staged under a fresh name beside the path and renamed over
@@ -1438,6 +1504,92 @@ func probeByKill(ctx context.Context, box Sandbox, commandID string) (bool, erro
 		return false, err
 	}
 	return res.ExitCode == 0, nil
+}
+
+// ErrNotJobProcess is an end request ([Sandbox.EndJob]) refused unsent: the pid
+// it names is no living process of the job.
+var ErrNotJobProcess = errors.New("sandbox: the pid is no living process of the job")
+
+// ErrNoJobGroup is a kill ([Sandbox.KillJob]) that signalled nothing, because
+// its box can name no process group that is the job's own: a container job
+// whose start recorded none, and whose first process is gone or in a group no
+// exec's session of its own leads. What is left of such a job runs on until
+// its box is reclaimed, and whether it is over is its poll's to say.
+var ErrNoJobGroup = errors.New("sandbox: the box names no process group of the job's own, " +
+	"so nothing of it was signalled")
+
+// The words [endScript] answers in, one for each of its two outcomes, so an
+// exec that never ran the script — a container runtime that is down, a box
+// whose agent dropped the stream — is told from a pid that is not there.
+const (
+	endSent = "crewlet-end-sent"
+	endGone = "crewlet-end-gone"
+)
+
+// endScript is the shell line that sends pid the end request (SIGUSR1) in a box
+// whose pids are its own namespace's, and says which way it went.
+//
+// THE `-SIG` SPELLING, `kill -USR1 <pid>`, which dash, bash and busybox ash
+// all read the same way (end-job-scratch/exp-kill.sh).
+func endScript(pid int) string {
+	return "if kill -USR1 " + strconv.Itoa(pid) + " 2> /dev/null; then echo " + endSent +
+		"; else echo " + endGone + "; fi"
+}
+
+// endByKill answers [Sandbox.EndJob] for a box whose pids are its own
+// namespace's — a container and an E2B VM: script is signalled in the box,
+// where nothing but the box's own processes can hold its pid, so a pid that
+// names nothing there is [ErrNotJobProcess]. A pid below 2 is refused before
+// the box is asked. Run from the box's home, a directory the job cannot take
+// away as it can its checkout, which an exec's working directory must exist in.
+func endByKill(ctx context.Context, box Sandbox, script int) error {
+	if script < 2 {
+		return fmt.Errorf("%w: pid %d is no process an end request is sent to", ErrNotJobProcess, script)
+	}
+	res, err := box.Exec(ctx, endScript(script), ExecOptions{Cwd: box.Home()})
+	if err != nil {
+		return fmt.Errorf("sandbox: asking pid %d in box %s to end its job: %w", script, box.ID(), err)
+	}
+	switch lastLine(res.Stdout) {
+	case endSent:
+		return nil
+	case endGone:
+		return fmt.Errorf("%w: box %s has no pid %d to signal", ErrNotJobProcess, box.ID(), script)
+	}
+	return fmt.Errorf("sandbox: box %s did not run its end request (exit %d): %s", box.ID(),
+		res.ExitCode, strings.TrimSpace(res.Stderr))
+}
+
+// lastLine is the last non-empty line of out, trimmed.
+func lastLine(out string) string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+// killScript is the shell script that ends every process target names — a
+// pid, or `-<pgid>` for a process group — in the shape [Sandbox.KillJob]
+// promises: SIGTERM, up to [JobStopGrace] for them to go, SIGKILL, and up to
+// [JobStopGrace] more for the kernel to take them, each wait over as soon as
+// `kill -0` finds nothing of target left. A target with nothing left to
+// signal is done at once.
+//
+// THE `-SIG` SPELLING, which reads a negative operand as a pid in dash, bash
+// and busybox ash alike; dash takes `kill -s TERM -<pgid>` for an option it
+// does not know, and wants a `--` before the pid that busybox ash need not
+// read the same way (end-job-scratch/exp-kill.sh).
+func killScript(target string) string {
+	return killAndAwait(target, "kill -0 "+target+" 2> /dev/null")
+}
+
+// killAndAwait is a kill in [killScript]'s shape whose waits last while the
+// shell condition alive holds — what is left of target — and no longer than
+// a grace each. Its output goes nowhere: a box's agent that stops listening
+// when its own process ends would otherwise end the script on its next write.
+func killAndAwait(target, alive string) string {
+	await := fmt.Sprintf(`i=0; while %s && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); done`,
+		alive, int(JobStopGrace/(100*time.Millisecond)))
+	return fmt.Sprintf("exec > /dev/null 2>&1\nkill -TERM %s || exit 0\n%s\nkill -KILL %s\n%s\n",
+		target, await, target, await)
 }
 
 // remoteJob answers [Sandbox.Job] for a box whose job runs in a machine of its

@@ -164,6 +164,7 @@ var codeSentences = map[string]string{
 	"upload_consumed":     "That upload has already been used.",
 	"upload_expired":      "That upload is too old to use. Upload it again.",
 	"not_undoable":        "It can no longer be undone.",
+	"seat_not_granted":    httpjson.CodeSeatNotGranted.Message(),
 	// WHATEVER THE STATUS.
 	"step_up_required":    refusedStepUp,
 	"body_too_large":      refusedTooLarge,

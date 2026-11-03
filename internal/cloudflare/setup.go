@@ -4,7 +4,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ProvisionerSecret is the sealed name the provisioner token is kept under.
@@ -48,9 +47,14 @@ func Requirements(in *config.Cloudflare, resolve func(string) (string, bool)) []
 			Connect:    true,
 			Checkable:  true,
 			CheckWith:  []string{"account_id"},
-			Help: "An account API token holding " + words.And(ProvisionerGroups()) +
-				", over the account and its zones. Crewlet mints each agent's token through it, " +
-				"and gives an agent nothing this token does not hold itself. Create one on your",
+			// A PASTE IS CHECKED AGAINST CLOUDFLARE'S ALPHABET before it is
+			// stored or tested.
+			Shape: setup.ShapeOpaqueToken,
+			// ONE LINE PER GROUP, in the builder's own names, so a person can
+			// tick them off; the form shows each line on its own.
+			Help: "An account API token that holds every permission an agent can be given, since " +
+				"Crewlet grants an agent nothing this token does not hold itself.\n" +
+				provisionerHelp() + "\nCreate one on your",
 			LinkText:  "account API tokens page",
 			VendorURL: "https://dash.cloudflare.com/{account_id}/api-tokens",
 			Blocks:    integration.FindingCredentialMissing,

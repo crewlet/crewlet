@@ -20,6 +20,7 @@ import {
   cloudflareAnswer,
   confluenceAnswer,
   datadogAnswer,
+  expoAnswer,
   githubAnswer,
   jiraAnswer,
   mattermostAnswer,
@@ -37,6 +38,8 @@ const calls = vi.hoisted(() => ({
   stepUp: false,
   /** A save refused as stale, once. */
   stale: false,
+  /** The revision the engine's plan is drawn from: the document as it stands now. */
+  planRevision: "rev-7",
 }));
 
 vi.mock("./api.ts", async (actual) => {
@@ -49,7 +52,7 @@ vi.mock("./api.ts", async (actual) => {
         calls.plan.push({ kind, seats });
         return {
           kind,
-          revision: "rev-7",
+          revision: calls.planRevision,
           ...(calls.stepUp ? { step_up: true } : {}),
           plans: [
             {
@@ -62,6 +65,12 @@ vi.mock("./api.ts", async (actual) => {
                   verb: "create",
                   by: "crewlet",
                   text: "Create the service account crewlet-qa@agents.crewlet.invalid",
+                },
+                {
+                  op: "mint",
+                  verb: "mint",
+                  by: "crewlet",
+                  text: "Mint an application key, sealed as DATADOG_APP_KEY_QA",
                 },
               ],
             },
@@ -98,6 +107,7 @@ beforeEach(() => {
   calls.install = [];
   calls.stepUp = false;
   calls.stale = false;
+  calls.planRevision = "rev-7";
 });
 afterEach(cleanup);
 
@@ -183,10 +193,11 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
   expect(reload).not.toHaveBeenCalled();
 });
 
-// THE REVIEW, SHORT: the change as one line of chips, then the next sync's
-// steps in order, each said with who takes it before its label, its note at a
-// quieter step, and no lead-in sentence above them.
-test("the review says the change as one line and the steps by who takes them", async () => {
+// THE REVIEW, SHORT: the change as labels and values in one grid, so "On
+// Datadog" and "Role at Datadog" line up, then the next sync's steps in order,
+// each said with who takes it before its label, and no lead-in sentence above
+// them. Mutation: draw the change inline again and the grid goes.
+test("the review lays the change out as labels and values, then the steps by who takes them", async () => {
   draw(datadogAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
@@ -196,11 +207,60 @@ test("the review says the change as one line and the steps by who takes them", a
     within(steps)
       .getAllByRole("listitem")
       .map((li) => li.textContent),
-  ).toEqual(["Crewlet: Create the service account crewlet-qa@agents.crewlet.invalid"]);
+  ).toEqual([
+    "Crewlet: Create the service account crewlet-qa@agents.crewlet.invalid",
+    "Crewlet: Mint an application key, sealed as DATADOG_APP_KEY_QA",
+  ]);
   const review = screen.getByRole("region", { name: "QA on Datadog" });
-  expect(review.querySelector(".crewlet-change-list--inline")).toBeTruthy();
-  expect(within(review).getByText("Off").closest(".crewlet-tag")).toBeTruthy();
+  const change = review.querySelector(".crewlet-change-list")!;
+  expect(change.className).not.toContain("crewlet-change-list--inline");
+  expect(
+    [...change.querySelectorAll(".crewlet-change-list__label")].map((l) => l.textContent),
+  ).toEqual(["On Datadog", "Role at Datadog"]);
   expect(screen.queryByText(/the next sync will:/)).toBeNull();
+});
+
+// A VARIABLE A STEP NAMES IS CODE, the name a reader looks up on the Secrets
+// screen, and the mark beside a step is decoration: who takes it is said in
+// the words. Mutation: render the step's text as plain text and the name is
+// prose again.
+test("a variable a step names is drawn as code, and the mark is hidden", async () => {
+  draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const steps = await screen.findByRole("list", { name: "What the next sync does at Datadog" });
+  expect(within(steps).getByText("DATADOG_APP_KEY_QA").tagName).toBe("CODE");
+  for (const mark of steps.querySelectorAll(".agent-access-actor")) {
+    expect(mark.getAttribute("aria-hidden")).toBe("true");
+  }
+});
+
+// THE DOCUMENT MOVED SINCE THE TAB READ IT: after a first connect, the access
+// migration writes a revision of its own, and a save sent with the tab's older
+// one was refused as stale. The plan names the revision it was drawn from, so
+// the tab reads again before Save is offered, keeping the draft, and saves
+// against the revision it then read. Mutation: drop the comparison and the
+// save goes out with rev-7.
+test("a plan drawn from a newer revision reads the tab again before Save is offered", async () => {
+  calls.planRevision = "rev-8";
+  const { reload, redraw } = draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid");
+  await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  const save = () => screen.getByRole("button", { name: "Save and sync" }) as HTMLButtonElement;
+  expect(save().getAttribute("aria-disabled") === "true" || save().disabled).toBe(true);
+  redraw({ ...datadogAnswer(), revision: "rev-8" });
+  await waitFor(() => expect(calls.plan).toHaveLength(2));
+  await waitFor(() =>
+    expect(save().getAttribute("aria-disabled") === "true" || save().disabled).toBe(false),
+  );
+  fireEvent.click(save());
+  await waitFor(() => expect(calls.save).toHaveLength(1));
+  expect(calls.save[0]).toMatchObject({ ifMatch: "rev-8" });
+  expect(calls.plan[1]).toEqual(calls.plan[0]);
+  expect(reload).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/Somebody changed these agents/)).toBeNull();
 });
 
 // CLOUDFLARE'S ACCOUNT IS THE TOKEN ITSELF: the details name it, the level it
@@ -251,6 +311,56 @@ test("rotating a Cloudflare token says it is rolled, and the old value stops wor
     expect(calls.act).toEqual([
       { kind: "cloudflare", handle: "sre", lane: "cloudflare", action: "rotate" },
     ]),
+  );
+});
+
+// AN EXPO SEAT IS A ROBOT USER: the details name it, the role it holds in
+// Expo's own word, the variable its token is sealed in and the CLI it drives.
+test("an Expo seat's details name its robot, its role and the CLI it uses", () => {
+  draw(expoAnswer());
+  details("QA", "Expo");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="QA on Expo"]')!);
+  expect(facts.getByText("crewlet-gophrase-qa")).toBeTruthy();
+  expect(facts.getByText("Role at Expo")).toBeTruthy();
+  expect(facts.getByText("Developer")).toBeTruthy();
+  expect(facts.getByText("EXPO_TOKEN_QA")).toBeTruthy();
+  expect(facts.getByText("Live, EAS CLI in its box, as EXPO_TOKEN")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Rotate credential" })).toBeTruthy();
+  expect(screen.queryByText("No Expo tool for its agents")).toBeNull();
+});
+
+// AN EXPO SEAT'S TOOL IS ITS BOX, NOT A SERVER: one whose sandbox env hands the
+// EAS CLI nothing is told the line to add there, never to declare a server.
+test("an Expo agent with no tool is told to set EXPO_TOKEN in its sandbox env", () => {
+  draw(expoAnswer({ tool: "no_server" }));
+  expect(screen.getByText("No Expo tool for its agents")).toBeTruthy();
+  const advice = screen.getByText(/QA has an account at Expo and nothing to use it with/);
+  expect(advice.textContent).toContain('Add EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"');
+  expect(advice.textContent).not.toMatch(/tool server/);
+});
+
+// AN EXPO ROBOT IS DELETED, NOT DISABLED: nothing is left at Expo to turn
+// back on, so the review says a new robot is created instead.
+test("turning an Expo seat off says the token and the robot are deleted", async () => {
+  draw(expoAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Expo" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      /Crewlet deletes the robot's access token, so it stops working at once/,
+    ),
+  ).toBeTruthy();
+});
+
+test("rotating an Expo token says a new one is created before the old one is deleted", async () => {
+  draw(expoAnswer());
+  details("QA", "Expo");
+  fireEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
+  const dialog = screen.getByRole("alertdialog", { name: "Rotate QA's Expo credential?" });
+  expect(within(dialog).getByText(/creates a new access token for the robot/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Rotate credential" }));
+  await waitFor(() =>
+    expect(calls.act).toEqual([{ kind: "expo", handle: "qa", lane: "expo", action: "rotate" }]),
   );
 });
 
@@ -616,6 +726,8 @@ test("a save refused as stale keeps the draft, reads again and plans again again
   expect(await screen.findByText(/Somebody changed these agents/)).toBeTruthy();
   expect(reload).toHaveBeenCalled();
   expect(screen.getByRole("dialog")).toBeTruthy();
+  // The engine now plans from the revision the colleague's save wrote.
+  calls.planRevision = "rev-8";
   redraw({ ...datadogAnswer(), revision: "rev-8" });
   await waitFor(() => expect(calls.plan).toHaveLength(2));
   expect(calls.plan[1]).toEqual(calls.plan[0]);

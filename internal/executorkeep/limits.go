@@ -56,6 +56,17 @@ const (
 	// login or a machine's `kind:name`, each at most iam.MaxLogin, with
 	// room for the kind.
 	ActorMaxBytes = 128
+
+	// HarnessVersionMaxBytes bounds the harness's version as the box
+	// reported it, and SessionIDMaxBytes the harness's own session id:
+	// Claude Code's is a UUID, OpenCode's a `ses_` prefix and twenty-six
+	// characters. The executor log refuses a row past either, and the
+	// sandbox holds what a box names to the same bounds where its runner
+	// reads the box and again as a launch's record is published
+	// (sandbox.ValidRelease, sandbox.ValidSessionID): declared here, the
+	// leaf both read, because the sandbox links no state log.
+	HarnessVersionMaxBytes = 64
+	SessionIDMaxBytes      = 128
 )
 
 // SealedMaxBytes is the largest object a session is stored as: an archive of

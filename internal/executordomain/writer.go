@@ -251,8 +251,8 @@ func (n NewCapture) validate() error {
 		field, value string
 		max          int
 	}{
-		{"the harness", n.Harness, HarnessMaxBytes}, {"the harness's version", n.HarnessVersion, HarnessVersionMaxBytes},
-		{"the session id", n.SessionID, SessionIDMaxBytes},
+		{"the harness", n.Harness, HarnessMaxBytes}, {"the harness's version", n.HarnessVersion, executorkeep.HarnessVersionMaxBytes},
+		{"the session id", n.SessionID, executorkeep.SessionIDMaxBytes},
 		{"the content key", n.ContentKey, maxContentKeyBytes},
 		{"the home path", n.Home, PathMaxBytes}, {"the workspace path", n.Workspace, PathMaxBytes},
 	} {

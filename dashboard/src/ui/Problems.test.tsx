@@ -82,6 +82,40 @@ test("values, routes, references and links are picked out of a sentence", () => 
   expect(link.getAttribute("target")).toBe("_blank");
 });
 
+// A VARIABLE'S BARE NAME IS ONE TOKEN A READER COPIES BACK, so it wears the
+// sealed entry's face whether or not the sentence wrapped it in `${}`. An
+// acronym is prose, and a path whose last key is a variable stays one path.
+// Mutation: drop the name pattern and the variable reads as prose.
+test("a variable's bare name is picked out, and an acronym is not", () => {
+  render(
+    <span>
+      {marked(
+        "Mint an API token, sealed as CLOUDFLARE_API_TOKEN_SRE, then check mcp_env.tracker.API_TOKEN",
+      )}
+    </span>,
+  );
+  const name = screen.getByText("CLOUDFLARE_API_TOKEN_SRE");
+  expect(name.tagName).toBe("CODE");
+  expect(name.className).toContain("crewlet-inline-code--reference");
+  expect(screen.getByText("mcp_env.tracker.API_TOKEN").tagName).toBe("CODE");
+  expect(screen.queryByText("API")).toBeNull();
+  expect(screen.queryByText("API_TOKEN")).toBeNull();
+});
+
+// AN ADDRESS IS PROSE, NOT HALF A PATH. The domain after an `@` has the dots
+// of a config path, so `crewlet-qa@agents.crewlet.invalid` was drawn with its
+// domain as code, and `paths` reported a field nobody has. Mutation: drop the
+// lookbehind and the domain is a CODE chip again.
+test("the domain of an address is not a config path", () => {
+  const sentence = "Create the service account crewlet-qa@agents.crewlet.invalid";
+  render(<span data-testid="said">{marked(sentence)}</span>);
+  expect(screen.getByTestId("said").querySelector("code")).toBeNull();
+  expect(screen.getByText(sentence)).toBeTruthy();
+  expect(paths(`${sentence}, then set integrations.datadog.route_to`)).toEqual([
+    "integrations.datadog.route_to",
+  ]);
+});
+
 // A LINK GOES WHERE THE SENTENCE PUTS IT.
 //
 // Only the person writing the sentence knows which words the link is about.

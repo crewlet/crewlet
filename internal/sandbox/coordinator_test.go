@@ -362,6 +362,12 @@ func newCoordRig(t *testing.T) *coordRig {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 	t.Cleanup(coordinator.Stop)
+	// AN END'S WAIT A CASE CAN SIT OUT: a stop's or a loss's read waits for a
+	// job its script was asked to end ([Coordinator.endJob]), and a case
+	// whose job never ends — a poll it fails, a script it leaves running —
+	// would otherwise wait the real two and a quarter minutes for it. A case
+	// about the wait sets its own.
+	coordinator.endWait, coordinator.endPoll = time.Second, 10*time.Millisecond
 	rig.coordinator = coordinator
 	return rig
 }
