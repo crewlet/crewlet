@@ -170,13 +170,22 @@ var reviewTiers = []int{4 << 10, 1 << 10}
 // encoded as it is, and one past it is condensed — see the file comment for
 // what, and in what order — and encoded within it, or refused with
 // [ErrTooLarge]. s itself is never changed.
+//
+// EVERY TIER CUTS A PAYLOAD AS ITS ROUND WAS PARKED, never what the tier before
+// it kept: a cut's marker says how much of how much is not kept, and a cut of a
+// cut would state the first cut's size as the whole — an intent of 29 KiB said
+// to weigh 3, of which 3 are left out, though 1 is kept. And what it gave up
+// counts each round, and each call, once: a tier cuts every payload the tier
+// before it cut, and more, so each count is assigned a tier at a time rather
+// than added to.
 func EncodeWithin(s State, budget int) (json.RawMessage, Condensed, error) {
 	blob, err := Encode(s)
 	if err != nil || len(blob) <= budget {
 		return blob, Condensed{}, err
 	}
 	var c Condensed
-	s.Iterations = cloneRounds(s.Iterations)
+	parked := s.Iterations
+	s.Iterations = cloneRounds(parked)
 	for i := range s.Iterations {
 		for j := range s.Iterations[i].Calls {
 			call := &s.Iterations[i].Calls[j]
@@ -190,34 +199,28 @@ func EncodeWithin(s State, budget int) (json.RawMessage, Condensed, error) {
 		return blob, c, err
 	}
 	for _, tier := range callTiers {
-		c.LeftOut += condenseCalls(s.Iterations, tier)
+		c.LeftOut = condenseCalls(s.Iterations, parked, tier)
 		if blob, err = Encode(s); err != nil || len(blob) <= budget {
 			return blob, c, err
 		}
 	}
 	for _, tier := range textTiers {
-		for i := range s.Iterations {
-			if text, whole := turnRecord.Text(s.Iterations[i].Text, tier); whole > 0 {
-				s.Iterations[i].Text = text
-				c.Texts++
-			}
-		}
+		c.Texts = cutProse(s.Iterations, parked, tier, roundText)
 		if blob, err = Encode(s); err != nil || len(blob) <= budget {
 			return blob, c, err
 		}
 	}
 	for _, tier := range intentTiers {
-		for i := range s.Iterations {
-			if intent, whole := turnRecord.Text(s.Iterations[i].Intent, tier); whole > 0 {
-				s.Iterations[i].Intent = intent
-				c.Intents++
-			}
-		}
+		c.Intents = cutProse(s.Iterations, parked, tier, roundIntent)
 		if blob, err = Encode(s); err != nil || len(blob) <= budget {
 			return blob, c, err
 		}
 	}
-	c.Identities += foldTallies(s.Iterations)
+	// THE ROUNDS WHOSE TALLIES WERE FOLDED BY TOOL, which the second fold —
+	// once the rounds' calls are folded into their tallies — may fold again:
+	// one round folded twice is one round whose tallies were folded.
+	folded := make([]bool, len(s.Iterations))
+	c.Identities = foldTallies(s.Iterations, folded)
 	if blob, err = Encode(s); err != nil || len(blob) <= budget {
 		return blob, c, err
 	}
@@ -235,25 +238,12 @@ func EncodeWithin(s State, budget int) (json.RawMessage, Condensed, error) {
 	if blob, err = Encode(s); err != nil || len(blob) <= budget {
 		return blob, c, err
 	}
-	c.Identities += foldTallies(s.Iterations)
+	c.Identities = foldTallies(s.Iterations, folded)
 	if blob, err = Encode(s); err != nil || len(blob) <= budget {
 		return blob, c, err
 	}
 	for _, tier := range reviewTiers {
-		for i := range s.Iterations {
-			round := &s.Iterations[i]
-			completed, cutToo := turnRecord.Text(round.CompletedWork, tier)
-			notes, cut := turnRecord.Text(round.ReviewNotes, tier)
-			if cut > 0 || cutToo > 0 {
-				if cutToo > 0 {
-					round.CompletedWork = completed
-				}
-				if cut > 0 {
-					round.ReviewNotes = notes
-				}
-				c.Reviews++
-			}
-		}
+		c.Reviews = cutProse(s.Iterations, parked, tier, roundCompletedWork, roundReviewNotes)
 		if blob, err = Encode(s); err != nil || len(blob) <= budget {
 			return blob, c, err
 		}
@@ -267,15 +257,49 @@ func EncodeWithin(s State, budget int) (json.RawMessage, Condensed, error) {
 	return nil, c, &TooLargeError{Bytes: len(blob), Budget: budget, Context: len(context)}
 }
 
-// foldTallies folds every closed round's two tallies by tool ([byTool]),
-// answering how many rounds it changed.
-func foldTallies(rounds []ledger.Iteration) int {
+// prose is a piece of a closed round's prose that a park cuts to its opening.
+type prose func(*ledger.Iteration) *string
+
+func roundText(r *ledger.Iteration) *string          { return &r.Text }
+func roundIntent(r *ledger.Iteration) *string        { return &r.Intent }
+func roundCompletedWork(r *ledger.Iteration) *string { return &r.CompletedWork }
+func roundReviewNotes(r *ledger.Iteration) *string   { return &r.ReviewNotes }
+
+// cutProse holds the named pieces of every closed round's prose to tier bytes
+// of their opening, each cut from the round as it was parked — a piece that
+// fits the tier keeps what it holds, whole or cut by a tier before — and
+// answers how many rounds it cut a piece of, each round once.
+func cutProse(rounds, parked []ledger.Iteration, tier int, pieces ...prose) int {
 	n := 0
 	for i := range rounds {
-		elided, folded := byTool(rounds[i].Elided)
-		absorbed, foldedToo := byTool(rounds[i].Absorbed)
-		if folded || foldedToo {
+		cut := false
+		for _, piece := range pieces {
+			if text, whole := turnRecord.Text(*piece(&parked[i]), tier); whole > 0 {
+				*piece(&rounds[i]) = text
+				cut = true
+			}
+		}
+		if cut {
+			n++
+		}
+	}
+	return n
+}
+
+// foldTallies folds every closed round's two tallies by tool ([byTool]),
+// marking each round it changed in folded, and answers how many rounds folded
+// marks: a round's tallies folded once and then again, once its calls were
+// folded into them, are one round's.
+func foldTallies(rounds []ledger.Iteration, folded []bool) int {
+	n := 0
+	for i := range rounds {
+		elided, changed := byTool(rounds[i].Elided)
+		absorbed, changedToo := byTool(rounds[i].Absorbed)
+		if changed || changedToo {
 			rounds[i].Elided, rounds[i].Absorbed = elided, absorbed
+			folded[i] = true
+		}
+		if folded[i] {
 			n++
 		}
 	}
@@ -325,19 +349,19 @@ func byTool(tally []ledger.Elided) ([]ledger.Elided, bool) {
 }
 
 // condenseCalls holds every closed round's calls to tier bytes of arguments,
-// and a failed one's error to tier bytes of its opening, answering how many it
-// changed.
-func condenseCalls(rounds []ledger.Iteration, tier int) int {
+// and a failed one's error to tier bytes of its opening — each cut from the
+// call as its round was parked — answering how many calls it cut, each once.
+func condenseCalls(rounds, parked []ledger.Iteration, tier int) int {
 	n := 0
 	for i := range rounds {
 		for j := range rounds[i].Calls {
-			call := &rounds[i].Calls[j]
+			call, was := &rounds[i].Calls[j], parked[i].Calls[j]
 			changed := false
-			if args, ok := keptArgs(call.Args, tier); ok {
+			if args, ok := keptArgs(was.Args, tier); ok {
 				call.Args, changed = args, true
 			}
-			if call.Failed {
-				if text, whole := turnRecord.Text(call.Result, tier); whole > 0 {
+			if was.Failed {
+				if text, whole := turnRecord.Text(was.Result, tier); whole > 0 {
 					call.Result, changed = text, true
 				}
 			}

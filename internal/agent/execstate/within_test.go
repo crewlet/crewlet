@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/kept"
+	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
 // budget is a parked state's share of its run's row, as the engine passes it.
@@ -405,4 +408,159 @@ func TestAStateWhoseClosedRoundsTalliesOutgrowItsShareFoldsThemByTool(t *testing
 				calls, failed, len(it.Elided))
 		}
 	}
+}
+
+// condensedWithin is state condensed within its share, as a park keeps it, and
+// what the park says it gave up.
+func condensedWithin(t *testing.T, state execstate.State) (execstate.State, execstate.Condensed) {
+	t.Helper()
+	if raw, _ := execstate.Encode(state); len(raw) <= budget {
+		t.Fatalf("the case's state weighs %d, within its share: it needs one past it", len(raw))
+	}
+	blob, condensed, err := execstate.EncodeWithin(state, budget)
+	if err != nil || len(blob) > budget {
+		t.Fatalf("EncodeWithin = %d bytes, %+v, %v; want it within %d", len(blob), condensed, err, budget)
+	}
+	got, _, err := execstate.Decode(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endingsKept(t, got, state)
+	return got, condensed
+}
+
+// saysParked fails unless got is parked's opening ended by the marker saying
+// how much of how much is not kept on the turn's record — both figures of
+// parked, the payload as its round was parked.
+func saysParked(t *testing.T, what, got, parked string) {
+	t.Helper()
+	at := strings.LastIndex(got, "…\n(")
+	if at < 0 || !strings.HasPrefix(parked, got[:at]) {
+		t.Fatalf("%s keeps %q, want an opening of what its round was parked with, ended by its marker", what, got)
+	}
+	want := "…\n(" + kept.Size(len(parked)-at) + " of " + kept.Size(len(parked)) + " not kept on the turn's record)"
+	if marker := got[at:]; marker != want {
+		t.Fatalf("%s ends %q, want %q: the sizes of what its round was parked with", what, marker, want)
+	}
+}
+
+// EVERY CUT A PARK MAKES SAYS WHAT ITS ROUND WAS PARKED WITH, AND IS COUNTED
+// ONCE. A payload past one tier is cut again at the next, and the marker each
+// cut ends with says how much of how much is not kept on the turn's record: of
+// the payload as its round was parked, never of what the tier before kept of
+// it — an intent of 8 KiB is never said to weigh the 4 its first cut kept. A
+// call's arguments past every tier are the marker of the arguments the call was
+// parked with, their size and their digest. And what the park says it gave up
+// counts each round, and each call, once, however many tiers cut it and however
+// often its tallies were folded.
+//
+// Mutation: cut a tier from what the tier before it kept — a round's text, its
+// intent, its review, or a failed call's error and arguments — and the marker
+// states the first cut's size, or its digest, as the whole; add a tier's count
+// to the one before it, or count a round's tallies once for each fold, and the
+// park says it gave up more than it did.
+func TestEveryCutAParkMakesSaysWhatItsRoundWasParkedWith(t *testing.T) {
+	t.Parallel()
+	t.Run("a round's produced text, cut twice", func(t *testing.T) {
+		t.Parallel()
+		state := worst()
+		state.Iterations = nil
+		for i := range 200 {
+			state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1,
+				Text: strings.Repeat("the draft. ", 3000)})
+		}
+		got, condensed := condensedWithin(t, state)
+		if condensed.Texts != 200 {
+			t.Errorf("the park says it cut %d rounds' texts, want the 200 it cut, each once", condensed.Texts)
+		}
+		for i, round := range got.Iterations {
+			saysParked(t, fmt.Sprintf("round %d's text", i+1), round.Text, state.Iterations[i].Text)
+		}
+	})
+	t.Run("a round's intent, cut twice", func(t *testing.T) {
+		t.Parallel()
+		state := worst()
+		state.Iterations = nil
+		for i := range 600 {
+			state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1,
+				Intent: strings.Repeat("set out to do it all. ", 400)})
+		}
+		got, condensed := condensedWithin(t, state)
+		if condensed.Intents != 600 {
+			t.Errorf("the park says it cut %d rounds' intents, want the 600 it cut, each once", condensed.Intents)
+		}
+		for i, round := range got.Iterations {
+			saysParked(t, fmt.Sprintf("round %d's intent", i+1), round.Intent, state.Iterations[i].Intent)
+		}
+	})
+	t.Run("a round's review, cut twice", func(t *testing.T) {
+		t.Parallel()
+		state := worst()
+		state.Iterations = nil
+		for i := range 300 {
+			state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1,
+				CompletedWork: strings.Repeat("landed. ", 4000), ReviewNotes: strings.Repeat("fix it. ", 4000)})
+		}
+		got, condensed := condensedWithin(t, state)
+		if condensed.Reviews != 300 {
+			t.Errorf("the park says it cut %d rounds' reviews, want the 300 it cut, each once", condensed.Reviews)
+		}
+		for i, round := range got.Iterations {
+			want := state.Iterations[i]
+			saysParked(t, fmt.Sprintf("round %d's landed work", i+1), round.CompletedWork, want.CompletedWork)
+			saysParked(t, fmt.Sprintf("round %d's correction", i+1), round.ReviewNotes, want.ReviewNotes)
+		}
+	})
+	t.Run("a failed call's error and its arguments, cut twice", func(t *testing.T) {
+		t.Parallel()
+		state := worst()
+		state.Iterations = nil
+		for i := range 5 {
+			calls := make([]ledger.Call, 200)
+			for j := range calls {
+				args := map[string]any{}
+				for k := range 10 {
+					args[fmt.Sprintf("k%d", k)] = strings.Repeat("x", 300)
+				}
+				calls[j] = ledger.Call{Name: "post_message", Args: args, Failed: true,
+					Result: strings.Repeat("refused: ", 1100), Digest: fmt.Sprintf("%064x", i*1000+j)}
+			}
+			state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1, Calls: calls})
+		}
+		got, condensed := condensedWithin(t, state)
+		if condensed.LeftOut != 1000 {
+			t.Errorf("the park says it cut %d calls, want the 1000 it cut, each once", condensed.LeftOut)
+		}
+		for i, round := range got.Iterations {
+			for j, call := range round.Calls {
+				was := state.Iterations[i].Calls[j]
+				saysParked(t, fmt.Sprintf("round %d call %d's error", i+1, j), call.Result, was.Result)
+				raw, err := plainjson.Marshal(was.Args, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := map[string]any{kept.NotKeptKey: kept.Record("the turn's record").LeftOut(raw)}
+				if !reflect.DeepEqual(call.Args, want) {
+					t.Fatalf("round %d call %d keeps arguments %v, want %v: the marker of the arguments it was "+
+						"parked with", i+1, j, call.Args, want)
+				}
+			}
+		}
+	})
+	t.Run("a round's tallies, folded twice", func(t *testing.T) {
+		t.Parallel()
+		state := worst()
+		state.Iterations = postRounds(100)
+		for i := range state.Iterations {
+			for k := range 20 {
+				state.Iterations[i].Elided = append(state.Iterations[i].Elided, ledger.Elided{Name: "read_file",
+					Digest: fmt.Sprintf("%064x", 1_000_000+i*100+k), Calls: 1})
+			}
+		}
+		_, condensed := condensedWithin(t, state)
+		if condensed.Identities != 100 || condensed.Calls != 100 {
+			t.Errorf("the park says it folded %d rounds' tallies and %d rounds' calls, want each of the 100 "+
+				"rounds once", condensed.Identities, condensed.Calls)
+		}
+	})
 }
