@@ -64,7 +64,8 @@ import { CircleAlertGlyph, FileTextGlyph, SquareTerminalGlyph } from "@crewlethq
 import { useLayoutEffect, useRef, useState } from "react";
 import { href, useParam, useRoute } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { conversationLabel, fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
+import { conversationLabel } from "~/lib/conversationKey.ts";
+import { fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useClient } from "~/lib/store-hooks.ts";

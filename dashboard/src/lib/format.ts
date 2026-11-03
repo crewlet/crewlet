@@ -19,7 +19,6 @@
 // constant rather than the component keeps this module free of React, which is
 // what lets it stay a leaf every screen and every test can reach.
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import { SCHEDULE_CONVERSATION_PREFIX } from "~/contract/sessions.ts";
 import { zone } from "./prefs.ts";
 import { isWholeReference } from "./references.ts";
 
@@ -648,43 +647,6 @@ export function splitConversationKey(key: string): { source: string; local: stri
   const idx = (key ?? "").indexOf(":");
   if (idx < 0) return { source: "", local: key ?? "" };
   return { source: key.slice(0, idx), local: key.slice(idx + 1) };
-}
-
-/** A uuid anywhere inside an identifier. */
-const UUID_IN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-
-/** One escaped part of a schedule's key as written, or as sent where it does not decode. */
-function unescapedPart(part: string): string {
-  try {
-    return decodeURIComponent(part);
-  } catch {
-    return part;
-  }
-}
-
-/**
- * A conversation key as a row prints it: every uuid inside it cut to its first
- * eight characters — `work:task:4d631f6d` — and everything else as it is, so
- * `work:ENG-32` and `slack:C9:1718.001` are untouched; and a schedule's key
- * with its parts as they were written — `schedule/unit/eng/weekly report`, not
- * `weekly%20report` — a role schedule's seat id cut like any other uuid.
- *
- * THE KEY IS THE THREAD'S ONLY IDENTITY on a list of threads, and a Worklet task
- * nobody gave a key is `work:task:` and a uuid — 46 unbreakable characters that
- * no row has room for, so a list of them read `work:task…` five times over.
- * The head of a uuid is how this product names one everywhere a row is narrow
- * (`workItemLabel`'s "task 4d631f6d"); the whole key belongs on the title, and
- * every caller puts it there. A schedule's key escapes its parts so that a
- * slash in a name cannot merge two schedules, which a reader needs no more than
- * a `%20` for every space; a part that does not decode is shown as sent.
- */
-export function conversationLabel(key: string): string {
-  const raw = key ?? "";
-  const prefix = SCHEDULE_CONVERSATION_PREFIX;
-  const shown = raw.startsWith(prefix)
-    ? prefix + raw.slice(prefix.length).split("/").map(unescapedPart).join("/")
-    : raw;
-  return shown.replace(UUID_IN, (id) => id.slice(0, 8));
 }
 
 /**

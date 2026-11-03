@@ -32,15 +32,8 @@ import { BookOpenGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { QueryState } from "~/components/common.tsx";
-import {
-  conversationLabel,
-  fmtBytes,
-  fmtDateTime,
-  plural,
-  tsKey,
-  utf8Bytes,
-  fmtDuration,
-} from "~/lib/format.ts";
+import { conversationLabel } from "~/lib/conversationKey.ts";
+import { fmtBytes, fmtDateTime, plural, tsKey, utf8Bytes, fmtDuration } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { decisionLabel, decisionTone } from "~/lib/phases.ts";
 import { uiletTone } from "~/ui/primitives.tsx";
