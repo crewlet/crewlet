@@ -285,7 +285,12 @@ older, the number a finding names — becomes a button, Shift extending the
 host's pick from where it began, and a picked line is ruled at its edge
 (`picked`), never tinted, since a pick is the reader's place and not the
 line's. What is drawn under a line and what a pick does are the host's; a
-diff given neither draws exactly what it drew before.
+diff given neither draws exactly what it drew before. A host that opens on a
+line — a failed check's — hands the diff the line to bring into view
+(`reveal`) rather than looking for it on the page: past the window's first
+block the line has no element until its block is drawn, so the diff scrolls
+to that block's box, which brings it within the window, and then centres the
+line, once.
 
 `styles/diffs.test.ts` holds the rule in the sheets (no rule naming a diff
 spends a state's, a chart series' or an identity's hue), in the palette (the

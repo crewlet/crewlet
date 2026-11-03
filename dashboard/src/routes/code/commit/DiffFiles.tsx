@@ -12,10 +12,10 @@
  * `layout=` how, each a filter of the page it is on.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 import { Button, Select, Skeleton, Stack } from "@crewlethq/ui";
 import { useParam } from "~/app/router.tsx";
-import { DiffView } from "~/components/DiffView.tsx";
+import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { usePatchPages } from "~/lib/patchPages.ts";
@@ -169,7 +169,9 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
  * listing holds is known binary before anything is asked, and nothing is.
  *
  * A LINE THE ADDRESS NAMES (`line`, of the newer side) is marked where the
- * patch draws it and scrolled into view once, as it is first drawn. One the
+ * patch draws it and brought into view once, as it is first drawn, by the
+ * diff itself, which knows which of its blocks holds it however long the
+ * patch is (`DiffView`'s `reveal`). One the
  * patch does not draw, read to its end, is outside what the diff changes:
  * said, with the file itself at `head` offered on that line, rather than a
  * patch drawn as if it held the line.
@@ -197,21 +199,14 @@ function FilePatch({
     codeRest.query("code_diff", { ...params, cursor }),
   );
   const entry = listed ?? file;
-  const drawn = line > 0 && hunks.some((h) => h.lines.some((l) => l.after === line));
-  const region = useRef<HTMLElement>(null);
-  const scrolled = useRef("");
-  useEffect(() => {
-    const place = `${path}\u0000${line}`;
-    if (!drawn || scrolled.current === place) return;
-    const marked = region.current?.querySelector<HTMLElement>(".diff-view__line[data-picked]");
-    if (!marked) return;
-    scrolled.current = place;
-    marked.scrollIntoView?.({ block: "center" });
-  }, [drawn, path, line]);
+  // ONE PREDICATE FOR THE LINE, kept across renders: the diff marks what it
+  // accepts and reveals it once for it, wherever its window is (`DiffView`).
+  const at = useCallback((l: DiffLine) => l.after === line, [line]);
+  const drawn = line > 0 && hunks.some((h) => h.lines.some(at));
   const outside =
     line > 0 && !drawn && !!entry && !entry.binary && !!read.data && !read.loading && !paged.more;
   return (
-    <section ref={region} aria-label={`Changes to ${path}`} className="code-file">
+    <section aria-label={`Changes to ${path}`} className="code-file">
       {entry?.binary ? (
         <p className="muted">A binary file: git draws no lines of it.</p>
       ) : read.loading && !read.data ? (
@@ -234,10 +229,14 @@ function FilePatch({
       ) : (
         <Stack gap={2}>
           <DiffView
+            // A NEW FILE IS A NEW DIFF: its window, and the line it reveals
+            // once, start over.
+            key={path}
             hunks={hunks}
             layout={layout}
             aria-label={`Changes to ${path}`}
-            picked={line > 0 ? (l) => l.after === line : undefined}
+            picked={line > 0 ? at : undefined}
+            reveal={line > 0 ? at : undefined}
           />
           <PatchPager paged={paged} />
         </Stack>

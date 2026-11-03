@@ -74,6 +74,14 @@
  * every row is mounted, which keeps find-in-page and a screen reader's reading
  * of the whole diff.
  *
+ * A LINE A HOST REVEALS IS THE DIFF'S TO SCROLL TO ([DiffViewProps.reveal]),
+ * never the host's: a block the window holds no rows of has no element for
+ * the line, so a host looking for one in the page found nothing past the
+ * first block and scrolled nowhere. The diff knows which block holds each
+ * row, so it brings that block's box into view — measured or estimated, so
+ * the place is honest — which brings the block within the window, and then
+ * centres the line itself once the block holds it.
+ *
  * THE WINDOW BOUNDS THE READING TOO, not only the mounting: which line an
  * edited one is paired with is settled from the diff's shape alone, and the
  * words of a pair are read — both lines tokenized, for the underline — only
@@ -200,6 +208,14 @@ export type DiffViewProps = DiffSource & {
   onPick?: ((line: DiffLine, extend: boolean) => void) | undefined;
   /** Whether the host has picked a line, which is drawn marked. */
   picked?: ((line: DiffLine) => boolean) | undefined;
+  /**
+   * The line the host brings into view: the first it accepts is scrolled to
+   * the middle of the view once, as soon as the diff draws it, wherever the
+   * window is ([useReveal]). Once for the PREDICATE, so a host keeps one
+   * across its renders (a `useCallback` on what it reveals): a new one is a
+   * new reveal.
+   */
+  reveal?: ((line: DiffLine) => boolean) | undefined;
 };
 
 /**
@@ -597,6 +613,69 @@ function useWindow(
   };
 }
 
+/** Whether a row draws a line `accepts` accepts. */
+function rowDraws(row: Row, accepts: (line: DiffLine) => boolean): boolean {
+  switch (row.kind) {
+    case "skip":
+      return false;
+    case "line":
+      return accepts(row.line);
+    case "pair":
+      return (row.left !== null && accepts(row.left)) || (row.right !== null && accepts(row.right));
+  }
+}
+
+/**
+ * Bring the line a host reveals into view, once for its predicate (see the
+ * package note): its block found among the rows, the block's box scrolled to
+ * while the window holds none of its rows — which brings it within a view,
+ * so the observer gives it its rows — and the line itself, marked
+ * `data-revealed`, centred on the first commit its block holds it. A diff the
+ * window holds whole, or a line in a block it holds, is centred at once.
+ *
+ * A LAYOUT EFFECT, after the window's own: the line is placed before the
+ * frame that draws it is painted, so the reader never sees the top of the
+ * diff first. A block measured or taken in above it later is the browser's
+ * scroll anchoring to keep in place, as it is for any reader's scroll.
+ *
+ * A LINE IN NO ROW YET — a patch read a page at a time, whose page holding it
+ * has not arrived — is revealed when a later commit's rows draw it, the same
+ * predicate still waiting.
+ */
+function useReveal(
+  body: RefObject<HTMLDivElement | null>,
+  blocks: readonly Row[][],
+  reveal: ((line: DiffLine) => boolean) | undefined,
+  holds: (at: number) => boolean,
+) {
+  const at = useMemo(
+    () => (reveal ? blocks.findIndex((block) => block.some((row) => rowDraws(row, reveal))) : -1),
+    [blocks, reveal],
+  );
+  const held = at >= 0 && holds(at);
+  // WHAT HAS BEEN DONE FOR THE PREDICATE: its block's box brought into view,
+  // or its line, after which nothing more is.
+  const done = useRef<{ reveal: (line: DiffLine) => boolean; line: boolean } | null>(null);
+  useLayoutEffect(() => {
+    if (!reveal || at < 0) return;
+    const was = done.current?.reveal === reveal ? done.current : null;
+    if (was?.line) return;
+    const box = body.current?.querySelector<HTMLElement>(`[data-block="${at}"]`);
+    if (!box) return;
+    if (held) {
+      const line = box.querySelector<HTMLElement>(".diff-view__line[data-revealed]");
+      if (!line) return;
+      done.current = { reveal, line: true };
+      line.scrollIntoView?.({ block: "center" });
+      return;
+    }
+    // ONCE: a box already brought into view is the observer's to fill.
+    if (was) return;
+    done.current = { reveal, line: false };
+    box.scrollIntoView?.({ block: "center" });
+  }, [body, at, held, reveal]);
+}
+
 /** A line's text, its changed run underlined. An empty line keeps its height. */
 function Text({ text, run }: { text: string; run: Run | null }) {
   return (
@@ -640,6 +719,7 @@ interface Tracks {
   notes?: ((line: DiffLine) => ReactNode) | undefined;
   onPick?: ((line: DiffLine, extend: boolean) => void) | undefined;
   picked?: ((line: DiffLine) => boolean) | undefined;
+  reveal?: ((line: DiffLine) => boolean) | undefined;
 }
 
 /**
@@ -719,6 +799,7 @@ function Line({
       className="diff-view__line"
       data-kind={line.kind}
       data-picked={tracks.picked?.(line) || undefined}
+      data-revealed={tracks.reveal?.(line) || undefined}
       aria-hidden={hidden || undefined}
     >
       {tracks.numbered && side !== "right" && (
@@ -783,7 +864,8 @@ function RowView({ row, tracks, pairs }: { row: Row; tracks: Tracks; pairs: Pair
 }
 
 export function DiffView(props: DiffViewProps) {
-  const { layout = "unified", against, empty, "aria-label": label, notes, onPick, picked } = props;
+  const { layout = "unified", against, empty, "aria-label": label } = props;
+  const { notes, onPick, picked, reveal } = props;
   const { hunks: given, before, after, context } = props;
   // TWO TEXTS ARE COMPARED ONCE, for as long as they are the two texts.
   const compared = useMemo(
@@ -805,6 +887,7 @@ export function DiffView(props: DiffViewProps) {
   const rows = useMemo(() => rowsOf(hunks, split), [hunks, split]);
   const blocks = useMemo(() => blocksOf(rows), [rows]);
   const shown = useWindow(body, blocks, rows.length > WINDOW_FROM_ROWS);
+  useReveal(body, blocks, reveal, shown.holds);
 
   if (compared && compared.kind !== "compared") {
     return (
@@ -816,7 +899,14 @@ export function DiffView(props: DiffViewProps) {
   if (!changed) {
     return <>{empty ?? <p className="diff-view__empty">Nothing changed.</p>}</>;
   }
-  const tracks: Tracks = { numbered: shape.numbered, keyed: shape.keyed, notes, onPick, picked };
+  const tracks: Tracks = {
+    numbered: shape.numbered,
+    keyed: shape.keyed,
+    notes,
+    onPick,
+    picked,
+    reveal,
+  };
   return (
     <div
       ref={root}
