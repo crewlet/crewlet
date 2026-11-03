@@ -470,8 +470,10 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 // counting from them: the one rebuild every segment that re-enters a run makes
 // ([Runner.rebuiltSurface]). ITS GUARD IS THE RELAUNCH'S: it holds what the
 // session the launch decides its run takes up holds — the job's own, which
-// loaded what it did, or none — and starts empty until the launch decides
-// ([Runner.sessionDecided]). The round's launch time keeps accumulating from
+// loaded what it did, or none — and is empty from the relaunch's last step
+// before its launch until the launch decides ([Runner.sessionDecided]); the
+// call a person approved is made before that, under the asking session's
+// guard as the rebuild armed it. The round's launch time keeps accumulating from
 // the instant the round first launched. No new phase is opened: the round's
 // started record was published when it first launched, the prompt this
 // relaunch hands its run is published as the phase's opening frame once the
@@ -505,11 +507,6 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
-	// THE GUARD IS THE RELAUNCH'S, empty until its launch decides which
-	// session its run takes up ([Runner.sessionDecided]): the rebuild armed
-	// it as the job before left it, which is what a run that continues that
-	// job's session holds and a fresh one does not.
-	r.armSession(built, nil, nil)
 
 	emit := r.emitter()
 	caps := roundCaps{max: runRound, ceiling: runRound}
@@ -547,6 +544,13 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// check that could refuse the relaunch, so a round refused here never
 	// made it, and before the prompt, which tells the run what it returned
 	// (ADR-0077).
+	//
+	// UNDER THE GUARD OF THE SESSION THAT ASKED IT, as the rebuild armed it:
+	// the job's launch state and its own loads, which is what that session had
+	// read when its call was held. The surface still asks the guard of an
+	// approved call, and a guard emptied for the relaunch first refused a
+	// skill-covered call the person approved, recorded the refusal as the
+	// call's result, and so used up the approval.
 	if asked, ok := carry.(*Asked); ok && asked.Held != nil {
 		if heldErr := makeHeld(ctx, surface, asked.Held); heldErr != nil {
 			r.steerReturn(ctx, Launched{}, fresh)
@@ -554,6 +558,13 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 				fmt.Errorf("runner: %s: %s: %w", phase.Execute, carry.what(), heldErr)
 		}
 	}
+	// THE GUARD IS THE RELAUNCH'S FROM HERE, empty until its launch decides
+	// which session its run takes up ([Runner.sessionDecided]): the rebuild
+	// armed it as the job before left it, which is what a run that continues
+	// that job's session holds and a fresh one does not. Before the launch,
+	// so the relaunched run's first call meets the guard of the session it
+	// runs in, never the asking one's.
+	r.armSession(built, nil, nil)
 	// UNDER THE TURN'S OWN FENCE TOKEN, which the relaunched run's tools fence
 	// what they read with: a reply carried on is somebody's words, fenced as
 	// the message that woke the turn is ([Asked.Continuation]).
