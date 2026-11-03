@@ -326,6 +326,36 @@ type BoxDefaulter interface {
 	BoxDefaults(c *config.Company, role *config.Role) BoxSet
 }
 
+// DocumentReach is a [Vendor] whose lanes' reach is written in the company
+// document rather than read from the vendor, so it is known whether or not the
+// vendor answers ([WithReach]). Its session's Options answers the same reach.
+type DocumentReach interface {
+	// Reach is what the company's connection reaches on lane, as the
+	// document and its roster write it.
+	Reach(c *config.Company, roster *org.Organization, lane Lane) Reach
+}
+
+// Reach is a lane's reach as the company document writes it: the entries a
+// seat's scope must be within, or Open where it lists none and so reaches
+// whatever the vendor accepts.
+type Reach struct {
+	Scope []string
+	Open  bool
+}
+
+// WithReach is o with its reach from the document where v writes it there
+// ([DocumentReach]), marked as read: a list the document holds is known even
+// while the vendor cannot be asked. o unchanged for any other vendor.
+func WithReach(o Options, v Vendor, c *config.Company, roster *org.Organization) Options {
+	doc, ok := v.(DocumentReach)
+	if !ok || !o.Scoped {
+		return o
+	}
+	r := doc.Reach(c, roster, o.Lane)
+	o.Scope, o.ScopeOpen, o.ScopeLive = slices.Clone(r.Scope), r.Open, true
+	return o
+}
+
 // BoxSet is what a [BoxDefaulter] supplies to one seat's box.
 type BoxSet struct {
 	// Env is each variable and its value: a literal, or a `${VAR}` reference

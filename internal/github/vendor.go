@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/crewlet/crewlet/internal/org"
 	"slices"
 	"strconv"
 	"strings"
@@ -245,9 +246,7 @@ func (vendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Sessi
 		seats:  map[string]seatDoc{},
 		cached: map[string]SeatObservation{},
 	}
-	if cfg.Provisioning != nil {
-		s.repos = slices.Clone(cfg.Provisioning.Repos)
-	}
+	s.repos = provisionedRepos(cfg)
 	for role := range in.Config.EachRole() {
 		seat := role.Seat()
 		if seat == nil || !seat.IsAgent() || role.Integrations.GitHub == nil {
@@ -290,12 +289,35 @@ type seatDoc struct {
 // repositories the company block lists, which a seat's scope must be within.
 // A company that lists none reaches whatever its installations cover.
 func (s *session) Options(context.Context, seataccess.Lane) (seataccess.Options, error) {
+	r := repoReach(s.repos)
 	return seataccess.Options{
 		Lane:        seataccess.LaneGitHub,
 		Permissions: PermissionSpecs(),
-		Scope:       slices.Clone(s.repos),
-		ScopeOpen:   len(s.repos) == 0,
+		Scope:       r.Scope,
+		ScopeOpen:   r.Open,
 	}, nil
+}
+
+// Reach implements [seataccess.DocumentReach]: the repositories the company
+// block lists, or whatever its installations cover where it lists none.
+func (vendor) Reach(c *config.Company, _ *org.Organization, _ seataccess.Lane) seataccess.Reach {
+	if c == nil {
+		return repoReach(nil)
+	}
+	return repoReach(provisionedRepos(c.Integrations.GitHub))
+}
+
+// provisionedRepos is the repositories cfg's provisioning block lists.
+func provisionedRepos(cfg *config.GitHub) []string {
+	if cfg == nil || cfg.Provisioning == nil {
+		return nil
+	}
+	return slices.Clone(cfg.Provisioning.Repos)
+}
+
+// repoReach is a connection that lists repos.
+func repoReach(repos []string) seataccess.Reach {
+	return seataccess.Reach{Scope: slices.Clone(repos), Open: len(repos) == 0}
 }
 
 // Observe implements [seataccess.Session].

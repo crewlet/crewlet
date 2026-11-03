@@ -29,6 +29,7 @@ package agentaccess
 import (
 	"context"
 	"fmt"
+	"github.com/crewlet/crewlet/internal/org"
 	"slices"
 	"strings"
 	"time"
@@ -42,6 +43,19 @@ import (
 )
 
 func init() { seataccess.Register(Vendor{}) }
+
+// Reach implements [seataccess.DocumentReach]: the Jira projects and the
+// Confluence spaces the company's org model names, or any where it names none.
+func (Vendor) Reach(_ *config.Company, roster *org.Organization, lane seataccess.Lane) seataccess.Reach {
+	var keys []string
+	switch lane {
+	case seataccess.LaneJira:
+		keys = jira.ProjectsOf(roster)
+	case seataccess.LaneConfluence:
+		keys = confluence.SpacesOf(roster)
+	}
+	return seataccess.Reach{Scope: keys, Open: len(keys) == 0}
+}
 
 // The credentials sealed per seat: the API token, and the address Atlassian
 // assigned the account, without which its products refuse the token (they

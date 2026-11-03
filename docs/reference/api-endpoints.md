@@ -4149,8 +4149,11 @@ the next read asks the vendor again. A scoped lane's entry says so (`scoped`)
 whatever its list holds: `scope` is the entries the company's connection
 reaches, or `scope_open` where it does not list them; `scope_names` names an
 entry where the vendor names one apart from its id; and `scope_live` says the
-list was read just now, so an entry without it could not be read and its empty
-`scope` says nothing about the reach. `scope_required` marks a lane whose agent,
+list is known: written in the company document (GitLab's projects, GitHub's
+repositories, Mattermost's channels, and the Jira projects and Confluence
+spaces the org model names), or read from the vendor just now. An entry
+without it could not be read, so its empty `scope` says nothing about the
+reach. `scope_required` marks a lane whose agent,
 once on, must name at least one scope entry. Each entry of `options` also says whether a person can
 ask for a credential on that lane to be rotated (`rotatable`), and carries
 `"managed": "external"` where the engine does not provision the integration

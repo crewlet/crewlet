@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/crewlet/crewlet/internal/org"
 	"net/http"
 	"slices"
 	"strings"
@@ -233,18 +234,32 @@ type accessSession struct {
 }
 
 // companyChannels is the company's list a seat's channels must be within.
-func (s *accessSession) companyChannels() []string {
-	if s.cfg.Provisioning == nil {
+func (s *accessSession) companyChannels() []string { return channelsOf(s.cfg) }
+
+// channelsOf is the channels cfg's provisioning block lists, trimmed, each once
+// and sorted.
+func channelsOf(cfg *config.Mattermost) []string {
+	if cfg == nil || cfg.Provisioning == nil {
 		return nil
 	}
 	var out []string
-	for _, name := range s.cfg.Provisioning.Channels {
+	for _, name := range cfg.Provisioning.Channels {
 		if name = strings.TrimSpace(name); name != "" && !slices.Contains(out, name) {
 			out = append(out, name)
 		}
 	}
 	slices.Sort(out)
 	return out
+}
+
+// Reach implements [seataccess.DocumentReach]: the channels the company block
+// lists, or any channel on the team where it lists none.
+func (accessVendor) Reach(c *config.Company, _ *org.Organization, _ seataccess.Lane) seataccess.Reach {
+	var channels []string
+	if c != nil {
+		channels = channelsOf(c.Integrations.Mattermost)
+	}
+	return seataccess.Reach{Scope: channels, Open: len(channels) == 0}
 }
 
 // Options is Mattermost's four accesses and the company's channels.

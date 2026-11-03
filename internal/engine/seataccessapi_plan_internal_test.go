@@ -111,7 +111,7 @@ func TestAPlanIsDrawnOnlyWhereTheSyncTakesSteps(t *testing.T) {
 // Datadog's keys are unset, so its vendor cannot be opened: the lane offers no
 // levels (a turn-on on it asks a step-up) and nothing is cached, so the next
 // read asks again. GitLab managed outside Crewlet needs no vendor, so its
-// offer is whole and is kept. Mutation: cache what failed, and the first case
+// offer is whole and is kept, its reach read from the document. Mutation: cache what failed, and the first case
 // fails.
 func TestAFailedOfferReadIsNeverKept(t *testing.T) {
 	t.Parallel()
@@ -137,8 +137,10 @@ func TestAFailedOfferReadIsNeverKept(t *testing.T) {
 		`["gitlab"]`)
 	offers = e.seatOffers(t.Context(), q.Kind, q.Company, q.Roster, "rev-external", false)
 	if len(offers) != 1 || offers[0].Managed != seataccess.ManagedExternal ||
-		!offers[0].Scoped || offers[0].ScopeLive || !cached(integration.KindGitLab, "rev-external") {
-		t.Errorf("an external GitLab offers %+v (cached %v), want it external and kept",
+		!offers[0].Scoped || !offers[0].ScopeLive || !offers[0].ScopeOpen ||
+		!cached(integration.KindGitLab, "rev-external") {
+		t.Errorf("an external GitLab offers %+v (cached %v), want it external and kept, its "+
+			"reach the document's (open, since it lists no project)",
 			offers, cached(integration.KindGitLab, "rev-external"))
 	}
 }
