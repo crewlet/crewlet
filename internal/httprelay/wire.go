@@ -1,6 +1,7 @@
 package httprelay
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -67,6 +68,48 @@ type clocks struct {
 }
 
 var defaultClocks = clocks{heartbeat: Heartbeat, idle: Idle, openWait: openWait, pushWait: pushWait}
+
+// timeSource is the time a relay reads and sets its timers on — the instant a
+// deadline is stamped with, the heartbeat a holder waits out, the idle bound an
+// entry waits out, the bound on one round trip — so that all of them are ONE
+// clock. It is the wall clock ([wallTime]) everywhere but in this package's
+// cases, which move a clock of their own ([manualTime], relay_test.go) rather
+// than wait real time out: a case about what does NOT happen within a bound — a
+// stream kept open past its idle bound — run on the wall clock is a race
+// against the runner's scheduler, which a loaded runner lost.
+type timeSource interface {
+	Now() time.Time
+	// NewTimer is a timer of d on this clock.
+	NewTimer(d time.Duration) relayTimer
+	// WithTimeout is ctx, ended once d has passed on this clock.
+	WithTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc)
+}
+
+// relayTimer is the part of a [time.Timer] a relay uses.
+type relayTimer interface {
+	C() <-chan time.Time
+	Reset(d time.Duration)
+	Stop()
+}
+
+// wallTime is the wall clock.
+type wallTime struct{}
+
+func (wallTime) Now() time.Time { return time.Now() }
+
+func (wallTime) NewTimer(d time.Duration) relayTimer { return wallTimer{time.NewTimer(d)} }
+
+func (wallTime) WithTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, d)
+}
+
+type wallTimer struct{ t *time.Timer }
+
+func (w wallTimer) C() <-chan time.Time { return w.t.C }
+
+func (w wallTimer) Reset(d time.Duration) { w.t.Reset(d) }
+
+func (w wallTimer) Stop() { w.t.Stop() }
 
 // Verdict is what a process can do for a request addressed to it.
 type Verdict string

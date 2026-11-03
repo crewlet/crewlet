@@ -67,8 +67,9 @@ func (m muteable) Ask(ctx context.Context, subject string, request []byte, want 
 }
 
 // fleet starts two nodes over one broker. The holder answers with h; the
-// entry forwards every request it gets to the holder's incarnation.
-func fleet(t *testing.T, h http.Handler, tune func(*clocks)) (entry, holder *node) {
+// entry forwards every request it gets to the holder's incarnation. tune, when
+// set, is handed each relay before it serves: its clocks, or its time.
+func fleet(t *testing.T, h http.Handler, tune func(*Relay)) (entry, holder *node) {
 	t.Helper()
 	broker := memory.NewBroker()
 	start := func(id string, handler http.Handler) *node {
@@ -92,7 +93,7 @@ func fleet(t *testing.T, h http.Handler, tune func(*clocks)) (entry, holder *nod
 			t.Fatalf("New: %v", err)
 		}
 		if tune != nil {
-			tune(&rl.clock)
+			tune(rl)
 		}
 		stop, err := rl.Serve(t.Context())
 		if err != nil {
@@ -120,9 +121,9 @@ func fleet(t *testing.T, h http.Handler, tune func(*clocks)) (entry, holder *nod
 	return entry, holder
 }
 
-func fast(c *clocks) {
-	c.heartbeat, c.idle, c.openWait, c.pushWait = 50*time.Millisecond, 300*time.Millisecond,
-		200*time.Millisecond, 200*time.Millisecond
+func fast(rl *Relay) {
+	rl.clock.heartbeat, rl.clock.idle, rl.clock.openWait, rl.clock.pushWait = 50*time.Millisecond,
+		300*time.Millisecond, 200*time.Millisecond, 200*time.Millisecond
 }
 
 // --- what a client sees ----------------------------------------------------
@@ -587,7 +588,7 @@ func TestAHandlerWaitsOnceAFramesWorthIsUnsent(t *testing.T) {
 		t.Fatalf("a write past a frame's worth returned (%d bytes) with nothing sent", n)
 	case <-time.After(100 * time.Millisecond):
 	}
-	f, ok := w.next(t.Context(), time.Minute, true)
+	f, ok := w.next(t.Context(), wallTime{}, time.Minute, true)
 	if !ok || len(f.Body) != MaxBody || f.Status != http.StatusOK {
 		t.Fatalf("next = %d bytes, status %d, %v; want a full frame", len(f.Body), f.Status, ok)
 	}
