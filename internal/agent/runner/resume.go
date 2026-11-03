@@ -123,12 +123,12 @@ func submitted(calls []ledger.Call) bool {
 	})
 }
 
-// roundCalls is the open round's calls as its run's row holds them: the calls
-// it lists ([BridgedCall]), in the order the bridge admitted them — a call
-// whose own record reached the row only with a later one among them — and the
-// identities of the calls it counts without listing: the round's own that it
-// dropped from the middle (elided), and the ones its calls' own work made in
-// the run's call log (absorbed).
+// roundCalls is the open round's calls as the log beside its run's row holds
+// them: the calls it lists ([BridgedCall]), in the order the bridge admitted
+// them — a call whose own append reached the log only with a later one among
+// them — and the identities of the calls it counts without listing: the round's
+// own that it dropped from the middle (elided), and the ones its calls' own
+// work made in the run's call log (absorbed).
 type roundCalls struct {
 	bridged  []BridgedCall
 	elided   []ledger.Elided
@@ -152,7 +152,7 @@ type roundCalls struct {
 // a call recorded twice only raises one, which is safe.
 //
 // BY IDENTITY: the digest each call was admitted under ([ledger.Call.Digest]),
-// which its record carries whatever it kept of its arguments — a run's row
+// which its record carries whatever it kept of its arguments — a run's log
 // keeps a value past its share as a marker, and a parked turn's closed rounds
 // are condensed the same way — and a tallied call's identity seeded as many
 // times as it was made. Seeded from the arguments a record kept, a cut call

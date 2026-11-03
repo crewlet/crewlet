@@ -43,7 +43,7 @@ func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 	spent := runner.Bridged{Aux: auxspend.Spent{Input: 900, Output: 90}, Workers: 1,
 		WorkerInput: 4000, WorkerOutput: 400}
 	reopened, err := r.ReopenAgentRun(context.Background(), state, []runner.BridgedCall{
-		// AS THE ROW HOLDS THEM: in the order they finished.
+		// AS THE LOG HOLDS THEM: in the order they finished.
 		{Call: ledger.Call{Name: "jira_create", Args: map[string]any{"summary": "first"},
 			Result: "created"}, Seq: 2},
 		{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1"},

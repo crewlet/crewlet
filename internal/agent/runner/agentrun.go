@@ -772,7 +772,7 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // unlocked refused again.
 //
 // AND ITS PLACE IN THE RUN. The turn's call log is seeded with its closed
-// rounds and every call the run has made over the bridge — the row's calls, the
+// rounds and every call the run has made over the bridge — the log's calls, the
 // identities of those it does not list (elided) and of those its calls' own
 // work made (absorbed) — by identity, in that same rebuild ([seedCalls]), so a
 // call made from here counts its
@@ -780,7 +780,7 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // process would have; a submission cites those calls as well as the ones made
 // from here; and the meter starts from what the row says the run's bridged
 // calls have cost so far ([NewBridgedSpendFrom]). spent is that total and
-// bridged the row's calls, in any order.
+// bridged the log's calls, in any order.
 //
 // AND ITS GUARD, THE SESSION'S ITS BOX STARTED: the skills its launch armed
 // only where the job's record says its box took up the session the launch
@@ -859,11 +859,12 @@ type ReopenedRun struct {
 // read off its calls ([Runner.observeLoads]): those numbered past the calls the
 // round held when the job opened ([execstate.State.BridgeFrom]), never an
 // earlier job's of the round, whose session the run's may not be. AND ITS
-// PLACE IN THE TURN: the closed rounds in history, and the round's calls as its
-// row holds them (round): the calls it lists, in the order the bridge admitted
-// them, and the identities of the ones it does not list and of the ones their
-// own work made, seeded into the call log through the rebuilt surface
-// ([seedCalls]), so a count read from here sees every call made before it.
+// PLACE IN THE TURN: the closed rounds in history, and the round's calls as the
+// log beside its row holds them (round): the calls it lists, in the order the
+// bridge admitted them, and the identities of the ones it does not list and of
+// the ones their own work made, seeded into the call log through the rebuilt
+// surface ([seedCalls]), so a count read from here sees every call made before
+// it.
 //
 // ONE REBUILD FOR ALL THREE, because they drifted apart when each made its
 // own: the collection rebuilt the launch's record alone, on the reasoning that
@@ -966,7 +967,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	logged := bridgedLedger(bridged)
 	elided, absorbed := r.cfg.Resume.Elided, r.cfg.Resume.Absorbed
 
-	// THE REPLAY'S DECODER IS NOT HELD TO WHAT THE ROW KEEPS WHOLE
+	// THE REPLAY'S DECODER IS NOT HELD TO WHAT THE LOG KEEPS WHOLE
 	// ([keptWhole]): the submission is already made, and one a build before
 	// that bound recorded whole is replayed as it stands.
 	var surface *tools.Surface
@@ -1016,7 +1017,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// reached the seat.
 	work.Calls = logged
 	work.Inherited = len(logged)
-	// AND THE CALLS THE ROW DID NOT KEEP, by identity: the round's all the
+	// AND THE CALLS THE LOG DID NOT KEEP, by identity: the round's all the
 	// same, for the delivery checks, the closed round's record and the
 	// reviewer, who is told how many there were — and the ones the round's
 	// own calls' work made, which the closed round's record carries for the
@@ -1164,12 +1165,12 @@ func sinceAnswer(bridged []BridgedCall, answered int) []BridgedCall {
 }
 
 // inAdmissionOrder is a run's bridged calls in the order the bridge admitted
-// them — the order the harness made them in — where the row holds them in the
+// them — the order the harness made them in — where the log holds them in the
 // order they FINISHED: each is appended once it returns, and a harness that makes
 // several calls at once finishes them in whatever order their tools take. The
 // record states the order the run acted in, and the replay below reads a
 // submission made after another as the correction, whichever returned first.
-// Stable, so calls the row carries no place for keep the row's order.
+// Stable, so calls the log carries no place for keep the log's order.
 func inAdmissionOrder(bridged []BridgedCall) []BridgedCall {
 	out := slices.Clone(bridged)
 	slices.SortStableFunc(out, func(a, b BridgedCall) int { return cmp.Compare(a.Seq, b.Seq) })
@@ -1194,10 +1195,10 @@ func inAdmissionOrder(bridged []BridgedCall) []BridgedCall {
 // it is rescued from as incomplete. Replayed, the record's marker would be the
 // round's summary — a cut that reads as the whole — and an older submission
 // replayed in its place would report an outcome the run had corrected. The
-// row keeps the newest successful submission whole (sandbox's
+// log keeps the newest successful submission whole (sandbox's
 // MaxSubmissionArgsBytes), and the live tool refuses one past what it keeps
 // ([keptWhole]), so this is a run whose own spelling took a submission the
-// tool accepted past what the row holds.
+// tool accepted past what the log holds.
 func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload], bridged []BridgedCall) {
 	newest := -1
 	for i, call := range bridged {

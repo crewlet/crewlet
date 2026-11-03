@@ -300,8 +300,9 @@ type ToolResult struct {
 	// CallLog.Own) — set by a surface that admitted the call
 	// ([Surface.Admit]). This loop never reads it, since its run's log holds
 	// them already: it is for a caller that records the call where a LATER
-	// segment's log is seeded from — a bridged run's row — and has to record
-	// them with it, or that segment counts fewer calls than the run made.
+	// segment's log is seeded from — a bridged run's tool log, kept beside its
+	// row — and has to record them with it, or that segment counts fewer calls
+	// than the run made.
 	Absorbed []Called
 }
 

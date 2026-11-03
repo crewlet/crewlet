@@ -37,11 +37,12 @@ type Call struct {
 	// admitted, or one a build before it recorded.
 	//
 	// CARRIED BESIDE ARGS BECAUSE ARGS MAY NOT BE WHOLE. An executor run's
-	// calls are recorded on a row bounded in bytes, which keeps a value past
-	// its share as a marker (internal/kept), and a parked turn's closed
-	// rounds are condensed the same way to fit theirs; a later segment that
-	// seeds its call log from the arguments it holds would take the call for
-	// another, and derive another operation's id. Seeded by this, it cannot.
+	// calls are recorded in a log bounded in bytes, beside its row, which keeps
+	// a value past its share as a marker (internal/kept), and a parked turn's
+	// closed rounds are condensed the same way to fit theirs; a later segment
+	// that seeds its call log from the arguments it holds would take the call
+	// for another, and derive another operation's id. Seeded by this, it
+	// cannot.
 	Digest string `json:"Digest,omitempty"`
 
 	// Withheld is a call whose arguments, and with them their digest, every

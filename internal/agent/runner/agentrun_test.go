@@ -515,7 +515,7 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 }
 
 // THE CORRECTION IS THE CALL MADE LAST, NOT THE ONE THAT FINISHED LAST. The
-// row holds a run's calls in the order they finished — each is appended once
+// log holds a run's calls in the order they finished — each is appended once
 // it returns — and a harness that makes calls at once finishes them in whatever
 // order their tools take. So the collection reads them in the order the bridge
 // admitted them, and states each with when it ran, for how long and who
@@ -537,7 +537,7 @@ func TestARunIsRecordedInTheOrderItMadeItsCalls(t *testing.T) {
 		resume: &runner.Resume{
 			State:  execstate.State{Version: execstate.Version, Round: 1},
 			Answer: "done",
-			// AS THE ROW HOLDS THEM: the correction returned first.
+			// AS THE LOG HOLDS THEM: the correction returned first.
 			Bridged: []runner.BridgedCall{
 				{Call: ledger.Call{Name: "slack_post", Result: "posted"}, Seq: 1,
 					StartedAt: started, Duration: 1500 * time.Millisecond,

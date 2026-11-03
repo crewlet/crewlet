@@ -19,18 +19,18 @@ import (
 )
 
 // noted is a status write carrying a megabyte note: a call whose arguments the
-// run's row keeps only in part.
+// run's log keeps only in part.
 var noted = map[string]any{"item": "GP-12", "status": "draft", "note": strings.Repeat("<x>", 1<<20/3)}
 
 // published is the call between the two noted ones, which asked for something
 // else.
 var published = map[string]any{"item": "GP-12", "status": "published"}
 
-// rowCall is the call a run's row holds for a call made with args: its
-// arguments kept as the row keeps them (the left-out note's marker in place of
-// the note) and read back as the engine reads a row's, its identity the digest
+// loggedCall is the call a run's log holds for a call made with args: its
+// arguments kept as the log keeps them (the left-out note's marker in place of
+// the note) and read back as the engine reads a log's, its identity the digest
 // the bridge admitted it under, and the size of what it was sent with.
-func rowCall(t *testing.T, seq int, args map[string]any) runner.BridgedCall {
+func loggedCall(t *testing.T, seq int, args map[string]any) runner.BridgedCall {
 	t.Helper()
 	text, err := tools.RecordArgs(args)
 	if err != nil {
@@ -45,16 +45,16 @@ func rowCall(t *testing.T, seq int, args map[string]any) runner.BridgedCall {
 // PARKED DERIVES (#477). A run wrote a status with a megabyte note, then
 // another status, then — after its turn parked and was resumed — the first
 // status again: a run that never parked counts the third call one different
-// call after the first, so it is a second operation. On the row, the first
+// call after the first, so it is a second operation. In the log, the first
 // call's note is left out (its arguments kept in part) and the second call was
 // dropped from the middle of a long log, kept only as its identity. Seeded by
-// what the row KEPT, the first counted as another call and the second as none;
+// what the log KEPT, the first counted as another call and the second as none;
 // seeded by identity, the resumed run counts what the run that never parked
 // counts, on every path a run's calls are read back on: its collection, its
 // continuation after a person's answer, and its reopening on a node that took
 // it over.
 //
-// Mutation: seed a kept call from the row's arguments rather than its digest,
+// Mutation: seed a kept call from the log's arguments rather than its digest,
 // and the count is two; leave the dropped identities out of the seed, and it
 // is zero — the first call's operation, answered `applied` without landing.
 func TestAResumePastADroppedCallAndACutOneDerivesTheIdsOfARunThatNeverParked(t *testing.T) {
@@ -76,9 +76,9 @@ func TestAResumePastADroppedCallAndACutOneDerivesTheIdsOfARunThatNeverParked(t *
 		t.Fatalf("the run that never parked counts %d different calls before its third, want 1", want)
 	}
 
-	cut := rowCall(t, 1, noted)
+	cut := loggedCall(t, 1, noted)
 	if cut.ArgsBytes == 0 {
-		t.Fatal("the noted call's arguments fit the row whole; the case needs them cut")
+		t.Fatal("the noted call's arguments fit the log whole; the case needs them cut")
 	}
 	bridged := []runner.BridgedCall{cut}
 	dropped := []ledger.Elided{{Name: "set_status", Digest: turnctx.ArgsDigest(published), Calls: 1}}
@@ -145,8 +145,8 @@ func TestAResumePastADroppedCallAndACutOneDerivesTheIdsOfARunThatNeverParked(t *
 	})
 }
 
-// reopenedLog is the call log a run reopened on its row's record seeds:
-// bridged, its calls the row lists; elided and absorbed, the identities it
+// reopenedLog is the call log a run reopened from its row and its log seeds:
+// bridged, its calls the log lists; elided and absorbed, the identities it
 // counts without listing; closed, the turn's closed rounds.
 func reopenedLog(t *testing.T, bridged []runner.BridgedCall, elided, absorbed []ledger.Elided,
 	closed []ledger.Iteration) *turnctx.CallLog {
@@ -212,7 +212,7 @@ func TestATallysCountsAreSeededAsTheCallsTheyWere(t *testing.T) {
 // answered `applied` without landing.
 func TestAWorkersCallsAreSeededFromTheRoundsRecord(t *testing.T) {
 	t.Parallel()
-	first := rowCall(t, 1, noted)
+	first := loggedCall(t, 1, noted)
 	worker := []ledger.Elided{{Name: "set_status", Digest: turnctx.ArgsDigest(published), Calls: 1}}
 	open := reopenedLog(t, []runner.BridgedCall{first}, nil, worker, nil)
 	if got := open.Ordinal("set_status", noted); got != 1 {
@@ -254,9 +254,9 @@ func submissionOf(n int) map[string]any {
 		"evidence": "the build is red"}
 }
 
-// A COLLECTED RUN WHOSE NEWEST SUBMISSION ITS ROW DID NOT KEEP WHOLE IS RESCUED,
-// never reported with the row's marker as its summary, nor with the submission
-// before it as its outcome. The row keeps the newest successful submission
+// A COLLECTED RUN WHOSE NEWEST SUBMISSION ITS LOG DID NOT KEEP WHOLE IS RESCUED,
+// never reported with the log's marker as its summary, nor with the submission
+// before it as its outcome. The log keeps the newest successful submission
 // whole, and the live tool refuses one past what it keeps, so this is a run
 // whose own spelling took one past it: what it submitted is not on the record,
 // and the round reads as one that said nothing.
@@ -285,14 +285,14 @@ func TestACollectedRunWhoseNewestSubmissionWasNotKeptIsRescued(t *testing.T) {
 	}
 }
 
-// A LIVE SUBMISSION PAST WHAT THE ROW KEEPS WHOLE IS REFUSED WHILE THE RUN CAN
+// A LIVE SUBMISSION PAST WHAT THE LOG KEEPS WHOLE IS REFUSED WHILE THE RUN CAN
 // SHORTEN IT, naming its size; one within it is taken. The collection replays a
-// submission off the run's row, so one the row could not keep whole would be a
+// submission off the run's log, so one the log could not keep whole would be a
 // round collected as having said nothing.
 //
 // Mutation: take a submission whatever its size, and the oversized one is
 // recorded as the run's outcome.
-func TestALiveSubmissionPastWhatTheRowKeepsIsRefused(t *testing.T) {
+func TestALiveSubmissionPastWhatTheLogKeepsIsRefused(t *testing.T) {
 	t.Parallel()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{})
 	reopened, err := r.ReopenAgentRun(context.Background(), execstate.State{Version: execstate.Version, Round: 1},
@@ -304,7 +304,7 @@ func TestALiveSubmissionPastWhatTheRowKeepsIsRefused(t *testing.T) {
 		summary int
 		refused bool
 	}{
-		"past what the row keeps whole": {sandbox.MaxSubmissionBytes, true},
+		"past what the log keeps whole": {sandbox.MaxSubmissionBytes, true},
 		"within it":                     {4 << 10, false},
 	} {
 		raw, err := json.Marshal(submissionOf(tc.summary))

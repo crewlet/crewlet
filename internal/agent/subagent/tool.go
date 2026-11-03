@@ -54,10 +54,10 @@ import (
 // log, so what they call is the call's own work: absorbed into the run's log
 // once the call returns, and handed on with the call's result, for a caller
 // that records the call where a later segment's call log is seeded from — a
-// bridged run's row. Forked from the run's own log instead, a bridged
-// `delegate`'s workers counted on the run while its record held nothing of
-// them, and a run resumed from that record took a join a worker's leave came
-// between for the first join's retry.
+// bridged run's tool log, kept beside its row. Forked from the run's own log
+// instead, a bridged `delegate`'s workers counted on the run while its record
+// held nothing of them, and a run resumed from that record took a join a
+// worker's leave came between for the first join's retry.
 type Tool struct{ cfg Config }
 
 var (

@@ -164,14 +164,14 @@ func TestAWorkerRecordCarriesItsPromptOutlinesOnlyWhenTheyTile(t *testing.T) {
 }
 
 // A COLLECTED RUN'S RECORD SAYS WHAT ITS RUN'S RECORD DID NOT KEEP. The
-// execute phase's record lists the calls the run's row kept — a long run's
-// head and tail — and outlives the row: once the run is gone, that record is
+// execute phase's record lists the calls the run's log kept — a long run's
+// head and tail — and outlives the log: once the run is gone, that record is
 // the turn's account of what its executor did. So the dropped calls are counted
 // in its round's calls and said by tool, how many and how many failed, the
 // calls whose tool was not kept either last.
 //
 // Mutation: leave the dropped calls off the record, or out of the round's
-// count, and a long run reads as the two hundred calls its row kept.
+// count, and a long run reads as the two hundred calls its log kept.
 func TestACollectedRunsRecordSaysWhatItsRunsRecordDidNotKeep(t *testing.T) {
 	t.Parallel()
 	pub := &collector{}

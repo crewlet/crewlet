@@ -341,12 +341,12 @@ type Resume struct {
 	Answer string
 
 	// Bridged is what the run called over the MCP bridge, read from the
-	// run's own durable row, in the order the row holds them — each carries
-	// its place in the order the bridge admitted them ([BridgedCall.Seq]),
-	// which is the order the resume records them in — and no round, which
-	// is this package's to state ([runRound]).
+	// run's own durable log, kept beside its row, in the order the log holds
+	// them — each carries its place in the order the bridge admitted them
+	// ([BridgedCall.Seq]), which is the order the resume records them in — and
+	// no round, which is this package's to state ([runRound]).
 	//
-	// It is the whole record of the phase, and it has to come from the row
+	// It is the whole record of the phase, and it has to come from the log
 	// rather than from memory: the process resuming may not be the one that
 	// launched, so its surface is fresh and has executed nothing.
 	Bridged []BridgedCall
@@ -422,7 +422,7 @@ func (r Resume) parked() execstate.State {
 }
 
 // BridgedCall is one call an executor run made over the MCP bridge, as the
-// run's durable row recorded it: the call the turn's record reads, and when it
+// run's durable log recorded it: the call the turn's record reads, and when it
 // ran, for how long and who answered — what the phase record's execution for
 // it states.
 //

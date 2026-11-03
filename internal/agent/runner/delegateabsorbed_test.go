@@ -59,7 +59,7 @@ func (leavingWorker) Complete(ctx context.Context, req llm.Request) (*llm.Comple
 // a call — admitted, then run — forks its workers' call logs from the call's
 // own log, so the call's result hands on what they called
 // (toolloop.ToolResult.Absorbed), which the bridge records with the call and
-// the run's row tallies. A log seeded from that record — the call by its
+// the run's log tallies. A log seeded from that record — the call by its
 // identity, and what it absorbed — counts the worker's call exactly as the run's
 // own log does: a later call to the family after the worker's leave is no
 // retry of a call before it.
@@ -137,7 +137,7 @@ func TestABridgedDelegatesWorkersAreCountedOnItsOwnRecord(t *testing.T) {
 		t.Errorf("the delegate's result carries %+v, want every call the run's log took in from it, %+v",
 			res.Absorbed, want)
 	}
-	// WHAT THE ROW HOLDS OF THE CALL, as a resumed segment seeds it: the
+	// WHAT THE LOG HOLDS OF THE CALL, as a resumed segment seeds it: the
 	// delegate by its identity, and what its work absorbed.
 	seeded := turnctx.NewCallLog()
 	seeded.Seed(turnctx.SeededCall{Tool: subagent.ToolName,

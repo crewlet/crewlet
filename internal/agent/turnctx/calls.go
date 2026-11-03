@@ -71,21 +71,21 @@ import (
 // makes its calls again, and each count comes out as it did the first time.
 //
 // A SEED IS BY IDENTITY, NEVER BY WHAT A RECORD KEPT. The record a resume
-// seeds from — a bridged run's row, a parked turn's closed rounds — is bounded
-// in bytes, so it may keep a call's arguments in part, and in count, so it may
-// keep a long run's middle only as a tally of identities. Each call it keeps
-// carries the digest its run admitted it under ([SeededCall.Digest]), and each
-// it dropped is a count of that digest, so neither moves a count; one whose
-// identity the record could not keep at all, or keeps withheld — a call held
-// for a person's approval, whose arguments ride sealed — is seeded as a call
-// matching no other ([SeededCall.Unknown], [CallLog.SeedUnknown]). Seeding can
-// therefore only over-count (a call that failed before deriving an id is
+// seeds from — a bridged run's tool log, a parked turn's closed rounds — is
+// bounded in bytes, so it may keep a call's arguments in part, and in count, so
+// it may keep a long run's middle only as a tally of identities. Each call it
+// keeps carries the digest its run admitted it under ([SeededCall.Digest]), and
+// each it dropped is a count of that digest, so neither moves a count; one
+// whose identity the record could not keep at all, or keeps withheld — a call
+// held for a person's approval, whose arguments ride sealed — is seeded as a
+// call matching no other ([SeededCall.Unknown], [CallLog.SeedUnknown]). Seeding
+// can therefore only over-count (a call that failed before deriving an id is
 // recorded anyway, and so is a call whose identity is unknown), and
 // over-counting is safe for the reason above.
 //
 // WHAT A RESUME SEEDS, then, is everything the run's log held that its record
-// keeps an identity of: the calls a bridged run's row lists (a call whose own
-// record did not land among them, once its session carried it), the ones it
+// keeps an identity of: the calls a bridged run's tool log lists (a call whose
+// own append did not land among them, once its session carried it), the ones it
 // counts without listing (a long run's dropped middle), the calls the log
 // absorbed from a bridged call's own work (a delegated worker's, [Called],
 // [CallLog.Own]), and the same three for every closed round. An under-count —
@@ -94,7 +94,7 @@ import (
 // record never landed and that nothing of its session carried — not a later
 // call of its job, not the carry its run's collection asks for, not the last
 // one its session makes as it ends, the store out of reach from the call
-// through every one of them, or the run's record moved on to its next job
+// through every one of them, or the run's log moved on to its next job
 // before one landed — is a call no record of the run holds, and no seed can
 // count it. The engine's bridge ledger names each such call in its log, at
 // warning: its tool, its place among its job's calls and the opening of its

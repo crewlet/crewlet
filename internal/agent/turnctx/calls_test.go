@@ -174,9 +174,9 @@ func TestASeededLogCountsTheCallsBeforeTheSeed(t *testing.T) {
 }
 
 // A SEEDED CALL IS COUNTED BY THE IDENTITY ITS RECORD CARRIES, NEVER BY WHAT ITS
-// RECORD KEPT. A run's row keeps a call's arguments in part past its share, so
-// a call seeded from them is another call; seeded by its digest it is the call
-// it was, and a repeat of it after the seed keeps its count.
+// RECORD KEPT. A run's tool log keeps a call's arguments in part past its
+// share, so a call seeded from them is another call; seeded by its digest it is
+// the call it was, and a repeat of it after the seed keeps its count.
 //
 // Mutation: record a seeded call by its arguments whatever its digest, and the
 // repeat counts the cut copy as a different call.

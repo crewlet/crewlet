@@ -120,19 +120,19 @@ func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() tu
 }
 
 // keptWhole is decode for a submission a run is MAKING, held to what the run's
-// record keeps whole.
+// log keeps whole.
 //
-// THE COLLECTION REPLAYS A RUN'S SUBMISSION FROM ITS ROW ([replaySubmission]),
-// so a submission is the run's outcome only as the row holds it, and the row
-// is bounded in bytes: it keeps the newest successful submission whole up to
-// sandbox.MaxSubmissionArgsBytes, and every other call's arguments with their
-// largest values left out. A submission past what it keeps would be collected
-// as a round that submitted nothing. So the tool refuses it here, while the
-// run can still shorten it, naming its size: past sandbox.MaxSubmissionBytes,
-// measured as the row would hold it (its arguments as the engine records them
-// and the row escapes them), which is half what the row keeps — the run's own
-// spelling of what the tool reads in canonical form can only add to it, and
-// never past the other half.
+// THE COLLECTION REPLAYS A RUN'S SUBMISSION FROM ITS LOG ([replaySubmission]),
+// the bridged call log kept beside the run's row, so a submission is the run's
+// outcome only as the log holds it, and the log is bounded in bytes: it keeps
+// the newest successful submission whole up to sandbox.MaxSubmissionArgsBytes,
+// and every other call's arguments with their largest values left out. A
+// submission past what it keeps would be collected as a round that submitted
+// nothing. So the tool refuses it here, while the run can still shorten it,
+// naming its size: past sandbox.MaxSubmissionBytes, measured as the log would
+// hold it (its arguments as the engine records them and the log escapes them),
+// which is half what the log keeps — the run's own spelling of what the tool
+// reads in canonical form can only add to it, and never past the other half.
 //
 // LIVE ONLY. The replay decodes without it: the submission is made, and one a
 // build before this bound recorded whole is replayed as it stands.

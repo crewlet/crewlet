@@ -9,14 +9,14 @@ import (
 // to Name asked for Digest, and how many of those failed.
 //
 // A RECORD BOUNDED IN COUNT KEEPS THE IDENTITIES OF WHAT IT DROPS. An executor
-// run's calls are kept on its row, which drops a long run's middle
-// (internal/sandbox's MaxBridgeCalls), and each call it drops still asked for
-// something — which the run's call log counts every later call against, so an
-// operation id derived after the drop is the one the run would have derived
-// without it (internal/agent/turnctx's CallLog). So the drop is a tally rather
-// than a loss: the tool, the digest of the arguments the call was admitted
-// with, how many calls had both, and how many failed — which is also all a
-// delivery check reads of a call.
+// run's calls are kept in the log beside its row, which drops a long run's
+// middle (internal/sandbox's MaxBridgeCalls), and each call it drops still
+// asked for something — which the run's call log counts every later call
+// against, so an operation id derived after the drop is the one the run would
+// have derived without it (internal/agent/turnctx's CallLog). So the drop is a
+// tally rather than a loss: the tool, the digest of the arguments the call was
+// admitted with, how many calls had both, and how many failed — which is also
+// all a delivery check reads of a call.
 //
 // AN IDENTITY THE RECORD COULD NOT KEEP is said by what is missing: an empty
 // Digest is calls to Name whose arguments are not known (an over-count of Name
