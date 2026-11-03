@@ -1635,7 +1635,17 @@ const (
 	// the tab loads in (271 bytes gzipped). The initial load did not grow:
 	// its files are the same bytes but for the chunk names they list. It
 	// moved down to 5455 KiB, the measured size's next KiB.
-	treeBudget = 5<<20 + 335<<10
+	// Google Cloud (its catalogue entry; the Agents tab's issued credential,
+	// tool reason, box files and the link to preparing a project; the connect
+	// form's public view of a minted key; the org builder's leftover service
+	// account) and the kit's move to 0.93.0 (the Google Cloud mark) took it
+	// from 5454.2 KiB to 5457.2 KiB (+3.0 KiB, 3027 bytes): the integrations
+	// model chunk +2532 bytes, the icons chunk +779 bytes for the mark, the
+	// entry +672 bytes, the catalogue chunk +311 bytes and the org builder's
+	// +142, less 925 bytes net across the kit's renamed chunks (an 840-byte
+	// one folded into the entry) and 484 bytes across the rest. The initial
+	// load did not grow: it is one file fewer. 5458 KiB.
+	treeBudget = 5<<20 + 338<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
