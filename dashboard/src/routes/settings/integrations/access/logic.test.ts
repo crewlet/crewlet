@@ -39,6 +39,7 @@ import {
   toolWords,
   type Lane,
 } from "./logic.ts";
+import type { AccessSeatLane } from "~/contract/access.ts";
 
 const sre = () => datadogAnswer().seats.find((s) => s.handle === "sre")!.lanes.datadog!;
 
@@ -130,16 +131,20 @@ test("the tool reads as one value", () => {
 
 // EXPO'S TOOL IS THE EAS CLI IN THE AGENT'S OWN BOX, with no tool server to
 // start: an on seat reads as the CLI it drives, its level as Expo's role name,
-// and a seat whose sandbox env hands the CLI nothing is told the line to add.
+// and a seat whose sandbox env hands the CLI nothing is told its own line, as
+// the engine sends it.
 test("an Expo seat's tool is the EAS CLI in its box, and its level is Expo's role", () => {
   const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
   expect(toolWords(EXPO_LANE, qa)).toBe("Live, EAS CLI in its box, as EXPO_TOKEN");
   expect(toolWords(EXPO_LANE, { ...qa, tool: "no_server" })).toBe(
     "Not set up: its sandbox env does not set EXPO_TOKEN",
   );
-  expect(noToolRemedy("expo")).toContain('Add EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"');
-  expect(noToolRemedy("expo")).not.toMatch(/tool server/);
-  expect(noToolRemedy("datadog")).toMatch(/^the company declares no datadog tool server\./);
+  expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).toBe(
+    'its sandbox env does not set EXPO_TOKEN. Add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env in the company document, and its tool signs in as the agent.',
+  );
+  expect(noToolRemedy(DATADOG_LANE, [{ name: "SRE", saved: sre() }])).toMatch(
+    /^the company declares no datadog tool server\./,
+  );
   expect(accessWords(EXPO_LANE, qa.observed)).toBe("Developer");
   expect(availableActions(EXPO_LANE, qa, false, false)).toEqual(["rotate"]);
   expect(offSentence(EXPO_LANE, offLane("viewer"))).toBe(
@@ -373,4 +378,33 @@ test("a seat turned on takes the only entry there is, and only then", () => {
   expect(onlyScope({ ...one, scope: ["a/b", "a/c"] }, { enabled: false })).toBeUndefined();
   expect(onlyScope(one, { enabled: true })).toBeUndefined();
   expect(onlyScope(one, { enabled: false, scope: ["gophrase/backend"] })).toBeUndefined();
+});
+
+// A BOX TOOL READING SEVERAL VARIABLES names every one a person adds, never the
+// settings the engine supplies itself, and tells each agent its own lines, so
+// nobody is told to add half of what their tool needs.
+test("a box tool reading several variables names each agent's own lines", () => {
+  const boxed = (handle: string) =>
+    ({
+      ...offLane(),
+      tool: "no_server",
+      box: {
+        env: [
+          { name: "SCW_ACCESS_KEY", value: `\${SCW_ACCESS_KEY_${handle}}`, by: "you" },
+          { name: "SCW_SECRET_KEY", value: `\${SCW_SECRET_KEY_${handle}}`, by: "you" },
+          { name: "SCW_DEFAULT_PROJECT_ID", value: "p-1", by: "crewlet" },
+        ],
+      },
+    }) satisfies AccessSeatLane;
+  expect(toolWords(EXPO_LANE, boxed("SRE"))).toBe(
+    "Not set up: its sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY",
+  );
+  expect(
+    noToolRemedy(EXPO_LANE, [
+      { name: "SRE", saved: boxed("SRE") },
+      { name: "QA", saved: boxed("QA") },
+    ]),
+  ).toBe(
+    'their sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY. In the company document, add each agent\'s own lines to its sandbox.env: SRE, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_SRE}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_SRE}"; QA, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_QA}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_QA}". Each tool then signs in as its agent.',
+  );
 });

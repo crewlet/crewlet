@@ -558,7 +558,13 @@ export function AgentsAccess({
           variant="warning"
           title={`No ${name} tool for ${only ? "this agent" : "its agents"}`}
         >
-          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: ${noToolRemedy(lanes[0]!.key)}`}
+          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: ${noToolRemedy(
+            lanes[0]!,
+            withoutTool.flatMap((s) => {
+              const saved = s.lanes[lanes[0]!.key];
+              return saved ? [{ name: s.name, saved }] : [];
+            }),
+          )}`}
         </Callout>
       )}
 

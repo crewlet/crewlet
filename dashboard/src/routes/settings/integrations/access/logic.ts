@@ -11,6 +11,7 @@
 
 import type {
   AccessAnswer,
+  AccessBoxLine,
   AccessDesired,
   AccessLaneKey,
   AccessObserved,
@@ -313,10 +314,16 @@ export function needsAttention(status: Status): boolean {
   return status.tone === "danger" || status.tone === "warning";
 }
 
+/** The lines a person adds to a seat's box for its CLI, as the engine sends them. */
+export function boxLines(saved: AccessSeatLane): AccessBoxLine[] {
+  return (saved.box?.env ?? []).filter((line) => line.by === "you");
+}
+
 /** The tool, as one value: whether it works, and what it works through. */
 export function toolWords(lane: Lane, saved: AccessSeatLane): string {
   const words = laneWords(lane.key);
-  const through = words.tool;
+  const names = andList(boxLines(saved).map((line) => line.name));
+  const through = names ? `${words.tool}, as ${names}` : words.tool;
   switch (saved.tool) {
     case "live":
       return `Live, ${through}`;
@@ -325,8 +332,8 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
     case "waiting":
       return `Waiting for the credential, ${through}`;
     case "no_server":
-      return words.boxEnv
-        ? `Not set up: its sandbox env does not set ${words.boxEnv.name}`
+      return names
+        ? `Not set up: its sandbox env does not set ${names}`
         : `Not set up: no ${words.server} tool server is declared`;
     case "server_off":
       return `Not running: the ${words.server} tool server is turned off`;
@@ -337,13 +344,23 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
 
 /**
  * What agents with an account and no tool lack, and how to give them one, said
- * once above the table after "... nothing to use it with: ".
+ * once above the table after "... nothing to use it with: ". A box tool's
+ * remedy is each agent's own lines, exactly as the engine sends them.
  */
-export function noToolRemedy(laneKey: string): string {
-  const words = laneWords(laneKey);
-  if (words.boxEnv) {
-    const { name, value } = words.boxEnv;
-    return `its sandbox env does not set ${name}. Add ${name}: "${value}" to each agent's sandbox.env in the company document, and its tool signs in as the agent.`;
+export function noToolRemedy(
+  lane: Lane,
+  seats: readonly { name: string; saved: AccessSeatLane }[],
+): string {
+  const words = laneWords(lane.key);
+  const boxed = seats.filter((s) => boxLines(s.saved).length > 0);
+  if (boxed.length > 0) {
+    const lines = (s: (typeof boxed)[number]) =>
+      andList(boxLines(s.saved).map(({ name, value }) => `${name}: "${value}"`));
+    const names = andList([...new Set(boxed.flatMap((s) => boxLines(s.saved).map((l) => l.name)))]);
+    if (boxed.length === 1)
+      return `its sandbox env does not set ${names}. Add ${lines(boxed[0]!)} to ${boxed[0]!.name}'s sandbox.env in the company document, and its tool signs in as the agent.`;
+    const each = boxed.map((s) => `${s.name}, ${lines(s)}`).join("; ");
+    return `their sandbox env does not set ${names}. In the company document, add each agent's own lines to its sandbox.env: ${each}. Each tool then signs in as its agent.`;
   }
   return `the company declares no ${words.server} tool server. Add it under Settings › MCP & tools as one instance per agent, and each agent's own credential is sent with it.`;
 }

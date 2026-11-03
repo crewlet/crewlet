@@ -10,7 +10,13 @@
  * the same on every run.
  */
 
-import type { AccessAnswer, AccessOptions, AccessSeat, AccessSeatLane } from "~/contract/access.ts";
+import type {
+  AccessAnswer,
+  AccessBox,
+  AccessOptions,
+  AccessSeat,
+  AccessSeatLane,
+} from "~/contract/access.ts";
 import { lanesOf, type Lane } from "./logic.ts";
 
 const MIN = 60_000;
@@ -368,6 +374,11 @@ export function cloudflareAnswer(): AccessAnswer {
   };
 }
 
+/** The line Expo's EAS CLI needs in a seat's box, as the engine sends it. */
+const expoBox = (handle: string): AccessBox => ({
+  env: [{ name: "EXPO_TOKEN", value: `\${EXPO_TOKEN_${handle}}`, by: "you" }],
+});
+
 /**
  * Expo with QA's robot on Developer, its token named in its sandbox env so its
  * tool is live, and PM off at the default level.
@@ -380,10 +391,11 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
     last_sync_at: ago(4 * MIN),
     options: [EXPO_OPTIONS],
     seats: [
-      seat("pm", "PM", { expo: offLane("viewer") }),
+      seat("pm", "PM", { expo: { ...offLane("viewer"), box: expoBox("PM") } }),
       seat("qa", "QA", {
         expo: onLane({
           variable: "EXPO_TOKEN_QA",
+          box: expoBox("QA"),
           desired: { enabled: true, level: "developer" },
           observed: {
             exists: true,

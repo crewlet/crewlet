@@ -338,7 +338,7 @@ test("an Expo agent with no tool is told to set EXPO_TOKEN in its sandbox env", 
   draw(expoAnswer({ tool: "no_server" }));
   expect(screen.getByText("No Expo tool for its agents")).toBeTruthy();
   const advice = screen.getByText(/QA has an account at Expo and nothing to use it with/);
-  expect(advice.textContent).toContain('Add EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"');
+  expect(advice.textContent).toContain('Add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env');
   expect(advice.textContent).not.toMatch(/tool server/);
 });
 
