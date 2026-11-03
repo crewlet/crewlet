@@ -1643,12 +1643,13 @@ const (
 	// call (the execute card, a call's span and the Tools tab's outcome), and
 	// the calls a collected executor's record did not keep counted in the
 	// turn's Tool calls fact, said on the Tools tab and counted by a call's
-	// span and the executors board's rail, took it from 5454.2 KiB to 5457.1
-	// KiB (+2.9 KiB, 2954 bytes): the shared chunk the wording landed in +794
-	// bytes, the Executors chunk +744, the live chunk +518, the settled chunk
-	// +500 and the phases chunk +398; every other chunk kept its size. The
-	// initial load did not grow: its files are the same bytes but for the
-	// chunk names they list and the order of one preload list. 5458 KiB.
+	// span and the executors board's rail, with their failures in its failure
+	// tag, took it from 5454.2 KiB to 5457.2 KiB (+2.9 KiB, 3015 bytes): the
+	// Executors chunk +805 bytes, the shared chunk the wording landed in +794,
+	// the live chunk +518, the settled chunk +500 and the phases chunk +398;
+	// every other chunk kept its size. The initial load did not grow: its
+	// files are the same bytes but for the chunk names they list and the order
+	// of one preload list. 5458 KiB.
 	treeBudget = 5<<20 + 338<<10
 )
 

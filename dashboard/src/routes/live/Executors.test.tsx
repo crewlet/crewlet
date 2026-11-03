@@ -141,6 +141,31 @@ test("the rail counts every call the run made, the dropped middle included", () 
   expect(screen.getByText("47 calls from the middle aren’t listed")).toBeTruthy();
 });
 
+test("the rail's failures are the dropped middle's too, as its count is", () => {
+  // The rail's call count is every call the run made, so its failure tag is
+  // every failure among them: the listed calls' and the ones the record's
+  // tally keeps of the calls it dropped. Mutation: count the listed calls'
+  // failures alone, and the rail says one failure of a run whose dropped
+  // middle failed twelve more times, beside a count that includes them.
+  render(
+    <BridgeSummary
+      run={run({
+        bridge_calls: [
+          { name: "read_file", at: "2026-06-15T12:01:00Z", failed: true },
+          { name: "post_message", at: "2026-06-15T12:09:00Z" },
+        ],
+        bridge_calls_elided: 47,
+        bridge_elided_calls: [
+          { name: "read_file", digest: "ab", calls: 35, failed: 12 },
+          { name: "post_message", calls: 12 },
+        ],
+      })}
+    />,
+  );
+  expect(screen.getByText("49 calls through the MCP bridge")).toBeTruthy();
+  expect(screen.getByText("13 failures")).toBeTruthy();
+});
+
 test("a run that made no calls says so", () => {
   // EVERY RUN IS BRIDGED, so an empty log is a fact about the run: one that
   // stopped having called nothing — not even its submission — is the run a

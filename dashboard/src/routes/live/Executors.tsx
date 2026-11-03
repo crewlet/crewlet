@@ -447,12 +447,18 @@ export function BridgeSummary({ run }: { run: ExecutorRow }) {
       </section>
     );
   }
-  const failures = calls.filter(callFailed).length;
   const last = calls[calls.length - 1];
   // EVERY CALL THE RUN MADE, the ones its record dropped from the middle
   // included: the rail's count is the run's, and the log below says which it
-  // does not list.
+  // does not list. AND EVERY FAILURE AMONG THEM, the dropped ones' off the
+  // tally the record keeps of them, so the rail's two numbers count one set of
+  // calls. That tally cannot tell a held call from one that failed — both are
+  // recorded failed — so a held call dropped from the middle counts as a
+  // failure here where a listed one does not: the rail errs towards a look.
   const elided = run.bridge_calls_elided ?? 0;
+  const failures =
+    calls.filter(callFailed).length +
+    (run.bridge_elided_calls ?? []).reduce((n, dropped) => n + (dropped.failed ?? 0), 0);
   return (
     <section className="col gap-2">
       <div className="t-label">Tool calls</div>
