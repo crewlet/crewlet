@@ -105,6 +105,13 @@ func (r *RefusedCheckout) Unwrap() error { return r.Result.Cause }
 type RunRepos struct {
 	// Repos are the run's grants, in the order the call named them.
 	Repos []sandbox.RunRepo
+	// Heads are where each grant's branch stood as the resolution read it,
+	// in Repos' order: the commit the branch's head names, "" where the
+	// branch does not exist yet. What a box that lost its clone continues
+	// from where its job holds the grant already ([sandbox.GrantHeld]):
+	// whatever the job it continues pushed is there, and a branch nothing
+	// was pushed to holds none of it.
+	Heads []string
 	// Floor is the run's first code floor: the furthest position any read
 	// of the resolution answered at, and this node's own writes to each
 	// repository — a code_commit_files just before the checkout must be in
@@ -182,10 +189,11 @@ func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs 
 	out := RunRepos{Ceiling: c.ceiling}
 	byID := map[string]string{}
 	for _, req := range reqs {
-		r, floor, refusal := d.runRepo(ctx, turn, c, req, grant)
+		got, refusal := d.runRepo(ctx, turn, c, req, grant)
 		if refusal != nil {
 			return RunRepos{}, &RefusedCheckout{Result: *refusal}
 		}
+		r := got.grant
 		if first, named := byID[r.RepoID]; named {
 			return RunRepos{}, &RefusedCheckout{Result: failed(fmt.Sprintf(CodeCheckoutTool+": %s and %s name one "+
 				"repository, %s; one run works on one branch of a repository, so name it once.", clip(first),
@@ -193,32 +201,41 @@ func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs 
 		}
 		byID[r.RepoID] = req.Repo
 		out.Repos = append(out.Repos, r)
-		out.Floor = statelog.Later(out.Floor, floor)
+		out.Heads = append(out.Heads, got.head)
+		out.Floor = statelog.Later(out.Floor, got.floor)
 	}
 	return out, nil
 }
 
-// runRepo is one request's grant on the run and the furthest position its
-// reads answered at — or the refusal, naming the repository.
+// resolvedRepo is what one request resolves to: its grant on the run, where
+// the grant's branch stands ([RunRepos.Heads]) and the furthest position its
+// reads answered at.
+type resolvedRepo struct {
+	grant sandbox.RunRepo
+	head  string
+	floor statelog.Position
+}
+
+// runRepo resolves one request — or refuses it, naming the repository.
 func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller, req RepoRequest,
-	grant GrantFunc) (sandbox.RunRepo, statelog.Position, *tools.Result) {
+	grant GrantFunc) (resolvedRepo, *tools.Result) {
 
 	const tool = CodeCheckoutTool
 	if !code.ValidName(req.Repo) {
 		r := failed(fmt.Sprintf("%s: %q is not a repository's name — a name is lowercase letters, digits and "+
 			"hyphens, as %s lists it.", tool, clip(req.Repo), CodeListReposTool))
-		return sandbox.RunRepo{}, statelog.Position{}, &r
+		return resolvedRepo{}, &r
 	}
 	repo, refusal := d.repo(ctx, turn, tool, c, req.Repo)
 	if refusal != nil {
-		return sandbox.RunRepo{}, statelog.Position{}, refusal
+		return resolvedRepo{}, refusal
 	}
 	floor := statelog.Later(repo.Position, d.Code.FloorOf(repo.ID))
 
 	branch := req.Branch
 	change, at, refusal := d.runChange(ctx, turn, c, req, repo)
 	if refusal != nil {
-		return sandbox.RunRepo{}, statelog.Position{}, refusal
+		return resolvedRepo{}, refusal
 	}
 	if change != nil {
 		branch = strings.TrimPrefix(change.SourceRef, branchRoot)
@@ -229,18 +246,18 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		if branch, err = code.SeatBranch(c.asker.Seat, workItemKey(turn), turn.RunID); err != nil {
 			r := faulted(ctx, tool, err, fmt.Sprintf("%s could not name the branch this run works on in "+
 				"repository %q: %s.", tool, repo.Name, faultSaid))
-			return sandbox.RunRepo{}, statelog.Position{}, &r
+			return resolvedRepo{}, &r
 		}
 	}
 	if !gitref.ValidBranch(branch) {
 		r := failed(fmt.Sprintf("%s: %q is not a branch name git accepts; name another `branch` for "+
 			"repository %q, or leave it out for your own.", tool, clip(branch), repo.Name))
-		return sandbox.RunRepo{}, statelog.Position{}, &r
+		return resolvedRepo{}, &r
 	}
 
 	target, refusal := openTarget(req, repo, branch)
 	if refusal != nil {
-		return sandbox.RunRepo{}, statelog.Position{}, refusal
+		return resolvedRepo{}, refusal
 	}
 
 	// ONE READ for every ref the checkout needs of the repository: the run's
@@ -265,7 +282,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	}
 	answer, refusal := d.refsOf(ctx, turn, tool, c, repo, names...)
 	if refusal != nil {
-		return sandbox.RunRepo{}, statelog.Position{}, refusal
+		return resolvedRepo{}, refusal
 	}
 	floor = statelog.Later(floor, answer.Position)
 	current := answer.Repo
@@ -277,7 +294,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		r := refusedBy(tools.RefusalNotFound, fmt.Errorf("%w: %s", code.ErrRepoNotFound, current.Name),
 			fmt.Sprintf("%s: %s; nothing was checked out.", tool, code.RepoGone{ID: current.ID, Name: current.Name,
 				Status: current.Status, DeletedAt: current.DeletedAt, ManagedBy: current.ManagedBy}.Detail()))
-		return sandbox.RunRepo{}, statelog.Position{}, &r
+		return resolvedRepo{}, &r
 	}
 	head := answer.Refs[0]
 	switch {
@@ -288,11 +305,11 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		r := refusedBy(tools.RefusalNotFound, fmt.Errorf("%w: %s", code.ErrRefNotFound, head.Missing),
 			fmt.Sprintf("%s: %s's branch %s was deleted as it was checked out, which closes the change; "+
 				"nothing was checked out — read it with %s.", tool, change.Ref, change.SourceRef, CodeGetChangeTool))
-		return sandbox.RunRepo{}, statelog.Position{}, &r
+		return resolvedRepo{}, &r
 	case targetAt >= 0 && answer.Refs[targetAt].Missing != "":
 		r := codeFailure(ctx, tool, repo.Name, fmt.Errorf("%w: %s — name an existing branch as "+
 			"open_change's `target`", code.ErrRefNotFound, answer.Refs[targetAt].Missing))
-		return sandbox.RunRepo{}, statelog.Position{}, &r
+		return resolvedRepo{}, &r
 	}
 	if head.Missing != "" {
 		// THE RUN'S OWN BRANCH, NOT THERE YET: held with no read, as a branch
@@ -305,7 +322,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, names[0], nil, statelog.Position{},
 			d.Now); err != nil {
 			r := refHoldFailure(ctx, tool, repo, names[0], err)
-			return sandbox.RunRepo{}, statelog.Position{}, &r
+			return resolvedRepo{}, &r
 		}
 	}
 
@@ -319,7 +336,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	}
 	access, refusal := runAccess(req, branch, head, current, boxGrant)
 	if refusal != nil {
-		return sandbox.RunRepo{}, statelog.Position{}, refusal
+		return resolvedRepo{}, refusal
 	}
 	if req.OpenChange != nil && access != sandbox.RepoWrite {
 		// AN ACCESS LEFT OUT came to read: the box could push nothing, so
@@ -328,7 +345,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 			"asks for open_change on %s, which it may not push, so it could deliver nothing to open a change "+
 			"from: name a `branch` it may push — leave `branch` out for your own — or leave open_change out.",
 			tool, repo.Name, branch))
-		return sandbox.RunRepo{}, statelog.Position{}, &r
+		return resolvedRepo{}, &r
 	}
 
 	var base string
@@ -344,16 +361,16 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 				r := refusedBy(tools.RefusalNotFound, refusal.Cause, fmt.Sprintf("%s: repository %q holds no "+
 					"commit %s; name a commit it holds, a branch or a tag as `base`.", tool, repo.Name,
 					clip(req.Base)))
-				return sandbox.RunRepo{}, statelog.Position{}, &r
+				return resolvedRepo{}, &r
 			}
-			return sandbox.RunRepo{}, statelog.Position{}, refusal
+			return resolvedRepo{}, refusal
 		}
 		base, floor = got.Rev, statelog.Later(floor, got.Position)
 	case baseAt >= 0:
 		ref := answer.Refs[baseAt]
 		if ref.Missing != "" {
 			r := codeFailure(ctx, tool, repo.Name, fmt.Errorf("%w: %s", code.ErrRefNotFound, ref.Missing))
-			return sandbox.RunRepo{}, statelog.Position{}, &r
+			return resolvedRepo{}, &r
 		}
 		base = ref.OID
 	case head.Missing == "":
@@ -371,7 +388,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		paths[i] = path.Clean(strings.TrimSpace(p))
 		if why := sandbox.ConePathProblem(paths[i]); why != "" {
 			r := failed(fmt.Sprintf("%s: repository %q's paths[%d] %q %s.", tool, repo.Name, i, clip(p), why))
-			return sandbox.RunRepo{}, statelog.Position{}, &r
+			return resolvedRepo{}, &r
 		}
 	}
 	out := sandbox.RunRepo{Repo: current.Name, RepoID: current.ID, Base: base, Branch: branch, Access: access,
@@ -385,9 +402,13 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	if err := out.ValidateFor(sandbox.CloneCoding); err != nil {
 		r := failed(fmt.Sprintf("%s: repository %q cannot be given to a run as named: %v.", tool, repo.Name,
 			err))
-		return sandbox.RunRepo{}, statelog.Position{}, &r
+		return resolvedRepo{}, &r
 	}
-	return out, floor, nil
+	branchHead := ""
+	if head.Missing == "" {
+		branchHead = head.OID
+	}
+	return resolvedRepo{grant: out, head: branchHead, floor: floor}, nil
 }
 
 // runAccess is what a run may do with a repository — the request's access,

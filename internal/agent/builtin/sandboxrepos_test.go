@@ -201,6 +201,41 @@ func TestALaunchReadsARepositorysRefsInOneQuery(t *testing.T) {
 	}
 }
 
+// A CHECKOUT SAYS WHERE THE RUN'S BRANCH STANDS: beside each grant, the head
+// its branch had as the resolution read it — what a box that lost its clone
+// continues from where its job holds the grant already — whatever base the
+// request named, and none for a branch nothing was pushed to yet, though that
+// grant starts from the default branch's head.
+//
+// Mutations: no head reported → the pushed branch's, red; the grant's base
+// reported as its head → the named base's and the unpushed branch's, red.
+func TestACheckoutSaysWhereTheRunsBranchStands(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name       string
+		req        builtin.RepoRequest
+		base, head string
+	}{
+		{"a branch pushed to", builtin.RepoRequest{Repo: "site", Branch: "feature"}, featureOID, featureOID},
+		{"a base named beside it", builtin.RepoRequest{Repo: "site", Branch: "feature", Base: "v1"}, mainOID,
+			featureOID},
+		{"a branch nothing was pushed to", builtin.RepoRequest{Repo: "site"}, mainOID, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := codeDeps(newCodeHost()).ResolveRunRepos(t.Context(), launchTurn(t),
+				[]builtin.RepoRequest{c.req}, maintains)
+			if err != nil {
+				t.Fatalf("ResolveRunRepos: %v", err)
+			}
+			if len(got.Repos) != 1 || got.Repos[0].Base != c.base || !slices.Equal(got.Heads, []string{c.head}) {
+				t.Errorf("the run is given %+v with its branch at %q, want base %s and head %q", got.Repos,
+					got.Heads, c.base, c.head)
+			}
+		})
+	}
+}
+
 // changeAt is site's change number 3, from feature into main, in state, as a
 // read of it answers.
 func changeAt(state code.ChangeState) *code.ChangeDetail {
