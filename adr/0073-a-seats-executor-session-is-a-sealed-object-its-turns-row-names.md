@@ -502,28 +502,28 @@ in chat: the next fire would otherwise be recorded as the answer to the
 question the last fire's run parked on.
 
 **A conversation's head is the turn that read it last**, no longer simply its
-newest end. A fire is never an answer, so a schedule's next fire runs beside a
-fire of it still parked on a person's question, which frees its seat, every
-time one parks: each later fire reads the schedule's head, continues it and
-ends, the next continuing that one, and the parked fire, answered or stopped
-hours later, ends after them all. As the newest end it became the head, so the
-fire after it continued the session the schedule had left before it parked,
-and the sessions the fires beside it had left, each continuing the one before,
-were told and then absorbed without ever being continued. Every first launch
-continues the head its read named, so a conversation's sessions are a line
-whose newest point is the ended turn whose READ is newest, what every later
-read built on. The head is therefore, of the ended turns whose rows still name
-a session, the one that read the conversation last: the newest end among turns
-that read it at one position, and a turn that read nothing (its read failed)
-after every turn that read. A turn that read early and ended late is told and
-offered beside the head, as every other ended turn is, and the next end absorbs
-it. Replicated migration 0149 adds the index the head's order seeks. The case
-was there for any conversation whose turn ran beside a parked one, and a
-conversation's later message is offered to the parked run as its answer first,
-so it was rare until a schedule made it routine. Holding a schedule's later
-fires back while a fire of it waits on a question was rejected: a schedule
-fires whatever its last run is doing, and a question nobody answers for days
-would hold every fire of it as long, to run once and days late.
+newest end: of its ended turns whose rows still name a session, the one that
+read the conversation last, the newest end among turns that read it at one
+position, and a turn that read nothing (its read failed) after every turn that
+read. A fire is never an answer, so a schedule's next fire runs beside a fire
+of it still parked on a person's question, which frees its seat, every time one
+parks: each later fire reads the schedule's head, continues it and ends, the
+next continuing that one, and the parked fire, answered or stopped hours later,
+ends after them all. As the newest end it became the head, so the fire after it
+continued the session the schedule had left before it parked, and the sessions
+the fires beside it had left, each continuing the one before, were told and
+then absorbed without ever being continued. Every first launch continues the
+head its read named, so a conversation's sessions are a line that every later
+read built on, and a turn that read early and ended late continued none of what
+the turns that read after it left: it is told and offered beside the head, as
+every other ended turn is, and the next end absorbs it. Replicated migration
+0149 adds the index the head's order seeks. The case was there for any
+conversation whose turn ran beside a parked one, and a conversation's later
+message is offered to the parked run as its answer first, so it was rare until
+a schedule made it routine. Holding a schedule's later fires back while a fire
+of it waits on a question was rejected: a schedule fires whatever its last run
+is doing, and a question nobody answers for days would hold every fire of it as
+long, to run once and days late.
 
 **The seat budget still releases the oldest end first**, so under budget
 pressure it can release a conversation's head before a stale sibling, a turn

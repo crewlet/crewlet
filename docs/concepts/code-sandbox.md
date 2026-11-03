@@ -1638,10 +1638,10 @@ lands in and its runner:
   same decision as `next_turn`, for a row of a schedule's conversation — a
   schedule is a conversation of each seat that runs it
   ([above](#a-conversations-next-turn-continues-its-last-turns-session)) — told
-  in the schedule's words: a fire that is not the newest names the fire whose
-  session the next fire is handed instead. A live fire's row is a relaunch's
-  like any other's, and where its turn has kept nothing it names the last fire
-  a relaunch in a box of its own would continue.
+  in the schedule's words: a fire that is not its schedule's head names the
+  fire whose session the next fire is handed instead. A live fire's row is a
+  relaunch's like any other's, and where its turn has kept nothing it names the
+  last fire a relaunch in a box of its own would continue.
 
 **The member is the one the node holding the seat would pick**, off the chain
 of the company revision the launch runs on: which members sit out a spent plan

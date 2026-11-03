@@ -362,8 +362,8 @@ schedule are one conversation of that seat, and the schedule's next fire there
 is that conversation's next turn:
 
 - its dispatch reads the session the schedule's last fire left on the seat —
-  the conversation's head, of the fires that ended with a kept session the one
-  that read the conversation last — and its first launch continues that
+  the conversation's head, of the ended fires whose session is still kept the
+  one that read the conversation last — and its first launch continues that
   session in a box of its own, led by
   `## A new fire of this schedule begins here`;
 - every brief of the fire carries `## How this schedule's earlier fires ended`

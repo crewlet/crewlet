@@ -99,22 +99,23 @@ import (
 // a relaunch would follow, and — where the turn has kept no session of its own
 // — the session its first launch was handed, which a relaunch in a box of its
 // own continues instead. AN ENDED ROW: whether it is its conversation's HEAD,
-// of the conversation's ended turns that left a session the one that read it
-// last, which the read that answered the row names from the same snapshot
-// (executordomain.Page.Heads, SessionRead.Head) — only the head is continued,
-// and a row that is not names the head the next turn is handed; a row that
-// names no session says why, of three reasons. And for either, the member the
-// launch would be launched on now, the cell its run lands in and that member's
-// runner — as THE NODE HOLDING THE SEAT picks them ([RelaunchTargets]): which
-// members sit out a spent plan is that node's own, and the launch is decided
-// there, off the chain of the company revision it runs on — a resumed segment
-// of the turn running there relaunches on the revision it was admitted under,
-// and a conversation's next turn is admitted under the revision live when it
-// comes, which an ask of NO turn names ([sandbox.TargetAsk]). Never a second
-// copy of any part of it. As far as the engine can know before a box is
-// chosen: whether the box a launch gets runs a harness release that takes the
-// session up, whether it is a box of its own, and whether the seat's budget
-// can carry it, are the launch's to find out, and no row says them.
+// of the conversation's ended turns whose rows still name a session the one
+// that read it last, which the read that answered the row names from the same
+// snapshot (executordomain.Page.Heads, SessionRead.Head) — only the head is
+// continued, and a row that is not names the head the next turn is handed; a
+// row that names no session says why, of three reasons. And for either, the
+// member the launch would be launched on now, the cell its run lands in and
+// that member's runner — as THE NODE HOLDING THE SEAT picks them
+// ([RelaunchTargets]): which members sit out a spent plan is that node's own,
+// and the launch is decided there, off the chain of the company revision it
+// runs on — a resumed segment of the turn running there relaunches on the
+// revision it was admitted under, and a conversation's next turn is admitted
+// under the revision live when it comes, which an ask of NO turn names
+// ([sandbox.TargetAsk]). Never a second copy of any part of it. As far as the
+// engine can know before a box is chosen: whether the box a launch gets runs a
+// harness release that takes the session up, whether it is a box of its own,
+// and whether the seat's budget can carry it, are the launch's to find out,
+// and no row says them.
 //
 // A ROW BEGINS AT ITS TURN'S FIRST LAUNCH where the turn read its
 // conversation, whose `begin` records that read and holds the session it was

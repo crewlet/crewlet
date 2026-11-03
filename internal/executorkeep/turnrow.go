@@ -96,8 +96,9 @@ type ConversationHead struct {
 	// session and ran beside the head.
 	Siblings []TurnRow
 
-	// Session is the head: of the conversation's ended turns that left a
-	// session, the one that read the conversation last, nil where none did.
+	// Session is the head: of the conversation's ended turns whose rows still
+	// name a session, the one that read the conversation last, nil where none
+	// does.
 	Session *TurnRow
 }
 

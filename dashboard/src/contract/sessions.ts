@@ -115,9 +115,10 @@ export interface ExecutorSessionRow {
   object_bytes: number;
   /**
    * The ended turn whose session this turn's first launch was handed to
-   * continue: its conversation's newest as the turn's dispatch read it. Absent
-   * where the read named none, or the log held none for it. Whether a launch
-   * took it up is the turn's executor records' to say.
+   * continue: its conversation's head as the turn's dispatch read it, the one
+   * of its ended turns with a kept session that read it last. Absent where the
+   * read named none, or the log held none for it. Whether a launch took it up
+   * is the turn's executor records' to say.
    */
   base_turn?: string;
   /**

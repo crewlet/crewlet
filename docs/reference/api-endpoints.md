@@ -10269,11 +10269,12 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object to
   make room for newer ones, keeping how the turn ended.
 - **`base_turn`** is the ended turn whose session this turn's first launch was
-  handed to continue: its conversation's newest as the turn's dispatch read it,
-  held on the log by the turn's `begin`. Absent where the read named none, that
-  session had gone before the `begin` landed, or no `begin` landed. Whether a
-  launch took it up is the turn's `executor_collected` records' `brief`
-  (`continued_conversation`).
+  handed to continue: its conversation's head as the turn's dispatch read it
+  (of the conversation's ended turns whose rows still name a session, the one
+  that read the conversation last), held on the log by the turn's `begin`.
+  Absent where the read named none, that session had gone before the `begin`
+  landed, or no `begin` landed. Whether a launch took it up is the turn's
+  `executor_collected` records' `brief` (`continued_conversation`).
 - **`continued_by`** is the launch the rest is about: `relaunch` — a relaunch
   of the turn — while the turn is live and its run is neither over nor ending,
   and `next_turn` — its conversation's next turn — once it has ended, or its run

@@ -49,7 +49,7 @@ const OLDER_THAN_HEAD_WHY =
   "conversation's line, and is told how this one ended where its brief has room";
 
 /**
- * A completed turn whose session is kept, its conversation's newest — which
+ * A completed turn whose session is kept, its conversation's head — which
  * the conversation's next turn would continue — with `over` laid on top.
  */
 function session(over: Partial<ExecutorSessionRow> = {}): ExecutorSessionRow {
@@ -246,10 +246,10 @@ test("a session's account says whether a relaunch would continue it", () => {
 });
 
 // WHETHER AN ENDED TURN'S SESSION IS CONTINUED IS ITS CONVERSATION'S NEXT
-// TURN'S: the conversation's newest session would be continued by that turn in
-// whichever box it gets; an older one is not, the engine saying which session
-// that turn is handed instead; one whose launch cannot be said is never drawn
-// as a no; and a turn that served no conversation names no launch at all.
+// TURN'S: the session of the conversation's head would be continued by that
+// turn in whichever box it gets; an older one is not, the engine saying which
+// session that turn is handed instead; one whose launch cannot be said is never
+// drawn as a no; and a turn that served no conversation names no launch at all.
 test("an ended turn's account says whether its conversation's next turn would continue it", () => {
   expect(continuableWords(session())).toBe(
     "The conversation's next turn would continue this session in whichever box it gets, " +

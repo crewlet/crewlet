@@ -33,13 +33,14 @@
 //
 // # One row per turn, never per conversation
 //
-// A conversation's HEAD is the ended turn of it that left a session and read
-// the conversation last — what its next turn continues ([Head]) — but that is
-// a READ over rows that each belong to one turn, never a conversation row a
-// later turn's capture takes over: a row that took another turn's object
-// would be an object carry, which ADR-0027 (as ADR-0036 amends it) allows only
-// inside one artifact. So a turn's capture only ever writes its own row, and a
-// conversation's earlier rows go when a later turn's `end` ABSORBS them.
+// A conversation's HEAD is, of its ended turns whose rows still name a session,
+// the one that read the conversation last — what its next turn continues
+// ([Head]) — but that is a READ over rows that each belong to one turn, never a
+// conversation row a later turn's capture takes over: a row that took another
+// turn's object would be an object carry, which ADR-0027 (as ADR-0036 amends
+// it) allows only inside one artifact. So a turn's capture only ever writes its
+// own row, and a conversation's earlier rows go when a later turn's `end`
+// ABSORBS them.
 //
 // # Subjects, scopes and the five records
 //
@@ -95,31 +96,31 @@
 // # What a conversation still holds is what no ended turn was shown
 //
 // A turn's dispatch reads the conversation ([Reader.Head]): its HEAD (of the
-// ended turns that left a session, the one that read the conversation last,
-// which the turn's launches continue) and every OTHER ended turn the
-// conversation still holds, which the turn is told of — and, of those that
-// still name a session, the SIBLINGS. The turns that read handed out in full
-// and the turn's brief told are carried on the turn's begin and its captures,
-// and the turn's end absorbs exactly them. So every ended row a conversation
-// holds is one no ended turn was shown, and the next read shows every one of
-// them, whether it ended before the head or after it: a turn parked on a
-// person's answer, beside which a later turn read the conversation and ended,
-// ends after that turn, and is told and offered to the turn after both beside
-// the head the later one left. A read bounded at [MaxEndings] leaves the
-// oldest out, and they stay for the turn after it rather than being absorbed
-// by an end that was never shown them.
+// ended turns whose rows still name a session, the one that read the
+// conversation last, which the turn's launches continue) and every OTHER ended
+// turn the conversation still holds, which the turn is told of — and, of those
+// that still name a session, the SIBLINGS. The turns that read handed out in
+// full and the turn's brief told are carried on the turn's begin and its
+// captures, and the turn's end absorbs exactly them. So every ended row a
+// conversation holds is one no ended turn was shown, and the next read shows
+// every one of them, whether it ended before the head or after it: a turn
+// parked on a person's answer, beside which a later turn read the conversation
+// and ended, ends after that turn, and is told and offered to the turn after
+// both beside the head the later one left. A read bounded at [MaxEndings]
+// leaves the oldest out, and they stay for the turn after it rather than being
+// absorbed by an end that was never shown them.
 //
 // # The head is the turn that read the conversation last
 //
-// Every turn's first launch continues the head its read named, so a
-// conversation's sessions are a LINE, and its newest point is the ended turn
-// whose read is newest, never simply the newest end: a turn that read early
-// and ended late — parked on a person's question while later turns ran, as a
+// Of a conversation's ended turns whose rows still name a session, the HEAD is
+// the one that read the conversation last, the newest end among turns that read
+// it at one position, and a turn that read nothing (its read failed) after
+// every turn that read ([Head]). Never simply the newest end: every turn's
+// first launch continues the head its read named, so a conversation's sessions
+// are a LINE, each continuing the one before, and a turn that read early and
+// ended late — parked on a person's question while later turns ran, as a
 // schedule's fires do, none of them ever its answer — continued none of the
-// sessions those turns left, which each continued the one before. So the head
-// is the turn that read the conversation last, the newest end among turns
-// that read it at one position, and a turn that read nothing (its read
-// failed) after every turn that did ([Head]).
+// sessions those later turns left.
 //
 // THE SEAT BUDGET STILL RELEASES THE OLDEST END FIRST ([seatPlan]), so under
 // budget pressure it can release a conversation's head before a STALE SIBLING,
