@@ -32,14 +32,27 @@ import (
 // ([topics.HeldRelaunch]) — as a seat's memory is read
 // (internal/learning/memread).
 //
+// # Per turn
+//
+// The chain a relaunch picks its member from is the one of the company revision
+// it is launched under, and that is the turn's: a resumed segment of the turn
+// running on the holder — a review, whose send-back relaunches the round, or a
+// round carried on — relaunches on the revision it was admitted under, pinned
+// for the whole segment ([resumeInput.Company]), which an apply since does not
+// move; any other turn's next segment is admitted under the revision the holder
+// runs when it comes ([Engine.relaunchCompany]). So the question names, for
+// each session it asks about, the turn it is of, and the holder answers each
+// with the pick of the revision that turn's relaunch would run on.
+//
 // # What crosses
 //
-// The holder's pick: its member's harness, the cell that member's run lands in,
-// the holder itself — a box on an engine host is continued in only by the node
-// it was launched on — why there is no member or why none can be said now, and
-// whether the company keeps sessions; and, for each archive the asker names,
-// whether that member's runner restores it. The runner is the holder's, of the
-// holder's build, which a rolling upgrade can make another than the asker's.
+// For each session asked about: the holder's pick — its member's harness, the
+// cell that member's run lands in, the holder itself, since a box on an engine
+// host is continued in only by the node it was launched on — why there is no
+// member or why none can be said now, whether the company keeps sessions, and
+// whether that member's runner restores the session's archive. The runner is
+// the holder's, of the holder's build, which a rolling upgrade can make another
+// than the asker's.
 //
 // AN UNKNOWN IS NEVER A NO: a lease that cannot be read, a seat no node holds,
 // and a holder that does not answer within the fleet read budget — one that
@@ -58,8 +71,8 @@ const relaunchTargetBudget = eventfan.FleetReadBudget
 // dropped on decode, which a rolling upgrade needs and nothing more.
 const relaunchWireVersion = 1
 
-// relaunchArchive is a session's archive as a request names it and a reply's
-// answers are keyed by: what a runner's restore reads of it.
+// relaunchArchive is a session's archive as a request names it: what a runner's
+// restore reads of it.
 type relaunchArchive struct {
 	Harness   string `json:"harness"`
 	SessionID string `json:"session_id"`
@@ -76,6 +89,13 @@ func (a relaunchArchive) archive() sandbox.SessionArchive {
 		Version: a.Version}
 }
 
+// relaunchSession is one session a request asks about: the turn a relaunch
+// would be of, and the archive the turn's row names.
+type relaunchSession struct {
+	Turn    string          `json:"turn"`
+	Archive relaunchArchive `json:"archive"`
+}
+
 // relaunchAsk is one reader's question, addressed to the incarnation the
 // seat's lease named: only that process answers, so a holder that restarted
 // since is silent rather than answered for by its successor.
@@ -83,45 +103,48 @@ type relaunchAsk struct {
 	Version  int               `json:"v"`
 	Owner    string            `json:"owner"`
 	Handle   string            `json:"handle"`
-	Archives []relaunchArchive `json:"archives,omitempty"`
+	Sessions []relaunchSession `json:"sessions,omitempty"`
 }
 
-// relaunchRestore is the holder's runner's answer for one archive.
-type relaunchRestore struct {
-	Restores bool   `json:"restores"`
-	Why      string `json:"why,omitempty"`
+// relaunchTargetReply is the holder's answer for one session asked about: its
+// pick for that session's turn, and whether the picked member's runner
+// restores that session's archive.
+type relaunchTargetReply struct {
+	Harness    string `json:"harness,omitempty"`
+	Placement  string `json:"placement,omitempty"`
+	Node       string `json:"node,omitempty"`
+	Why        string `json:"why,omitempty"`
+	Undecided  bool   `json:"undecided,omitempty"`
+	NoKept     string `json:"no_kept,omitempty"`
+	Restores   bool   `json:"restores,omitempty"`
+	RestoreWhy string `json:"restore_why,omitempty"`
 }
 
 // relaunchReply is the holder's answer. It names its owner because a
-// scatter's replies carry no sender; Restores answers the asked archives, in
+// scatter's replies carry no sender; Targets answers the sessions asked, in
 // the order they were asked.
 type relaunchReply struct {
-	Version   int               `json:"v"`
-	Owner     string            `json:"owner"`
-	Harness   string            `json:"harness,omitempty"`
-	Placement string            `json:"placement,omitempty"`
-	Node      string            `json:"node,omitempty"`
-	Why       string            `json:"why,omitempty"`
-	Undecided bool              `json:"undecided,omitempty"`
-	NoKept    string            `json:"no_kept,omitempty"`
-	Restores  []relaunchRestore `json:"restores,omitempty"`
+	Version int                   `json:"v"`
+	Owner   string                `json:"owner"`
+	Targets []relaunchTargetReply `json:"targets,omitempty"`
 }
 
 // errRelaunchNotAddressed is a request for another incarnation: answered with
 // nothing, since its asker waits on the one it named.
 var errRelaunchNotAddressed = errors.New("engine: the relaunch target request is addressed to another incarnation")
 
-// RelaunchTarget is what a relaunch of the seat's turn would be launched on now,
-// as the node holding the seat picks it — this node's own pick where it holds
-// the seat ([Engine.localRelaunchTarget]), and otherwise the holder's answer,
-// asked over the broker — with whether that member's runner restores each of
-// archives: what the read surface decides each row of a seat's sessions by
-// (internal/api/queries' `continuable`, [sandbox.ReadContinuityOf]). Never an
-// error: what cannot be said now is a target that says so.
-func (e *Engine) RelaunchTarget(ctx context.Context, seat uuid.UUID, handle string,
-	archives []sandbox.SessionArchive) sandbox.RelaunchTarget {
+// RelaunchTargets is what a relaunch of each turn asked about would be
+// launched on now, one target per ask in the order asked, as the node holding
+// the seat picks it — this node's own pick where it holds the seat
+// ([Engine.localRelaunchTarget]), and otherwise the holder's answer, asked over
+// the broker once for every ask — with whether that member's runner restores
+// the ask's archive: what the read surface decides each row of a seat's
+// sessions by (internal/api/queries' `continuable`, [sandbox.ReadContinuityOf]).
+// Never an error: what cannot be said now is a target that says so.
+func (e *Engine) RelaunchTargets(ctx context.Context, seat uuid.UUID, handle string,
+	asks []sandbox.RelaunchAsk) []sandbox.RelaunchTarget {
 
-	return e.relaunchTargets().target(ctx, seat, handle, archives)
+	return e.relaunchTargets().targets(ctx, seat, handle, asks)
 }
 
 // relaunchTargets is this node as it asks, and answers, what a relaunch of a
@@ -153,106 +176,137 @@ type relaunchLeases interface {
 
 // relaunchTargets answers what a relaunch of a seat's turn would be launched
 // on, from the node holding the seat: owner is this process's incarnation, which
-// a seat's lease names; local this node's own pick; queue nil, or leases nil,
-// a node that answers every question itself.
+// a seat's lease names; local this node's own pick for a turn; queue nil, or
+// leases nil, a node that answers every question itself.
 type relaunchTargets struct {
 	owner  string
 	queue  relaunchAsker
 	leases relaunchLeases
-	local  func(handle string) sandbox.RelaunchTarget
+	local  func(handle, turn string) sandbox.RelaunchTarget
 	budget time.Duration
 	now    func() time.Time
 }
 
-// target is [Engine.RelaunchTarget]'s answer.
-func (r relaunchTargets) target(ctx context.Context, seat uuid.UUID, handle string,
-	archives []sandbox.SessionArchive) sandbox.RelaunchTarget {
+// targets is [Engine.RelaunchTargets]' answer.
+func (r relaunchTargets) targets(ctx context.Context, seat uuid.UUID, handle string,
+	asks []sandbox.RelaunchAsk) []sandbox.RelaunchTarget {
 
+	if len(asks) == 0 {
+		return nil
+	}
 	if r.queue == nil || r.leases == nil {
-		return r.local(handle)
+		return r.locals(handle, asks)
 	}
 	lease, err := r.leases.Get(ctx, coord.SeatResource(seat))
 	switch {
 	case err != nil:
 		// UNKNOWN, never "held by nobody": an unreadable lease table says
 		// nothing about where the seat is.
-		return undecidedRelaunch(fmt.Sprintf("which node holds the seat could not be read: %v", err))
+		return undecidedRelaunches(len(asks), fmt.Sprintf("which node holds the seat could not be read: %v", err))
 	case lease == nil || !lease.Live(r.now()):
-		return undecidedRelaunch("no node holds the seat now, and the node that takes it decides what a " +
-			"relaunch of its turns is launched on")
+		return undecidedRelaunches(len(asks), "no node holds the seat now, and the node that takes it decides "+
+			"what a relaunch of its turns is launched on")
 	case lease.Owner == r.owner:
-		return r.local(handle)
+		return r.locals(handle, asks)
 	}
-	return r.ask(ctx, lease.Owner, handle, archives)
+	return r.ask(ctx, lease.Owner, handle, asks)
 }
 
-// undecidedRelaunch is a target that cannot be said now, for why.
-func undecidedRelaunch(why string) sandbox.RelaunchTarget {
-	return sandbox.RelaunchTarget{Undecided: true, Why: why}
+// locals is this node's own pick for each ask.
+func (r relaunchTargets) locals(handle string, asks []sandbox.RelaunchAsk) []sandbox.RelaunchTarget {
+	out := make([]sandbox.RelaunchTarget, len(asks))
+	for i, a := range asks {
+		out[i] = r.local(handle, a.Turn)
+	}
+	return out
+}
+
+// undecidedRelaunches is n targets that cannot be said now, for why.
+func undecidedRelaunches(n int, why string) []sandbox.RelaunchTarget {
+	out := make([]sandbox.RelaunchTarget, n)
+	for i := range out {
+		out[i] = sandbox.RelaunchTarget{Undecided: true, Why: why}
+	}
+	return out
 }
 
 // ask puts the question to owner, the incarnation holding the seat, and reads
-// its answer as the target it names.
+// its answer as the targets it names.
 func (r relaunchTargets) ask(ctx context.Context, owner, handle string,
-	archives []sandbox.SessionArchive) sandbox.RelaunchTarget {
+	asks []sandbox.RelaunchAsk) []sandbox.RelaunchTarget {
 
 	node := config.IncarnationNode(owner)
 	question := relaunchAsk{Version: relaunchWireVersion, Owner: owner, Handle: handle}
-	for _, a := range archives {
-		question.Archives = append(question.Archives, relaunchArchiveOf(a))
+	for _, a := range asks {
+		question.Sessions = append(question.Sessions, relaunchSession{Turn: a.Turn,
+			Archive: relaunchArchiveOf(a.Archive)})
 	}
 	raw, err := json.Marshal(question)
 	if err != nil {
-		return undecidedRelaunch(fmt.Sprintf("the question for %s, which holds the seat, could not be "+
-			"written: %v", node, err))
+		return undecidedRelaunches(len(asks), fmt.Sprintf("the question for %s, which holds the seat, "+
+			"could not be written: %v", node, err))
 	}
 	askCtx, cancel := context.WithTimeout(ctx, r.budget)
 	defer cancel()
 	replies, err := r.queue.Ask(askCtx, topics.HeldRelaunch, raw, 1)
 	if err != nil {
-		return undecidedRelaunch(fmt.Sprintf("%s, which holds the seat, could not be asked what a "+
-			"relaunch is launched on: %v", node, err))
+		return undecidedRelaunches(len(asks), fmt.Sprintf("%s, which holds the seat, could not be asked "+
+			"what a relaunch is launched on: %v", node, err))
 	}
 	for _, body := range replies {
 		var reply relaunchReply
 		if json.Unmarshal(body, &reply) != nil || reply.Owner != owner {
 			continue
 		}
-		return reply.target(question.Archives)
+		return reply.targets(node, question.Sessions)
 	}
-	return undecidedRelaunch(fmt.Sprintf("%s, which holds the seat, did not say within %s what a "+
-		"relaunch is launched on", node, r.budget))
+	return undecidedRelaunches(len(asks), fmt.Sprintf("%s, which holds the seat, did not say within %s "+
+		"what a relaunch is launched on", node, r.budget))
 }
 
-// target is the reply as the target it names, its runner the holder's answers
-// for the archives asked.
-func (r relaunchReply) target(asked []relaunchArchive) sandbox.RelaunchTarget {
-	answers := &answeredRestores{answers: make(map[relaunchArchive]relaunchRestore, len(asked))}
-	for i, a := range asked {
-		if i < len(r.Restores) {
-			answers.answers[a] = r.Restores[i]
+// targets is the reply as the targets it names, one per session asked, each
+// one's runner the holder's answer for that session's archive. A session the
+// reply holds no answer for — a holder whose answer was cut short — cannot be
+// said.
+func (r relaunchReply) targets(node string, asked []relaunchSession) []sandbox.RelaunchTarget {
+	out := make([]sandbox.RelaunchTarget, len(asked))
+	for i, session := range asked {
+		if i >= len(r.Targets) {
+			out[i] = sandbox.RelaunchTarget{Undecided: true, Why: fmt.Sprintf("%s, which holds the seat, "+
+				"did not answer for this session", node)}
+			continue
 		}
+		t := r.Targets[i]
+		out[i] = sandbox.RelaunchTarget{Harness: t.Harness, Placement: sandbox.Placement(t.Placement),
+			Node: t.Node, Why: t.Why, Undecided: t.Undecided, NoKept: t.NoKept,
+			Restorer: &answeredRestore{archive: session.Archive,
+				answer: relaunchRestore{Restores: t.Restores, Why: t.RestoreWhy}}}
 	}
-	return sandbox.RelaunchTarget{Harness: r.Harness, Placement: sandbox.Placement(r.Placement), Node: r.Node,
-		Restorer: answers, Why: r.Why, Undecided: r.Undecided, NoKept: r.NoKept}
+	return out
 }
 
-// answeredRestores is the holder's runner as its answers for the archives a
-// reader asked about ([sandbox.ArchiveRestorer]). A pointer, so a target that
-// carries it compares as any other does.
-type answeredRestores struct {
-	answers map[relaunchArchive]relaunchRestore
+// relaunchRestore is the holder's runner's answer for one archive.
+type relaunchRestore struct {
+	Restores bool
+	Why      string
 }
 
-var _ sandbox.ArchiveRestorer = (*answeredRestores)(nil)
+// answeredRestore is the holder's runner as its answer for the one archive a
+// reader asked about with a turn ([sandbox.ArchiveRestorer]). A pointer, so a
+// target that carries it compares as any other does.
+type answeredRestore struct {
+	archive relaunchArchive
+	answer  relaunchRestore
+}
+
+var _ sandbox.ArchiveRestorer = (*answeredRestore)(nil)
 
 // Restores is the holder's answer for archive.
-func (a *answeredRestores) Restores(archive sandbox.SessionArchive) (bool, string) {
-	answer, ok := a.answers[relaunchArchiveOf(archive)]
-	if !ok {
+func (a *answeredRestore) Restores(archive sandbox.SessionArchive) (bool, string) {
+	if relaunchArchiveOf(archive) != a.archive {
 		return false, "the node holding the seat was not asked whether its runner restores this session"
 	}
-	return answer.Restores, answer.Why
+	return a.answer.Restores, a.answer.Why
 }
 
 // armRelaunchTargets makes this node an answerer for what a relaunch of a seat
@@ -277,8 +331,9 @@ func (e *Engine) armRelaunchTargets(ctx context.Context) error {
 	return nil
 }
 
-// answer is one question, answered from this node's own pick where it is
-// addressed to this process's incarnation, and with nothing where it is not.
+// answer is one question, answered from this node's own pick for each turn
+// asked about where it is addressed to this process's incarnation, and with
+// nothing where it is not.
 func (r relaunchTargets) answer(raw []byte) ([]byte, error) {
 	var question relaunchAsk
 	if err := json.Unmarshal(raw, &question); err != nil {
@@ -287,13 +342,13 @@ func (r relaunchTargets) answer(raw []byte) ([]byte, error) {
 	if question.Owner == "" || question.Owner != r.owner {
 		return nil, errRelaunchNotAddressed
 	}
-	target := r.local(question.Handle)
-	reply := relaunchReply{Version: relaunchWireVersion, Owner: r.owner, Harness: target.Harness,
-		Placement: string(target.Placement), Node: target.Node, Why: target.Why, Undecided: target.Undecided,
-		NoKept: target.NoKept}
-	for _, a := range question.Archives {
-		restores, why := target.Restores(a.archive())
-		reply.Restores = append(reply.Restores, relaunchRestore{Restores: restores, Why: why})
+	reply := relaunchReply{Version: relaunchWireVersion, Owner: r.owner}
+	for _, session := range question.Sessions {
+		target := r.local(question.Handle, session.Turn)
+		restores, why := target.Restores(session.Archive.archive())
+		reply.Targets = append(reply.Targets, relaunchTargetReply{Harness: target.Harness,
+			Placement: string(target.Placement), Node: target.Node, Why: target.Why,
+			Undecided: target.Undecided, NoKept: target.NoKept, Restores: restores, RestoreWhy: why})
 	}
 	return json.Marshal(reply)
 }

@@ -9328,8 +9328,11 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   ([A relaunch continues the turn's
   session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session))
   — over the row as a relaunch reads it. **The member is the one the node
-  holding the seat would pick**, which sits its own spent plans out: the node
-  answering asks it, once a page, itself where it holds the seat. **`continues_in`**
+  holding the seat would pick**, which sits its own spent plans out, off the
+  chain of the revision the turn's relaunch runs on — for a turn whose resumed
+  segment is running there, the revision that segment was admitted under: the
+  node answering asks it, once a page, turn by turn, itself where it holds the
+  seat. **`continues_in`**
   says where: `any_box`, from that kept capture in whichever box the relaunch
   gets; or `parked_box`, where the kept capture is not continued but a
   person's answer would carry the turn's parked run on in the box it parked in,
@@ -9356,12 +9359,12 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   on in its box only where its sign-in was replaced) — which `not_continuable`
   then says. A resumed turn says, as it begins, whether it collects its job or
   carries the round on, and from then on, its review included, the row is
-  decided on that. A page reads the coordination
-  store once, and a live turn's record alone where the listing does not hold
-  it, and not at all where every row on it has ended, and is answered whether
-  or not it answers; it reads a row again at `linearizable` only where the
-  page was read below that and the row names another capture than its run's
-  record keeps.
+  decided on that. A page reads the coordination store once for its runs, and a
+  live turn's record alone where the listing does not hold it, and once more
+  for the seat's lease where a live row asks the node holding the seat, and not
+  at all where every row on it has ended, and is answered whether or not it
+  answers; it reads a row again at `linearizable` only where the page was read
+  below that and the row names another capture than its run's record keeps.
 - **Paged by where each row began**, which nothing moves, so a page never skips
   or repeats a row that was captured again or ended between two reads.
   `next_cursor` is absent on the last page. `complete: false` says the

@@ -1325,12 +1325,16 @@ reads it, the turn's run record in the coordination store and the job that
 record names as the one a relaunch would follow, and the member of the seat's
 executor chain a relaunch would be launched on now — the first not sitting out
 its plan — with the cell its run lands in and its runner. **The member is the
-one the node holding the seat would pick**: which members sit out a spent plan
-is what that node's own calls have met, and which company revision says
-sessions are kept is the revision it runs, and a relaunch is decided there. So
-the node answering asks it — itself where it holds the seat, and otherwise the
-node the seat's lease names, once a page — and is answered with that node's
-pick and whether that member's runner restores each session the page holds.
+one the node holding the seat would pick**, off the chain of the company
+revision the turn's relaunch runs on: which members sit out a spent plan is what
+that node's own calls have met, which company revision says sessions are kept
+is the revision it runs, a resumed segment of the turn running there relaunches
+— its reviewer's send-back, the round it carries on — on the revision it was
+admitted under, whatever an apply has put live since, and a relaunch is decided
+there. So the node answering asks it — itself where it holds the seat, and
+otherwise the node the seat's lease names, once a page — and is answered, turn
+by turn, with that node's pick and whether that member's runner restores the
+turn's session.
 `any_box` where the turn is live and not ending, the newest capture of that job
 was kept and is the one the row names, and that runner restores its harness,
 format and release; a round whose job was lost a second time is carried on in a
@@ -1367,12 +1371,14 @@ as it begins**, on the job's record — collects the job, or carries the round o
 or not its read took any capture: a turn that collects its job is reviewed, and
 its send-back continues nothing in the job's box; one that carries the round on
 in that box continues it there. A claim of a person's answer reads no box, and
-is decided whatever its job kept. A page reads the
-coordination store once, one listing of the seat's live runs — and one turn's
-record alone for a live row the listing does not hold, a record of a status
-this build does not know or one it could not decode — and not at all where
-every turn on it has ended; where the store does not answer, a live turn's row
-says so, and the page is answered all the same. **A row is read again at the
+is decided whatever its job kept. A page reads the coordination store once for
+its runs, one listing of the seat's live runs — and one turn's record alone for
+a live row the listing does not hold, a record of a status this build does not
+know or one it could not decode — and once more for the seat's lease, to find
+the node holding the seat, wherever a live row asks it, that node's own pages
+included; and not at all where every turn on it has ended. Where the store does
+not answer, a live turn's row says so, and the page is answered all the
+same. **A row is read again at the
 relaunch's level** (`linearizable`) only where the page was read below it and
 the row names another capture than the one its run's record keeps — a copy of
 the log behind the record, which would read a capture a relaunch continues as

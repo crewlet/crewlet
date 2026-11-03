@@ -1055,6 +1055,12 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		return fmt.Errorf("%w: run %s was handed to resumeTurn without the "+
 			"company its seat was resolved in", sandbox.ErrResumeUnavailable, in.Run.TurnID)
 	}
+	// THE REVISION THIS SEGMENT RELAUNCHES ON, for as long as it runs: a
+	// reader asking this node what a relaunch of the turn is launched on is
+	// answered from it, not from the revision an apply since put live
+	// ([Engine.relaunchCompany]).
+	e.resumedSegments.Store(in.Run.TurnID, company)
+	defer e.resumedSegments.CompareAndDelete(in.Run.TurnID, company)
 	// BEFORE ANYTHING THIS SEGMENT LAUNCHES: a run that ended on its
 	// vendor's spent plan sits its entry out here, on the node whose launch
 	// the turn's next run is — see [Engine.noteRunEnded].

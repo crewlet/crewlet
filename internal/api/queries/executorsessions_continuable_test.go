@@ -72,12 +72,15 @@ func (s *stubRuns) reads() (listed, got int) {
 }
 
 // stubTargets is the node holding each seat as the sessions surface asks it
-// what a relaunch of the seat's turns would be launched on, and every archive
-// set it was asked about; a seat it does not name has no member.
+// what a relaunch of the seat's turns would be launched on — the seat's one
+// pick, or a turn's own where byTurn names one, as a turn whose resumed segment
+// runs on the holder is answered from that segment's revision — and every set
+// of sessions it was asked about; a seat it does not name has no member.
 type stubTargets struct {
 	mu      sync.Mutex
 	targets map[string]sandbox.RelaunchTarget
-	asked   [][]sandbox.SessionArchive
+	byTurn  map[string]sandbox.RelaunchTarget
+	asked   [][]sandbox.RelaunchAsk
 }
 
 // targetOf is the holder of ana's seat answering target.
@@ -85,17 +88,25 @@ func targetOf(target sandbox.RelaunchTarget) *stubTargets {
 	return &stubTargets{targets: map[string]sandbox.RelaunchTarget{"ana": target}}
 }
 
-func (s *stubTargets) RelaunchTarget(_ context.Context, _ uuid.UUID, handle string,
-	archives []sandbox.SessionArchive) sandbox.RelaunchTarget {
+func (s *stubTargets) RelaunchTargets(_ context.Context, _ uuid.UUID, handle string,
+	asks []sandbox.RelaunchAsk) []sandbox.RelaunchTarget {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.asked = append(s.asked, slices.Clone(archives))
-	return s.targets[handle]
+	s.asked = append(s.asked, slices.Clone(asks))
+	out := make([]sandbox.RelaunchTarget, len(asks))
+	for i, ask := range asks {
+		target, own := s.byTurn[ask.Turn]
+		if !own {
+			target = s.targets[handle]
+		}
+		out[i] = target
+	}
+	return out
 }
 
-// asks is every archive set the holder was asked about, in order.
-func (s *stubTargets) asks() [][]sandbox.SessionArchive {
+// asks is every set of sessions the holder was asked about, in order.
+func (s *stubTargets) asks() [][]sandbox.RelaunchAsk {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.asked)
@@ -194,9 +205,9 @@ func decided(row queries.SessionRow) string {
 // and an ended turn's session no later turn continues yet — each not
 // continuable, saying why. A whole page reads the coordination store ONCE, and
 // once more for the one live row the listing does not hold, and asks the node
-// holding the seat ONCE, about every live row's session at once; one session
-// read alone reads its own turn's record and asks about its own session, and
-// nothing else.
+// holding the seat ONCE, about every live row's turn and session at once; one
+// session read alone reads its own turn's record and asks about its own turn's
+// session, and nothing else.
 //
 // Mutation: decide a row by anything but sandbox.ReadContinuityOf, read the
 // store or ask the holder once per row, ask the runner of the harness that
@@ -254,9 +265,9 @@ func TestASessionsRowSaysWhetherARelaunchWouldContinueIt(t *testing.T) {
 			"and the one live turn it does not hold", listed, got)
 	}
 	targets := s.RelaunchTargets.(*stubTargets)
-	if asks := targets.asks(); len(asks) != 1 || len(asks[0]) != 2 {
-		t.Errorf("a page asked the node holding the seat %v, want once, about the two sessions its live "+
-			"rows hold", asks)
+	if asks := targets.asks(); len(asks) != 1 || len(asks[0]) != 4 {
+		t.Errorf("a page asked the node holding the seat %v, want once, about the four live rows with a run",
+			asks)
 	}
 
 	read, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": continues.Turn})
@@ -273,9 +284,9 @@ func TestASessionsRowSaysWhetherARelaunchWouldContinueIt(t *testing.T) {
 			"turn's read %d, want the page's one listing and two turns read alone", listed, got)
 	}
 	if asks := targets.asks(); len(asks) != 2 || len(asks[1]) != 1 ||
-		asks[1][0] != sandbox.ArchiveOf(continues) {
+		asks[1][0] != (sandbox.RelaunchAsk{Turn: continues.Turn, Archive: sandbox.ArchiveOf(continues)}) {
 		t.Errorf("after a page and a session read alone, the holder was asked %v, want the session read "+
-			"alone asking about its own session once", asks)
+			"alone asking about its own turn's session once", asks)
 	}
 }
 
@@ -592,6 +603,49 @@ func TestAClaimIsDecidedOnceItsReadOrItsTurnHasSaid(t *testing.T) {
 				t.Errorf("the claim's row is %s, want it saying %q", decided(got), tc.why)
 			}
 		})
+	}
+}
+
+// EACH ROW IS DECIDED BY ITS OWN TURN'S TARGET. The node holding the seat answers
+// what a relaunch of each turn would be launched on from the revision that
+// turn's relaunch runs on — a turn whose resumed segment is running there, from
+// the revision that segment was admitted under, whatever an apply put live since
+// — so two turns of one seat on one page can be targeted at two members, and
+// each row is decided by its own.
+//
+// Mutation: decide every row of a page by one target, and one of the two rows
+// is decided for a member its relaunch is never launched on.
+func TestEachRowIsDecidedByItsOwnTurnsTarget(t *testing.T) {
+	t.Parallel()
+	open, openRun := liveSession(executor.ClaudeCodeName)
+	final := *openRun.Kept
+	final.Final = true
+	openRun.Status, openRun.Capture, openRun.Kept = sandbox.StatusResumed, &final, &final
+	openRun.Launch.ResumeCarry = sandbox.ResumeCollects
+	parked, parkedRun := liveSession(executor.ClaudeCodeName)
+	s := continuableSources(t, []executordomain.Session{open, parked},
+		&stubRuns{runs: []sandbox.PendingRun{openRun, parkedRun}})
+	// THE REVISION LIVE ON THE HOLDER NOW launches the seat on OpenCode in the
+	// container cell; the open segment relaunches on the one it was admitted
+	// under, Claude Code in the direct cell.
+	targets := targetOf(sandbox.RelaunchTarget{Harness: executor.OpenCodeName, Placement: sandbox.Container,
+		Node: holder, Restorer: restoring{harness: executor.OpenCodeName}})
+	targets.byTurn = map[string]sandbox.RelaunchTarget{open.Turn: claudeTarget()}
+	s.RelaunchTargets = targets
+	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	rows := rowsByTurn(t, page)
+	if got := rows[open.Turn]; got.Continuable == nil || !*got.Continuable ||
+		got.ContinuesIn != sandbox.ContinuesInAnyBox {
+		t.Errorf("the open segment's row is %s, want continuable in any box by the member its send-back "+
+			"is launched on", decided(got))
+	}
+	if got := rows[parked.Turn]; got.Continuable == nil || *got.Continuable ||
+		!strings.Contains(got.NotContinuable, executor.OpenCodeName) {
+		t.Errorf("the parked turn's row is %s, want not continuable by the live revision's member",
+			decided(got))
 	}
 }
 

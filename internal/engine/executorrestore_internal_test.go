@@ -434,7 +434,7 @@ func TestAResumeReadsWhichSessionTheJobsBoxStarted(t *testing.T) {
 }
 
 // A RELAUNCH IS TARGETED AT THE MEMBER IT WOULD BE LAUNCHED ON, as the node
-// holding the seat picks it ([Engine.RelaunchTarget], which a node with no
+// holding the seat picks it ([Engine.RelaunchTargets], which a node with no
 // broker, the whole fleet, answers from its own pick): the seat's first member
 // with an in-box runner that is not sitting out its plan there, the cell its
 // run lands in, that node, and its runner — never the runner of the harness
@@ -476,7 +476,11 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 			if !ok {
 				t.Fatal("the seat has no agent id")
 			}
-			got := e.RelaunchTarget(t.Context(), id, seat.Handle(), nil)
+			targets := e.RelaunchTargets(t.Context(), id, seat.Handle(), []sandbox.RelaunchAsk{{Turn: "t1"}})
+			if len(targets) != 1 {
+				t.Fatalf("one turn asked about was answered %d targets", len(targets))
+			}
+			got := targets[0]
 			if tc.undecided {
 				if !got.Undecided || got.Restorer != nil || !strings.Contains(got.Why, "sitting out its plan") {
 					t.Fatalf("a chain sitting out is targeted %+v, want it undecided, saying so", got)
@@ -498,9 +502,61 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 	e, _ := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
-	if got := e.localRelaunchTarget("nobody"); got.Restorer != nil || got.Undecided ||
+	if got := e.localRelaunchTarget("nobody", "t1"); got.Restorer != nil || got.Undecided ||
 		!strings.Contains(got.Why, "no seat") {
 		t.Errorf("a handle no seat holds is targeted %+v, want no member, said", got)
+	}
+}
+
+// A RESUMED TURN'S RELAUNCH IS TARGETED FROM THE REVISION IT RUNS ON. A resumed
+// segment pins the company revision it was admitted under, and a reviewer's
+// send-back from it is launched on that revision's chain whatever an apply put
+// live since; so the node running it answers what that turn's relaunch is
+// launched on from the segment's revision, while a turn with no segment running
+// here — whose next one is admitted under the revision live when it comes — is
+// answered from the live one. Two turns of the seat, one page, two answers.
+//
+// Mutation: answer every turn from the revision the node runs, and the open
+// segment's row is decided for a member its send-back is never launched on.
+func TestAResumedTurnsRelaunchIsTargetedFromTheRevisionItRunsOn(t *testing.T) {
+	t.Parallel()
+	pinned, seat := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
+	e, _ := launchRigRestoring(t, pinned, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}), &keptLog{rows: map[string]executordomain.Session{}, archives: map[string][]byte{}})
+	// THE TURN'S SEGMENT IS RUNNING ON THIS NODE, pinned to the revision it
+	// was admitted under, as [Engine.resumeTurn] registers it.
+	e.resumedSegments.Store("t-open", pinned)
+	// AN APPLY SINCE: the seat's llm is now an OpenCode entry in the
+	// container cell, under the same catalogue.
+	applied, _ := chainCompany(t, chainMember{key: "oc", agent: "opencode",
+		model: "anthropic/claude-sonnet-5", runIn: config.Placement(sandbox.Container)})
+	applied.catalogue = pinned.catalogue
+	e.epoch.current.Store(applied)
+	id, ok := pinned.Org.AgentIDFor(seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	got := e.RelaunchTargets(t.Context(), id, seat.Handle(), []sandbox.RelaunchAsk{
+		{Turn: "t-open"}, {Turn: "t-parked"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("two turns asked about were answered %d targets", len(got))
+	}
+	if open := got[0]; open.Undecided || open.Harness != "claude-code" || open.Placement != sandbox.Direct {
+		t.Errorf("the open segment's turn is targeted %+v, want the claude-code member of the revision it "+
+			"was admitted under, in the direct cell", open)
+	}
+	if parked := got[1]; parked.Undecided || parked.Harness != "opencode" || parked.Placement != sandbox.Container {
+		t.Errorf("a turn with no segment open is targeted %+v, want the opencode member of the revision "+
+			"live now, in the container cell", parked)
+	}
+	// AND ONCE THE SEGMENT ENDS, the turn's next one is admitted under the
+	// live revision, which answers it.
+	e.resumedSegments.Delete("t-open")
+	if after := e.RelaunchTargets(t.Context(), id, seat.Handle(),
+		[]sandbox.RelaunchAsk{{Turn: "t-open"}}); after[0].Harness != "opencode" {
+		t.Errorf("a turn whose segment ended is targeted %+v, want the live revision's member", after[0])
 	}
 }
 
@@ -538,7 +594,7 @@ func TestARelaunchTargetSaysWhetherTheCompanyKeepsSessions(t *testing.T) {
 				}
 				e.objects = &objectStore{store: store}
 			}
-			got := e.localRelaunchTarget(seat.Handle())
+			got := e.localRelaunchTarget(seat.Handle(), "t1")
 			if (got.NoKept == sandbox.NoKeptSession) != tc.noKept || (!tc.noKept && got.NoKept != "") {
 				t.Fatalf("the target says %q of keeping sessions, want kept none %v", got.NoKept, tc.noKept)
 			}

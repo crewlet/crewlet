@@ -90,8 +90,10 @@ import (
 // a relaunch would follow, and the member a relaunch of the seat's turn would
 // be launched on now, the cell its run lands in and that member's runner — as
 // THE NODE HOLDING THE SEAT picks them ([RelaunchTargets]): which members sit
-// out a spent plan is that node's own, and the relaunch is decided there. Never
-// a second copy of any part of it. As far as the engine can know before a box
+// out a spent plan is that node's own, and the relaunch is decided there, off
+// the chain of the company revision that turn's relaunch runs on — a resumed
+// segment of it running there relaunches on the revision it was admitted
+// under. Never a second copy of any part of it. As far as the engine can know before a box
 // is chosen: whether the box a relaunch gets runs a harness release that takes
 // the session up, and whether the seat's budget can carry it, are the launch's
 // to find out, and no row says them. An ended turn's session is never
@@ -103,8 +105,11 @@ import (
 // which the log's row alone decides, and one turn's record alone for a live
 // row the listing does not hold — a record of a status this build does not
 // know, or one it could not decode — which a session read alone decides the
-// same way. It ASKS THE NODE HOLDING THE SEAT ONCE, for every live row's
-// archive at once, and not at all where no row is live. And A LIVE ROW IS
+// same way. It ASKS THE NODE HOLDING THE SEAT ONCE, for every live row's turn
+// and archive at once, and not at all where no row is live — which costs one
+// read more of the coordination store, the seat's lease, naming that node
+// ([RelaunchTargets]), on every page that asks, the holder's own included. And
+// A LIVE ROW IS
 // DECIDED ON THE LOG AS A RELAUNCH READS IT: read again at the relaunch's level
 // ([sandbox.RelaunchRead]) where the page was read below it and the row names
 // another capture than the one its run's record keeps ([sandbox.RereadsRow]),
@@ -160,16 +165,18 @@ type SessionRuns interface {
 	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
 }
 
-// RelaunchTargets is what a relaunch of a seat's turn would be launched on now,
-// as THE NODE HOLDING THE SEAT picks it ([sandbox.RelaunchTarget]): the member
-// of the seat's executor chain the relaunch takes, the cell its run lands in,
-// that node, and whether that member's runner restores each of archives — the
-// sessions a page asks about — so a row is decided by the runner a relaunch
-// would take, never by the harness that wrote the session, nor by a bench of
-// spent plans the relaunching node does not keep.
+// RelaunchTargets is what a relaunch of each of a seat's turns asked about
+// would be launched on now, one target per ask in the order asked, as THE NODE
+// HOLDING THE SEAT picks it ([sandbox.RelaunchTarget]): the member of the
+// seat's executor chain the relaunch takes — off the chain of the company
+// revision that turn's relaunch runs on — the cell its run lands in, that node,
+// and whether that member's runner restores the ask's archive, so a row is
+// decided by the runner a relaunch would take, never by the harness that wrote
+// the session, nor by a bench of spent plans the relaunching node does not
+// keep.
 type RelaunchTargets interface {
-	RelaunchTarget(ctx context.Context, seat uuid.UUID, handle string,
-		archives []sandbox.SessionArchive) sandbox.RelaunchTarget
+	RelaunchTargets(ctx context.Context, seat uuid.UUID, handle string,
+		asks []sandbox.RelaunchAsk) []sandbox.RelaunchTarget
 }
 
 // SessionRow is one turn's executor session as this surface shows it.
@@ -343,11 +350,11 @@ func (s Sources) executorSessions(ctx context.Context, p Params) (any, error) {
 		}
 		pending = append(pending, s.relaunchRow(ctx, row, run, runErr, fresh, now))
 	}
-	target := s.relaunchTarget(ctx, seat, pending)
+	targets := s.relaunchTargets(ctx, seat, pending)
 	rows := make([]SessionRow, 0, len(pending))
-	for _, c := range pending {
+	for i, c := range pending {
 		shown := sessionRowOf(c.row)
-		shown.Continuable, shown.ContinuesIn, shown.NotContinuable = c.decide(target, now)
+		shown.Continuable, shown.ContinuesIn, shown.NotContinuable = c.decide(targets[i], now)
 		rows = append(rows, shown)
 	}
 	return SessionsAnswer{Handle: seat.Handle, Sessions: rows, Next: page.Next,
@@ -372,30 +379,47 @@ const unreadRelaunchRow = "the turn's row on the executor log could not be read 
 // relaunch continues the session: its first page says it, once.
 const laterTranscriptPage = "said on the transcript's first page, which a later page does not ask again"
 
-// relaunchTarget is what a relaunch of seat's turns would be launched on, as the
-// node holding the seat answers it for the archives rows decide on — asked
-// once, and not at all where no row is live and has a run, which nothing else
-// decides by it — or, on a node wired with nothing to ask
+// relaunchTargets is what a relaunch of each row's turn would be launched on,
+// one per row, as the node holding the seat answers it for the turn and the
+// archive the row decides on — asked once for every row that asks
+// ([rowContinuity.asksTarget]), and not at all where none does, a row that does
+// not deciding by it — or, on a node wired with nothing to ask
 // ([Sources.RelaunchTargets]), a target that cannot be said: every live row of
 // the seat is then undecided, as one whose run record could not be read is.
-func (s Sources) relaunchTarget(ctx context.Context, seat memread.Seat, rows []rowContinuity) sandbox.RelaunchTarget {
-	var archives []sandbox.SessionArchive
-	for _, c := range rows {
+func (s Sources) relaunchTargets(ctx context.Context, seat memread.Seat,
+	rows []rowContinuity) []sandbox.RelaunchTarget {
+
+	targets := make([]sandbox.RelaunchTarget, len(rows))
+	var asks []sandbox.RelaunchAsk
+	var asking []int
+	for i, c := range rows {
 		if !c.asksTarget() {
 			continue
 		}
-		if archive := sandbox.ArchiveOf(c.decideOn); !slices.Contains(archives, archive) {
-			archives = append(archives, archive)
+		asks = append(asks, sandbox.RelaunchAsk{Turn: c.decideOn.Turn, Archive: sandbox.ArchiveOf(c.decideOn)})
+		asking = append(asking, i)
+	}
+	if len(asks) == 0 {
+		return targets
+	}
+	var answered []sandbox.RelaunchTarget
+	if s.RelaunchTargets != nil {
+		answered = s.RelaunchTargets.RelaunchTargets(ctx, seat.ID, seat.Handle, asks)
+	}
+	for j, i := range asking {
+		switch {
+		case s.RelaunchTargets == nil:
+			targets[i] = sandbox.RelaunchTarget{Undecided: true, Why: "this node asks no node holding the seat " +
+				"what a relaunch is launched on; ask a node that runs the company"}
+		case j >= len(answered):
+			// AN ASK LEFT UNANSWERED is unknown, never a no.
+			targets[i] = sandbox.RelaunchTarget{Undecided: true, Why: "the node holding the seat said nothing " +
+				"of this session's relaunch; ask again shortly"}
+		default:
+			targets[i] = answered[j]
 		}
 	}
-	switch {
-	case len(archives) == 0:
-		return sandbox.RelaunchTarget{}
-	case s.RelaunchTargets == nil:
-		return sandbox.RelaunchTarget{Undecided: true, Why: "this node asks no node holding the seat what a " +
-			"relaunch is launched on; ask a node that runs the company"}
-	}
-	return s.RelaunchTargets.RelaunchTarget(ctx, seat.ID, seat.Handle, archives)
+	return targets
 }
 
 // liveRuns is the run record of every live turn among rows the listing holds,
@@ -552,7 +576,7 @@ func (s Sources) executorSession(ctx context.Context, p Params) (any, error) {
 		run, unread := s.liveRun(ctx, row)
 		c := s.relaunchRow(ctx, row, run, unread, fresh, now)
 		shown.Continuable, shown.ContinuesIn, shown.NotContinuable = c.decide(
-			s.relaunchTarget(ctx, seat, []rowContinuity{c}), now)
+			s.relaunchTargets(ctx, seat, []rowContinuity{c})[0], now)
 	} else {
 		shown.NotContinuable = laterTranscriptPage
 	}

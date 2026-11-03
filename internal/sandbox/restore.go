@@ -255,6 +255,14 @@ var ContinuesIns = []ContinuesIn{ContinuesInAnyBox, ContinuesInParkedBox}
 // sent may name another, which is read as the value it is.
 func (w ContinuesIn) Valid() bool { return slices.Contains(ContinuesIns, w) }
 
+// RelaunchAsk is one live session a reader asks the node holding its seat
+// about ([RelaunchTarget]): the turn a relaunch would be of, and the archive the
+// turn's row names.
+type RelaunchAsk struct {
+	Turn    string
+	Archive SessionArchive
+}
+
 // RelaunchTarget is what a relaunch of a seat's turn would be launched on now,
 // as the node holding the seat picks it (internal/engine): the harness of the
 // first member of the seat's executor chain not sitting out its plan there, the
@@ -267,6 +275,13 @@ func (w ContinuesIn) Valid() bool { return slices.Contains(ContinuesIns, w) }
 // which no node shares), and which company revision says the switch is a node's
 // too; a relaunch is decided on the node holding the seat, and a reader serving
 // the API need not be that node.
+//
+// AND THE TURN'S, PICKED FROM THE CHAIN ITS RELAUNCH IS LAUNCHED ON: a resumed
+// segment of the turn running on the holder relaunches — its reviewer's
+// send-back, the round it carries on — on the company revision it was admitted
+// under, which an apply since does not move; any other turn's next segment is
+// admitted under the revision the holder runs when it comes. So a target is
+// asked for per turn ([RelaunchAsk]).
 type RelaunchTarget struct {
 	// Harness and Placement are the member's harness and the cell its run
 	// lands in, which decide whether a relaunch continues in the box the run
