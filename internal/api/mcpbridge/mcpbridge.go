@@ -1713,7 +1713,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 			"seat", s.Handle, "tool", in.Name, "panic", broke.Value, "stack", broke.Stack)
 		o.stop(broke)
 		res = toolloop.ToolResult{Output: failedInsideNote, Failed: true,
-			Cause: tools.RefusalInternalError}
+			Cause: tools.RefusalInternalError, Absorbed: res.Absorbed}
 	case err != nil:
 		// The surface returns an error only for a call that could not run
 		// at all — nothing was recorded on it, and nothing is here: the
@@ -1744,7 +1744,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 			"run_id", s.RunID, "seat", s.Handle, "tool", in.Name)
 		res = toolloop.ToolResult{Output: suspendNote, Failed: true,
 			Cause: tools.RefusalForbidden, Origin: res.Origin, Server: res.Server,
-			Source: res.Source}
+			Source: res.Source, Absorbed: res.Absorbed}
 	}
 
 	// AND AGAIN ONCE THE TOOL HAS RETURNED. Its answer is delivered — it
@@ -1779,7 +1779,11 @@ func (o *binding) execute(admitted toolloop.Admitted, name string, args map[stri
 ) (res toolloop.ToolResult, broke *turn.PanicError, err error) {
 	defer func() {
 		if broke = turn.Recovered(recover()); broke != nil {
+			// WHAT THE CALL'S OWN WORK HAD RECORDED by the time it broke, which
+			// the run's log holds all the same, kept for the call's record
+			// ([toolloop.CallPanic]); the panic logged as the call raised it.
 			res, err = toolloop.ToolResult{}, nil
+			broke.Value, res.Absorbed = toolloop.PanicValue(broke.Value)
 		}
 	}()
 	// THE SESSION'S JOB rides the call, so a tool that writes the run's own

@@ -317,6 +317,27 @@ type Called struct {
 	Digest string
 }
 
+// CallPanic is a panic an admitted call raised, raised again by the surface
+// that admitted it ([Surface.Admit]) carrying what the call's own work had
+// added to the run's call log by then ([ToolResult.Absorbed]) — which the
+// run's log absorbs whether or not the call returns, so a caller that records
+// the call where a later segment's log is seeded from records that work beside
+// the call that broke, as it would have beside one that answered. Value is
+// what the call panicked with; [PanicValue] is what a recovery logs.
+type CallPanic struct {
+	Value    any
+	Absorbed []Called
+}
+
+// PanicValue is a recovered panic as the call raised it, and what its own work
+// absorbed where a surface carried that out with it ([CallPanic]).
+func PanicValue(recovered any) (any, []Called) {
+	if p, ok := recovered.(*CallPanic); ok {
+		return p.Value, p.Absorbed
+	}
+	return recovered, nil
+}
+
 // Refusal is the call's class, read out of [ToolResult.Cause] by
 // [mcp.RefusalOf]: "" for a success and for a failure nothing in this engine
 // classified.

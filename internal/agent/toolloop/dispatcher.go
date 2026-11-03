@@ -1100,6 +1100,10 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 	defer func() {
 		if r := recover(); r != nil {
 			perr := turn.Recovered(r)
+			// THE CALL'S OWN PANIC, never the wrapper a surface carried its
+			// work out in ([CallPanic]): this loop's run holds that work in
+			// its log already, and the line names what broke.
+			perr.Value, _ = PanicValue(perr.Value)
 			log.ErrorContext(d.ctx, "tool_panicked", "tool", c.name, "panic", perr.Value,
 				"stack", perr.Stack)
 			d.cut(perr)

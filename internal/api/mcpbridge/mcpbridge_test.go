@@ -822,6 +822,65 @@ func TestWhatACallsOwnWorkRecordedRidesItsRecord(t *testing.T) {
 	}
 }
 
+// breakingTool is a call whose own work makes a call of the run's, on the
+// call's own log, and then breaks, as a `delegate` whose fan-out panicked
+// after a worker's call would.
+type breakingTool struct{ workingTool }
+
+func (breakingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[string]any) (tools.Result, error) {
+	worker := turn.CallLog().Fork()
+	worker.Record("leave_channel", toolargs.Of(nil, map[string]any{"channel": "R"}))
+	turn.CallLog().Absorb(worker)
+	panic("the fan-out broke")
+}
+
+// AND IT RIDES THE RECORD OF A CALL THE BRIDGE ANSWERED IN ITS PLACE. A call
+// that panicked, and one whose tool asked to park a loop the box's harness does
+// not have, are recorded with an answer of the bridge's own; the run's log took
+// in what their own work recorded all the same, so their record carries it, or
+// a later segment's log is short of a worker's call the run's own counted.
+//
+// Mutation: answer a panicked or a parking call with a result that drops what
+// the call's work absorbed — or let the surface lose it to the panic — and the
+// record carries none of it.
+func TestWhatACallsOwnWorkRecordedRidesTheRecordTheBridgeAnswersInItsPlace(t *testing.T) {
+	t.Parallel()
+	want := toolloop.Called{Tool: "leave_channel", Digest: turnctx.ArgsDigest(map[string]any{"channel": "R"})}
+	for name, tc := range map[string]struct {
+		tool  tools.Callable
+		parks bool
+	}{
+		"a call that panicked":     {tool: breakingTool{}},
+		"a call that asks to park": {tool: workingTool{}, parks: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			reg := tools.NewRegistry()
+			if err := reg.Register(tc.tool, tools.OriginBuiltin); err != nil {
+				t.Fatal(err)
+			}
+			turn := seatTurn()
+			turn.Calls = turnctx.NewCallLog()
+			f.surface = tools.NewSurface("execute", reg.Snapshot(), []string{"delegate"}).ForTurn(turn)
+			f.session.Surface = f.surface
+			if tc.parks {
+				f.session.Surface = parking{Surface: f.surface, parks: map[string]bool{"delegate": true}}
+				f.session.Caller = actingSeat{f.surface}
+			}
+			sess := dial(t, f.open(t))
+
+			if res := callTool(t, sess, "delegate", map[string]any{}); !res.IsError {
+				t.Fatalf("the bridge answered %s, want the call refused in its place", text(res))
+			}
+			rows := f.ledger.rows()
+			if len(rows) != 1 || len(rows[0].Absorbed) != 1 || rows[0].Absorbed[0] != want {
+				t.Fatalf("the delegate's record is %+v, want it carrying the worker's call %+v", rows, want)
+			}
+		})
+	}
+}
+
 // A LOST LEDGER ROW COSTS ONE LINE OF EVIDENCE. Failing the call instead would
 // tell a harness to retry work that has already happened — the
 // duplicate-side-effect failure the whole delivery machinery exists to stop.
