@@ -383,8 +383,9 @@ type listedRepo struct {
 }
 
 // summary is row as a listing of changes renders it, from repository l: what
-// its conversation says of it where a read set that on the row
-// ([withConversations]), and its lifecycle's last move alone where none did.
+// its conversation says of it where a read set that on the row — a listing's
+// by [withConversations], a change read's from the conversation row its detail
+// reads — and its lifecycle's last move alone where none did.
 func (l listedRepo) summary(row changeRow) ChangeSummary {
 	return ChangeSummary{ChangeRow: row.wire(), Repo: l.ref.Name, Ref: ChangeRef(l.ref.Name, row.number),
 		Access: l.access.String(), OpenFindings: row.openFindings,
@@ -685,7 +686,7 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if authorsErr != nil {
 			return authorsErr
 		}
-		conversation, conversationErr := conversationRowIn(ctx, tx, row.id)
+		conversation, spoken, conversationErr := conversationRowIn(ctx, tx, row.id)
 		if conversationErr != nil {
 			return conversationErr
 		}
@@ -693,11 +694,14 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if mergeErr != nil {
 			return mergeErr
 		}
-		said := []changeRow{row}
-		if saidErr := withConversations(ctx, tx, said); saidErr != nil {
-			return saidErr
+		// WHAT ITS CONVERSATION SAYS OF IT, from the row just read: the
+		// detail is the most re-read question of a change, so it pays no
+		// second statement for what [withConversations] would read of the
+		// same row.
+		row.moved = max(row.updatedAt, spoken)
+		if conversation != nil {
+			row.openFindings = conversation.OpenFindings
 		}
-		row = said[0]
 		readiness, readinessErr := readinessIn(ctx, tx, []changeRow{row}, map[string]listedRepo{row.repoID: repo},
 			chart, q.Asker, r.limits().MergeByFloor)
 		if readinessErr != nil {

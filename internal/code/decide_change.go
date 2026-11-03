@@ -1304,7 +1304,8 @@ type changeRow struct {
 	// moved on its repository's subject (replicated 0142).
 	position, updatedAt int64
 	// moved and openFindings are what a READ of changes adds from the
-	// change's conversation ([withConversations]): when it last moved on
+	// change's conversation ([withConversations] on a listing's page, the
+	// detail's own conversation row on a change read): when it last moved on
 	// either of its subjects, and how many of its findings stand open — both
 	// 0 where nothing read them, as a decide and an apply never do.
 	moved, openFindings int64
