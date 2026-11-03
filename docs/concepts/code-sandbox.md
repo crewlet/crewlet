@@ -1400,13 +1400,19 @@ null: its first page says it.
 its object is streamed out of the store and opened under its own associated
 data, and the archive is read by the runner that packs it, which alone knows
 its layout — Claude Code's transcript, one record a line, then each subagent's
-own from its sidecar; OpenCode's export, a message at a time. The entries are
-what the run was briefed, the notes a person sent it while it worked, what its
-model wrote, every tool call and what answered it, and the compaction summaries
-the harness wrote in place of what came before them; the model's thinking and
-the harness's bookkeeping are none. A note is known by the heading the engine
-opens every note with, wherever the harness filed it — OpenCode as a person's
-message, Claude Code as a hook's context in a record of its own — and the line
+own from its sidecar; OpenCode's export, a message at a time, each read by the
+kind OpenCode 2 gives it. The entries are what the run was briefed, the notes a
+person sent it while it worked, what its model wrote, every tool call and what
+answered it, and the compaction summaries the harness wrote in place of what
+came before them; the model's thinking and the harness's bookkeeping are none —
+OpenCode's own messages included: its notices in the person's turn, an update
+of the run's instructions, a skill or a shell command a person ran in the
+session, an execution's end, and a switch of the session's agent, model or
+directory. An OpenCode message of a kind this build does not know is said where
+it was, as a record of no shape the read knows is. A note is known by the
+heading the engine opens every note with, wherever the harness filed it —
+OpenCode as a person's message, Claude Code as a hook's context in a record of
+its own — and the line
 the run's own hook prints as it hands notes over is a note entry too. It is
 read a page at a time and bounded — 200 entries and 1 MiB of text a page,
 16 KiB an entry, and 256 MiB a read of the archive as it inflates and, apart,
