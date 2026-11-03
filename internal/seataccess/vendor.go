@@ -172,6 +172,43 @@ type ApplyInput struct {
 	// account id for the mint after it, a mint's credential id for the
 	// retire after it ([Minted.CredentialID]). Empty for an op's first step.
 	Prior []StepResult
+
+	// HandIn is the credential a person pasted for this seat ([Ask.HandIn]),
+	// empty where none was. Never logged.
+	HandIn string `json:"-"`
+}
+
+// HandsIn is a session whose seat credential a person creates at the vendor
+// and pastes, because the vendor lets no credential create one: the paste
+// route checks the value with it, and the seat's sync then seals it.
+type HandsIn interface {
+	// CheckHandIn proves value fit for the seat's lane, with reads only. A
+	// [*Refusal] is the person's to fix; any other error is a fault.
+	CheckHandIn(ctx context.Context, in HandInInput) (HandedIn, error)
+}
+
+// HandInInput is one pasted credential and the seat it is for.
+type HandInInput struct {
+	Seat SeatRef
+	Lane Lane
+	Want Desired
+
+	// Record is the seat's ledger record, and Records every seat's of the
+	// kind, so a credential another seat holds is refused.
+	Record  *Record
+	Records map[string]Record
+
+	// Value is the pasted credential. Never logged or echoed.
+	Value string
+}
+
+// HandedIn is a pasted credential that passed its check.
+type HandedIn struct {
+	// Detail is the sentence the person reads.
+	Detail string
+
+	// Rotate reports a replacement for a credential the seat already holds.
+	Rotate bool
 }
 
 // StepResult is what one step did.

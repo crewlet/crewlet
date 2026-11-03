@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,49 +32,26 @@ const (
 	defaultRetryAfter = 5 * time.Second
 )
 
-// maxResponse bounds what one answer may be: a page of robots with their
-// tokens is tens of kilobytes, and the cap stops a proxy's page being read
-// whole.
+// maxResponse bounds what one answer may be: an actor with its tokens is a
+// few kilobytes, and the cap stops a proxy's page being read whole.
 const maxResponse = 4 << 20
 
-// Paging: the robot listing asks for robotPageSize members a page and stops
-// after robotPageCeiling pages with an error, since a short read would read as
-// robots that do not exist.
+// Role is an actor's role on an account, spelled as Expo's GraphQL Role enum.
+type Role string
+
+// Expo's account roles.
 const (
-	robotPageSize    = 50
-	robotPageCeiling = 100
+	RoleViewOnly       Role = "VIEW_ONLY"
+	RoleRunner         Role = "RUNNER"
+	RoleDeveloper      Role = "DEVELOPER"
+	RoleReleaseManager Role = "RELEASE_MANAGER"
+	RoleAdmin          Role = "ADMIN"
+	RoleOwner          Role = "OWNER"
+	RoleCustom         Role = "CUSTOM"
 )
 
-// Permission is one of Expo's account permissions, spelled as its GraphQL
-// `Permission` enum spells it.
-type Permission string
-
-// Expo's account permissions.
-const (
-	PermissionView             Permission = "VIEW"
-	PermissionRun              Permission = "RUN"
-	PermissionPublish          Permission = "PUBLISH"
-	PermissionPublishProtected Permission = "PUBLISH_PROTECTED"
-	PermissionAdmin            Permission = "ADMIN"
-	PermissionOwn              Permission = "OWN"
-)
-
-// Valid reports whether p is a permission Expo's schema defines.
-func (p Permission) Valid() bool {
-	switch p {
-	case PermissionView, PermissionRun, PermissionPublish, PermissionPublishProtected,
-		PermissionAdmin, PermissionOwn:
-		return true
-	default:
-		return false
-	}
-}
-
-// administers reports a permission set that manages the account's robots and
-// their tokens: Admin, or ownership, which includes it.
-func administers(perms []Permission) bool {
-	return slices.Contains(perms, PermissionAdmin) || slices.Contains(perms, PermissionOwn)
-}
+// Administers reports a role that manages the account, which no agent holds.
+func (r Role) Administers() bool { return r == RoleAdmin || r == RoleOwner }
 
 // APIError is a call Expo refused: an HTTP status of 300 or more, or a 2xx
 // whose body carries GraphQL `errors`. It never carries a credential.
@@ -320,25 +296,45 @@ func retryAfter(raw string) time.Duration {
 	return defaultRetryAfter
 }
 
-// Actor is who an access token acts as: a user, a robot or an SSO user.
+// Actor is who an access token acts as: a robot, a person or an SSO user.
 type Actor struct {
 	ID string
-	// Kind is Expo's type name for the actor: User, Robot, SSOUser.
+	// Kind is Expo's type name for the actor: Robot, User, SSOUser.
 	Kind string
 	Name string
+
+	// Tokens are a robot's own access tokens, never their values; empty for
+	// any other actor.
+	Tokens []Token
 }
 
-// Viewer is the actor the client's token acts as. A token Expo does not
-// recognise answers a 401.
+// Robot reports an actor that is a robot user.
+func (a Actor) Robot() bool { return a.Kind == "Robot" }
+
+// Token is one access token, by the prefix Expo shows for it.
+type Token struct {
+	ID      string
+	Prefix  string
+	Revoked bool
+}
+
+// Viewer is the actor the client's token acts as, with a robot's tokens. A
+// token Expo does not recognise answers a 401.
 func (c *Client) Viewer(ctx context.Context) (Actor, error) {
 	var data struct {
 		MeActor *struct {
-			Typename    string `json:"__typename"`
-			ID          string `json:"id"`
-			DisplayName string `json:"displayName"`
+			Typename     string `json:"__typename"`
+			ID           string `json:"id"`
+			DisplayName  string `json:"displayName"`
+			AccessTokens []struct {
+				ID        string     `json:"id"`
+				Prefix    string     `json:"visibleTokenPrefix"`
+				RevokedAt *time.Time `json:"revokedAt"`
+			} `json:"accessTokens"`
 		} `json:"meActor"`
 	}
-	const q = `query CrewletViewer { meActor { __typename id displayName } }`
+	const q = `query CrewletViewer { meActor { __typename id displayName ` +
+		`... on Robot { accessTokens { id visibleTokenPrefix revokedAt } } } }`
 	if err := c.do(ctx, "CrewletViewer", q, nil, &data); err != nil {
 		return Actor{}, err
 	}
@@ -346,347 +342,38 @@ func (c *Client) Viewer(ctx context.Context) (Actor, error) {
 		return Actor{}, &APIError{Op: "CrewletViewer", Status: http.StatusUnauthorized,
 			Detail: "Expo did not recognise the access token"}
 	}
-	return Actor{ID: data.MeActor.ID, Kind: data.MeActor.Typename, Name: data.MeActor.DisplayName}, nil
+	me := data.MeActor
+	out := Actor{ID: me.ID, Kind: me.Typename, Name: me.DisplayName}
+	for _, t := range me.AccessTokens {
+		out.Tokens = append(out.Tokens, Token{ID: t.ID, Prefix: t.Prefix, Revoked: t.RevokedAt != nil})
+	}
+	return out, nil
 }
 
-// Account is an Expo account as the engine reads it.
-type Account struct {
-	ID   string
-	Name string
-}
-
-// Account reads the account named name. A name Expo does not know, or one
-// the token's actor cannot see, is a refusal (404 or 403).
-func (c *Client) Account(ctx context.Context, name string) (Account, error) {
+// RoleOn is the role the token's actor holds on the account named name. An
+// account the actor holds no role on answers a 403 or a 404.
+//
+// Expo carries the Role only on the deprecated viewerUserPermission; the
+// current viewerUserPermission2 answers permissions alone.
+func (c *Client) RoleOn(ctx context.Context, name string) (Role, error) {
 	var data struct {
 		Account struct {
 			ByName struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
+				Viewer *struct {
+					Role Role `json:"role"`
+				} `json:"viewerUserPermission"`
 			} `json:"byName"`
 		} `json:"account"`
 	}
-	const q = `query CrewletAccount($name: String!) { account { byName(accountName: $name) { id name } } }`
-	if err := c.do(ctx, "CrewletAccount", q, map[string]any{"name": name}, &data); err != nil {
-		return Account{}, err
-	}
-	got := data.Account.ByName
-	if got.ID == "" {
-		return Account{}, &APIError{Op: "CrewletAccount", Status: http.StatusNotFound,
-			Detail: "Expo has no account named " + strconv.Quote(name)}
-	}
-	return Account{ID: got.ID, Name: got.Name}, nil
-}
-
-// ViewerPermissions is what the token's actor holds on the account named
-// name, its own permissions and those its role implies, each once.
-func (c *Client) ViewerPermissions(ctx context.Context, name string) ([]Permission, error) {
-	var data struct {
-		Account struct {
-			ByName struct {
-				Viewer struct {
-					Permissions []Permission `json:"permissions"`
-					Effective   []Permission `json:"effectivePermissions"`
-				} `json:"viewerUserPermission2"`
-			} `json:"byName"`
-		} `json:"account"`
-	}
-	const q = `query CrewletViewerPermissions($name: String!) { account { byName(accountName: $name) { ` +
-		`viewerUserPermission2 { permissions effectivePermissions } } } }`
-	if err := c.do(ctx, "CrewletViewerPermissions", q, map[string]any{"name": name}, &data); err != nil {
-		return nil, err
+	const q = `query CrewletRole($name: String!) { account { byName(accountName: $name) { ` +
+		`viewerUserPermission { role } } } }`
+	if err := c.do(ctx, "CrewletRole", q, map[string]any{"name": name}, &data); err != nil {
+		return "", err
 	}
 	v := data.Account.ByName.Viewer
-	return permissionSet(append(slices.Clone(v.Permissions), v.Effective...)), nil
-}
-
-// AppCount is how many projects the account holds.
-func (c *Client) AppCount(ctx context.Context, name string) (int, error) {
-	var data struct {
-		Account struct {
-			ByName struct {
-				AppCount int `json:"appCount"`
-			} `json:"byName"`
-		} `json:"account"`
+	if v == nil || v.Role == "" {
+		return "", &APIError{Op: "CrewletRole", Status: http.StatusForbidden,
+			Detail: "the token's actor holds no role on " + strconv.Quote(name)}
 	}
-	const q = `query CrewletAppCount($name: String!) { account { byName(accountName: $name) { appCount } } }`
-	if err := c.do(ctx, "CrewletAppCount", q, map[string]any{"name": name}, &data); err != nil {
-		return 0, err
-	}
-	return data.Account.ByName.AppCount, nil
-}
-
-// Robot is one robot user on an account: its permissions there and its
-// access tokens.
-type Robot struct {
-	ID      string
-	Name    string
-	Created time.Time
-
-	// Deleting is a robot whose deletion is scheduled: it is going, and no
-	// longer the seat's.
-	Deleting bool
-
-	// Permissions are what it holds on the account the listing read.
-	Permissions []Permission
-
-	// Tokens are its access tokens, revoked ones included.
-	Tokens []Token
-}
-
-// Token is one access token, never its value.
-type Token struct {
-	ID        string
-	Note      string
-	Revoked   bool
-	CreatedAt time.Time
-}
-
-// robotNode is one robot member as the listing answers it.
-type robotNode struct {
-	Permissions []Permission `json:"permissions"`
-	Actor       struct {
-		Typename                string     `json:"__typename"`
-		ID                      string     `json:"id"`
-		DisplayName             string     `json:"displayName"`
-		Created                 time.Time  `json:"created"`
-		LastDeletionAttemptTime *time.Time `json:"lastDeletionAttemptTime"`
-		AccessTokens            []struct {
-			ID        string     `json:"id"`
-			Note      *string    `json:"note"`
-			RevokedAt *time.Time `json:"revokedAt"`
-			CreatedAt time.Time  `json:"createdAt"`
-		} `json:"accessTokens"`
-	} `json:"actor"`
-}
-
-func (n robotNode) robot() Robot {
-	r := Robot{
-		ID: n.Actor.ID, Name: n.Actor.DisplayName, Created: n.Actor.Created,
-		Deleting:    n.Actor.LastDeletionAttemptTime != nil,
-		Permissions: permissionSet(n.Permissions),
-	}
-	for _, t := range n.Actor.AccessTokens {
-		tok := Token{ID: t.ID, Revoked: t.RevokedAt != nil, CreatedAt: t.CreatedAt}
-		if t.Note != nil {
-			tok.Note = *t.Note
-		}
-		r.Tokens = append(r.Tokens, tok)
-	}
-	return r
-}
-
-// Robots is every robot user on the account named name, read page by page.
-func (c *Client) Robots(ctx context.Context, name string) ([]Robot, error) {
-	const q = `query CrewletRobots($name: String!, $first: Int!, $after: String) { account { ` +
-		`byName(accountName: $name) { membersPaginated(memberType: ROBOT, first: $first, after: $after) { ` +
-		`edges { node { permissions actor { __typename id displayName created lastDeletionAttemptTime ` +
-		`accessTokens { id note revokedAt createdAt } } } } pageInfo { hasNextPage endCursor } } } } }`
-	var out []Robot
-	var after *string
-	for page := 0; ; page++ {
-		if page >= robotPageCeiling {
-			return nil, fmt.Errorf("expo: the robot listing did not finish after %d pages of %d",
-				robotPageCeiling, robotPageSize)
-		}
-		var data struct {
-			Account struct {
-				ByName struct {
-					Members struct {
-						Edges []struct {
-							Node robotNode `json:"node"`
-						} `json:"edges"`
-						PageInfo struct {
-							HasNextPage bool   `json:"hasNextPage"`
-							EndCursor   string `json:"endCursor"`
-						} `json:"pageInfo"`
-					} `json:"membersPaginated"`
-				} `json:"byName"`
-			} `json:"account"`
-		}
-		vars := map[string]any{"name": name, "first": robotPageSize, "after": after}
-		if err := c.do(ctx, "CrewletRobots", q, vars, &data); err != nil {
-			return nil, err
-		}
-		members := data.Account.ByName.Members
-		for _, edge := range members.Edges {
-			if edge.Node.Actor.Typename == "Robot" && edge.Node.Actor.ID != "" {
-				out = append(out, edge.Node.robot())
-			}
-		}
-		if !members.PageInfo.HasNextPage || members.PageInfo.EndCursor == "" || len(members.Edges) == 0 {
-			return out, nil
-		}
-		cursor := members.PageInfo.EndCursor
-		after = &cursor
-	}
-}
-
-// CreateRobot creates a robot user on the account with accountID, named name
-// and holding perms there.
-func (c *Client) CreateRobot(ctx context.Context, accountID, name string, perms []Permission) (Robot, error) {
-	var data struct {
-		Robot struct {
-			Create struct {
-				ID          string    `json:"id"`
-				DisplayName string    `json:"displayName"`
-				Created     time.Time `json:"created"`
-			} `json:"createRobotForAccount"`
-		} `json:"robot"`
-	}
-	const q = `mutation CrewletCreateRobot($accountID: String!, $permissions: [Permission]!, ` +
-		`$robotData: RobotDataInput) { robot { createRobotForAccount(accountID: $accountID, ` +
-		`permissions: $permissions, robotData: $robotData) { id displayName created } } }`
-	vars := map[string]any{
-		"accountID": accountID, "permissions": perms, "robotData": map[string]any{"name": name},
-	}
-	if err := c.do(ctx, "CrewletCreateRobot", q, vars, &data); err != nil {
-		return Robot{}, err
-	}
-	got := data.Robot.Create
-	if got.ID == "" {
-		return Robot{}, errors.New("expo: created a robot and Expo returned no id for it")
-	}
-	return Robot{ID: got.ID, Name: got.DisplayName, Created: got.Created,
-		Permissions: permissionSet(perms)}, nil
-}
-
-// RenameRobot sets a robot's name.
-func (c *Client) RenameRobot(ctx context.Context, id, name string) error {
-	const q = `mutation CrewletRenameRobot($id: String!, $robotData: RobotDataInput!) { robot { ` +
-		`updateRobot(id: $id, robotData: $robotData) { id } } }`
-	return c.do(ctx, "CrewletRenameRobot", q, map[string]any{
-		"id": id, "robotData": map[string]any{"name": name},
-	}, nil)
-}
-
-// DeleteRobot schedules a robot's deletion, which removes it and every token
-// it holds. A robot Expo no longer has is the state asked for.
-func (c *Client) DeleteRobot(ctx context.Context, id string) error {
-	var data struct {
-		Robot struct {
-			Receipt struct {
-				State        string `json:"state"`
-				WillRetry    bool   `json:"willRetry"`
-				ErrorMessage string `json:"errorMessage"`
-			} `json:"scheduleRobotDeletion"`
-		} `json:"robot"`
-	}
-	const q = `mutation CrewletDeleteRobot($id: ID!) { robot { scheduleRobotDeletion(id: $id) { ` +
-		`state willRetry errorMessage } } }`
-	err := c.do(ctx, "CrewletDeleteRobot", q, map[string]any{"id": id}, &data)
-	if Status(err) == http.StatusNotFound {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if r := data.Robot.Receipt; r.State == "FAILURE" && !r.WillRetry {
-		detail := strings.TrimSpace(r.ErrorMessage)
-		if detail == "" {
-			detail = noDetail
-		}
-		return &APIError{Op: "CrewletDeleteRobot", Status: http.StatusInternalServerError,
-			Detail: "Expo could not delete the robot: " + httpx.Refusal("text/plain", []byte(detail))}
-	}
-	return nil
-}
-
-// CreateToken mints an access token for the actor with actorID, under note.
-// The value is answered once and never again: the caller seals it at once.
-func (c *Client) CreateToken(ctx context.Context, actorID, note string) (Token, string, error) {
-	var data struct {
-		AccessToken struct {
-			Create struct {
-				Token       string `json:"token"`
-				AccessToken struct {
-					ID        string    `json:"id"`
-					Note      *string   `json:"note"`
-					CreatedAt time.Time `json:"createdAt"`
-				} `json:"accessToken"`
-			} `json:"createAccessToken"`
-		} `json:"accessToken"`
-	}
-	const q = `mutation CrewletCreateToken($data: CreateAccessTokenInput!) { accessToken { ` +
-		`createAccessToken(createAccessTokenData: $data) { token accessToken { id note createdAt } } } }`
-	vars := map[string]any{"data": map[string]any{"actorID": actorID, "note": note}}
-	if err := c.do(ctx, "CrewletCreateToken", q, vars, &data); err != nil {
-		return Token{}, "", err
-	}
-	got := data.AccessToken.Create
-	tok := Token{ID: got.AccessToken.ID, CreatedAt: got.AccessToken.CreatedAt}
-	if got.AccessToken.Note != nil {
-		tok.Note = *got.AccessToken.Note
-	}
-	if tok.ID == "" {
-		return Token{}, "", errors.New("expo: created an access token and Expo returned no id for it")
-	}
-	return tok, got.Token, nil
-}
-
-// RevokeToken revokes an access token, which stops it authenticating at once.
-// A token Expo no longer has is the state asked for.
-func (c *Client) RevokeToken(ctx context.Context, id string) error {
-	const q = `mutation CrewletRevokeToken($id: ID!) { accessToken { ` +
-		`setAccessTokenRevoked(id: $id, revoked: true) { id } } }`
-	err := c.do(ctx, "CrewletRevokeToken", q, map[string]any{"id": id}, nil)
-	if Status(err) == http.StatusNotFound {
-		return nil
-	}
-	return err
-}
-
-// DeleteToken deletes an access token. A token Expo no longer has is the
-// state asked for.
-func (c *Client) DeleteToken(ctx context.Context, id string) error {
-	const q = `mutation CrewletDeleteToken($id: ID!) { accessToken { deleteAccessToken(id: $id) { id } } }`
-	err := c.do(ctx, "CrewletDeleteToken", q, map[string]any{"id": id}, nil)
-	if Status(err) == http.StatusNotFound {
-		return nil
-	}
-	return err
-}
-
-// RetireToken revokes then deletes a token, so one whose delete fails has
-// still stopped working.
-func (c *Client) RetireToken(ctx context.Context, id string) error {
-	if err := c.RevokeToken(ctx, id); err != nil {
-		return err
-	}
-	return c.DeleteToken(ctx, id)
-}
-
-// Grant adds perms to what the actor holds on the account. Nothing to add
-// makes no call.
-func (c *Client) Grant(ctx context.Context, accountID, actorID string, perms []Permission) error {
-	if len(perms) == 0 {
-		return nil
-	}
-	const q = `mutation CrewletGrant($accountID: ID!, $actorID: ID!, $permissions: [Permission]) { ` +
-		`account { grantActorPermissions(accountID: $accountID, actorID: $actorID, ` +
-		`permissions: $permissions) { id } } }`
-	return c.do(ctx, "CrewletGrant", q, map[string]any{
-		"accountID": accountID, "actorID": actorID, "permissions": perms,
-	}, nil)
-}
-
-// Revoke takes perms away from what the actor holds on the account. Nothing
-// to take makes no call.
-func (c *Client) Revoke(ctx context.Context, accountID, actorID string, perms []Permission) error {
-	if len(perms) == 0 {
-		return nil
-	}
-	const q = `mutation CrewletRevoke($accountID: ID!, $actorID: ID!, $permissions: [Permission]) { ` +
-		`account { revokeActorPermissions(accountID: $accountID, actorID: $actorID, ` +
-		`permissions: $permissions) { id } } }`
-	return c.do(ctx, "CrewletRevoke", q, map[string]any{
-		"accountID": accountID, "actorID": actorID, "permissions": perms,
-	}, nil)
-}
-
-// permissionSet is perms sorted, each once.
-func permissionSet(perms []Permission) []Permission {
-	out := slices.Clone(perms)
-	slices.Sort(out)
-	return slices.Compact(out)
+	return v.Role, nil
 }

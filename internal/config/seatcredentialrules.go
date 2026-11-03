@@ -71,7 +71,9 @@ func seatFields(kind string) []seatField {
 	case "cloudflare":
 		return []seatField{{"API_TOKEN", true}}
 	case "expo":
-		return []seatField{{"TOKEN", true}}
+		// RETIRED_TOKEN is a turned-off seat's token, kept only to see its
+		// robot deleted at Expo, and read by no tool.
+		return []seatField{{"TOKEN", true}, {"RETIRED_TOKEN", false}}
 	default:
 		return nil
 	}

@@ -181,6 +181,10 @@ type Ask struct {
 	// and to every lane where it is empty. Rotate and Remove act on the
 	// ACCOUNT, which every lane of a kind shares, so they are taken once.
 	Lane Lane
+
+	// HandIn is a credential a person pasted for the seat ([HandsIn]),
+	// which the step that checks it seals. Never logged or marshalled.
+	HandIn string `json:"-"`
 }
 
 // Zero reports an ask for nothing.

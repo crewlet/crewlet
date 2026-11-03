@@ -2,167 +2,161 @@ package expo
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// Expo's half of per-seat access. The seat's account is its robot user,
-// recorded in the ledger by robot ID; the credential is an access token on
-// that robot. See the package doc for why nothing is adopted by name.
+// Expo's half of per-seat access. Expo lets no access token create a robot,
+// so a person creates each seat's robot at Expo and pastes its token; the
+// engine checks it, seals it, and reads everything after with it.
 
 func init() { seataccess.Register(accessVendor{}) }
+
+// RetiredField is the token of a seat turned off, sealed where no box reads
+// it, so the pass can tell when the robot is deleted at Expo.
+const RetiredField = "RETIRED_TOKEN"
 
 // accessVendor is Expo's [seataccess.Vendor].
 type accessVendor struct{}
 
 func (accessVendor) Kind() integration.Kind { return integration.KindExpo }
 
-// Catalog is Expo's per-seat offer: four fixed levels, no per-seat scope (a
-// robot acts on the whole account) and a rotatable token the EAS CLI in the
-// seat's box reads as EXPO_TOKEN.
+// Catalog is Expo's per-seat offer: four fixed levels, no per-seat scope, a
+// robot a person creates, and a token the EAS CLI reads as EXPO_TOKEN.
 func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
 		Kind:        integration.KindExpo,
-		Credentials: []string{TokenField},
+		Credentials: []string{TokenField, RetiredField},
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneExpo, Levels: true,
-			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet,
+			CreatedBy: seataccess.ByYou, EnabledBy: seataccess.ByYou,
 			Rotatable: true, BoxEnv: ToolEnv,
 		}},
 	}
 }
 
-// Steps is each op as Expo takes it, in the order Apply takes it. Pure.
+// Steps is each op as it is taken, in order. Pure.
 func (accessVendor) Steps(
 	seat seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
-	want seataccess.Desired, have seataccess.Observed,
+	want seataccess.Desired, _ seataccess.Observed,
 ) []seataccess.Step {
-	out := expoSteps(seat, op, want, have)
+	out := expoSteps(seat, op, want)
 	for i := range out {
 		out[i].Index = i
 	}
 	return out
 }
 
-func expoSteps(
-	seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired, have seataccess.Observed,
-) []seataccess.Step {
+func expoSteps(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired) []seataccess.Step {
 	sink := seataccess.SinkName(integration.KindExpo, TokenField, seat.Handle)
-	step := func(verb seataccess.StepVerb, text string) seataccess.Step {
-		return seataccess.Step{Op: op, Verb: verb, By: seataccess.ByCrewlet, Text: text}
+	you := func(verb seataccess.StepVerb, text string) seataccess.Step {
+		return seataccess.Step{Op: op, Verb: verb, By: seataccess.ByYou, Text: text}
 	}
-	level := LevelName(want.Level)
-	// THE NEW TOKEN FIRST, sealed before the ones it replaces are retired, so
-	// the seat is never left holding nothing.
-	mint := step(seataccess.VerbMint, "Create an access token for its robot user, sealed as "+sink)
-	retire := step(seataccess.VerbRevoke, "Revoke and delete the tokens it replaces")
+	role := LevelName(want.Level)
+	paste := you(seataccess.VerbMint, "Create an access token for its robot, then paste it here")
+	seal := seataccess.Step{Op: op, Verb: seataccess.VerbMint, By: seataccess.ByCrewlet,
+		Text: "Check the token and seal it as " + sink}
+	clear := seataccess.Step{Op: op, Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
+		Text: "Clear " + sink + ", so the agent loses Expo at once"}
 	switch op {
 	case seataccess.OpCreate:
-		return []seataccess.Step{step(seataccess.VerbCreate, "Create an Expo robot user at "+level), mint}
+		return []seataccess.Step{
+			you(seataccess.VerbCreate, "Add a robot for this agent with the "+role+" role at Expo"),
+			paste, seal}
 	case seataccess.OpEnable:
-		out := []seataccess.Step{step(seataccess.VerbEnable, "Give its robot user back its permissions at "+level)}
-		if have.Credential == nil || have.CredentialGone {
-			out = append(out, mint, retire)
-		}
-		return out
+		return []seataccess.Step{you(seataccess.VerbEnable,
+			"Give its robot the "+role+" role again with Edit robot at Expo")}
 	case seataccess.OpLevel:
-		return []seataccess.Step{step(seataccess.VerbRerole, "Move its robot user to "+level)}
+		return []seataccess.Step{you(seataccess.VerbRerole,
+			"Change its robot's role to "+role+" with Edit robot at Expo")}
 	case seataccess.OpMint:
-		return []seataccess.Step{mint, retire}
+		// THE REFUSED TOKEN GOES FIRST, so Expo is never asked with it again.
+		drop := clear
+		drop.Text = "Clear " + sink + ", which Expo no longer accepts"
+		paste.Text = "Create a new access token for its robot, then paste it here"
+		return []seataccess.Step{drop, paste, seal}
 	case seataccess.OpRotate:
-		mint.Text = "Create a new access token for its robot user, sealed as " + sink
-		return []seataccess.Step{mint, retire}
+		paste.Text = "Create a new access token for its robot, then paste it here"
+		return []seataccess.Step{paste, seal,
+			you(seataccess.VerbRevoke, "Delete its robot's other tokens at Expo")}
 	case seataccess.OpDisable:
-		off := step(seataccess.VerbDisable, "Revoke its tokens and delete its robot user")
-		off.Note = "Expo keeps no switched-off robot, so turning the agent back on creates a new one."
-		return []seataccess.Step{off}
+		return []seataccess.Step{clear, you(seataccess.VerbRemove, "Delete its robot at Expo")}
 	case seataccess.OpRevoke:
-		return []seataccess.Step{step(seataccess.VerbRevoke, "Revoke and delete its tokens and clear "+sink)}
+		return []seataccess.Step{clear}
 	case seataccess.OpRemove:
-		return []seataccess.Step{step(seataccess.VerbRemove,
-			"Revoke its tokens, delete its robot user and stop managing it")}
+		return []seataccess.Step{clear,
+			you(seataccess.VerbRemove, "Delete its robot at Expo, so Crewlet stops tracking it")}
 	default:
-		// OpScope: a robot acts on the whole account, with no per-seat scope.
+		// OpScope: a robot acts on the whole account.
 		return nil
 	}
 }
 
-// listingGrace is how long a new robot missing from the listing reads as not
-// listed yet rather than gone: a listing shows one within seconds, and ten
-// minutes bounds how long a robot deleted at Expo leaves its seat without one.
-const listingGrace = 10 * time.Minute
-
 // Open builds a session from the company's Expo block.
 func (v accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
-	return v.open(in, nil, nil)
+	return v.open(in, nil)
 }
 
-// open is [accessVendor.Open] with the transport and clock a test supplies;
-// nil takes the defaults.
-func (accessVendor) open(in seataccess.OpenInput, hc *http.Client, now func() time.Time) (seataccess.Session, error) {
+// open is [accessVendor.Open] with the transport a test supplies; nil takes
+// the default.
+func (accessVendor) open(in seataccess.OpenInput, hc *http.Client) (seataccess.Session, error) {
 	if in.Config == nil {
 		return nil, fmt.Errorf("expo: %w: no company document", integration.ErrNotConfigured)
 	}
 	cfg := in.Config.Integrations.Expo
-	if cfg == nil || !cfg.Enabled || cfg.Provisioning == nil {
-		return nil, fmt.Errorf("expo: %w: integrations.expo is off or has no provisioning block",
+	if cfg == nil || !cfg.Enabled || cfg.Provisioning == nil || in.Env == nil {
+		return nil, fmt.Errorf("expo: %w: integrations.expo is off or names no account",
 			integration.ErrNotConfigured)
 	}
-	var account, token string
-	if in.Env != nil {
-		account = strings.TrimSpace(in.Env.Value(cfg.Provisioning.AccountName))
-		token = strings.TrimSpace(in.Env.Value(cfg.Provisioning.AccessToken))
-	}
-	if account == "" || token == "" {
-		return nil, fmt.Errorf("expo: %w: the account name and the provisioner token did not both resolve",
+	account := strings.TrimSpace(in.Env.Value(cfg.Provisioning.AccountName))
+	if account == "" {
+		return nil, fmt.Errorf("expo: %w: integrations.expo.provisioning.account_name resolved to nothing",
 			integration.ErrNotConfigured)
 	}
-	client, err := NewClient(ClientOptions{Token: token, HTTP: hc})
-	if err != nil {
-		return nil, err
-	}
-	if now == nil {
-		now = func() time.Time { return time.Now().UTC() }
-	}
-	return &accessSession{client: client, account: account, company: in.Config.Name, now: now}, nil
+	env := in.Env
+	return &accessSession{
+		account: account, company: in.Config.Name, http: hc,
+		sealed: func(handle, field string) string {
+			return strings.TrimSpace(env.Value("${" + seataccess.SinkName(integration.KindExpo, field, handle) + "}"))
+		},
+	}, nil
 }
 
-// accessSession is one pass's connection to Expo.
+// accessSession is one pass's connection to Expo, through each seat's own
+// token.
 type accessSession struct {
-	client  *Client
 	account string
 	company string
-	now     func() time.Time
+	http    *http.Client
 
-	// The account's ID, read once per pass where a step writes.
-	mu        sync.Mutex
-	accountID string
+	// sealed is the value sealed for one seat's field, "" where none is.
+	sealed func(handle, field string) string
+
+	// robots are the seat each recorded robot belongs to, by robot ID.
+	robots map[string]string
 }
 
-// accountRef is the account's ID, read once.
-func (s *accessSession) accountRef(ctx context.Context) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.accountID != "" {
-		return s.accountID, nil
-	}
-	acct, err := s.client.Account(ctx, s.account)
-	if err != nil {
-		return "", err
-	}
-	s.accountID = acct.ID
-	return acct.ID, nil
+// client is a client carrying one token.
+func (s *accessSession) client(token string) (*Client, error) {
+	return NewClient(ClientOptions{Token: token, HTTP: s.http})
 }
 
-// Options is Expo's four levels, least access first. Fixed: a level is this
-// engine's set of Expo permissions, not something Expo lists.
+// remember records which seat holds each recorded robot.
+func (s *accessSession) remember(records map[string]seataccess.Record) {
+	s.robots = map[string]string{}
+	for handle, rec := range records {
+		if rec.Held() && rec.Account.ID != "" {
+			s.robots[rec.Account.ID] = handle
+		}
+	}
+}
+
+// Options is Expo's four levels under the roles' own names. Fixed: a level is
+// one of Expo's robot roles, not something Expo lists.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
 	out := make([]seataccess.Level, 0, len(Levels()))
 	for _, id := range Levels() {
@@ -171,44 +165,23 @@ func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seatac
 	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true}, nil
 }
 
-// Observe reads each seat's recorded robot, by ID, from one listing; nothing is
-// adopted by name. A robot being deleted or missing is absent, except one
-// created within [listingGrace], which is that seat's fault to retry.
+// Observe reads each seat's robot with the seat's own sealed token. A seat
+// with none has no robot here yet, and Observed.Account is the name to give
+// it; a token Expo refuses is reported gone and not used again.
 func (s *accessSession) Observe(ctx context.Context, in seataccess.ObserveInput) (seataccess.Observation, error) {
 	out := seataccess.Observation{}
 	faults := seataccess.SeatFaults{}
-	var byID map[string]Robot
+	s.remember(in.Records)
 	for _, handle := range in.Handles() {
-		rec := in.Record(handle)
-		if rec == nil || !rec.Held() || rec.Account.ID == "" {
-			out[handle] = map[seataccess.Lane]seataccess.Observed{seataccess.LaneExpo: {}}
+		observed, err := s.observe(ctx, handle, in.Record(handle))
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			faults[handle] = err
 			continue
 		}
-		if byID == nil {
-			robots, err := s.client.Robots(ctx, s.account)
-			if err != nil {
-				return nil, fmt.Errorf("expo: list the account's robot users: %w",
-					integration.Reject(err, Status(err)))
-			}
-			byID = make(map[string]Robot, len(robots))
-			for _, r := range robots {
-				byID[r.ID] = r
-			}
-		}
-		robot, found := byID[rec.Account.ID]
-		switch {
-		case found && !robot.Deleting:
-			out[handle] = map[seataccess.Lane]seataccess.Observed{
-				seataccess.LaneExpo: observedOf(robot, handle, rec),
-			}
-		case !found && s.now().Sub(rec.Account.CreatedAt) < listingGrace:
-			// NOT LISTED YET: read as gone, it would be created a second
-			// time and the first robot left holding a live token.
-			faults[handle] = fmt.Errorf("expo: the account's listing does not show robot user %s, "+
-				"created %s, yet", rec.Account.ID, rec.Account.CreatedAt.Format(time.RFC3339))
-		default:
-			out[handle] = map[seataccess.Lane]seataccess.Observed{seataccess.LaneExpo: {}}
-		}
+		out[handle] = map[seataccess.Lane]seataccess.Observed{seataccess.LaneExpo: observed}
 	}
 	if len(faults) > 0 {
 		return out, faults
@@ -216,312 +189,256 @@ func (s *accessSession) Observe(ctx context.Context, in seataccess.ObserveInput)
 	return out, nil
 }
 
-// observedOf is one robot as the shared plan reads it. A robot holding no
-// permission on the account was emptied by somebody else: the engine never
-// does that, it deletes.
-func observedOf(robot Robot, handle string, rec *seataccess.Record) seataccess.Observed {
-	out := seataccess.Observed{
-		Exists: true, Enabled: len(robot.Permissions) > 0,
-		Account: robot.Name, AccountID: robot.ID, Level: levelOf(robot.Permissions),
-		CreatedAt: rec.Account.CreatedAt,
-		// A TOKEN DELETED OR REVOKED AT EXPO leaves whatever is sealed for
-		// the seat refused for ever; the robot's own token list is the proof.
-		CredentialGone: len(engineTokens(robot, handle)) == 0,
+// observe is one seat's lane.
+func (s *accessSession) observe(ctx context.Context, handle string, rec *seataccess.Record) (seataccess.Observed, error) {
+	sink := &seataccess.Credential{Variable: seataccess.SinkName(integration.KindExpo, TokenField, handle)}
+	recorded := seataccess.Observed{Exists: true, Enabled: true}
+	if rec != nil && rec.Held() {
+		recorded.AccountID, recorded.Account = rec.Account.ID, rec.Account.Name
+		recorded.CreatedAt = rec.Account.CreatedAt
+		if lr, ok := rec.Lanes[seataccess.LaneExpo]; ok && lr.Applied != nil {
+			recorded.Level = lr.Applied.Level
+		}
 	}
-	if !out.Enabled {
+	token := s.sealed(handle, TokenField)
+	switch {
+	case token == "" && recorded.AccountID == "":
+		return seataccess.Observed{Account: RobotName(s.company, handle)}, nil
+	case token == "" && s.sealed(handle, RetiredField) != "":
+		// OFF, AND ITS ROBOT NOT DELETED YET: the remove step watches it.
+		return recorded, nil
+	case token == "":
+		// A RECORDED ROBOT WITH NO TOKEN: the one Expo refused was cleared.
+		recorded.CredentialGone = true
+		return recorded, nil
+	}
+	c, err := s.client(token)
+	if err != nil {
+		return seataccess.Observed{}, err
+	}
+	me, err := c.Viewer(ctx)
+	if Status(err) == http.StatusUnauthorized {
+		recorded.CredentialGone, recorded.Credential = true, sink
+		return recorded, nil
+	}
+	if err != nil {
+		return seataccess.Observed{}, fmt.Errorf("expo: read %s's robot: %w", handle, err)
+	}
+	out := seataccess.Observed{Exists: true, Account: me.Name, AccountID: me.ID,
+		CreatedAt: recorded.CreatedAt, Credential: sink}
+	role, err := c.RoleOn(ctx, s.account)
+	switch status := Status(err); {
+	case status == http.StatusForbidden || status == http.StatusNotFound:
+		// NO ROLE ON THE ACCOUNT: somebody took it away at Expo.
 		out.DisabledBy = seataccess.DisabledByHand
-	}
-	return out
-}
-
-// Apply takes one step at Expo, chosen by its op and verb.
-func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
-	switch in.Step.Op {
-	case seataccess.OpCreate:
-		if in.Step.Verb == seataccess.VerbCreate {
-			return s.create(ctx, in)
-		}
-		return s.mint(ctx, in)
-	case seataccess.OpEnable:
-		switch in.Step.Verb {
-		case seataccess.VerbEnable:
-			return s.setLevel(ctx, in)
-		case seataccess.VerbMint:
-			return s.mint(ctx, in)
-		default:
-			return s.retire(ctx, in)
-		}
-	case seataccess.OpLevel:
-		return s.setLevel(ctx, in)
-	case seataccess.OpMint, seataccess.OpRotate:
-		if in.Step.Verb == seataccess.VerbMint {
-			return s.mint(ctx, in)
-		}
-		return s.retire(ctx, in)
-	case seataccess.OpDisable, seataccess.OpRemove:
-		return s.deleteRobot(ctx, in)
-	case seataccess.OpRevoke:
-		return s.revokeTokens(ctx, in)
+	case err != nil:
+		return seataccess.Observed{}, fmt.Errorf("expo: read %s's role: %w", handle, err)
 	default:
-		return seataccess.StepResult{}, fmt.Errorf("expo: no step for %q", in.Step.Op)
+		out.Enabled, out.Level = true, levelOf(role)
+	}
+	return out, nil
+}
+
+// Apply takes one step: a person's step answers Waiting until Expo shows it
+// done, and Crewlet's steps check and seal a pasted token or clear one.
+func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
+	switch {
+	case in.Step.By == seataccess.ByCrewlet && in.Step.Verb == seataccess.VerbMint:
+		return s.seal(ctx, in)
+	case in.Step.By == seataccess.ByCrewlet && in.Step.Op == seataccess.OpMint:
+		return seataccess.StepResult{Revoked: []string{TokenField}}, nil
+	case in.Step.By == seataccess.ByCrewlet:
+		return s.clear(in), nil
+	case in.Step.Verb == seataccess.VerbCreate || in.Step.Verb == seataccess.VerbMint:
+		return s.awaitToken(in), nil
+	case in.Step.Verb == seataccess.VerbEnable || in.Step.Verb == seataccess.VerbRerole:
+		return s.awaitRole(ctx, in)
+	case in.Step.Verb == seataccess.VerbRevoke:
+		return s.awaitOtherTokens(ctx, in)
+	case in.Step.Verb == seataccess.VerbRemove:
+		return s.awaitDeleted(ctx, in)
+	default:
+		return seataccess.StepResult{}, fmt.Errorf("expo: no step for %q %q", in.Step.Op, in.Step.Verb)
 	}
 }
 
-// permissionsFor is what the seat's level grants, or the refusal saying why
-// it cannot be granted.
-func permissionsFor(in seataccess.ApplyInput) ([]Permission, error) {
-	perms, ok := Permissions(in.Want.Level)
-	if !ok {
-		return nil, &seataccess.Refusal{
-			Said:   fmt.Sprintf("Expo: %q is not a level this engine offers", in.Want.Level),
-			Remedy: "Choose a level for this agent on the Agents tab",
-			Actor:  seataccess.ByYou,
-		}
+// awaitToken is done once a token was pasted for the seat, and otherwise says
+// what to do at Expo.
+func (s *accessSession) awaitToken(in seataccess.ApplyInput) seataccess.StepResult {
+	if in.HandIn != "" {
+		return seataccess.StepResult{}
 	}
-	return perms, nil
+	switch {
+	case in.Have.CredentialGone:
+		return s.waiting(fmt.Sprintf("Expo no longer accepts robot %s's token. Create a new token "+
+			"on its row and paste it here.", in.Have.Account))
+	case in.Step.Op == seataccess.OpRotate || in.Step.Op == seataccess.OpMint:
+		return s.waiting(fmt.Sprintf("Create a new access token on robot %s's row and paste it here.",
+			in.Have.Account))
+	default:
+		return s.waiting(fmt.Sprintf("Add a robot named %s with the %s role on %s's access tokens "+
+			"page, create an access token for it, and paste the token here.",
+			RobotName(s.company, in.Seat.Handle), LevelName(in.Want.Level), s.account))
+	}
 }
 
-// create makes the seat's robot user, already holding its level's
-// permissions. Observe reports a seat robotless only where its robot is gone
-// or already being deleted, so there is no earlier robot to clear first.
-func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
-	perms, err := permissionsFor(in)
+// seal checks the pasted token for the seat and hands it to the sync to seal,
+// recording the robot it proved.
+func (s *accessSession) seal(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
+	if in.HandIn == "" {
+		return s.waiting("Paste the robot's token here."), nil
+	}
+	checked, err := s.check(ctx, in.Seat, in.Want, in.Record, in.Step.Op == seataccess.OpRotate, in.HandIn)
 	if err != nil {
 		return seataccess.StepResult{}, err
 	}
-	accountID, err := s.accountRef(ctx)
+	res := seataccess.StepResult{
+		AccountID: checked.Robot.ID, Account: checked.Robot.Name,
+		Minted: []seataccess.Minted{{Field: TokenField, Value: in.HandIn, CredentialID: checked.Prefix}},
+	}
+	if s.sealed(in.Seat.Handle, RetiredField) != "" {
+		res.Revoked = []string{RetiredField}
+	}
+	return res, nil
+}
+
+// check proves value for the seat, refusing as the shared [seataccess.Refusal].
+// sameRobot holds a replacement token to the robot the seat already has.
+func (s *accessSession) check(
+	ctx context.Context, seat seataccess.SeatRef, want seataccess.Desired, rec *seataccess.Record,
+	sameRobot bool, value string,
+) (Checked, error) {
+	c, err := s.client(value)
 	if err != nil {
-		return seataccess.StepResult{}, s.refused(in, err)
+		return Checked{}, err
 	}
-	name := RobotName(s.company, in.Seat.Handle)
-	robot, err := s.client.CreateRobot(ctx, accountID, name, perms)
-	if err != nil {
-		return seataccess.StepResult{}, s.refused(in, err)
-	}
-	return seataccess.StepResult{AccountID: robot.ID, Account: name}, nil
-}
-
-// mint creates one access token on the seat's robot and hands its value to the
-// sync to seal. A value the sync cannot seal is revoked and deleted through
-// its Revoke; the tokens it replaces go in the op's next step.
-func (s *accessSession) mint(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
-	return s.withRobot(ctx, in, func(robot Robot) (seataccess.StepResult, error) {
-		tok, value, err := s.client.CreateToken(ctx, robot.ID, TokenNote(in.Seat.Handle))
-		if err != nil {
-			return seataccess.StepResult{}, s.refused(in, err)
-		}
-		if strings.TrimSpace(value) == "" {
-			// THE TOKEN EXISTS AND ITS VALUE NEVER ARRIVED, so it is taken
-			// back now rather than left live and held by nobody.
-			revokeErr := s.client.RetireToken(context.WithoutCancel(ctx), tok.ID)
-			return seataccess.StepResult{}, errors.Join(
-				errors.New("expo: created an access token and Expo returned no value for it"), revokeErr)
-		}
-		tokenID := tok.ID
-		return seataccess.StepResult{Minted: []seataccess.Minted{{
-			Field: TokenField, Value: value, CredentialID: tokenID,
-			Revoke: func(ctx context.Context) error { return s.client.RetireToken(ctx, tokenID) },
-		}}}, nil
-	})
-}
-
-// retire revokes and deletes the engine's tokens on the robot other than the
-// one this op's earlier step minted. With nothing minted before it, it
-// refuses and retires nothing, so a seat is never left without a token.
-func (s *accessSession) retire(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
-	keep := in.PriorCredentialID(TokenField)
-	if keep == "" {
-		return seataccess.StepResult{}, fmt.Errorf(
-			"expo: %s: no token was minted before this step, so none is retired", in.Seat.Handle)
-	}
-	return s.withRobot(ctx, in, func(robot Robot) (seataccess.StepResult, error) {
-		for _, tok := range engineTokens(robot, in.Seat.Handle) {
-			if tok.ID == keep {
-				continue
+	in := CheckInput{Token: value, Account: s.account, Level: want.Level, Seat: seat.Label(),
+		OwnerOf: func(id string) string {
+			if h := s.robots[id]; h != "" && h != seat.Handle {
+				return h
 			}
-			if err := s.client.RetireToken(ctx, tok.ID); err != nil {
-				return seataccess.StepResult{}, s.refused(in, err)
-			}
-		}
-		return seataccess.StepResult{}, nil
-	})
+			return ""
+		}}
+	if sameRobot && rec != nil && rec.Held() {
+		in.Robot = rec.Account.ID
+	}
+	checked, err := Check(ctx, c, in)
+	if r, ok := IsRefusal(err); ok {
+		return Checked{}, &seataccess.Refusal{Said: r.Detail, Remedy: r.Hint, Actor: seataccess.ByYou,
+			ActionURL: AccessTokensURL(s.account)}
+	}
+	return checked, err
 }
 
-// setLevel moves the robot to exactly the seat's level: the permissions it
-// lacks are granted first and the extra ones revoked after, so it never holds
-// less than the lower of the two levels in between.
-func (s *accessSession) setLevel(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
-	perms, err := permissionsFor(in)
+// clear takes the seat's token away from its box at once, keeping its value
+// where no box reads it until the robot is deleted at Expo.
+func (s *accessSession) clear(in seataccess.ApplyInput) seataccess.StepResult {
+	res := seataccess.StepResult{Revoked: []string{TokenField}}
+	if token := s.sealed(in.Seat.Handle, TokenField); token != "" {
+		res.Minted = []seataccess.Minted{{Field: RetiredField, Value: token}}
+	}
+	return res
+}
+
+// awaitRole is done once the robot holds the seat's role, read with its own
+// token, and otherwise names both roles.
+func (s *accessSession) awaitRole(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
+	c, err := s.client(s.sealed(in.Seat.Handle, TokenField))
 	if err != nil {
 		return seataccess.StepResult{}, err
 	}
-	return s.withRobot(ctx, in, func(robot Robot) (seataccess.StepResult, error) {
-		accountID, err := s.accountRef(ctx)
-		if err != nil {
-			return seataccess.StepResult{}, s.refused(in, err)
-		}
-		if err := s.client.Grant(ctx, accountID, robot.ID, difference(perms, robot.Permissions)); err != nil {
-			return seataccess.StepResult{}, s.refused(in, err)
-		}
-		if err := s.client.Revoke(ctx, accountID, robot.ID, difference(robot.Permissions, perms)); err != nil {
-			return seataccess.StepResult{}, s.refused(in, err)
-		}
+	role, err := c.RoleOn(ctx, s.account)
+	status := Status(err)
+	if err != nil && status != http.StatusForbidden && status != http.StatusNotFound {
+		return seataccess.StepResult{}, err
+	}
+	if want, _ := RoleOf(in.Want.Level); err == nil && role == want {
 		return seataccess.StepResult{}, nil
-	})
+	}
+	held := "no role"
+	if err == nil {
+		held = "a " + roleName(role)
+	}
+	return s.waiting(fmt.Sprintf("Robot %s holds %s on %s, and you chose %s. Change its role with "+
+		"Edit robot at Expo, or choose its role here.", in.Have.Account, held, s.account,
+		LevelName(in.Want.Level))), nil
 }
 
-// deleteRobot is off and remove alike: every token on the robot is revoked
-// and deleted, then the robot's deletion is scheduled. One already gone is
-// the state asked for.
-func (s *accessSession) deleteRobot(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
-	done := seataccess.StepResult{Gone: true, Revoked: []string{TokenField}}
-	id := robotID(in)
-	if id == "" {
-		return done, nil
+// awaitOtherTokens is done once the robot holds no live token but the sealed
+// one, read with that token.
+func (s *accessSession) awaitOtherTokens(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
+	token := in.HandIn
+	if token == "" {
+		token = s.sealed(in.Seat.Handle, TokenField)
 	}
-	robot, found, err := s.findRobot(ctx, id)
+	c, err := s.client(token)
 	if err != nil {
-		return seataccess.StepResult{}, s.refused(in, err)
+		return seataccess.StepResult{}, err
 	}
-	if !found || robot.Deleting {
-		return done, nil
-	}
-	if err := s.dropRobot(ctx, robot); err != nil {
-		return seataccess.StepResult{}, s.refused(in, err)
-	}
-	return done, nil
-}
-
-// dropRobot revokes and deletes every live token on robot, then schedules the
-// robot's deletion: the tokens first, so a deletion Expo runs later leaves no
-// token working in between.
-func (s *accessSession) dropRobot(ctx context.Context, robot Robot) error {
-	for _, tok := range robot.Tokens {
-		if tok.Revoked {
-			continue
-		}
-		if err := s.client.RetireToken(ctx, tok.ID); err != nil {
-			return err
-		}
-	}
-	return s.client.DeleteRobot(ctx, robot.ID)
-}
-
-// revokeTokens revokes and deletes the engine's tokens on the seat's robot and
-// keeps the robot. A robot already gone holds none.
-func (s *accessSession) revokeTokens(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
-	done := seataccess.StepResult{Revoked: []string{TokenField}}
-	id := robotID(in)
-	if id == "" {
-		return done, nil
-	}
-	robot, found, err := s.findRobot(ctx, id)
+	me, err := c.Viewer(ctx)
 	if err != nil {
-		return seataccess.StepResult{}, s.refused(in, err)
+		return seataccess.StepResult{}, err
 	}
-	if !found || robot.Deleting {
-		return done, nil
-	}
-	for _, tok := range engineTokens(robot, in.Seat.Handle) {
-		if err := s.client.RetireToken(ctx, tok.ID); err != nil {
-			return seataccess.StepResult{}, s.refused(in, err)
+	own := prefixOf(me, token)
+	var others []string
+	for _, t := range me.Tokens {
+		if !t.Revoked && t.Prefix != own {
+			others = append(others, t.Prefix+"…")
 		}
 	}
-	return done, nil
+	if len(others) == 0 {
+		return seataccess.StepResult{}, nil
+	}
+	return s.waiting(fmt.Sprintf("Delete robot %s's other tokens (%s) on %s's access tokens page.",
+		nameOf(me), strings.Join(others, ", "), s.account)), nil
 }
 
-// robotID is the step's robot: the ledger's, else the one the pass observed.
-func robotID(in seataccess.ApplyInput) string {
-	if in.Record != nil && in.Record.Account != nil && in.Record.Account.ID != "" {
-		return in.Record.Account.ID
-	}
-	return in.Have.AccountID
-}
-
-// findRobot reads the account's robots fresh and answers the one with id.
-func (s *accessSession) findRobot(ctx context.Context, id string) (Robot, bool, error) {
-	robots, err := s.client.Robots(ctx, s.account)
-	if err != nil {
-		return Robot{}, false, err
-	}
-	for _, r := range robots {
-		if r.ID == id {
-			return r, true, nil
-		}
-	}
-	return Robot{}, false, nil
-}
-
-// withRobot reads the step's robot fresh and runs fn on it, or answers Gone
-// where Expo no longer has it. A robot a step leaves on carries the engine's
-// name again, so the account's robot list keeps naming its agent.
-func (s *accessSession) withRobot(
-	ctx context.Context, in seataccess.ApplyInput, fn func(Robot) (seataccess.StepResult, error),
-) (seataccess.StepResult, error) {
-	for _, prior := range in.Prior {
-		if prior.AccountID != "" {
-			// A ROBOT THIS OP JUST CREATED is taken as created: a listing read
-			// straight after may not show it yet, and Gone would leak it.
-			return fn(Robot{ID: prior.AccountID, Name: prior.Account})
-		}
-	}
-	id := robotID(in)
-	if id == "" {
-		return seataccess.StepResult{}, fmt.Errorf("expo: %s has no robot user to %s", in.Seat.Handle, in.Step.Verb)
-	}
-	robot, found, err := s.findRobot(ctx, id)
-	if err != nil {
-		return seataccess.StepResult{}, s.refused(in, err)
-	}
-	if !found || robot.Deleting {
+// awaitDeleted is done once the turned-off robot's token answers 401, which is
+// Expo saying the robot or its token is gone.
+func (s *accessSession) awaitDeleted(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
+	retired := s.sealed(in.Seat.Handle, RetiredField)
+	if retired == "" {
 		return seataccess.StepResult{Gone: true}, nil
 	}
-	if name := RobotName(s.company, in.Seat.Handle); in.Step.Op.LeavesOn() && robot.Name != name {
-		if err := s.client.RenameRobot(ctx, robot.ID, name); err != nil {
-			return seataccess.StepResult{}, s.refused(in, err)
-		}
-		robot.Name = name
+	c, err := s.client(retired)
+	if err != nil {
+		return seataccess.StepResult{}, err
 	}
-	return fn(robot)
+	_, err = c.Viewer(ctx)
+	if Status(err) == http.StatusUnauthorized {
+		return seataccess.StepResult{Gone: true, Revoked: []string{RetiredField}}, nil
+	}
+	if err != nil {
+		return seataccess.StepResult{}, err
+	}
+	return s.waiting(fmt.Sprintf("Robot %s still exists at Expo. Delete it with Delete robot on "+
+		"%s's access tokens page.", in.Have.Account, s.account)), nil
 }
 
-// refused turns an Expo refusal into the shared [seataccess.Refusal], with the
-// remedy and who acts; a rate limit, a 5xx or a transport failure stays a
-// fault the sync retries.
-func (s *accessSession) refused(in seataccess.ApplyInput, err error) error {
-	if err == nil {
-		return nil
-	}
-	if _, ok := errors.AsType[*seataccess.Refusal](err); ok {
-		return err
-	}
-	api, ok := errors.AsType[*APIError](err)
-	if !ok || api.Status == http.StatusTooManyRequests || api.Status >= http.StatusInternalServerError {
-		return err
-	}
-	said := api.Detail
-	if said == "" || said == noDetail {
-		said = fmt.Sprintf("Expo refused the request with status %d", api.Status)
-	}
-	return &seataccess.Refusal{
-		Said: "Expo: " + said, Remedy: remedyFor(in.Step.Op, api.Status),
-		Actor: seataccess.ByYou, ActionURL: AccessTokensURL(s.account),
-	}
+// waiting is a person's step at Expo, pointing at the account's access tokens
+// page.
+func (s *accessSession) waiting(detail string) seataccess.StepResult {
+	return seataccess.StepResult{Waiting: &seataccess.Waiting{ActionURL: AccessTokensURL(s.account), Detail: detail}}
 }
 
-// remedyFor is what a person does about a refusal, by what was refused.
-func remedyFor(op seataccess.Op, status int) string {
-	switch status {
-	case http.StatusUnauthorized:
-		return "Replace the provisioner token on the Expo connection"
-	case http.StatusForbidden:
-		return "Give the provisioner token's user or robot the Admin role on the Expo account, then retry"
-	case http.StatusNotFound:
-		if op == seataccess.OpCreate || op == seataccess.OpLevel || op == seataccess.OpEnable {
-			return "Check that integrations.expo.provisioning.account_name names the Expo account, then retry"
-		}
-		return "Settle what Expo names at Expo, then retry"
-	default:
-		return "Settle what Expo names at Expo, then retry"
+// CheckHandIn implements [seataccess.HandsIn]: the paste route's check, with
+// reads only, before the sync seals anything.
+func (s *accessSession) CheckHandIn(ctx context.Context, in seataccess.HandInInput) (seataccess.HandedIn, error) {
+	s.remember(in.Records)
+	// A ROTATE replaces a token the seat holds and Expo still accepts, so the
+	// new one must be the same robot's; any other paste may name a new robot.
+	held := in.Record != nil && in.Record.Held() && s.sealed(in.Seat.Handle, TokenField) != ""
+	if held {
+		last := in.Record.Lanes[in.Lane].Observed
+		held = last.Exists && !last.CredentialGone
 	}
+	checked, err := s.check(ctx, in.Seat, in.Want, in.Record, held, in.Value)
+	if err != nil {
+		return seataccess.HandedIn{}, err
+	}
+	return seataccess.HandedIn{
+		Rotate: held,
+		Detail: fmt.Sprintf("Works. Robot %s, %s on %s. Sealed as %s.", nameOf(checked.Robot),
+			roleName(checked.Role), s.account, seataccess.SinkName(integration.KindExpo, TokenField, in.Seat.Handle)),
+	}, nil
 }
