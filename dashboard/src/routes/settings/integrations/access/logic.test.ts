@@ -30,6 +30,7 @@ import {
   joinLevels,
   levelName,
   boxSettings,
+  boxSettingsFact,
   credentialNote,
   noToolRemedy,
   onlyScope,
@@ -47,6 +48,7 @@ import {
   type Lane,
 } from "./logic.ts";
 import type { AccessSeatLane } from "~/contract/access.ts";
+import { laneWords } from "./words.ts";
 
 const sre = () => datadogAnswer().seats.find((s) => s.handle === "sre")!.lanes.datadog!;
 
@@ -524,13 +526,39 @@ test("the settings Crewlet puts in a box name its files after its variables", ()
   );
 });
 
+// A LANE WHOSE CLI MUST COME WITH THE BOX IMAGE says so beside what Crewlet
+// sets there, and a lane with nothing set says nothing at all.
+test("the settings Crewlet sets carry the lane's note on them, and nothing without settings", () => {
+  const sre = neutralAnswer().seats[1]!.lanes[NEUTRAL_LANE.key]!;
+  const words = laneWords(NEUTRAL_LANE.key);
+  expect(boxSettingsFact(NEUTRAL_LANE, sre)).toEqual({
+    settings: "VENDOR_TOKEN_FILE and .config/crewlet/token",
+  });
+  expect(
+    boxSettingsFact(NEUTRAL_LANE, sre, { ...words, boxNote: "the CLI must be in the box image" }),
+  ).toEqual({
+    settings: "VENDOR_TOKEN_FILE and .config/crewlet/token",
+    note: "the CLI must be in the box image",
+  });
+  expect(
+    boxSettingsFact(NEUTRAL_LANE, offLane(), {
+      ...words,
+      boxNote: "the CLI must be in the box image",
+    }),
+  ).toBeNull();
+});
+
 // A CREDENTIAL CREWLET ISSUES AT USE has no time any node shares, so it reads
-// as how it is issued; a minted one keeps its time, and one provided from
-// outside says so.
+// as how it is issued, for as long as its lane says one lasts; a minted one
+// keeps its time, and one provided from outside says so.
 test("a credential reads as issued at use, minted when, or provided externally", () => {
   const now = Date.now();
   const issued = neutralAnswer().seats[1]!.lanes[NEUTRAL_LANE.key]!.observed;
-  expect(credentialNote(NEUTRAL_LANE, issued, now)).toBe(", issued for an hour at a time, at use");
+  const words = laneWords(NEUTRAL_LANE.key);
+  expect(credentialNote(NEUTRAL_LANE, issued, now)).toBe(", issued at use");
+  expect(credentialNote(NEUTRAL_LANE, issued, now, { ...words, issued: "15 minutes" })).toBe(
+    ", issued for 15 minutes at a time, at use",
+  );
   const minted = {
     ...issued,
     credential: onLane({ variable: "VENDOR_TOKEN_SRE" }).observed.credential!,
