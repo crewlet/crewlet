@@ -84,7 +84,9 @@ func TestAnEndedTurnTakesNoFurtherCapture(t *testing.T) {
 // Mutation: absorb every ended row at or below the read, as the rule once was,
 // and the turn the read left out is absorbed although nobody was shown it; drop
 // the end_seq bound from absorbStatement and the turn that ended after the
-// read goes, and so does the live turn's begun row.
+// read goes; and absorb a named row whether or not it ended — no end_seq term
+// at all, or a missing end read as one at the log's start — and the live
+// turn's begun row goes with it.
 func TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -260,12 +262,18 @@ func TestACaptureKeepsItsTurnsFirstReadAndWork(t *testing.T) {
 // store does not spell, a digest that is not one, and a list of absorbed turns
 // no read hands out. Each would be a row that fails the collector, its audit,
 // the backup and every read of the seat on every node, for as long as it stays.
+// Nor does one whose session's context is below nothing, which no request
+// carries and whose writer refuses it: a launch would size its budget floor on
+// it.
 //
-// Mutation: drop nameable from applyCapture and the malformed key is recorded.
+// Mutation: drop nameable from applyCapture and the malformed key is recorded;
+// drop the context's floor from it and a record that skipped its writer puts
+// -1 tokens on every node's row.
 func TestACaptureNamingWhatNoReaderCanParseWritesNothing(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
 	for name, spoil := range map[string]func(*Capture){
+		"a context below nothing":                func(c *Capture) { c.ContextTokens = -1 },
 		"an object key the store does not spell": func(c *Capture) { c.Object = "session-7" },
 		"an uppercase object key":                func(c *Capture) { c.Object = strings.ToUpper(c.Object) },
 		"a digest that is not one":               func(c *Capture) { c.ObjectHash = "abc" },
@@ -365,23 +373,27 @@ func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
 // endings, and never a live turn's: and a capture that cannot fit even with
 // every ended session released writes nothing and releases nothing.
 //
+// A row a turn's begin wrote needs no case here: it names no object, so the
+// budget, which counts and releases only rows that name one, can neither count
+// nor take it, and releasing it would change nothing a reader sees. What a
+// begin does change for the budget is the base it holds, which
+// TestNoReleaseTakesAHeldBase and TestTheHoldLiftsAtTheHoldersFirstCapture
+// hold.
+//
 // Mutation: order the release by end_seq DESC and the newer ending's session
 // goes first; release before checking the plan fits and the oversized capture
-// strips every ended session for nothing.
+// strips every ended session for nothing; release live turns' sessions too and
+// the live one goes.
 func TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
-	oldest, newer, live, next, begun := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
+	oldest, newer, live, next := newTurn(), newTurn(), newTurn(), newTurn()
 	const tight = 100
 	e.capture(capturing("ana", "chat:a", oldest, 1, 1, 40, tight))
 	e.end(ending("ana", "chat:a", oldest, "", Ending{Outcome: OutcomeCompleted}))
 	e.capture(capturing("ana", "chat:b", newer, 1, 1, 40, tight))
 	e.end(ending("ana", "chat:b", newer, "", Ending{Outcome: OutcomeCompleted}))
 	e.capture(capturing("ana", "chat:c", live, 1, 1, 10, tight))
-	// A LIVE TURN WHOSE BEGIN WROTE ITS ROW, holding no base: a row naming no
-	// object, which the budget neither counts nor releases.
-	e.begin(Begin{V: 1, Handle: "ana", Turn: begun, ConversationKey: "chat:f",
-		ReadThrough: e.at().Packed()})
 
 	if _, n := e.capture(capturing("ana", "chat:d", next, 1, 1, 30, tight)); n == 0 {
 		t.Fatal("a capture the budget holds once the oldest ending is released wrote nothing")
@@ -404,9 +416,6 @@ func TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst(t *testing.T) {
 	}
 	if l, _ := e.session("ana", live); !l.HasObject() {
 		t.Error("a live turn's session was released")
-	}
-	if b, found := e.session("ana", begun); !found || b.Ended() || b.ReadThrough.Packed() == 0 {
-		t.Errorf("the budget's release reached a live turn's begun row: (%+v, %v)", b, found)
 	}
 }
 
@@ -461,22 +470,23 @@ func TestARetentionDeleteTakesATurnThatNeverEnded(t *testing.T) {
 }
 
 // A REMOVED SEAT STAYS REMOVED: its rows go, its live turns are tombstoned,
-// and a capture or an end decided before the removal and landing after it
-// writes nothing — the turn that had a row by its tombstone, and the turn that
-// had none (no tombstone could name it) by the removal's position, which every
-// capture and end carries the one its decide saw. A capture of the seat's next
-// tenure, decided once the removal was applied, lands; and the removal's
-// record goes with the retention.
+// and a capture, a begin or an end decided before the removal and landing after
+// it writes nothing — the turn that had a row by its tombstone, and the turn
+// that had none (no tombstone could name it) by the removal's position, which
+// every capture, begin and end carries the one its decide saw. A capture or a
+// begin of the seat's next tenure, decided once the removal was applied,
+// lands; and the removal's record goes with the retention.
 //
-// Mutation: drop the removal check from applyCapture (or applyEnd) and the
-// turn that had no row comes back for a removed seat; drop the tombstones from
-// removeSeat and the live turn does.
+// Mutation: drop the removal check from applyCapture, applyBegin (or applyEnd)
+// and the turn that had no row comes back for a removed seat; drop the
+// tombstones from removeSeat, or the tombstone check from applyBegin, and the
+// live turn does.
 func TestARemovedSeatStaysRemoved(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
-	done, live, rowless, endless := newTurn(), newTurn(), newTurn(), newTurn()
+	done, live, rowless, endless, unbegun := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:a", done, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:a", done, "", Ending{Outcome: OutcomeCompleted}))
+	read, _ := e.end(ending("ana", "chat:a", done, "", Ending{Outcome: OutcomeCompleted}))
 	e.capture(capturing("ana", "chat:b", live, 1, 1, 100, budget))
 	e.capture(capturing("ben", "chat:b", newTurn(), 1, 1, 100, budget))
 
@@ -506,11 +516,31 @@ func TestARemovedSeatStaysRemoved(t *testing.T) {
 		t.Errorf("the end of a turn that captured nothing, decided before the removal, "+
 			"wrote %d rows", n)
 	}
+	// A BEGIN IS HELD TO THE REMOVAL AS A CAPTURE IS: the live turn's by its
+	// tombstone, though it carries the removal, and a turn with no row,
+	// decided before the removal, by the removal's position.
+	if _, n := e.begin(Begin{V: 1, Handle: "ana", Turn: live, ConversationKey: "chat:b",
+		ReadThrough: removed.Packed(), SeenRemoval: removed.Packed()}); n != 0 {
+		t.Errorf("a begin of the live turn landing after the removal wrote %d rows", n)
+	}
+	if _, n := e.begin(Begin{V: 1, Handle: "ana", Turn: unbegun, ConversationKey: "chat:c",
+		ReadThrough: read.Packed()}); n != 0 {
+		t.Errorf("the begin of a turn with no row, decided before the removal, wrote %d rows", n)
+	}
+	for _, run := range []string{live, unbegun} {
+		if _, found := e.session("ana", run); found {
+			t.Errorf("a begin landing after the removal left a row of turn %s", run)
+		}
+	}
 	// THE SEAT'S NEXT TENURE, decided by a node that applied the removal.
 	next := capturing("ana", "chat:c", newTurn(), 1, 1, 100, budget)
 	next.SeenRemoval = removed.Packed()
 	if _, n := e.capture(next); n == 0 {
 		t.Error("a capture decided after the removal, carrying it, wrote nothing")
+	}
+	if _, n := e.begin(Begin{V: 1, Handle: "ana", Turn: newTurn(), ConversationKey: "chat:c",
+		ReadThrough: removed.Packed(), SeenRemoval: removed.Packed()}); n == 0 {
+		t.Error("a begin decided after the removal, carrying it, wrote nothing")
 	}
 	var others int
 	if err := e.db.Read(t.Context(), func(tx *sql.Tx) error {

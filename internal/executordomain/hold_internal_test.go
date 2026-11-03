@@ -1,9 +1,15 @@
 package executordomain
 
 import (
+	"context"
+	"database/sql"
 	"maps"
 	"slices"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 )
 
 // THE HOLD: a turn's begin names the base its first read froze, and while the
@@ -16,12 +22,14 @@ import (
 // names the head as its base and holds it; a second begin of the turn — a
 // retry, or another read after a newer turn ended — writes nothing; and a
 // begin no read hands out (a base outside what the read handed out, the turn
-// as its own base, no read, no conversation, a session no reader can parse)
-// writes nothing at all.
+// as its own base, no read at all, no conversation, a session no reader can
+// parse) writes nothing at all.
 //
-// Mutation: drop the `read_through > 0` refusal from applyBegin and the second
-// begin replaces the turn's first read and its base; drop baseShaped and a
-// begin naming a base its read never handed out holds it.
+// Mutation: drop the `read_through > 0` refusal from applyBegin — the one
+// place a turn's first read is held to stand — and the second begin replaces
+// the turn's first read and its base; drop baseShaped and a begin naming a
+// base its read never handed out holds it; drop the read's own check and a
+// begin that read nothing writes a row.
 func TestABeginHoldsTheBaseItsReadNamed(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -64,8 +72,12 @@ func TestABeginHoldsTheBaseItsReadNamed(t *testing.T) {
 		"a base the read did not hand out": func(b *Begin) {
 			b.Absorbs = slices.DeleteFunc(slices.Clone(b.Absorbs), func(x string) bool { return x == b.BaseTurn })
 		},
-		"the turn as its own base":           func(b *Begin) { b.BaseTurn = b.Turn },
-		"no read":                            func(b *Begin) { b.ReadThrough = 0 },
+		"the turn as its own base": func(b *Begin) { b.BaseTurn = b.Turn },
+		// NOTHING BUT THE READ MISSING: no turns handed out and no base,
+		// which the turns' own check would refuse beside a read of nothing.
+		"no read at all": func(b *Begin) {
+			*b = Begin{V: b.V, Handle: b.Handle, Turn: b.Turn, ConversationKey: b.ConversationKey}
+		},
 		"no conversation":                    func(b *Begin) { b.ConversationKey = "" },
 		"a base session no reader can parse": func(b *Begin) { b.BaseObject = "session-7" },
 	} {
@@ -124,6 +136,176 @@ func TestABeginAndAnEndOfItsBaseAreOrderedByTheLog(t *testing.T) {
 					"head absorbed and nothing named", kept, row.BaseTurn)
 			}
 		})
+	}
+}
+
+// A BEGIN HOLDS ONLY THE SESSION ITS READ SAW: a base whose row is still live,
+// ended after the read, another conversation's, or names another object,
+// another digest or none at all is not the head that read handed out — a
+// record that skipped its writer names one, and a release between the read and
+// the record leaves the last — so the begin records its read and holds nothing.
+//
+// Mutation: drop any arm of baseStands, or either half of the arm that holds a
+// base to the read's moment (still live, or ended after it), or either
+// comparison of the arm that holds it to the read's session (its object, its
+// digest), and that case's begin holds a row that is not the session its read
+// saw.
+func TestABeginHoldsOnlyTheSessionItsReadSaw(t *testing.T) {
+	t.Parallel()
+	// naming is a begin of a fresh turn in chat:room read at read, naming base
+	// by the session base's row names now, as a read at read would have seen it.
+	naming := func(e *estate, base string, read statelog.Position) Begin {
+		e.t.Helper()
+		s, found := e.session("ana", base)
+		if !found || !s.HasObject() {
+			e.t.Fatalf("the premise: base %s's row is (%+v, %v), want one naming a session", base, s, found)
+		}
+		return Begin{V: 1, Handle: "ana", Turn: newTurn(), ConversationKey: "chat:room",
+			ReadThrough: read.Packed(), Absorbs: []string{base}, BaseTurn: base,
+			BaseObject: s.Object.Key.String(), BaseHash: string(s.Object.Hash)}
+	}
+	// endedIn is a turn of conversation that captured and ended.
+	endedIn := func(e *estate, conversation string) string {
+		turn := newTurn()
+		e.capture(capturing("ana", conversation, turn, 1, 1, 100, budget))
+		e.end(ending("ana", conversation, turn, "", Ending{Outcome: OutcomeCompleted}))
+		return turn
+	}
+	for name, setUp := range map[string]func(e *estate) (string, Begin){
+		"a base still live": func(e *estate) (string, Begin) {
+			base := newTurn()
+			e.capture(capturing("ana", "chat:room", base, 1, 1, 100, budget))
+			return base, naming(e, base, e.at())
+		},
+		"a base that ended after the read": func(e *estate) (string, Begin) {
+			base := newTurn()
+			e.capture(capturing("ana", "chat:room", base, 1, 1, 100, budget))
+			b := naming(e, base, e.at())
+			e.end(ending("ana", "chat:room", base, "", Ending{Outcome: OutcomeCompleted}))
+			return base, b
+		},
+		"another conversation's base": func(e *estate) (string, Begin) {
+			base := endedIn(e, "chat:other")
+			return base, naming(e, base, e.at())
+		},
+		"a base naming another object": func(e *estate) (string, Begin) {
+			base := endedIn(e, "chat:room")
+			b := naming(e, base, e.at())
+			b.BaseObject = keyAt(monday).String()
+			return base, b
+		},
+		"a base naming another digest": func(e *estate) (string, Begin) {
+			base := endedIn(e, "chat:room")
+			b := naming(e, base, e.at())
+			b.BaseHash = string(objstore.HashOf([]byte("another session")))
+			return base, b
+		},
+		"a base the budget released after the read": func(e *estate) (string, Begin) {
+			const tight = 100
+			base := newTurn()
+			e.capture(capturing("ana", "chat:room", base, 1, 1, 40, tight))
+			e.end(ending("ana", "chat:room", base, "", Ending{Outcome: OutcomeCompleted}))
+			b := naming(e, base, e.at())
+			// ROOM FOR ANOTHER CONVERSATION'S CAPTURE IS THE UNHELD BASE'S.
+			e.capture(capturing("ana", "chat:other", newTurn(), 1, 1, 70, tight))
+			if s, _ := e.session("ana", base); s.HasObject() {
+				e.t.Fatalf("the premise: the budget kept the base's session: %+v", s)
+			}
+			return base, b
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newEstate(t)
+			base, b := setUp(e)
+			if _, n := e.begin(b); n == 0 {
+				t.Fatal("the begin wrote nothing: it records its read whatever its base")
+			}
+			s, found := e.session("ana", b.Turn)
+			if !found || s.BaseTurn != "" || s.ReadThrough.Packed() != b.ReadThrough {
+				t.Errorf("the begun row is (%+v, %v), want its read recorded and no base named", s, found)
+			}
+			if e.holds("ana", base) {
+				t.Error("a base that is not the session the read saw is held")
+			}
+		})
+	}
+}
+
+// A LATE BEGIN RECORDS THE READ AND HOLDS NOTHING. A turn's first capture can
+// land before its begin; its launches then continue that capture's session, so
+// the begin landing after holds no base — but it still writes where the turn
+// read its conversation, what that read handed out and the base it named onto
+// the turn's row, since that read is what the turn's end absorbs.
+//
+// Mutation: write nothing for a begin whose turn already has a row, or leave the
+// read, the turns it handed out or the base off updateBeginStatement, and the
+// turn's row misses what its late begin recorded — the read and the turns it
+// handed out being what the turn's end absorbs; hold a base for a row that
+// landed a capture and the base its launches never continue is held.
+func TestALateBeginRecordsTheReadAndHoldsNothing(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	base, turn := newTurn(), newTurn()
+	e.capture(capturing("ana", "chat:room", base, 1, 1, 100, budget))
+	e.end(ending("ana", "chat:room", base, "", Ending{Outcome: OutcomeCompleted}))
+	h := e.head("ana", "chat:room")
+	captured := capturing("ana", "chat:room", turn, 1, 1, 100, budget)
+	e.capture(captured)
+	if _, n := e.begin(beginning(h, "ana", "chat:room", turn, "")); n == 0 {
+		t.Fatal("the begin landing after the turn's first capture wrote nothing")
+	}
+	s, _ := e.session("ana", turn)
+	if s.ReadThrough.Packed() != h.Position.Packed() || !slices.Equal(s.Absorbs, h.Absorbs()) ||
+		s.BaseTurn != base || s.SessionID != captured.SessionID || s.LaunchSeq != 1 || s.Ended() {
+		t.Errorf("the turn's row is %+v, want its capture's session beside the read its late begin "+
+			"recorded at %s, the turns it handed out %v and the base %s", s, h.Position, h.Absorbs(), base)
+	}
+	if e.holds("ana", base) {
+		t.Error("a base the turn's own capture outran is held")
+	}
+	e.end(ending("ana", "chat:room", turn, "", Ending{Outcome: OutcomeCompleted}))
+	if _, found := e.session("ana", base); found {
+		t.Error("the turn's end did not absorb the head its late begin's read handed out")
+	}
+}
+
+// A BEGIN OF A TURN THAT ENDED WRITES NOTHING, whether the turn's row is still
+// there or a later turn's end absorbed it: the turn's tombstone outlives its
+// row, and refuses every record about the turn after its end.
+//
+// Mutation: drop the tombstone check from applyBegin and the begin of the turn
+// whose row was absorbed writes a live row for a turn that ended, which no end
+// can close again — and which, had its begin named a base, would hold it until
+// the retention.
+func TestABeginOfATurnThatEndedWritesNothing(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	kept, absorbed, absorber := newTurn(), newTurn(), newTurn()
+	e.capture(capturing("ana", "chat:kept", kept, 1, 1, 100, budget))
+	e.end(ending("ana", "chat:kept", kept, "", Ending{Outcome: OutcomeCompleted}))
+	e.capture(capturing("ana", "chat:room", absorbed, 1, 1, 100, budget))
+	e.end(ending("ana", "chat:room", absorbed, "", Ending{Outcome: OutcomeCompleted}))
+	h := e.head("ana", "chat:room")
+	e.capture(launching(h, capturing("ana", "chat:room", absorber, 1, 1, 100, budget)))
+	e.end(ending("ana", "chat:room", absorber, "", Ending{Outcome: OutcomeCompleted}))
+	if _, found := e.session("ana", absorbed); found {
+		t.Fatal("the premise: the absorbed turn's row is still there")
+	}
+	for name, tc := range map[string]struct{ turn, conversation string }{
+		"row is still there":     {kept, "chat:kept"},
+		"row was absorbed since": {absorbed, "chat:room"},
+	} {
+		if _, n := e.begin(Begin{V: 1, Handle: "ana", Turn: tc.turn, ConversationKey: tc.conversation,
+			ReadThrough: e.at().Packed()}); n != 0 {
+			t.Errorf("a begin of an ended turn whose %s wrote %d rows", name, n)
+		}
+	}
+	if s, _ := e.session("ana", kept); !s.Ended() || s.ReadThrough.Packed() != 0 {
+		t.Errorf("the ended turn's row is %+v after a begin of it, want its end and no read", s)
+	}
+	if _, found := e.session("ana", absorbed); found {
+		t.Error("a begin of a turn whose row was absorbed wrote it a row again")
 	}
 }
 
@@ -387,12 +569,16 @@ func TestTheRetentionListsNoHeldRow(t *testing.T) {
 // SNAPSHOT: every conversation a page's rows name is mapped to its head —
 // whether the head's own row is on the page or not — or to nothing where it
 // has none; a row with no conversation names none; a single row's read names
-// its conversation's head beside it; and a page read after a newer head ended
-// names that one.
+// its conversation's head beside it; a page read after a newer head ended
+// names that one; and an end that lands the moment a page's or a row's read
+// has closed is in neither its rows nor its heads.
 //
 // Mutation: take a conversation's head from the rows in hand rather than a
 // seek of its own, and a conversation whose head began before the page's first
-// row reads as having none.
+// row reads as having none; read the heads in a snapshot of their own, after
+// the rows' — a second read, or a head read per conversation — and an end
+// landing between the two names as its conversation's head a turn the page
+// shows live.
 func TestAPageNamesEachConversationsHead(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -435,4 +621,61 @@ func TestAPageNamesEachConversationsHead(t *testing.T) {
 		t.Errorf("a page read after the live turn ended names chat:a's head %q, want the turn that "+
 			"just ended", again.Heads["chat:a"])
 	}
+
+	// AN END LANDING THE MOMENT THE READ HAS CLOSED, which a head read in a
+	// snapshot of its own would see and the rows did not.
+	next, after := newTurn(), newTurn()
+	e.capture(capturing("ana", "chat:a", next, 1, 1, 100, budget))
+	landed, err := e.readerLanding(func() {
+		e.end(ending("ana", "chat:a", next, "", Ending{Outcome: OutcomeCompleted}))
+	}).Sessions(t.Context(), "ana", "", 10, stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := slices.IndexFunc(landed.Sessions, func(s Session) bool { return s.Turn == next })
+	if shown < 0 || landed.Sessions[shown].Ended() || landed.Heads["chat:a"] != live {
+		t.Errorf("a page read just before turn %s ended names chat:a's head %q, want the head its "+
+			"own rows hold, %s, beside that turn still live", next, landed.Heads["chat:a"], live)
+	}
+	e.capture(capturing("ana", "chat:a", after, 1, 1, 100, budget))
+	single, err := e.readerLanding(func() {
+		e.end(ending("ana", "chat:a", after, "", Ending{Outcome: OutcomeCompleted}))
+	}).Session(t.Context(), "ana", after, stale)
+	if err != nil || single.Session.Ended() || single.Head != next {
+		t.Errorf("a read of turn %s just before it ended names head %q (%v), want the head its own "+
+			"snapshot holds, %s, beside the turn still live", after, single.Head, err, next)
+	}
+}
+
+// betweenReads is a read seam that applies one record right after the next
+// read it serves has closed its snapshot: what a reader that took a second
+// snapshot after its first would find changed under it.
+type betweenReads struct {
+	db   statelogtest.DB
+	land func()
+}
+
+// Read serves one read, then lands the record, once.
+func (b *betweenReads) Read(ctx context.Context, fn func(*sql.Tx) error) error {
+	err := b.db.Read(ctx, fn)
+	if land := b.land; land != nil {
+		b.land = nil
+		land()
+	}
+	return err
+}
+
+// readerLanding is e's reader, as [estate.reader] builds it, over a read seam
+// that applies land once, the moment the reader's next read has closed.
+func (e *estate) readerLanding(land func()) *Reader {
+	e.t.Helper()
+	authority, err := statelogtest.LocalReader(Domain{}, &betweenReads{db: e.db, land: land}, e.at())
+	if err != nil {
+		e.t.Fatalf("build the read authority: %v", err)
+	}
+	r, err := NewReader(ReaderOptions{DB: e.db.Reader(), Log: authority})
+	if err != nil {
+		e.t.Fatalf("build the reader: %v", err)
+	}
+	return r
 }

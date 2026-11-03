@@ -46,9 +46,11 @@ import (
 //
 // Every write answers its whole [statelog.Result] and never a bare position,
 // because a position cannot tell `applied` and `pending` from `unknown`; and a
-// capture the rows refused at the apply (an end, a newer capture or another
-// conversation's capture that took the budget, between the decide and the
-// apply) answers the refusal its own row says, read back.
+// capture the rows refused at the apply (an end, a newer capture, another
+// conversation's capture that took the budget, or another turn's begin that
+// came to hold a base the budget would have released, between the decide and
+// the apply) answers the refusal its own row says, read back, as a begin says
+// whether its row holds the base it named.
 
 // Call is one write's caller: who is writing and under which operation.
 type Call struct {
@@ -348,9 +350,10 @@ type CaptureResult struct {
 
 	// Recorded is true when the row was read back naming this capture's
 	// object. False on an applied result means the apply refused it (an
-	// end, a newer capture, a removal of the seat or another conversation's
-	// capture that took the budget got there first), and on a pending or
-	// unknown one that this node has not seen it apply yet.
+	// end, a newer capture, a removal of the seat, another conversation's
+	// capture that took the budget, or another turn's begin that came to
+	// hold a base the budget would have released got there first), and on a
+	// pending or unknown one that this node has not seen it apply yet.
 	Recorded bool
 }
 
@@ -365,8 +368,9 @@ const captureReadBackStatement = `
 // removed ([ErrTurnEnded]), ordinals not newer than the row's
 // ([ErrStaleCapture]), another conversation or unit of work than the turn's
 // ([ErrInvalid]), and a capture the seat's budget cannot hold with every ended
-// session released ([ErrOverBudget]). The apply repeats every guard but the
-// age, and an applied capture is read back ([CaptureResult.Recorded]).
+// session no other live turn holds as its base released ([ErrOverBudget]). The
+// apply repeats every guard but the age, and an applied capture is read back
+// ([CaptureResult.Recorded]).
 func (w *Writer) Capture(ctx context.Context, c Call, n NewCapture) (CaptureResult, error) {
 	if err := c.validate(); err != nil {
 		return CaptureResult{}, err
@@ -426,6 +430,27 @@ func (w *Writer) Capture(ctx context.Context, c Call, n NewCapture) (CaptureResu
 	return out, err
 }
 
+// turnEnded is [ErrTurnEnded] for a turn that has ended or whose seat was
+// removed, and nil for one that has not: what every decide about a turn
+// refuses a closed one by.
+//
+// THE TOMBSTONE ALONE DECIDES IT, never the row's own end. An end writes the
+// turn's tombstone in the very apply that ends its row ([applyEnd]), and only
+// the retention removes a tombstone, together with its row ([removeTurn]), so
+// no ended row is without one; and a turn whose row a later turn's end
+// absorbed, or its seat's removal deleted, has the tombstone alone — which a
+// test of the row would let through as a turn with no row yet.
+func turnEnded(ctx context.Context, tx *sql.Tx, handle, turn string) error {
+	_, tombed, err := readTomb(ctx, tx, handle, turn)
+	switch {
+	case err != nil:
+		return err
+	case tombed:
+		return fmt.Errorf("%w: %s's turn %s", ErrTurnEnded, handle, turn)
+	}
+	return nil
+}
+
 // decideCapture is the capture's decide over one snapshot of the turn and its
 // seat: every refusal [Writer.Capture] names. It answers the seat's removal the
 // snapshot holds, which the record carries ([Capture.SeenRemoval]).
@@ -443,12 +468,8 @@ func decideCapture(ctx context.Context, tx *sql.Tx, n NewCapture, at time.Time) 
 	if err != nil {
 		return 0, err
 	}
-	_, tombed, err := readTomb(ctx, tx, n.Handle, n.Turn)
-	if err != nil {
+	if err = turnEnded(ctx, tx, n.Handle, n.Turn); err != nil {
 		return 0, err
-	}
-	if tombed {
-		return 0, fmt.Errorf("%w: %s's turn %s", ErrTurnEnded, n.Handle, n.Turn)
 	}
 	row, found, err := readSession(ctx, tx, n.Handle, n.Turn)
 	if err != nil {
@@ -456,8 +477,6 @@ func decideCapture(ctx context.Context, tx *sql.Tx, n NewCapture, at time.Time) 
 	}
 	if found {
 		switch {
-		case row.ended:
-			return 0, fmt.Errorf("%w: %s's turn %s", ErrTurnEnded, n.Handle, n.Turn)
 		case row.conversationKey != n.ConversationKey:
 			return 0, invalid("turn %s belongs to another conversation than the capture names",
 				n.Turn)
@@ -484,7 +503,8 @@ func decideCapture(ctx context.Context, tx *sql.Tx, n NewCapture, at time.Time) 
 // ---- begin -------------------------------------------------------------- //
 
 // NewBegin is a turn's first read of its conversation, and the base that read
-// froze: what its first launch publishes once its run is recorded.
+// froze: what the turn's first launch is to publish once its run is recorded.
+// No launch publishes one yet, so no row holds a base until one does.
 type NewBegin struct {
 	Handle          string
 	Turn            string
@@ -530,13 +550,12 @@ func (n NewBegin) validate() error {
 		}
 		return nil
 	}
-	switch {
-	case !canonicalTurn(n.BaseTurn):
-		return invalid("the base turn %q is not a run id in its canonical spelling", n.BaseTurn)
-	case n.BaseTurn == n.Turn:
-		return invalid("turn %s names itself as its base: a turn continues another's session", n.Turn)
-	case !slices.Contains(n.Absorbs, n.BaseTurn):
-		return invalid("the base turn %s is not among the turns the read handed out, and a "+
+	// THE BASE IS ONE OF THE TURNS THE READ HANDED OUT, which absorbsOf has
+	// just held to canonical turn ids other than this turn's own: so a base
+	// among them is a turn in its one spelling and never the turn itself,
+	// and neither needs a test of its own.
+	if !slices.Contains(n.Absorbs, n.BaseTurn) {
+		return invalid("the base turn %q is not among the turns the read handed out, and a "+
 			"read's head always is", n.BaseTurn)
 	}
 	if err := n.BaseObject.Validate(); err != nil {
@@ -626,20 +645,16 @@ func (w *Writer) Begin(ctx context.Context, c Call, n NewBegin) (BeginResult, er
 }
 
 // decideBegin is the begin's decide over one snapshot of the turn: a turn
-// already ended or removed, and one whose row names another conversation or
-// unit of work, are refused; a row that already holds the turn's first read is
-// begun, with nothing left to publish. It answers the seat's removal the
-// snapshot holds.
+// already ended or removed ([turnEnded]), and one whose row names another
+// conversation or unit of work, are refused; a row that already holds the
+// turn's first read is begun, with nothing left to publish. It answers the
+// seat's removal the snapshot holds.
 func decideBegin(ctx context.Context, tx *sql.Tx, n NewBegin) (removal int64, begun bool, err error) {
 	if removal, err = readRemoval(ctx, tx, n.Handle); err != nil {
 		return 0, false, err
 	}
-	_, tombed, err := readTomb(ctx, tx, n.Handle, n.Turn)
-	switch {
-	case err != nil:
+	if err = turnEnded(ctx, tx, n.Handle, n.Turn); err != nil {
 		return 0, false, err
-	case tombed:
-		return 0, false, fmt.Errorf("%w: %s's turn %s", ErrTurnEnded, n.Handle, n.Turn)
 	}
 	row, found, err := readSession(ctx, tx, n.Handle, n.Turn)
 	switch {
@@ -647,8 +662,6 @@ func decideBegin(ctx context.Context, tx *sql.Tx, n NewBegin) (removal int64, be
 		return 0, false, err
 	case !found:
 		return removal, false, nil
-	case row.ended:
-		return 0, false, fmt.Errorf("%w: %s's turn %s", ErrTurnEnded, n.Handle, n.Turn)
 	case row.conversationKey != n.ConversationKey:
 		return 0, false, invalid("turn %s belongs to another conversation than the begin names", n.Turn)
 	case !sameWork(row.workKey, n.WorkKey):
@@ -748,19 +761,16 @@ func (w *Writer) End(ctx context.Context, c Call, n NewEnd) (statelog.Result, er
 }
 
 // decideEnd is the end's decide over one snapshot of the turn: a turn already
-// ended or removed, and one whose row names another conversation or unit of
-// work, are refused. It answers the seat's removal the snapshot holds.
+// ended or removed ([turnEnded]), and one whose row names another conversation
+// or unit of work, are refused. It answers the seat's removal the snapshot
+// holds.
 func decideEnd(ctx context.Context, tx *sql.Tx, n NewEnd) (int64, error) {
 	removal, err := readRemoval(ctx, tx, n.Handle)
 	if err != nil {
 		return 0, err
 	}
-	_, tombed, err := readTomb(ctx, tx, n.Handle, n.Turn)
-	if err != nil {
+	if err = turnEnded(ctx, tx, n.Handle, n.Turn); err != nil {
 		return 0, err
-	}
-	if tombed {
-		return 0, fmt.Errorf("%w: %s's turn %s", ErrTurnEnded, n.Handle, n.Turn)
 	}
 	row, found, err := readSession(ctx, tx, n.Handle, n.Turn)
 	if err != nil {
@@ -778,17 +788,22 @@ func decideEnd(ctx context.Context, tx *sql.Tx, n NewEnd) (int64, error) {
 }
 
 // lostFailure is the account an end the retention duty records for a turn
-// whose own end was lost carries ([Writer.EndLost]).
+// whose own end was lost carries ([Writer.EndLost]). It is kept in the
+// replicated ending and told to the conversation's next turn, so it names the
+// turn's LAST RECORD rather than its last capture: a turn whose begin wrote
+// its row may have captured nothing at all.
 const lostFailure = "no end was recorded for this turn, and no run of it was live a day " +
-	"after its last capture: its end was lost"
+	"after its last record: its end was lost"
 
 // EndLost records a turn whose end was lost as ended `lost`, as the retention
 // duty, under the operation the duty derived: a turn that never ended, whose
-// last capture was at or before before, and which the duty found no live run
-// of ([LostAfter]). Its session is kept as any ended turn's is — the next turn
-// on the conversation continues it — and what the end releases is the seat's
-// budget, which never releases a live turn's session. A turn that ended, or was
-// captured, since the duty listed it is refused [ErrTurnEnded] or [ErrNotDue].
+// last record — its newest capture, or the begin of a turn that captured
+// nothing — was at or before before, and which the duty found no live run of
+// ([LostAfter]). Its session is kept as any ended turn's is — the next turn on
+// the conversation continues it — and what the end releases is the seat's
+// budget, which never releases a live turn's session, and the base the turn
+// held, if it captured nothing. A turn that ended, or was captured, since the
+// duty listed it is refused [ErrTurnEnded] or [ErrNotDue].
 func (w *Writer) EndLost(ctx context.Context, c Call, handle, conversationKey, turn string,
 	before time.Time) (statelog.Result, error) {
 

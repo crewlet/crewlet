@@ -29,14 +29,17 @@ import (
 // # A held base is released by nothing
 //
 // A turn's first read freezes the conversation's head as the BASE its launches
-// continue while the turn has kept no session of its own, and its `begin`
-// writes the turn's row naming it ([Begin]). While that row is live and has
-// landed no capture, it HOLDS the base: the seat budget's release, an end's
+// are to continue while the turn has kept no session of its own, and its
+// `begin` writes the turn's row naming it ([Begin]). While that row is live and
+// has landed no capture, it HOLDS the base: the seat budget's release, an end's
 // absorption and its work-key dedupe, and the retention's delete each skip a
-// held row. Each asks about the one row it is about to release, here, in log
-// order, rather than through a subquery of the statement that releases it, so
-// no statement gives the planner a correlated subquery to rewrite into a read
-// of the whole table (storetest.Decorrelated). A skipped row stays an ordinary
+// held row. Each decides it here, in log order, rather than through a subquery
+// of the statement that releases, so no statement gives the planner a
+// correlated subquery to rewrite into a read of the whole table
+// (storetest.Decorrelated): an end's absorption and dedupe and the retention's
+// delete ask about each row before they take it ([held]), and the budget's
+// release, which walks the seat's ended sessions in order, reads the seat's
+// holds once before it walks ([heldBases]). A skipped row stays an ordinary
 // ended row: the holder was handed it, so the holder's own end absorbs it once
 // the hold has lifted, and so does the next end whose read showed it.
 //
@@ -178,22 +181,26 @@ const (
 
 	// updateBeginStatement is a begin landing on the row a capture of the
 	// turn wrote first with no read: the read and the base the row names
-	// from then on. It holds nothing, the row having landed a capture.
+	// from then on. It holds nothing, the row having landed a capture. Every
+	// value is the one [applyBegin] decided, from the row — that it holds no
+	// read yet, since a turn's first read stands, included — so the
+	// statement itself decides nothing.
 	updateBeginStatement = `
 		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, read_through = ?,
 			absorbs = ?, base_turn = ?, version = ?
-		WHERE agent_handle = ? AND turn_id = ? AND end_seq IS NULL AND read_through = 0
-		  AND version < ?`
+		WHERE agent_handle = ? AND turn_id = ? AND end_seq IS NULL AND version < ?`
 
-	// endRowStatement stamps a captured turn's end on its row.
+	// endRowStatement stamps a turn's end on the row a capture of it, or its
+	// begin, wrote.
 	endRowStatement = `
 		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, ended_at = ?, end_seq = ?,
 			outcome = ?, delivered = ?, ending = ?, ask_excerpt = ?, last_at = ?,
 			version = ?
 		WHERE agent_handle = ? AND turn_id = ? AND end_seq IS NULL`
 
-	// insertEndingStatement is the ended row of a turn that captured
-	// nothing: its ending alone, naming no object.
+	// insertEndingStatement is the ended row of a turn that has none: it
+	// captured nothing and no begin of it landed, so its ending alone, naming
+	// no object.
 	insertEndingStatement = `
 		INSERT INTO executor_sessions (agent_handle, turn_id, conversation_key,
 			work_key, ended_at, end_seq, outcome, delivered, ending, ask_excerpt,
@@ -408,12 +415,13 @@ func splitAbsorbs(column string) []string {
 // THE OLDEST ENDINGS GO FIRST, by the position each ended at, and never a live
 // turn's session or this turn's own: a live turn's is the one its next launch
 // continues, and this turn's is being replaced. NOR A BASE ANOTHER LIVE TURN
-// HOLDS ([held]): that turn's relaunch continues it. A base THIS turn holds is
-// released like any ended session, because this capture is the turn's first
-// landed one and lifts the hold in the same apply: from it on, the turn's
-// launches continue its own session, which holds everything the base did, so
-// releasing the base loses nothing — what keeps a seat at its budget's floor
-// able to take a continued turn's first capture at all.
+// HOLDS ([heldBases], read once for the whole walk): that turn's relaunch is
+// to continue it. A base THIS turn holds is released like any ended session,
+// because this capture is the turn's first landed one and lifts the hold in
+// the same apply: from it on, the turn's launches continue its own session,
+// which holds everything the base did, so releasing the base loses nothing —
+// what keeps a seat at its budget's floor able to take a continued turn's
+// first capture at all.
 //
 // The release is a total order of the rows (an end's position is unique among
 // them), so every node releases the same sessions. Nothing is chosen when even
@@ -721,7 +729,7 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 func applyBegin(ctx context.Context, tx *sql.Tx, c applyContext, p Begin) (int, error) {
 	absorbs, wellFormed := absorbsOf(p.Absorbs, p.Turn, p.ReadThrough)
 	if !present(p.Handle) || !present(p.Turn) || p.ConversationKey == "" ||
-		p.ReadThrough <= 0 || !wellFormed || !p.baseShaped() {
+		p.ReadThrough <= 0 || !wellFormed || !p.baseShaped(absorbs) {
 		return 0, nil
 	}
 	removal, err := readRemoval(ctx, tx, p.Handle)
@@ -774,15 +782,16 @@ func applyBegin(ctx context.Context, tx *sql.Tx, c applyContext, p Begin) (int, 
 	return affected(res), nil
 }
 
-// baseShaped reports a begin's base as a read hands one out: none at all, or a
-// turn in its one spelling other than the beginning one, among the turns the
-// read handed out, naming a session every reader can parse ([nameable]).
-func (p Begin) baseShaped() bool {
+// baseShaped reports a begin's base as a read hands one out: none at all, or one
+// of absorbs — the turns the read handed out, as [absorbsOf] checked them —
+// naming a session every reader can parse ([nameable]). Every turn absorbsOf
+// passes is a canonical turn id other than the beginning turn's own, so a base
+// among them is one too, and neither needs a test of its own.
+func (p Begin) baseShaped(absorbs []string) bool {
 	if p.BaseTurn == "" {
 		return p.BaseObject == "" && p.BaseHash == ""
 	}
-	return canonicalTurn(p.BaseTurn) && p.BaseTurn != p.Turn &&
-		slices.Contains(p.Absorbs, p.BaseTurn) && nameable(p.BaseObject, p.BaseHash)
+	return slices.Contains(absorbs, p.BaseTurn) && nameable(p.BaseObject, p.BaseHash)
 }
 
 // endBody is an end's payload with its ending as the bytes the record carries,
