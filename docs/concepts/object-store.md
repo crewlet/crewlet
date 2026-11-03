@@ -352,7 +352,13 @@ store:
 
 Each object is one S3 object, `<prefix>files/<key>`. Any S3-compatible store
 works — Amazon S3, Cloudflare R2, MinIO, Ceph's gateway, GCS through its
-interoperability endpoint. The bucket keeps whatever copies its provider
+interoperability endpoint. The `endpoint` is an `http` or `https` URL: a host
+name, an IPv4 address or an IPv6 one in brackets, whose zone is an
+interface's name or number (`https://[fe80::1%25eth0]:9000`), and at most one
+port, 1 to 65535. `crewlet validate` and every node's start refuse any other
+— one with no host or a query, a port of 0 or past 65535, a zone holding a
+`]`, a `%` or a space — naming what is wrong, because no request could reach
+a bucket there. The bucket keeps whatever copies its provider
 promises, and its size is the provider's problem rather than any node's disk —
 up to the point the provider has no room left, when a write is refused as full
 (below).
@@ -504,9 +510,13 @@ up to the point the provider has no room left, when a write is refused as full
   the span again, since a bucket asking the node to slow down is up. One its
   deadline ends says so and names the bucket's last answer. A refusal that
   asking again cannot change — a key the bucket refuses, a bucket that is not
-  there, a certificate the node does not trust — fails at once, the check at
-  boot included; a bucket that does not answer at all holds that check for
-  its thirty seconds.
+  there, a certificate the node does not trust, an address no connection can
+  be made to (a port of 0 or past 65535, or one the dialer cannot parse, the
+  proxy's included) — fails at once, the check at boot included; a bucket
+  that does not answer at all holds that check for its thirty seconds. A
+  connection refused on any other port, an unreachable network and a name the
+  resolver could not answer yet are asked again, since the bucket's server or
+  the network may come back.
 
   Measured against the S3 fake 100 ms away, every request answered
   `500 InternalError`, eight or four runs of each at once: an 8 MiB upload

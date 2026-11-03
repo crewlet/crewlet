@@ -1490,7 +1490,10 @@ store:
   #     endpoint: ""                #   the S3 API's base URL; empty is Amazon
                                     #   S3's own for the region. R2, MinIO,
                                     #   Ceph's gateway and GCS's interoperability
-                                    #   endpoint each name theirs here
+                                    #   endpoint each name theirs here: http or
+                                    #   https, a host, and a port of 1..65535 if
+                                    #   it has one. One no request can reach is
+                                    #   REFUSED, naming what is wrong with it
   #     region: eu-west-1           #   REQUIRED — every request is signed for
                                     #   a region, even where the provider
                                     #   ignores it (R2: auto, MinIO: us-east-1)

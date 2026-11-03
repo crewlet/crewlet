@@ -812,6 +812,11 @@ type Collector struct {
 	suspectsHeld int
 	rangeChunk   int
 	window       int
+	// atProbe, when a test sets it, is called on the goroutine that lets an
+	// audit's walk go to cut its second range ([auditor.probe]), as it lets it
+	// go: the test holds that goroutine there while the walk takes its next
+	// step, so what the walk reads is what was set before it was let go.
+	atProbe func()
 
 	mu     sync.Mutex
 	status Status
@@ -1190,7 +1195,7 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		return nil, err
 	}
 	a := &auditor{store: c.opts.Store, r: r, q: suspects{limit: c.suspectsHeld}, window: c.window,
-		probed: make(chan struct{})}
+		probed: make(chan struct{}), atProbe: c.atProbe}
 	if !c.opts.Store.Ranged() {
 		a.mode.Store(askListing)
 	}
@@ -1421,9 +1426,10 @@ type auditor struct {
 
 	// probed is closed once the first range handed on has come back,
 	// whatever it answered, which the walk waits for before it cuts its
-	// second ([auditor.probe]).
+	// second ([auditor.probe]); atProbe is [Collector.atProbe].
 	probed    chan struct{}
 	probeOnce sync.Once
+	atProbe   func()
 
 	// mu guards everything below, written by up to [auditConcurrency]
 	// questions at once.
@@ -1491,8 +1497,45 @@ func (a *auditor) measured(names, refs int) {
 	a.density += (d - a.density) / rangeDensityWeight
 }
 
-// probe says the first range handed on has come back ([auditor.probed]).
-func (a *auditor) probe() { a.probeOnce.Do(func() { close(a.probed) }) }
+// cameBack takes in what the listing of a range the walk handed on said of the
+// store, err being how it ended — the density of one listed to its end
+// ([auditor.measured]), an order the store cannot keep ([auditor.unordered]) —
+// and only then lets the walk cut its next range ([auditor.probe]). names is
+// how many names the listing handed on, and refs how many references the range
+// was cut for.
+//
+// ONLY A RANGE LISTED TO ITS END is a density: one that left an undated object
+// or two out is included, since a stat dates those.
+//
+// AND THE WALK IS LET GO LAST, because it reads both the moment it is: the
+// density its next cut is sized by, and the mode that says whether it cuts one at
+// all. Let go before the mode turned, as it once was, the walk could gather and
+// hand on a second range of a store that keeps no order in the moment before
+// this goroutine turned the audit to the listing: a second listing of a range the
+// store had already said it cannot give in order, and every reference of it then
+// asked about by name. CI met exactly that, twenty references asked about by name
+// for the ten of the one range a store that keeps no order should ever be asked
+// for.
+func (a *auditor) cameBack(ctx context.Context, err error, names, refs int) {
+	if err == nil || errors.Is(err, objstore.ErrUndated) {
+		a.measured(names, refs)
+	}
+	if errors.Is(err, objstore.ErrUnordered) {
+		a.unordered(ctx, err)
+	}
+	a.probe()
+}
+
+// probe says the first range handed on has come back ([auditor.probed]),
+// whatever it answered, once what it answered is taken in ([auditor.cameBack]).
+func (a *auditor) probe() {
+	a.probeOnce.Do(func() {
+		close(a.probed)
+		if a.atProbe != nil {
+			a.atProbe()
+		}
+	})
+}
 
 // answer is what one question to the store found of one reference.
 type answer int
@@ -1672,16 +1715,11 @@ func (a *auditor) firstRange(ctx context.Context, after objstore.Key, chunk []ob
 		}
 		return nil
 	})
-	// ONLY A RANGE LISTED TO ITS END is a density — one left out an
-	// undated object or two included, which a stat dates — and the walk
-	// goes on once this range has come back, whatever it answered.
-	if err == nil || errors.Is(err, objstore.ErrUndated) {
-		a.measured(names, len(chunk))
-	}
-	a.probe()
+	// THE WALK GOES ON once this range has come back, whatever it answered,
+	// and once what it answered is taken in.
+	a.cameBack(ctx, err, names, len(chunk))
 	switch {
 	case errors.Is(err, objstore.ErrUnordered):
-		a.unordered(ctx, err)
 		if berr := a.eachByName(ctx, chunk[i:]); berr != nil {
 			return berr
 		}
