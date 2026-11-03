@@ -200,7 +200,7 @@ func TestARestartIsAskedOfTheFleetAndAuditedRefusalsIncluded(t *testing.T) {
 		{"wiki", "", http.StatusConflict, "conflict"},
 		{"search", `{"seat":"ceo"}`, http.StatusBadRequest, "invalid_body"},
 		{"tracker", `{"seat":"nobody"}`, http.StatusNotFound, "no_such_seat"},
-		{"tracker", `{"seat":"cto"}`, http.StatusConflict, "conflict"},
+		{"tracker", `{"seat":"cto"}`, http.StatusConflict, "seat_not_granted"},
 	} {
 		code, body := post(t, svc, admin, tc.server, tc.body)
 		if code != tc.status || body["error"] != tc.code || body["detail"] == "" {

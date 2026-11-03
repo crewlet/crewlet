@@ -177,6 +177,7 @@ func TestASavedServerIsTestedAndEveryCallAudited(t *testing.T) {
 		"gone/":         mcpapi.ErrNoSuchServer,
 		"off/":          mcpapi.ErrServerOff,
 		"tracker/ghost": mcpapi.ErrNoSuchSeat,
+		"tracker/cto":   mcpapi.ErrSeatNotGranted,
 		"split/":        mcpapi.ErrSeatRequired,
 		"broken/":       errors.New("the broker is down"),
 	}}
@@ -236,6 +237,7 @@ func TestASavedServerIsTestedAndEveryCallAudited(t *testing.T) {
 		{"/mcp-servers/gone/check", "", http.StatusNotFound, "not_found"},
 		{"/mcp-servers/off/check", "", http.StatusConflict, "conflict"},
 		{"/mcp-servers/tracker/check", `{"seat":"ghost"}`, http.StatusNotFound, "no_such_seat"},
+		{"/mcp-servers/tracker/check", `{"seat":"cto"}`, http.StatusConflict, "seat_not_granted"},
 		{"/mcp-servers/split/check", "", http.StatusBadRequest, "invalid_body"},
 		{"/mcp-servers/broken/check", "", http.StatusServiceUnavailable, "unavailable"},
 		{"/mcp-servers/tracker/check", `{"seat":"ceo","force":true}`, http.StatusBadRequest, "invalid_body"},

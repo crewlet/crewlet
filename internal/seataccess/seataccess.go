@@ -209,7 +209,8 @@ type Desired struct {
 	//     sorted and space-separated (`create:page read:space`).
 	//   - mattermost: the roles, space-separated in Mattermost's own order
 	//     ([config.MattermostRoleSets]).
-	//   - cloudflare: `read` or `operate`, an unset level reading as read.
+	//   - cloudflare: `read`, `operate` or `configure`, an unset level reading
+	//     as read.
 	//   - expo: `viewer`, `runner`, `developer` or `release_manager`, an
 	//     unset level reading as viewer.
 	Level string `json:"level,omitempty"`

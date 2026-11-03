@@ -599,3 +599,72 @@ func TestEveryCredentialIsCheckableOrSaysWhenItIsProved(t *testing.T) {
 		t.Fatal("no credential was walked, so this certified nothing")
 	}
 }
+
+// A TYPED VALUE ITS FIELD REFUSES IS ANSWERED AT THAT FIELD, BEFORE ANY VENDOR
+// IS ASKED, as saving answers it: whitespace or an invisible character in a
+// credential, a character outside a vendor's alphabet where its field declares
+// a shape (Cloudflare's token), and a value typed beside the checked one. Expo's
+// token declares no shape, its alphabet being undocumented, so only the stray
+// check holds it. The sentence never quotes the credential. Mutation: drop the
+// check from the verify route, and each refused value reaches the probe.
+func TestAVerifyRefusesAMalformedValueBeforeAnyVendorIsAsked(t *testing.T) {
+	t.Parallel()
+	const doc = `{
+  "name": "Acme",
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "integrations": {
+    "cloudflare": {"enabled": true, "provisioning": {
+      "account_id": "0123456789abcdef0123456789abcdef", "api_token": "${CLOUDFLARE_API_TOKEN}"}},
+    "expo": {"enabled": true, "provisioning": {"account_name": "acme", "access_token": "${EXPO_ACCESS_TOKEN}"}}
+  },
+  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
+}`
+	for _, tc := range []struct {
+		name        string
+		kind        integration.Kind
+		body        string
+		field, says string
+		// secret is the credential's text, which no answer may carry.
+		secret string
+	}{
+		{"a wrapped Cloudflare paste", integration.KindCloudflare,
+			verifyBody("api_token", "cfat_wrapped paste", ""), "api_token", "1 space", "wrapped"},
+		{"a character no Cloudflare token has", integration.KindCloudflare,
+			verifyBody("api_token", "cfat_bang!token", ""), "api_token", "a character a token never has", "bang"},
+		{"an account ID typed with a space", integration.KindCloudflare,
+			verifyBody("api_token", "cfat_fine_token", `"values": {"account_id": "0123 4567"}`),
+			"account_id", "cannot contain a space", "cfat_fine"},
+		{"a wrapped Expo paste", integration.KindExpo,
+			verifyBody("access_token", "expo_wrapped paste", ""), "access_token", "1 space", "wrapped"},
+		{"an invisible character in an Expo token", integration.KindExpo,
+			verifyBody("access_token", "expo_hidden\\u200bmark", ""), "access_token", "1 invisible character", "hidden"},
+		{"an Expo token, with no shape to hold it to", integration.KindExpo,
+			verifyBody("access_token", "expo.dotted!token", ""), "", "", ""},
+	} {
+		s := newSurface(t)
+		s.seedDocument(t, doc)
+		probe := &recordingProbe{verdict: setup.Works("Works.")}
+		s.withProbe(t, tc.kind, probe.probe)
+		res := s.do(t, http.MethodPost, "/setup/integrations/"+string(tc.kind)+"/verify", tc.body, nil)
+		if tc.field == "" {
+			if res.Code != http.StatusOK || len(probe.calls) != 1 {
+				t.Errorf("%s: %d %s, asked %d times; want the probe's verdict", tc.name, res.Code, res.Body,
+					len(probe.calls))
+			}
+			continue
+		}
+		body := decode(t, res)
+		path, _ := body["path"].(string)
+		detail, _ := body["detail"].(string)
+		if res.Code != http.StatusBadRequest || body["error"] != string(httpjson.CodeInvalidInput) ||
+			body["field"] != tc.field || !strings.HasSuffix(path, "."+tc.field) || !strings.Contains(detail, tc.says) {
+			t.Errorf("%s: %d %v, want 400 invalid_input at %s saying %q", tc.name, res.Code, body, tc.field, tc.says)
+		}
+		if strings.Contains(res.Body.String(), tc.secret) {
+			t.Errorf("%s: the refusal quotes the credential: %s", tc.name, res.Body)
+		}
+		if len(probe.calls) != 0 {
+			t.Errorf("%s: the vendor was asked %d times", tc.name, len(probe.calls))
+		}
+	}
+}

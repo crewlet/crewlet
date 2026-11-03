@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -283,5 +284,70 @@ roles:
 	if third := e.testHere(t.Context(), ask); third == nil || third.Failure == nil ||
 		strings.Contains(third.Failure.Said, "already running") {
 		t.Fatalf("a test after the first answered = %+v, want it run", third)
+	}
+}
+
+// A SEAT'S TEST OF A DRAFT IS HANDED THE SEAT'S OWN CREDENTIAL, as the draft's
+// save will hand the running seat, for every integration whose credential the
+// engine binds: the helper writes the value of the key the draft reads into its
+// tool's description, and the report withholds a value the spec was started
+// with. Mutation: read the seat's block from the org built before the draft,
+// and the key is empty.
+func TestASeatsTestOfADraftIsHandedTheSeatsCredential(t *testing.T) {
+	t.Parallel()
+	company := companyFor(t, `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    zulu:
+      model: claude-sonnet-5
+integrations:
+  datadog:
+    enabled: true
+    webhook_token: EXAMPLEDATADOGTOKEN0000000
+    route_to: ceo
+    provisioning:
+      site: datadoghq.com
+      api_key: "${DD_API_KEY}"
+      app_key: "${DD_APP_KEY}"
+  cloudflare:
+    enabled: true
+    provisioning:
+      account_id: 0123456789abcdef0123456789abcdef
+      api_token: "${CLOUDFLARE_API_TOKEN}"
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    integrations:
+      datadog: {enabled: true, role: 00000000-0000-0000-0000-000000000001}
+      cloudflare: {enabled: true}
+`)
+	sealed := config.MapSource{
+		envref.SealedName("datadog", "APP_KEY", "ceo"):      "datadog-seat-key-not-real-0001",
+		envref.SealedName("cloudflare", "API_TOKEN", "ceo"): "cloudflare-seat-token-not-real-0001",
+	}
+	e := &Engine{testNode: "node-a", mcp: mcp.NewBridge(nil, mcp.Supervision{}), cipher: valueRing(t, "k1"),
+		environ: sealed}
+	e.epoch.current.Store(company)
+	heldSeatChildren(t, e, "ceo", func() bool { return true })
+
+	for _, kind := range []string{"datadog", "cloudflare"} {
+		draft := config.MCPServer{Name: kind + "-tools", Transport: config.TransportStdio, Command: os.Args[0],
+			Shared: org.Off(), Env: map[string]string{
+				ToolServerModeEnv:    "server",
+				ToolServerEchoEnv:    "TOKEN",
+				procgrouptest.GORACE: procgrouptest.StandInRaceOptions(),
+			},
+			SeatCredentials: []config.SeatCredential{{Kind: kind, Key: "TOKEN"}}}
+		result, err := e.CheckMCPServer(t.Context(), MCPCheckRequest{Server: draft.Name, Entry: &draft, Draft: true,
+			Seat: "ceo", By: checkingJane})
+		if err != nil || !result.OK || len(result.Nodes) != 1 || !result.Nodes[0].Answered {
+			t.Fatalf("%s: the draft's test as the seat = %+v, %v", kind, result, err)
+		}
+		if tools := result.Nodes[0].Report.Tools; len(tools) != 1 || tools[0].Description != "TOKEN=[withheld]" {
+			t.Errorf("%s: the tool's description = %+v, want the seat's own credential, withheld", kind, tools)
+		}
 	}
 }

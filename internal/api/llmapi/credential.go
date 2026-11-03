@@ -422,7 +422,7 @@ func nameProblems(company *config.Company, key string, entry *config.LLMProvider
 		// BEFORE ANY HARNESS RUNS: a value with a space or a line break inside
 		// is never one the vendor issued, and Claude Code ignores such a
 		// token outright, so testing it only produces a misleading refusal.
-		if problem := strayProblem(wordsFor(entry, key, []string{name}).noun, values[name]); problem != "" {
+		if problem := secrets.StrayProblem(wordsFor(entry, key, []string{name}).noun, values[name]); problem != "" {
 			out = append(out, config.Problem{Path: path.String(), Segments: path, Kind: "invalid",
 				Message: problem})
 			continue

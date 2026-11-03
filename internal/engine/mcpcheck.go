@@ -566,17 +566,21 @@ func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport 
 		// fleet's active revision states it). A draft never is, whatever its
 		// name: the grant's token goes to the address it was issued for, and
 		// a draft's address is somebody's typing.
-		report = e.testServer(ctx, server, nil, nil, nil, tried, e.testBearer(ctx, server.Name))
+		report = e.testServer(ctx, server, nil, nil, nil, nil, tried, e.testBearer(ctx, server.Name))
 	case ask.Seat == uuid.Nil:
-		report = e.testServer(ctx, server, nil, nil, nil, tried, nil)
+		report = e.testServer(ctx, server, nil, nil, nil, nil, tried, nil)
 	default:
 		role := c.Org.AgentSeatByID(ask.Seat)
 		if role == nil {
 			return nil
 		}
+		// THE SEAT'S BLOCK FOR THE ENTRY UNDER TEST, a draft's included: its
+		// save binds the seat's own credential to it, and a draft is decided
+		// as that save, so it is tested with what the save will hand the seat.
+		block := c.Config.SeatToolEnv(server, role.Handle())
 		env, token := e.seatResolver(ctx, c, role, github.ToolTokenLife)
-		report = e.testServer(ctx, server, role, env, &seatMint{kinds: e.mintedFor(c, role.Handle()), token: token},
-			tried, nil)
+		report = e.testServer(ctx, server, role, block, env,
+			&seatMint{kinds: e.mintedFor(c, role.Handle()), token: token}, tried, nil)
 	}
 	report = boundedReport(report, e.epochTools())
 	return &report
@@ -642,21 +646,20 @@ func testedEntry(c *Company, ask mcpCheckAsk, sent *config.MCPServer) *config.MC
 	return &c.Config.MCPServers[i]
 }
 
-// testServer tests server on this node, as a seat when seat is set, with the
-// values a start of it would be given: the same resolution
-// ([resolveServer]), the same spec ([serverSpec]) and so the same address rule
-// and the same launch ([mcp.Test]); with tried, each of its keys reads its
-// value. bearer is the grant's token source of a saved server a person signed
+// testServer tests server on this node, as a seat when seat is set (with
+// block, the seat's values for it), with the values a start of it would be
+// given: the same resolution ([resolveServer]), the same spec ([serverSpec])
+// and so the same address rule and the same launch ([mcp.Test]); with tried,
+// each of its keys reads its value. bearer is the grant's token source of a saved server a person signed
 // in to with OAuth, nil for any other, and is sent only where the test dials
 // the origin the saved server is dialled at. A service identity signs in for
 // the test itself.
-func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat *org.Role,
+func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat *org.Role, block map[string]string,
 	env *config.Resolver, mint *seatMint, tried []MCPValueTry, bearer mcp.BearerSource) mcp.TestReport {
 
 	instance, handle := server.Name, ""
-	var block map[string]string
 	if seat != nil {
-		instance, handle, block = mcp.InstanceName(server.Name, seat.Name), seat.Handle(), seat.MCPEnv[server.Name]
+		instance, handle = mcp.InstanceName(server.Name, seat.Name), seat.Handle()
 	}
 	if env == nil {
 		env = e.resolver()

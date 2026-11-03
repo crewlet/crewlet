@@ -74,7 +74,7 @@ func TestTheProbeNamesWhatIsWrong(t *testing.T) {
 			own.PermissionGroups = slices.DeleteFunc(slices.Clone(own.PermissionGroups),
 				func(g cloudflare.GroupRef) bool { return g.ID == groupID("Cache Purge") })
 			f.provisionerOwn = []cloudflare.Policy{own}
-		}, typed, setup.VerifyRefused, `missing "Cache Purge"`},
+		}, typed, setup.VerifyRefused, "missing Cache Purge: Purge"},
 		{"a zone the account lacks", func(f *fakeCloudflare) {
 			f.zones = slices.DeleteFunc(f.zones, func(z cloudflare.Zone) bool { return z.Name == zoneExampleName })
 		}, typed, setup.VerifyRefused, `no zone named "example.com"`},
