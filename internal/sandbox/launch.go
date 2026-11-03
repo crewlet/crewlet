@@ -637,6 +637,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// THE ENVIRONMENT THE JOB IS STARTED WITH, the launch's own with the
 	// run's telemetry, read once: it is what the job is handed, and what
 	// its session's capture scrubs out ([HandedSecrets]).
+	//
 	// Its TELEMETRY ENDPOINT IS MINTED HERE, at the job's start, rather than
 	// with the launch's environment above: its token lives a fixed span from
 	// its minting ([otelTokenTTL]), and whatever the box's provisioning took
