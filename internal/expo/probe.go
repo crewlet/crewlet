@@ -17,12 +17,9 @@ import (
 // for a slow answer.
 const probeCallTimeout = 5 * time.Second
 
-// Probe checks a typed provisioner token against its account before anything
-// stores it, with reads only: the token works, the account resolves by name,
-// the token's actor holds Admin there, and the account's projects can be
-// counted. Nothing at Expo is created or changed.
-//
-// httpClient is nil in production; a test hands one that reaches a fake.
+// Probe checks a typed provisioner token before anything stores it, with reads
+// only: the token works, the account resolves, its actor holds Admin there and
+// the projects can be counted. httpClient is nil in production.
 func Probe(httpClient *http.Client) setup.Probe {
 	return func(ctx context.Context, check setup.Check) (setup.Verdict, error) {
 		if check.Field != "access_token" {

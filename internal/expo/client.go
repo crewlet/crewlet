@@ -192,9 +192,8 @@ type gqlResponse struct {
 }
 
 // statusOf is the HTTP status a GraphQL error stands for, so a refusal reads
-// the same whether Expo sent it as a status or as an error code. A transient
-// error is a 503 the sync retries; an error Expo attributes to the caller is a
-// 400; anything else is a 500 the sync retries.
+// alike either way: a known code its status, a transient error 503, an error
+// Expo attributes to the caller 400, and anything else 500.
 func statusOf(e gqlError) int {
 	switch e.code() {
 	case "UNAUTHENTICATED", "UNAUTHENTICATED_ERROR":

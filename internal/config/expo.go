@@ -8,12 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Expo gives each agent seat its own Expo robot user on the company's Expo
-// account, with its own access token, created and kept at the seat's level by
-// the engine through the company's provisioner token.
-//
-// It ingests nothing: v1 has no inbound route, so the block is provisioning
-// alone and [Expo.validate] requires it whenever the block is enabled.
+// Expo gives each agent seat its own Expo robot user and access token on the
+// company's account, kept at the seat's level through the provisioner token.
+// It ingests nothing, so [Expo.validate] requires provisioning when enabled.
 type Expo struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn the integration on."`
 

@@ -124,11 +124,9 @@ func (w *syncWorld) sealed(robotID string) string {
 	return value
 }
 
-// A SEAT'S WHOLE LIFE THROUGH THE SHARED SYNC: on creates its robot at its
-// level and seals its token; a converged pass writes nothing; a permission
-// added by hand is taken back and reported; a level change moves the robot;
-// a rotation replaces the token; off revokes the tokens and deletes the
-// robot; back on creates a new robot.
+// A SEAT'S WHOLE LIFE THROUGH THE SHARED SYNC: create and seal, a converged
+// pass that writes nothing, drift taken back, level changes, a rotation, off
+// deleting the robot and its tokens, and back on creating a new robot.
 func TestAnExpoSeatThroughTheSync(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, config.ExpoLevelRunner)

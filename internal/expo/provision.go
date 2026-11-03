@@ -18,10 +18,9 @@ const TokenField = "TOKEN"
 // seat's `role.sandbox.env` sets to the seat's sealed token.
 const ToolEnv = "EXPO_TOKEN"
 
-// CLIRelease is the EAS CLI release agents run as `npx eas-cli@<release>`:
-// the one pin, which every page and skill that launches it names
-// (TestEveryEASCLILaunchNamesThePinnedRelease). 27.2.0 was the newest release
-// on npm on 2026-11-02.
+// CLIRelease is the one pinned EAS CLI release, which every page and skill
+// launching `npx eas-cli` names (TestEveryEASCLILaunchNamesThePinnedRelease):
+// the newest on npm on 2026-11-02.
 const CLIRelease = "27.2.0"
 
 // RobotName is the name one seat's robot is created under, so a person

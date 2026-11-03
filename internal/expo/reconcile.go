@@ -42,8 +42,7 @@ type Result struct {
 
 // Reconcile reads the provisioner token and the account and reports what an
 // operator has to act on. A token Expo refuses is an error wrapping
-// [integration.ErrCredentialRejected]: nothing else a pass reports could be
-// trusted over it.
+// [integration.ErrCredentialRejected], since nothing else could be trusted.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

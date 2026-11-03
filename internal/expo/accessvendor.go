@@ -93,10 +93,9 @@ func expoSteps(
 	}
 }
 
-// listingGrace is how long after its creation a robot the account's listing
-// does not show is read as not listed yet rather than gone. A listing normally
-// shows a new robot within seconds; ten minutes covers a slow replica while
-// bounding how long a robot deleted at Expo leaves its seat without one.
+// listingGrace is how long a new robot missing from the listing reads as not
+// listed yet rather than gone: a listing shows one within seconds, and ten
+// minutes bounds how long a robot deleted at Expo leaves its seat without one.
 const listingGrace = 10 * time.Minute
 
 // Open builds a session from the company's Expo block.
@@ -171,10 +170,8 @@ func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seatac
 	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true}, nil
 }
 
-// Observe reads back the robot the ledger records for each seat, by ID, from
-// one listing of the account's robots. A seat with no recorded robot holds
-// none: nothing is adopted by name. A robot whose deletion is scheduled is
-// reported absent, and so is one missing from the listing, unless it was
+// Observe reads each seat's recorded robot, by ID, from one listing; nothing is
+// adopted by name. A robot being deleted or missing is absent, except one
 // created within [listingGrace], which is that seat's fault to retry.
 func (s *accessSession) Observe(ctx context.Context, in seataccess.ObserveInput) (seataccess.Observation, error) {
 	out := seataccess.Observation{}

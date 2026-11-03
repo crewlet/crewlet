@@ -11,11 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// expoPass checks the company's provisioner token and account at Expo, then
-// runs each agent's robot user through the access sync.
-//
-// No Teardown: nothing company-wide is registered at Expo, and a disconnect's
-// access sync deletes every agent's robot ([Engine.tearDownSeatAccess]).
+// expoPass checks the provisioner token and account at Expo, then runs each
+// agent's robot through the access sync. No Teardown: nothing company-wide is
+// registered at Expo, and a disconnect's sync deletes every robot.
 type expoPass struct{ engine *Engine }
 
 func (*expoPass) Kind() integration.Kind { return integration.KindExpo }
