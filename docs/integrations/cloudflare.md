@@ -21,7 +21,7 @@ Every agent's token is its own, so Cloudflare's audit log names the agent behind
 Company › Integrations › Cloudflare asks two things and checks them before it saves:
 
 1. **Account ID**: the 32-character ID on the account's overview page in the Cloudflare dashboard.
-2. **Provisioner token**: the one token Crewlet uses to make each agent's own token. See [Creating the provisioner token](#creating-the-provisioner-token).
+2. **Provisioner token**: the one token Crewlet uses to make each agent's own token. The help under the field lists every permission it needs as the token builder names them, the account's on one line and the zones' on the next. See [Creating the provisioner token](#creating-the-provisioner-token).
 
 The form seals the token as `CLOUDFLARE_API_TOKEN`, points the config at it and activates. The next pass mints a token for every agent seat that is on.
 
@@ -66,6 +66,8 @@ Cloudflare shows the token's value once. Paste it into the form, or seal it your
 ### Testing the token before you save it
 
 The form offers **Test key** under the provisioner token. It runs read-only calls in order and stops at the first that fails, so the result names what to fix. Nothing is stored by a test.
+
+Before any call, the value is held to what a token looks like: a space, a line break, an invisible character or anything but letters, digits, hyphens and underscores is refused beside the field, naming the character's position, and nothing is sent. Saving refuses the same values. A token Cloudflare refuses as malformed or invalid (its error codes 1000, 6003 and 6111) reads "This is not a valid Cloudflare API token. Paste only the token's value, from Copy on the token page.", never as a wrong address.
 
 | Stage | Call | What a failure means |
 |---|---|---|
