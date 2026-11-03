@@ -245,20 +245,18 @@ func (p turnPart) keep(n int) any {
 //   - the REFLECTION PASS, which publishes after them: an episode, a persist
 //     decision, a counterparty profile per distinct sender, a synthesized,
 //     refined or promoted skill and its sentinel — 7 with one sender;
-//   - what that pass's model calls cost, as `auxiliary_spend` of the
+//   - and what that pass's model calls cost, as `auxiliary_spend` of the
 //     reflection stage — one per purpose per model: the persist decider, the
-//     profiler, the synthesizer and the refiner, 4 on one model;
-//   - and the conversation entry's rewrites, beside the pass: one record per
-//     kind of payload it condensed, an argument and a failed call's error, 2.
+//     profiler, the synthesizer and the refiner, 4 on one model.
 //
-// Nineteen, then, before a coalesced trigger's second sender or a fallback
+// Seventeen, then, before a coalesced trigger's second sender or a fallback
 // chain that answered the pass on a second model adds a row each. Twenty —
-// this constant's old value, set when the ending was counted at fifteen —
-// cleared that by one, and a busier ending pushed the review phase out of
-// the recovered rows: the one a reader who came for "how did it end" wants
-// beside the words. Thirty-two keeps thirteen rows of headroom for exactly
-// those, while staying small enough that the second read is a seek rather
-// than a scan. The recovered rows replace nothing: a cut view holds
+// this constant's old value, set when the ending was counted at fifteen — was
+// outgrown by a busier ending, which pushed the review phase out of the
+// recovered rows: the one a reader who came for "how did it end" wants beside
+// the words. Thirty-two keeps fifteen rows of headroom for exactly those,
+// while staying small enough that the second read is a seek rather than a
+// scan. The recovered rows replace nothing: a cut view holds
 // [store.MaxTurnEvents] opening rows plus at most this many closing ones,
 // which is the same payload budget the cap exists for with a bounded addition
 // — fleet-wide as well as per node, because the merge cuts to the same two

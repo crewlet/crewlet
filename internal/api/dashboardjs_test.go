@@ -1782,7 +1782,20 @@ const (
 	// +7475 bytes came to 7,477 bytes on the merged tree, taking it from
 	// 5481.1 KiB (5,612,696 bytes) to 5488.4 KiB (5,620,173 bytes). It moved by
 	// main's own 7 KiB, from 5482 KiB: 5489 KiB.
-	treeBudget = 5<<20 + 369<<10
+	// A conversation's next turn continuing the session its last turn left —
+	// the Sessions view saying which launch would continue each session
+	// (`continued_by`), naming the session a turn's first launch was handed
+	// (`base_turn`, a link to that session) and whether its reply reached the
+	// party waiting, net of the Memory tab's Conversations section it
+	// replaces, with its thread list and their turns — took main's from 5456.5
+	// KiB to 5454.2 KiB (-2.3 KiB, 2367 bytes), all of it the agents chunk
+	// the tab loads in (271 bytes gzipped). The initial load did not grow:
+	// its files are the same bytes but for the chunk names they list.
+	// Merged again with it, main's -2367 bytes came to -2,380 bytes on the
+	// merged tree, taking it from 5488.4 KiB (5,620,173 bytes) to 5486.1 KiB
+	// (5,617,793 bytes). It moved down by main's own 2 KiB, from 5489 KiB to
+	// the measured size's next KiB: 5487 KiB.
+	treeBudget = 5<<20 + 367<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -30,10 +30,10 @@ import (
 //   - PartitionKey says which other events this one is handled WITH: the
 //     broker's inbox partition and the coalescer's merge unit.
 //   - ConversationIdentity says which ongoing conversation it is part of: the
-//     conversation ledger's key, the turn telemetry's conversation_key tag,
-//     the episodes column, and the value a parked executor matches a
-//     person's answer against — they answer on the conversation, not into
-//     the batch.
+//     key a seat's sessions are kept under on the executor log, the turn
+//     telemetry's conversation_key tag, the episodes column, and the value a
+//     parked executor matches a person's answer against — they answer on the
+//     conversation, not into the batch.
 //   - WakesActor says whether a notification reaches the party who caused it.
 //   - DigestBody is the supersede rule when several of them merge.
 //
@@ -141,8 +141,8 @@ type Prompt interface {
 	PartitionKey(metadata map[string]string, subject string) string
 
 	// ConversationIdentity is the SOURCE-LOCAL identity of the ongoing
-	// conversation: what the ledger, the episodes and the event store's
-	// conversation_key tag file this event under.
+	// conversation: what the turn's rows on the executor log, the episodes
+	// and the event store's conversation_key tag file this event under.
 	//
 	// Local, like [Prompt.PartitionKey], because the caller namespaces
 	// both through the same rule. Empty means the same thing: this source
@@ -156,9 +156,9 @@ type Prompt interface {
 	// THE INVARIANT EVERY IMPLEMENTATION OWES: the identity must be
 	// CONSTANT ACROSS EVERY EVENT IN A PARTITION, so a partition key is
 	// always the identity itself or a finer cut of it. A turn is a
-	// partition and the ledger is written once per turn, so if two
-	// constituents of one coalesced trigger disagreed about the identity
-	// the ledger key would depend on which event sorted first.
+	// partition and its rows on the executor log are keyed once per turn,
+	// so if two constituents of one coalesced trigger disagreed about the
+	// identity the key would depend on which event sorted first.
 	//
 	// For most sources the two coincide, because an issue key, a page id
 	// and a monitor id are each one object that is both the merge unit and

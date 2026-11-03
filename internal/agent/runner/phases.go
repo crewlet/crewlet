@@ -145,11 +145,13 @@ type Config struct {
 	// supplied one.
 	Fence func() error
 
-	// Task is the ask, and Conversation is the prior-turns block. Both are
-	// fixed for the turn — Conversation as [Config.Context] is, and empty
-	// with [Config.Resume] for the same reason.
-	Task         string
-	Conversation string
+	// Task is the ask, and Endings how the conversation's earlier turns
+	// ended (internal/agent/prompts' BuildConversationEndings), rendered at
+	// the turn's dispatch. Both are fixed for the turn — Endings as
+	// [Config.Context] is, frozen on every park and thawed from it, and
+	// empty with [Config.Resume] for the same reason.
+	Task    string
+	Endings string
 
 	// Reply says who is waiting for this turn, so the executor's own
 	// submission can be checked against a fact the model does not control.
@@ -601,7 +603,7 @@ func New(cfg Config) (*Runner, error) {
 		return nil, fmt.Errorf("runner: no executor launcher (Config.Launcher) — " +
 			"every seat's executor is its harness's own run, and the " +
 			"assembler must supply what launches it")
-	case cfg.Resume != nil && frozen(cfg.Context, cfg.Conversation) != (execstate.Frozen{}):
+	case cfg.Resume != nil && frozen(cfg.Context, cfg.Endings) != (execstate.Frozen{}):
 		// TWO SOURCES FOR ONE FROZEN THING, and no honest way to pick: the
 		// parked state is what the turn's first launch was built from, and
 		// a context fetched again for the resume is a second answer to the
@@ -609,10 +611,10 @@ func New(cfg Config) (*Runner, error) {
 		// them silently dropped.
 		return nil, fmt.Errorf("runner: a resumed turn's context is the one its parked " +
 			"state froze at the turn's start — leave Config.Context and " +
-			"Config.Conversation empty with Config.Resume")
+			"Config.Endings empty with Config.Resume")
 	}
 	if cfg.Resume != nil {
-		cfg.Context, cfg.Conversation = thawed(cfg.Resume.State.Context)
+		cfg.Context, cfg.Endings = thawed(cfg.Resume.State.Context)
 	}
 	return &Runner{cfg: cfg}, nil
 }
@@ -700,9 +702,12 @@ func (r *Runner) executorSystem(built *tools.Surface) prompts.Prompt {
 func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledger.Iteration,
 	fresh []steer.Note) prompts.Prompt {
 	return prompts.BuildPhaseUserMessage(prompts.UserMessage{
-		TaskDescription:     r.taskFor(notes),
-		PriorWork:           r.priorWork(ctx, history),
-		ConversationHistory: r.cfg.Conversation,
+		TaskDescription: r.taskFor(notes),
+		PriorWork:       r.priorWork(ctx, history),
+		// HOW THE CONVERSATION'S EARLIER TURNS ENDED, as the turn froze it
+		// at its dispatch: every brief of the turn, fresh or reseeded, on
+		// whatever segment, tells the same account.
+		Endings: r.cfg.Endings,
 		// EVERY NOTE THE TURN HAS READ, so a run launched after a person
 		// corrected the turn starts from the turn as corrected — and then
 		// the notes this brief is the first to read. The run is a fresh
@@ -762,12 +767,11 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		// AND NO SUMMARY. The executor gave no account of itself, and the
 		// engine must not write one for it: Summary is the INTENT line —
 		// rendered whole, as "set out to", to every later round and to the
-		// reviewer, and kept whole in the conversation ledger — where its
-		// prose is already carried as Text, tail-elided at render and
-		// sized for what a transcript is. Copying the transcript into the
-		// intent line put a whole run's output into the one slot nothing
-		// bounds, twice per round, and under a heading that called it the
-		// executor's own account.
+		// reviewer — where its prose is already carried as Text,
+		// tail-elided at render and sized for what a transcript is.
+		// Copying the transcript into the intent line put a whole run's
+		// output into the one slot nothing bounds, twice per round, and
+		// under a heading that called it the executor's own account.
 		log.WarnContext(phaseCtx, "work_never_submitted", "round", round)
 		payload = workPayload{Outcome: string(turn.OutcomeIncomplete)}
 	}

@@ -6,7 +6,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
@@ -43,13 +42,6 @@ const (
 	// every node. Shortening it shortens how far back a re-derived day
 	// keeps its schedules.
 	ScheduledRunRetention = 7 * 24 * time.Hour
-
-	// ConversationRetention is how long a seat remembers what it already
-	// said in one thread. Thirty days is the default; it is the one
-	// retention an operator can override, because a company running
-	// long-lived tickets may legitimately want a conversation remembered
-	// past the event store's own horizon.
-	ConversationRetention = 30 * 24 * time.Hour
 
 	// ChannelRetention keeps a CLOSED agent-to-agent channel readable for
 	// a week — long enough for an operator to reconstruct an exchange from
@@ -498,37 +490,4 @@ func ScheduleJobs(l schedule.Ledger) []Job {
 		return nil
 	}
 	return []Job{PurgeN("scheduled_runs", NodeLocal, Fixed(ScheduledRunRetention), l.Purge)}
-}
-
-// LedgerJobs is the sweep for the turn ledgers.
-//
-// ONE JOB, not two: the completion ledger moved to the coordination store,
-// where the bucket's own age is the retention and the broker expires the
-// records — see coord.LedgerRetention, and coordtest's guard that it still
-// outlasts the scheduler's catchup ceiling.
-//
-// [NodeLocal]: a conversation row records what a seat said in a thread from
-// the node that ran the turn, so each node holds its own and no peer's sweep
-// reaches it.
-//
-// conversationRetention is the operator-facing horizon, asked at every sweep
-// because an apply can move it (see [Horizon]). An answer of zero or less —
-// or no function at all — takes [ConversationRetention]: the engine's config
-// validation refuses a retention below one day, so this floor is for a node
-// with no company yet and a caller that built its stores directly, and it
-// exists because the alternative reading of zero is "delete every
-// conversation on the next tick".
-func LedgerJobs(s ledgerstore.Conversations, conversationRetention Horizon) []Job {
-	if s == nil {
-		return nil
-	}
-	horizon := func() time.Duration {
-		if conversationRetention != nil {
-			if d := conversationRetention(); d > 0 {
-				return d
-			}
-		}
-		return ConversationRetention
-	}
-	return []Job{Purge("conversation_sessions", NodeLocal, horizon, s.Purge)}
 }

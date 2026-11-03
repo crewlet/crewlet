@@ -45,6 +45,16 @@ type executorLogSpy struct {
 	calls map[string]int
 }
 
+// Begin answers a turn's first read held wherever it names a base, as the log
+// does where nothing moved the base before it landed. What a begin carries is
+// the conversation cases' to read (conversation_internal_test.go's headLog);
+// these cases are about how a turn ends.
+func (s *executorLogSpy) Begin(_ context.Context, _ executordomain.Call,
+	n executordomain.NewBegin) (executordomain.BeginResult, error) {
+	return executordomain.BeginResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied},
+		Held: n.BaseTurn != ""}, nil
+}
+
 func (s *executorLogSpy) Capture(_ context.Context, _ executordomain.Call,
 	n executordomain.NewCapture) (executordomain.CaptureResult, error) {
 	s.mu.Lock()
@@ -436,10 +446,14 @@ func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
 // THE END CARRIES THE TURN'S OWN DECISION AND BREACH, NEVER THE REVIEWER'S LAST
 // WORD: a turn the loop failed on a guard after its reviewer said `done` ended
 // failed, saying which guard; what the reviewer said landed and what stopped a
-// blocked round are carried; and a stop says who stopped it and why.
+// blocked round are carried; a stop says who stopped it and why; and a turn
+// abandoned, after it broke or as its first launch failed once its run was
+// recorded, ended failed, saying so, with the error that abandoned it redacted
+// in its own account, before any path to the log redacts it again.
 //
-// Mutation: read the decision off LastReview, drop the breach's account, or
-// leave the stop's author off, and a field below says something else.
+// Mutation: read the decision off LastReview, drop the breach's account, leave
+// the stop's author off, or quote an abandoned turn's or launch's error
+// unredacted, and a field below says something else.
 func TestTheEndCarriesTheTurnsOwnDecisionAndBreach(t *testing.T) {
 	t.Parallel()
 	res := turn.Result{
@@ -464,6 +478,15 @@ func TestTheEndCarriesTheTurnsOwnDecisionAndBreach(t *testing.T) {
 		errors.New("push failed: "+leakedToken))
 	if abandoned.Outcome != executorkeep.OutcomeFailed || strings.Contains(abandoned.Failure, leakedToken) {
 		t.Fatalf("the abandoned turn's ending is %+v, want it failed, its error redacted", abandoned)
+	}
+	launchEnd := launchAbandonedEnding(turn.Result{}, reply, colleagueAnswer{},
+		errors.New("the box refused to start its job: "+leakedToken))
+	if launchEnd.Outcome != executorkeep.OutcomeFailed ||
+		!strings.Contains(launchEnd.Failure, "abandoned after its run was recorded") ||
+		!strings.Contains(launchEnd.Failure, "the box refused to start its job") ||
+		strings.Contains(launchEnd.Failure, leakedToken) {
+		t.Fatalf("the abandoned launch's ending is %+v, want it failed, saying why, its error redacted",
+			launchEnd)
 	}
 	stop := &stopError{pause: coord.SeatPause{By: "jane", Reason: "wrong repository", StopRunning: true}}
 	stopped := stoppedEnding(turn.Result{Decision: phase.Done}, reply, stop, colleagueAnswer{})

@@ -18,8 +18,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/ledger"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/opkey"
@@ -27,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -47,16 +46,21 @@ const (
 	codingThread       = "root-1"
 )
 
-// conversation reads a seat's thread history straight from the node's own
-// store, which is where the ledger lives.
-func (n *node) conversation(t *testing.T, handle, key string) []ledger.Session {
+// executorRows reads a seat's rows on the executor log through the node's
+// estate router, at the level a turn's dispatch reads its conversation at, so
+// an end recorded since is in the copy that answers.
+func (n *node) executorRows(t *testing.T, handle string) []executordomain.Session {
 	t.Helper()
-	got, err := ledgerstore.NewConversations(n.engine.Backends().Store).
-		History(context.Background(), handle, key, 0)
-	if err != nil {
-		t.Fatalf("conversation history for %s on %s: %v", handle, key, err)
+	reads, ok := engine.ExecutorSessionReads(n.engine)
+	if !ok {
+		t.Fatal("the node has no estate router to read the executor log through")
 	}
-	return got
+	page, err := reads.Sessions(context.Background(), handle, "", 0,
+		statelog.Freshness{Level: statelog.ReadLinearizable})
+	if err != nil {
+		t.Fatalf("the executor log's rows for %s: %v", handle, err)
+	}
+	return page.Sessions
 }
 
 // GATE G6 — the golden coding turn.
@@ -266,9 +270,9 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
 	// IN A DM THREAD, as a chat message arrives. The conversation is what
-	// the resumed turn owes an answer to and what its ledger entry is filed
-	// under; the thread beside it is the batch this run was launched from,
-	// and the row carries both.
+	// the resumed turn owes an answer to and what its row on the executor
+	// log is keyed by; the thread beside it is the batch this run was
+	// launched from, and the run's record carries both.
 	n.wakeInDirectThread(t, "swe", "the api test is flaking, please fix it",
 		codingConversation, codingThread)
 
@@ -391,36 +395,38 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	if m < 0 || m == len(argv)-1 || argv[m+1] != codingModel {
 		t.Fatalf("the harness was not handed the coder entry's model %s: %v", codingModel, argv)
 	}
-	// AND THE CONVERSATION KNOWS THE TURN HAPPENED. A turn that ends on the
-	// resume path ends a thread's turn as surely as one that ends on the
-	// inbox path, and only the inbox path recorded it: the thread's history
-	// stopped at the moment the run detached, so the seat's next turn on it
-	// read a conversation in which the coding work had never happened.
+	// AND THE CONVERSATION'S NEXT TURN WILL FIND IT. A turn that ends on the
+	// resume path ends a conversation's turn as surely as one that ends on the
+	// inbox path, and its end on the executor log is what the conversation's
+	// next turn is told — and its row's session what that turn continues —
+	// each read under the conversation the row names.
 	//
 	// End to end because the two halves are in different processes' worth of
-	// code: the LAUNCH writes the conversation onto the run's row, and the
-	// RESUME — which cannot see the trigger any more — reads it back.
+	// code: the LAUNCH writes the conversation onto the run's record, and the
+	// RESUME — which cannot see the trigger any more — ends the turn under it.
 	//
 	// AND UNDER THE CONVERSATION RATHER THAN THE BATCH, which only a DM-shaped
 	// wake can assert: the launch copies two values off the turn into two
-	// fields of the row, and a crossed pair compiles — both are strings — so
-	// the entry filed here is the only end-to-end proof they did not swap.
-	history := n.conversation(t, "swe", codingConversation)
-	if len(history) != 1 {
-		t.Fatalf("the resumed turn left %d conversation entries under the DM line, "+
-			"want 1: the row it reported through names the wrong conversation",
-			len(history))
+	// fields of the record, and a crossed pair compiles — both are strings —
+	// so the key on the turn's row is the only end-to-end proof they did not
+	// swap.
+	var ended executordomain.Session
+	waitFor(t, "the turn's end to reach the executor log", func() bool {
+		for _, row := range n.executorRows(t, "swe") {
+			if row.Ended() {
+				ended = row
+				return true
+			}
+		}
+		return false
+	})
+	if ended.ConversationKey != codingConversation {
+		t.Fatalf("the turn's row is keyed %q, want the DM line %q: the conversation's "+
+			"next turn reads its head and its endings under the line and would find "+
+			"nothing", ended.ConversationKey, codingConversation)
 	}
-	if batch := n.conversation(t, "swe", codingConversation+":"+codingThread); len(batch) != 0 {
-		t.Errorf("the resumed turn filed %d entries under the inbox batch instead; "+
-			"the seat's next turn on this DM reads the conversation and finds "+
-			"nothing", len(batch))
-	}
-	if history[0].Reply == "" {
-		t.Errorf("the entry carries no reply: %+v", history[0])
-	}
-	if history[0].Decision != "done" {
-		t.Errorf("decision = %q, want the resumed turn's own outcome", history[0].Decision)
+	if ended.Ending.Decision != "done" {
+		t.Errorf("decision = %q, want the resumed turn's own outcome", ended.Ending.Decision)
 	}
 }
 

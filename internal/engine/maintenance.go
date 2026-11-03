@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/a2a"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -91,12 +90,6 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		jobs = append(jobs, maintenance.LearningJobs(learning.NewDiary(db))...)
 		jobs = append(jobs, maintenance.CounterpartyJobs(learning.NewCounterparties(db))...)
 		jobs = append(jobs, maintenance.ScheduleJobs(sqlledger.New(db.SQL()))...)
-		// THE COMPANY'S HORIZON, READ AT EVERY SWEEP: an apply moves
-		// it under a running node, and a horizon read here, once, held
-		// the sweep to the revision the node booted on. See
-		// [maintenance.Horizon].
-		jobs = append(jobs, maintenance.LedgerJobs(
-			ledgerstore.NewConversations(db), e.ConversationRetention)...)
 	}
 	// THE FLEET'S MCP LISTINGS, which no age may forget: what a node that
 	// died or restarted left behind, and the schemas nothing names any more.
@@ -271,40 +264,6 @@ func (e *Engine) rebuildMaintenance(ctx context.Context) {
 	}
 }
 
-// ConversationRetention reads the operator's horizon for the conversation
-// ledger, in days, off the ACTIVE epoch.
-//
-// Exported alongside [Engine.Maintenance] for the same reason: what a
-// company actually forgets, and when, is an operator question.
-//
-// Read by the sweep at EVERY SWEEP, so a revision that moves it is honoured on
-// the next one. It was read once, when the sweep was built, and that held the
-// conversation ledger to the revision the node booted on: a company that
-// shortened its retention kept every conversation it had asked to forget for
-// as long as the node stayed up. A horizon cannot move under a sweep in
-// flight — each job asks it once, as it starts.
-//
-// The field has existed since the ledger shipped and nothing ever read it:
-// an operator setting `retention_days: 7` got thirty days of conversations,
-// silently, because there was no sweep to honour it.
-func (e *Engine) ConversationRetention() time.Duration {
-	// AN UNCONFIGURED NODE HAS NO HORIZON TO STATE, and says so with a
-	// zero rather than inventing one: [maintenance.LedgerJobs] already
-	// reads zero as "take the floor", which is the same answer and only
-	// one place to change it. What it must never do is return a literal
-	// zero DURATION to a caller that would read it as "retain nothing" —
-	// which is exactly why that floor is there.
-	c := e.Company()
-	if c == nil {
-		return 0
-	}
-	// No zero check beyond that: validation refuses retention_days below 1
-	// and fills the shipped default when it is unset, so a config that
-	// reached an engine always carries a positive number.
-	days := c.Config.TurnEngine.ConversationSession.RetentionDays
-	return time.Duration(days) * 24 * time.Hour
-}
-
 // buildMailboxes builds the seat mailbox registry and its sweep.
 //
 // Nil, with no error, on backends without a fleet store, a queue or a lease
@@ -456,14 +415,14 @@ func (e *Engine) stopMaintenance() {
 }
 
 // inboxRetention is how long this company's inbox rows live, read off the
-// PUBLISHED company each time it is asked — the sweep asks it at every sweep,
-// for the reason [Engine.ConversationRetention] is.
+// PUBLISHED company each time it is asked — the sweep asks it at every sweep
+// ([maintenance.Horizon]), so a revision that moves it is honoured on the next
+// one rather than held to the revision the node booted on.
 //
-// A NODE WITH NO COMPANY STATES NO HORIZON, for the reason
-// [Engine.ConversationRetention] gives: a literal zero duration read as
-// "retain nothing" would delete the inbox, so the shipped default is what an
-// unconfigured node sweeps on. Validation refuses a configured value outside
-// its own bounds and fills the default when it is unset.
+// A NODE WITH NO COMPANY STATES NO HORIZON of its own: a literal zero duration
+// read as "retain nothing" would delete the inbox, so the shipped default is
+// what an unconfigured node sweeps on. Validation refuses a configured value
+// outside its own bounds and fills the default when it is unset.
 func (e *Engine) inboxRetention() time.Duration {
 	c := e.Company()
 	if c == nil {

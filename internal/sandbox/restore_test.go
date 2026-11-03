@@ -356,7 +356,7 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 				req.Continue = &Continuation{SessionID: "sess-ask", Brief: "carry on in the box you left"}
 			}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused)
+				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
 			wantBrief := map[BriefKind]string{BriefContinued: "carry on in the box you left",
 				BriefContinuedNewBox: "carry on in a box that replaced yours", BriefFresh: "the fresh brief"}[tc.want]
@@ -479,8 +479,8 @@ func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (Carr
 // executor log and its run's record. A live turn whose job the relaunch follows
 // left a kept capture, its newest, that the log's row names and the runner a
 // launch would take it up with restores: continued. A row naming no object, an
-// ended turn — saying no later turn continues it yet — a turn whose run is
-// over, a turn whose end is owed on its record or recorded already (ending, and
+// ended turn — saying only its conversation's next turn continues it — a turn
+// whose run is over, a turn whose end is owed on its record or recorded already (ending, and
 // no relaunch of it follows, though the log's row has not ended yet), a runner
 // of no harness that restores sessions, one that refuses the archive, a job
 // that left no capture of its own — an earlier job's holding none of what it
@@ -522,7 +522,7 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 		"a live turn's kept session": {row: live, run: run, follows: 2, restorer: fakeRestorer{}, continues: true},
 		"a row naming no session":    {row: bare, run: run, follows: 2, restorer: fakeRestorer{}, why: "names no kept session"},
 		"an ended turn": {row: ended, run: run, follows: 2, restorer: fakeRestorer{},
-			why: "no later turn continues its session yet"},
+			why: "continued only by its conversation's next turn"},
 		"a turn whose run is over":     {row: live, follows: 2, restorer: fakeRestorer{}, why: "has ended"},
 		"a turn whose end is owed":     {row: live, run: &owing, follows: 2, restorer: fakeRestorer{}, why: "is ending"},
 		"a turn whose end is recorded": {row: live, run: &recorded, follows: 2, restorer: fakeRestorer{}, why: "is ending"},
@@ -550,16 +550,25 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	}
 }
 
-// A BRIEF'S KIND IS ONE OF THREE, and a record naming another — one a build
-// that knows a fourth wrote — reads as the value it is, never as one of them.
+// A BRIEF'S KIND IS ONE OF FOUR, and a record naming another — one a build
+// that knows a fifth wrote — reads as the value it is, never as one of them.
+// Each of the three that continue a session says so, and the fresh one does
+// not.
 //
-// Mutation: answer true for any value, and the unknown rows go red.
-func TestABriefKindIsOneOfThree(t *testing.T) {
+// Mutation: answer true for any value, drop a kind from [BriefKinds], or read
+// the conversation's session as a fresh brief, and a row goes red.
+func TestABriefKindIsOneOfFour(t *testing.T) {
 	t.Parallel()
-	for _, k := range []BriefKind{BriefContinued, BriefContinuedNewBox, BriefFresh} {
+	for _, k := range []BriefKind{BriefContinued, BriefContinuedNewBox, BriefContinuedConversation, BriefFresh} {
 		if !k.Valid() {
 			t.Errorf("%q is not a brief", k)
 		}
+		if k.Continues() == (k == BriefFresh) {
+			t.Errorf("%q continues a session: %v", k, k.Continues())
+		}
+	}
+	if len(BriefKinds) != 4 {
+		t.Errorf("there are %d briefs, want 4", len(BriefKinds))
 	}
 	for _, k := range []BriefKind{"", "continued_elsewhere"} {
 		if k.Valid() {
@@ -896,6 +905,10 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 		decided  bool
 		in       ContinuesIn
 		whyHolds string
+		// ending is a run whose ending is decided, which no relaunch of it
+		// follows: of a turn of no conversation, as this row is, no launch
+		// continues it at all.
+		ending bool
 	}{
 		"its kept capture":  {target: target, decided: true, in: ContinuesInAnyBox},
 		"in its parked box": {target: older, decided: true, in: ContinuesInParkedBox, whyHolds: "older than"},
@@ -970,7 +983,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			target: RelaunchTarget{Undecided: true, Why: "every member is sitting out its plan"}},
 		"no member at all": {decided: true, whyHolds: "no runner member",
 			target: RelaunchTarget{Why: "the seat's chain has no runner member"}},
-		"a decided ending": {target: target, decided: true, whyHolds: "is ending",
+		"a decided ending": {target: target, decided: true, whyHolds: "is ending", ending: true,
 			run: func(r *PendingRun) { r.Ending = &RecordedEnding{ID: "ending-1"} }},
 		"a company that keeps no session": {decided: true, in: ContinuesInParkedBox,
 			whyHolds: "keeps no executor session",
@@ -983,8 +996,14 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			if tc.run != nil {
 				tc.run(&run)
 			}
-			got := ReadContinuityOf(row, &run, tc.target, now)
+			got := ReadContinuityOf(row, "", &run, tc.target, now)
+			by := ContinuedByRelaunch
+			if tc.ending {
+				by = ""
+			}
 			switch {
+			case got.By != by:
+				t.Fatalf("ReadContinuityOf = %+v, want it about %q", got, by)
 			case got.Decided != tc.decided:
 				t.Fatalf("ReadContinuityOf = %+v, want decided %v", got, tc.decided)
 			case got.Continues != (tc.in != "") || got.In != tc.in:

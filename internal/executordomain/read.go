@@ -137,7 +137,30 @@ func (s Session) Kept() executorkeep.TurnRow {
 		Harness: s.Harness, HarnessVersion: s.HarnessVersion, SessionID: s.SessionID,
 		ArchiveFormat: s.ArchiveFormat, LaunchSeq: s.LaunchSeq, CaptureSeq: s.CaptureSeq,
 		Object: s.Object, Ended: s.Ended(),
+		ConversationKey: s.ConversationKey, NotKept: s.NotKept(),
+		ContentKey: s.ContentKey, Home: s.Home, Workspace: s.Workspace,
+		ContextTokens: s.ContextTokens, Interrupted: s.Interrupted, EndedAt: s.EndedAt,
+		BaseTurn: s.BaseTurn,
 	}
+}
+
+// Kept is the read as a turn's first launch freezes it
+// ([executorkeep.ConversationHead]): the ONE conversion of a head into the
+// sandbox's view of it, as [Session.Kept] is of a row. A read made at no
+// position carries none.
+func (h Head) Kept() executorkeep.ConversationHead {
+	kept := executorkeep.ConversationHead{Absorbs: h.Absorbs()}
+	if h.Position.Seq != 0 {
+		kept.ReadThrough = h.Position.Packed()
+	}
+	for _, s := range h.Siblings {
+		kept.Siblings = append(kept.Siblings, s.Kept())
+	}
+	if h.Session != nil {
+		session := h.Session.Kept()
+		kept.Session = &session
+	}
+	return kept
 }
 
 // RelaunchRead is the level a relaunch reads its turn's row at, and so the
@@ -146,6 +169,42 @@ func (s Session) Kept() executorkeep.TurnRow {
 // may have been recorded by another node's keep, which this node's copy may
 // not have applied yet.
 func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
+
+// NotKept is why the row names no session's object, in a reader's words, ""
+// where it names one. A row names none for one of three reasons, each the
+// domain's own and told apart off the row alone: nothing of the turn's session
+// was captured — yet, while the turn is live, its row its begin's; the turn's
+// newest capture was not kept, which its end said ([executorkeep.Ending.Unkept]) and which
+// released the older capture the row named, if any ([applyEnd]) — told by the
+// unkept capture being newer than the place the row keeps, which a release
+// leaves as it was; or the seat's session budget released it to make room
+// ([seatPlan]), the one other release that leaves a row, and one that takes
+// only an ended turn's.
+//
+// SOMEBODY ELSE'S WORDS IN IT: the unkept capture's reason quotes what refused
+// it — an error a box or a store wrote — so a reader redacts what this
+// answers, as it redacts every text a row holds.
+func (s Session) NotKept() string {
+	switch {
+	case s.HasObject():
+		return ""
+	case s.Ending != nil && s.Ending.Unkept != nil && unkeptSupersedes(*s.Ending.Unkept, s.LaunchSeq, s.CaptureSeq):
+		u := *s.Ending.Unkept
+		reason := u.Reason
+		if reason == "" {
+			reason = "no reason was recorded"
+		}
+		return fmt.Sprintf("the turn's newest capture of its session (launch %d, capture %d) was not kept: "+
+			"%s; how the turn ended is kept", u.LaunchSeq, u.CaptureSeq, reason)
+	case s.CapturedAt.IsZero() && !s.Ended():
+		return "nothing of this turn's session has been captured yet"
+	case s.CapturedAt.IsZero():
+		return "nothing of this turn's session was captured: its run ended before its harness packed one, " +
+			"its harness carries none, or the company kept no session"
+	}
+	return "the seat's session budget released this session's object to make room for newer ones; how the " +
+		"turn ended is kept"
+}
 
 // rowScanner is one row, from a query or a query row.
 type rowScanner interface{ Scan(dest ...any) error }

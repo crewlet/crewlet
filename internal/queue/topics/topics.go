@@ -216,11 +216,13 @@ const (
 	SeatSteer = SteerPrefix + "note"
 
 	// HeldPrefix prefixes the subjects a question only a seat's HOLDER can
-	// answer truthfully crosses — a seat's memory and its conversation
-	// ledger, which every node keeps a copy of and only the holder keeps
-	// current (internal/learning/memread), and what a relaunch of its turns
-	// would be launched on, which the holder's own bench of spent plans
-	// decides (internal/engine, relaunchtarget.go).
+	// answer truthfully crosses — a seat's memory, which every node keeps a
+	// copy of and only the holder keeps current
+	// (internal/learning/memread); what a launch of its turns — a
+	// relaunch, or a conversation's next turn — would be launched on, which
+	// the holder's own bench of spent plans decides (internal/engine,
+	// relaunchtarget.go); and whether a park holds its inbox, which lives in
+	// the holder's process alone (internal/engine, parkheld.go).
 	//
 	// NOT EVENTS, for SearchPrefix's reason: a read is the ephemeral
 	// request and reply of [queue.EventQueue.Ask]. And NOT under
@@ -231,9 +233,16 @@ const (
 	// and only the incarnation the seat's lease names answers.
 	HeldRead = HeldPrefix + "read"
 	// HeldRelaunch is where a reader of a seat's executor sessions asks what
-	// a relaunch of the seat's turns would be launched on now. Every node
-	// serves it and only the incarnation the seat's lease names answers.
+	// a relaunch of the seat's turns, or a conversation's next turn, would be
+	// launched on now. Every node serves it and only the incarnation the
+	// seat's lease names answers.
 	HeldRelaunch = HeldPrefix + "relaunch"
+	// HeldPark is where the idle sweep asks whether one of the holder's
+	// parks holds a seat's inbox — its budget's on whatever floor, or its
+	// models' limit — before it closes a channel whose ask may wait there.
+	// Every node serves it and only the incarnation the seat's lease names
+	// answers.
+	HeldPark = HeldPrefix + "park"
 
 	// RelayPrefix prefixes the subjects a data node RELAYS what its own
 	// appliers announced on, to a peer whose own copy is out of service

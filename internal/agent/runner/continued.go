@@ -53,7 +53,17 @@ import (
 // cannot take the session up after all and starts one of its own: its box says
 // so before the run's first call ([Runner.sessionStarted]), and its job's record
 // keeps what it said for every later rebuild of the guard ([Resume.Continued]).
-// Within a turn only: the next turn's first launch continues nothing yet.
+//
+// A CONVERSATION'S NEXT TURN continues the session its last turn left: its first
+// launch the head its dispatch read, and a relaunch of a turn that has kept no
+// session of its own yet the one its first launch froze (internal/sandbox,
+// restore.go). That session is another turn's, in a box of its own, so its run
+// is told where this turn begins and what the new box changes
+// ([prompts.BuildNextTurn]), then handed the launch's own fresh brief whole —
+// the task, the turn's earlier rounds and notes, and how the conversation's
+// earlier turns ended — none of which it read ([Runner.baseSession]). ITS GUARD
+// IS EMPTY: the skills that session loaded were another turn's, set up anew for
+// this one, which the lead says.
 
 // sessionBasis asks the turn's launcher which kept session this relaunch
 // continues ([SessionProber]). A launcher that cannot say continues none.
@@ -91,6 +101,25 @@ func (r *Runner) keptSession(basis SessionBasis, lead string, bridged []BridgedC
 	replaced := brief + "\n\n" + prompts.BoxReplaced(provenance.Neutralise(b, branch),
 		provenance.Neutralise(b, basis.Home))
 	return &SessionContinuation{Basis: basis, Brief: brief, Replaced: replaced}
+}
+
+// baseSession is how a launch continues the session its conversation's last
+// turn left, nil where basis names none: the lead that says where this turn
+// begins and what the new box changes ([prompts.BuildNextTurn]), then fresh,
+// the launch's own fresh brief or reseed, whole. Only in a box of its own, so
+// its same-box brief is empty. The base's turn and home are the engine's record
+// of that session, defused under the launching segment's token.
+func (r *Runner) baseSession(basis SessionBasis, fresh string) *SessionContinuation {
+	if !basis.ContinuesBase() {
+		return nil
+	}
+	b := r.cfg.Turn.Context.FenceBoundary()
+	base := basis.Base
+	lead := prompts.BuildNextTurn(prompts.NextTurn{
+		BaseTurn: provenance.Neutralise(b, base.Turn), EndedAt: base.EndedAt,
+		Home: provenance.Neutralise(b, base.Home), Interrupted: base.Interrupted,
+	})
+	return &SessionContinuation{Basis: basis, Replaced: lead + "\n\n" + strings.TrimSpace(fresh)}
 }
 
 // calledAfter is the calls of bridged a session saved with seq as the highest
@@ -172,8 +201,13 @@ type launchBriefs struct {
 // copy in its box is continued — because the continued model has those bodies
 // in front of it; none for a session of the run's own, whose model has read no
 // skill. Never the turn's other jobs' loads: a session another job worked in is
-// not this one. Armed before the run starts, so no call of the run is admitted
-// against a guard that holds what its model never read.
+// not this one. AND NONE FOR THE SESSION THE CONVERSATION'S LAST TURN LEFT,
+// whatever the parked state holds: the skills that session loaded were another
+// turn's, which this turn's guard never armed and its lead says were set up
+// anew — the safe direction, a skill-covered call refused until it is loaded
+// again rather than admitted on a body nobody read this turn. Armed before the
+// run starts, so no call of the run is admitted against a guard that holds what
+// its model never read.
 //
 // AND IT PUBLISHES THE PROMPT THE RUN WAS HANDED as the phase's opening frame
 // ([emitter.prompted]) — the continuation in the form its box takes, or the
@@ -190,6 +224,9 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 		decided.set(d)
 		handed := b.fresh
 		switch {
+		case d.Continues && d.Base && b.kept != nil:
+			r.armSession(surface, nil, nil)
+			handed = prompts.Prompt{Text: b.kept.Replaced}
 		case d.Continues && d.Kept && b.kept != nil:
 			r.armSession(surface, b.state.LoadedSkills,
 				ownCalls(b.bridged, b.state.BridgeFrom, b.kept.Basis.BridgeSeq, b.kept.Basis.BridgeOpen))

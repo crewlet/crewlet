@@ -1,9 +1,9 @@
-// Four readers that were written, tested, and asked by nothing.
+// Three readers that were written, tested, and asked by nothing.
 //
 // Each of these has existed for as long as the subsystem behind it: the item
-// search a seat calls with `search_work_items`, the conversation ledger that stops a
-// seat replying twice in one thread, the counterparty profiles the learning
-// loop writes, and the per-recipient routing the tracker's applier records.
+// search a seat calls with `search_work_items`, the counterparty profiles the
+// learning loop writes, and the per-recipient routing the tracker's applier
+// records.
 // Every one of them is read by the engine itself and reaches no screen, which
 // is the quietest way for a feature to be absent — it is not missing, it is
 // merely unaddressable.
@@ -30,9 +30,8 @@ type WorkSearcher interface {
 	Search(ctx context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error)
 }
 
-// SeatMemory is a seat's memory and its conversation ledger, answered by the
-// node holding the seat — the two reads this surface makes of
-// [memread.Reader].
+// SeatMemory is a seat's memory, answered by the node holding the seat — the
+// reads this surface makes of [memread.Reader].
 //
 // Consumer-defined like every other seam here, and over memread's own answer
 // types: the rows stay one shape rather than a copy this package would have to
@@ -45,7 +44,6 @@ type WorkSearcher interface {
 type SeatMemory interface {
 	Memory(ctx context.Context, seat memread.Seat, q memread.MemoryQuery) (memread.Memory, error)
 	Episode(ctx context.Context, seat memread.Seat, id string) (memread.EpisodeDetail, error)
-	Threads(ctx context.Context, seat memread.Seat, conversation string, limit int) (memread.Threads, error)
 	Overview(ctx context.Context, seats []memread.Seat) (memread.Overview, error)
 }
 
@@ -113,29 +111,6 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	out := map[string]any{"hits": hits, "mode": string(mode), "available": true}
 	outcome(out, answer.Outcome)
 	return out, nil
-}
-
-// conversations answers one seat's external threads, ANSWERED BY THE SEAT'S
-// HOLDER — see [Sources.Memory].
-//
-// The ledger is what stops a seat replying twice in one chat thread, and it is
-// the only record of what a seat said on a surface this engine does not own.
-//
-// TWO SHAPES IN ONE ANSWER, because the screen asks two questions with one
-// navigation: which threads this seat is in, and — when one is named — what it
-// said in that one. Split into two questions the second would need the first's
-// answer to know what to ask for. The page is [memread.ThreadPage]'s, and the
-// listing carries the seat's whole count beside it.
-func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
-	// A SEAT'S TRAIL, and so its lead's or an admin's whoever's seat it is
-	// — see [Sources.trailSeat]. An absent handle is still the caller's own
-	// seat.
-	seat, err := s.trailSeat(ctx, strings.TrimSpace(p.String("handle")))
-	if err != nil {
-		return nil, err
-	}
-	return s.Memory.Threads(ctx, seat, strings.TrimSpace(p.String("conversation")),
-		p.Int("limit", 0))
 }
 
 // workRouting answers who one change woke, and under which reason.

@@ -50,6 +50,13 @@ type agentLauncher struct {
 	// which the run's record carries to the frame that ends the turn
 	// ([sandbox.ColleagueAsk]).
 	ask *sandbox.ColleagueAsk
+
+	// conversation is what the turn's dispatch read of its conversation
+	// ([Engine.readConversation]): the base its first launch continues and
+	// freezes, answered with no further read. Set on a dispatched segment's
+	// launcher, whose one launch is the turn's first; nil on a resumed
+	// segment's, whose relaunches read the base the first launch froze.
+	conversation *conversationRead
 }
 
 var _ runner.AgentLauncher = (*agentLauncher)(nil)
@@ -449,10 +456,16 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// its host, in a session of its own ([runner.Lost]). Either keeps the
 		// round's calls on the row.
 		Continue: sandboxContinuation(req.Continue),
-		// AND THE TURN'S KEPT SESSION, continued in whatever box the launch
-		// gets, where the turn's runner was told it would be
+		// AND THE SESSION IT CONTINUES in whatever box the launch gets — the
+		// turn's kept capture, or the session its conversation's last turn
+		// left — where the turn's runner was told it would be
 		// ([agentLauncher.ProbeSession]), with the briefs that continue it.
-		Session:     sandboxSession(req.Session),
+		Session: sandboxSession(req.Session),
+		// AND THE TURN'S READ OF ITS CONVERSATION, which its first launch
+		// alone freezes on the record it creates and records on the executor
+		// log, whatever this launch then takes up: a relaunch of a turn that
+		// keeps nothing of its own continues it.
+		Base:        l.conversation.frozen(),
 		SteerSeat:   e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
 		BriefNotes:  brief,
 		HandedNotes: handed,
@@ -526,15 +539,14 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 				"error", err, "detail", "a person stopped the seat's running work while its "+
 					"executor was launching; the launch is ended and the turn stops")
 			return failed, &stopError{pause: pauseOfStop(decided), handle: handle, ofRun: true}
-		case turn.Stopped(err):
-			// THE TURN'S OWN FENCE REFUSED IT once the record was written:
-			// the launch abandoned the record under it
-			// ([sandbox.Coordinator.Launch]), so no ending of the run owes the
-			// turn's end, and the frame that ends the turn records it.
-			if recorded != "" {
-				e.abandonedLaunches.Store(l.turn.RunID, struct{}{})
-			}
-			return failed, err
+		case recorded != "":
+			// THE LAUNCH ABANDONED THE RECORD IT WROTE — the turn's own fence
+			// refused it once the record was written, or the box, the job or
+			// its attach failed after ([sandbox.Coordinator.Launch]) — so no
+			// ending of the run owes the turn's end, and the frame that ends
+			// the turn records it: stopped where its fence was, and failed,
+			// saying why, where the launch was.
+			e.abandonedLaunches.Store(l.turn.RunID, struct{}{})
 		}
 		return failed, err
 	}
@@ -546,12 +558,14 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 // held to ([launchFloor]): the larger of the static floor and, for each session
 // the launch may continue, that session's context with the brief that continues
 // it — the turn's kept capture, in the longer of its two briefs, since which
-// box the launch gets is the launch's to learn, and the job before's own copy
-// in its box with the brief that carries it on, where inBox says the launch can
-// continue in that box at all ([agentLauncher.continuesInItsBox]). A context no
-// capture measured is unknown, and holds the launch to the static floor.
+// box the launch gets is the launch's to learn; the session its conversation's
+// last turn left, with the brief that continues it in a box of its own, the one
+// box it is continued in; and the job before's own copy in its box with the
+// brief that carries it on, where inBox says the launch can continue in that
+// box at all ([agentLauncher.continuesInItsBox]). A context no capture measured
+// is unknown, and holds the launch to the static floor.
 //
-// THE KEPT CAPTURE ONLY WHERE MEMBER RUNS THE HARNESS THAT WROTE IT
+// THE SESSION ONLY WHERE MEMBER RUNS THE HARNESS THAT WROTE IT
 // ([runner.SessionBasis.Harness]): a session is continued only by its own
 // harness, so a launch on a member running another starts a session of its own,
 // and is held to the static floor rather than to a session it will not send —
@@ -576,9 +590,18 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	}
 	static := staticFloor(l.company)
 	floor := static
-	if s := req.Session; s != nil && s.Basis.Continues() {
-		floor = floor.atLeast(static.continuing(s.Basis.ContextTokens,
-			max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))))
+	if s := req.Session; s != nil {
+		switch {
+		case s.Basis.Continues():
+			floor = floor.atLeast(static.continuing(s.Basis.ContextTokens,
+				max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))))
+		case s.Basis.ContinuesBase():
+			// THE BASE'S OWN CONTEXT, never the job before's: that one sizes
+			// the in-place floor below, and a base is continued only in a box
+			// of its own, with its one brief.
+			floor = floor.atLeast(static.continuing(s.Basis.Base.ContextTokens,
+				harness.EstimateTokens(s.Replaced)))
+		}
 	}
 	if c := req.Continue; c != nil && c.SessionID != "" && inBox {
 		floor = floor.atLeast(static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief)))
@@ -874,8 +897,12 @@ func bridgeServers(endpoint string, surface mcpbridge.Surface) map[string]sandbo
 // than the concrete type: assigning a nil *agentLauncher into
 // runner.Config.Launcher would hand the runner a launcher that dereferences
 // nothing on its first launch.
+//
+// conversation is what the turn's dispatch read of its conversation, which a
+// dispatched segment's one launch — the turn's first — continues and freezes;
+// nil for a resumed segment's, whose relaunches read what that launch froze.
 func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
-	ask *sandbox.ColleagueAsk,
+	ask *sandbox.ColleagueAsk, conversation *conversationRead,
 ) runner.AgentLauncher {
 	if t == nil || company == nil || company.Models == nil {
 		return nil
@@ -884,7 +911,8 @@ func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
 	if seat == nil {
 		return nil
 	}
-	return &agentLauncher{engine: e, turn: t, seat: seat, company: company, ask: ask}
+	return &agentLauncher{engine: e, turn: t, seat: seat, company: company, ask: ask,
+		conversation: conversation}
 }
 
 // agentPlacement is the cell an executor entry runs in: its own `run_in`, then

@@ -496,9 +496,9 @@ const (
 
 	// --- one seat's own trail, read by somebody else ----------------- //
 	//
-	// A SEAT'S MEMORY, ITS THREADS AND ITS TURNS, read over the API: what
-	// it wrote in its diary, what it learned, who it has worked with, what
-	// it said on a chat surface this engine does not own, and the prompts
+	// A SEAT'S MEMORY, ITS SESSIONS AND ITS TURNS, read over the API: what
+	// it wrote in its diary, what it learned, who it has worked with, the
+	// session each of its turns kept and how each ended, and the prompts
 	// and responses of its own turns. DOTTED, because no tool reads another
 	// seat's trail — a seat's own memory tools take no handle at all
 	// ([ClassSelf]) — and it is ITS OWN VERB rather than [ActionAuditRead]

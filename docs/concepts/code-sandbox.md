@@ -510,7 +510,7 @@ Because its standing instructions tell the harness that it is *not* the last ste
 | `failed`, `error`, `error_kind`, `notes` | `failed` and `error` are set, with the kind `launch_failed`, when the launch did not succeed — a failure of its turn, as a failed phase's is. A launch that stopped to ask a question, one a person stopped and one its host cut off are **not** failed; their `notes` say which |
 | `work_item`, `work_key`, `conversation_key` | As on the turn's phase records |
 | `harness_session`, `harness_version` | The harness's own session the launch **ran** — as its script recorded it, so a launch asked to continue a session its box could not is named by the new one it started — and the harness's release, as its `--version` gave it. Each is absent where the box named none of the shape a harness gives it: an id of letters, digits, `-` and `_`, at most 128 of them, and a release of at most 64 bytes |
-| `brief`, `harness_session_continued`, `harness_session_fell_back` | Which brief the launch handed its run — `continued` (the turn's session, in the box it was last worked in), `continued_new_box` (the turn's session, restored into another box) or `fresh` (a session of its own) — whether the run did take up the session it was asked to continue, and, where it did not, why its script started one of its own instead, handing it the fresh brief ([A relaunch continues the turn's session](#a-relaunch-continues-the-turns-session)) — one sentence, redacted and cut to **1 KiB**, marked `…`. `brief` is absent where the launch recorded none |
+| `brief`, `harness_session_continued`, `harness_session_fell_back` | Which brief the launch handed its run — `continued` (the turn's session, in the box it was last worked in), `continued_new_box` (the turn's session, restored into another box), `continued_conversation` (the session the turn's conversation's last turn left, restored into a box of its own; [A conversation's next turn continues its last turn's session](#a-conversations-next-turn-continues-its-last-turns-session)) or `fresh` (a session of its own) — whether the run did take up the session it was asked to continue, and, where it did not, why its script started one of its own instead, handing it the fresh brief ([A relaunch continues the turn's session](#a-relaunch-continues-the-turns-session)) — one sentence, redacted and cut to **1 KiB**, marked `…`. `brief` is absent where the launch recorded none |
 | `session_taken_bytes`, `session_not_kept` | What the read that collected the launch [took of its session](#each-launchs-session-kept): the size of the sealed session taken out of the box to be kept, or why none was taken, redacted and cut to **1 KiB**, marked `…`. Whether it then landed is said after the read, by `executor_session_kept` or `executor_session_not_kept` in the log and on the run's record. Both absent where nothing was taken — a harness that carries no session, or `turn_engine.conversation_session.enabled` off |
 
 It is published **once per launch**, however often the tail is retried: a resume that fails hands the completion back and the retry collects the same job again, so the run's coordination record says the launch's record already went out, in the same write that hands the claim back — exactly as the [charge](#budgets) is recorded. A publish the broker refused is not recorded and is offered again by a retry, if one comes; telemetry never fails the resume. Because every spend reader folds these records — the spend rollup, each data node's daily usage and the turn list — the executor's run's tokens are counted where every phase's are, in the Execute band; before this record existed they reached the budget counter and nothing a person reads.
@@ -544,7 +544,7 @@ A run's harness keeps its conversation in its box — Claude Code as a transcrip
 | A person's stop | The archive the run's script packed as the stop's read ended its job, or one packed now where it left none — final wherever the job ended — in the read that charges what the stopped job spent, after the job's bridge session is closed and before its box is reclaimed |
 | A run lost with its box still there | The archive the run's script packed as the loss's read ended its job, or one packed now where it left none — final wherever the job ended — after the job's bridge session is closed and before the loss's ending reclaims the box (a launch whose engine restarted before its turn parked), on this node's host or asked of the host the box is on |
 
-A box that is **gone** — lost from its host, or with a node that left the fleet — has nothing left to read, and keeps nothing: the launch's session is lost with it, and the newest capture the turn kept stays the one its row names — but the relaunch that follows that job has no capture of its session to continue, so it starts a session of its own.
+A box that is **gone** — lost from its host, or with a node that left the fleet — has nothing left to read, and keeps nothing: the launch's session is lost with it, and the newest capture the turn kept stays the one its row names — but the relaunch that follows that job has no capture of its session to continue, so it starts a session of its own — or, where the turn has kept no session at all, continues the one its first launch was handed ([below](#a-conversations-next-turn-continues-its-last-turns-session)).
 
 **A stop or a loss ends the job before it takes the session.** A job still working when its session is taken is packed as it stands — a step in flight half recorded — so the read that takes a stopped or lost job's session first asks its script to end it ([A Claude Code run's session](#a-claude-code-runs-session), [OpenCode](#an-opencode-runs-session)): the harness is told to stop and the session packed as the run's own end packs it, and the take is of that archive, final. The read waits for the job to be over for at most **2¼ minutes** — the harness's five-second grace, the pack's two minutes, and five seconds each for the script's own stops of its login exporter and its server — and then kills what is left of it (`SIGTERM`, five seconds, `SIGKILL`, five seconds more): a sweep of stray processes after a clean end, the escalation past the wait, and at once for a script that answers no request (one an older build started, one not yet at its first line), whose session is then packed by the read, final. Only a job the kill could not reach — a box whose runtime would not run it, a kernel record a `direct` box could not read, so the signal was withheld, a `container` job whose box can name no process group of the job's own — is taken as it stands, not final, and its reclaim ends it. The kill keeps the box for the take: a `direct` box kills its job's recorded group, a `container` box the job's process group in its container — recorded as the job started, or, for a job an older build started, which recorded none, read off the job's first process where an exec's own session leads it, as every runc exec's does; never the container's main process, beside which the take still runs, and never the job's first process alone, which is the runner's wrapper rather than the job, so a job whose group neither names is signalled nothing — and an `e2b` box every process of its user, since E2B starts a job in its agent's own process group.
 
@@ -563,34 +563,35 @@ Then the archive is **sealed as it streams** under the fleet keyring, bound to t
 
 **Recorded through the estate router, on every node.** The capture is recorded on the executor log through the [estate router](../guides/satellite-nodes.md), so a seats-only node records one through a data node as a data node records its own; under the operation the turn, the launch and the capture's place derive, asked again under that same operation while the log does not answer — for thirty seconds, which outlasts a broker's leader election — so it lands once however often it is asked.
 
-**Every capture is stamped on the run's record.** Each launch of a turn is numbered (1, 2, …) in the write that opens it, and each capture takes its place — the launch's number and its own among that launch's captures — on the run's record before a byte moves, beside what the job had been answered and told when it was packed — its highest bridged call, the calls below it still in flight then, and the last note read, short of the notes its job took at its last take where its harness was cut off, which may never have reached it — so a later launch that continues it knows what came after; whether its harness was cut off — the engine packed it, or the run's script packed it after a harness that did not exit cleanly, killed by a signal or its memory limit — so it may end mid-record; and, once it is spooled, what its last request carried, read off its own transcript as it was taken, kept or not, which a launch that continues it — restored, or as the job's own box holds it — is held to ([What a continued launch costs](#what-a-continued-launch-costs)). How it came out is stamped beside it: **landed** (the executor log names its object); **refused**, with why — a pack that failed, a session past its 32 MiB bound or the scrub's, secrets the scrub could not know, the store's reservation spent, the seat's [budget](../getting-started/configuration.md) its live turns already hold, a record the log will never take; or **unresolved** — uploaded, and its record sent and not answered, which the turn's end asks again under the same operation before it ends the turn, and which is read as refused once its object is past the twelve hours an object may be named in. **And the turn's end carries the newest capture where it was not kept**: the executor log's row then names no older session as the turn's last, and lets that older object go, so no session a newer one was refused after is named as the turn's last ([Turn Engine](turn-engine.md#how-a-turn-ends-on-the-executor-log)).
+**Every capture is stamped on the run's record.** Each launch of a turn is numbered (1, 2, …) in the write that opens it, and each capture takes its place — the launch's number and its own among that launch's captures — on the run's record before a byte moves, beside what the job had been answered and told when it was packed — its highest bridged call, the calls below it still in flight then, and the last note read, short of the notes its job took at its last take where its harness was cut off, which may never have reached it — so a later launch that continues it knows what came after; whether its harness was cut off — the engine packed it, or the run's script packed it after a harness that did not exit cleanly, killed by a signal or its memory limit — so it may end mid-record; and, once it is spooled, what its last request carried, read off its own transcript as it was taken, kept or not, which a launch that continues it — restored, or as the job's own box holds it — is held to ([What a continued launch costs](#what-a-continued-launch-costs)). How it came out is stamped beside it: **landed** (the executor log names its object); **refused**, with why — a pack that failed, a session past its 32 MiB bound or the scrub's, secrets the scrub could not know, the store's reservation spent, the seat's [budget](../getting-started/configuration.md) its live turns already hold, a record the log will never take; or **unresolved** — uploaded, and its record sent and not answered, which the turn's end asks again under the same operation before it ends the turn, and which is read as refused once its object is past the twelve hours an object may be named in. Every capture of a turn that read its conversation also carries that read as the turn's first launch froze it, which is what the turn's end absorbs ([below](#a-conversations-next-turn-continues-its-last-turns-session)). **And the turn's end carries the newest capture where it was not kept**: the executor log's row then names no older session as the turn's last, and lets that older object go, so no session a newer one was refused after is named as the turn's last ([Turn Engine](turn-engine.md#how-a-turn-ends-on-the-executor-log)).
 
 **How long a read waits.** A collection on another node asks the box's host to read it ([below](#durability-completion-and-observability)), and the session is taken inside that read, before the box is paused: so the asker waits for the read's own minute **and** what a take may cost — two minutes for the pack and two for the scrub, plus a half minute for the take's own stamps and another for the read's pause and its answer — of which the host's read is given three quarters of what the asker waits: about eight minutes in all (60 s + (240 s + 60 s) / 0.75). A stop's or a loss's read ends the job before it takes the session ([above](#each-launchs-session-kept)), so its asker waits for that end on top — its 2¼-minute wait and the kill's ten seconds, counted at the same three-quarter share — about eleven minutes in all (60 s + (145 s + 240 s + 60 s) / 0.75), which leaves the host's take its whole four minutes after an end at its bound. A session of a day's work is a mebibyte or two and is taken in seconds; the bound is what a host that has truly stopped costs before its claim is handed back. The upload and the record — up to about seventeen minutes for a session at its bound at the object store's slowest accepted pace — are the keep's, after the read has answered. A stop's read and a loss's ending take the session off the frame that decided them, in the ending's own retry — the pause watch that decided a stop, and the seat's acquisition that found a loss, go on to the next run at once. **The seat's next turn does wait**: its mail is held behind every ending kept for its retry, through the job's end and the take — up to the read's eleven minutes (a collection's eight) where the box's host is silent, and for a stop asked again on each retry until the box timeout gives that host up — and through the end's wait for the turn's captures to land, up to the twenty-one minutes a capture can take, since the turn's end is recorded only after them and the conversation's next turn only after its end.
 
-**The switch.** `turn_engine.conversation_session.enabled: false` keeps no session — nothing is taken out of a box or stamped, no launch seals what it handed its box for a scrub, no node asks another's host to read a lost run's box for one, and a relaunch continues at most the session its own box holds, never a capture kept while the switch was on, which a seat's sessions say too — and still records how each turn ended, which is the turn's account and not its session ([Turn Engine](turn-engine.md#how-a-turn-ends-on-the-executor-log)); and a person's stop still ends the job before its box goes, in the stop's own retry, since that is how a stop ends a job rather than anything kept. Whether to prepare a capture is read off the revision each node runs; whether to keep one, off the revision the fleet runs; whether to continue one, off the revision the relaunching node runs, as a capture is prepared.
+**The switch.** `turn_engine.conversation_session.enabled: false` keeps no session — nothing is taken out of a box or stamped, no launch seals what it handed its box for a scrub, no node asks another's host to read a lost run's box for one, and a relaunch continues at most the session its own box holds, never a capture kept while the switch was on, which a seat's sessions say too; and no turn reads its conversation, is told how its earlier turns ended or continues the session its last turn left — and still records how each turn ended, which is the turn's account and not its session ([Turn Engine](turn-engine.md#how-a-turn-ends-on-the-executor-log)); and a person's stop still ends the job before its box goes, in the stop's own retry, since that is how a stop ends a job rather than anything kept. Whether to prepare a capture is read off the revision each node runs; whether to keep one, off the revision the fleet runs; whether to continue one, off the revision the relaunching node runs, as a capture is prepared.
 
 ## A relaunch continues the turn's session
 
-Every relaunch of a turn — a reviewer's send-back, a person's answer carrying a parked run on, a round whose job was [lost with its host](#durability-completion-and-observability), a round refused on a sign-in replaced while it ran — **continues the turn's own session** where it can, in whatever box and cell the launch gets: the box the session was last worked in, or any other. What it continues is **the session of the job it follows** — the job its reviewer collected, the one whose question was answered, the one lost or refused — as that job's kept capture holds it ([above](#each-launchs-session-kept)), named by the turn's row of the executor log, read through the estate router at `linearizable` so a capture another node's keep recorded is seen, and opened against that row alone: the seat's and the turn's own session, never another turn's of the same conversation, whatever ended since. **Within the turn only.** A conversation's next turn starts a session of its own.
+Every relaunch of a turn — a reviewer's send-back, a person's answer carrying a parked run on, a round whose job was [lost with its host](#durability-completion-and-observability), a round refused on a sign-in replaced while it ran — **continues the turn's own session** where it can, in whatever box and cell the launch gets: the box the session was last worked in, or any other. What it continues is **the session of the job it follows** — the job its reviewer collected, the one whose question was answered, the one lost or refused — as that job's kept capture holds it ([above](#each-launchs-session-kept)), named by the turn's row of the executor log, read through the estate router at `linearizable` so a capture another node's keep recorded is seen, and opened against that row alone: the seat's and the turn's own session, never another turn's of the same conversation, whatever ended since. A turn that has kept no session of its own yet continues the one its first launch was handed instead, and a conversation's next turn continues the one its last turn left ([below](#a-conversations-next-turn-continues-its-last-turns-session)).
 
-**Which session, and when none.** Only the job before's session holds everything the turn's jobs were told — the round's task, or the review that sent it back; a person's answer; the job's own work — so a relaunch continues that job's **newest** capture, once it is kept, and nothing older: a capture an earlier job took holds none of what the jobs after it were told. The job's capture is taken by the read that collected it and kept off that read, so a relaunch that follows at once waits for the keep — for about as long as an ordinary keep takes, fifteen seconds, and no longer: the frame that waits holds the seat and a slot of the node's admission, and a keep still under way past that is a slow store's or a stopped node's, which it does not wait out. So a relaunch continues no kept session where the job it follows left none — its box went with its host, its take or its keep was refused, its record was never answered, its keep was still under way — or where that job's newest capture was not kept, since that session went further than any kept one. It then continues, as it always could, the session the job's own box holds, where a person's answer or a replaced sign-in carries the run on in the box it parked in, and starts fresh anywhere else. And a kept session is continued only:
+**Which session, and when none.** Only the job before's session holds everything the turn's jobs were told — the round's task, or the review that sent it back; a person's answer; the job's own work — so a relaunch continues that job's **newest** capture, once it is kept, and nothing older: a capture an earlier job took holds none of what the jobs after it were told. The job's capture is taken by the read that collected it and kept off that read, so a relaunch that follows at once waits for the keep — for about as long as an ordinary keep takes, fifteen seconds, and no longer: the frame that waits holds the seat and a slot of the node's admission, and a keep still under way past that is a slow store's or a stopped node's, which it does not wait out. So a relaunch continues no kept session where the job it follows left none — its box went with its host, its take or its keep was refused, its record was never answered, its keep was still under way — or where that job's newest capture was not kept, since that session went further than any kept one. It then continues, where the turn has kept no session at all, the session its first launch was handed — the one its conversation's last turn left, frozen on the run's record and held on the executor log, never read again — in a box of its own; else, as it always could, the session the job's own box holds, where a person's answer or a replaced sign-in carries the run on in the box it parked in; and starts fresh anywhere else. And a kept session is continued only:
 
 - by a runner that restores it: the harness that wrote it, in the archive format this build restores, written by a release whose sessions another box continues — and in a box whose harness can take it up, which the launch asks the box before it chooses the run's brief (Claude Code 2.1.310 or later, OpenCode 2.0.32 or later, never older than the release that wrote it; [Claude Code](#a-claude-code-runs-session), [OpenCode](#an-opencode-runs-session));
 - where the seat's budget can carry it: a session whose launch would need more than the smallest ceiling of the seat's or the company's capped windows — its context with the brief that continues it ([What a continued launch costs](#what-a-continued-launch-costs)) — is not continued, which the launch decides once that brief is written; a seat with no capped window continues a session of any size;
 - and once per lost round: a round whose job is lost a second time starts a session of its own, rather than replay the state it was lost in toward the round's limit.
 
-A relaunch that continues no kept session continues the session its box holds where it could before, as above — except one the seat's budget cannot carry, whose copy in the box is the same session, as large or larger — and otherwise starts a session of its own, with the brief written for one. Each reason is logged as `executor_session_not_continued` — **never a failed launch**.
+A relaunch that continues no kept session of the turn's own continues the session its first launch was handed where the turn has kept none, or the session its box holds where it could before, as above — except one the seat's budget cannot carry, whose copy in the box is the same session, as large or larger — and otherwise starts a session of its own, with the brief written for one. Each reason is logged as `executor_session_not_continued` — **never a failed launch**.
 
 **Fetched and checked before it is carried.** The session is fetched sealed from the [object store](object-store.md) onto the launching node's disk and opened whole once before a byte of it reaches the box, so an object the store no longer holds, or one whose seal does not open, is found before the run's brief is chosen rather than part way through writing the archive into the box. A box that already holds the archive keeps its own copy, by the digest it keeps ([Claude Code](#a-claude-code-runs-session)); where the job before ran in this very box and its harness exited cleanly, nothing is fetched at all.
 
 **A session its harness was cut off in** — every capture the engine packed rather than the run's script at its harness's clean exit: a job lost, stopped or ended by its turn's cap, or one that died before its script could pack; and every one the script packed after a harness that did not exit cleanly, killed by a signal or its memory limit while its wrapper lived on — **replaces the box's own copy**, which may end in what its harness never finished, and the run is told its session may end mid-call. Each harness takes such a session up as it stands, by its own rules: Claude Code keeps a tool call the previous process died in (2.1.265: "an interrupted tool call is kept"), and the script resumes it without `CLAUDE_CODE_RESUME_INTERRUPTED_TURN`, which would run the cut-off turn again before the brief, and cuts a transcript line the harness was killed while writing; OpenCode's export holds only the messages that settled (`session/transfer.ts` at 2.0.32 and 2.2.5), so a step that never settled is not in it.
 
-**Three briefs, and the box picks between two.** The run's brief is chosen by whether it continues the session and where:
+**Four briefs, and the box picks between two.** The run's brief is chosen by whether it continues the session and where:
 
 | The run | Its brief |
 |---|---|
 | Continues the session in the box it was last worked in | The session's next message: what carries it on, then what it lacks (below) |
 | Continues the session restored into another box | The same, then what a new box changes: a fresh checkout, the work-in-progress branch to check out, the uncommitted work gone, and that the session's absolute paths under the earlier box's home were that box's |
+| Continues the session its conversation's last turn left, in a box of its own | Where this turn begins and what a new box changes, then the turn's own brief whole — its fresh brief, or a relaunch's reseed ([below](#a-conversations-next-turn-continues-its-last-turns-session)) |
 | Starts a session of its own | The turn's ask, with the ledger of its earlier rounds, every note the turn has read and what became of the run before it ([What a harness is told](#what-a-harness-is-told)) |
 
 Whether a restore succeeds is finally the box's to find out — an archive that does not unpack, an import OpenCode refuses — so a run asked to continue a session carries **both** its continuation and the fresh brief, and its script hands its harness the one its restore came to: a new session never answers a brief written for a model that remembers. It carries both wirings of the seat's tools too, one per session its box may start, and installs the one of the session it started, which is how the box tells the bridge ([below](#which-session-the-box-started)). The launch publishes the brief it handed as the round's opening frame once it has its box, before the run starts — the started record, published before the launch knows its box, carries the fresh brief — and its `executor_collected` record says which brief it handed (`brief`), whether the run took the session up (`harness_session_continued`) and, where it did not, why (`harness_session_fell_back`).
@@ -604,7 +605,7 @@ Whether a restore succeeds is finally the box's to find out — an archive that 
 
 Every word in it that somebody else wrote is fenced or defused under the relaunching segment's token, and every marker of any token in it escaped, so nothing the session read in an earlier segment opens or closes a fence of this one ([ADR-0040](https://github.com/crewlet/crewlet/blob/main/adr/0040-content-a-model-reads-carries-its-provenance.md)).
 
-**Its skills follow the session.** A continued session has the skill bodies it loaded in front of it, so a relaunch that continues it arms its [skill guard](tool-skills.md#session-scope--why-per-phase-not-per-turn) with exactly those — the skills the launch of the job it follows was armed with, and those that job's own session loaded, through the point its capture was saved at where the capture is what is restored — and never another session's: not an earlier round's, and not an earlier job's of the round. One that starts a session of its own starts with an empty guard. The guard is armed when the launch has decided which session its run takes up, once it knows its box and before the run starts, so a launch that finds it cannot continue the session after all — a box whose harness cannot take it up, an object the store no longer holds, a session the seat's budget cannot carry — arms an empty one ([Runtime invariants](turn-engine.md#runtime-invariants) 7 and 8). A run whose box finds only once it starts that its restore failed — an archive that does not unpack, an import OpenCode refuses — starts a session of its own, **and its box says so before the run's first call**, so the run is held to that session's guard, an empty one ([Which session the box started](#which-session-the-box-started)).
+**Its skills follow the session.** A continued session has the skill bodies it loaded in front of it, so a relaunch that continues it arms its [skill guard](tool-skills.md#session-scope--why-per-phase-not-per-turn) with exactly those — the skills the launch of the job it follows was armed with, and those that job's own session loaded, through the point its capture was saved at where the capture is what is restored — and never another session's: not an earlier round's, and not an earlier job's of the round. One that starts a session of its own starts with an empty guard, and so does one that continues the session its conversation's last turn left: the skills that session loaded were another turn's, which its lead says were set up anew. The guard is armed when the launch has decided which session its run takes up, once it knows its box and before the run starts, so a launch that finds it cannot continue the session after all — a box whose harness cannot take it up, an object the store no longer holds, a session the seat's budget cannot carry — arms an empty one ([Runtime invariants](turn-engine.md#runtime-invariants) 7 and 8). A run whose box finds only once it starts that its restore failed — an archive that does not unpack, an import OpenCode refuses — starts a session of its own, **and its box says so before the run's first call**, so the run is held to that session's guard, an empty one ([Which session the box started](#which-session-the-box-started)).
 
 ### Which session the box started
 
@@ -618,10 +619,37 @@ Whether a restore succeeds is the box's to find out, as its run starts, and the 
 
 A continued run sends its session's whole context again before it reads a word of its brief, and every request it makes carries that context — mostly served from the prompt cache, and every token of it counted against the seat's windows, the cached share included ([Cache share](../guides/budgets-and-spend.md#cache-share)). So:
 
-- **Its launch's floor** is the larger of `turn_engine.executor_min_budget_tokens` and the session's context with the brief that continues it: the whole input of the session's last request, cache included, read off the session's own transcript as it was captured (Claude Code's last main-thread assistant message's usage; OpenCode's last settled assistant message's tokens), and the estimate of the longer of its two briefs, since which box the launch gets is the launch's to learn. That holds for the job before's own copy in its box as much as for its kept capture — its context is what the job's newest capture measured, kept or not — and a session no capture measured (keeping switched off) has no known context, its launch held to the floor alone. **The floor is the member's the launch picks**: the launch picks its member of the seat's chain once, as it launches — the first not sitting out its plan — before it reckons the floor, and a kept session written by another harness than that member's is started fresh, held to the floor alone; the briefs that continue it were written beforehand wherever some member of the chain could take it up, since a plan can be spent, or come back, between the two. The job before's own session in its box counts only where that member can continue in that box: the same harness in the same cell, and a box on the engine host only on the node that launched it. A continued launch is a relaunch, a resumed segment's, so one refused below its floor is held — or, an answer's, turned back — on that figure, never parked: the dispatcher's park holds a seat's mail for its turns' first launches, which continue no session. Its reason says what the figure is made of ([Budgets and Spend](../guides/budgets-and-spend.md#budget-windows)).
+- **Its launch's floor** is the larger of `turn_engine.executor_min_budget_tokens` and the session's context with the brief that continues it: the whole input of the session's last request, cache included, read off the session's own transcript as it was captured (Claude Code's last main-thread assistant message's usage; OpenCode's last settled assistant message's tokens), and the estimate of the longer of its two briefs, since which box the launch gets is the launch's to learn. That holds for the job before's own copy in its box as much as for its kept capture — its context is what the job's newest capture measured, kept or not — and a session no capture measured (keeping switched off) has no known context, its launch held to the floor alone. **The floor is the member's the launch picks**: the launch picks its member of the seat's chain once, as it launches — the first not sitting out its plan — before it reckons the floor, and a kept session written by another harness than that member's is started fresh, held to the floor alone; the briefs that continue it were written beforehand wherever some member of the chain could take it up, since a plan can be spent, or come back, between the two. The job before's own session in its box counts only where that member can continue in that box: the same harness in the same cell, and a box on the engine host only on the node that launched it. A relaunch refused below its floor is held — or, an answer's, turned back — on that figure; a turn's first launch that continues its conversation's session, whose context is the base's own as its row recorded it, is refused on its dispatch, and the dispatcher parks the seat's mail on that figure — never on the floor alone, which a window with room for a fresh launch but not for the session meets, and which handed the delivery straight back into the same refusal. Its reason says what the figure is made of ([Budgets and Spend](../guides/budgets-and-spend.md#budget-windows)).
 - **Its context is bounded by its harness's compaction.** Every Claude Code run compacts its conversation at **100,000 tokens** (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, pinned by the wrapper over whatever the seat, the image or a profile set, with the variables that would switch compaction off unset), so no request of a run, or of a run that continues its session, carries much more. OpenCode compacts near its model's own window — once a conversation reaches the window less 15% of it, at least 16,000 tokens, on 2.2; less 10% on 2.0 — which the engine does not move: OpenCode's setting for it (`compaction.buffer`) is a share or a count of the model's window, which the engine does not know, and a count at or past the window has 2.0 compact on every request. So a continued OpenCode run's request carries up to about its model's window less that share. A session past the window — an OpenCode one, or a Claude Code one whose repository switched its compaction off — is continued wherever the seat's budget can carry it, its floor saying so.
 
 **The 100,000 is a judgement**, and the knob it trades on is cost against detail. A continued Claude Code run's every request carries up to the window, so the window bounds what one request can charge — four times the default floor — where a model's own window, a million tokens on some, would let one carry ten times that; a Claude Code run that continues a session and makes *n* requests is charged up to about *n* × 100,000 input tokens, most of them cache reads, and an OpenCode run up to *n* times its model's compaction point. A smaller window compacts sooner and charges less; a larger one keeps more of the session verbatim. 100,000 is the least Claude Code accepts, and an executor's durable state is its checkout and its turn's records rather than its transcript, so a session compacted there keeps the work in hand and its own summary of the rest.
+
+## A conversation's next turn continues its last turn's session
+
+A turn that serves a conversation — the thread, the issue, the pull request or the work item its trigger names — **continues the session its conversation's last turn left**: its first launch restores the conversation's **head**, the newest ended turn of the conversation whose row on the executor log still names a kept session, into a box of its own, and its run takes that session up, told where the new turn begins. What the earlier turn did and said is in that session; what no transcript holds — how each earlier turn ended — the engine tells it.
+
+**Read once, at the turn's dispatch.** The turn reads its conversation once, as its dispatch starts it, through the [estate router](../guides/satellite-nodes.md) at `linearizable`, so an end another node published is in the copy that answers: the head, and every other ended turn of the conversation that no ended turn was shown (the newest sixteen, the rest counted). From that one read it renders how those turns ended and decides what its launches continue; no launch of the turn reads the conversation again, so a turn of the same conversation that ends meanwhile moves neither. A turn with no conversation key — a colleague's ask, a generic source's wake — reads nothing, and neither does a turn of a company with `turn_engine.conversation_session.enabled: false`. A read that fails, or that the node's copy refuses, is logged (`executor_conversation_unread`), and the turn runs with no account of its conversation and a session of its own: a turn with less context, never one that cannot work.
+
+**How the conversation's earlier turns ended.** Every brief of the turn — the fresh brief, a relaunch's reseed, the brief a continued session is handed after its lead — carries a section of its own above `## Task`, **How this conversation's earlier turns ended**: for each turn, oldest first, how it ended (`completed`, `failed`, `stopped` or `lost`) and its reviewer's last word; whether its reply reached the party waiting and on what surface, or that whether it did is not known; what its reviewer said landed; what its executor said blocked it; who stopped it and why; what failed, as the engine recorded it; that its newest session was not kept, and why; the engine's answer to a colleague's ask it took up; and what it was asked. Its rules: a reply that reached the party waiting is not to be said again, one that did not may still be owed, everything else a turn did already took effect, and where the history and the task below disagree, the task wins. **It is bounded at 24 000 bytes** as the run's record carries it, escapes included, about six thousand tokens: the head always, then the other turns newest first, each whole, while they fit; the rest are counted (`N earlier turns of this conversation are not shown here`) and stay for the next turn, since a turn's end absorbs only the turns its brief told. Every account in it somebody else wrote — what a turn was asked, its reviewer's and its executor's words, a stop's reason, the engine's accounts that quote a box or a store — is fenced under the turn's token as `turn_ending`, at the least trust, and the name of whoever stopped a turn is defused in place ([ADR-0040](https://github.com/crewlet/crewlet/blob/main/adr/0040-content-a-model-reads-carries-its-provenance.md)). It is rendered once, at the dispatch, and frozen on every park, so every brief of the turn, on whatever node and in whatever segment, tells the same bytes.
+
+**Frozen at the first launch, and held on the log.** The turn's first launch freezes the read on the run's record it creates — where it was read, the turns its brief told, and the head as the turn's **base** — and no write that opens a later launch changes it. It records the read on the executor log as the turn's `begin`, right after that record exists and before any box does, asked for at most fifteen seconds on the launching frame, and the turn's row then **holds the base** against every release — a sibling turn's end, the seat's budget, the retention — until the turn's first landed capture or its end ([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)). A begin the log does not hold in time leaves the launch continuing no base; one that lands later holds no longer than the turn's first capture or its end. Every capture of the turn carries the read its first launch froze, so its end absorbs the turns it was handed — the base among them, continued or not — and nothing it was not told. And a turn that has kept no session of its own when its first job is lost — its box gone with its host, its capture refused or never answered — is [relaunched](#a-relaunch-continues-the-turns-session) into the same base, on whichever node holds the seat by then, never a head read again: otherwise one lost job would end the conversation's session line for good. Once the turn has kept a session of its own, that one holds the base and everything after it, and only the relaunch rule above applies.
+
+**In a box of its own, told where the turn begins.** A box the turn's earlier job ran in holds that job's working tree and session, which are the turn's to continue in place, so the base is continued only in a box of the launch's own. The launch reads the base's row again, at `linearizable`, and takes it up only while it still names the session the read froze; then, as for a [kept session](#a-relaunch-continues-the-turns-session), the runner and the box's harness must take it up, and its object is fetched sealed and opened whole before a byte reaches the box. The run is handed a lead, then the turn's own brief whole — its fresh brief, or a relaunch's reseed:
+
+- that everything above is the conversation as its turns left it, through the base's turn, which ended at its instant, and that a new message has woken it, the task below being this turn's;
+- that what it read above may be stale, and that tools it activated and skills it loaded above were set up anew for this turn — its [skill guard](tool-skills.md#session-scope--why-per-phase-not-per-turn) starts empty, whatever the base's session loaded;
+- that it is in a new box on a fresh checkout, what the session had not committed and pushed gone with the box it was worked in, and that absolute paths under the base's home were that box's;
+- and, where the base's capture was cut off, that it may end mid-call.
+
+The launch's record says `continued_conversation`; the run carries the fresh brief beside the lead, for its script to hand a session of its own where its restore fails in the box, and its box says which session it started ([below](#which-session-the-box-started)).
+
+**What it costs, and where the seat waits.** A run that continues a conversation's session sends that session's whole context first, as a relaunch does: its launch is held to the base's context, as its row recorded it, with the lead and the brief beside it ([What a continued launch costs](#what-a-continued-launch-costs)); a base no capped window can ever carry is not continued; and a first launch refused below that figure **parks the seat's mail on it** until a window has room for it ([Budgets and Spend](../guides/budgets-and-spend.md#budget-windows)).
+
+**What starts fresh.** A conversation's first turn, and one whose every earlier turn's session was released, absorbed or aged out — nothing was there to continue, which is not logged — and, each logged as `executor_session_not_continued`: a turn with no conversation key, the switch off, a read that failed; no member of the seat's chain that restores the base, or a launch on a member running another harness; a base no window can carry; a begin the log did not hold; a box whose harness cannot take the session up, an object the store no longer holds, a restore that fails in the box; and a launch that reuses its turn's earlier box.
+
+**A turn of a conversation that ends in its own frame leaves its ending too.** One that never launched and ended without an error — refused at the delegation cap — and a first launch abandoned once its record was written record their end from the frame that dispatched them ([How a turn ends on the executor log](turn-engine.md#how-a-turn-ends-on-the-executor-log)), so the conversation's next turn is told how they ended, and an abandoned launch's hold lifts at once. A turn whose frame failed before it launched records none: its delivery is handed back, to be parked or run again.
+
+**Siblings are told and absorbed, never continued.** A turn that ran beside the head and ended with a session of its own is told how it ended, and absorbed by the turn's end with the rest of what its brief told; no launch holds it or opens it.
 
 ## Setup steps — provisioning the box
 
@@ -1538,79 +1566,124 @@ long and how much is kept). That archive is the whole record of what the run
 read, called and wrote, and a seat's **Sessions** — under its profile's Memory
 tab on the dashboard ([A seat's profile](../reference/dashboard-design.md#a-seats-profile)),
 or [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions)
-— list them, the latest first: how each turn ended (the engine's own account,
-which the transcript cannot know), what it was asked, and whether its session
-is still kept.
+— list them, the latest begun first: how each turn ended (the engine's own
+account, which the transcript cannot know), what it was asked, and whether its
+session is still kept. **A row begins at its turn's first launch** where the
+turn read its conversation — its `begin`, which names the session that launch
+was handed (`base_turn`) — and at its first capture otherwise. **And a row goes
+with the turn that was handed it**: once a later turn of its conversation that
+was handed its session, and that kept a session of its own, ends, its end
+absorbs the turns its read handed out, and their rows are gone from the list —
+as are rows past the retention, and a removed seat's. A session read by its turn
+after its row went is `404 not_found`, saying it may have gone any of these ways.
 
-**Each says whether a relaunch would continue it** (`continuable`), where
-(`continues_in`), and where not, why (`not_continuable`), decided by the one
-decision a relaunch takes ([above](#a-relaunch-continues-the-turns-session))
-over what a relaunch reads: the turn's row of the executor log as a relaunch
-reads it, the turn's run record in the coordination store and the job that
-record names as the one a relaunch would follow, and the member of the seat's
-executor chain a relaunch would be launched on now — the first not sitting out
-its plan — with the cell its run lands in and its runner. **The member is the
-one the node holding the seat would pick**, off the chain of the company
-revision the turn's relaunch runs on: which members sit out a spent plan is what
-that node's own calls have met, which company revision says sessions are kept
-is the revision it runs, a resumed segment of the turn running there relaunches
-— its reviewer's send-back, the round it carries on — on the revision it was
-admitted under, whatever an apply has put live since, and a relaunch is decided
-there. So the node answering asks it — itself where it holds the seat, and
-otherwise the node the seat's lease names, once a page — and is answered, turn
-by turn, with that node's pick and whether that member's runner restores the
-turn's session.
-`any_box` where the turn is live and not ending, the newest capture of that job
-was kept and is the one the row names, and that runner restores its harness,
-format and release; a round whose job was lost a second time is carried on in a
-session of its own, which a reader is told cannot be said where a review of the
-work it submitted may yet continue it. `parked_box` where that is not so but a
-person's answer would still carry the turn's parked run on in the box it parked
-in — the run still holds the box, the box ran the row's own session (not one it
-started in that one's place, and not one whose job's box never said which of
-the two it ran), the member is of the box's harness in its cell, and a box on
-the engine host is on the host of the node holding the seat, which alone can
-continue in it — which continues the session that box holds there and nowhere
-else, for as long as the box is held; `not_continuable` then says why no other
-box would. A box that cannot be continued in says why, beside why the kept
-capture is not continued. As far as the engine can know before a box is chosen,
-and no further: whether the box a relaunch gets runs a harness release that can
-take the session up, and whether the seat's budget can carry its context, are
-the launch's to find out, and no row says them. An ended turn's session is
-never continuable: no later turn continues a session yet; and a turn whose
-run's ending is decided is ending, from the decision on. **An unknown is never
-a no**: `continuable` is null, with its reason, where the run record or the
-row at the relaunch's level could not be read, and where a relaunch would not
-decide now either — the job it would follow still working, or a claim on it
-whose read is still under way, one that has neither taken the job's final
-capture nor begun its turn; that job's capture still being kept; what a
-relaunch is launched on not to be said (every member of the seat's chain
-sitting out its plan, no node holding the seat, the node holding it not
-answering within two seconds); and a relaunch only the resume of a collected
-job decides, until its turn begins — whether its round is carried on in its
-box, which it is where the job's sign-in was replaced while it ran, and whether
-a round lost a second time is carried on in a session of its own or reviewed
-from the work it submitted. **A resumed turn says what it does with the round
-as it begins**, on the job's record — collects the job, or carries the round on
-— and from then on, its review included, the claim is decided on that, whether
-or not its read took any capture: a turn that collects its job is reviewed, and
-its send-back continues nothing in the job's box; one that carries the round on
-in that box continues it there. A claim of a person's answer reads no box, and
-is decided whatever its job kept. A page reads the coordination store once for
-its runs, one listing of the seat's live runs — and one turn's record alone for
-a live row the listing does not hold, a record of a status this build does not
-know or one it could not decode — and once more for the seat's lease, to find
-the node holding the seat, wherever a live row asks it, that node's own pages
-included; and not at all where every turn on it has ended. Where the store does
-not answer, a live turn's row says so, and the page is answered all the
-same. **A row is read again at the
-relaunch's level** (`linearizable`) only where the page was read below it and
-the row names another capture than the one its run's record keeps — a copy of
-the log behind the record, which would read a capture a relaunch continues as
-one the log no longer names: a read at that level costs a barrier on the
-executor log, and a row naming the kept capture decides as one read there
-would. A transcript's later pages (read with a `cursor`) leave `continuable`
-null: its first page says it.
+**A row that keeps no session says why**, one of three: nothing of the turn's
+session was captured (yet, while it runs); its newest capture was not kept —
+its end said so, with the reason the store or the log gave, redacted, and took
+the older capture off the row, since that one does not hold what came after it;
+or the seat's session budget released it to make room for newer ones.
+
+**Each says which launch would continue it** (`continued_by`), **whether it
+would** (`continuable`), where (`continues_in`), and where not, why
+(`not_continuable`), each decided by the one decision that launch takes, over
+what that launch reads, and of the member of the seat's executor chain it would
+be launched on now — the first not sitting out its plan — with the cell its run
+lands in and its runner:
+
+- **A live turn's session, by a relaunch of it** (`relaunch`): the decision a
+  relaunch takes ([above](#a-relaunch-continues-the-turns-session)), over the
+  turn's row of the executor log as a relaunch reads it, the turn's run record
+  in the coordination store and the job that record names as the one a relaunch
+  would follow. `any_box` where the turn is live and not ending, the newest
+  capture of that job was kept and is the one the row names, and that runner
+  restores its harness, format and release; a round whose job was lost a second
+  time is carried on in a session of its own, which a reader is told cannot be
+  said where a review of the work it submitted may yet continue it. `parked_box`
+  where that is not so but a person's answer would still carry the turn's
+  parked run on in the box it parked in — the run still holds the box, the box
+  ran the row's own session (not one it started in that one's place, and not
+  one whose job's box never said which of the two it ran), the member is of the
+  box's harness in its cell, and a box on the engine host is on the host of the
+  node holding the seat, which alone can continue in it — which continues the
+  session that box holds there and nowhere else, for as long as the box is
+  held; `not_continuable` then says why no other box would. A box that cannot
+  be continued in says why, beside why the kept capture is not continued. **A
+  turn that has kept no session of its own** — its first job lost with its box
+  before anything of it was kept — says so, and where its row still holds the
+  session its first launch was handed and the member restores it, that a
+  relaunch in a box of its own continues that session instead
+  ([A conversation's next turn continues its last turn's
+  session](#a-conversations-next-turn-continues-its-last-turns-session)).
+- **An ended turn's session, by its conversation's next turn** (`next_turn`):
+  the decision that turn's first launch takes of the head its dispatch reads.
+  Only the conversation's **head** is continued — its newest ended turn whose
+  row still names a session, which the read that answered the row names from
+  the same snapshot, so a row's standing is the one its page's `read_level`
+  states — `any_box`, where the member restores it, and in a box of the next
+  turn's own. A row that is not the head names the turn whose session the next
+  turn is handed instead; one that names no session says why; and one whose
+  company keeps no session says so. A turn whose run is over, or whose ending is
+  decided, and whose end is not on the log as the row was read is the next
+  turn's too, and `null` until its end lands. A turn that served no
+  conversation — a colleague's ask, a generic source's wake — is continued by
+  no launch: it sends no `continued_by`, and `continuable` is `false`.
+
+**The member is the one the node holding the seat would pick**, off the chain
+of the company revision the launch runs on: which members sit out a spent plan
+is what that node's own calls have met, which company revision says sessions are
+kept is the revision it runs, a resumed segment of the turn running there
+relaunches — its reviewer's send-back, the round it carries on — on the revision
+it was admitted under, whatever an apply has put live since, and a
+conversation's next turn is admitted under the revision live when it comes. So
+the node answering asks it — itself where it holds the seat, and otherwise the
+node the seat's lease names, once a page — and is answered, session by session,
+with that node's pick and whether that member's runner restores the session: a
+live turn's by its turn, and a conversation's head by none, so a segment of the
+ended turn still pinned in the moments before it returns answers for no
+revision the next turn runs on. As far as the engine can know before a box is
+chosen, and no further: whether the box a launch gets runs a harness release
+that can take the session up, whether it is a box of the launch's own, and
+whether the seat's budget can carry its context, are the launch's to find out,
+and no row says them.
+
+**An unknown is never a no**: `continuable` is null, with its reason, where the
+run record or the row at the relaunch's level could not be read, and where the
+launch would not decide now either — the job a relaunch would follow still
+working, or a claim on it whose read is still under way, one that has neither
+taken the job's final capture nor begun its turn; that job's capture still being
+kept; what the launch is launched on not to be said (every member of the seat's
+chain sitting out its plan, no node holding the seat, the node holding it not
+answering within two seconds); a relaunch only the resume of a collected job
+decides, until its turn begins — whether its round is carried on in its box,
+which it is where the job's sign-in was replaced while it ran, and whether a
+round lost a second time is carried on in a session of its own or reviewed from
+the work it submitted; and a turn whose end is not on the log yet. **A resumed
+turn says what it does with the round as it begins**, on the job's record —
+collects the job, or carries the round on — and from then on, its review
+included, the claim is decided on that, whether or not its read took any
+capture: a turn that collects its job is reviewed, and its send-back continues
+nothing in the job's box; one that carries the round on in that box continues it
+there. A claim of a person's answer reads no box, and is decided whatever its
+job kept.
+
+**What a page costs.** A page reads the coordination store once for its runs,
+one listing of the seat's live runs — and one turn's record alone for a live row
+the listing does not hold, a record of a status this build does not know or one
+it could not decode — and none where every row on it has ended; and once more
+for the seat's lease, to find the node holding the seat, wherever a row asks it
+— a live row whose run is neither over nor ending, or a conversation's head —
+that node's own pages included. Where the store does not answer, a live turn's
+row says so, and the page is answered all the same. **A live row is read again
+at the relaunch's level** (`linearizable`) only where the page was read below
+it and the row names another capture than the one its run's record keeps, or
+the record keeps none — a copy of the log behind the record, which would read a
+capture a relaunch continues as one the log no longer names: a read at that
+level costs a barrier on the executor log, and a row naming the kept capture
+decides as one read there would. An ended row is decided on its page's own
+snapshot, its conversation's head read in the same transaction as the rows: one
+seek of the conversation's index for each conversation the page names. A
+transcript's later pages (read with a `cursor`) leave `continuable` null: its
+first page says it.
 
 **One session opens as its transcript**
 ([`GET /agents/{id}/sessions/{turn_id}`](../reference/api-endpoints.md#get-agentsidsessionsturn_id)):

@@ -298,14 +298,16 @@ const (
 	// THE LOG GROWS WITH THE TURNS SEATS RUN, NOT WITH THE DISK, so unset takes
 	// a fixed default rather than a share of the volume, as the assistant's
 	// does. At the reference company's thirty turns a seat a day over its 100
-	// seats, a turn writes about six captures (a collection for each of about
-	// two launches, and the bounded saves a long launch takes between them),
-	// about a kibibyte each signed; one end of about three kibibytes; one
-	// retention delete of about 400 bytes; and two linearizable reads, each a
-	// barrier of about 140 bytes (executordomain.LinearizableReadsPerSeatDay).
-	// That is about 29 MB a day: a healthily trimming log holds one `min_age`
-	// window of it, and 512 MiB is about eighteen days of a COMPLETELY
-	// BLOCKED trim, against a `trim_blocked` alarm raised after a day. A
+	// seats, a turn writes one begin, its first launch's read of its
+	// conversation, of about a kibibyte signed; about six captures (a
+	// collection for each of about two launches, and the bounded saves a long
+	// launch takes between them), about a kibibyte each; one end of about
+	// three kibibytes; one retention delete of about 400 bytes; and four
+	// linearizable reads, each a barrier of about 140 bytes
+	// (executordomain.LinearizableReadsPerSeatDay). That is about 32 MB a day:
+	// a healthily trimming log holds one `min_age` window of it, and 512 MiB
+	// is about seventeen days of a COMPLETELY BLOCKED trim, against a
+	// `trim_blocked` alarm raised after a day. A
 	// record is bounded at executordomain.MaxRecordBytes, 128 KiB, so a fleet
 	// writing every record at its caps would spend it in under a day; the
 	// bound is on one record, and the census is what the ceiling is sized for.
@@ -322,11 +324,11 @@ const (
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor] records:
 	// ten seats write a tenth of the reference rate, for which 64 MiB is about
-	// three weeks. IT IS NOT THE REFERENCE COMPANY'S: at its 29 MB a day the
+	// three weeks. IT IS NOT THE REFERENCE COMPANY'S: at its 32 MB a day the
 	// floor holds about two days, short of the seven-day `min_age` window a
 	// healthy trim keeps, so a log scaled down to it fills with every term of
-	// the trim satisfied for a company of more than about thirty-three seats
-	// (64 MiB over seven days of 0.29 MB a seat). That is a floor where the
+	// the trim satisfied for a company of more than about thirty seats
+	// (64 MiB over seven days of 0.32 MB a seat). That is a floor where the
 	// broker is short, not the default: `log_ceiling_short` names the log,
 	// and the remedy is this field set outright, which no scaling moves, or a
 	// broker with the room for the default — the docs say so where a small

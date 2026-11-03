@@ -2296,14 +2296,17 @@ company's `turn_engine.conversation_session.retention_days`, 30 days by
 default, ended or not, never while its turn's run is live — and takes the
 row's tombstone with it, since no record decided before the delete can land
 that late. It also ends a turn as `lost` when the turn never ended, a day has
-passed since its last capture, and no run of it is live: the turn's own end was
-lost, and until it is ended its session holds the seat's budget, which only
-ever releases ended turns' sessions. A seat that leaves the company takes its
+passed since its last record — its newest capture, or the `begin` that opened
+the row of a turn that captured nothing — and no run of it is live: the turn's
+own end was lost, and until it is ended its session holds the seat's budget,
+which only ever releases ended turns' sessions, and its begin holds the session
+it was handed against every release. A seat that leaves the company takes its
 rows with it once its [mailbox is retired](../concepts/seat-ownership.md#the-removed-seat),
 by one record every node applies in order, which also refuses a capture or an
 end decided before it and landing after; that record of the removal goes with
-the same retention. A person's removal does not reach the sessions yet, as it
-did not reach the conversation ledger they replace.
+the same retention. A person's removal does not reach the sessions: what they
+said to a seat stays in the sessions of the turns that read it until each row
+goes by one of the ways above, the retention at the latest.
 
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each data node applies the log into its own copy, so a fleet
@@ -2651,13 +2654,16 @@ barriers it would have had to hold against a 512 MiB ceiling, and which
 Ask Crewlet's log declares **none** as well: no seat reads it, and a
 person reads their own conversation through the node their own writes waited
 on, so its one barrier is the collector's pin below, counted as the engine's
-own. The executor log declares **60**: a seat's executor reads it at the
-seat's level once when a turn first launches, for the head of the
-conversation it continues, and once more on each relaunch (a send-back, an
-answered question), at a mean of one relaunch a turn over the census's thirty
-turns a seat a day. So its ceiling, `stream.executor_log_max_bytes`, carries a
-barrier term of 60 × 100 × 365 × 140 B, about 307 MB a year at the reference
-company, beside the about 29 MB a day its captures and endings write.
+own. The executor log declares **120**: a turn's dispatch reads it at the
+seat's level once, for the head of the conversation it continues; its first
+launch, where it continues the session that head left, reads that session's
+row once more, to take it up only while it still names what the read froze;
+and each relaunch (a send-back, an answered question) reads the turn's own row
+twice — as its runner asks which session it continues and as its launch takes
+that one up — at a mean of one relaunch a turn over the census's thirty turns a
+seat a day. So its ceiling, `stream.executor_log_max_bytes`, carries a barrier
+term of 120 × 100 × 365 × 140 B, about 613 MB a year at the reference company,
+beside the about 32 MB a day its begins, captures and endings write.
 
 The [`census_drift`](../reference/alarms.md) alarm holds every log to its own
 census: its domain's rate per agent seat (a company with none is counted as

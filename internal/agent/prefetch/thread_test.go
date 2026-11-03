@@ -222,8 +222,8 @@ func TestTheMiddleIsCountedWhenItCannotBeCondensed(t *testing.T) {
 //
 // A block trimmed to nothing tells the turn this thread has no history, which
 // is the one thing it must not conclude — so the root and the newest both
-// survive however long they are, exactly as the conversation ledger's newest
-// entry does.
+// survive however long they are, as the conversation's newest ending survives
+// the bound on its endings.
 func TestTheByteCeilingNeverTrimsAwayTheRootOrTheNewest(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("x", 6000)

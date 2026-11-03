@@ -174,10 +174,9 @@ func (l *Ledger) Flush(ctx context.Context) {
 }
 
 // FlushTurn publishes one turn's buckets now, of every stage — called before a
-// turn segment publishes its end, before its reflection pass publishes its
-// sentinel, and once its conversation entry's rewrites are made. The turn's
-// page asks for the turn again at the first two, so each record is on the
-// stream before the event that makes a reader ask, rather than a flush
+// turn segment publishes its end and before its reflection pass publishes its
+// sentinel. The turn's page asks for the turn again at both, so each record is
+// on the stream before the event that makes a reader ask, rather than a flush
 // interval after it. Nil-safe.
 func (l *Ledger) FlushTurn(ctx context.Context, turnID string) {
 	if l == nil || turnID == "" {

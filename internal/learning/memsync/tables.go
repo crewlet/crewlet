@@ -7,9 +7,9 @@ import "slices"
 // ONE REGISTRY, and it is the whole reason this package is not fifteen
 // publish calls scattered across the learning subsystem. Memory is written
 // from many places — the reflect worker, the persist decider, the skill
-// synthesizer and refiner, the counterparty profiler, the onboarding claim,
-// the conversation ledger — and a scheme that hooked each write site would
-// need every one of them to remember. The diary's own retention sweep proves
+// synthesizer and refiner, the counterparty profiler, the onboarding claim —
+// and a scheme that hooked each write site would need every one of them to
+// remember. The diary's own retention sweep proves
 // how that ends: it shipped, was documented, and for months nothing called
 // it.
 //
@@ -36,9 +36,9 @@ type table struct {
 	// way on every node. It is what the replication subject is built from
 	// and what an import conflicts on.
 	//
-	// Never a synthetic id. conversation_sessions carries an AUTOINCREMENT
-	// `id` that starts at 1 on every node, so replicating it would collide
-	// two unrelated rows the moment two nodes had both written one.
+	// Never a synthetic id. An AUTOINCREMENT `id` starts at 1 on every
+	// node, so replicating one would collide two unrelated rows the moment
+	// two nodes had both written one.
 	key []string
 
 	// columns is everything carried. The synthetic id is deliberately
@@ -85,11 +85,10 @@ type table struct {
 	// mark that has already passed it, and is never published while this
 	// node holds the seat. So those tables carry `change_seq`, stamped by
 	// a trigger from a counter that only ever increments, on every insert
-	// and on every vector set in place (node migration 0041); and the one
-	// table here whose rowid IS an AUTOINCREMENT id, which is never
-	// reused, keeps the rowid. TestNoAppendOnlyTableReusesItsWatermark
-	// holds every append-only entry to that, so an entry added later
-	// cannot bring the reusable rowid back.
+	// and on every vector set in place (node migration 0041).
+	// TestNoAppendOnlyTableReusesItsWatermark holds every append-only entry
+	// to that, so an entry added later cannot bring the reusable rowid
+	// back.
 	watermark string
 
 	// fillsVector says the holder FILLS this append-only table's vector
@@ -198,30 +197,6 @@ var tables = []table{
 			"created_at", "updated_at", "in_progress_until",
 		},
 		wholeEachCycle: true,
-	},
-	{
-		name:    "conversation_sessions",
-		seatCol: "agent_handle",
-		// NOT `id`: it is an AUTOINCREMENT that starts at 1 on every
-		// node, so replicating it would collide two unrelated entries
-		// the moment two nodes had both written one. entry_id is the
-		// name the writing node minted for the row — see schema/0017.
-		//
-		// And NOT (agent_handle, conversation_key, work_key, turn_id)
-		// either, which reads like the natural key and is not one: both
-		// work_key and turn_id are '' for a turn with no ledgerable
-		// trigger, so that quadruple collapses every unkeyed turn in a
-		// conversation onto one row. The table's own dedupe index is
-		// PARTIAL over `work_key <> ''` for exactly that reason.
-		key: []string{"entry_id"},
-		columns: []string{
-			"entry_id", "agent_handle", "conversation_key", "work_key",
-			"turn_id", "entry", "created_at",
-		},
-		// THE ROWID, and sound here as it is nowhere else in this list:
-		// `id INTEGER PRIMARY KEY AUTOINCREMENT` makes the rowid that id,
-		// and AUTOINCREMENT never hands a deleted one out again.
-		watermark: "rowid",
 	},
 }
 

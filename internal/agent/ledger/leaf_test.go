@@ -11,9 +11,9 @@ import (
 )
 
 // THE LEDGER IMPORTS NOTHING BUT THE STANDARD LIBRARY AND ONE LEAF over it,
-// which is the property its package doc states: the turn context, the prompt
-// builder and the API layer all hold ledger values, so whatever the ledger
-// imports, all three drag behind them. internal/plainjson is admitted because
+// which is the property its package doc states: the turn loop, the runner and
+// the parked state all hold ledger values, so whatever the ledger imports, all
+// three drag behind them. internal/plainjson is admitted because
 // it is held to the standard library by a test of its own, so admitting it
 // admits nothing further. Every other engine package is the import that ends
 // the property — and everything would still compile, so the doc alone would

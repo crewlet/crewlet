@@ -602,7 +602,7 @@ func (s *Service) Roster() AgentRows {
 // an admin — against the chart this node runs.
 //
 // THE TABLE'S ROW AND NOT A SECOND COPY OF IT, so who reads a seat's body over
-// the socket is exactly who reads its turns, its memory and its conversations
+// the socket is exactly who reads its turns, its memory and its sessions
 // through the questions beside it, and moving the rule moves both.
 //
 // AN UNDECIDABLE SEAT IS NOT BODY: a chart this node cannot read withholds a

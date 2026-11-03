@@ -1263,7 +1263,7 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 // opens and reviews at most a change a turn, a change is ejected at most once
 // an entry, and a check fails a head only where its owner has code to fix, so
 // a day counts a few of these rows against the tens of thousands of spend and
-// read rows node/0060 promoted columns for. A check's ENDINGS are the one
+// read rows node/0061 promoted columns for. A check's ENDINGS are the one
 // record here that is not rare — every push of every change ends each check
 // its file defines, passes included — so which of them are counted is decided
 // on the promoted `agent_id` column, which only an ending that fails a head
@@ -1362,7 +1362,7 @@ func usageCodeSQL(w UsageWindow) (string, []any) {
 // reads their records count, what they were sent, the newest, and the
 // repository's name as the newest of its reads named it.
 //
-// OFF THE COLUMNS node/0060 and node/0061 promoted, never the payload: a day is
+// OFF THE COLUMNS node/0061 and node/0062 promoted, never the payload: a day is
 // derived again on every tick it moves, and read out of each row's JSON the
 // grouping cost more than the rest of the day did — 272 ms a busy day of 50
 // 000 rows, past the 150 ms (1 % of the publisher's 15 s tick) a derived day

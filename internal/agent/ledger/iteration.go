@@ -36,7 +36,7 @@ type Call struct {
 //
 // The zero value is the VERBATIM contract Review's single-iteration evidence
 // log depends on: nothing fitted, no read cap, nothing dropped. The
-// cross-round and cross-turn ledgers opt into the budgets explicitly.
+// cross-round ledger opts into the budgets explicitly.
 type FormatOptions struct {
 	// Skip names never render. Meta-tools (activate_tool, list_..._tools)
 	// are never a delivery, so in a record whose only job is "what already
@@ -59,7 +59,7 @@ type FormatOptions struct {
 	Fitted Fitted
 }
 
-// Format is the budgeted form the cross-round and cross-turn ledgers use.
+// Format is the budgeted form the cross-round ledger uses.
 // The caller fits the pieces it names and sets [FormatOptions.Fitted].
 func Format(skip, reads []string) FormatOptions {
 	return FormatOptions{

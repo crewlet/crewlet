@@ -646,7 +646,7 @@ func prepareEvent(rec EventRecord, seats SeatResolver) (eventRow, error) {
 		origins: TurnOrigins(rec.Type, payload)}, nil
 }
 
-// repoRead is what a repository read's columns hold (node/0060, and node/0061
+// repoRead is what a repository read's columns hold (node/0061, and node/0062
 // its count): who read which repository, how, how many times and what they
 // were sent — the fields the usage day groups and sums a day of reads by
 // ([DB.usageRepoReads]), filled when the row is written so the derivation,

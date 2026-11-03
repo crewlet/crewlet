@@ -151,7 +151,6 @@ A seat's entries can be different harnesses, so different roles can use differen
 - **`synthesized_skills` / `synthesized_skill_versions`** — auto-drafted skills the agent can load via `use_skill`, with refinement history.
 - **`counterparty_profiles`** — per-(observer, subject) profiles built up from observed interactions.
 - **`agent_onboarding_markers`** — `mark_onboarded` bookkeeping (one row per agent, UPSERT-keyed).
-- **`conversation_sessions`** — the [conversation ledger](conversation-sessions.md): one row per completed turn, keyed on the seat and the conversation it served, rendered back into that conversation's next turn. Deduped on the work key, trimmed on write, swept on a retention horizon.
 
 Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `scheduled_runs` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
 
@@ -182,8 +181,8 @@ internal/
 │                         #   turn/ (the two-stage loop), toolloop/ (the
 │                         #   model↔tool round-trip),
 │                         #   inbox/ (what wakes a seat, and what must not
-│                         #   wake it twice), ledger/ (iteration, conversation
-│                         #   and budget ledgers), structured/ (how a phase
+│                         #   wake it twice), ledger/ (the prior-work ledger
+│                         #   and its budgets), structured/ (how a phase
 │                         #   gives a typed answer), prefetch/, prompts/,
 │                         #   skills/, skillsync/ (keeps every node's
 │                         #   skill registry current), builtin/,

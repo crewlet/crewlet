@@ -376,6 +376,7 @@ var contract = []Entry{
 		"internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"ExecutorSessionRow", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SessionEnding", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"SessionUnkept", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"ExecutorSessionAnswer", ReadInterface,
 		"internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"TranscriptEntry", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
@@ -385,6 +386,7 @@ var contract = []Entry{
 	{"TranscriptCut", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SessionOutcome", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SessionContinuesIn", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"SessionContinuedBy", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 
 	// identity.ts
 	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},

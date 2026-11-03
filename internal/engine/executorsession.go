@@ -51,6 +51,7 @@ import (
 // captures and its turn's end through: the estate router's
 // (estate.ExecutorWrites), which a seats-only node reaches through a data node.
 type executorLogWrites interface {
+	Begin(ctx context.Context, c executordomain.Call, n executordomain.NewBegin) (executordomain.BeginResult, error)
 	Capture(ctx context.Context, c executordomain.Call,
 		n executordomain.NewCapture) (executordomain.CaptureResult, error)
 	End(ctx context.Context, c executordomain.Call, n executordomain.NewEnd) (statelog.Result, error)
@@ -86,7 +87,7 @@ func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (
 	stamp := c.Stamp
 	call := executordomain.Call{By: sandboxAuthor,
 		OpID: executordomain.CaptureOpID(stamp.Minted, c.Handle, c.Turn, stamp.Launch, stamp.CaptureSeq)}
-	res, err := r.log.Capture(ctx, call, executordomain.NewCapture{
+	n := executordomain.NewCapture{
 		Handle: c.Handle, Turn: c.Turn, ConversationKey: c.ConversationKey, WorkKey: c.WorkKey,
 		Harness: stamp.Harness, HarnessVersion: stamp.HarnessVersion, SessionID: stamp.SessionID,
 		Object: c.Object, ContentKey: stamp.ContentKey, ArchiveFormat: stamp.ArchiveFormat,
@@ -96,7 +97,14 @@ func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (
 		// row, which outlives it: a launch continuing the session after its
 		// turn ended has no run record to read them from.
 		ContextTokens: stamp.ContextTokens, Interrupted: stamp.Interrupted,
-	})
+	}
+	if c.ReadThrough > 0 {
+		// THE TURN'S FIRST READ, as its first launch froze it: the log
+		// keeps it where no begin of the turn landed first.
+		n.ReadThrough = statelog.Unpack(executordomain.Domain{}.Stream().Name, c.ReadThrough)
+		n.Absorbs = c.Absorbs
+	}
+	res, err := r.log.Capture(ctx, call, n)
 	switch {
 	case err == nil && res.Outcome == statelog.OutcomeApplied && res.Recorded:
 		return sandbox.LogLanded, nil
@@ -106,6 +114,28 @@ func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (
 		return sandbox.LogRefused, err
 	}
 	return sandbox.LogUnsettled, unsettledRecord(res.Outcome, err)
+}
+
+// Begin records a turn's first read of its conversation under the one
+// operation the turn derives ([executordomain.BeginOpID]), and answers whether
+// the turn's row, read back, holds the base the read froze
+// ([executordomain.BeginResult]). APPLIED is LANDED whether this attempt wrote
+// it or an earlier one, or a capture that landed first, recorded the turn's
+// first read: either way the row read back says what it holds. The log's
+// definite refusals are a capture's ([refusedCapture]).
+func (r executorRecords) Begin(ctx context.Context, b sandbox.BeginRecord) (sandbox.BeginAnswer, error) {
+	call := executordomain.Call{By: sandboxAuthor, OpID: executordomain.BeginOpID(b.Minted, b.Handle, b.Turn)}
+	res, err := r.log.Begin(ctx, call, executordomain.NewBegin{Handle: b.Handle, Turn: b.Turn,
+		ConversationKey: b.ConversationKey, WorkKey: b.WorkKey,
+		ReadThrough: statelog.Unpack(executordomain.Domain{}.Stream().Name, b.ReadThrough),
+		Absorbs:     b.Absorbs, BaseTurn: b.BaseTurn, BaseObject: b.BaseObject})
+	switch {
+	case err == nil && res.Outcome == statelog.OutcomeApplied:
+		return sandbox.BeginAnswer{Log: sandbox.LogLanded, Held: res.Held, Why: res.Why}, nil
+	case refusedCapture(err):
+		return sandbox.BeginAnswer{Log: sandbox.LogRefused}, err
+	}
+	return sandbox.BeginAnswer{Log: sandbox.LogUnsettled}, unsettledRecord(res.Outcome, err)
 }
 
 // refusedCapture reports whether err is the log's definite refusal of a capture:
@@ -394,6 +424,20 @@ func abandonedEnding(res turn.Result, reply turn.Reply, answered colleagueAnswer
 	ending := endingOf(res, reply, answered)
 	ending.Outcome = executorkeep.OutcomeFailed
 	ending.Failure = redact.Secrets(fmt.Sprintf("the resumed turn broke and was abandoned (%s): %v", reason, err))
+	return ending
+}
+
+// launchAbandonedEnding is how a dispatched turn whose first launch was
+// abandoned after its run's record was written ended: failed, saying why — the
+// launch's error redacted, since it can quote what a box or a store said —
+// beside whatever its loop had decided and answered by then.
+func launchAbandonedEnding(res turn.Result, reply turn.Reply, answered colleagueAnswer,
+	err error) executorkeep.Ending {
+
+	ending := endingOf(res, reply, answered)
+	ending.Outcome = executorkeep.OutcomeFailed
+	ending.Failure = redact.Secrets(fmt.Sprintf("the turn's executor launch was abandoned after its run was "+
+		"recorded: %v", err))
 	return ending
 }
 

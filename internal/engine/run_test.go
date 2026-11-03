@@ -280,8 +280,8 @@ func TestTheDispatcherIsWiredFromTheEngine(t *testing.T) {
 	if d.NoteDeferred == nil {
 		t.Error("NoteDeferred unwired: a deferred seat never resumes consuming")
 	}
-	if d.Completions == nil || d.Conversations == nil {
-		t.Error("the ledgers were not wired to the local store")
+	if d.Completions == nil {
+		t.Error("the completion ledger was not wired to the fleet")
 	}
 	if d.Ledgered != nil && !d.Ledgered("task_assigned") {
 		t.Error("Ledgered is wired to something other than the inbox's own set")
@@ -293,7 +293,7 @@ func TestASuppliedSeamIsKeptNotOverwritten(t *testing.T) {
 	// The regression this exists for: the wiring used to be reapplied on
 	// every delivery, which both raced across seats and silently replaced
 	// whatever a caller had supplied. A caller that wants to pin ownership
-	// answers must still get the real ledgers.
+	// answers must still get the real completion ledger.
 	pinned := func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: false}
 	}
@@ -533,8 +533,8 @@ func (c *countingWithdrawals) ForgetAdmission(ctx context.Context, nodeID, incar
 
 // A PARTIAL SET IS REFUSED, NAMING WHAT IS MISSING. It used to be run: the
 // engine skipped whatever needed the absent piece, so an engine lent a queue
-// and no store served a company with no conversation ledger and no Worklet,
-// and nothing said so. Every node `crewlet run` builds holds all four.
+// and no store served a company with no memory and no Worklet, and nothing
+// said so. Every node `crewlet run` builds holds all four.
 func TestBackendsSuppliedWithoutEveryEstateAreRefused(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {

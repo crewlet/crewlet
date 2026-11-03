@@ -130,9 +130,9 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"turn_engine.executor_min_budget_tokens", ErrOutOfRange,
 		},
 		{
-			"a conversation ledger that keeps nothing",
-			"name: Acme\nturn_engine:\n  conversation_session:\n    max_entries: 0\n",
-			"turn_engine.conversation_session.max_entries", ErrOutOfRange,
+			"executor sessions kept for no time at all",
+			"name: Acme\nturn_engine:\n  conversation_session:\n    retention_days: 0\n",
+			"turn_engine.conversation_session.retention_days", ErrOutOfRange,
 		},
 		{
 			// ONE SESSION AT ITS BOUND, sealed, is a little over 32 MiB: a

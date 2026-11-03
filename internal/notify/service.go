@@ -569,8 +569,9 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	}
 	// BOTH KEYS ride on the event: the partition key so the inbox coalescer
 	// can group without re-deriving a third-party app's rule, and the
-	// conversation identity so the ledger, the episodes and the event
-	// store's tag file this turn where the next turn will look for it.
+	// conversation identity so the turn's rows on the executor log, the
+	// episodes and the event store's tag file this turn where the next turn
+	// will look for it.
 	// Derived here, where the third-party app's prompt is already in hand.
 	//
 	// THROUGH [Prompts.Partition] and [Prompts.Conversation], which exist so
@@ -623,7 +624,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// comments on one thread woke a seat ten times and ran ten turns instead
 	// of the one digest turn the design describes. Both copies are kept: the
 	// metadata one is what a prompt renders from, this one is what the broker
-	// groups on and what the ledger keys off.
+	// groups on and what the turn's conversation is keyed off.
 	Stamp(wake, partition, conversation)
 	// AND WHERE THE CHANGE THAT WOKE THE SEAT WAS COMMITTED, on the same bag
 	// for the same reason: the turn reads it off the envelope, never out of

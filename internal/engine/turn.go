@@ -12,13 +12,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
-	"github.com/crewlet/crewlet/internal/agent/ledger"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/auxspend"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -29,7 +25,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
-	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -50,12 +45,11 @@ type Dispatcher struct {
 	// type. Only those contribute to the work key.
 	Ledgered func(eventType string) bool
 
-	// Completions and Conversations are the two durable ledgers. Either may
-	// be nil, which is the embedded single-node case: with no peer to race,
-	// the seat lease is the whole mutual exclusion and there is nothing for
-	// a completion ledger to add.
-	Completions   ledgerstore.Completions
-	Conversations ledgerstore.Conversations
+	// Completions is the durable completion ledger. It may be nil, which is
+	// the embedded single-node case: with no peer to race, the seat lease is
+	// the whole mutual exclusion and there is nothing for a completion
+	// ledger to add.
+	Completions ledgerstore.Completions
 
 	// Turn runs the seat's turn once the guards have passed.
 	Turn func(ctx context.Context, req Request) (turn.Result, error)
@@ -97,14 +91,20 @@ type Dispatcher struct {
 	HoldSandbox func(ctx context.Context, handle string)
 
 	// Budget parks the seat when one of its capped token windows is
-	// refusing, and reports the deferral reason naming the window — see
-	// budgetpark.go. An error is a park that could not be taken, which
+	// refusing, or leaves less room than the delivery's launch needs, and
+	// reports the deferral reason naming the window — see budgetpark.go.
+	// refused is the budget refusal the delivery's turn met, nil before any
+	// turn ran: a launch refused below its own floor — one that continues the
+	// session its conversation's last turn left, whose context it sends first
+	// — carries that floor, and the park waits for room for it rather than
+	// for the static floor a fresh launch needs, which the window may already
+	// have ([floorOf]). An error is a park that could not be taken, which
 	// DEFERS the delivery rather than running a turn the counter refuses:
 	// the refusal is the node's, and a deferral keeps the message's place.
 	//
 	// Nil parks nothing, which is a dispatcher with no counters: every
 	// turn then runs, and its own meter, if it has one, is the gate.
-	Budget func(ctx context.Context, handle string) (reason string, parked bool, err error)
+	Budget func(ctx context.Context, handle string, refused error) (reason string, parked bool, err error)
 
 	// Provider parks the seat when every member of the chain a turn ran on
 	// refused for a rate limit, until the first is tried again, and reports
@@ -176,18 +176,6 @@ type Dispatcher struct {
 	// nothing vouches for.
 	Parties func() notify.Parties
 
-	// Conversation resolves the conversation-ledger policy for the turn
-	// about to run.
-	//
-	// A FUNCTION, and read per dispatch rather than captured at
-	// construction: the dispatcher is built once and the policy lives on
-	// the company config, which a live apply replaces. A captured copy
-	// would keep serving the revision the process started on.
-	//
-	// nil means the shipped defaults, which is what a test that does not
-	// care about the policy wants.
-	Conversation func() config.ConversationSession
-
 	// Identify names the seat a handle is, as the role name and agent id
 	// every seat-addressed event carries.
 	//
@@ -203,52 +191,8 @@ type Dispatcher struct {
 	// trigger still recorded and the delivery still settled.
 	Identify func(handle string) (role, agentID string)
 
-	// Rewriter is the seat's compactor, which rewrites a tool-call payload
-	// past the ledger's budget before the conversation entry is written —
-	// see [ledger.SessionInput.Fitted] — bound to the attribution the
-	// dispatcher files those rewrites under.
-	//
-	// A FUNCTION, read per dispatch, for [Dispatcher.Conversation]'s
-	// reason: the auxiliary chain is the company's, and a live apply
-	// replaces it. Nil records every payload whole, which is the honest
-	// answer for a dispatcher with no model to rewrite with: the row is the
-	// store's only record of the turn, and a fragment written into it is a
-	// fragment for ever.
-	Rewriter func(handle string, use auxspend.Use) ledgerfit.Fitter
-
-	// ReflectionRoom is the PRE-FLIGHT gate on those rewrites: whether the
-	// seat may spend on the reflection stage at all, the same answer the
-	// reflection pass beside them asks for ([Engine.reflectionRoom]) — they
-	// are filed under that stage, being what the seat remembers of a turn
-	// once it is over. Asked once per entry, and only for an entry with a
-	// payload to rewrite, so a false is those rewrites turned away — and the
-	// engine's gate records it as the window's refusal. Three-valued: an
-	// error is a counter that could not be read, and the rewrites are made,
-	// since the charge on the way out still counts them.
-	//
-	// A FUNCTION, read per dispatch, for [Dispatcher.Conversation]'s reason.
-	// Nil admits every entry, which is the answer for a dispatcher with no
-	// counter to ask.
-	ReflectionRoom func(ctx context.Context, handle string) (bool, error)
-
-	// FlushSpend publishes what a run's auxiliary calls have cost on this
-	// node so far ([auxspend.Ledger.FlushTurn]) — called once the
-	// conversation entry's rewrites are made, which happen after the turn's
-	// end and beside its reflection pass, so their records reach the
-	// rollups and the turn's page then rather than a flush interval later.
-	// Nil leaves them to the ledger's timer.
-	FlushSpend func(ctx context.Context, runID string)
-
 	// Now is injectable so a test can pin the clock.
 	Now func() time.Time
-}
-
-// conversationPolicy is the resolved policy, defaulted when unset.
-func (d *Dispatcher) conversationPolicy() config.ConversationSession {
-	if d.Conversation == nil {
-		return config.DefaultConversationSession()
-	}
-	return d.Conversation()
 }
 
 // Request is one dispatch's worth of work.
@@ -293,17 +237,15 @@ type Request struct {
 	// nothing and re-run the turn on every redelivery.
 	Trigger []*events.Event
 
-	// History is what this seat already said in this conversation.
-	History []ledger.Session
-
 	// ConversationKey is the surface-scoped conversation IDENTITY — the
 	// durable thread this turn is part of — empty when the trigger has
 	// none.
 	//
 	// The identity, never the inbox partition key beside it: this field is
-	// what reaches the conversation ledger, the turn telemetry that becomes
-	// the event store's conversation_key tag and the episodes column, and
-	// the row a detached executor reports back through.
+	// what reaches the turn telemetry that becomes the event store's
+	// conversation_key tag and the episodes column, the executor log's rows
+	// the conversation's next turn reads its head and endings from, and the
+	// row a detached executor reports back through.
 	//
 	// THE PARTITION KEY IS NOT A FIELD HERE. It is read straight off the
 	// events at each of the four places that want it (see [partitionKeyOf])
@@ -577,7 +519,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	//
 	// AFTER THE SCREENING, whose every non-proceeding outcome already hands
 	// the delivery on without running anything, so it costs those no read.
-	if result, parked := d.parkOnBudget(ctx, handle); parked {
+	if result, parked := d.parkOnBudget(ctx, handle, nil); parked {
 		return result
 	}
 
@@ -735,9 +677,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	ctx = tracing.WithRemote(ctx, triggerTrace(trigger))
 	depth, chain := delegationOf(routing.Events)
 	// MINTED HERE, at the one frame that knows a partition is about to
-	// RUN, because both halves of the dispatch's own bookkeeping need it:
-	// the conversation entry names the run a reader can open, and the
-	// abandon record names the run that stopped. See ADR-0017.
+	// RUN, because what the turn records and what the dispatch records of
+	// it both need it: the turn's rows on the executor log name the run a
+	// reader can open, and the abandon record names the run that stopped.
+	// See ADR-0017.
 	req := Request{
 		RunID:  newRunID(),
 		Handle: handle, Events: routing.Events, Trigger: trigger,
@@ -763,17 +706,6 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// name the whole DM channel and say nothing about which batch collapsed.
 	d.noteCoalesced(ctx, handle, partitionKeyOf(routing.Events), routing)
 	d.noteSuperseded(ctx, handle, routing.Events, trigger)
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if history, err := d.history(ctx, handle, req.ConversationKey); err == nil {
-		req.History = history
-	} else {
-		// A conversation ledger that cannot be read is a seat with less
-		// context, not a seat that cannot work. The read RAISES rather
-		// than returning empty precisely so this decision is made here,
-		// visibly, instead of a database outage looking like a first turn.
-		log.WarnContext(ctx, "conversation_history_unreadable",
-			"seat", handle, "conversation", req.ConversationKey, "error", err)
-	}
 
 	// The acting seat travels the same way, and for the same reason: the
 	// only consumer is a leaf. A provider gives every seat its own harness
@@ -841,8 +773,14 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// out. Below [turn.Abandon] for the reason the seat-moved
 			// branch is: a turn that proved an outward write is
 			// recorded, not run again when the window resets.
+			//
+			// ON THE FLOOR THE TURN'S LAUNCH WAS REFUSED BELOW, which the
+			// refusal carries: a first launch that continues its
+			// conversation's session needs that session's context beside
+			// its brief, and parked on the static floor it found the
+			// window not starved, and was NAKed into the same refusal.
 			if errors.Is(err, toolloop.ErrBudgetExhausted) {
-				if result, parked := d.parkOnBudget(ctx, handle); parked {
+				if result, parked := d.parkOnBudget(ctx, handle, err); parked {
 					log.InfoContext(ctx, "turn_budget_parked", "seat", handle,
 						"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
 					return result
@@ -887,18 +825,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 }
 
 // parkOnBudget runs the budget stage, reporting the disposition when it parked
-// the seat or could not take the park it decided on.
+// the seat or could not take the park it decided on. refused is the budget
+// refusal the delivery's turn met, nil before any ran ([Dispatcher.Budget]).
 //
 // A PARK IS A DEFERRAL, and noted as one, so the seat host resumes the
 // attachment the deferral quiesces on its next renew — the park's own hold is
 // what keeps the resumed attachment from being handed anything until the
 // window turns over. See budgetpark.go for why the two stops have two owners.
-func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string) (queue.Result, bool) {
+func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string, refused error) (queue.Result, bool) {
 	if d.Budget == nil {
 		return queue.Result{}, false
 	}
 	return d.parkOn(ctx, handle, "budget park", func(ctx context.Context) (string, bool, error) {
-		return d.Budget(ctx, handle)
+		return d.Budget(ctx, handle, refused)
 	})
 }
 
@@ -972,11 +911,10 @@ func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, ca
 		"error", cause.Error(),
 		"detail", "the trigger is recorded rather than redelivered")
 
-	// The completion rows ONLY, never RecordSession. A broken turn has no
-	// reply to file: its artifact is whichever round closed last, and
-	// writing that to the thread as this turn's answer is the bug
-	// [Dispatcher.RecordSession]'s own doc commemorates for the suspended
-	// case, because the next turn reads it back as what this one did.
+	// The completion rows ONLY. A broken turn has no reply to account for:
+	// its artifact is whichever round closed last, and nothing here files it
+	// as this turn's answer. What its conversation's next turn is told of it
+	// is whatever end the turn left on the executor log.
 	if d.Completions != nil {
 		for _, ev := range req.Events {
 			if ev == nil || !d.ledgered(ev.Type) {
@@ -1490,15 +1428,20 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 	return out, inThread
 }
 
-// recordWorked writes both ledgers after a turn.
+// recordWorked writes the completion ledger after a turn.
 //
 // Per CONSTITUENT event, not per partition. The partition's own key covers the
 // set that ran together; a later redelivery of a SUBSET keys differently and
 // would match nothing, so the subset would run again. Recording each
 // constituent under its own key is what makes a partial overlap droppable.
 //
-// Both writes fail open. A turn that ran and could not be recorded may run
+// The write fails open. A turn that ran and could not be recorded may run
 // again; a turn refused because its bookkeeping failed never runs at all.
+//
+// How the turn ended is not written here: its conversation's next turn is
+// told from the turn's end on the executor log, which the frame that ran it
+// records ([Engine.runTurn]), or the resume of a turn that detached
+// ([Engine.recordResume]).
 func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Request, res turn.Result) {
 	now := d.now()
 	if d.Completions != nil {
@@ -1519,176 +1462,6 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 			}
 		}
 	}
-	d.RecordSession(ctx, handle, req.ConversationKey, req.RunID, req.WorkKey,
-		DescribeTrigger(req.Ask(), ""), res, now)
-}
-
-// RecordSession appends what this turn said to the conversation it served.
-//
-// EXPORTED AND SEPARATE because a turn has two ways of ending and both owe
-// the conversation an entry. An ordinary turn ends here, in the dispatcher.
-// A turn that suspended on a detached executor ends somewhere else
-// entirely — in another process, on another node, days later — and that path
-// recorded nothing at all: the thread's history stopped at the moment the run
-// detached, so the seat's next turn on it re-read a conversation in which the
-// coding work had never happened and planned it again.
-//
-// Fails open, like the completion write beside it: a turn whose bookkeeping
-// failed has already delivered, and refusing to admit it happened is the
-// worse of the two errors.
-// TWO IDENTITIES, BECAUSE THE ENTRY AND THE DEDUPE ARE DIFFERENT QUESTIONS.
-// runID is what the entry RENDERS — the seat reads "(turn a1b2c3d4)" back on
-// its next turn of this thread, and that has to name the execution somebody
-// can open. workKey is what the row is DEDUPED on, and it has to survive a
-// re-run or the same trigger files two entries into one conversation. One
-// value served both until a turn id stopped meaning the unit of work; see
-// ADR-0017.
-//
-// handle is the seat's handle — the delivery's, or a resumed run's — and the
-// entry is filed under it.
-func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
-	runID, workKey, trigger string, res turn.Result, now time.Time,
-) {
-	if d == nil {
-		return
-	}
-	policy := d.conversationPolicy()
-	if d.Conversations == nil || conversation == "" || !policy.Records() {
-		return
-	}
-	// A SUSPENDED TURN HAS SAID NOTHING YET. It parked on a detached
-	// executor, and its Result carries the self_iterate the suspend returns and
-	// an empty artifact — so filing it wrote the seat's "reply" to the
-	// thread as a decision it never made and an answer it never gave, and
-	// the next turn on that thread read it back as what this one had done.
-	// The completion ledger's write at the same moment IS right: the
-	// trigger has been worked, it is simply not finished. The finish comes
-	// back through the resume, which records then.
-	if res.Suspended {
-		return
-	}
-	// EVERY FIELD THE ENTRY RENDERS, not just the reply. Only Reply and
-	// Decision were ever filled, so a seat re-reading its own history on the
-	// next turn of a thread saw a list of answers with no account of what
-	// produced them — no trigger, no intent, no calls — and the renderer's
-	// other three sections never appeared at all.
-	in := ledger.SessionInput{
-		TurnID:  runID,
-		At:      now.Format(time.RFC3339),
-		Trigger: trigger,
-		Reply:   res.Artifact,
-		// WHICH FIELD THAT ARTIFACT LANDS IN. It is the reviewer's
-		// `final_artifact`, which is prose about the turn rather than
-		// anything a tool sent, and this was filed unconditionally as the
-		// seat's own "You replied" — so a turn that did real work and told
-		// nobody wrote into its own history that it had. That record is
-		// what the next turn on this thread reads, which is what made the
-		// failure self-sealing: the founder's follow-up would be answered
-		// against a reply that was never sent.
-		Delivered: res.Delivered,
-		Decision:  res.Decision.String(),
-		Skip:      toolname.Discovery(),
-	}
-	if w := res.LastWork; w != nil {
-		// The LAST round's, which is the one the reply came out of. The
-		// earlier rounds are the turn's own business and end with it.
-		in.Intent, in.Calls = w.Summary, w.Calls
-		if w.Outcome == turn.OutcomeBlocked {
-			// See [ledger.Session.BlockedOn]: the ledger cannot name this
-			// outcome itself, because turn imports ledger. The evidence is
-			// mandatory on a blocked submission, so this is never the
-			// empty string standing in for a real account.
-			in.BlockedOn = w.Evidence
-		}
-	}
-	if pieces := ledger.SessionPieces(in); d.Rewriter != nil && len(pieces) > 0 {
-		// REWRITTEN BEFORE THE WRITE, never cut: the row is the only copy,
-		// and what a later turn reads of a payload past the budget is what
-		// the seat's auxiliary model made of it. Bounded by the turn's own
-		// context rather than a detached one, because the turn's work is
-		// done and an entry written a moment later with the payload whole
-		// is better than a dispatcher held behind a slow provider.
-		//
-		// THE REFLECTION STAGE: the entry is the seat's own account of the
-		// turn, written for its next turn on the thread once this one is
-		// over — what the seat remembers, never what the work cost — so
-		// it is counted on the seat's day and kept off the turn's total
-		// and its work item, beside the reflection workers.
-		//
-		// AND GATED AS THAT STAGE IS: a seat or a company with no room left
-		// starts no reflection pass, and makes none of these rewrites
-		// either. A turn the budget ended is the case that matters: its
-		// refused round left the counter past the ceiling, and a rewrite
-		// made now would be spend past it on a turn nobody will read
-		// again until the window turns over. The entry is still written —
-		// a payload that cannot be rewritten is named by its size and
-		// digest, ledgerfit's account of any rewrite it cannot have, and
-		// the call line beside it still says which tool ran and whether
-		// it worked. Unlike the task card (turnspend.go), which a person
-		// reads for exactly that turn, this row is read by the seat's
-		// next turn on the thread, which waits for room anyway.
-		var fitter ledgerfit.Fitter
-		if d.mayReflect(ctx, handle, runID) {
-			fitter = d.Rewriter(handle, auxspend.Use{
-				Stage: types.AuxStageReflection, TurnID: runID, WorkKey: workKey,
-			})
-		}
-		in.Fitted = ledgerfit.Fit(ctx, fitter, pieces)
-		if fitter != nil && d.FlushSpend != nil {
-			d.FlushSpend(ctx, runID)
-		}
-	}
-	entry := ledger.BuildSession(in)
-	if res.LastReview != nil {
-		entry.CompletedWork = res.LastReview.CompletedWork
-	}
-	// TRIMMED TO THE CONFIGURED KEEP. Passing 0 here meant "keep
-	// everything", so max_entries — documented as what bounds a DM whose
-	// conversation key is the whole channel and therefore never stops
-	// receiving entries — bounded nothing, and the table grew for the life
-	// of the deployment.
-	if err := d.Conversations.Append(ctx, handle, conversation, entry,
-		workKey, now, policy.MaxEntries); err != nil {
-		log.WarnContext(ctx, "conversation_not_recorded", "seat", handle,
-			"conversation", conversation, "error", err)
-	}
-}
-
-// mayReflect asks [Dispatcher.ReflectionRoom] whether a conversation entry's
-// rewrites may be made, and logs the two answers that are not a plain yes.
-func (d *Dispatcher) mayReflect(ctx context.Context, handle, runID string) bool {
-	if d.ReflectionRoom == nil {
-		return true
-	}
-	ok, err := d.ReflectionRoom(ctx, handle)
-	switch {
-	case err != nil:
-		// UNKNOWN, not refused — the reflection pass's own reading.
-		log.WarnContext(ctx, "conversation_rewrite_budget_unknown", "seat", handle,
-			"turn_id", runID, "error", err,
-			"detail", "rewriting the entry's long payloads anyway; the spend is still charged")
-		return true
-	case !ok:
-		log.InfoContext(ctx, "conversation_rewrite_skipped_no_budget", "seat", handle,
-			"turn_id", runID,
-			"detail", "the company or this seat is at its token ceiling, so the entry's "+
-				"long payloads are named by size and digest rather than rewritten")
-		return false
-	}
-	return true
-}
-
-func (d *Dispatcher) history(ctx context.Context, handle, conversation string) ([]ledger.Session, error) {
-	policy := d.conversationPolicy()
-	if d.Conversations == nil || conversation == "" || !policy.Records() {
-		return nil, nil
-	}
-	// UNLIMITED on the READ. What is recorded is read back whole; the block
-	// a turn is given is bounded at render time by dropping whole entries
-	// (ledger.InjectedMaxChars), which is where a bound belongs — the two
-	// config knobs that used to claim this job were never threaded to any
-	// caller and cut nothing.
-	return d.Conversations.History(ctx, handle, conversation, 0)
 }
 
 func (d *Dispatcher) conditions(handle string) inbox.Conditions {
@@ -1710,10 +1483,9 @@ func (d *Dispatcher) ledgered(eventType string) bool {
 
 // now is the dispatcher's clock, injectable for tests.
 //
-// Nil-tolerant on the receiver, like [Dispatcher.RecordSession] beside it: a
-// caller reaching a dispatcher that was never built — a partially wired
-// engine, a test driving one method — asks the wall clock rather than
-// panicking on the way to a write the same nil check is about to decline.
+// Nil-tolerant on the receiver: a caller reaching a dispatcher that was never
+// built — a partially wired engine, a test driving one method — asks the wall
+// clock rather than panicking.
 func (d *Dispatcher) now() time.Time {
 	if d == nil || d.Now == nil {
 		return time.Now().UTC()
@@ -1725,8 +1497,8 @@ func (d *Dispatcher) now() time.Time {
 // events, and partitionKeyOf takes the inbox partition key.
 //
 // TWO FUNCTIONS BECAUSE THERE ARE TWO QUESTIONS, and the dispatcher asks both
-// on every turn: the ledger, the telemetry, the episodes and a parked run's
-// answer match want the identity, while the coalescing record wants the
+// on every turn: the executor log, the telemetry, the episodes and a parked
+// run's answer match want the identity, while the coalescing record wants the
 // partition — it records that N events MERGED, which is what the partition
 // decides. The answer match takes both: the identity admits a run and the
 // partition picks between runs one direct message admits. One value
@@ -1775,9 +1547,9 @@ func partitionKeyOf(evs []*events.Event) string { return notify.KeyOfAll(evs) }
 // body was fenced under a token minted for the wake, because no turn existed
 // where it was built, and everything around those fences — a display name, a
 // room's name — is neutralised, as a tool answer's other strings are
-// ([provenance.Rekey]). A reader with no turn of its own (the conversation
-// ledger) passes no token, which keeps the wake's and still neutralises the
-// rest. A parked run's answer is no reader of the trigger: it records what the
+// ([provenance.Rekey]). A caller with no turn of its own passes no token,
+// which keeps the wake's and still neutralises the rest. A parked run's answer
+// is no reader of the trigger: it records what the
 // reply says ([replyWords]), and the run it carries on fences those words under
 // its own turn's token.
 //

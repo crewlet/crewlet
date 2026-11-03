@@ -176,26 +176,27 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 // domain it is the domain's own number, and a boot refuses a barrier stated
 // without one, a model stated beside NoBarrier, and a negative rate.
 //
-// The shipped figures are pinned, so moving one is a change in this diff:
-// the reference company's 125 a day per seat on the tracker's, the knowledge
-// base's, the artifacts log's, the artifact datastore's and the code host's
-// logs, chat's own 120 on its log, the executor log's own 60, and zero on the
-// identity estate's and the Dashboard Assistant's.
+// The shipped figures are pinned AS LITERALS, so moving one is a change in this
+// diff and never a constant moved somewhere else: the reference company's 125 a
+// day per seat on the tracker's, the knowledge base's, the artifacts log's, the
+// artifact datastore's and the code host's logs, chat's own 120 on its log, the
+// executor log's own 120, and zero on the identity estate's and the Dashboard
+// Assistant's.
 func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 	shipped := map[string]*int{
-		worklet.Domain{}.Name():   new(statelog.LinearizableReadsPerSeatDay),
-		doclet.Domain{}.Name():    new(statelog.LinearizableReadsPerSeatDay),
+		worklet.Domain{}.Name():   new(125),
+		doclet.Domain{}.Name():    new(125),
 		iamdomain.Domain{}.Name(): new(0),
 		search.Domain{}.Name():    nil,
 		usage.Domain{}.Name():     nil,
 
-		artifactsdomain.Domain{}.Name(): new(statelog.LinearizableReadsPerSeatDay),
-		artifactdata.Domain{}.Name():    new(statelog.LinearizableReadsPerSeatDay),
-		chatlet.Domain{}.Name():         new(chatlet.LinearizableReadsPerSeatDay),
+		artifactsdomain.Domain{}.Name(): new(125),
+		artifactdata.Domain{}.Name():    new(125),
+		chatlet.Domain{}.Name():         new(120),
 		assistantdomain.Domain{}.Name(): new(0),
-		executordomain.Domain{}.Name():  new(executordomain.LinearizableReadsPerSeatDay),
+		executordomain.Domain{}.Name():  new(120),
 		// The tracker's figure: a seat's code tools read at linearizable.
-		code.Domain{}.Name(): new(statelog.LinearizableReadsPerSeatDay),
+		code.Domain{}.Name(): new(125),
 	}
 	for _, entry := range register() {
 		name := entry.Domain.Name()

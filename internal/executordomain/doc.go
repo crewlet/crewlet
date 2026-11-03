@@ -2,15 +2,15 @@
 // SESSIONS (ADR-0073): one row per (seat handle, turn) whose executor captured
 // its harness's session, naming the sealed object in the fleet's object
 // store that holds it (ADR-0026), or whose first launch recorded its read (a
-// `begin`, which no launch publishes yet), on the `CREWLET_EXECUTOR_LOG`
-// stream and applied into every data node's replicated estate.
+// `begin`), on the `CREWLET_EXECUTOR_LOG` stream and applied into every data
+// node's replicated estate.
 //
 // # Who has to agree on it
 //
 // A turn's relaunch may run on any node, in any box, and continues the session
-// the turn's earlier launch left; and a conversation's HEAD — the session a
-// later turn on it would continue, which no launch takes up yet: a later turn
-// starts a session of its own — is read over the same rows. So the name of a
+// the turn's earlier launch left; and a conversation's HEAD — the session its
+// next turn continues, on whichever node that turn runs — is read over the same
+// rows. So the name of a
 // session is the WHOLE FLEET's, identically, which is the replicated estate,
 // which only this domain's applier writes. The bytes are not here at all. A
 // session is tens of mebibytes, so it lives in the object store as one sealed
@@ -34,7 +34,7 @@
 // # One row per turn, never per conversation
 //
 // A conversation's HEAD is the newest ended turn of it that left a session —
-// what a later turn on it would continue, which nothing does yet — but that is
+// what its next turn continues — but that is
 // a READ over rows that each belong to one turn, never a conversation row a
 // later turn's capture takes over: a row that took another turn's object
 // would be an object carry, which ADR-0027 (as ADR-0036 amends it) allows only
@@ -94,12 +94,12 @@
 //
 // # What a conversation still holds is what no ended turn was shown
 //
-// A turn's first launch reads the conversation ([Reader.Head]): its HEAD (the
-// newest ended turn that left a session, which the launch continues) and every
-// OTHER ended turn the conversation still holds, which the launch is told of —
-// and, of those that still name a session, the SIBLINGS it is offered. The
-// turns that read handed out in full are carried on the turn's captures, and
-// the turn's end absorbs exactly them. So every ended row a conversation holds
+// A turn's dispatch reads the conversation ([Reader.Head]): its HEAD (the
+// newest ended turn that left a session, which the turn's launches continue)
+// and every OTHER ended turn the conversation still holds, which the turn is
+// told of — and, of those that still name a session, the SIBLINGS. The turns
+// that read handed out in full and the turn's brief told are carried on the
+// turn's begin and its captures, and the turn's end absorbs exactly them. So every ended row a conversation holds
 // is one no ended turn was shown, and the next read shows every one of them,
 // whether it ended before the head or after it: a turn that ran beside a turn
 // parked on a person's answer ends before the parked one does, and is still
@@ -109,12 +109,12 @@
 //
 // # A turn's first read holds its base
 //
-// A turn's launches are to continue the BASE its first read froze — the head
-// it was handed — for as long as the turn has kept no session of its own: a
-// first job lost with its box, before any capture, relaunched into that same
-// base, on any node. No launch does yet, and none publishes the `begin` below:
-// this package holds the record and the hold, and every release behaves as it
-// did until a launch takes them up. Every release of an ended row could take
+// A turn's launches continue the BASE its first read froze — the head it was
+// handed — for as long as the turn has kept no session of its own: its first
+// launch, and a first job lost with its box, before any capture, relaunched
+// into that same base, on any node (internal/sandbox's restore.go). The first
+// launch publishes the `begin` below as soon as the run's record that froze the
+// read exists. Every release of an ended row could take
 // the base from under that turn: another turn's end that was handed the same
 // head absorbs it, an end of the same unit of work dedupes it, a capture of
 // any conversation of the seat releases it past the budget, and the retention

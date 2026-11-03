@@ -38,6 +38,19 @@ type sessionWrites struct {
 	refuse error
 }
 
+// Begin answers a turn's first read held wherever it names a base and the turn
+// has not ended, as the log does where nothing moved the base before it landed.
+// What a begin carries is the conversation cases' to read (conversationLog);
+// these cases launch turns that read no conversation.
+func (w *sessionWrites) Begin(_ context.Context, b BeginRecord) (BeginAnswer, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.ended[b.Turn] {
+		return BeginAnswer{Log: LogRefused}, fmt.Errorf("the turn has ended: %s", b.Turn)
+	}
+	return BeginAnswer{Log: LogLanded, Held: b.BaseTurn != ""}, nil
+}
+
 type capturedRecord struct {
 	CaptureRecord
 	err error

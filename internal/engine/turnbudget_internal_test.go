@@ -3,20 +3,14 @@ package engine
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
-	"github.com/crewlet/crewlet/internal/agent/ledger"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
-	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/auxspend"
-	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -31,13 +25,13 @@ import (
 // A turn's own auxiliary spend, held by the turn's own meter.
 //
 // The meter learned only from its own charges' answers, and a turn's auxiliary
-// calls — its context assembly, the conversation block's condensation, every
-// rewrite its ledgers and tools ask for — reach the same counters by another
-// route, a post-charge that refuses nothing. So a window one of them took past
-// its ceiling was one the turn's next round was sent into, billed by the
-// vendor, and then refused. These cases drive the REAL turn frame, because the
-// property is about the order of its steps: the meter has to exist before the
-// first auxiliary call and be the thing that call is charged through.
+// calls — its context assembly, every rewrite its ledger and tools ask for —
+// reach the same counters by another route, a post-charge that refuses
+// nothing. So a window one of them took past its ceiling was one the turn's
+// next round was sent into, billed by the vendor, and then refused. These
+// cases drive the REAL turn frame, because the property is about the order of
+// its steps: the meter has to exist before the first auxiliary call and be the
+// thing that call is charged through.
 
 // countedProvider counts its calls and answers each the same way.
 type countedProvider struct {
@@ -69,8 +63,11 @@ func (p *countedProvider) called() int {
 
 // budgetedTurn is an engine over the in-memory fleet, running one seat whose
 // day is capped at dayCeiling, with its text phases and its auxiliary model on
-// two providers a case can count. Its executor launches on [runnerKey], where
-// a case that rigs the run gets one.
+// two providers a case can count, and one memory in its diary — so the turn's
+// context assembly asks the auxiliary model, once, which of the seat's
+// memories bear on the task, before the executor's first round and through
+// the turn's meter. Its executor launches on [runnerKey], where a case that
+// rigs the run gets one.
 type budgetedTurn struct {
 	e          *Engine
 	pub        *pub
@@ -93,45 +90,43 @@ func newBudgetedTurn(t *testing.T, dayCeiling, auxTokens int) *budgetedTurn {
 		pub: &pub{}, fleet: coordmem.NewFleet(), seat: seat, dayCeiling: dayCeiling,
 		org:      &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
 		executor: &countedProvider{},
-		// A rewrite that fits whatever budget it is asked for, and costs
-		// what the case says.
+		// The memory filter's answer, which names no memory, costing what
+		// the case says.
 		auxiliary: &countedProvider{answer: &llm.Completion{
-			Model: "cheap", Content: "Earlier: the seat answered the same question four times.",
+			Model: "cheap", Content: "None of them bears on the task.",
 			InputTokens: auxTokens - 100, OutputTokens: 100,
 		}},
 	}
 	models := runnable(t, []phase.Entry{
 		{Key: "main", Provider: r.executor}, {Key: "cheap", Provider: r.auxiliary},
 	}, seat)
-	r.e = withSessions(t, &Engine{backends: &Backends{Queue: r.pub, Fleet: r.fleet}})
+	id, ok := r.org.AgentIDFor(seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	db, _ := diaryFixture(t, map[string][]string{
+		id.String(): {"Ana wants the deploy status in one line."},
+	})
+	r.e = withSessions(t, &Engine{backends: &Backends{Queue: r.pub, Fleet: r.fleet, Store: db}})
+	// NO ONBOARDING PASS: the store that keeps the seat's diary keeps its
+	// onboarding marker too, and a seat with none runs that pass — calls on
+	// its main model — before its executor launches, which is not what these
+	// cases count.
+	noOnboarding := 0
 	r.e.epoch.current.Store(&Company{
 		Org: r.org, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
 			MaxIterations: 1, DelegationDepthLimit: 3,
+			OnboardingMaxToolRounds: &noOnboarding,
 		}},
 	})
 	return r
 }
 
-// longConversation is a conversation whose older entries do not fit the
-// block a turn is given, so the turn's context condenses them with one call
-// on the seat's auxiliary model.
-func longConversation() []ledger.Session {
-	var history []ledger.Session
-	for range 10 {
-		history = append(history, ledger.Session{
-			Trigger: "Message from Ana", Decision: "done",
-			Reply: strings.Repeat("The deploy is green and the flag is on. ", 75),
-		})
-	}
-	return history
-}
-
 func (r *budgetedTurn) run(t *testing.T) error {
 	t.Helper()
 	_, err := r.e.runTurn(t.Context(), Request{
-		RunID: newRunID(), Handle: "swe", WorkKey: "wk-1", ConversationKey: "conv-1",
-		History: longConversation(),
+		RunID: newRunID(), Handle: "swe", WorkKey: "wk-1",
 		Events: []*events.Event{events.New(types.TaskAssigned{
 			TaskID: "t-1", RoleName: "SWE", Description: "answer Ana", Schedule: "s",
 		}, events.TraceContext{})},
@@ -156,23 +151,27 @@ func (r *budgetedTurn) seatDay(t *testing.T) int {
 
 // A TURN WHOSE CONTEXT TAKES ITS SEAT PAST ITS DAY SENDS NO ROUND.
 //
-// The budget park found room, so the turn started; condensing its
-// conversation then cost more than the day had left. That spend is real — the
-// counter holds it whole — and every round after it is certain to be refused,
-// so the executor's first round must be held before it is sent rather than
-// sent, billed and refused. The turn ends on the budget, naming the window the
-// condensation filled.
+// The budget park found room, so the turn started; asking which of its
+// memories bear on the task then cost more than the day had left. That spend
+// is real — the counter holds it whole — and every round after it is certain
+// to be refused, so the executor's first round must be held before it is sent
+// rather than sent, billed and refused. The turn ends on the budget, naming
+// the window the context assembly filled.
+//
+// Mutation: have [recordedProvider.Complete] charge the seat's counter without
+// the turn's meter hearing of it, and the executor's first round is sent into
+// the full day — this goes red on the executor's calls and the refusal.
 func TestATurnWhoseContextSpendsItsDayIsHeldBeforeItsFirstRound(t *testing.T) {
 	t.Parallel()
 	r := newBudgetedTurn(t, 1000, 1600)
 
 	err := r.run(t)
 	if r.auxiliary.called() != 1 {
-		t.Fatalf("the auxiliary model was called %d times, want the one condensation "+
-			"this case is about (err: %v)", r.auxiliary.called(), err)
+		t.Fatalf("the auxiliary model was called %d times, want the memory filter's one "+
+			"call this case is about (err: %v)", r.auxiliary.called(), err)
 	}
 	if got := r.seatDay(t); got != 1600 {
-		t.Errorf("the seat's day holds %d, want the 1600 the condensation spent", got)
+		t.Errorf("the seat's day holds %d, want the 1600 the memory filter spent", got)
 	}
 	if n := r.executor.called(); n != 0 {
 		t.Errorf("the executor was called %d times on a day the turn's own context had "+
@@ -184,7 +183,7 @@ func TestATurnWhoseContextSpendsItsDayIsHeldBeforeItsFirstRound(t *testing.T) {
 	}
 	if refused.Scope != "agent" || refused.Period != period.Day || refused.Used != 1600 ||
 		refused.Limit != 1000 {
-		t.Errorf("refusal = %+v, want the seat's day the condensation took to 1600 of 1000", refused)
+		t.Errorf("refusal = %+v, want the seat's day the context took to 1600 of 1000", refused)
 	}
 	got := only[*types.BudgetExhausted](t, r.pub, "budget_exhausted")
 	if got.BudgetType != types.BudgetScopeAgent || got.UsedTokens != 1600 || got.MaxTokens != 1000 {
@@ -215,7 +214,11 @@ func TestATurnsJudgeAsksTheTurnsMeter(t *testing.T) {
 }
 
 // A TURN WHOSE CONTEXT FITS LAUNCHES ITS EXECUTOR, so the case above is about
-// the window being full and not about a turn that condensed anything at all.
+// the window being full and not about a turn whose context spent anything at
+// all.
+//
+// Mutation: hold the executor's first round wherever the turn's context made
+// an auxiliary call, whatever room is left, and no run launches here.
 func TestATurnWhoseContextFitsItsDayLaunchesItsExecutor(t *testing.T) {
 	t.Parallel()
 	r := newBudgetedTurn(t, 100_000, 1600)
@@ -223,76 +226,10 @@ func TestATurnWhoseContextFitsItsDayLaunchesItsExecutor(t *testing.T) {
 
 	_ = r.run(t)
 	if r.auxiliary.called() != 1 {
-		t.Fatalf("the auxiliary model was called %d times, want one condensation",
+		t.Fatalf("the auxiliary model was called %d times, want the memory filter's one call",
 			r.auxiliary.called())
 	}
 	if n := len(rig.started()); n != 1 {
 		t.Errorf("the turn launched %d executor runs on a day with room left, want one", n)
-	}
-}
-
-// recordEntry files a conversation entry for a turn whose last round posted a
-// payload past the ledger's budget, through the dispatcher the engine wires,
-// and returns what the entry's calls read.
-func (r *budgetedTurn) recordEntry(t *testing.T) (calls, payload string) {
-	t.Helper()
-	conversations := ledgerstore.NewMemoryConversations()
-	d := r.e.buildDispatcher(Options{Dispatch: &Dispatcher{
-		NoteDeferred: func(string) {}, Completions: ledgerstore.NewMemoryCompletions(),
-		Conversations: conversations,
-	}}, r.e.backends)
-	payload = strings.Repeat("the full incident report, line by line. ", 100)
-	d.RecordSession(t.Context(), "swe", "conv-1", "run-entry", "wk-1", "Message from Ana",
-		turn.Result{Decision: phase.Done, LastWork: &turn.Work{
-			Summary: "posted the report",
-			Calls:   []ledger.Call{{Name: "slack_post", Args: map[string]any{"text": payload}}},
-		}}, time.Now())
-	entries, err := conversations.History(t.Context(), "swe", "conv-1", 0)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("History = %v, %v, want the one entry", entries, err)
-	}
-	return entries[0].Calls, payload
-}
-
-// A TURN THE BUDGET ENDED HAS ITS CONVERSATION ENTRY WRITTEN WITH NO REWRITE.
-//
-// The entry's rewrites are reflection-stage spend, made after the turn, and
-// they ran with no gate at all — so the turn whose refused round left its seat
-// past the day paid for more past it, for a row the seat reads only once the
-// day has turned over. The reflection stage's gate now stands in front of
-// them, as it does in front of the reflection pass: the entry is written, and
-// the long payload is named by size and digest.
-func TestATurnTheBudgetEndedRewritesNothingInItsConversationEntry(t *testing.T) {
-	t.Parallel()
-	r := newBudgetedTurn(t, 1000, 1600)
-	if err := r.run(t); !errors.Is(err, toolloop.ErrBudgetExhausted) {
-		t.Fatalf("runTurn = %v, want the turn ended on the budget", err)
-	}
-	calls, payload := r.recordEntry(t)
-	if n := r.auxiliary.called(); n != 1 {
-		t.Errorf("the auxiliary model was called %d times, want only the turn's own "+
-			"condensation: the entry's rewrite is spend past a day already spent", n)
-	}
-	if got := r.seatDay(t); got != 1600 {
-		t.Errorf("the seat's day holds %d after the entry, want the turn's 1600", got)
-	}
-	if !strings.Contains(calls, compact.Omitted(payload)) {
-		t.Errorf("the entry's call reads %q, want its payload named by size and digest", calls)
-	}
-}
-
-// AND A TURN WITH ROOM LEFT HAS IT REWRITTEN, so the case above is about the
-// window being full rather than about a gate that refuses everything.
-func TestATurnWithRoomLeftRewritesItsConversationEntry(t *testing.T) {
-	t.Parallel()
-	r := newBudgetedTurn(t, 100_000, 1600)
-	_ = r.run(t)
-	before := r.auxiliary.called()
-	calls, _ := r.recordEntry(t)
-	if n := r.auxiliary.called(); n != before+1 {
-		t.Errorf("the auxiliary model was called %d times for the entry, want one rewrite", n-before)
-	}
-	if !strings.Contains(calls, ledgerfit.Condensed) {
-		t.Errorf("the entry's call reads %q, want its payload rewritten", calls)
 	}
 }

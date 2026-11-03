@@ -102,7 +102,6 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// holds its own copy, so a singleton would tidy the node with
 		// the duty and let the table grow for ever on every other.
 		"company_config",
-		"conversation_sessions",
 		// THE COORDINATION STORE'S REMOVAL MARKERS. A bucket no clock
 		// ages keeps the marker every removal leaves for the life of
 		// the deployment, and every listing that meets one reads it
@@ -426,7 +425,6 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		// ledger's to the catchup ceiling, the follows' to its own
 		// declared constant.
 		"scheduled_runs":        maintenance.ScheduledRunRetention,
-		"conversation_sessions": maintenance.ConversationRetention,
 		"a2a_channels":          maintenance.ChannelRetention,
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
@@ -472,29 +470,6 @@ func TestTheScheduleHorizonOutlastsTheCatchupCeiling(t *testing.T) {
 			t.Errorf("%s retention (%v) can delete a row a tick could still evaluate (catchup %v)",
 				name, horizon, schedule.DefaultCatchupMax)
 		}
-	}
-}
-
-// The operator's retention_days has existed since the conversation ledger
-// shipped and nothing ever read it: setting it to 7 got you thirty days of
-// conversations, silently, because there was no sweep to honour it.
-func TestTheOperatorsConversationHorizonIsHonoured(t *testing.T) {
-	t.Parallel()
-	doc := companyDoc + `
-turn_engine:
-  conversation_session:
-    retention_days: 3
-`
-	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
-
-	if got := e.ConversationRetention(); got != 3*24*time.Hour {
-		t.Fatalf("conversation retention = %v, want the configured 3 days", got)
-	}
-	// And an unset one falls back to the ledger's own default rather than
-	// to zero, which would mean "delete everything on the next tick".
-	plain := newEngine(t, engine.Options{})
-	if got := plain.ConversationRetention(); got != 30*24*time.Hour {
-		t.Fatalf("the default retention is %v, want 30 days", got)
 	}
 }
 

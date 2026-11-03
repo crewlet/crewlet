@@ -392,7 +392,7 @@ every other route.
 | `GET` | `/agents/{id}` | Single agent — its `handle`, `agent_id` and `role` (its name), the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`. A role name is NOT accepted: two seats may share one, and a name-addressed answer read one seat's live call and transcript as the other's. A handle no agent seat answers to is `404` |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the seat's handle, which the rest is keyed by, resolves to the derived agent id the diary is keyed by |
 | `GET` | `/agents/{id}/memory/episodes/{episode}` | One episode **whole** — its ask and its account complete, which the memory listing carries the openings of (see [below](#get-agentsidmemoryepisodesepisode)) |
-| `GET` | `/agents/{id}/sessions` | The seat's **executor sessions**, the latest begun first, a page at a time: each turn whose executor captured its harness's session, how the turn ended, what it was asked, whether its session is still kept, and whether a relaunch would continue it. The seat's trail, `audit.seat.read` (see [below](#get-agentsidsessions)) |
+| `GET` | `/agents/{id}/sessions` | The seat's **executor sessions**, the latest begun first, a page at a time: each turn whose executor captured its harness's session or read its conversation, how the turn ended, what it was asked, whether its session is still kept, and whether a relaunch of it — or, once it has ended, its conversation's next turn — would continue it. The seat's trail, `audit.seat.read` (see [below](#get-agentsidsessions)) |
 | `GET` | `/agents/{id}/sessions/{turn_id}` | One turn's session and a page of its **transcript**, read from its sealed object as its harness recorded it, redacted; an object that is gone or does not open is an answer saying so (see [below](#get-agentsidsessionsturn_id)) |
 | `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
@@ -939,7 +939,7 @@ told they lead nobody goes looking for an authority they already hold.
 | `doclet` | The reads under `/doclet/pages/*` and `/containers`, the page questions, and writing Doclet's pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
 | `chatlet` | The reads under `/chatlet/*`, every `chat_*` question, the socket's eight `chat_*` pushes, and the chat tools of `/operator/mcp` and `/operator/act` — each made **as a seat**, so a principal acting as itself is refused them `unseated` whatever else it holds, and which room it reaches is the chat domain's own rule rather than a permission (see [Chatlet](#chatlet)). A room's horizon, an erase and a prune are `admin`'s instead, with a recent proof; see [A chat erase, prune or horizon](#a-chat-erase-prune-or-horizon) |
 | `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model (a harness the host runs) and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned harnesses), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, the administrator's reading of `/mcp-servers`, `/mcp-servers/{name}` and `/mcp-catalogue` and a restart (`POST /mcp-servers/{name}/retry`), `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, the artifacts' quota counters (`GET /artifacts/usage`), the three purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`, `/artifacts/{id}/purge`) and chat's three destructions (`/chatlet/channels/{channel_id}/erase`, `/prune` and `/retention`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
-| `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, an executor's tail (`/executors/{turn_id}/tail`), and the seat's executor sessions with each one's transcript (`/agents/{id}/sessions`, `/agents/{id}/sessions/{turn_id}`) — decided per seat: **its lead**, or `admin` |
+| `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, an executor's tail (`/executors/{turn_id}/tail`), and the seat's executor sessions with each one's transcript (`/agents/{id}/sessions`, `/agents/{id}/sessions/{turn_id}`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
 route is — one registry, both transports — so there is no way round a
@@ -5733,9 +5733,8 @@ REST route calls, so the two surfaces cannot diverge:
 | `agent_memory` | `{id, limit, skills_order}` | `GET /agents/{id}/memory`. A seat's trail, so it takes `audit.seat.read` — the seat's lead, or `admin`. ANSWERED BY THE NODE HOLDING THE SEAT, which it names (`held_by`, or `none` with an empty answer for a seat no node holds; `unavailable` while the holder is silent or still taking the seat) — every node keeps a copy of a seat's memory and only the holder keeps it current. Four collections, each a page (`limit`, at most 50) with its counted total beside it: the diary (`diary_total`), the episodes (`episodes_total`), the synthesized skills (`skills_total`, newest drafted first, or in `skills_order` — `uses`, the most used first, or `updated`, the most recently changed — which the holder applies to the whole set BEFORE it cuts the page, so the page is the top of the set and never the newest page re-sorted; any other value is `bad_params`) and the COUNTERPARTY PROFILES (`counterparties_total`) — what this seat has learned about the colleagues it works with, both instants carried because `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits changed. `traits` is a bag whose keys the model invents, never a fixed schema. Plus `latest_reflection` (the newest live diary entry, whatever the page) and `onboarded_at`. An episode's `ask` and `plan_summary` are their OPENINGS, at most 600 bytes each — the figure a seat is shown of a past turn's words before they are condensed (`learning.EpisodeAccountBytes`) — with each whole text's size in `ask_bytes` and `plan_summary_bytes`. The diary is keyed on the derived agent id and the other three on the seat's handle; both are resolved from the one identifier a caller has, the handle. See [the route](#get-agentsidmemory) |
 | `agent_episode` | `{id, episode}` | `GET /agents/{id}/memory/episodes/{episode}`. A seat's trail, so it takes `audit.seat.read`, as `agent_memory` does. ONE EPISODE WHOLE — what the turn was asked and what it did, complete — answered by the seat's holder as `agent_memory` is (`held_by`); `episode: null` for one the seat no longer holds. See [the route](#get-agentsidmemoryepisodesepisode) |
 | `memory_overview` | `{}` | **Decided per seat by `audit.seat.read`**, as `agent_memory` is, and answered for exactly the seats the caller may read — every one for `admin`, a lead's own agents for a lead, none for anybody else; a seat this node cannot decide makes the whole answer `unavailable` rather than a shorter list. Each seat's memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. The seats the caller may read, handle order, no cap. See [the section](#memory_overview) |
-| `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. The ledger is keyed on the seat's handle. An absent `handle` is the caller's own SEAT — a seat's trail is the seat's, so a caller bound to none names one — and a named one is a seat's TRAIL rather than a person's queue, so it takes `audit.seat.read` — the seat's lead, or `admin`. The listing is a page (default 50, at most 200) with `conversations_total` beside it, ANSWERED BY THE SEAT'S HOLDER, as `agent_memory` is and for its reason: the ledger travels with a seat's memory and only the holder's copy is current (`held_by`) — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for) |
-| `executor_sessions` | `{handle, cursor, limit, read_level, …}` | `GET /agents/{id}/sessions`. The seat's EXECUTOR SESSIONS, the latest begun first: a row per turn whose executor captured its harness's session, naming the sealed object in the fleet's object store that holds the session its harness kept when its run ended — the whole record of what the run read, called and wrote — and how the turn ended. A seat's trail, so it takes `audit.seat.read` — the seat, its lead or `admin`, the verb an executor's tail is decided by — and an absent `handle` is the caller's own seat. Read through the estate router, so any node answers, at the caller's freshness (`read_level`; this surface's own when absent). A page of `limit` rows (25 when absent, 100 at most) with `next_cursor`, the cursor of the page after it, absent on the last; `read_level` and `position` say how it was read, and `complete: false` that the answering copy holds a record of the log it could not read. Each row says whether a relaunch of its turn would continue it (`continuable`, `null` where that cannot be said now), where (`continues_in`: `any_box` or `parked_box`) and where not, why (`not_continuable`). See [the route](#get-agentsidsessions) |
-| `executor_session` | `{handle, turn_id, cursor, read_level, …}` | `GET /agents/{id}/sessions/{turn_id}`. One turn's session and a page of its TRANSCRIPT, its sealed object opened and read as its harness recorded it — entries of `brief`, `note`, `model`, `tool_call`, `tool_result`, `summary` and `unread` — every entry's text redacted at this read. Decided as `executor_sessions` is, and it shows more than the run's live output did: every call's input and each result's text, to an entry's bound. A page holds at most 200 entries and 1 MiB of text, each entry at most 16 KiB, and `cut` says why it ends where it does, `next_cursor` the cursor of the page after it, absent on the last; `read_level`, `position` and `complete` say how the session's row was read. A node decodes at most two transcripts at once, and a question past them waits for a slot, nothing opened, for as long as its caller does. An object the store no longer holds, one that does not open, one that is no archive and one this build does not read are each an answer (`state`) with the engine's sentence (`why`), never a failure. Its first page says of the row whether a relaunch would continue the session, and a later page leaves `continuable` null. See [the route](#get-agentsidsessionsturn_id) |
+| `executor_sessions` | `{handle, cursor, limit, read_level, …}` | `GET /agents/{id}/sessions`. The seat's EXECUTOR SESSIONS, the latest begun first: a row per turn whose executor captured its harness's session or that read its conversation, naming the sealed object in the fleet's object store that holds the session its harness kept when its run ended — the whole record of what the run read, called and wrote — and how the turn ended. A seat's trail, so it takes `audit.seat.read` — the seat, its lead or `admin`, the verb an executor's tail is decided by — and an absent `handle` is the caller's own seat. Read through the estate router, so any node answers, at the caller's freshness (`read_level`; this surface's own when absent). A page of `limit` rows (25 when absent, 100 at most) with `next_cursor`, the cursor of the page after it, absent on the last; `read_level` and `position` say how it was read, and `complete: false` that the answering copy holds a record of the log it could not read. Each row says which launch would continue it (`continued_by`: `relaunch` while its turn is live, `next_turn` once it has ended), whether it would (`continuable`, `null` where that cannot be said now), where (`continues_in`: `any_box` or `parked_box`) and where not, why (`not_continuable`), and the session its turn's first launch was handed (`base_turn`). See [the route](#get-agentsidsessions) |
+| `executor_session` | `{handle, turn_id, cursor, read_level, …}` | `GET /agents/{id}/sessions/{turn_id}`. One turn's session and a page of its TRANSCRIPT, its sealed object opened and read as its harness recorded it — entries of `brief`, `note`, `model`, `tool_call`, `tool_result`, `summary` and `unread` — every entry's text redacted at this read. Decided as `executor_sessions` is, and it shows more than the run's live output did: every call's input and each result's text, to an entry's bound. A page holds at most 200 entries and 1 MiB of text, each entry at most 16 KiB, and `cut` says why it ends where it does, `next_cursor` the cursor of the page after it, absent on the last; `read_level`, `position` and `complete` say how the session's row was read. A node decodes at most two transcripts at once, and a question past them waits for a slot, nothing opened, for as long as its caller does. An object the store no longer holds, one that does not open, one that is no archive and one this build does not read are each an answer (`state`) with the engine's sentence (`why`), never a failure. Its first page says of the row whether a launch would continue the session, and a later page leaves `continuable` null. A turn the seat keeps no row of is `not_found`: it recorded none, or its row went with the end of a later turn of its conversation that was handed it, past the retention, or with the seat. See [the route](#get-agentsidsessionsturn_id) |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload, and `node`, the node that published it (every stored event carries it, not only this answer's) |
 | `events` | `{limit, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only, since, until, before_id, before_time}` | `GET /events`. `feed_only=true` selects the rows the activity feed carries — every stored type but the ones it keeps out (`auxiliary_spend`), a trace's `agent` siblings included — and is what every read merged with the live feed asks; `true`, `false` or absent, any other word a **400**. `failed` is THREE-VALUED the same way — `true`, `false` or absent, any other word a **400** — and selects by the rule every row's own `failed` is stamped by: a stored `failed` tag, or a type that is itself a failure (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `executor_failed`). It is the event log's "Failures only", applied by the engine so the axis and every page are one set. `suspended` is THREE-VALUED — `true`, `false` or absent for every row, any other word a **400** — and selects by whether a completion record PARKED its turn on its executor in its box: a turn that parks and resumes writes two `agent_turn_completed` records, the first marked `suspended`, so `type=agent_turn_completed&suspended=false` is the turns that ENDED, one record each, and is what a turns axis counts over. `trace_id` selects one trace as a FILTER — paged, windowed and combinable with every other filter, where [`GET /events/trace/{trace_id}`](#routes) is the whole trace oldest first. `channel_id` selects one agent-to-agent conversation's events, by the channel id every A2A event carries (an index seek, migration `0034`). `seat` is a seat's **handle** and selects the events that seat published, resolved on the server to the id every node derives for it — so a seat since removed from the chart still names its history, and a role name, which a rename changes, is never the key; anything that is not a handle, or a person's seat's handle, is a **400** — an empty page would read as a seat that never did anything — and before a company configuration is applied it is **503** `unavailable`, since the id is derived from the company's name. `agent` is the broader question — the **related** filter: every event involving one agent seat, named by any handle it answers to and matched on its agent id, plus every event sharing a trace with one (see [Paging the event history](#paging-the-event-history)). `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered; `work_item` selects every event on one work item — each turn's start, its phases and completions, an executor it launched — named by the item's identity across trackers, `<backend>:<id>` (`native:<task id>`, `jira:<issue id>`), never by its key, which a move rewrites. A value that is not that shape (a key such as `ENG-4`, or either half missing) is a **400** rather than an empty page, because an empty answer reads as "nothing happened on this item". The filter reads the `work_item` COLUMN (migration `0033`), filled from the same payload field as the row's `work_item` tag. Every row answers with its own `work_key` read off the `work_key` COLUMN (migration `0029`) rather than out of its `tags` — the column is what the `work_key` filter reads, so a row and the filter that matched it never disagree about its unit of work |
 | `event_series` | `{bucket, since, until, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only}` | `GET /events/series`. Every bar carries `failed` beside `count` — how many of its rows reported a failure — and the answer a `failed` total beside `total` (see [the event log's time axis](#the-event-logs-time-axis)). THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
@@ -5915,13 +5914,13 @@ searched" rather than "nothing matched".
 
 ### Whose record a personal question answers for
 
-Six questions answer about **one person or seat** rather than about the
-company: `work_my_work`, `work_inbox`, `work_person`, `conversations`,
-`executor_sessions` and `executor_session`. Every one of them takes a `handle`,
-and the rule for whose is the same, in one place:
+Five questions answer about **one person or seat** rather than about the
+company: `work_my_work`, `work_inbox`, `work_person`, `executor_sessions` and
+`executor_session`. Every one of them takes a `handle`, and the rule for whose
+is the same, in one place:
 
 1. **No handle** answers for the caller's **own record** — and for a seat's
-   trail (`conversations` and the two sessions questions), their own seat.
+   trail (the two sessions questions), their own seat.
 2. **Your own handle** is the same thing said explicitly — and on the three
    person questions either of your names is: a person's login names the same
    record their seat does.
@@ -5955,15 +5954,15 @@ and the rule for whose is the same, in one place:
    person — so a lead may name their report by seat or by login — or a caller
    holding `admin`, each with `worklet`. A node that cannot read the chart to
    tell answers `503`, never a refusal — a lead told they lead nobody goes
-   looking for an authority they already hold. `conversations` is a seat's
-   TRAIL — what it said on a surface the engine does not own — and so are
-   `executor_sessions` and `executor_session` — what its harness wrote on each
-   turn — and all three take `audit.seat.read`, the rule `/agents/{id}/memory`
-   and an executor's tail take: the seat's lead, or `admin`, with no app.
+   looking for an authority they already hold. `executor_sessions` and
+   `executor_session` are a seat's TRAIL — what its harness wrote on each turn,
+   and how each turn ended — and both take `audit.seat.read`, the rule
+   `/agents/{id}/memory` and an executor's tail take: the seat's lead, or
+   `admin`, with no app.
 
 A refusal on authority is `403 unauthorized` naming the rule that decided in
 `reason` and, in `grants`, the permissions any one of which would have
-admitted the caller — `admin` for a colleague's queue or a seat's threads,
+admitted the caller — `admin` for a colleague's queue or a seat's sessions,
 `worklet` for a lead who does not use it. An empty `grants` means no
 permission would.
 
@@ -5980,8 +5979,8 @@ acts as a seat when the directory binds its login to one — and what binding
 changes is where the record is kept, not whether there is one.
 
 A seat's trail is the exception, because it belongs to the seat: a caller
-bound to no seat who names none on `conversations` or a sessions question is
-refused `bad_params`, not `unauthorized`. Nobody was denied anything: there is no seat to answer about,
+bound to no seat who names none on a sessions question is refused
+`bad_params`, not `unauthorized`. Nobody was denied anything: there is no seat to answer about,
 and the remedy is a binding in the directory rather than a different
 credential.
 
@@ -10225,8 +10224,10 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
       "ask_excerpt": "…",
       "kept": true,
       "object_bytes": 41234,
-      "continuable": false,
-      "not_continuable": "the turn has ended, and no later turn continues its session yet, since a session is continued only by a relaunch of the turn that kept it"
+      "base_turn": "0193f0b8-2d4c-7e1a-9b3f-5c8d7e6f1a20",
+      "continued_by": "next_turn",
+      "continuable": true,
+      "continues_in": "any_box"
     }
   ],
   "next_cursor": "48121",
@@ -10236,68 +10237,109 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
 }
 ```
 
+- **A row begins at its turn's first launch** where the turn read its
+  conversation (its `begin`), and at its first capture otherwise. **A row goes
+  with the turn that was handed it**: once a later turn of its conversation that
+  was handed its session, and kept a session of its own, ends, its end absorbs
+  the turns its read handed out, and their rows leave the list — as do rows past
+  `turn_engine.conversation_session.retention_days`, and a removed seat's.
 - **`ending`** is the engine's account of how the turn ended — what the
   harness's own transcript cannot know — and `null` while the turn runs (or its
   end was lost and the engine has yet to record it `lost`, a day after its last
-  capture). `outcome` is `completed`, `failed`, `stopped` or `lost`, and the
+  record). `outcome` is `completed`, `failed`, `stopped` or `lost`, and the
   rest is sent only where the way the turn ended establishes it: the
-  reviewer's `decision`, whether the turn's reply reached anybody
-  (`delivered`, on `delivered_to`), the engine's `answer` to a colleague's ask,
-  the reviewer's `completed_work`, the executor's `blocked_on`, who stopped it
-  (`stopped_by`) and why (`stop_reason`), and the engine's `failure`. The prose
-  among them is a model's or a person's words, and so is `ask_excerpt`, the
-  first kibibyte of what the turn was asked; all are **redacted at this read**.
+  reviewer's `decision`, whether the turn's reply reached the party waiting
+  (`delivered`) and the surface it was owed on (`delivered_to`, sent whether or
+  not it went), that whether it went is not known (`delivery_unknown`: the
+  turn's record of its calls was cut to stay bounded, and the calls it kept show
+  no delivery — never beside `delivered`), the engine's `answer` to a
+  colleague's ask, the reviewer's `completed_work`, the executor's
+  `blocked_on`, who stopped it (`stopped_by`) and why (`stop_reason`), the
+  engine's `failure`, and the turn's newest capture where it was not kept
+  (`unkept`: its `launch_seq` and `capture_seq`, and the `reason`, which quotes
+  what refused it). The prose among them is a model's or a person's words, and
+  so is `ask_excerpt`, the first kibibyte of what the turn was asked; all are
+  **redacted at this read**, `unkept.reason` among them.
 - **`kept`** says the row still names a session's object, of `object_bytes`
-  sealed. A row that names none is an ending alone: its turn captured nothing,
-  or the seat's session budget
+  sealed. A row that names none is an ending alone, for one of three reasons
+  its transcript's `why` and its `not_continuable` say: its turn captured
+  nothing (yet, while it runs); its newest capture was not kept, and its end
+  took the older one off the row; or the seat's session budget
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object to
   make room for newer ones, keeping how the turn ended.
-- **`continuable`** says whether a relaunch of the turn would continue this
-  session, decided by the one decision a relaunch takes — the turn live and not
+- **`base_turn`** is the ended turn whose session this turn's first launch was
+  handed to continue: its conversation's newest as the turn's dispatch read it,
+  held on the log by the turn's `begin`. Absent where the read named none, that
+  session had gone before the `begin` landed, or no `begin` landed. Whether a
+  launch took it up is the turn's `executor_collected` records' `brief`
+  (`continued_conversation`).
+- **`continued_by`** is the launch the rest is about: `relaunch` — a relaunch
+  of the turn — while the turn is live and its run is neither over nor ending,
+  and `next_turn` — its conversation's next turn — once it has ended, or its run
+  is over or ending and its end is not on the log yet. Absent for a turn that
+  served no conversation, which no launch continues once it ends, and on a
+  transcript's later page.
+- **`continuable`** says whether that launch would continue this session,
+  decided by the one decision that launch takes, of the member of the seat's
+  executor chain it would be launched on now, the first not sitting out its
+  plan. **A relaunch** decides it as a relaunch does — the turn live and not
   ending, the newest capture of the job a relaunch would follow kept and named
-  by the row, and a runner that restores its harness, format and release: the
-  runner of the member of the seat's executor chain a relaunch would be
-  launched on now, the first not sitting out its plan
+  by the row, and a runner that restores its harness, format and release
   ([A relaunch continues the turn's
   session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session))
-  — over the row as a relaunch reads it. **The member is the one the node
-  holding the seat would pick**, which sits its own spent plans out, off the
-  chain of the revision the turn's relaunch runs on — for a turn whose resumed
-  segment is running there, the revision that segment was admitted under: the
-  node answering asks it, once a page, turn by turn, itself where it holds the
-  seat. **`continues_in`**
-  says where: `any_box`, from that kept capture in whichever box the relaunch
-  gets; or `parked_box`, where the kept capture is not continued but a
-  person's answer would carry the turn's parked run on in the box it parked in,
-  which still holds that box, ran the row's own session there, and runs that
-  member's harness in its cell — on the host of the node holding the seat, for
-  a box on the engine host — continued there and nowhere else, for as long as
-  the box is held; a company that keeps no session
+  — over the row as a relaunch reads it. **The next turn** decides it as that
+  turn's first launch does of its conversation's head: only the head — the
+  newest ended turn of the conversation whose row still names a session, which
+  the same read names from its own snapshot — is continued, where that runner
+  restores it ([A conversation's next turn continues its last turn's
+  session](../concepts/code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)).
+  **The member is the one the node holding the seat would pick**, which sits
+  its own spent plans out, off the chain of the revision the launch runs on —
+  for a turn whose resumed segment is running there, the revision that segment
+  was admitted under; for a conversation's next turn, the revision live when it
+  comes: the node answering asks it, once a page, a live turn's session by its
+  turn and a head by none, itself where it holds the seat. **`continues_in`**
+  says where: `any_box`, in whichever box the launch gets — a relaunch from the
+  turn's kept capture, the next turn from the head, in a box of its own; or
+  `parked_box`, a relaunch's alone, where the kept capture is not continued but
+  a person's answer would carry the turn's parked run on in the box it parked
+  in, which still holds that box, ran the row's own session there, and runs
+  that member's harness in its cell — on the host of the node holding the seat,
+  for a box on the engine host — continued there and nowhere else, for as long
+  as the box is held; a company that keeps no session
   (`turn_engine.conversation_session.enabled: false`) continues no kept
-  capture, so only `parked_box` is said there. **`not_continuable`**, in the
-  engine's own words, redacted, is why a relaunch would not continue it, why
-  that cannot be said now, or, for `parked_box`, why no other box would. As
-  far as the engine can know before a
-  box is chosen: whether the box a relaunch gets can take the session up, and
-  whether the seat's budget can carry it, are the launch's to find out. An
-  ended turn's session is always `false`: no later turn continues a session
-  yet; so is one whose run's ending is decided. `null` where it cannot be said
-  now — the turn's run record, or its row read as a relaunch reads it, could
-  not be read; the job a relaunch would follow is still working, or a claim on
-  it has neither taken its final capture nor begun its turn; its capture is
-  still being kept; what a relaunch is launched on cannot be said (every member
-  of the seat's chain sitting out its plan, no node holding the seat, the node
-  holding it not answering); or only the resume of a collected job decides the
+  capture, so only `parked_box` is said there, and no next turn continues
+  anything. **`not_continuable`**, in the engine's own words, redacted, is why
+  the launch would not continue it, why that cannot be said now, or, for
+  `parked_box`, why no other box would: a row that is not its conversation's
+  head names the turn whose session the next turn is handed instead, one that
+  names no session says which of the three reasons it is, and a live turn that
+  has kept no session of its own says, where its row still holds the session
+  its first launch was handed, that a relaunch in a box of its own continues
+  that one instead. As far as the engine can know before a box is chosen:
+  whether the box a launch gets can take the session up, whether it is a box of
+  its own, and whether the seat's budget can carry it, are the launch's to find
+  out. `false`, with no `continued_by`, for a turn that served no conversation
+  once it has ended or is ending. `null` where it cannot be said now — the turn's run record, or its row read as a relaunch reads it, could not
+  be read; the job a relaunch would follow is still working, or a claim on it
+  has neither taken its final capture nor begun its turn; its capture is still
+  being kept; what the launch is launched on cannot be said (every member of
+  the seat's chain sitting out its plan, no node holding the seat, the node
+  holding it not answering); only the resume of a collected job decides the
   relaunch, and its turn has not begun (a round lost a second time, or carried
-  on in its box only where its sign-in was replaced) — which `not_continuable`
-  then says. A resumed turn says, as it begins, whether it collects its job or
+  on in its box only where its sign-in was replaced); or the turn's run is over
+  or ending and its end is not on the log yet — which `not_continuable` then
+  says. A resumed turn says, as it begins, whether it collects its job or
   carries the round on, and from then on, its review included, the row is
   decided on that. A page reads the coordination store once for its runs, and a
-  live turn's record alone where the listing does not hold it, and once more
-  for the seat's lease where a live row asks the node holding the seat, and not
-  at all where every row on it has ended, and is answered whether or not it
-  answers; it reads a row again at `linearizable` only where the page was read
-  below that and the row names another capture than its run's record keeps.
+  live turn's record alone where the listing does not hold it, and not at all
+  where every row on it has ended; once more for the seat's lease where a row
+  asks the node holding the seat — a live row whose run is neither over nor
+  ending, or a conversation's head; and is answered whether or not either
+  answers. It reads a live row again at `linearizable` only where the page was
+  read below that and the row names another capture than its run's record
+  keeps, or the record keeps none; an ended row is decided on the page's own
+  snapshot, each conversation's head read in the same transaction as the rows.
 - **Paged by where each row began**, which nothing moves, so a page never skips
   or repeats a row that was captured again or ended between two reads.
   `next_cursor` is absent on the last page. `complete: false` says the
@@ -10313,8 +10355,9 @@ names.
 One turn's session and a page of its **transcript**, `?cursor=` the
 `next_cursor` an earlier page of it handed out. Also served as the
 `executor_session` query, which takes `{handle, turn_id, cursor}`. The
-first page (no `cursor`) says of its row whether a relaunch would continue the
-session, as a page of `GET /agents/{id}/sessions` says it; a later page leaves
+first page (no `cursor`) says of its row which launch would continue the
+session and whether, as a page of `GET /agents/{id}/sessions` says it, on the
+head of its conversation the row's own read names; a later page leaves
 `continuable` `null`, saying it is the first page's to say.
 
 ```json
@@ -10407,8 +10450,9 @@ another count, is `400 bad_params` — read the transcript again from its start 
 rather than a page continued in another archive, or at an ordinal that names
 another entry. A cursor of a row that names no object any more is answered as
 its first page would be, `state: none` with the engine's sentence: the seat's
-session budget released the object, which it does only to a turn that ended,
-and an ended turn is never captured again.
+session budget released the object, or the turn's end did, its newest capture
+not kept — each only of a turn that ended — and an ended turn is never captured
+again.
 
 **Two transcripts at a time on each node.** One read can hold a line at
 `bounds.line_bytes`, as much again while the buffer gathering it grows, and the
@@ -10427,15 +10471,17 @@ held:
 | `state` | Meaning |
 |---|---|
 | `read` | The entries are the transcript's |
-| `none` | The row names no object: its turn captured nothing, or the seat's budget released it |
+| `none` | The row names no object: its turn captured nothing (yet, while it runs), its newest capture was not kept, or the seat's budget released it |
 | `missing` | The object store no longer holds the object |
 | `unreadable` | The object does not open: it is sealed under a keyring key this fleet no longer holds, or its bytes are not the ones sealed for this turn |
 | `malformed` | It opened, and is not an archive of its harness's format, and `why` says which of six ways: it is not gzip-compressed, its compressed bytes are corrupt, it ends part way through, it holds no tar of its harness's files, it holds no export document of its harness's, or its bytes are not laid out as its format describes (a box's own agent can rewrite what its run packs before a collection takes it) |
 | `unsupported` | It is of a harness or an archive format this build does not read |
 
 A store that did not answer is `503 unavailable` with a `Retry-After`, and a
-turn the seat keeps no row of is `404 not_found`. Absent on a node with no
-object store, where the rows are still listed.
+turn the seat keeps no row of is `404 not_found`, saying how a row goes: its
+turn recorded none, or its row went with the end of a later turn of its
+conversation that was handed it, past the retention, or with the seat. Absent
+on a node with no object store, where the rows are still listed.
 
 ---
 

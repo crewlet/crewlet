@@ -47,9 +47,5 @@ func TestASeatThisNodeHoldsHasItsMemoryReadHere(t *testing.T) {
 			t.Errorf("%s's memory was answered by %q, want this node %q",
 				seat.Handle, got.HeldBy, e.Node().ID())
 		}
-		threads, err := reads.Threads(t.Context(), seat, "", 0)
-		if err != nil || threads.HeldBy != e.Node().ID() {
-			t.Errorf("%s's threads: held_by %q, err %v", seat.Handle, threads.HeldBy, err)
-		}
 	}
 }

@@ -867,6 +867,17 @@ type PendingRun struct {
 	Capture *SessionCapture `json:"session_capture,omitempty"`
 	Kept    *SessionCapture `json:"session_kept,omitempty"`
 
+	// Base is the read the turn's FIRST launch made of its conversation —
+	// where its head was read, the turns it handed out that the brief told,
+	// and the head itself, which the turn's launches continue while the turn
+	// has kept no session of its own (conversationbase.go). The TURN'S,
+	// written by [PendingStore.BeginLaunch] on the write that creates the
+	// record ([LaunchRequest.Base]) and by no other, so every relaunch reads
+	// the read the first launch made and never makes one again; deleted with
+	// the record. Nil for a turn that read no conversation. A section of its
+	// own with an Extra (wirekeys.go).
+	Base *ConversationBase `json:"conversation_base,omitempty"`
+
 	// OwedEnd is the turn's END, decided and not yet on the executor log
 	// ([Coordinator.publishEnd]): the [executorkeep.Ending] as its JSON,
 	// carried whole by every build. Written by whatever ended the turn — its
@@ -955,9 +966,10 @@ type PendingRun struct {
 	PartitionKey string `json:"partition_key,omitempty"`
 
 	// ConversationKey is the durable conversation this run belongs
-	// to: what the resumed turn's ledger entry is filed under, and — since
-	// a person answers on the conversation rather than into the batch —
-	// what admits an arriving delivery as its answer.
+	// to: what the turn's rows on the executor log are keyed by — its
+	// captures and its end, which its conversation's next turn reads — and,
+	// since a person answers on the conversation rather than into the
+	// batch, what admits an arriving delivery as its answer.
 	//
 	// The two were one field, and its doc said so — "where to report back
 	// AND what matches a person's answer". They are different questions
@@ -1886,6 +1898,11 @@ type PendingStore interface {
 	// ([PendingRun.HandedNotes]) are filed WAITING in the same write, after
 	// them: from the write that creates the record, nothing a person files on
 	// it can land ahead of a note the box took first.
+	//
+	// THE TURN'S READ OF ITS CONVERSATION ([PendingRun.Base]) IS WRITTEN BY
+	// THE CREATE ALONE and kept by every reset, whatever the reset's run
+	// carries: the turn's first launch made the read, and a relaunch
+	// continues the base that read named, never one read again.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)

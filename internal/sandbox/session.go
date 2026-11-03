@@ -112,6 +112,18 @@ import (
 // every ending kept for its retry. A turn with no capture still ends: its row
 // names no object, and holds the account.
 //
+// # And every turn's first read of its conversation, held on the log
+//
+// A turn's first launch freezes the read its dispatch made of its conversation
+// on the turn's run record ([PendingRun.Base]) and records it on the log as the
+// turn's BEGIN ([Coordinator.recordBegin]): the turn's row from then on names
+// where the read was made, the turns it handed out that the turn was told of —
+// which its end absorbs once it has landed a capture — and the head it froze,
+// which the row HOLDS against every release while the turn is live and has
+// landed no capture. Every capture carries the same read
+// ([Coordinator.recordCapture]), which the log takes where no begin landed
+// first: a turn's first landed record keeps the read.
+//
 // # The switch
 //
 // `turn_engine.conversation_session.enabled: false` keeps nothing — no capture
@@ -137,6 +149,13 @@ import (
 // sides must agree on byte for byte, the turn's ending and a session's bounds,
 // is internal/executorkeep's.
 type SessionWrites interface {
+	// Begin records a turn's first read of its conversation — where its head
+	// was read, the turns the read handed out and the session it froze as the
+	// turn's base — under the one operation the turn derives at
+	// [BeginRecord.Minted], and answers whether the log, reading the turn's
+	// row back, holds that base for it.
+	Begin(ctx context.Context, b BeginRecord) (BeginAnswer, error)
+
 	// Capture records a stamped, uploaded capture of a turn's session, under
 	// the one operation its place derives — the turn, the launch it was
 	// taken from and its ordinal there, at the instant the turn's
@@ -164,6 +183,48 @@ type CaptureRecord struct {
 	// harness's session it holds, the keyring key that sealed it and the
 	// seat's budget the record carries.
 	Stamp SessionCapture
+
+	// ReadThrough and Absorbs are the turn's first read of its conversation
+	// as its first launch froze it ([ConversationBase]): where the head was
+	// read, packed, and the turns that read handed out, which the log keeps
+	// where no begin of the turn landed first. ReadThrough is 0 for a turn
+	// that read no conversation.
+	ReadThrough int64
+	Absorbs     []string
+}
+
+// BeginRecord is a turn's first read of its conversation, asked of the
+// executor log as the turn's begin.
+type BeginRecord struct {
+	Handle          string
+	Turn            string
+	ConversationKey string
+	WorkKey         string
+
+	// Minted is the instant the turn's derived operations are minted at
+	// ([SessionKeep.MintedAt]), which the begin's operation derives from.
+	Minted time.Time
+
+	// ReadThrough is where the head was read on the executor log, packed;
+	// Absorbs the turns the read handed out that the turn's brief told.
+	ReadThrough int64
+	Absorbs     []string
+
+	// BaseTurn and BaseObject are the session the read froze as the turn's
+	// base, which the begin holds against its release: "" and zero where the
+	// read froze none.
+	BaseTurn   string
+	BaseObject objstore.Object
+}
+
+// BeginAnswer is how the executor log settled a turn's begin: the log's answer
+// ([LogLanded] where it applied, or had the turn's first read already), and,
+// where it landed, whether the turn's row, read back, holds the base, and why
+// not where it holds none.
+type BeginAnswer struct {
+	Log  LogAnswer
+	Held bool
+	Why  string
 }
 
 // EndRecord is how one turn ended, asked of the executor log.
@@ -1012,7 +1073,7 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 	}
 	stamp.Object, stamp.ObjectHash = sealed.Object.Key.String(), string(sealed.Object.Hash)
 	stamp.ObjectSize, stamp.ContentKey = sealed.Object.Size, sealed.ContentKey
-	outcome, why := c.recordCapture(ctx, run.AgentHandle, run.TurnID, run.ConversationKey, run.WorkKey, stamp)
+	outcome, why := c.recordCapture(ctx, run, stamp)
 	return c.finishCapture(ctx, time.Time{}, run, stamp, outcome, why)
 }
 
@@ -1020,20 +1081,29 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 // the sessions its other LIVE turns hold, or "" where it may: asked before the
 // upload, so a seat whose live turns fill its budget does not upload a session
 // on every launch that the log then refuses, holding the store's room for a day
-// each time. Read off the seat's runs in the coordination store, whose kept
-// captures are what its live turns hold; the log decides again at the record
-// (a capture it refuses, [LogRefused]), which also counts a turn whose end was
-// lost.
-// A listing that cannot be read decides nothing here.
+// each time. Read off the seat's runs in the coordination store: each live
+// turn's kept capture, and — for a live turn that has kept nothing yet — the
+// session its conversation's last turn left that it froze ([PendingRun.Base]),
+// which its begin holds against the budget's release (each such base once,
+// however many turns froze it). The capturing turn's own base is not counted:
+// its capture lifts its hold in the same apply. The log decides again at the
+// record (a capture it refuses, [LogRefused]), which also counts a turn whose
+// end was lost. A listing that cannot be read decides nothing here.
 func (c *Coordinator) overBudget(ctx context.Context, run PendingRun, size, budget int64) string {
 	runs, err := c.pending.ListActiveForSeat(ctx, run.AgentHandle)
 	if err != nil {
 		return ""
 	}
 	var held int64
+	bases := map[string]bool{}
 	for _, other := range runs {
-		if other.TurnID != run.TurnID && other.Kept != nil {
+		switch {
+		case other.TurnID == run.TurnID:
+		case other.Kept != nil:
 			held += other.Kept.ObjectSize
+		case other.Base != nil && other.Base.Session != nil && !bases[other.Base.Session.Turn]:
+			bases[other.Base.Session.Turn] = true
+			held += other.Base.Session.ObjectSize
 		}
 	}
 	if held+size <= budget {
@@ -1436,25 +1506,33 @@ func uploadRefusal(err error) string {
 	return fmt.Sprintf("the session could not be uploaded: %v", err)
 }
 
-// recordCapture records a stamped, uploaded capture on the executor log under
-// the operation its place derives ([SessionWrites.Capture]), asked again
-// under that same operation while no answer settles it, within
+// recordCapture records a stamped, uploaded capture of run's turn on the
+// executor log under the operation its place derives ([SessionWrites.Capture]),
+// asked again under that same operation while no answer settles it, within
 // [sessionRecordBudget]: landed, refused (and why), or unresolved.
-func (c *Coordinator) recordCapture(ctx context.Context, handle, turn, conversationKey, workKey string,
-	stamp SessionCapture) (CaptureState, string) {
-
+//
+// EVERY CAPTURE CARRIES THE TURN'S FIRST READ as its first launch froze it
+// ([PendingRun.Base]), never a read made now: the log keeps the read the turn's
+// first landed record carried — its begin, or where none landed, its first
+// capture — so a capture made after a sibling of the conversation ended still
+// names the read the turn was told of, and its end absorbs exactly that.
+func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp SessionCapture) (CaptureState, string) {
+	handle, turn := run.AgentHandle, run.TurnID
 	key, err := objstore.ParseKey(stamp.Object)
 	if err != nil {
 		return CaptureRefused, fmt.Sprintf("the capture names no object a record can: %v", err)
 	}
 	record := CaptureRecord{
-		Handle: handle, Turn: turn, ConversationKey: conversationKey, WorkKey: workKey,
+		Handle: handle, Turn: turn, ConversationKey: run.ConversationKey, WorkKey: run.WorkKey,
 		Object: objstore.Object{Key: key, Hash: objstore.Hash(stamp.ObjectHash), Size: stamp.ObjectSize},
 		Stamp:  stamp,
 	}
+	if read := run.Base; read != nil && read.ReadThrough > 0 {
+		record.ReadThrough, record.Absorbs = read.ReadThrough, read.Absorbs
+	}
 	var outcome CaptureState
 	var why string
-	c.askRecord(ctx, "capture", turn, func(ctx context.Context) (bool, error) {
+	c.askRecord(ctx, "capture", turn, c.recordBudget, func(ctx context.Context) (bool, error) {
 		answer, err := c.sessions.Capture(ctx, record)
 		switch answer {
 		case LogLanded:
@@ -1474,12 +1552,105 @@ func (c *Coordinator) recordCapture(ctx context.Context, handle, turn, conversat
 	return outcome, why
 }
 
+// beginRecordBudget bounds the record of a turn's begin: every attempt at it,
+// under its one operation, together.
+//
+// FIFTEEN SECONDS, on the frame that launches: that frame holds the seat and a
+// slot of the node's admission, so it does not wait for the log the way an
+// end's own retry does ([sessionRecordBudget]). Three of the publisher's
+// five-second waits (statelog.DefaultResolveBudget), for the reason the
+// relaunch's wait for a capture is three ([relaunchCaptureWait]): a write the
+// log takes answers in milliseconds, and three waits are room for a store
+// having a slow moment. A begin not held by then is one a slow log or a
+// stopped node is holding: the launch continues no base, and a begin that
+// lands later holds no longer than the turn's first capture or its end.
+const beginRecordBudget = 15 * time.Second
+
+// recordBegin records run's turn's first read of its conversation on the
+// executor log — the read its first launch froze on the record ([PendingRun.Base])
+// — as the turn's begin ([SessionWrites.Begin]), under the one operation the
+// turn derives, asked again under it while no answer settles it, within [beginRecordBudget]. A read that froze a base
+// names it, whatever the launch then takes up, so a later relaunch can still
+// continue it. Logged, never failed on: a begin the log does not hold leaves
+// the turn's launches continuing no base ([BaseContinuityOf]), which is what
+// the turn's own row then says. A coordinator with no executor log (a test's)
+// records nothing.
+//
+// It answers whether the log read the turn's row back holding the base the read
+// froze ([BeginAnswer.Held]): read on the serving data node once
+// the begin applied, in log order, which is what a read of the row would say
+// now — nothing but the turn's own first capture or its end lifts a hold, and
+// neither comes before this launch's run starts — so the launch takes the
+// base up on it rather than reading the row again ([Coordinator.continueBase]).
+func (c *Coordinator) recordBegin(ctx context.Context, req LaunchRequest, opened PendingRun) bool {
+	read := opened.Base
+	if !c.keepsSessions() || read == nil || read.ReadThrough <= 0 || req.Turn.ConversationKey == "" {
+		return false
+	}
+	minted, err := c.keep.MintedAt(ctx, req.Turn.TurnID, req.Turn.WorkKey, req.Turn.WorkSince)
+	if err != nil {
+		log.WarnContext(ctx, "executor_begin_not_recorded", "turn_id", req.Turn.TurnID,
+			"agent", req.Turn.AgentHandle, "error", err.Error(),
+			"detail", "the turn's operations could not be minted, so its first read is not held on the "+
+				"executor log; its launches continue no session its conversation's last turn left")
+		return false
+	}
+	record := BeginRecord{Handle: req.Turn.AgentHandle, Turn: req.Turn.TurnID,
+		ConversationKey: req.Turn.ConversationKey, WorkKey: req.Turn.WorkKey, Minted: minted,
+		ReadThrough: read.ReadThrough, Absorbs: read.Absorbs}
+	if base := read.Session; base != nil {
+		key, keyErr := objstore.ParseKey(base.Object)
+		if keyErr != nil {
+			log.WarnContext(ctx, "executor_begin_not_recorded", "turn_id", req.Turn.TurnID,
+				"agent", req.Turn.AgentHandle, "error", keyErr.Error(),
+				"detail", "the base the turn's first read froze names no object a record can")
+			return false
+		}
+		record.BaseTurn = base.Turn
+		record.BaseObject = objstore.Object{Key: key, Hash: objstore.Hash(base.ObjectHash), Size: base.ObjectSize}
+	}
+	var (
+		held    bool
+		why     string
+		settled bool
+	)
+	c.askRecord(ctx, "begin", req.Turn.TurnID, c.beginBudget, func(ctx context.Context) (bool, error) {
+		res, err := c.sessions.Begin(ctx, record)
+		switch res.Log {
+		case LogLanded:
+			// APPLIED, or nothing to publish: the turn's first read was
+			// recorded already, by an earlier attempt at this begin or a
+			// capture that landed first. Either way the row, read back,
+			// says what it holds.
+			held, why, settled = res.Held, res.Why, true
+			return true, nil
+		case LogRefused:
+			why, settled = fmt.Sprint(err), true
+			return true, nil
+		}
+		why = fmt.Sprint(err)
+		return false, err
+	})
+	switch {
+	case !settled:
+		log.InfoContext(ctx, "executor_begin_unanswered", "turn_id", req.Turn.TurnID,
+			"agent", req.Turn.AgentHandle, "detail", redact.Secrets(why),
+			"outcome", "the launch continues no session its conversation's last turn left; the begin may "+
+				"still land, and holds no longer than the turn's first capture or its end")
+	case record.BaseTurn != "" && !held:
+		log.InfoContext(ctx, "executor_begin_holds_no_base", "turn_id", req.Turn.TurnID,
+			"agent", req.Turn.AgentHandle, "base_turn", record.BaseTurn, "detail", redact.Secrets(why),
+			"outcome", "the turn's launches continue no session its conversation's last turn left")
+	}
+	return settled && held
+}
+
 // askRecord asks one record of the log until it is settled — try answers true —
-// or [sessionRecordBudget] runs out, spaced by a doubling wait.
-func (c *Coordinator) askRecord(ctx context.Context, what, turn string,
+// or budget runs out, spaced by a doubling wait.
+func (c *Coordinator) askRecord(ctx context.Context, what, turn string, budget time.Duration,
 	try func(context.Context) (bool, error)) {
 
-	ctx, cancel := context.WithTimeout(ctx, c.recordBudget)
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	for attempt := 1; ; attempt++ {
 		settled, err := try(ctx)
@@ -1510,8 +1681,7 @@ func (c *Coordinator) settleCapture(ctx context.Context, run PendingRun, last Se
 		last.State, last.Reason = CaptureRefused, fmt.Sprintf("its record was never answered within the "+
 			"%s an object may be named in", objstore.RecordWithin)
 	} else {
-		last.State, last.Reason = c.recordCapture(ctx, run.AgentHandle, run.TurnID, run.ConversationKey,
-			run.WorkKey, last)
+		last.State, last.Reason = c.recordCapture(ctx, run, last)
 	}
 	c.stampSettled(ctx, time.Time{}, run.TurnID, last)
 	return last
@@ -1813,7 +1983,7 @@ func (c *Coordinator) recordEnd(ctx context.Context, end TurnEnd) error {
 		WorkKey: end.WorkKey, Minted: minted, Ask: end.Ask, Ending: end.Ending}
 	var lastErr error
 	ended := false
-	c.askRecord(ctx, "end", end.TurnID, func(ctx context.Context) (bool, error) {
+	c.askRecord(ctx, "end", end.TurnID, c.recordBudget, func(ctx context.Context) (bool, error) {
 		answer, err := c.sessions.End(ctx, record)
 		switch answer {
 		case LogLanded:

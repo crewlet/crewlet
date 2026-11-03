@@ -376,14 +376,14 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 			Workers:   config.CloneWorkers(c.Config.WorkersFor(handle)),
 			Remaining: in.Remaining,
 		},
-		Task:         in.Task,
-		Context:      in.Context,
-		Reply:        in.Reply,
-		Conversation: in.Conversation,
-		Skills:       in.Skills,
-		SkipNames:    toolname.Discovery(),
-		Publisher:    in.Publisher,
-		Turn:         in.Turn,
+		Task:      in.Task,
+		Context:   in.Context,
+		Reply:     in.Reply,
+		Endings:   in.Endings,
+		Skills:    in.Skills,
+		SkipNames: toolname.Discovery(),
+		Publisher: in.Publisher,
+		Turn:      in.Turn,
 		// The working indicator's phase hook, threaded per turn like the
 		// publisher beside it: which turn's indicator a phase moves is the
 		// caller's answer, not the epoch's.
@@ -418,8 +418,12 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 
 // RunnerInput is the per-turn half of a runner's configuration.
 type RunnerInput struct {
-	Task         string
-	Conversation string
+	// Task is the ask, and Endings how the turn's conversation's earlier
+	// turns ended, rendered at its dispatch ([conversationRead]): both fixed
+	// for the turn, and Endings empty on a resume, whose runner thaws the
+	// one its first segment froze.
+	Task    string
+	Endings string
 
 	// Metrics is the node's recorder, which every surface of the turn
 	// counts into ([runner.Config.Metrics], where it is copied): its

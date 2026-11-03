@@ -1,13 +1,14 @@
 /**
  * A seat's executor sessions, as `executor_sessions` and `executor_session`
- * send them: every turn whose executor captured its harness's session — how
- * the turn ended, what it was asked, whether its session is still kept — and
- * one session's transcript, a page at a time.
+ * send them: every turn whose executor captured its harness's session, or that
+ * read its conversation as its first launch began — how the turn ended, what it
+ * was asked, whether its session is still kept, and which launch would
+ * continue it — and one session's transcript, a page at a time.
  *
  * EXACTLY WHAT `internal/api/queries` SENDS, held there by
  * `TestTheSessionsScreenReadsWhatTheAnswersSend` in both directions: every
  * member declared here is a key an answer carries, every key an answer carries
- * is declared, and the five unions are the engine's own closed sets — so a
+ * is declared, and the six unions are the engine's own closed sets — so a
  * screen keyed by them (`routes/agents/seat/Sessions.tsx`) has a word for
  * every value the engine sends.
  *
@@ -22,11 +23,31 @@ import type { LogPosition } from "./positions.ts";
 export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";
 
 /**
- * Where a relaunch of a turn would continue its session (`sandbox.ContinuesIns`):
- * from the turn's kept capture, in whichever box the relaunch gets; or only in
+ * Where a launch would continue a turn's session (`sandbox.ContinuesIns`): in
+ * whichever box the launch gets — a relaunch from the turn's kept capture, or
+ * the conversation's next turn from its head; or, a relaunch's alone, only in
  * the box the turn's run parked in, while that box is held.
  */
 export type SessionContinuesIn = "any_box" | "parked_box";
+
+/**
+ * Which launch would continue a turn's session (`sandbox.ContinuedBys`): a
+ * relaunch of the turn, while it is live; or its conversation's next turn, once
+ * it has ended — or is ending, its end not yet on the log — which continues only
+ * the conversation's newest session.
+ */
+export type SessionContinuedBy = "relaunch" | "next_turn";
+
+/**
+ * A capture of a turn's session no row names (`executorkeep.Unkept`): its
+ * place among the turn's captures, and why it was not kept — the engine's
+ * words, which quote what refused it, redacted.
+ */
+interface SessionUnkept {
+  launch_seq: number;
+  capture_seq: number;
+  reason: string;
+}
 
 /**
  * The engine's account of how a turn ended (`executorkeep.Ending`): what a
@@ -37,9 +58,15 @@ interface SessionEnding {
   outcome: SessionOutcome;
   /** The reviewer's final decision word. */
   decision?: string;
-  /** The turn's reply reached the party waiting on it, on `delivered_to`. */
+  /** The turn's reply reached the party waiting on it. */
   delivered?: boolean;
+  /** The surface the party waiting on the turn waits on: where its reply was
+   *  owed, whether or not it went. */
   delivered_to?: string;
+  /** Whether the reply went is not known: the turn's record of its calls was
+   *  cut to stay bounded, and the calls it kept show no delivery. Never sent
+   *  beside `delivered`. */
+  delivery_unknown?: boolean;
   /** The engine's own outcome of a colleague's ask the turn answered. */
   answer?: string;
   /** The reviewer's account of what landed — a model's words. */
@@ -51,6 +78,9 @@ interface SessionEnding {
   stop_reason?: string;
   /** The engine's account of the guard, the budget or the loss that ended it. */
   failure?: string;
+  /** The turn's newest capture of its session, where it is not the one its
+   *  row names: the row then names none of the turn's. */
+  unkept?: SessionUnkept;
 }
 
 /** One turn's executor session. */
@@ -73,27 +103,42 @@ export interface ExecutorSessionRow {
   kept: boolean;
   object_bytes: number;
   /**
-   * Whether a relaunch of the turn would continue this session, as far as the
-   * engine can know before a box is chosen: decided as a relaunch decides it,
-   * for the member the node holding the seat would launch it on now, and never
-   * for an ended turn, whose session no later turn continues yet. Whether the
-   * box a relaunch gets takes the session up, and whether the seat's budget can
-   * carry it, are the launch's to find out. Null where it cannot be decided now
-   * — a run record or a log row that could not be read, a job still working or
-   * being collected, a capture still being kept, what a relaunch is launched on
-   * not to be said (every member of the seat's chain sitting out its plan, no
-   * node holding the seat, the node holding it not answering), a relaunch only
-   * the resume of its job's collection decides — which `not_continuable` then
-   * says: an unknown is never sent as a no. A transcript's later page leaves it
-   * null, its first page having said it.
+   * The ended turn whose session this turn's first launch was handed to
+   * continue: its conversation's newest as the turn's dispatch read it. Absent
+   * where the read named none, or the log held none for it. Whether a launch
+   * took it up is the turn's executor records' to say.
+   */
+  base_turn?: string;
+  /**
+   * Which launch `continuable` is about. Absent where no launch would ever
+   * continue the session — a turn that served no conversation — and on a
+   * transcript's later page.
+   */
+  continued_by?: SessionContinuedBy;
+  /**
+   * Whether that launch would continue this session, as far as the engine can
+   * know before a box is chosen: decided as the launch decides it, for the
+   * member the node holding the seat would launch it on now — a relaunch of a
+   * live turn on the turn's own revision; an ended turn's conversation's next
+   * turn, which continues only the conversation's newest session, on the
+   * revision live when it comes. Whether the box a launch gets takes the
+   * session up, and whether the seat's budget can carry it, are the launch's
+   * to find out. Null where it cannot be decided now — a run record or a log
+   * row that could not be read, a job still working or being collected, a
+   * capture still being kept, what the launch is launched on not to be said
+   * (every member of the seat's chain sitting out its plan, no node holding the
+   * seat, the node holding it not answering), a relaunch only the resume of
+   * its job's collection decides, a turn whose end is not on the log yet —
+   * which `not_continuable` then says: an unknown is never sent as a no. A
+   * transcript's later page leaves it null, its first page having said it.
    */
   continuable: boolean | null;
-  /** Where a relaunch would continue it; present only where it would. */
+  /** Where the launch would continue it; present only where it would. */
   continues_in?: SessionContinuesIn;
-  /** Why a relaunch would not continue it, why that cannot be said now, or —
-   *  where it would only in the box the run parked in — why no other box
-   *  would: the engine's own sentence, redacted. Absent where a relaunch would
-   *  continue it in any box. */
+  /** Why the launch would not continue it, why that cannot be said now, or —
+   *  where a relaunch would only in the box the run parked in — why no other
+   *  box would: the engine's own sentence, redacted. Absent where the launch
+   *  would continue it in any box. */
   not_continuable?: string;
 }
 

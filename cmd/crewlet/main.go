@@ -2525,11 +2525,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// through the reader the collector's duty resumes from, so a
 			// report left behind by a move of the files is none here too.
 			Objects: e.Backends(),
-			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
-			// the node HOLDING the seat. The ENGINE's reader, because
-			// the answerer it registered on every node is the other
-			// half of the same protocol, and a node serving no API may
-			// be the one holding the seat.
+			// A SEAT'S MEMORY, answered by the node HOLDING the seat.
+			// The ENGINE's reader, because the answerer it registered on
+			// every node is the other half of the same protocol, and a
+			// node serving no API may be the one holding the seat.
 			Memory: memoryReads(e),
 			// The fleet's agent-to-agent authorization record. The
 			// FLEET's, not this node's: a channel is opened by whichever
@@ -2616,11 +2615,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// object store, opened under this node's keyring.
 			ExecutorSessions: executorSessionReads(e),
 			SessionObjects:   sessionObjects(e, log),
-			// AND WHETHER A RELAUNCH CONTINUES EACH ONE, decided as a
-			// relaunch decides it: off the FLEET's run records — the store
-			// a relaunch reads its own turn's from — and the member a
-			// relaunch of the seat's turn would be launched on, as the
-			// node holding the seat picks it, asked of that node.
+			// AND WHETHER A LAUNCH CONTINUES EACH ONE — a relaunch of its
+			// turn, or its conversation's next turn — decided as that
+			// launch decides it: off the FLEET's run records — the store a
+			// relaunch reads its own turn's from — and the member the
+			// launch would be launched on, as the node holding the seat
+			// picks it, asked of that node.
 			SessionRuns:     sandbox.NewCoordStore(e.Backends().Fleet),
 			RelaunchTargets: e,
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
@@ -3779,7 +3779,7 @@ func nodeGate(e *engine.Engine) api.NodeGate {
 
 // memoryReads is the engine's memory reader as the read surface's seam, or nil
 // when the engine has none — a typed nil in the interface would register
-// `agent_memory` and `conversations` over a reader that cannot answer.
+// `agent_memory` over a reader that cannot answer.
 func memoryReads(e *engine.Engine) queries.SeatMemory {
 	if r := e.MemoryReads(); r != nil {
 		return r

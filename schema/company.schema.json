@@ -1177,7 +1177,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Record and replay per-conversation history, and keep each executor launch's harness session (default on; off keeps no session, and still records how each turn ended).",
+          "description": "Keep each executor launch's harness session, continue it in the turn's relaunches and the conversation's next turn, and tell that turn how the conversation's earlier turns ended (default on; off keeps and continues no session, and still records how each turn ended).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -1194,16 +1194,8 @@
             "null"
           ]
         },
-        "max_entries": {
-          "description": "Entries kept per conversation.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "retention_days": {
-          "description": "How long a conversation is remembered.",
+          "description": "Days a seat's executor sessions are kept past their turn's last record, read at every reaper pass (default 30).",
           "minimum": 0,
           "type": [
             "integer",

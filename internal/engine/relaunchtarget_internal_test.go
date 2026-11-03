@@ -127,7 +127,7 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 		t.Errorf("a holder with no member restores the session %v (%q), want its reason", ok, why)
 	}
 	row, run := parkedSession()
-	if decided := sandbox.ReadContinuityOf(row.Kept(), &run, got[2], time.Now()); decided.Decided ||
+	if decided := sandbox.ReadContinuityOf(row.Kept(), "", &run, got[2], time.Now()); decided.Decided ||
 		!strings.Contains(decided.Why, "sitting out") {
 		t.Errorf("a row decided on the holder's undecided pick reads %+v, want undecided", decided)
 	}

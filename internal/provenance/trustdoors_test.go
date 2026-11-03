@@ -162,6 +162,17 @@ var trustDoors = map[string]trustDoor{
 		// open web, which nobody in the company wrote (ADR-0054).
 		"internal/assistant.TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface",
 	}},
+	// HOW A CONVERSATION'S EARLIER TURNS ENDED, as the engine recorded each
+	// on the executor log and the next turn's brief tells it: what the turn
+	// was asked, what its reviewer and its executor wrote, a stop's reason
+	// and the engine's accounts of what failed or was not kept. No surface's
+	// record a writer vouches for: each account quotes what a box, a tool or
+	// a person wrote, and the ask's writer is one the row does not keep, so
+	// every one is read at the least trust, decided there and never inferred
+	// from whoever wrote it, as an executor's words are (Executor).
+	"internal/agent/prompts/endings.go:endingAccounts": {vendor, []string{
+		"internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken",
+	}},
 }
 
 // The rules each family is: the hosted rule's two functions, and the vendor

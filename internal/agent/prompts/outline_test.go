@@ -95,12 +95,12 @@ func outlineCorpus() []outlined {
 		{
 			name:   "user message, both ledgers",
 			prompt: BuildPhaseUserMessage(richUserMessage()),
-			keys:   []string{"conversation_history", "task", "prior_work"},
+			keys:   []string{"conversation_endings", "task", "prior_work"},
 			nested: map[string][]string{
 				"task": {"## Triage — decide BEFORE replying", "## Thread context",
 					"naïve cache warmed ✅"},
 				"prior_work":           {"### Round 2", "résumé"},
-				"conversation_history": {"\"## Done ✅\""},
+				"conversation_endings": {"\"## Done ✅\""},
 			},
 		},
 		{

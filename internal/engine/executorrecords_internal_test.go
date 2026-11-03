@@ -24,8 +24,15 @@ type recordingLog struct {
 	err      error
 
 	call    executordomain.Call
+	begin   executordomain.NewBegin
 	capture executordomain.NewCapture
 	end     executordomain.NewEnd
+}
+
+func (l *recordingLog) Begin(_ context.Context, c executordomain.Call,
+	n executordomain.NewBegin) (executordomain.BeginResult, error) {
+	l.call, l.begin = c, n
+	return executordomain.BeginResult{Result: l.result, Held: l.recorded}, l.err
 }
 
 func (l *recordingLog) Capture(_ context.Context, c executordomain.Call,

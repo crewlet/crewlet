@@ -203,9 +203,9 @@
 // its refusals are that repository's, which the person's surface classes as it
 // does a push's. The executor log's writes are the ENGINE's:
 // its record of what its own runs did — a turn's first read of its
-// conversation (which no launch records yet), a harness's session captured, a
-// turn ended, a session aged out, a removed seat's taken away — which nobody
-// asks for and no surface may make (ADR-0073). So they are declared to no surface,
+// conversation, a harness's session captured, a turn ended, a session aged out,
+// a removed seat's taken away — which nobody asks for and no surface may make
+// (ADR-0073). So they are declared to no surface,
 // and they are reached through a writer facade the engine alone holds
 // ([ExecutorWrites]). Two gates hold the class, one on each side: every write
 // on the executor log is declared the engine's, and no package that serves a

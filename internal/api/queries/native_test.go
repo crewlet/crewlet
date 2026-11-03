@@ -334,20 +334,19 @@ func (s *stubPages) Revision(_ context.Context, pageID string, version int,
 	return s.revision, s.revisionHeld, s.err
 }
 
-// personalQuestions are the five scoped by the caller's own record or seat —
-// see Sources.recordHandle and Sources.trailSeat. They refuse a caller who
+// personalQuestions are the five scoped by the caller's own record — see
+// Sources.recordHandle. They refuse a caller who
 // names somebody else's record without the relation or grant that reaches it,
 // so a sweep that walks every native question has to present a credential for
 // these five. Named once rather than per sweep: the set grew from one to five,
 // and each sweep that spelled it as `== "work_my_work"` silently stopped
 // covering the rest.
 var personalQuestions = map[string]bool{
-	"work_my_work":  true,
-	"work_person":   true,
-	"work_inbox":    true,
-	"conversations": true,
-	"decisions":     true,
-	"inbox":         true,
+	"work_my_work": true,
+	"work_person":  true,
+	"work_inbox":   true,
+	"decisions":    true,
+	"inbox":        true,
 	// The other half of `decisions`, scoped as it is.
 	"answered_decisions": true,
 }

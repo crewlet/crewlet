@@ -19,9 +19,9 @@ import (
 // is the record a reader who came for "how did it end" wants, and everything
 // stamped after it sits between it and the end: its card's rewrite, the stop's
 // record, the two completions, a colleague's answer, a reflection pass over a
-// trigger three people spoke in, what that pass cost on two models, and the
-// conversation entry's two rewrites — twenty-two rows. Twenty recovered rows,
-// this bound's old value, dropped the review for every one of them.
+// trigger three people spoke in, and what that pass cost on two models —
+// twenty rows. Twenty recovered rows, this bound's old value, dropped the
+// review for every one of them.
 func TestALongTurnsRecoveredEndingHoldsItsReview(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
@@ -50,8 +50,6 @@ func TestALongTurnsRecoveredEndingHoldsItsReview(t *testing.T) {
 		"reflection_completed",
 		// What the pass cost: four purposes on one model, two on another.
 		"auxiliary_spend", "auxiliary_spend", "auxiliary_spend", "auxiliary_spend",
-		"auxiliary_spend", "auxiliary_spend",
-		// The conversation entry's rewrites: an argument and an error.
 		"auxiliary_spend", "auxiliary_spend",
 	}
 	for n, typ := range ending {

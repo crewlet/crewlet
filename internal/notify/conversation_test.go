@@ -159,7 +159,7 @@ func TestBothKeysRoundTripIndependently(t *testing.T) {
 		t.Errorf("the broker would partition this on %q", got)
 	}
 	if got := notify.ConversationIdentityOf(ev); got != "chat:D1" {
-		t.Errorf("the ledger would key this on %q", got)
+		t.Errorf("the turn's rows on the executor log would be keyed on %q", got)
 	}
 	if got := notify.KeyOfAll([]*events.Event{ev}); got != "chat:D1:root-1" {
 		t.Errorf("KeyOfAll = %q", got)

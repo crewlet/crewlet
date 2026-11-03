@@ -203,7 +203,7 @@ var (
 )
 
 // repoReadType is the one event the repository-read columns are filled from
-// (node/0060), taken from its payload type for the reason [phaseCompleted] is.
+// (node/0061), taken from its payload type for the reason [phaseCompleted] is.
 var repoReadType = types.CodeFetched{}.EventType()
 
 // spendTypes are all three, as a statement's arguments take them — every read
