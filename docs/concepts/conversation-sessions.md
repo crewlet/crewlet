@@ -135,8 +135,9 @@ turn's end absorbs it. A schedule's fires run beside a parked fire every time
 ([Schedules](#schedules)). The seat's session budget still releases the oldest
 end first ([`max_bytes_per_seat`](#configuration)), so it can release a head
 before a stale sibling — a turn that read the conversation earlier and ended
-later — and the next turn then continues the newest session the seat still
-keeps and is told every newer ending, the released head's among them.
+later — and the next turn then continues, of the sessions the conversation
+still keeps, the one that read it last, and is told the released head's ending
+as it is told every other.
 
 **A turn's end absorbs what its brief told.** Once a turn of the conversation
 that kept a session of its own ends, the turns its brief told — the head it

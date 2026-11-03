@@ -298,8 +298,9 @@ func scanSession(row rowScanner) (Session, error) {
 // absorbed by the next end.
 //
 // The seat's budget releases the oldest END first ([seatPlan]), so it can
-// release a head before such a turn: the head is then the newest session the
-// seat still keeps, and the released head is told among the endings.
+// release a head before such a turn: the head is then, of the sessions the
+// conversation still keeps, the one that read it last, and the released head's
+// ending is told as every other ending is.
 //
 // # What is left of a conversation is what no ended turn was shown
 //

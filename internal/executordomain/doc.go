@@ -125,14 +125,14 @@
 // THE SEAT BUDGET STILL RELEASES THE OLDEST END FIRST ([seatPlan]), so under
 // budget pressure it can release a conversation's head before a STALE SIBLING,
 // a turn that read the conversation earlier and ended later, and the next turn
-// then continues the newest session the seat still keeps and is told every
-// newer ending, the released head's among them. The release does not follow
-// the head's order because the applier decides it: in a rolling upgrade, a
-// node releasing by end beside one releasing by read would release different
-// sessions for one capture, and their copies of the estate would diverge. The
-// head is a read's alone — two builds answering two heads hand two turns two
-// bases, each recorded on the log as that turn's read — so its order moved
-// with nothing to diverge.
+// then continues, of the sessions the conversation still keeps, the one that
+// read it last, and is told the released head's ending as it is told every
+// other. The release does not follow the head's order because the applier
+// decides it: in a rolling upgrade, a node releasing by end beside one
+// releasing by read would release different sessions for one capture, and
+// their copies of the estate would diverge. The head is a read's alone — two
+// builds answering two heads hand two turns two bases, each recorded on the
+// log as that turn's read — so its order moved with nothing to diverge.
 //
 // # A turn's first read holds its base
 //

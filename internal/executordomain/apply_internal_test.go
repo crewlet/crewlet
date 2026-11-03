@@ -437,10 +437,10 @@ func TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst(t *testing.T) {
 // read it after the parked one is the head, and ended first. The budget walks
 // the seat's ended sessions oldest END first, as the applier on every data node
 // does ([seatPlan]), so under pressure it takes the head and leaves the stale
-// sibling its session: the next read hands out the newest session the seat
-// still keeps, the sibling's, which the next turn's begin holds as the base it
-// continues, tells the released head's ending beside it and hands both out,
-// and the next end absorbs both.
+// sibling its session: the next read hands out, of the sessions the
+// conversation still keeps, the one that read it last, the sibling's, which the
+// next turn's begin holds as the base it continues, tells the released head's
+// ending beside it and hands both out, and the next end absorbs both.
 //
 // Mutation: release in the head's line order, the oldest read first, and the
 // stale sibling goes while the head keeps its session; read the head among rows
@@ -482,8 +482,8 @@ func TestAHeadReleasedBeforeAStaleSiblingHandsTheNextTurnTheSibling(t *testing.T
 
 	h := e.head("ana", room)
 	if h.Session == nil || h.Session.Turn != sibling {
-		t.Fatalf("the next turn is handed %+v, want the newest session the seat still keeps, "+
-			"the stale sibling's", h.Session)
+		t.Fatalf("the next turn is handed %+v, want the stale sibling's, the session the "+
+			"conversation still keeps that read it last", h.Session)
 	}
 	if !slices.Equal(turnsOf(h.Endings), []string{head}) || !slices.Contains(h.Absorbs(), head) {
 		t.Fatalf("the next turn is told %v and hands out %v, want the released head's ending "+

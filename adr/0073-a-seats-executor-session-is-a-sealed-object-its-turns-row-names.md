@@ -528,9 +528,10 @@ long, to run once and days late.
 **The seat budget still releases the oldest end first**, so under budget
 pressure it can release a conversation's head before a stale sibling, a turn
 that read the conversation earlier and ended later, and the next turn then
-continues the newest session the seat still keeps and is told every newer
-ending, the released head's among them. Releasing in the head's order was
-rejected: which sessions a capture releases is decided by the applier on every
+continues, of the sessions the conversation still keeps, the one that read it
+last, and is told the released head's ending as it is told every other.
+Releasing in the head's order was rejected: which sessions a capture releases
+is decided by the applier on every
 data node, so in a rolling upgrade a node releasing by end beside one releasing
 by read would release different sessions for one capture, and the copies of
 the replicated estate would diverge. The head's order is a read's alone: two

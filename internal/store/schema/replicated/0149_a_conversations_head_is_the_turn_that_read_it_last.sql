@@ -34,7 +34,8 @@
 -- hand two turns different bases, each recorded on the log as that turn's
 -- read, and diverge nothing. Under budget pressure the release can take a
 -- conversation's head before a stale sibling, a turn that read it earlier and
--- ended later, and the next turn then continues the newest session the seat
--- still keeps and is told every newer ending.
+-- ended later, and the next turn then continues, of the sessions the
+-- conversation still keeps, the one that read it last, and is told the
+-- released head's ending as it is told every other.
 
 CREATE INDEX executor_sessions_line_idx ON executor_sessions (agent_handle, conversation_key, read_through, end_seq); -- a conversation's head: the newest read, the newest end among equals
