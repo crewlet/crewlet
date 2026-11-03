@@ -15,9 +15,10 @@
  * system_post_all_public"; Cloudflare's `read`, `operate` or `configure`,
  * Crewlet's own sets of permission groups; Expo's `viewer`, `runner`,
  * `developer` or `release_manager`, each a set of Expo permissions named for
- * the Expo role that holds them; Google Cloud's `viewer`, `operator` or
- * `administer`, Crewlet's own sets of Google's predefined roles) and is drawn
- * under the vendor's exact name, which
+ * the Expo role that holds them; DigitalOcean's `read`, `operate` or
+ * `administer`, each a set of DigitalOcean token scopes sent as its `grants`;
+ * Google Cloud's `viewer`, `operator` or `administer`, Crewlet's own sets of
+ * Google's predefined roles) and is drawn under the vendor's exact name, which
  * `options` carries. Datadog's, Jira's and Confluence's lists are read live
  * from the vendor, so no list of them lives here. GitHub has no levels; a
  * seat holds GitHub App permissions.
@@ -37,6 +38,7 @@ export type AccessLaneKey =
   | "mattermost"
   | "cloudflare"
   | "expo"
+  | "digitalocean"
   | "google_cloud";
 
 /** "external" on a lane the engine does not provision for the company. */
@@ -75,6 +77,11 @@ interface AccessLevel {
   note?: string;
   /** Why no seat can be given it yet: offered disabled, with this as the reason. */
   unavailable?: string;
+  /**
+   * Every vendor permission the level holds, in the vendor's own names, where a
+   * person grants them by hand at the vendor (DigitalOcean's token scopes).
+   */
+  grants?: string[];
 }
 
 /** One GitHub App permission a seat can hold, in GitHub's own name. */
@@ -116,6 +123,16 @@ export interface AccessOptions {
   rotatable?: boolean;
   /** Where a person takes this lane's steps at the vendor, for a step that names no page of its own. */
   action_url?: string;
+  /**
+   * Every vendor permission no level grants that a pasted credential must not
+   * hold. With `unneeded` and the levels' `grants`, each permission the
+   * vendor offers is in exactly one.
+   */
+  refused?: string[];
+  /** Every vendor permission no level grants that a pasted credential may still hold. */
+  unneeded?: string[];
+  /** The account, organization or team the company connected, as the vendor shows it. */
+  vendor_account?: string;
   /**
    * Whether a person may keep a turned-off agent's account at the vendor
    * rather than delete it there (the `release` action, on its remove wait).
@@ -176,6 +193,10 @@ export interface AccessObserved {
   disabled_by?: AccessDisabledBy;
   /** The account as the vendor names it. */
   account?: string;
+  /**
+   * The vendor's identifier for the account, or an opaque fingerprint where
+   * every seat acts as the same person (DigitalOcean's tokens). Never drawn.
+   */
   account_id?: string;
   level?: string;
   permissions?: Record<string, GitHubAccess>;
@@ -305,6 +326,16 @@ export interface AccessSeatLane {
   administers?: boolean;
   /** Where the lane's tool is a CLI in the seat's own box (Expo's EAS CLI), what that box holds for it. */
   box?: AccessBox;
+  /**
+   * Where a person makes the seat's credential at the vendor: the name to give
+   * it at the seat's desired level. Computed by the engine, never read back.
+   */
+  hand_in?: AccessHandIn;
+}
+
+/** What a person makes at the vendor for a seat. */
+interface AccessHandIn {
+  name: string;
 }
 
 export interface AccessSeat {

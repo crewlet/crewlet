@@ -55,6 +55,7 @@ export const DIRECTORY: { key: string; label: string; lines: Line[] }[] = [
     label: "Cloud and Infrastructure",
     lines: [
       { kind: "app", key: "cloudflare" },
+      { kind: "app", key: "digitalocean" },
       { kind: "app", key: "google_cloud" },
     ],
   },

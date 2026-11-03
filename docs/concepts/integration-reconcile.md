@@ -169,6 +169,7 @@ flowchart LR
 | Cloudflare | the account API token's name, `crewlet-<company>-<handle>` with the company name slugified, beside the token ID the engine records when it mints it | Nothing |
 | Google Cloud | the service account's ID, `crewlet-<handle, at most 17 characters>-<4 characters>`, and its display name `Crewlet <company> <handle>`, beside the unique ID the engine records when it creates it | Nothing |
 | Expo | the robot user's name, `crewlet-<company>-<handle>`, which a person gives the robot at Expo, beside the robot ID the engine records from the first token pasted for the seat | Nothing |
+| DigitalOcean | the personal access token's name, `crewlet-<company>-<handle>-<level>`, which a person gives the token in the control panel, beside a keyed fingerprint of the token and its team's ID, which the engine records from the token pasted for the seat | Nothing |
 | Atlassian | the marker inside the display name, `{role} (crewlet:<handle>)` | the `{role}` label in front of the marker |
 
 ## What the loop does, and what it leaves alone

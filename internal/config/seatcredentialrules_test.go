@@ -172,3 +172,93 @@ roles:
 		t.Errorf("before the migration the identity = %q, want the document's as written", got)
 	}
 }
+
+// seatSignInDoc is a company whose agent SRE runs its executor on chain, over
+// the entries in llm, with its DigitalOcean lane on and box.
+func seatSignInDoc(llm, chain, box string) string {
+	return `
+name: Acme
+integrations:
+  digitalocean: {enabled: true, provisioning: {team: Example Team}}
+providers:
+  sandbox: {local: {}, default_run_in: direct}
+  llm:
+` + llm + `
+roles:
+  - name: SRE
+    handle: sre
+    llm: ` + chain + `
+    integrations: {digitalocean: {enabled: true, level: operate}}
+    sandbox:
+` + box
+}
+
+// opencodeOnDigitalOcean is an OpenCode entry on DigitalOcean's own models,
+// which OpenCode signs in to by DIGITALOCEAN_ACCESS_TOKEN.
+const opencodeOnDigitalOcean = `    oc:
+      harness: opencode
+      model: digitalocean/llama3.3-70b-instruct
+      auth: {mode: env}
+      env: {DIGITALOCEAN_ACCESS_TOKEN: "${DO_MODEL_ACCESS_KEY}"}
+`
+
+// A SEAT'S OWN VENDOR CREDENTIAL NEVER SIGNS ITS EXECUTOR IN: doctl's
+// DIGITALOCEAN_ACCESS_TOKEN set to the seat's sealed token is refused, in its
+// env or a setup step's, where a member of its executor chain is OpenCode on
+// DigitalOcean's models, which reads that name as its model key, and so is
+// GitLab's token under GITLAB_TOKEN. The same line beside an entry signed in
+// by another name, and the seat's own model key under the same name, pass.
+// Mutation: drop validateSeatSignIns from validateSeatAccess, and every
+// refusal here is accepted.
+func TestASeatsToolCredentialNeverSignsItsExecutorIn(t *testing.T) {
+	t.Parallel()
+	const line = `DIGITALOCEAN_ACCESS_TOKEN: "${DIGITALOCEAN_TOKEN_SRE}"`
+	claude := `    cc:
+      harness: claude-code
+      model: sonnet
+      auth: {mode: api-key, api_key: "${ANTHROPIC_KEY}"}
+`
+	const doServer = "Give this agent the digitalocean MCP server instead"
+	for _, tc := range []struct {
+		name, llm, chain, box, path, server string
+	}{
+		{name: "in its env", llm: opencodeOnDigitalOcean, chain: "oc", server: doServer,
+			box: "      env: {" + line + "}\n", path: "roles[0].sandbox.env.DIGITALOCEAN_ACCESS_TOKEN"},
+		{name: "in a setup step's env", llm: opencodeOnDigitalOcean, chain: "oc", server: doServer,
+			box:  "      setup: [{name: doctl, env: {" + line + "}}]\n",
+			path: "roles[0].sandbox.setup[0].env.DIGITALOCEAN_ACCESS_TOKEN"},
+		{name: "beside a fallback member", llm: claude + opencodeOnDigitalOcean, chain: "[cc, oc]",
+			server: doServer, box: "      env: {" + line + "}\n",
+			path: "roles[0].sandbox.env.DIGITALOCEAN_ACCESS_TOKEN"},
+		{name: "GitLab's token", path: "roles[0].sandbox.env.GITLAB_TOKEN", chain: "oc",
+			server: "Give this agent the gitlab MCP server instead",
+			llm: `    oc:
+      harness: opencode
+      model: gitlab/duo-chat-sonnet-4-5
+      auth: {mode: env}
+      env: {GITLAB_TOKEN: "${GITLAB_DUO_TOKEN}"}
+`, box: `      env: {GITLAB_TOKEN: "${GITLAB_TOKEN_SRE}"}` + "\n"},
+	} {
+		err := rejects(t, seatSignInDoc(tc.llm, tc.chain, tc.box), tc.path)
+		if !errors.Is(err, ErrConflict) ||
+			!strings.Contains(err.Error(), "is also how providers.llm.oc, the opencode harness") ||
+			!strings.Contains(err.Error(), tc.server) {
+			t.Errorf("%s: %v, want a conflict naming the entry and %q", tc.name, err, tc.server)
+		}
+	}
+
+	for _, tc := range []struct{ name, llm, box string }{
+		{name: "an entry signed in by another name", llm: `    oc:
+      harness: opencode
+      model: openrouter/qwen
+      auth: {mode: env}
+      env: {OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"}
+`, box: "      env: {" + line + "}\n"},
+		{name: "the seat's own model key", llm: opencodeOnDigitalOcean,
+			box: `      env: {DIGITALOCEAN_ACCESS_TOKEN: "${SRE_DO_MODEL_ACCESS_KEY}"}` + "\n"},
+	} {
+		if _, err := ParseCompany([]byte(seatSignInDoc(tc.llm, "oc", tc.box))); err != nil {
+			t.Errorf("%s was refused: %v", tc.name, err)
+		}
+	}
+}

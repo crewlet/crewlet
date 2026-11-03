@@ -27,17 +27,18 @@ import (
 // integration off. An empty block is not the same thing — `slack: {}` is
 // how Slack is enabled with nothing overridden.
 type Integrations struct {
-	Jira        *Jira        `yaml:"jira,omitempty" json:"jira,omitempty" desc:"Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."`
-	Confluence  *Confluence  `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."`
-	Slack       *Slack       `yaml:"slack,omitempty" json:"slack,omitempty" desc:"Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."`
-	Mattermost  *Mattermost  `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
-	GitHub      *GitHub      `yaml:"github,omitempty" json:"github,omitempty" desc:"GitHub.com or Enterprise Server, webhook secret and provisioning. Absent = disabled."`
-	GitLab      *GitLab      `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"GitLab instance, webhook signing and provisioning. Absent = disabled."`
-	Datadog     *Datadog     `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"Datadog monitor alerts delivered as inbound events. Absent = disabled."`
-	Cloudflare  *Cloudflare  `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"Cloudflare account and provisioner token, used to mint one account API token per agent. Absent = disabled."`
-	Expo        *Expo        `yaml:"expo,omitempty" json:"expo,omitempty" desc:"Expo account and provisioner token, used to create one Expo robot user per agent. Absent = disabled."`
-	GoogleCloud *GoogleCloud `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."`
-	Atlassian   *Atlassian   `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."`
+	Jira         *Jira         `yaml:"jira,omitempty" json:"jira,omitempty" desc:"Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."`
+	Confluence   *Confluence   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."`
+	Slack        *Slack        `yaml:"slack,omitempty" json:"slack,omitempty" desc:"Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."`
+	Mattermost   *Mattermost   `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
+	GitHub       *GitHub       `yaml:"github,omitempty" json:"github,omitempty" desc:"GitHub.com or Enterprise Server, webhook secret and provisioning. Absent = disabled."`
+	GitLab       *GitLab       `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"GitLab instance, webhook signing and provisioning. Absent = disabled."`
+	Datadog      *Datadog      `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"Datadog monitor alerts delivered as inbound events. Absent = disabled."`
+	Cloudflare   *Cloudflare   `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"Cloudflare account and provisioner token, used to mint one account API token per agent. Absent = disabled."`
+	Expo         *Expo         `yaml:"expo,omitempty" json:"expo,omitempty" desc:"Expo account the agents' robot users act for: a person creates each agent's robot and pastes its token. Absent = disabled."`
+	DigitalOcean *DigitalOcean `yaml:"digitalocean,omitempty" json:"digitalocean,omitempty" desc:"DigitalOcean team the agents' tokens act in: a person creates each agent's personal access token and pastes it. Absent = disabled."`
+	GoogleCloud  *GoogleCloud  `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."`
+	Atlassian    *Atlassian    `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
 	// audience claim must match it. Required when the Forge app is used —
@@ -153,6 +154,9 @@ func (i *Integrations) validate(path Path) error {
 	}
 	if i.Expo != nil {
 		p.wrap(i.Expo.validate(at(path, "expo")))
+	}
+	if i.DigitalOcean != nil {
+		p.wrap(i.DigitalOcean.validate(at(path, "digitalocean")))
 	}
 	if i.GoogleCloud != nil {
 		p.wrap(i.GoogleCloud.validate(at(path, "google_cloud")))

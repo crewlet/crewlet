@@ -2515,6 +2515,7 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.Atlassian = &config.Atlassian{OrgID: "acme"}
 	cfg.Integrations.Cloudflare = &config.Cloudflare{Enabled: true}
 	cfg.Integrations.Expo = &config.Expo{Enabled: true}
+	cfg.Integrations.DigitalOcean = &config.DigitalOcean{Enabled: true}
 	cfg.Integrations.GoogleCloud = &config.GoogleCloud{Enabled: true}
 
 	body := asMap(t, answer(t, queries.Sources{

@@ -1702,6 +1702,7 @@ or without egress. `GET /mcp-catalogue` serves it (see the
 | `sentry` | Sentry's remote server | OAuth |
 | `stripe` | Stripe's remote server | OAuth, or an agent API key header |
 | `cloudflare` | The Cloudflare API server | the Cloudflare integration (each agent's own scoped token), OAuth, or an API token header |
+| `digitalocean` | DigitalOcean's MCP router | the DigitalOcean integration (each agent's own token), OAuth, or a token header |
 | `google-cloud-monitoring` | Google's Cloud Monitoring server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
 | `google-cloud-logging` | Google's Cloud Logging server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
 | `google-cloud-compute` | Google's Compute Engine server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
@@ -1934,8 +1935,9 @@ Two things MCP does not cover, and what to do instead:
   [Jira](../integrations/jira.md), [Confluence](../integrations/confluence.md),
   [GitLab](../integrations/gitlab.md), [GitHub](../integrations/github.md) and
   [Datadog](../integrations/datadog.md), plus Atlassian's own Forge relay, and
-  every one of them routes end to end. [Cloudflare](../integrations/cloudflare.md)
-  receives nothing yet: it provisions each agent's token and its tool only. A config block the engine cannot honour
+  every one of them routes end to end. [Cloudflare](../integrations/cloudflare.md),
+  [Expo](../integrations/expo.md), [DigitalOcean](../integrations/digitalocean.md)
+  and [Google Cloud](../integrations/google-cloud.md) receive nothing yet: they provision each agent's credential and its tool only. A config block the engine cannot honour
   is refused rather than ignored, because a silently dropped integration block
   looks exactly like one that is working until somebody notices the messages
   never arrived.
@@ -2496,7 +2498,8 @@ When the engine launches a per-role MCP server instance, it merges the base serv
 ### Seat credentials the engine binds
 
 For an integration the engine manages an account or a credential on
-(Atlassian, Cloudflare, Datadog, Expo, GitHub, GitLab, Mattermost, Slack), a
+(Atlassian, Cloudflare, Datadog, DigitalOcean, Expo, GitHub, GitLab, Google Cloud, Mattermost,
+Slack), a
 seat's own credential is never named in
 `mcp_env`. The engine seals it under a name it derives from the handle and
 binds it to every per-seat server (`shared: false`) that reads that
@@ -2514,7 +2517,7 @@ mcp_servers:
     shared: false
     url: "https://mcp.example.com/"
     seat_credentials:
-      - kind: atlassian          # atlassian | cloudflare | datadog | expo | github | gitlab | google_cloud | mattermost | slack
+      - kind: atlassian          # atlassian | cloudflare | datadog | digitalocean | expo | github | gitlab | google_cloud | mattermost | slack
         field: EMAIL             # optional: Atlassian's TOKEN or EMAIL; empty is the credential itself
         key: X-Atlassian-User    # the variable (stdio) or header (http) the server reads
       - kind: atlassian
@@ -2532,6 +2535,7 @@ recognition:
 |---|---|---|
 | Datadog's remote server | a `datadoghq.` or `ddog-gov.` host | `DD_APPLICATION_KEY` |
 | The Cloudflare API server | `mcp.cloudflare.com` | `Authorization: Bearer <seat token>` |
+| DigitalOcean's MCP router and services | `mcp.digitalocean.com` or a host under it | `Authorization: Bearer <seat token>` |
 | Google's managed Google Cloud servers | the host of each: `monitoring`, `logging`, `compute`, `container`, `run`, `sqladmin`, `storage` and `cloudresourcemanager`, each `.googleapis.com` | `Authorization: Bearer <the agent's issued access token>` |
 | GitHub's remote server | `api.githubcopilot.com` | `Authorization: Bearer <installation token>` |
 | GitHub's local server | a `github-mcp-server` command or image | `GITHUB_PERSONAL_ACCESS_TOKEN` |
@@ -2639,7 +2643,7 @@ What the engine does depends on whether anything will fill the variable:
 
 | The variable | The server | Where it shows |
 |---|---|---|
-| Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat, a GitLab or Datadog account's token, a Cloudflare seat's API token, an Expo robot's token once a person pastes it, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set, and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; on **Settings › MCP & tools** the server's row counts it as *waiting*, the server reads *Waiting* where nothing else is wrong, and its page lists each waiting instance |
+| Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat, a GitLab or Datadog account's token, a Cloudflare seat's API token, an Expo robot's or a DigitalOcean seat's token once a person pastes it, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set, and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; on **Settings › MCP & tools** the server's row counts it as *waiting*, the server reads *Waiting* where nothing else is wrong, and its page lists each waiting instance |
 | Is one such a pass mints, and its last report says it cannot until a person acts — its own credential is missing or refused, an administrator has an app or a setting to switch on, or this seat's account could not be made or was switched off by somebody else — or the integration is being disconnected | **Failed**, with the finding that pass recorded: the same finding the integration's card shows. It is a wait with no end until somebody acts, so it is not reported as one | `mcp_server_credential_missing` (error) when the seat's pass meets it; the server's row counts it as failed from the first heartbeat after the integration reports it, whenever that is, and as waiting again from the first after it clears |
 | Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value; for a shared server, every variable is this | **Failed**, naming the variable and the remedies: seal it (`crewlet secrets set`, or for a seat's credential the integration's own `provision` command where it has one), which a running node re-activates the company for as it stores it (`POST /config/reload` for a value stored with the engine stopped), or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value, which a running node re-activates the company for; and, where the server can run without it, list the key holding it under the server's `optional_keys` — offered for the server's own settings, and never for a seat's own credential, which is the identity its child acts as, or for a variable the `url` needs, since a server is dialled at its `url` | `mcp_server_credential_missing` (error); the server's row counts it as failed, with the same sentence |
 

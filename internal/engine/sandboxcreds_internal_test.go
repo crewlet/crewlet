@@ -515,10 +515,10 @@ roles:
 	if err != nil {
 		t.Fatalf("executor chain: %v", err)
 	}
-	run := newExecutorRun(member.Provider.(*harness.Provider), map[string]string{}, map[string]string{
+	run := newExecutorRun(member.Provider.(*harness.Provider), runEnv{env: map[string]string{}, defaults: map[string]string{
 		"CLOUD_REGION": "fr-par", "CLAUDE_CODE_USE_VERTEX": "1",
 		"ANTHROPIC_API_KEY": "sk-ant-integration", "CLI_ZONE": "fr-par-1",
-	}, map[string]string{"CLI_TOKEN_FILE": ".config/crewlet/token", "CLAUDE_CODE_USE_VERTEX": ".config/crewlet/x"})
+	}, homePaths: map[string]string{"CLI_TOKEN_FILE": ".config/crewlet/token", "CLAUDE_CODE_USE_VERTEX": ".config/crewlet/x"}})
 	if want := map[string]string{"CLI_TOKEN_FILE": ".config/crewlet/token"}; !maps.Equal(run.homePaths, want) {
 		t.Errorf("the box file variables = %v, want %v: none under a sign-in name", run.homePaths, want)
 	}
@@ -554,8 +554,8 @@ func TestACredentialShapedDefaultNeverSignsAHarnessIn(t *testing.T) {
 		t.Fatalf("executor chain: %v", err)
 	}
 	const file = "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"
-	run := newExecutorRun(member.Provider.(*harness.Provider), nil,
-		map[string]string{file: "/home/user/.config/crewlet/gcloud-token"}, nil)
+	run := newExecutorRun(member.Provider.(*harness.Provider),
+		runEnv{defaults: map[string]string{file: "/home/user/.config/crewlet/gcloud-token"}})
 	if run.env[file] == "" {
 		t.Fatalf("the default did not reach the box: %v", run.env)
 	}

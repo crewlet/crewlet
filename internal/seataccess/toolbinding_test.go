@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/digitalocean"
 	_ "github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
@@ -100,6 +101,7 @@ func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 		"gitlab":       gitlab.CredentialKeys,
 		"github":       github.CredentialKeys,
 		"cloudflare":   cloudflare.CredentialKeys,
+		"digitalocean": digitalocean.CredentialKeys,
 		"google_cloud": googlecloud.CredentialKeys,
 	}
 	for _, b := range catalogue.Bindings() {

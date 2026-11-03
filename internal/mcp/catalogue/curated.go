@@ -26,6 +26,9 @@ var (
 	// Cloudflare's remote server reads an account API token as a bearer
 	// header, and has no local counterpart this build binds.
 	cloudflareKeys = []SeatKey{{Field: "API_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
+	// DigitalOcean's remote servers, its router and each service's own, read
+	// a personal access token as a bearer header.
+	digitaloceanKeys = []SeatKey{{Field: "TOKEN", Header: "Authorization", Prefix: "Bearer "}}
 	// Google's managed servers read a short-lived OAuth access token as a
 	// bearer header: each agent's own, issued at use.
 	googleCloudKeys = []SeatKey{{Field: "ACCESS_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
@@ -209,6 +212,24 @@ var curated = sync.OnceValue(func() []Entry {
 			"Buckets and the objects in them."),
 		googleCloud("google-cloud-resource-manager", "Resource Manager", "cloudresourcemanager.googleapis.com", "/mcp",
 			"Projects and folders, and their allow policies."),
+		{
+			ID: "digitalocean", Name: "digitalocean", Title: "DigitalOcean", Vendor: "digitalocean",
+			Description: "Droplets, Kubernetes, databases, networking, volumes, apps and monitoring, through " +
+				"DigitalOcean's own MCP router.",
+			Transport: TransportHTTP, URL: "https://mcp.digitalocean.com/mcp",
+			Headers: []Input{{Name: "Authorization", Required: true, Secret: true, FromIntegration: true,
+				Format: "Bearer <personal access token>",
+				Description: "A personal access token: each agent's own where the DigitalOcean integration is on. " +
+					"Its scopes bound every tool the router runs."}},
+			Auth:        []AuthMethod{AuthIntegration, AuthOAuth, AuthHeaders},
+			OAuthClient: ClientDCR,
+			Integration: "digitalocean",
+			Docs:        "https://docs.digitalocean.com/reference/mcp/configure-mcp/",
+			ReadAt:      "2026-11-03",
+			// THE ROUTER AND EVERY SERVICE'S OWN SERVER sit under one domain
+			// and read the same bearer token.
+			recognise: []recognition{{match: hostUnder("mcp.digitalocean.com"), keys: digitaloceanKeys}},
+		},
 		{
 			// OAUTH ONLY, AND NO SEAT BINDING: the server is its own
 			// authorization server (scope mcp:access), and whether it takes an

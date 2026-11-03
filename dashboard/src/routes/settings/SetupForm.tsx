@@ -1275,11 +1275,7 @@ export function SetupForm({
           // WHAT THE ENGINE RENDERED, copied whole: a block a person pastes
           // into the app's own shell, which this form keeps no text of.
           <FormField as="fieldset" label={r.label} helper={helpLines(fill(r.help ?? ""))}>
-            <CodeBlock
-              code={shown.text}
-              language={shown.language}
-              wrap={false}
-            />
+            <CodeBlock code={shown.text} language={shown.language} wrap={false} />
           </FormField>
         ) : editable(section, r) ? (
           <ValueField
