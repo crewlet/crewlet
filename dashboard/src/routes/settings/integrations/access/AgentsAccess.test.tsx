@@ -29,6 +29,7 @@ import {
   gitlabAnswer,
   jiraAnswer,
   mattermostAnswer,
+  neutralAnswer,
   offLane,
   onLane,
   seat,
@@ -1211,34 +1212,16 @@ test("an agent's details name the settings Crewlet puts in its box, and only tho
 // issued, the wait in the engine's words, and the file beside the variables
 // Crewlet sets.
 test("an agent's details read an issued token, the engine's wait and the files Crewlet sets", () => {
-  const data = datadogAnswer();
-  const sre = data.seats.find((s) => s.handle === "sre")!.lanes.datadog!;
-  sre.observed.credential = { variable: "VENDOR_TOKEN_SRE", source: "issued" };
-  sre.tool = "waiting";
-  sre.tool_reason = "the vendor is still applying the grant";
-  sre.box = {
-    env: [
-      { name: "VENDOR_TOKEN_FILE", value: "/home/crewlet/.config/crewlet/token", by: "crewlet" },
-    ],
-    files: [
-      {
-        path: ".config/crewlet/token",
-        value: "${VENDOR_TOKEN_SRE}",
-        rewritten: true,
-        by: "crewlet",
-      },
-    ],
-  };
-  draw(data);
+  draw(neutralAnswer({ tool: "waiting", tool_reason: "the vendor is still applying the grant" }));
   expect(screen.queryByText("Needs you")).toBeNull();
-  details("SRE");
-  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on Datadog"]')!);
+  details("SRE", "the vendor");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on the vendor"]')!);
   expect(facts.getByText("VENDOR_TOKEN_SRE").parentElement!.textContent).toBe(
-    "VENDOR_TOKEN_SRE, issued for an hour at a time, at use",
+    "VENDOR_TOKEN_SRE, issued at use",
   );
   expect(
     facts.getByText(
-      "Waiting: the vendor is still applying the grant, Datadog MCP server, one per agent",
+      "Waiting: the vendor is still applying the grant, Its tool server, one per agent",
     ),
   ).toBeTruthy();
   expect(facts.getByText("VENDOR_TOKEN_FILE and .config/crewlet/token")).toBeTruthy();
