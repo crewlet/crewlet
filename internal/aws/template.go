@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // The owner's setup is one CloudFormation stack, rendered per company with the
@@ -18,15 +19,11 @@ const (
 	// change to what the stack creates.
 	StackVersion = "1"
 	versionTag   = "crewlet:stack-version"
-	// ConnectionOutput is the one output the person copies back.
-	ConnectionOutput = "CrewletConnection"
 	// CloudFormation's TemplateBody cap; above it, deploy needs an S3 bucket.
 	templateBodyLimit = 51200
 	// The provisioner's session lasts an hour; seat sessions chain from it.
 	profileSeconds = 3600
 )
-
-var regionPattern = regexp.MustCompile(`^[a-z]{2}(-gov)?-[a-z]+-\d$`)
 
 // StackParams is what a company's stack is rendered from.
 type StackParams struct {
@@ -43,7 +40,7 @@ func stackName(company Company) string { return "crewlet-" + string(company) }
 // RenderStack renders the company's CloudFormation template.
 func RenderStack(p StackParams) ([]byte, error) {
 	if !p.Company.Valid() {
-		return nil, fmt.Errorf("company %q must match %s", p.Company, companyPattern)
+		return nil, fmt.Errorf("company %q is not a valid slug", p.Company)
 	}
 	if !strings.Contains(p.CAPEM, "BEGIN CERTIFICATE") || hasPEMPrivateKey(p.CAPEM) {
 		return nil, fmt.Errorf("the CA certificate is not PEM")
@@ -55,7 +52,7 @@ func RenderStack(p StackParams) ([]byte, error) {
 		return nil, fmt.Errorf("name at least one allowed region")
 	}
 	for _, r := range p.Regions {
-		if !regionPattern.MatchString(r) {
+		if !config.AWSRegion(r) {
 			return nil, fmt.Errorf("%q is not a region name", r)
 		}
 	}
@@ -109,7 +106,7 @@ func RenderStack(p StackParams) ([]byte, error) {
 		"Resources":                resources,
 		// One value to paste back: the five ARNs CreateSession needs, joined.
 		"Outputs": obj{
-			ConnectionOutput: obj{"Value": obj{"Fn::Join": []any{",", []any{
+			config.AWSConnectionOutput: obj{"Value": obj{"Fn::Join": []any{",", []any{
 				obj{"Fn::GetAtt": []string{"TrustAnchor", "TrustAnchorArn"}},
 				obj{"Fn::GetAtt": []string{"ProvisionerProfile", "ProfileArn"}},
 				obj{"Fn::GetAtt": []string{"ProvisionerRole", "Arn"}},
@@ -145,6 +142,6 @@ func CloudShellBlock(template []byte, region string, company Company) string {
 	fmt.Fprintf(&b, "aws cloudformation deploy --region %s --stack-name %s --template-file %s.json --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset\n",
 		region, stack, stack)
 	fmt.Fprintf(&b, "aws cloudformation describe-stacks --region %s --stack-name %s --query \"Stacks[0].Outputs[?OutputKey=='%s'].OutputValue\" --output text\n",
-		region, stack, ConnectionOutput)
+		region, stack, config.AWSConnectionOutput)
 	return b.String()
 }

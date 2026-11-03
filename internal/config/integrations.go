@@ -36,6 +36,7 @@ type Integrations struct {
 	Datadog    *Datadog    `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"Datadog monitor alerts delivered as inbound events. Absent = disabled."`
 	Cloudflare *Cloudflare `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"Cloudflare account and provisioner token, used to mint one account API token per agent. Absent = disabled."`
 	Expo       *Expo       `yaml:"expo,omitempty" json:"expo,omitempty" desc:"Expo account and provisioner token, used to create one Expo robot user per agent. Absent = disabled."`
+	AWS        *AWS        `yaml:"aws,omitempty" json:"aws,omitempty" desc:"The Crewlet stack in an AWS account and the engine's certificate authority, used to create one IAM role per agent through IAM Roles Anywhere. Absent = disabled."`
 	Atlassian  *Atlassian  `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
@@ -152,6 +153,9 @@ func (i *Integrations) validate(path Path) error {
 	}
 	if i.Expo != nil {
 		p.wrap(i.Expo.validate(at(path, "expo")))
+	}
+	if i.AWS != nil {
+		p.wrap(i.AWS.validate(at(path, "aws")))
 	}
 	if i.Confluence != nil {
 		p.wrap(i.Confluence.validate(at(path, "confluence"), i.DiscoversAtlassianSite(), i.Atlassian.Declared()))

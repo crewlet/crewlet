@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sigv4"
 )
 
@@ -31,45 +33,47 @@ const (
 	testBroker      = "arn:aws:iam::123456789012:role/crewlet/acme/crewlet-acme-broker"
 )
 
-func testOutputs() Outputs {
-	return Outputs{TrustAnchorARN: testAnchor, ProvisionerProfileARN: testProvProfile, ProvisionerRoleARN: testProv,
-		SeatProfileARN: testSeatProfile, BrokerRoleARN: testBroker}
+// testProvisioning is acme's block in us-east-2, its stack output pasted.
+func testProvisioning(t *testing.T) *config.AWSProvisioning {
+	t.Helper()
+	return &config.AWSProvisioning{Slug: "acme", HomeRegion: "us-east-2", CertificateAuthority: mustBundle(t),
+		Connection: strings.Join([]string{testAnchor, testProvProfile, testProv, testSeatProfile, testBroker}, ",")}
 }
 
-func TestParseConnectionHoldsTheOutputsToOneCompanysStack(t *testing.T) {
-	t.Parallel()
-	bundle := mustBundle(t)
-	conn, err := ParseConnection("acme", "us-east-2", testOutputs(), bundle)
-	if err != nil || conn.Account != "123456789012" || conn.Partition != "aws" {
-		t.Fatalf("%+v %v", conn, err)
+func mustConnection(t *testing.T) *Connection {
+	t.Helper()
+	conn, err := NewConnection(testProvisioning(t))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for name, mutate := range map[string]func(*Outputs){
-		"one profile":   func(o *Outputs) { o.SeatProfileARN = o.ProvisionerProfileARN },
-		"swapped roles": func(o *Outputs) { o.ProvisionerRoleARN, o.BrokerRoleARN = o.BrokerRoleARN, o.ProvisionerRoleARN },
-		"other company": func(o *Outputs) { o.BrokerRoleARN = strings.ReplaceAll(o.BrokerRoleARN, "acme", "other") },
-		"other account": func(o *Outputs) {
-			o.BrokerRoleARN = strings.Replace(o.BrokerRoleARN, "123456789012", "210987654321", 1)
-		},
-		"other region":  func(o *Outputs) { o.SeatProfileARN = strings.Replace(o.SeatProfileARN, "us-east-2", "eu-west-1", 1) },
-		"not an anchor": func(o *Outputs) { o.TrustAnchorARN = o.ProvisionerProfileARN },
-		"name and path": func(o *Outputs) {
-			o.ProvisionerRoleARN = strings.Replace(o.ProvisionerRoleARN, "crewlet-acme-", "crewlet-other-", 1)
-		},
+	return conn
+}
+
+func TestNewConnectionReadsTheProvisioningBlock(t *testing.T) {
+	t.Parallel()
+	conn := mustConnection(t)
+	if conn.Company != "acme" || conn.Region != "us-east-2" || conn.Account != "123456789012" ||
+		conn.Partition != "aws" || conn.BrokerRoleARN != testBroker || conn.CA == nil {
+		t.Fatalf("%+v", conn)
+	}
+	for name, mutate := range map[string]func(*config.AWSProvisioning){
+		"no output":     func(p *config.AWSProvisioning) { p.Connection = " " },
+		"another slug":  func(p *config.AWSProvisioning) { p.Slug = "other" },
+		"another home":  func(p *config.AWSProvisioning) { p.HomeRegion = "eu-west-1" },
+		"no key":        func(p *config.AWSProvisioning) { p.CertificateAuthority = "not a bundle" },
+		"not a slug":    func(p *config.AWSProvisioning) { p.Slug = "Acme" },
+		"not a region":  func(p *config.AWSProvisioning) { p.HomeRegion = "ohio" },
+		"two ARNs only": func(p *config.AWSProvisioning) { p.Connection = testAnchor + "," + testProv },
 	} {
-		out := testOutputs()
-		mutate(&out)
-		if _, err := ParseConnection("acme", "us-east-2", out, bundle); err == nil {
+		p := testProvisioning(t)
+		mutate(p)
+		_, err := NewConnection(p)
+		if err == nil {
 			t.Errorf("%s: accepted", name)
 		}
-	}
-	if got, err := ParseConnectionValue(" " + testOutputs().String() + "\n"); err != nil || got != testOutputs() {
-		t.Fatalf("the connection value does not round-trip: %v %v", got, err)
-	}
-	if _, err := ParseConnectionValue(testAnchor + "," + testProv); err == nil {
-		t.Error("a value with two ARNs was accepted")
-	}
-	if _, err := ParseConnection("acme", "us-east-2", testOutputs(), "not a bundle"); err == nil {
-		t.Error("a bundle with no key was accepted")
+		if (name == "no output") != errors.Is(err, ErrNotConnected) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 
@@ -79,10 +83,7 @@ var x509Auth = regexp.MustCompile(`^AWS4-X509-ECDSA-SHA256 Credential=(\d+)/(\d{
 // does, then STS, whose AssumeRole must come from the broker's session.
 func TestASeatSessionGoesThroughTheBrokerUnderTheSeatsName(t *testing.T) {
 	t.Parallel()
-	conn, err := ParseConnection("acme", "us-east-2", testOutputs(), mustBundle(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn := mustConnection(t)
 	var throttled atomic.Int32
 	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,10 +151,7 @@ func TestASeatSessionGoesThroughTheBrokerUnderTheSeatsName(t *testing.T) {
 
 func TestRolesAnywhereRefusalsAreReadAndNotRetried(t *testing.T) {
 	t.Parallel()
-	conn, err := ParseConnection("acme", "us-east-2", testOutputs(), mustBundle(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn := mustConnection(t)
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -164,7 +162,7 @@ func TestRolesAnywhereRefusalsAreReadAndNotRetried(t *testing.T) {
 	defer srv.Close()
 	ra := newRolesAnywhere(srv.Client(), "us-east-2")
 	ra.endpoint = func(string) string { return srv.URL }
-	_, err = ra.createSession(context.Background(), conn.CA, "crewlet-acme-provisioner", LeafECDSA, testProvProfile, testProv, testAnchor, 3600)
+	_, err := ra.createSession(context.Background(), conn.CA, "crewlet-acme-provisioner", LeafECDSA, testProvProfile, testProv, testAnchor, 3600)
 	if api, ok := err.(*APIError); !ok || api.Code != "AccessDeniedException" || api.Message != "Unable to assume role" || calls.Load() != 1 {
 		t.Fatalf("err %v after %d calls", err, calls.Load())
 	}

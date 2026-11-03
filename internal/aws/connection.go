@@ -3,95 +3,49 @@ package aws
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
-// Outputs are the company stack's outputs, as CloudShell prints them.
-type Outputs struct {
-	TrustAnchorARN        string
-	ProvisionerProfileARN string
-	ProvisionerRoleARN    string
-	SeatProfileARN        string
-	BrokerRoleARN         string
-}
+// ErrNotConnected is a provisioning block whose stack output is not pasted yet:
+// the CA is minted, and the stack holding its certificate may not exist.
+var ErrNotConnected = errors.New("aws: the Crewlet stack's output is not pasted yet")
 
-// ParseConnectionValue splits the stack's CrewletConnection output: the trust
-// anchor, the provisioner's profile and role, the seats' profile and the
-// broker, joined by commas (no ARN holds one).
-func ParseConnectionValue(v string) (Outputs, error) {
-	parts := strings.Split(strings.TrimSpace(v), ",")
-	if len(parts) != 5 {
-		return Outputs{}, fmt.Errorf("aws: the %s value holds five ARNs joined by commas; copy the whole last line the CloudShell block prints", ConnectionOutput)
-	}
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
-	}
-	return Outputs{TrustAnchorARN: parts[0], ProvisionerProfileARN: parts[1], ProvisionerRoleARN: parts[2],
-		SeatProfileARN: parts[3], BrokerRoleARN: parts[4]}, nil
-}
-
-// String is the CrewletConnection value the outputs make.
-func (o Outputs) String() string {
-	return strings.Join([]string{o.TrustAnchorARN, o.ProvisionerProfileARN, o.ProvisionerRoleARN, o.SeatProfileARN, o.BrokerRoleARN}, ",")
-}
-
-// Connection is a company's AWS connection: the stack's outputs, the Region
-// they live in, the account and partition read from them, and the sealed CA.
+// Connection is a company's AWS connection: the stack's checked output, the
+// home Region it lives in, and the sealed CA.
 type Connection struct {
-	Company   Company
-	Region    string
-	Partition string
-	Account   string
-	Outputs
+	Company Company
+	Region  string
+	config.AWSConnection
 	CA *CA
 }
 
-var (
-	anchorPattern  = regexp.MustCompile(`^arn:(aws[a-z-]*):rolesanywhere:([a-z0-9-]+):(\d{12}):trust-anchor/[0-9a-f-]{36}$`)
-	profilePattern = regexp.MustCompile(`^arn:(aws[a-z-]*):rolesanywhere:([a-z0-9-]+):(\d{12}):profile/[0-9a-f-]{36}$`)
-	// The company is read from the role ARN, path and name both.
-	rolePattern = regexp.MustCompile(`^arn:(aws[a-z-]*):iam::(\d{12}):role/crewlet/([a-z0-9-]+)/crewlet-([a-z0-9-]+)-(provisioner|broker)$`)
-)
-
-// ParseConnection checks that the five outputs are one company's stack, in
-// one account and partition, with its trust anchor and profiles in region.
-// Each refusal names the output to copy again.
-func ParseConnection(company Company, region string, out Outputs, caBundle string) (*Connection, error) {
+// NewConnection reads a company's provisioning block, its secrets resolved:
+// the stack output held to the slug and the home Region, and the CA.
+func NewConnection(p *config.AWSProvisioning) (*Connection, error) {
+	if p == nil {
+		return nil, errors.New("aws: no provisioning block")
+	}
+	company, region := Company(strings.TrimSpace(p.Slug)), strings.TrimSpace(p.HomeRegion)
 	if !company.Valid() {
-		return nil, fmt.Errorf("aws: company %q is not a valid slug", company)
+		return nil, fmt.Errorf("aws: %q is not a valid slug", p.Slug)
 	}
-	if !regionPattern.MatchString(region) {
-		return nil, fmt.Errorf("aws: %q is not a Region name", region)
+	if !config.AWSRegion(region) {
+		return nil, fmt.Errorf("aws: %q is not a Region code", p.HomeRegion)
 	}
-	a := anchorPattern.FindStringSubmatch(out.TrustAnchorARN)
-	pp := profilePattern.FindStringSubmatch(out.ProvisionerProfileARN)
-	sp := profilePattern.FindStringSubmatch(out.SeatProfileARN)
-	r := rolePattern.FindStringSubmatch(out.ProvisionerRoleARN)
-	b := rolePattern.FindStringSubmatch(out.BrokerRoleARN)
-	switch {
-	case a == nil:
-		return nil, errors.New("aws: TrustAnchorArn is not a Roles Anywhere trust anchor ARN")
-	case pp == nil || sp == nil:
-		return nil, errors.New("aws: ProvisionerProfileArn and SeatProfileArn must be Roles Anywhere profile ARNs")
-	case out.ProvisionerProfileARN == out.SeatProfileARN:
-		return nil, errors.New("aws: the provisioner and the seats need separate profiles; copy SeatProfileArn again")
-	case r == nil || r[5] != "provisioner":
-		return nil, errors.New("aws: ProvisionerRoleArn is not a role crewlet/<company>/crewlet-<company>-provisioner")
-	case b == nil || b[5] != "broker":
-		return nil, errors.New("aws: BrokerRoleArn is not a role crewlet/<company>/crewlet-<company>-broker")
-	case r[3] != string(company) || r[4] != string(company) || b[3] != string(company) || b[4] != string(company):
-		return nil, fmt.Errorf("aws: the stack's roles are not company %q's", company)
-	case a[2] != region || pp[2] != region || sp[2] != region:
-		return nil, errors.New("aws: the trust anchor and the profiles must be in the home Region")
-	case a[3] != r[2] || pp[3] != r[2] || sp[3] != r[2] || b[2] != r[2] || a[1] != r[1]:
-		return nil, errors.New("aws: the trust anchor, profiles and roles must be in one account")
+	if strings.TrimSpace(p.Connection) == "" {
+		return nil, ErrNotConnected
 	}
-	ca, err := ParseCA(caBundle)
+	out, err := config.ParseAWSConnection(string(company), region, p.Connection)
+	if err != nil {
+		return nil, fmt.Errorf("aws: the stack output: %w", err)
+	}
+	ca, err := ParseCA(p.CertificateAuthority)
 	if err != nil {
 		return nil, err
 	}
-	return &Connection{Company: company, Region: region, Partition: r[1], Account: r[2], Outputs: out, CA: ca}, nil
+	return &Connection{Company: company, Region: region, AWSConnection: out, CA: ca}, nil
 }
 
 // vars is the connection's values for the policy documents' tokens.

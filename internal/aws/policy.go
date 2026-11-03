@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // The single source of every policy document: the setup template is rendered
@@ -59,12 +60,8 @@ const (
 // Company is the slug every Crewlet name in the account carries.
 type Company string
 
-// companyPattern keeps every derived name inside IAM's 64-character role name
-// and the seat CN inside Roles Anywhere's 61 characters.
-var companyPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$`)
-
-// Valid reports a slug every derived name can carry.
-func (c Company) Valid() bool { return companyPattern.MatchString(string(c)) }
+// Valid reports a slug every derived name can carry ([config.AWSSlug]).
+func (c Company) Valid() bool { return config.AWSSlug(string(c)) }
 
 // named resolves the {company} token in a name, path or ARN.
 func named(s string, company Company) string {

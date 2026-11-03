@@ -1155,6 +1155,8 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.Cloudflare != nil
 	case "expo":
 		return in.Expo != nil
+	case "aws":
+		return in.AWS != nil
 	case "atlassian":
 		return in.Atlassian != nil
 	default:

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sigv4"
 )
 
@@ -275,8 +276,8 @@ func TestTheStackDeploysExactlyWhatTheCheckExpects(t *testing.T) {
 		}
 	}
 	outputs := tpl["Outputs"].(map[string]any)
-	if len(outputs) != 1 || outputs[ConnectionOutput] == nil {
-		t.Fatalf("the stack must output exactly %s, got %v", ConnectionOutput, outputs)
+	if len(outputs) != 1 || outputs[config.AWSConnectionOutput] == nil {
+		t.Fatalf("the stack must output exactly %s, got %v", config.AWSConnectionOutput, outputs)
 	}
 	for _, id := range []string{"TrustAnchor", "ProvisionerRole", "BrokerRole", "ProvisionerProfile", "SeatProfile"} {
 		if !strings.Contains(string(compactJSON(props(id)["Tags"])), `"`+versionTag+`","Value":"`+StackVersion+`"`) {
