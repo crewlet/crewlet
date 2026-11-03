@@ -390,7 +390,7 @@ func newConversingLaunch(t *testing.T, ceiling, spent int) conversingLaunch {
 	heads := newHeadLog()
 	e := &Engine{backends: &Backends{Queue: q, Fleet: fleet}, bridge: bridge}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Answers: testAnswers(), Audience: noAudience{},
+		Answers: testAnswers(), Audience: noAudience{}, Pushes: noPushes{},
 		Queue: q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
 		Restore: headRestore{heads}, Sessions: executorRecordsOf(heads), Keep: conversingKeep{},
 	})

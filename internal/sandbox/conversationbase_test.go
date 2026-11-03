@@ -485,7 +485,7 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 	// record and the same log.
 	resumer := &resumeSpy{}
 	nodeB, err := NewCoordinator(CoordinatorOptions{
-		Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager, Pushes: rig.pushes,
 		Resume: resumer, Audience: &audienceSpy{},
 		Lease: leased(Fence{Owner: "node-b:1", Epoch: 2}), Node: "node-b",
 		Sessions: logbook, Keep: keep, Restore: logbook, SpoolDir: t.TempDir(),
