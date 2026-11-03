@@ -290,7 +290,7 @@ const (
 // holds ([Paths.SessionDigests]): the line a run's script writes for an archive
 // it packed or restored, written here for the archive a capture kept.
 func keepDigest(ctx context.Context, box sandbox.Sandbox, paths Paths, session, digest string) error {
-	if !validSessionID(session) {
+	if !sandbox.ValidSessionID(session) {
 		return fmt.Errorf("executor: %q is not a session id a digest may be kept under", session)
 	}
 	res, err := box.Exec(ctx, "printf '%s\\n' "+shellQuote(session+" "+digest)+" >> "+

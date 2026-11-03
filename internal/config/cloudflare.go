@@ -41,13 +41,14 @@ type CloudflareProvisioning struct {
 // The levels a seat's Cloudflare token is minted at, least access first.
 // internal/cloudflare maps each to the permission groups it grants.
 const (
-	CloudflareLevelRead    = "read"
-	CloudflareLevelOperate = "operate"
+	CloudflareLevelRead      = "read"
+	CloudflareLevelOperate   = "operate"
+	CloudflareLevelConfigure = "configure"
 )
 
 // CloudflareLevels is every level a seat may name, least access first.
 func CloudflareLevels() []string {
-	return []string{CloudflareLevelRead, CloudflareLevelOperate}
+	return []string{CloudflareLevelRead, CloudflareLevelOperate, CloudflareLevelConfigure}
 }
 
 // RoleCloudflare is a seat's own Cloudflare account API token.
@@ -55,7 +56,7 @@ type RoleCloudflare struct {
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own Cloudflare token. Off deletes the token."`
 
 	// Level is what the token may do; empty is read.
-	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=read|operate" desc:"read (the default): zone, DNS, cache, firewall, SSL and analytics reads. operate: read plus cache purge and cache settings edits."`
+	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=read|operate|configure" desc:"read (the default): zone, DNS, cache, firewall, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included."`
 }
 
 // LevelOrDefault is the seat's level, read where it names none.

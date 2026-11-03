@@ -3662,9 +3662,13 @@ What each surface checks, and with what:
 Refusals: `400 invalid_body` for an unknown key; `400 invalid_input` when
 `field` is not a requirement of that surface (or seat) or is not a `secret`,
 when `value` is empty, when a key in `values` is not a field of the surface,
-when a `${NAME}` names no stored secret ("There is no secret NAME."), and when
-the check cannot be made from what was given (Datadog's other key, a site
-address, an organization id), each with a sentence saying what is missing;
+when a `${NAME}` names no stored secret ("There is no secret NAME."), when a
+typed value is one its field refuses, as a save would refuse it (whitespace or
+an invisible character inside a credential, a space inside an address or an
+identifier, a character outside the vendor's alphabet where the field declares
+one), with `field` and `path` and before any vendor is asked, and when the
+check cannot be made from what was given (Datadog's other key, a site address,
+an organization id), each with a sentence saying what is missing;
 `404 unknown_kind`; `404 invalid_input` for a seat that takes no per-seat
 setup; `409 no_active_revision`; `409` under one of the five codes for a
 revision this node [cannot open](#a-revision-this-node-cannot-open-is-refused-whichever-route-reads-it).
@@ -4089,9 +4093,10 @@ and writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
 Datadog role id, a GitLab access level, a Jira project role id; Cloudflare's
-`read` or `operate`, each a fixed set of permission groups; Expo's `viewer`,
-`runner`, `developer` or `release_manager`, each a fixed set of Expo
-permissions), GitHub's permissions, and the scope it is narrowed to. A lane is the block's key:
+`read`, `operate` or `configure`, each a fixed set of permission groups;
+Expo's `viewer`, `runner`, `developer` or `release_manager`, each a fixed set
+of Expo permissions), GitHub's permissions, and the scope it is narrowed to.
+A lane is the block's key:
 `atlassian` has two, `jira` and `confluence`, over one account per agent, and
 every other integration has one named after itself. Jira and Confluence asked
 for by their own names answer `404 no_seat_access`.
@@ -10304,7 +10309,8 @@ seat.
 | Status | `error` | When |
 |---|---|---|
 | `404` | `not_found` | The configuration declares no such server |
-| `409` | `conflict` | The server is turned off (`enabled: false`), so nothing runs it; or the seat named is not granted the server |
+| `409` | `conflict` | The server is turned off (`enabled: false`), so nothing runs it |
+| `409` | `seat_not_granted` | The seat named is not granted the server, so nothing runs it as that seat |
 | `400` | `invalid_body` | A `seat` named for a shared server, which runs one instance for the company; or a body with a field the route does not read |
 | `404` | `no_such_seat` | The organization has no agent seat by that handle |
 | `503` | `unavailable` | The node could not record the request; ask again |
@@ -10391,7 +10397,8 @@ record goes when the configuration stops declaring the server.
 | Status | `error` | When |
 |---|---|---|
 | `404` | `not_found` | The configuration declares no such server |
-| `409` | `conflict` | The server is turned off, so nothing runs it to test (test its entry as a draft instead); or the seat named is not granted the server |
+| `409` | `conflict` | The server is turned off, so nothing runs it to test (test its entry as a draft instead) |
+| `409` | `seat_not_granted` | The seat named is not granted the server, so nothing runs it as that seat |
 | `400` | `invalid_body` | A `seat` named for a shared server, none named for a per-agent one, or a body with a field the route does not read |
 | `404` | `no_such_seat` | The organization has no agent seat by that handle |
 | `503` | `unavailable` | The node could not ask the fleet; ask again |
@@ -10444,8 +10451,11 @@ entry the dry run refuses is answered `422 validation_error` with the
 problems a write of it would get. An admitted draft is tested as the dry run
 left it, turned on whatever its `enabled` says, on the nodes the saved entry
 would run on, and answered as [`POST /mcp-servers/{name}/check`](#post-mcp-serversnamecheck)
-answers, with `"draft": true`. **A draft's test is never recorded**: the
-server's latest test is of the entry the company runs.
+answers, with `"draft": true`. Tested for an agent (`seat`), it is started with
+what the saved entry would start that agent's instance with: the agent's own
+values, its unit's, and its own credential at every integration the entry
+reads, bound as the save will bind it. **A draft's test is never recorded**:
+the server's latest test is of the entry the company runs.
 
 ### `POST /mcp-probe`
 
@@ -10604,9 +10614,9 @@ The body is read strictly (`400 invalid_body` for a field it does not read, no
 `value`, an empty one, or one holding a line break or a NUL, since a header's
 or a variable's value is one line), and any other query parameter is `400
 invalid_query`. `404 not_found` for a server the configuration does not
-declare, `404 no_such_seat` for a seat that is not an agent's, `409 conflict`
-for a seat the server is not granted to. **No answer, log line or audit record
-carries the value**, a refusal included: every call is one `mcp_server_acted`
+declare, `404 no_such_seat` for a seat that is not an agent's, and
+`409 seat_not_granted` for a seat the server is not granted to. **No answer,
+log line or audit record carries the value**, a refusal included: every call is one `mcp_server_acted`
 with the action `store_value`, naming the `key` and the `variable`, and a
 test's sentences withhold the values the server was started with.
 

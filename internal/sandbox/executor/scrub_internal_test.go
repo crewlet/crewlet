@@ -219,6 +219,50 @@ func TestATarIsWrittenWithEachMembersSizeAsRewritten(t *testing.T) {
 	}
 }
 
+// AN ARCHIVE THAT CHANGED NAMES ITS MEMBER SHORT, whichever way it changed.
+// The name is the archive's, which the box wrote, at up to a MiB a member, and
+// the failure becomes the reason the run's session was not kept, which the
+// run's row, the launch's record and a box host's reply to the node that asked
+// for the read carry: so it quotes the name as a transcript line quotes a path
+// — its first line, redacted and held to [transcriptDetailLimit]
+// ([memberNamed]). The two changes the second reading can meet are each named
+// where they are met, a member's size and its kind, and each is a case.
+//
+// Mutation: quote the member's name whole where either change is met, or hold
+// it to more than a transcript line quotes of a path, and a case goes red.
+func TestAChangedArchiveNamesItsMemberShort(t *testing.T) {
+	t.Parallel()
+	name := "projects/p/" + strings.Repeat("n", 64<<10) + ".txt"
+	s := newScrubber([]string{"opaque-engine-value"})
+	for change, readings := range map[string][2][]byte{
+		// SHORTER the second time, so the rewrite ends before the size the
+		// first reading counted.
+		"its size": {
+			tarOf(t, map[string]string{name: "out opaque-engine-value and the rest of it\n"}),
+			tarOf(t, map[string]string{name: "out\n"}),
+		},
+		// A FILE the first time and a directory under the same name the
+		// second.
+		"its kind": {
+			tarOfMembers(t, []tarMember{{h: tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg}, body: "out\n"}}),
+			tarOfMembers(t, []tarMember{{h: tar.Header{Name: name, Mode: 0o700, Typeflag: tar.TypeDir}}}),
+		},
+	} {
+		err := scrubTar(bytes.NewReader(readings[0]), reopenOf(readings[1]), io.Discard, s, testBounds)
+		if err == nil {
+			t.Errorf("%s: an archive that changed between its two readings was written", change)
+			continue
+		}
+		_, quoted, _ := strings.Cut(err.Error(), "changed its member ")
+		quoted, _, found := strings.Cut(quoted, " while it was read")
+		if want := firstLine(name, transcriptDetailLimit); !found || quoted != want ||
+			len(quoted) > transcriptDetailLimit {
+			t.Errorf("%s: the failure names the member as %d bytes, %.60q…; want the %d bytes a transcript "+
+				"line quotes of it, %.60q…", change, len(quoted), quoted, len(want), want)
+		}
+	}
+}
+
 // tarOf is a gzipped tar of files, in name order.
 func tarOf(t *testing.T, files map[string]string) []byte {
 	t.Helper()

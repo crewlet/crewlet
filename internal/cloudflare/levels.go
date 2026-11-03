@@ -14,78 +14,195 @@ import (
 // Names are resolved to IDs from the account's live catalogue on every pass,
 // never hardcoded, because Cloudflare treats the name as cosmetic.
 
-// readGroups is the read level: everything an agent needs to look at a zone,
-// and Account Settings Read, which Cloudflare's MCP server needs to discover
-// the account at all.
-var readGroups = []string{
-	"Zone Read", "Zone Settings Read", "Analytics Read", "DNS Read",
-	"Cache Settings Read", "Firewall Services Read", "SSL and Certificates Read",
-	"Account Analytics Read", "Account Settings Read",
+// permission is one Cloudflare permission group: its API name, its name in the
+// token builder (from the Dashboard tab of Cloudflare's permissions reference,
+// which renames some), and whether the builder lists it under the zones.
+type permission struct {
+	name    string
+	builder string
+	zone    bool
 }
 
-// operateGroups is the operate level: read, plus purging the cache and
-// editing cache rules. DNS, WAF and zone settings writes are deliberately
-// absent.
-var operateGroups = append(slices.Clone(readGroups), "Cache Purge", "Cache Settings Write")
+// The permission groups more than one list here names.
+//
+//nolint:gochecknoglobals // immutable descriptions, not state
+var (
+	zoneRead           = permission{"Zone Read", "Zone: Read", true}
+	accountSettings    = permission{"Account Settings Read", "Account Settings: Read", false}
+	accountTokensWrite = permission{"Account API Tokens Write", "Account API Tokens: Edit", false}
+)
 
-// provisionerOwnGroups is what the provisioner token needs for itself: to
-// mint and manage tokens, to read the account and to list its zones.
-var provisionerOwnGroups = []string{"Account API Tokens Write", "Account Settings Read", "Zone Read"}
+// level is one seat level: the ID a document names, how a person reads it,
+// and the groups it grants on top of every level before it.
+type level struct {
+	id, name, note string
+	adds           []permission
+}
+
+// levels is every seat level, least access first, each granting everything
+// the levels before it do. DNS, WAF and SSL writes are in none of them.
+//
+//nolint:gochecknoglobals // an immutable table, not state
+var levels = []level{
+	{
+		id: config.CloudflareLevelRead, name: "Read",
+		note: "Reads zones, zone settings, DNS, cache rules, firewall, SSL and analytics",
+		// Account Settings Read is what Cloudflare's MCP server needs to find
+		// the account at all.
+		adds: []permission{
+			zoneRead,
+			{"Zone Settings Read", "Zone Settings: Read", true},
+			{"Analytics Read", "Analytics: Read", true},
+			{"DNS Read", "DNS: Read", true},
+			{"Cache Settings Read", "Cache Rules: Read", true},
+			{"Firewall Services Read", "Firewall Services: Read", true},
+			{"SSL and Certificates Read", "SSL and Certificates: Read", true},
+			{"Account Analytics Read", "Account Analytics: Read", false},
+			accountSettings,
+		},
+	},
+	{
+		id: config.CloudflareLevelOperate, name: "Operate",
+		note: "Everything Read does, plus purging the cache and editing cache rules",
+		adds: []permission{
+			{"Cache Purge", "Cache Purge: Purge", true},
+			{"Cache Settings Write", "Cache Rules: Edit", true},
+		},
+	},
+	{
+		id: config.CloudflareLevelConfigure, name: "Configure",
+		note: "Everything Operate does, plus editing compression rules and every zone setting, " +
+			"the SSL mode and security level included",
+		// Cloudflare grants every zone setting as one group, the cache, tiered
+		// cache, protocol and SSL mode settings alike.
+		adds: []permission{
+			{"Zone Settings Write", "Zone Settings: Edit", true},
+			{"Response Compression Write", "Response Compression: Edit", true},
+		},
+	},
+}
+
+// provisionerOwnPermissions is what the provisioner token needs for itself:
+// to mint and manage tokens, to read the account and to list its zones.
+//
+//nolint:gochecknoglobals // an immutable list, not state
+var provisionerOwnPermissions = []permission{accountTokensWrite, accountSettings, zoneRead}
+
+func names(ps []permission) []string {
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.name)
+	}
+	return out
+}
 
 // Levels is every seat level, least access first.
-func Levels() []string { return config.CloudflareLevels() }
+func Levels() []string {
+	out := make([]string, 0, len(levels))
+	for _, l := range levels {
+		out = append(out, l.id)
+	}
+	return out
+}
 
 // LevelName is a level as a person reads it.
-func LevelName(level string) string {
-	switch level {
-	case config.CloudflareLevelRead:
-		return "Read"
-	case config.CloudflareLevelOperate:
-		return "Operate"
-	default:
-		return level
+func LevelName(id string) string {
+	if i := slices.IndexFunc(levels, func(l level) bool { return l.id == id }); i >= 0 {
+		return levels[i].name
 	}
+	return id
 }
 
 // LevelNote is the sentence saying what a level grants.
-func LevelNote(level string) string {
-	switch level {
-	case config.CloudflareLevelRead:
-		return "Reads zones, DNS, cache settings, firewall, SSL and analytics"
-	case config.CloudflareLevelOperate:
-		return "Everything Read does, plus purging the cache and editing cache settings"
-	default:
-		return ""
+func LevelNote(id string) string {
+	if i := slices.IndexFunc(levels, func(l level) bool { return l.id == id }); i >= 0 {
+		return levels[i].note
 	}
+	return ""
 }
 
 // Groups is the permission group names a level grants, and false for a level
 // this build does not offer.
 func Groups(level string) ([]string, bool) {
-	switch level {
-	case config.CloudflareLevelRead:
-		return slices.Clone(readGroups), true
-	case config.CloudflareLevelOperate:
-		return slices.Clone(operateGroups), true
-	default:
-		return nil, false
+	ps, ok := levelPermissions(level)
+	return names(ps), ok
+}
+
+// levelPermissions is everything a level grants: its own groups and those of
+// every level before it.
+func levelPermissions(id string) ([]permission, bool) {
+	var out []permission
+	for _, l := range levels {
+		out = append(out, l.adds...)
+		if l.id == id {
+			return out, true
+		}
 	}
+	return nil, false
 }
 
 // ProvisionerGroups is every permission group the provisioner token has to
-// hold: its own, then every group a seat level grants, each once. A token is
-// only trusted to grant what it holds itself.
-func ProvisionerGroups() []string {
-	out := slices.Clone(provisionerOwnGroups)
+// hold, by name: its own, then every group a seat level grants, each once. A
+// token is only trusted to grant what it holds itself.
+func ProvisionerGroups() []string { return names(provisionerPermissions()) }
+
+func provisionerPermissions() []permission {
+	out := slices.Clone(provisionerOwnPermissions)
 	for _, level := range Levels() {
-		groups, _ := Groups(level)
-		for _, g := range groups {
-			if !slices.Contains(out, g) {
-				out = append(out, g)
+		ps, _ := levelPermissions(level)
+		for _, p := range ps {
+			if !slices.Contains(out, p) {
+				out = append(out, p)
 			}
 		}
 	}
 	return out
+}
+
+// DashboardName is a permission group as Cloudflare's token builder shows it
+// ("Cache Purge: Purge"), or the name itself for one this integration does
+// not name.
+func DashboardName(name string) string {
+	for _, p := range provisionerPermissions() {
+		if p.name == name {
+			return p.builder
+		}
+	}
+	return name
+}
+
+// dashboardList is names as the token builder shows them, for a finding's
+// list.
+func dashboardList(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, DashboardName(n))
+	}
+	return out
+}
+
+// dashboardNames is [dashboardList] for a sentence, unquoted.
+func dashboardNames(names []string) []words.Said {
+	out := make([]words.Said, 0, len(names))
+	for _, n := range dashboardList(names) {
+		out = append(out, words.Said(n))
+	}
+	return out
+}
+
+// provisionerHelp is the provisioner token's permissions as two lines a person
+// follows in Cloudflare's token builder, the account's and the zones'.
+func provisionerHelp() string {
+	var account, zone []words.Said
+	for _, p := range provisionerPermissions() {
+		if p.zone {
+			zone = append(zone, words.Said(p.builder))
+		} else {
+			account = append(account, words.Said(p.builder))
+		}
+	}
+	return "Account permissions: " + words.And(account) + ".\n" +
+		"Zone permissions (all zones): " + words.And(zone) + "."
 }
 
 // Resource scopes a permission group applies at.

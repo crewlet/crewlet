@@ -2075,6 +2075,18 @@ func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, resu
 // collection, so DURATION covers launch to collection: the waiter's poll
 // interval is inside it, and the coding itself is the rest.
 func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.ExecutorCollected {
+	// THE SESSION AND THE RELEASE THE BOX NAMED, held to the shapes a harness
+	// gives them as the reasons below are held to their bounds, whatever the
+	// runner or the host that read the box made of them: each is the box's
+	// word, and one of any other shape is none — never cut, since a shortened
+	// id or release names another one.
+	session, release := result.SessionID, result.HarnessVersion
+	if !ValidSessionID(session) {
+		session = ""
+	}
+	if !ValidRelease(release) {
+		release = ""
+	}
 	rec := types.ExecutorCollected{
 		Agent: run.AgentID, RoleName: run.Role,
 		TurnID: run.TurnID, WorkKey: run.WorkKey,
@@ -2120,20 +2132,28 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		// launch says whether a later one may continue it. Whether the
 		// upload and the record after the read landed is the run's record's
 		// and the log's: they are made off the read.
-		HarnessSession: result.SessionID,
-		HarnessVersion: result.HarnessVersion,
+		HarnessSession: session,
+		HarnessVersion: release,
 		// AND WHICH BRIEF THE LAUNCH HANDED IT, beside whether the run did
 		// continue the session it was asked to and, where it did not, why
 		// its script started one of its own and handed it the fresh brief:
 		// the started phase record carries the fresh brief, which a run that
 		// continued its session never read.
+		//
+		// THE REASON HELD TO ITS BOUND HERE, redacted and then cut
+		// ([BoundFellBack]), whatever the runner or the host that read the
+		// box made of it: it is a line of a file in the box, which the run's
+		// own agent can write as long as the file the engine reads whole.
 		Brief:                   string(facts.Brief),
 		HarnessSessionContinued: result.Continued,
-		HarnessSessionFellBack:  redact.Secrets(result.FellBack),
+		HarnessSessionFellBack:  BoundFellBack(result.FellBack),
 	}
 	if kept := result.Kept; kept != nil {
 		rec.SessionTakenBytes = kept.Bytes
-		rec.SessionNotKept = redact.Secrets(kept.NotKept)
+		// AND WHY THE SESSION WAS NOT KEPT, at the bound the executor log
+		// holds the same reason to: it quotes the refusal the take met,
+		// which can quote what the box's archive holds.
+		rec.SessionNotKept = boundReason(kept.NotKept, executordomain.UnkeptReasonMaxBytes)
 	}
 	rec.StartedAt = facts.StartedAt.UTC()
 	if took := collected.Sub(facts.StartedAt); took > 0 {

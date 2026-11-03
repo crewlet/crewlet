@@ -2894,10 +2894,11 @@
           ]
         },
         "level": {
-          "description": "read (the default): zone, DNS, cache, firewall, SSL and analytics reads. operate: read plus cache purge and cache settings edits.",
+          "description": "read (the default): zone, DNS, cache, firewall, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included.",
           "enum": [
             "read",
             "operate",
+            "configure",
             "",
             null
           ]

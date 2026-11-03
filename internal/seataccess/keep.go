@@ -9,9 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// ErrNoCloudflareLevel refuses keeping a Cloudflare token whose policy is
-// neither level's: a seat names a level, and none of them holds what it holds.
-var ErrNoCloudflareLevel = errors.New("the token's permissions are neither Read nor Operate: " +
+// ErrNoCloudflareLevel refuses keeping a Cloudflare token whose policy is no
+// level's: a seat names a level, and none of them holds what it holds.
+var ErrNoCloudflareLevel = errors.New("the token's permissions are not those of any Cloudflare level: " +
 	"save the level it should hold here, and Crewlet narrows it to that")
 
 // ErrNoExpoLevel refuses keeping an Expo robot's permissions when they are no

@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // A REF IS REDACTED BEFORE ANYTHING READS IT. It is whatever word a report
@@ -77,6 +79,93 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 	}
 }
 
+// THE RECORD NAMES A SESSION AND A RELEASE OF A HARNESS'S SHAPES ALONE. Both
+// are the box's words, which a runner holds to those shapes as it reads the
+// box, and the record holds them again as it is published — trusting no
+// runner, nor a host of another build, to have done so, as it holds its two
+// reasons: one of any other shape, or past its bound, is none on the record,
+// never cut, since a shortened id or release names another one.
+//
+// Mutation: carry either as the runner handed it, hold it to its length alone
+// or its characters alone, or cut it to its bound, and a case goes red.
+func TestTheRecordNamesASessionAndAReleaseOfTheirShapesAlone(t *testing.T) {
+	t.Parallel()
+	const uuid = "9a8b7c6d-0000-4000-8000-000000000001"
+	widestID := strings.Repeat("s", executordomain.SessionIDMaxBytes)
+	widestRelease := strings.Repeat("1", executordomain.HarnessVersionMaxBytes-len(".0.0")) + ".0.0"
+	for _, tc := range []struct{ session, release, wantSession, wantRelease string }{
+		{uuid, "2.1.310", uuid, "2.1.310"},
+		{"ses_01J9ZQ3W7K", "2.0.32", "ses_01J9ZQ3W7K", "2.0.32"},
+		{widestID, widestRelease, widestID, widestRelease},
+		{widestID + "s", "1" + widestRelease, "", ""},
+		{"../../.credentials.json", "2.1.310 (Claude Code)", "", ""},
+		{"a session", "2.1", "", ""},
+		{"s\n" + uuid, "v2.1.310", "", ""},
+		{"", "2..310", "", ""},
+	} {
+		rec := collectedRecord(PendingRun{}, LaunchRecord{},
+			Result{SessionID: tc.session, HarnessVersion: tc.release}, time.Now())
+		if rec.HarnessSession != tc.wantSession || rec.HarnessVersion != tc.wantRelease {
+			t.Errorf("a box that named session %.40q (%d bytes) and release %.40q (%d bytes) is recorded "+
+				"as %.40q and %.40q; want %.40q and %.40q", tc.session, len(tc.session), tc.release,
+				len(tc.release), rec.HarnessSession, rec.HarnessVersion, tc.wantSession, tc.wantRelease)
+		}
+	}
+}
+
+// A PIECE IS MEASURED AS THE RECORD CARRIES IT: REDACTED. A redaction can
+// lengthen a text — a password's value written in pieces between escaped
+// breaks becomes a marker a piece, seven times its bytes — and the record is
+// redacted as it is published, so a report or a failure measured before its
+// last redaction rode the record at up to seven times its bound: a runner's
+// that redacted nothing, which the coordinator trusts no runner not to hand
+// over, and a model's rewrite, which no runner ever saw. Each is redacted as
+// it is fitted, a rewrite before it is measured, and one the redaction puts
+// past the bound is refused as a long one is: whole lines of the redacted text
+// stand in its place.
+//
+// Mutation: fit the report or the failure before redacting it, or measure the
+// rewrite before redacting it, and a case goes red.
+func TestAPieceIsMeasuredAsTheRecordCarriesIt(t *testing.T) {
+	t.Parallel()
+	// LINES OF A VALUE IN PIECES, just inside the bound as written and seven
+	// times it redacted, in lines a fallback can keep whole.
+	line := "pwd=" + strings.Repeat(`x\n`, 20) + "\n"
+	grows := strings.Repeat(line, MaxRunTextBytes/len(line))
+	if redacted := redact.Secrets(grows); len(redacted) < 4*MaxRunTextBytes {
+		t.Fatalf("the case's text redacts to %d bytes, which is not far past the %d-byte bound", len(redacted),
+			MaxRunTextBytes)
+	}
+	controls := strings.Repeat(strings.Repeat("\x01", 99)+"\n", 2*MaxRunTextBytes/100+1)
+	failure := strings.Repeat(strings.Repeat("\x01", 99)+"\n", MaxCondenseBytes/100+2)
+	noModel := &fakeCondenser{answer: func(RunPart, string, int) (string, error) {
+		return "", errors.New("no model")
+	}}
+	// A REWRITE OF THAT SHAPE, inside the budget as the model wrote it.
+	growingRewrite := &fakeCondenser{answer: func(_ RunPart, _ string, budget int) (string, error) {
+		return grows[:budget/len(line)*len(line)], nil
+	}}
+	for name, tc := range map[string]struct {
+		condense Condenser
+		result   Result
+	}{
+		"a runner that redacted nothing": {noModel, Result{Text: grows, Error: grows}},
+		"a rewrite a redaction grows":    {growingRewrite, Result{Text: controls, Error: failure}},
+	} {
+		c := &Coordinator{condense: tc.condense}
+		rec := collectedRecord(PendingRun{}, LaunchRecord{}, c.fitResult(t.Context(), PendingRun{}, tc.result),
+			time.Now())
+		// THE NOTE saying what was left out is not counted against the bound
+		// ([wholeLines]); a KiB holds it.
+		for piece, text := range map[string]string{"report": rec.Response, "failure": rec.Error} {
+			if len(text) > MaxRunTextBytes+1<<10 {
+				t.Errorf("%s: the record's %s is %d bytes, past the %d it is held to", name, piece, len(text),
+					MaxRunTextBytes)
+			}
+		}
+	}
+}
+
 // THE WHOLE RECORD FITS. Every piece of text a box wrote that rides the
 // launch's own record is at its bound, in the worst bytes JSON can be handed —
 // each one escaped six-fold — and the record still clears the queue's ceiling,
@@ -101,6 +190,18 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 		refs = append(refs, fmt.Sprintf("https://github.com/acme/api/pull/%d?x=%s", i, strings.Repeat("<", 400)))
 	}
 	asking := PendingRun{Question: strings.Repeat("<", decision.MaxQuestion)}
+	// THE TWO REASONS FAR PAST THEIR KiB: one line of control bytes a MiB
+	// long, as a box's own agent can make the session record's line the
+	// fall-back reason is read from — and as a runner, or a host of another
+	// build, that did not hold it would hand it over. Held as the record is
+	// published, each is at its widest whatever it came as; carried whole,
+	// either one puts the record past the ceiling. AND THE SESSION AND THE
+	// RELEASE THE BOX NAMED, the same MiB each, as such a runner would hand
+	// them over too: identifiers, which the record refuses rather than cuts
+	// when they are not of a harness's shapes; carried whole, either one puts
+	// the record past the ceiling as well.
+	reason := strings.Repeat("\x01", 1<<20)
+	kept := &SessionKept{NotKept: reason}
 	c := &Coordinator{condense: &fakeCondenser{answer: func(RunPart, string, int) (string, error) {
 		return "", errors.New("no model")
 	}}}
@@ -108,11 +209,23 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 		run    PendingRun
 		result Result
 	}{
-		"a failed run":    {PendingRun{}, Result{Text: twice, Error: failure, Transcript: twice, DeliveredRefs: refs}},
-		"a run that asks": {asking, Result{Text: twice, Transcript: twice, DeliveredRefs: refs}},
+		"a failed run": {PendingRun{}, Result{Text: twice, Error: failure, Transcript: twice, DeliveredRefs: refs,
+			FellBack: reason, Kept: kept, SessionID: reason, HarnessVersion: reason}},
+		"a run that asks": {asking, Result{Text: twice, Transcript: twice, DeliveredRefs: refs,
+			FellBack: reason, Kept: kept, SessionID: reason, HarnessVersion: reason}},
 	} {
 		fitted := c.fitResult(t.Context(), tc.run, tc.result)
-		raw, err := json.Marshal(collectedRecord(tc.run, LaunchRecord{}, fitted, time.Now()))
+		rec := collectedRecord(tc.run, LaunchRecord{}, fitted, time.Now())
+		if len(rec.HarnessSessionFellBack) > MaxFellBackBytes ||
+			len(rec.SessionNotKept) > executordomain.UnkeptReasonMaxBytes {
+			t.Errorf("%s: the record's reasons are %d and %d bytes, past the KiB each is held to", name,
+				len(rec.HarnessSessionFellBack), len(rec.SessionNotKept))
+		}
+		if rec.HarnessSession != "" || rec.HarnessVersion != "" {
+			t.Errorf("%s: the record names a session of %d bytes and a release of %d, where neither is "+
+				"of a harness's shape", name, len(rec.HarnessSession), len(rec.HarnessVersion))
+		}
+		raw, err := json.Marshal(rec)
 		if err != nil {
 			t.Fatal(err)
 		}
