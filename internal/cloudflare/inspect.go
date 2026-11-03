@@ -115,10 +115,14 @@ func inspect(
 // policy, which says nothing about what it holds, so nothing is guessed.
 func readUnheld(ctx context.Context, c *Client, cat catalogue, tokenID string) ([]string, error) {
 	own, found, err := c.Token(ctx, tokenID)
-	switch {
-	case err != nil && Status(err) != http.StatusForbidden:
+	if Status(err) == http.StatusForbidden {
+		// NOT SHOWN, which is an answer rather than a failure: no gap is judged.
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
-	case err != nil || !found:
+	}
+	if !found {
 		return nil, nil
 	}
 	return cat.unheld(own.Policies), nil

@@ -83,6 +83,12 @@ func TestTheProbeNamesWhatIsWrong(t *testing.T) {
 		}, typed, setup.VerifyRefused, `no zone named "example.com"`},
 		{"Cloudflare down", func(f *fakeCloudflare) { f.refuse["verify"] = http.StatusServiceUnavailable }, typed,
 			setup.VerifyUnreachable, "could not say"},
+		// ITS OWN POLICY NOT SHOWN is an answer, so no gap is judged; any other
+		// failure to read it is one.
+		{"its own policy not shown", func(f *fakeCloudflare) { f.refuseID[provisionerID] = http.StatusForbidden },
+			typed, setup.VerifyWorks, "Works. The token is active"},
+		{"its own policy unreadable", func(f *fakeCloudflare) { f.refuseID[provisionerID] = http.StatusBadGateway },
+			typed, setup.VerifyUnreachable, "502 Bad Gateway"},
 	} {
 		f := newFakeCloudflare()
 		if tc.arrange != nil {
