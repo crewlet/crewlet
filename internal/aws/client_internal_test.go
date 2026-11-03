@@ -128,7 +128,7 @@ func TestASeatSessionGoesThroughTheBrokerUnderTheSeatsName(t *testing.T) {
 			}}})
 		default:
 			form, _ := url.ParseQuery(string(body))
-			if form.Get("Action") != "AssumeRole" || form.Get("RoleSessionName") != "crewlet-acme-seat-sre" || form.Get("DurationSeconds") != "900" {
+			if form.Get("Action") != "AssumeRole" || form.Get("RoleSessionName") != "crewlet-acme-seat-sre" || form.Get("DurationSeconds") != "3600" {
 				t.Errorf("AssumeRole %v", form)
 			}
 			if r.Header.Get("X-Amz-Security-Token") != "broker-token" {

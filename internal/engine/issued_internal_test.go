@@ -124,6 +124,7 @@ var issuerCases = []struct {
 		return issuerRig{e: appEngine(t, c), c: c, kind: integration.KindGitHub,
 			ready: "builder", waiting: "planner", says: "403"}
 	}},
+	{"aws", awsRig},
 	{"a second issuer", func(t *testing.T, refused bool) issuerRig {
 		// GITHUB OFF, so the fake is the only issuer that issues anything.
 		c := appCompany(t, "https://github.example.com", false)

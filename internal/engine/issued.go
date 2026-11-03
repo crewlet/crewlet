@@ -174,7 +174,7 @@ func (e *Engine) seatIssuers() []seatIssuer {
 	if e.issuers != nil {
 		return e.issuers
 	}
-	return []seatIssuer{githubSeatIssuer{issuer: &e.githubIssuer}}
+	return []seatIssuer{githubSeatIssuer{issuer: &e.githubIssuer}, awsSeatIssuer{issuer: &e.awsIssuer}}
 }
 
 // seatToken answers one variable an integration issues one seat, issued at

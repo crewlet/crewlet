@@ -15,7 +15,7 @@ import (
 
 // AWS's half of per-seat access. The seat's account is its IAM role, recorded
 // in the ledger by role ID; its access is the Crewlet level policies attached
-// to it; its credential is a session the engine issues at use for 15 minutes,
+// to it; its credential is a session the engine issues at use for an hour,
 // never sealed.
 //
 // DENY-ALL IS WHAT "OFF" MEANS. Off attaches AWS's deny-all policy first,
@@ -34,17 +34,38 @@ type accessVendor struct{}
 func (accessVendor) Kind() integration.Kind { return integration.KindAWS }
 
 // Catalog is AWS's per-seat offer: three fixed levels, no scope (the Regions
-// are the company's, set in the stack), and nothing to rotate, since a session
-// lasts 15 minutes.
+// are the company's, set in the stack), nothing sealed and nothing to rotate,
+// since the session is issued at use for an hour.
 func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
-		Kind:        integration.KindAWS,
-		Credentials: []string{CredentialsField},
+		Kind: integration.KindAWS,
 		Lanes: []seataccess.LaneSpec{{
-			Lane: seataccess.LaneAWS, Levels: true,
+			Lane: seataccess.LaneAWS, Levels: true, Issued: CredentialsField,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet,
 		}},
 	}
+}
+
+// BoxDefaults is the two files the seat's AWS CLI reads, and no variable: its
+// crewlet profile, and the session file the completion poll rewrites as the
+// session renews.
+func (accessVendor) BoxDefaults(c *config.Company, role *config.Role) seataccess.BoxSet {
+	if c == nil || c.Integrations.AWS == nil || c.Integrations.AWS.Provisioning == nil || role == nil {
+		return seataccess.BoxSet{}
+	}
+	return seataccess.BoxSet{Files: []seataccess.BoxFile{
+		{Path: BoxConfigPath, Ref: BoxConfig(c.Integrations.AWS.Provisioning.HomeRegion)},
+		{Path: BoxCredentialsPath, Ref: "${" + SeatVariable(role.IdentityKey()) + "}", Rewritten: true},
+	}}
+}
+
+// settleFor is how long the lane's tool waits for IAM to apply a grant: a
+// level change reached a live session within about 2 minutes, live.
+const settleFor = 2 * time.Minute
+
+// settling marks a grant the step wrote as still applying.
+func settling() *seataccess.Settling {
+	return &seataccess.Settling{Reason: "AWS is still applying the change", Until: time.Now().Add(settleFor)}
 }
 
 // levelInfo is how the Agents tab names each level.
@@ -107,7 +128,7 @@ func (accessVendor) Steps(
 			"Delete its IAM role, which ends its sessions at once. CloudTrail keeps its entries")}
 	default:
 		// A mint, rotate, revoke or retire has nothing to take: the session
-		// is issued at use for 15 minutes and never sealed.
+		// is issued at use for an hour and never sealed.
 		return nil
 	}
 	for i := range out {
@@ -253,9 +274,9 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 		if in.Step.Index == 0 {
 			return s.create(ctx, in)
 		}
-		return seataccess.StepResult{}, s.converge(ctx, in, s.want(in.Want), true)
+		return s.granted(s.converge(ctx, in, s.want(in.Want), true))
 	case seataccess.OpEnable, seataccess.OpLevel:
-		return seataccess.StepResult{}, s.converge(ctx, in, s.want(in.Want), false)
+		return s.granted(s.converge(ctx, in, s.want(in.Want), false))
 	case seataccess.OpDisable:
 		if in.Step.Index == 0 {
 			name, err := s.roleOf(in)
@@ -271,6 +292,14 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 	default:
 		return seataccess.StepResult{}, fmt.Errorf("aws: no step for %q", in.Step.Op)
 	}
+}
+
+// granted is a grant step's result: settling while IAM applies it.
+func (s *accessSession) granted(err error) (seataccess.StepResult, error) {
+	if err != nil {
+		return seataccess.StepResult{}, err
+	}
+	return seataccess.StepResult{Settling: settling()}, nil
 }
 
 // want is what a seat that is on holds: its level and the company's IAM read

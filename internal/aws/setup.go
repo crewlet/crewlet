@@ -148,6 +148,6 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 // Summary is the sentence the connect form opens with.
 func Summary() string {
 	return "Crewlet gives each agent its own IAM role in your AWS account, at the level you choose, and signs " +
-		"it in for 15 minutes at a time, so CloudTrail names the agent for everything it does. Connecting " +
+		"it in for an hour at a time, so CloudTrail names the agent for everything it does. Connecting " +
 		"creates one CloudFormation stack in your account. No access key is stored."
 }

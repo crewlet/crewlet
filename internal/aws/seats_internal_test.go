@@ -234,7 +234,7 @@ func TestCreateSeatRoleIsContainedFromTheStart(t *testing.T) {
 	want := map[string]string{
 		"Action": "CreateRole", "RoleName": "crewlet-acme-" + slug, "Path": "/crewlet/acme/seat/",
 		"PermissionsBoundary": "arn:aws:iam::123456789012:policy/crewlet/acme/crewlet-acme-seat-boundary",
-		"MaxSessionDuration":  "900", "Tags.member.3.Key": "crewlet:seat", "Tags.member.3.Value": slug,
+		"MaxSessionDuration":  "3600", "Tags.member.3.Key": "crewlet:seat", "Tags.member.3.Value": slug,
 	}
 	for k, v := range want {
 		if form.Get(k) != v {

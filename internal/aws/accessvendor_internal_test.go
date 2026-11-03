@@ -80,12 +80,13 @@ func recorded(handle, id string) seataccess.Record {
 }
 
 // THE VENDOR AGREES WITH THE DOCUMENT: one lane, three fixed levels, the
-// session issued at use and nothing to rotate.
+// session issued at use, nothing sealed and nothing to rotate.
 func TestTheAWSCatalogIsTheDocuments(t *testing.T) {
 	t.Parallel()
 	cat := accessVendor{}.Catalog()
-	if cat.Kind != integration.KindAWS || !slices.Equal(cat.Credentials, config.SeatSealedFields("aws")) ||
-		len(cat.Lanes) != 1 || cat.Lanes[0].Lane != seataccess.LaneAWS || cat.Lanes[0].Rotatable || cat.Lanes[0].Scoped {
+	if cat.Kind != integration.KindAWS || len(cat.Credentials) != 0 || len(config.SeatSealedFields("aws")) != 0 ||
+		len(cat.Lanes) != 1 || cat.Lanes[0].Lane != seataccess.LaneAWS || cat.Lanes[0].Issued != CredentialsField ||
+		cat.Lanes[0].Rotatable || cat.Lanes[0].Scoped {
 		t.Fatalf("%+v", cat)
 	}
 	opts, _ := (&accessSession{client: &Client{conn: mustConnection(t)}}).Options(context.Background(), seataccess.LaneAWS)
@@ -192,9 +193,10 @@ func TestApplyTakesEachOpInIAM(t *testing.T) {
 	if err != nil || made.AccountID != "AROANEW" {
 		t.Fatalf("create: %+v %v", made, err)
 	}
-	if _, err := s.Apply(ctx, seataccess.ApplyInput{Seat: seat, Step: create[1], Want: want,
-		Prior: []seataccess.StepResult{made}}); err != nil {
-		t.Fatal(err)
+	granted, err := s.Apply(ctx, seataccess.ApplyInput{Seat: seat, Step: create[1], Want: want,
+		Prior: []seataccess.StepResult{made}})
+	if err != nil || granted.Settling == nil || granted.Settling.Reason != "AWS is still applying the change" {
+		t.Fatalf("a grant is not marked as still applying: %+v %v", granted, err)
 	}
 	role := roles[made.Account]
 	if !slices.Equal(role.policies, conn.Policies(Access{Level: config.AWSLevelOperate, IAMRead: true})) {
@@ -246,4 +248,24 @@ func TestALevelStepRefusesAForeignGrant(t *testing.T) {
 	if slices.Contains(f.actions(), "AttachRolePolicy") {
 		t.Error("a write was made beside a foreign grant")
 	}
+}
+
+// THE BOX HOLDS TWO FILES AND NO VARIABLE: the crewlet profile, written once,
+// and the session file the poll rewrites, holding the seat's issued variable.
+func TestTheBoxHoldsTheProfileAndTheSessionFile(t *testing.T) {
+	t.Parallel()
+	c := &config.Company{}
+	c.Integrations.AWS = &config.AWS{Enabled: true, Provisioning: &config.AWSProvisioning{HomeRegion: "eu-west-1"}}
+	got := accessVendor{}.BoxDefaults(c, &config.Role{Name: "SRE", Handle: "sre"})
+	if len(got.Env) != 0 || len(got.Files) != 2 {
+		t.Fatalf("%+v", got)
+	}
+	conf, creds := got.Files[0], got.Files[1]
+	if conf.Path != ".aws/config" || conf.Rewritten || !strings.Contains(conf.Ref, "region = eu-west-1") {
+		t.Errorf("config file %+v", conf)
+	}
+	if creds.Path != BoxCredentialsPath || !creds.Rewritten || creds.Ref != "${AWS_CREDENTIALS_SRE}" {
+		t.Errorf("credentials file %+v", creds)
+	}
+	var _ seataccess.BoxDefaulter = accessVendor{}
 }

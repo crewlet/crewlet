@@ -13,11 +13,16 @@ import (
 // [seataccess.BoxDefaulter] supplies reaches the box of every seat with any of
 // its lanes on, beneath every layer a person writes, so which vendors supply
 // one is held here, each with why: a vendor that starts to fails this test
-// until it is named. None does in this build. Every vendor is registered here
+// until it is named. Every vendor is registered here
 // (scoperequired_test.go), so the list is checked against all of them.
 func TestAVendorGainsBoxDefaultsOnlyByAReviewedChange(t *testing.T) {
 	t.Parallel()
-	reviewed := map[integration.Kind]string{}
+	reviewed := map[integration.Kind]string{
+		// The AWS CLI's crewlet profile and the session file the poll
+		// rewrites: no variable and nothing a person writes, and an agent
+		// on at AWS reaches its role through nothing else.
+		integration.KindAWS: "the crewlet profile and its rewritten session file",
+	}
 	var supplying []integration.Kind
 	registered := seataccess.Registered()
 	for _, v := range registered {
