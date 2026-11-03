@@ -10200,7 +10200,8 @@ seat.
 | Status | `error` | When |
 |---|---|---|
 | `404` | `not_found` | The configuration declares no such server |
-| `409` | `conflict` | The server is turned off (`enabled: false`), so nothing runs it; or the seat named is not granted the server |
+| `409` | `conflict` | The server is turned off (`enabled: false`), so nothing runs it |
+| `409` | `seat_not_granted` | The seat named is not granted the server, so nothing runs it as that seat |
 | `400` | `invalid_body` | A `seat` named for a shared server, which runs one instance for the company; or a body with a field the route does not read |
 | `404` | `no_such_seat` | The organization has no agent seat by that handle |
 | `503` | `unavailable` | The node could not record the request; ask again |
@@ -10287,7 +10288,8 @@ record goes when the configuration stops declaring the server.
 | Status | `error` | When |
 |---|---|---|
 | `404` | `not_found` | The configuration declares no such server |
-| `409` | `conflict` | The server is turned off, so nothing runs it to test (test its entry as a draft instead); or the seat named is not granted the server |
+| `409` | `conflict` | The server is turned off, so nothing runs it to test (test its entry as a draft instead) |
+| `409` | `seat_not_granted` | The seat named is not granted the server, so nothing runs it as that seat |
 | `400` | `invalid_body` | A `seat` named for a shared server, none named for a per-agent one, or a body with a field the route does not read |
 | `404` | `no_such_seat` | The organization has no agent seat by that handle |
 | `503` | `unavailable` | The node could not ask the fleet; ask again |
@@ -10503,9 +10505,9 @@ The body is read strictly (`400 invalid_body` for a field it does not read, no
 `value`, an empty one, or one holding a line break or a NUL, since a header's
 or a variable's value is one line), and any other query parameter is `400
 invalid_query`. `404 not_found` for a server the configuration does not
-declare, `404 no_such_seat` for a seat that is not an agent's, `409 conflict`
-for a seat the server is not granted to. **No answer, log line or audit record
-carries the value**, a refusal included: every call is one `mcp_server_acted`
+declare, `404 no_such_seat` for a seat that is not an agent's, and
+`409 seat_not_granted` for a seat the server is not granted to. **No answer,
+log line or audit record carries the value**, a refusal included: every call is one `mcp_server_acted`
 with the action `store_value`, naming the `key` and the `variable`, and a
 test's sentences withhold the values the server was started with.
 
