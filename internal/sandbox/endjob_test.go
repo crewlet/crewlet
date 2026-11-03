@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -234,53 +235,80 @@ func TestAJobThatOutlivesItsEndIsKilledBeforeItsTake(t *testing.T) {
 	}
 }
 
-// AN UNHEARD JOB IS KILLED, NOT WAITED FOR. A job whose script answers no end
-// request — an older build's, one not yet at its first line — is asked nothing,
-// and the read kills it at once: nothing would ever end it within the wait.
+// A JOB ASKED NOTHING IS KILLED, NOT WAITED FOR. A job whose script could not
+// be asked to end — one that records no end protocol, an older build's or one
+// not yet at its first line; one whose recorded pid the box says is no process
+// of the job; one in a box that could not be asked at all — is killed at once:
+// nothing would ever end it within the wait. Each is polled once, whether it
+// was over, before the kill; its session is taken final after it; and the kill
+// says why, the box that could not be asked with the error that said so.
 //
-// Mutation: wait out the end's wait for an unheard job, and it is polled
-// through the whole of it before it is killed.
-func TestAnUnheardJobIsKilledNotWaitedFor(t *testing.T) {
-	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	launched := rig.launchKept(t, "t1")
-	box := rig.provider.Box(launched.SandboxID)
-	rig.runner.Unheard = true
-	var mu sync.Mutex
-	polls, killed, pollsAtKill := 0, false, -1
-	rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		polls++
-		if killed {
-			return JobEnded, nil
-		}
-		return JobRunning, nil
-	}
-	box.KillJobFunc = func(context.Context, string) error {
-		mu.Lock()
-		defer mu.Unlock()
-		killed, pollsAtKill = true, polls
-		return nil
-	}
-	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-		t.Fatalf("StopSeat: %v", err)
-	}
-	rig.fireRetries()
-	rig.awaitKeeps()
-	rig.fireRetries()
+// Mutation: wait out the end's wait for any of the three — an ask's error or a
+// pid that is not the job's taken for a request delivered — and the job is
+// polled through the whole of it before it is killed.
+func TestAJobAskedNothingIsKilledNotWaitedFor(t *testing.T) {
+	for name, tc := range map[string]struct {
+		unheard bool
+		endErr  error
+		why     string
+	}{
+		"a script that records no end protocol": {unheard: true, why: "script_unheard"},
+		"a pid that is no process of the job":   {endErr: ErrNotJobProcess, why: "not_the_jobs"},
+		"a box that could not be asked":         {endErr: errors.New("the runtime is down"), why: "ask_failed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLogs(t)
+			rig, _, _ := keepingRig(t)
+			launched := rig.launchKept(t, "t1")
+			box := rig.provider.Box(launched.SandboxID)
+			rig.runner.Unheard = tc.unheard
+			if tc.endErr != nil {
+				box.EndJobFunc = func(context.Context, string, int) error { return tc.endErr }
+			}
+			var mu sync.Mutex
+			polls, killed, pollsAtKill := 0, false, -1
+			rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				polls++
+				if killed {
+					return JobEnded, nil
+				}
+				return JobRunning, nil
+			}
+			box.KillJobFunc = func(context.Context, string) error {
+				mu.Lock()
+				defer mu.Unlock()
+				killed, pollsAtKill = true, polls
+				return nil
+			}
+			if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+				t.Fatalf("StopSeat: %v", err)
+			}
+			rig.fireRetries()
+			rig.awaitKeeps()
+			rig.fireRetries()
 
-	mu.Lock()
-	defer mu.Unlock()
-	if pollsAtKill != 1 {
-		t.Fatalf("the unheard job was polled %d times before it was killed, want once — whether it was over",
-			pollsAtKill)
-	}
-	if rig.runner.Asks() != 1 {
-		t.Fatalf("the job was asked to end %d times, want once", rig.runner.Asks())
-	}
-	if takes := rig.runner.Takes(); len(takes) != 1 || takes[0].Pack {
-		t.Fatalf("takes %+v, want the killed job's session taken final", takes)
+			mu.Lock()
+			defer mu.Unlock()
+			if pollsAtKill != 1 {
+				t.Fatalf("the job was polled %d times before it was killed, want once — whether it was over",
+					pollsAtKill)
+			}
+			if rig.runner.Asks() != 1 {
+				t.Fatalf("the job was asked to end %d times, want once", rig.runner.Asks())
+			}
+			if takes := rig.runner.Takes(); len(takes) != 1 || takes[0].Pack {
+				t.Fatalf("takes %+v, want the killed job's session taken final", takes)
+			}
+			said := logs.String()
+			if !strings.Contains(said, "msg=sandbox_job_killed") || !strings.Contains(said, "why="+tc.why) {
+				t.Fatalf("the kill was not said as why=%s:\n%s", tc.why, said)
+			}
+			if unasked := strings.Contains(said, "sandbox_job_end_unasked"); unasked != (tc.why == "ask_failed") {
+				t.Fatalf("the ask's failure was said %v, want %v:\n%s", unasked, tc.why == "ask_failed", said)
+			}
+		})
 	}
 }
 
