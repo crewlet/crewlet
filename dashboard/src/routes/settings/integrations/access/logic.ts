@@ -54,9 +54,9 @@ export type HandoffStep = "create" | "mint" | "rerole";
  */
 export interface Handoff {
   step: HandoffStep;
-  /** The vendor's page where the person acts. */
-  url: string;
-  /** The engine's sentence for the wait. */
+  /** The vendor's page where the person acts, where the engine names it. */
+  url: string | undefined;
+  /** The engine's sentence for the wait; empty for a rotate, which waits on nothing yet. */
   said: string;
   /** The account to make, or the one the seat already has, by name, where the engine names it. */
   account: string | undefined;
@@ -66,9 +66,22 @@ export interface Handoff {
   current: string | undefined;
   /** A token was sealed for the seat before (revoked at the vendor, or being rotated), so this is a new one. */
   renew: boolean;
+  /** Opened to rotate a token the vendor still accepts: the sheet starts at the paste. */
+  rotating: boolean;
 }
 
 const HANDOFF_STEPS: ReadonlySet<string> = new Set<HandoffStep>(["create", "mint", "rerole"]);
+
+/** What the engine says of a seat's account at the vendor: its name, the role chosen, and the role it holds. */
+function seatFacts(lane: Lane, saved: AccessSeatLane) {
+  const level = (id: string | undefined) => lane.levels.find((l) => l.id !== "" && l.id === id);
+  const chosen = level(saved.desired.level);
+  return {
+    account: saved.observed.account || undefined,
+    role: chosen ? { name: chosen.name, note: chosen.note } : undefined,
+    current: level(saved.observed.level)?.name,
+  };
+}
 
 /**
  * The handoff a seat is waiting on, or undefined: only on a lane whose
@@ -82,16 +95,31 @@ export function handoffOf(lane: Lane, saved: AccessSeatLane): Handoff | undefine
   if (!wait || wait.actor !== "you" || !wait.action_url || !HANDOFF_STEPS.has(wait.step)) {
     return undefined;
   }
-  const level = (id: string | undefined) => lane.levels.find((l) => l.id !== "" && l.id === id);
-  const chosen = level(saved.desired.level);
   return {
     step: wait.step as HandoffStep,
     url: wait.action_url,
     said: wait.said,
-    account: wait.account || saved.observed.account || undefined,
-    role: chosen ? { name: chosen.name, note: chosen.note } : undefined,
-    current: level(saved.observed.level)?.name,
+    ...seatFacts(lane, saved),
     renew: saved.observed.credential !== undefined || saved.observed.credential_gone === true,
+    rotating: false,
+  };
+}
+
+/**
+ * The handoff a rotate opens on a lane whose tokens a person makes: a new
+ * token for the account the seat already has, pasted here. The engine takes a
+ * paste for a seat whose token still works as the rotate, so the seat action
+ * is never called. Undefined on every other lane, which rotates by itself.
+ */
+export function rotateHandoffOf(lane: Lane, saved: AccessSeatLane): Handoff | undefined {
+  if (!laneWords(lane.key).handoff) return undefined;
+  return {
+    step: "mint",
+    url: undefined,
+    said: "",
+    ...seatFacts(lane, saved),
+    renew: true,
+    rotating: true,
   };
 }
 

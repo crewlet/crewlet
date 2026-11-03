@@ -359,18 +359,25 @@ test("turning an Expo seat off says the token goes at once and the robot is your
   ).toBeTruthy();
 });
 
-test("rotating an Expo token says a person pastes a new one for the same robot", async () => {
+// AN EXPO ROTATE IS A PASTE: the sheet opens at "Paste it here" for the robot
+// the seat has, and the engine takes the paste as the rotate, so the rotate
+// seat action is never called. Mutation: route rotate to the dialog again.
+test("rotating an Expo token opens the sheet at the paste and never calls the rotate action", async () => {
   draw(expoAnswer());
   details("QA", "Expo");
   fireEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
-  const dialog = screen.getByRole("alertdialog", { name: "Rotate QA's Expo credential?" });
-  expect(
-    within(dialog).getByText(/create a new token for the same robot at Expo and paste it here/),
-  ).toBeTruthy();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Rotate credential" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  const sheet = screen.getByRole("dialog", { name: "New token for QA" });
+  fireEvent.change(within(sheet).getByLabelText("Token"), {
+    target: { value: "robot-token-for-tests" },
+  });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Check and save" }));
   await waitFor(() =>
-    expect(calls.act).toEqual([{ kind: "expo", handle: "qa", lane: "expo", action: "rotate" }]),
+    expect(calls.credential).toEqual([
+      { kind: "expo", handle: "qa", lane: "expo", value: "robot-token-for-tests" },
+    ]),
   );
+  expect(calls.act).toEqual([]);
 });
 
 test("turning a seat off says in the review what that does at the vendor", async () => {

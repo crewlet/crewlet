@@ -77,6 +77,7 @@ import {
   productOnlyNote,
   providedExternally,
   refusedLevel,
+  rotateHandoffOf,
   sameDesired,
   scopeApplies,
   scopeWords,
@@ -553,11 +554,14 @@ export function AgentsAccess({
             now={now}
             actions={availableActions(row.lane, row.saved, held !== undefined, data.syncing)}
             pending={pending[row.key]}
-            onAction={(a) =>
-              a === "rotate"
-                ? setRotating({ seat: row.seat, lane: row.lane })
-                : setRemoving({ seat: row.seat, lane: row.lane })
-            }
+            onAction={(a) => {
+              // A ROTATE THAT A PERSON MAKES AT THE VENDOR opens the sheet at
+              // the paste; every other lane rotates by itself.
+              const handoff = a === "rotate" ? rotateHandoffOf(row.lane, row.saved) : undefined;
+              if (handoff) setHanding({ seat: row.seat, lane: row.lane, handoff });
+              else if (a === "rotate") setRotating({ seat: row.seat, lane: row.lane });
+              else setRemoving({ seat: row.seat, lane: row.lane });
+            }}
           />
         )}
         renderAccessoryRow={(row) => {

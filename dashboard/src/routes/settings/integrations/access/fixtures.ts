@@ -366,21 +366,25 @@ const EXPO_WAITS: Record<HandoffStep, string> = {
 
 /**
  * Expo with PM turned on at Runner and waiting on a person for its robot at
- * one step, QA as in [expoAnswer]. `named: false` leaves the robot's name off
- * the wait, as an engine that sends none would.
+ * one step, QA as in [expoAnswer]. The robot's name is `observed.account`,
+ * the name to give it while it does not exist yet; `named: false` leaves it
+ * off, as an engine that sends none would.
  */
 export function expoWaitingAnswer(
   step: HandoffStep = "create",
   { renew = step !== "create", named = true }: { renew?: boolean; named?: boolean } = {},
 ): AccessAnswer {
   const answer = expoAnswer();
-  const robot = step === "create" ? {} : { account: PM_ROBOT, account_id: "robot-pm" };
+  const robot = {
+    ...(named ? { account: PM_ROBOT } : {}),
+    ...(step === "create" ? {} : { account_id: "robot-pm" }),
+  };
   answer.seats[0] = seat("pm", "PM", {
     expo: {
       desired: { enabled: true, level: "runner" },
       observed:
         step === "create"
-          ? { exists: false, enabled: false }
+          ? { exists: false, enabled: false, ...robot }
           : {
               exists: step === "rerole",
               enabled: step === "rerole",
@@ -403,7 +407,6 @@ export function expoWaitingAnswer(
           remedy: "",
           actor: "you",
           action_url: EXPO_TOKENS_PAGE,
-          ...(named ? { account: PM_ROBOT } : {}),
         },
       },
       plan: [],

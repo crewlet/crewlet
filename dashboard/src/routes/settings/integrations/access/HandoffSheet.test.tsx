@@ -14,8 +14,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { HandoffSheet } from "./HandoffSheet.tsx";
-import { EXPO_LANE, expoWaitingAnswer, seat } from "./fixtures.ts";
-import { handoffOf, type Handoff, type HandoffStep } from "./logic.ts";
+import { EXPO_LANE, expoAnswer, expoWaitingAnswer, seat } from "./fixtures.ts";
+import { handoffOf, rotateHandoffOf, type Handoff, type HandoffStep } from "./logic.ts";
 
 afterEach(cleanup);
 
@@ -190,4 +190,18 @@ test("a robot the engine did not name is asked for in the engine's words", () =>
     within(robot).getByText("Add a robot named crewlet-gophrase-pm with the Runner role at Expo"),
   ).toBeTruthy();
   expect(within(robot).queryByRole("button", { name: /^Copy/ })).toBeNull();
+});
+
+// A ROTATE STARTS AT THE PASTE, its token step one step back for a person who
+// has not made the new token yet; with no wait behind it, the engine named no
+// page, so there is no Open Expo to draw. Mutation: start a rotate at the token.
+test("a rotate starts at the paste, with how to make the token one step back", () => {
+  const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
+  draw(rotateHandoffOf(EXPO_LANE, qa)!);
+  expect(screen.getByText("New token for PM")).toBeTruthy();
+  expect(within(sheet()).getByLabelText("Token")).toBeTruthy();
+  press("Back");
+  const token = within(sheet()).getByRole("region", { name: "Create a new token" });
+  expect(token.textContent).toContain("On the row of crewlet-gophrase-qa, choose Create token.");
+  expect(within(token).queryByText(/Open Expo/)).toBeNull();
 });
