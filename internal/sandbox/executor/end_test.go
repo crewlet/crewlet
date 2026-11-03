@@ -377,10 +377,15 @@ func TestASecondEndRequestLeavesAClaudeCodePackWhole(t *testing.T) {
 // box may have: the run's script packs in its staging directory and moves a
 // whole archive into place, so a job killed while it packs — an end past its
 // wait — leaves only the staging directory, which the clear before the box's
-// next run removes.
+// next run removes. AND THE JOB'S END STANDS: recorded as soon as its harness
+// was over, before the pack, so the collection of a run killed mid-pack —
+// which wrote no exit status, its wrapper killed with it — still reads it as
+// ended on request, never as the success the report its harness wrote would
+// make it.
 //
-// Mutation: tar straight into the capture's path, and the kill leaves part of an
-// archive where the take reads it as whole.
+// Mutations: tar straight into the capture's path, and the kill leaves part of
+// an archive where the take reads it as whole; record the end only after the
+// pack, and the run killed mid-pack reads as a success.
 func TestAPackKilledMidwayLeavesNoArchiveWhereTheTakeReads(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -394,6 +399,11 @@ func TestAPackKilledMidwayLeavesNoArchiveWhereTheTakeReads(t *testing.T) {
 			t.Fatalf("Start: %v", err)
 		}
 		boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
+		// THE REPORT A HARNESS WRITES before it stops, which reads as a
+		// success where nothing says the run was ended.
+		if err := box.WriteFile(t.Context(), p.Findings(), []byte("fixed the flake")); err != nil {
+			t.Fatal(err)
+		}
 		askEnd(t, runner, box, handle)
 		waitForFile(t, begun, "the ended run to pack")
 		if err := box.KillJob(t.Context(), handle.CommandID); err != nil {
@@ -401,6 +411,18 @@ func TestAPackKilledMidwayLeavesNoArchiveWhereTheTakeReads(t *testing.T) {
 		}
 		awaitOver(t, runner, box, handle, 15*time.Second, "the job was killed")
 
+		if ended := boxFile(t, box, p.JobEnded()); ended != "asked\n" {
+			t.Errorf("the job killed mid-pack has its end recorded as %q, want asked", ended)
+		}
+		res, err := runner.Collect(t.Context(), box, handle)
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		const opening = "the run was ended on request before it finished: its harness was told to stop"
+		if res.Success || res.JobEnd != sandbox.JobEndAsked || !strings.HasPrefix(res.Error, opening) {
+			t.Errorf("the run killed mid-pack collects success %v, end %q, failure %q; want one that says it "+
+				"was ended", res.Success, res.JobEnd, res.Error)
+		}
 		if left := boxFile(t, box, p.SessionCapture()); left != "" {
 			t.Fatalf("the killed pack left %q where the take reads a whole archive", left)
 		}
