@@ -218,17 +218,20 @@ func TestASeatsToolCredentialNeverSignsItsExecutorIn(t *testing.T) {
       model: sonnet
       auth: {mode: api-key, api_key: "${ANTHROPIC_KEY}"}
 `
+	const doServer = "Give this agent the digitalocean MCP server instead"
 	for _, tc := range []struct {
-		name, llm, chain, box, path string
+		name, llm, chain, box, path, server string
 	}{
-		{name: "in its env", llm: opencodeOnDigitalOcean, chain: "oc",
+		{name: "in its env", llm: opencodeOnDigitalOcean, chain: "oc", server: doServer,
 			box: "      env: {" + line + "}\n", path: "roles[0].sandbox.env.DIGITALOCEAN_ACCESS_TOKEN"},
-		{name: "in a setup step's env", llm: opencodeOnDigitalOcean, chain: "oc",
+		{name: "in a setup step's env", llm: opencodeOnDigitalOcean, chain: "oc", server: doServer,
 			box:  "      setup: [{name: doctl, env: {" + line + "}}]\n",
 			path: "roles[0].sandbox.setup[0].env.DIGITALOCEAN_ACCESS_TOKEN"},
 		{name: "beside a fallback member", llm: claude + opencodeOnDigitalOcean, chain: "[cc, oc]",
-			box: "      env: {" + line + "}\n", path: "roles[0].sandbox.env.DIGITALOCEAN_ACCESS_TOKEN"},
+			server: doServer, box: "      env: {" + line + "}\n",
+			path: "roles[0].sandbox.env.DIGITALOCEAN_ACCESS_TOKEN"},
 		{name: "GitLab's token", path: "roles[0].sandbox.env.GITLAB_TOKEN", chain: "oc",
+			server: "Give this agent the gitlab MCP server instead",
 			llm: `    oc:
       harness: opencode
       model: gitlab/duo-chat-sonnet-4-5
@@ -237,9 +240,10 @@ func TestASeatsToolCredentialNeverSignsItsExecutorIn(t *testing.T) {
 `, box: `      env: {GITLAB_TOKEN: "${GITLAB_TOKEN_SRE}"}` + "\n"},
 	} {
 		err := rejects(t, seatSignInDoc(tc.llm, tc.chain, tc.box), tc.path)
-		if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "providers.llm.oc") ||
-			!strings.Contains(err.Error(), "MCP server") {
-			t.Errorf("%s: %v, want a conflict naming the entry and the remedy", tc.name, err)
+		if !errors.Is(err, ErrConflict) ||
+			!strings.Contains(err.Error(), "is also how providers.llm.oc, the opencode harness") ||
+			!strings.Contains(err.Error(), tc.server) {
+			t.Errorf("%s: %v, want a conflict naming the entry and %q", tc.name, err, tc.server)
 		}
 	}
 

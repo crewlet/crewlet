@@ -486,7 +486,7 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	}
 	gap := refGap{env: resolver, mint: mint}
 	facts := refGap{env: resolver, mint: mint}
-	var mine map[string]bool
+	var mine map[string]string
 	if c != nil {
 		mine = c.Config.SeatCredentialVariables(seat.Handle())
 	}
@@ -500,7 +500,7 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 			if !l.fact {
 				out.secrets = append(out.secrets, referencedValues(resolver, l.value)...)
 			}
-			if slices.ContainsFunc(envref.Names(l.value), func(name string) bool { return mine[name] }) {
+			if slices.ContainsFunc(envref.Names(l.value), func(name string) bool { return mine[name] != "" }) {
 				out.tools = append(out.tools, key)
 			}
 		case l.fact:
