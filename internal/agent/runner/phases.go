@@ -529,9 +529,18 @@ type Runner struct {
 }
 
 // Sent waits until every record this runner publishes off a request's path has
-// gone out, or given up within its budget ([Runner.sessionStarted]). The
-// goroutines are the runner's, and whatever reads the round's record after
-// them waits for them here rather than racing them.
+// gone out, or given up within its budget ([startedFrameBudget]): the
+// goroutines are the runner's own, each ended by its budget, and Sent is how a
+// caller that reads what they publish knows they are done — a test, which
+// would otherwise race them.
+//
+// NOTHING ON THE ENGINE'S PATH WAITS HERE, and nothing orders such a record
+// after the round's later ones: the round is closed by its collection, a later
+// segment's runner on whichever node claims the run, which cannot wait on this
+// one. So a frame published while the broker is slow can land after the
+// round's completion, as the record of what the run was handed in the
+// continuation's place; one past its budget is dropped, and the collection
+// still says the run started a session of its own.
 func (r *Runner) Sent() { r.sent.Wait() }
 
 var _ turn.Phases = (*Runner)(nil)
