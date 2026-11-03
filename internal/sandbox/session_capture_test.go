@@ -388,8 +388,8 @@ type lateStore struct {
 	pending *SessionCapture
 }
 
-// noLeader is a store answering while its stream has no leader.
-var noLeader = errors.New("the stream has no leader")
+// errNoLeader is a store answering while its stream has no leader.
+var errNoLeader = errors.New("the stream has no leader")
 
 // leaderless reports whether the store answers this read or stamp with no
 // leader: one of the first fails after the reservation.
@@ -405,13 +405,16 @@ func (s *lateStore) leaderless() bool {
 
 // land applies a reservation still on its way, as made against the row before
 // whatever was read or written since: asked again on the row as it stands now.
-func (s *lateStore) land(turnID string) {
+// Under ctx's values and never its cancellation, as the late write is already
+// the store's: whatever became of the request that carried it in, nothing
+// takes it back.
+func (s *lateStore) land(ctx context.Context, turnID string) {
 	s.mu.Lock()
 	pending := s.pending
 	s.pending = nil
 	s.mu.Unlock()
 	if pending != nil {
-		_, _ = s.PendingStore.StampCapture(context.Background(), turnID, *pending)
+		_, _ = s.PendingStore.StampCapture(context.WithoutCancel(ctx), turnID, *pending)
 	}
 }
 
@@ -433,17 +436,17 @@ func (s *lateStore) StampCapture(ctx context.Context, turnID string, stamp Sessi
 		return false, ctx.Err()
 	}
 	if s.leaderless() {
-		return false, noLeader
+		return false, errNoLeader
 	}
-	defer s.land(turnID)
+	defer s.land(ctx, turnID)
 	return s.PendingStore.StampCapture(ctx, turnID, stamp)
 }
 
 func (s *lateStore) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
 	if s.leaderless() {
-		return PendingRun{}, false, noLeader
+		return PendingRun{}, false, errNoLeader
 	}
-	defer s.land(turnID)
+	defer s.land(ctx, turnID)
 	return s.PendingStore.Get(ctx, turnID)
 }
 
@@ -478,7 +481,7 @@ func TestAReservationTheStoreTakesLateIsSettledWhicheverWayItLands(t *testing.T)
 				t.Fatalf("a take whose place was never answered spooled %+v", spooled)
 			}
 			// AND ANY RESERVATION STILL ON ITS WAY, landed now.
-			store.land("t1")
+			store.land(t.Context(), "t1")
 			c := rig.get("t1").Capture
 			switch {
 			case c == nil:
