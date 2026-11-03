@@ -1642,7 +1642,15 @@ const (
 	// A lane naming its issued token's period and a note on the settings
 	// Crewlet puts in a box took it from 5454.8 KiB to 5455.0 KiB (+252
 	// bytes), all of it the integrations model chunk. 5456 KiB.
-	treeBudget = 5<<20 + 336<<10
+	// AWS (its catalogue entry and story, the Agents tab's words and the org
+	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
+	// tile's cloud glyph, with the Google Cloud mark from 0.93.0) took it from
+	// 5455.0 KiB to 5457.0 KiB (+2.0 KiB, 2050 bytes): the integrations model
+	// chunk +1543 bytes, the icons chunk +842 bytes, the entry +672 bytes, the
+	// catalogue chunk +170 bytes, the authority remedy chunk +156 bytes and
+	// the org builder's +69, less 840 bytes for a kit chunk folded into the
+	// entry and 562 bytes across the rest. 5458 KiB.
+	treeBudget = 5<<20 + 338<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
