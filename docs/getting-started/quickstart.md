@@ -262,8 +262,10 @@ units:
 > over: an agent's durable id is a UUIDv5 over `"<company name>:<handle>"`
 > (`org.DeriveAgentID`), and it is also what every `lead:` and `manages:` in
 > the chart above resolves. So changing a handle, *or the company `name`*,
-> mints a new id and orphans that seat's diary, onboarding markers and
-> counterparty profiles. It keeps working, but it has lost its memory.
+> mints a new id and orphans that seat's diary and onboarding markers; a
+> handle change also orphans what is kept under the handle itself, its
+> episodes, skills, counterparty profiles and conversations' sessions. It
+> keeps working, without what was orphaned.
 > A seat that leaves `handle` unset gets one derived from its `name`, and
 > every write stores it — so an edit of the *stored* company (the org
 > builder, `PATCH /config`, the per-entity routes) keeps it when a name is

@@ -388,7 +388,7 @@ afresh, its next fire continuing nothing:
 - a schedule moved between a role and a unit;
 - a role schedule of a company whose `name` changed, since a seat's agent id is
   derived from it. The rename orphans what a seat keeps under that id — its
-  diary, its onboarding markers and its counterparty profiles
+  diary and its onboarding markers
   ([The one thing to get right](../getting-started/ai-authoring.md#the-one-thing-to-get-right-before-you-run))
   — but no other conversation's session: a seat's sessions are kept under its
   handle, so its threads, issues, pull requests and unit schedules go on
