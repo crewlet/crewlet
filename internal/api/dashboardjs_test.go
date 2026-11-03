@@ -1639,7 +1639,10 @@ const (
 	// box's files, and the connect form's public view of a minted value, took
 	// it from 5454.2 KiB to 5454.8 KiB (+557 bytes), all of it the
 	// integrations model chunk. It stays at 5455 KiB.
-	treeBudget = 5<<20 + 335<<10
+	// A lane naming its issued token's period and a note on the settings
+	// Crewlet puts in a box took it from 5454.8 KiB to 5455.0 KiB (+252
+	// bytes), all of it the integrations model chunk. 5456 KiB.
+	treeBudget = 5<<20 + 336<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
