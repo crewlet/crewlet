@@ -350,3 +350,28 @@ func refused(err error, says string) bool {
 	r, ok := errors.AsType[*seataccess.Refusal](err)
 	return ok && strings.Contains(r.Said, says) && r.Remedy != "" && r.Actor == seataccess.ByYou
 }
+
+// A DISCONNECT KEEPS NOTHING: no pass reads the seat again, so its token is
+// cleared outright rather than kept to watch its robot.
+func TestAnExpoDisconnectKeepsNoToken(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
+	_, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	if _, err := w.paste(tok.value); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seataccess.Sync(context.Background(), seataccess.SyncInput{
+		Vendor: w.vendor, Ledger: w.ledger, Sink: w.sink, Pass: "test", By: "test",
+		Open: w.open(), Disconnect: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{sealedQA, retiredQA} {
+		if _, ok := w.sink.Held(name); ok {
+			t.Errorf("%s outlived the disconnect", name)
+		}
+	}
+	if rec, _ := w.ledger.Record(integration.KindExpo, "qa"); rec.Held() {
+		t.Errorf("record = %+v, want the robot let go", rec)
+	}
+}

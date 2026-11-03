@@ -331,8 +331,12 @@ func (s *accessSession) check(
 }
 
 // clear takes the seat's token away from its box at once, keeping its value
-// where no box reads it until the robot is deleted at Expo.
+// where no box reads it until the robot is deleted at Expo. A disconnect keeps
+// nothing, since no pass would read it again.
 func (s *accessSession) clear(in seataccess.ApplyInput) seataccess.StepResult {
+	if in.Disconnect {
+		return seataccess.StepResult{Revoked: []string{TokenField, RetiredField}}
+	}
 	res := seataccess.StepResult{Revoked: []string{TokenField}}
 	if token := s.sealed(in.Seat.Handle, TokenField); token != "" {
 		res.Minted = []seataccess.Minted{{Field: RetiredField, Value: token}}
@@ -396,6 +400,10 @@ func (s *accessSession) awaitOtherTokens(ctx context.Context, in seataccess.Appl
 // awaitDeleted is done once the turned-off robot's token answers 401, which is
 // Expo saying the robot or its token is gone.
 func (s *accessSession) awaitDeleted(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
+	if in.Disconnect {
+		return seataccess.StepResult{Gone: true, Did: fmt.Sprintf("Crewlet no longer tracks robot %s; "+
+			"delete it on %s's access tokens page at Expo.", in.Have.Account, s.account)}, nil
+	}
 	retired := s.sealed(in.Seat.Handle, RetiredField)
 	if retired == "" {
 		return seataccess.StepResult{Gone: true}, nil

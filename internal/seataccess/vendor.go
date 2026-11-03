@@ -176,6 +176,10 @@ type ApplyInput struct {
 	// HandIn is the credential a person pasted for this seat ([Ask.HandIn]),
 	// empty where none was. Never logged.
 	HandIn string `json:"-"`
+
+	// Disconnect is a step of the integration's disconnect, after which no
+	// pass reads this seat again ([SyncInput.Disconnect]).
+	Disconnect bool
 }
 
 // HandsIn is a session whose seat credential a person creates at the vendor
