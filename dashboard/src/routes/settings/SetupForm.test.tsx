@@ -215,6 +215,61 @@ test("a mintable secret is not on the form at all", () => {
   expect(baseElement.querySelectorAll('input[type="password"]').length).toBe(0);
 });
 
+// A MINTED VALUE WITH A HALF A PERSON CARRIES shows that half, as the engine
+// renders it, and never an input: Google Cloud's federation key is minted on
+// the first save, and its row is then the Cloud Shell block that holds its
+// public key. Before it is minted there is nothing to show.
+test("a minted value's public view is shown as the engine renders it, never as an input", () => {
+  const block = "gcloud config set project acme-crewlet-id\necho done";
+  const google = (minted: boolean): SetupToolState => ({
+    ...tool,
+    key: "google_cloud",
+    requirements: [
+      req({
+        field: "provisioner",
+        label: "Provisioner",
+        kind: "id",
+        config_path: "integrations.google_cloud.provisioning.provisioner",
+      }),
+      req({
+        field: "federation_key",
+        label: "Federation key",
+        kind: "secret",
+        mintable: true,
+        present: minted,
+        help: "Run this block in Cloud Shell.",
+        config_path: "integrations.google_cloud.provisioning.federation_key",
+        ...(minted ? { public: { text: block, language: "sh" } } : {}),
+      }),
+      req({
+        field: "provider",
+        label: "Provider",
+        kind: "id",
+        config_path: "integrations.google_cloud.provisioning.provider",
+      }),
+    ],
+  });
+  const form = (minted: boolean) => (
+    <SetupForm
+      sections={[{ name: "Google Cloud", tool: google(minted) }]}
+      title="Google Cloud"
+      onClose={() => {}}
+      onDone={() => {}}
+    />
+  );
+  const { baseElement, rerender } = render(form(false));
+  expect(screen.queryByText("Federation key")).toBeNull();
+  rerender(form(true));
+  const group = screen.getByRole("group", { name: "Federation key" });
+  expect(group.textContent).toContain("gcloud config set project acme-crewlet-id");
+  expect(group.textContent).toContain("Run this block in Cloud Shell.");
+  expect(within(group).getByRole("button", { name: /Copy/ })).toBeTruthy();
+  expect(within(group).queryByRole("textbox")).toBeNull();
+  expect(baseElement.querySelectorAll('input[type="password"]').length).toBe(0);
+  expect(screen.getByLabelText(/Provisioner/)).toBeTruthy();
+  expect(screen.getByLabelText(/Provider/)).toBeTruthy();
+});
+
 // A HELD CREDENTIAL SHOWS THAT IT IS HELD, and never what it is.
 //
 // The engine does not send a credential back, so an empty box under a
