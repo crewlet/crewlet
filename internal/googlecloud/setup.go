@@ -6,14 +6,15 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// Requirements says what this company still needs for Google Cloud. A nil
-// block answers every field absent, so the form still renders.
+// Requirements says what company still needs for Google Cloud. A nil block
+// answers every field absent, so the form still renders.
 //
 // ONE PASS, IN ORDER: the provisioner is entered and saved, which mints the
 // federation key; the Cloud Shell block uploads the key's public half and
 // prints the provider; the provider is pasted and tested. So the provider is
-// required only once the key is held.
-func Requirements(in *config.GoogleCloud, resolve func(string) (string, bool)) []setup.Requirement {
+// required only once the key is held, and the key's row carries the block
+// ([CloudShellBlock]) from then on, rendered for company's issuer and subject.
+func Requirements(company string, in *config.GoogleCloud, resolve func(string) (string, bool)) []setup.Requirement {
 	var provisioner, provider, key string
 	var enabled bool
 	if in != nil {
@@ -55,6 +56,7 @@ func Requirements(in *config.GoogleCloud, resolve func(string) (string, bool)) [
 			// makes the key, seals the private half, and nobody downloads a
 			// credential at all.
 			Mintable: true,
+			Shape:    setup.ShapeES256Key,
 			Help: "Crewlet's own key, made when you save and sealed as " + FederationKeySecret + ". " +
 				"Google holds only its public half, which the block below uploads to your workload " +
 				"identity provider. The private half is never shown or exported.",
@@ -98,6 +100,9 @@ func Requirements(in *config.GoogleCloud, resolve func(string) (string, bool)) [
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(provisioner, resolve)
 		case "federation_key":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(key, resolve)
+			if keyHeld {
+				reqs[i].Public = cloudShellView(company, setup.Deref(provisioner, resolve), setup.Deref(key, resolve))
+			}
 		case "provider":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(provider, resolve)
 		case "enabled":

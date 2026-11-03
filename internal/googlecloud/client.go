@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Google's API hosts. Fixed rather than configurable, so the provisioner's
@@ -219,9 +220,11 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("integrations.google_cloud.provisioning.federation_key: %w", err)
 	}
-	jwk, err := PublicJWK(&key.PublicKey)
+	// THE KID IS THE ONE THE CLOUD SHELL BLOCK UPLOADS ([setup.ES256JWKS]),
+	// so Google matches every signed token to that key.
+	kid, err := setup.ES256KeyID(opts.FederationKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("integrations.google_cloud.provisioning.federation_key: %w", err)
 	}
 	hc := opts.HTTP
 	if hc == nil {
@@ -230,7 +233,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	return &Client{
 		provisioner: email, identity: identity, provider: provider,
 		issuer: Issuer(opts.Company), subject: Subject(opts.Company),
-		key: key, kid: jwk.Kid, http: hc, clock: wallClock(),
+		key: key, kid: kid, http: hc, clock: wallClock(),
 	}, nil
 }
 
@@ -307,7 +310,7 @@ func (c *Client) forget(refused string) {
 // federated signs the engine's token and exchanges it at STS.
 func (c *Client) federated(ctx context.Context) (string, error) {
 	audience := Audience(c.provider)
-	jwt, err := signJWT(c.key, c.issuer, c.subject, "https:"+audience, c.clock.now())
+	jwt, err := signJWT(c.key, c.kid, c.issuer, c.subject, "https:"+audience, c.clock.now())
 	if err != nil {
 		return "", err
 	}

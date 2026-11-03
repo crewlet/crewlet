@@ -7,8 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/base64"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"net/http"
@@ -181,35 +179,6 @@ func TestAListingReadsEveryPage(t *testing.T) {
 	}
 	if len(projects) != 5 {
 		t.Fatalf("read %d projects across pages, want 5", len(projects))
-	}
-}
-
-// THE FEDERATION KEY'S PUBLIC HALF IS ALL ITS JWKS HOLDS, and the kid every
-// signed token names is the key's thumbprint in it.
-func TestTheJWKSHoldsThePublicHalfAlone(t *testing.T) {
-	t.Parallel()
-	key, pemText := fakeKey(t)
-	jwks, err := googlecloud.JWKS(pemText)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var set struct {
-		Keys []map[string]string `json:"keys"`
-	}
-	if err := json.Unmarshal([]byte(jwks), &set); err != nil || len(set.Keys) != 1 {
-		t.Fatalf("jwks %q: %v", jwks, err)
-	}
-	jwk := set.Keys[0]
-	if _, private := jwk["d"]; private || strings.Contains(jwks, "PRIVATE") {
-		t.Fatal("the JWKS carries the private half")
-	}
-	x, _ := base64.RawURLEncoding.DecodeString(jwk["x"])
-	if jwk["alg"] != "ES256" || jwk["kty"] != "EC" || !slices.Equal(key.PublicKey.X.FillBytes(make([]byte, 32)), x) {
-		t.Fatalf("jwk %v is not the key's public half", jwk)
-	}
-	want, _ := googlecloud.PublicJWK(&key.PublicKey)
-	if jwk["kid"] != want.Kid || want.Kid == "" {
-		t.Errorf("kid %q, want the thumbprint %q", jwk["kid"], want.Kid)
 	}
 }
 

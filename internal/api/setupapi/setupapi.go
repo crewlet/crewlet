@@ -1019,7 +1019,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// and its token is issued at use, never named in the document.
 		block := company.Integrations.GoogleCloud
 		summary = googlecloud.Summary()
-		reqs = googlecloud.Requirements(block, s.resolve)
+		reqs = googlecloud.Requirements(company.Name, block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

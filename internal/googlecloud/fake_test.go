@@ -402,13 +402,21 @@ type jwtClaims struct {
 	Exp int64  `json:"exp"`
 }
 
-// verify checks an ES256 token against the uploaded public key.
+// verify checks an ES256 token against the uploaded public key, which it
+// names by the key's RFC 7638 thumbprint as Google matches it.
 func (f *fakeGoogle) verify(token string) (jwtClaims, bool) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return jwtClaims{}, false
 	}
 	dec := base64.RawURLEncoding.DecodeString
+	rawHeader, err := dec(parts[0])
+	var header struct {
+		Kid string `json:"kid"`
+	}
+	if err != nil || json.Unmarshal(rawHeader, &header) != nil || header.Kid != thumbprint(f.pub) {
+		return jwtClaims{}, false
+	}
 	sig, err := dec(parts[2])
 	if err != nil || len(sig) != 64 {
 		return jwtClaims{}, false
@@ -423,6 +431,16 @@ func (f *fakeGoogle) verify(token string) (jwtClaims, bool) {
 	}
 	var claims jwtClaims
 	return claims, json.Unmarshal(raw, &claims) == nil
+}
+
+// thumbprint is pub's RFC 7638 thumbprint, worked out here rather than by the
+// code under test, so a kid the engine got wrong is refused.
+func thumbprint(pub *ecdsa.PublicKey) string {
+	enc := base64.RawURLEncoding.EncodeToString
+	canonical := `{"crv":"P-256","kty":"EC","x":"` + enc(pub.X.FillBytes(make([]byte, 32))) +
+		`","y":"` + enc(pub.Y.FillBytes(make([]byte, 32))) + `"}`
+	sum := sha256.Sum256([]byte(canonical))
+	return enc(sum[:])
 }
 
 // impersonate is generateAccessToken: the federated subject may become the

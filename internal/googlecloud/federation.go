@@ -69,59 +69,10 @@ func ParseFederationKey(text string) (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-// JWK is one public key as the provider's uploaded JWKS holds it.
-type JWK struct {
-	Kty string `json:"kty"`
-	Crv string `json:"crv"`
-	X   string `json:"x"`
-	Y   string `json:"y"`
-	Kid string `json:"kid"`
-	Alg string `json:"alg"`
-	Use string `json:"use"`
-}
-
-// PublicJWK is the key's public half, with its RFC 7638 thumbprint as its kid,
-// which every token the engine signs names. It carries nothing private.
-func PublicJWK(pub *ecdsa.PublicKey) (JWK, error) {
-	ec, err := pub.ECDH()
-	if err != nil {
-		return JWK{}, fmt.Errorf("googlecloud: the federation key's public half: %w", err)
-	}
-	raw := ec.Bytes() // 0x04 || X || Y
-	if len(raw) != 65 {
-		return JWK{}, errors.New("googlecloud: the federation key's public point is not P-256")
-	}
-	x, y := b64(raw[1:33]), b64(raw[33:])
-	thumb := sha256.Sum256([]byte(`{"crv":"P-256","kty":"EC","x":"` + x + `","y":"` + y + `"}`))
-	return JWK{Kty: "EC", Crv: "P-256", X: x, Y: y, Kid: b64(thumb[:]), Alg: "ES256", Use: "sig"}, nil
-}
-
-// JWKS is the JSON key set holding the federation key's public half, which the
-// provider is created or updated with (`--jwk-json-path`). Never the private
-// half.
-func JWKS(text string) (string, error) {
-	key, err := ParseFederationKey(text)
-	if err != nil {
-		return "", err
-	}
-	jwk, err := PublicJWK(&key.PublicKey)
-	if err != nil {
-		return "", err
-	}
-	body, err := json.Marshal(map[string][]JWK{"keys": {jwk}})
-	if err != nil {
-		return "", fmt.Errorf("googlecloud: encode the JWKS: %w", err)
-	}
-	return string(body), nil
-}
-
-// signJWT signs the federation token for one exchange at now.
-func signJWT(key *ecdsa.PrivateKey, issuer, subject, audience string, now time.Time) (string, error) {
-	jwk, err := PublicJWK(&key.PublicKey)
-	if err != nil {
-		return "", err
-	}
-	header, err := json.Marshal(map[string]string{"alg": "ES256", "typ": "JWT", "kid": jwk.Kid})
+// signJWT signs the federation token for one exchange at now, naming kid, the
+// key's thumbprint in the JWKS the provider holds ([setup.ES256KeyID]).
+func signJWT(key *ecdsa.PrivateKey, kid, issuer, subject, audience string, now time.Time) (string, error) {
+	header, err := json.Marshal(map[string]string{"alg": "ES256", "typ": "JWT", "kid": kid})
 	if err != nil {
 		return "", fmt.Errorf("googlecloud: encode the token header: %w", err)
 	}

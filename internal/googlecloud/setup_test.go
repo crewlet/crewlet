@@ -15,7 +15,7 @@ import (
 // held, which is the one field the Test button checks, with the other two.
 func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 	t.Parallel()
-	reqs := googlecloud.Requirements(nil, nil)
+	reqs := googlecloud.Requirements(testCompany, nil, nil)
 	var fields []string
 	for _, r := range reqs {
 		fields = append(fields, r.Field)
@@ -37,11 +37,11 @@ func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 		Provisioner: provisioner, FederationKey: "${" + googlecloud.FederationKeySecret + "}",
 	}}
 	held := func(name string) (string, bool) { return "a key", name == googlecloud.FederationKeySecret }
-	if got := googlecloud.Requirements(block, held)[2]; !got.Required {
+	if got := googlecloud.Requirements(testCompany, block, held)[2]; !got.Required {
 		t.Error("once the key is held, the provider is not required")
 	}
 	unheld := func(string) (string, bool) { return "", false }
-	if got := googlecloud.Requirements(block, unheld)[2]; got.Required {
+	if got := googlecloud.Requirements(testCompany, block, unheld)[2]; got.Required {
 		t.Error("a key reference that resolves to nothing made the provider required")
 	}
 	if !strings.Contains(googlecloud.Summary(), "no service account key") {
@@ -54,7 +54,7 @@ func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 // reference is a pointer, never judged.
 func TestAPasteIsHeldToGooglesShape(t *testing.T) {
 	t.Parallel()
-	reqs := googlecloud.Requirements(nil, nil)
+	reqs := googlecloud.Requirements(testCompany, nil, nil)
 	prov, provider := reqs[0], reqs[2]
 	for _, tc := range []struct {
 		req   setup.Requirement
@@ -79,7 +79,7 @@ func TestTheFormReadsWhatTheDocumentHolds(t *testing.T) {
 	block := &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{
 		Provisioner: provisioner, Provider: testProvider, FederationKey: "${" + googlecloud.FederationKeySecret + "}",
 	}}
-	for _, r := range googlecloud.Requirements(block, nil) {
+	for _, r := range googlecloud.Requirements(testCompany, block, nil) {
 		want := map[string]string{
 			"provisioner": provisioner, "provider": testProvider,
 			"federation_key": "${" + googlecloud.FederationKeySecret + "}", "enabled": "true",
