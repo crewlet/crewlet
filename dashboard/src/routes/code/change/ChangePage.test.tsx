@@ -23,6 +23,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { engineJson } from "~/test/engineAnswer.ts";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { ChangePage } from "./ChangePage.tsx";
@@ -404,9 +405,7 @@ test("a review is held while the reader's standing findings are being read", asy
   );
   fireEvent.click(press);
   fireEvent.submit(within(dialog).getByRole("textbox", { name: "Summary" }).closest("form")!);
-  await act(async () => {
-    await Promise.resolve();
-  });
+  await settled(() => vi.mocked(fetch).mock.calls.length);
   expect(acted).toHaveLength(0);
 });
 
@@ -429,9 +428,7 @@ test("a refused standing read holds the review until it is read again", async ()
   const press = within(dialog).getByRole("button", { name: "Approve" });
   await waitFor(() => expect(press.getAttribute("title")).toMatch(/were not read/));
   fireEvent.click(press);
-  await act(async () => {
-    await Promise.resolve();
-  });
+  await settled(() => vi.mocked(fetch).mock.calls.length);
   expect(acted).toHaveLength(0);
 
   refuse = false;
