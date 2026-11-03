@@ -29,6 +29,8 @@ func TestCodeGetRepoCarriesEveryDetailFieldOrSaysWhy(t *testing.T) {
 		"path_owners": "answered only to a read that asks for them, and code_get_repo asks for its " +
 			"rules' gates alone",
 		"gates": "answered beside the detail, whole, each with the rule it holds a merge to (protections)",
+		"rule_sources": "answered beside the detail, whole, each on the rule it says who last set and " +
+			"when (protections)",
 	}
 	jsonName := func(f reflect.StructField) string {
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")

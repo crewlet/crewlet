@@ -184,7 +184,7 @@ func (l lane) subject(node string) string {
 // the longest the engine stamps the rest — the request as admitted, its
 // arguments copied out of it, and the write decoded, which the git half holds
 // to its end: about 3 MiB a slot at the bound, three payloads and what is
-// beside them (2.96 and 3.09 payloads measured), so about 200 MiB for the
+// beside them (3.02 payloads measured), so about 200 MiB for the
 // sixty-four; an at-once answer holds the first two, some 2 MiB, for the
 // milliseconds its admission takes — 31 ms measured, under -race on two
 // cores; and a held write's staged pack, at most code.MaxWritePackBytes, is
