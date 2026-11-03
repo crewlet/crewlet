@@ -2820,10 +2820,16 @@ type LaunchRecord struct {
 //
 // UNKNOWN WHERE THE BOX'S WORD NEVER REACHED THE ROW for a launch that continued
 // a session: its box ran one of two sessions, and the row cannot tell which. A
-// relaunch then carries the round on from the turn's kept capture, or in a
-// session of its own, never in place: continuing the launch's choice there
-// would hand the guard the job's skill loads, made perhaps in the other, for a
-// transcript that never read them.
+// relaunch then continues neither by this word: it carries the round on from the
+// turn's kept capture, or in a session of its own. Continuing the launch's
+// choice in place would hand the guard the job's skill loads, made perhaps in
+// the other, for a transcript that never read them.
+//
+// THIS IS THE IN-PLACE RELAUNCH'S WORD ALONE. A kept capture names the session
+// its take read off the box's own record of it ([SessionCapture.SessionID]),
+// the file the run's script writes as its harness exits — as much the box's as
+// the transcript the session is — and a relaunch continuing that capture
+// continues the session it names, in whichever box it gets.
 func (r PendingRun) SessionRan() string {
 	switch r.Launch.SessionStart {
 	case SessionStartFresh:
