@@ -23,8 +23,12 @@ import (
 //
 // # What each version added
 //
-//   - 1: every shape this domain has.
-const RecordVersion = 1
+//   - 1: the base format: a capture, an end, a retention delete, a seat's
+//     removal, and the framework's eviction, generation and barrier.
+//   - 2: a turn's `begin` ([Begin]: its first read of its conversation and the
+//     base that read froze, which the row then holds), and a capture's
+//     context and cut-off ([Capture.ContextTokens], [Capture.Interrupted]).
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -36,10 +40,26 @@ const GateRecordVersion = 1
 
 // versionedFields is every field an executor record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
-// EMPTY: every field this build writes is in the base format. Adding one is a
-// row here, [RecordVersion] moved to its version, and a conformance candidate
-// that carries it.
-var versionedFields = statelog.RecordFields{}
+// Adding one is a row here, [RecordVersion] moved to its version, and a
+// conformance candidate that carries it (statelog_test.go's carrying).
+//
+// A FIELD NO TAG HAS SHIPPED STILL GETS ITS ROW: two builds of a rolling
+// upgrade disagree about it all the same. A build at version 1 has no applier
+// for a `begin` — its dispatch would fault on the (conversation, begin) pair —
+// and no column for a capture's context or cut-off, which it would decode
+// around, apply without, and so hold rows that differ from every upgraded
+// node's for as long as the turn's row lives. With the rows it retains both,
+// and applies them once it can.
+//
+// A NEW OP IS A VALUE of a key every record has carried since the base format,
+// so its row names the key and the value: a row naming `op` alone would stamp
+// every record the domain writes. A capture's two fields are omitted at their
+// zero, so a capture that recorded neither stays readable by every build.
+var versionedFields = statelog.RecordFields{
+	{Name: "RecordEnvelope.Op begin", Since: 2, Path: []string{"op"}, Equals: string(OpBegin)},
+	{Name: "Capture.ContextTokens", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "context_tokens"}},
+	{Name: "Capture.Interrupted", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "interrupted"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -49,6 +69,12 @@ type OpKind string
 
 // The ops an executor record can carry.
 const (
+	// OpBegin records a turn's first read of its conversation and the base
+	// that read froze, which the turn's row then holds against every
+	// release while the turn keeps no session of its own, on its
+	// conversation's subject.
+	OpBegin OpKind = "begin"
+
 	// OpCapture names a new object for a live turn's session, on its
 	// conversation's subject.
 	OpCapture OpKind = "capture"
@@ -78,7 +104,7 @@ const (
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
-	OpCapture, OpEnd, OpDelete, OpSeatDelete, OpEviction, OpGeneration, OpBarrier,
+	OpBegin, OpCapture, OpEnd, OpDelete, OpSeatDelete, OpEviction, OpGeneration, OpBarrier,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

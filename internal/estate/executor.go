@@ -19,9 +19,9 @@ import (
 //
 // # Every write is the engine's
 //
-// Nobody asks for a session to be captured, a turn to be ended, a session to
-// be aged out or a removed seat's to be taken away: the engine records what its
-// own runs did. So every write here is ENGINE-ORIGINATED ([originEngine]): the
+// Nobody asks for a turn's first read to be recorded, a session to be
+// captured, a turn to be ended, a session to be aged out or a removed seat's to
+// be taken away: the engine records what its own runs did. So every write here is ENGINE-ORIGINATED ([originEngine]): the
 // log is in no list of the domains a surface writes ([SurfaceWriteDomains]), so
 // the person's write surfaces have no refusal of it to class and no object of
 // it to name, and its writer facade ([ExecutorWrites]) is the engine's alone,
@@ -30,8 +30,9 @@ import (
 // # Each write is the same operation however often it is asked
 //
 // Every write carries, on its [executordomain.Call], the operation id the
-// domain derives PER EXECUTION — a capture's from its turn, its launch and its
-// ordinal, an end's from its turn, a retention delete's from its turn and the
+// domain derives PER EXECUTION — a begin's from its turn, a capture's from its
+// turn, its launch and its ordinal, an end's from its turn, a retention
+// delete's from its turn and the
 // reaper's slot, a removed seat's from the seat and the instant its retirement
 // was marked — and the log's ledger answers a repeat with the first copy's
 // outcome. So every write is an [opIdempotentWrite]: one some data node never
@@ -68,6 +69,8 @@ type ExecutorReader interface {
 // ExecutorWriter is the executor log's write side: exactly the domain writer's
 // method set, every one of them the engine's ([originEngine]).
 type ExecutorWriter interface {
+	Begin(ctx context.Context, c executordomain.Call,
+		n executordomain.NewBegin) (executordomain.BeginResult, error)
 	Capture(ctx context.Context, c executordomain.Call,
 		n executordomain.NewCapture) (executordomain.CaptureResult, error)
 	End(ctx context.Context, c executordomain.Call, n executordomain.NewEnd) (statelog.Result, error)
@@ -220,6 +223,24 @@ var opExecutorSealedKeys = define("executor.sealed_keys", opRead, executorDomain
 	})
 
 // ---- the writes: the engine's, each under the operation it carries ---------- //
+
+type executorBeginArgs struct {
+	Call  executordomain.Call
+	Begin executordomain.NewBegin
+}
+
+// A TURN'S BEGIN records its first read of its conversation and the base that
+// read froze, under the operation its turn derives, and answers whether the
+// row the serving node holds holds that base now
+// ([executordomain.BeginResult.Held]), read back on that node.
+var opExecutorBegin = define("executor.begin", opIdempotentWrite, executorDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a executorBeginArgs) (executordomain.BeginResult, error) {
+		w, err := b.executorWriter()
+		if err != nil {
+			return executordomain.BeginResult{}, err
+		}
+		return w.Begin(ctx, a.Call, a.Begin)
+	}).byEngine()
 
 type executorCaptureArgs struct {
 	Call    executordomain.Call
@@ -390,11 +411,11 @@ func (x ExecutorReads) SealedKeys(ctx context.Context) (executordomain.SealedCou
 // set, so a consumer cannot tell local from routed.
 //
 // THE ENGINE'S ALONE ([originEngine]): it is for the engine's record of what
-// its own runs did — the executor's captures and ends, the retention's deletes
-// and a removed seat's — and no package that serves a person or a model names
-// it, which the gate over those packages holds. Each write's position is this
-// node's next floor on the log, so the read that follows it, on whichever data
-// node answers, includes it.
+// its own runs did — a turn's first read, the executor's captures and ends, the
+// retention's deletes and a removed seat's — and no package that serves a
+// person or a model names it, which the gate over those packages holds. Each
+// write's position is this node's next floor on the log, so the read that
+// follows it, on whichever data node answers, includes it.
 type ExecutorWrites struct{ r *Router }
 
 // ExecutorWrites answers the executor log's writes.
@@ -402,9 +423,17 @@ func (r *Router) ExecutorWrites() ExecutorWrites { return ExecutorWrites{r: r} }
 
 var _ ExecutorWriter = ExecutorWrites{}
 
-// Capture records a new object for a live turn's session. Asked again of the
-// next data node, under the operation its call carries, wherever one did not
-// answer — and so is every write below.
+// Begin records a turn's first read of its conversation and the base it froze.
+// Asked again of the next data node, under the operation its call carries,
+// wherever one did not answer — and so is every write below.
+func (x ExecutorWrites) Begin(ctx context.Context, c executordomain.Call,
+	n executordomain.NewBegin) (executordomain.BeginResult, error) {
+	out, err := call(ctx, x.r, opExecutorBegin, nil, executorBeginArgs{Call: c, Begin: n})
+	x.r.Observe(out.Position)
+	return out, err
+}
+
+// Capture records a new object for a live turn's session.
 func (x ExecutorWrites) Capture(ctx context.Context, c executordomain.Call,
 	n executordomain.NewCapture) (executordomain.CaptureResult, error) {
 	out, err := call(ctx, x.r, opExecutorCapture, nil, executorCaptureArgs{Call: c, Capture: n})

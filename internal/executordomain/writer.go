@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,17 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE EXECUTOR WRITE PATH: one record per capture, end or delete, published
-// to the subject of the conversation (or the seat) it contends for, decided
-// inside one snapshot of this node's own rows.
+// THE EXECUTOR WRITE PATH: one record per begin, capture, end or delete,
+// published to the subject of the conversation (or the seat) it contends for,
+// decided inside one snapshot of this node's own rows.
 //
 // # Every write is the engine's
 //
 // Nobody asks for a session to be captured or a turn to be ended: the engine
 // records what its runs did. So a [Call] names the engine's own actor, and the
 // operation id it carries is DERIVED PER EXECUTION, never from the work key: a
-// capture's from the turn, the launch and its ordinal ([CaptureOpID]), an end's
-// from the turn ([EndOpID]), a retention delete's from the turn and the
+// begin's from the turn ([BeginOpID]), a capture's from the turn, the launch
+// and its ordinal ([CaptureOpID]), an end's from the turn ([EndOpID]), a
+// retention delete's from the turn and the
 // reaper's slot (the trash reaper's), a seat's removal from the seat and the
 // instant the retirement removing it was marked ([SeatDeleteOpID]). Derived
 // from the work key, a re-run's capture would be answered from the ledger as
@@ -88,6 +90,14 @@ func (c Call) validate() error {
 func CaptureOpID(minted time.Time, handle, turn, launch string, captureSeq int64) string {
 	return statelog.DeriveOpID(minted, "executor-capture", "crewlet.executor",
 		handle, turn, launch, fmt.Sprint(captureSeq))
+}
+
+// BeginOpID is the operation a turn's begin is published under: the seat and
+// the turn, at the instant the turn's derived operations are minted at — the
+// same minted [CaptureOpID] takes. A turn begins once, however often its first
+// launch asks.
+func BeginOpID(minted time.Time, handle, turn string) string {
+	return statelog.DeriveOpID(minted, "executor-begin", "crewlet.executor", handle, turn)
 }
 
 // EndOpID is the operation a turn's end is published under: the seat and the
@@ -229,6 +239,14 @@ type NewCapture struct {
 	Home      string
 	Workspace string
 
+	// ContextTokens is the whole input of the session's last request, as its
+	// transcript recorded it, and Interrupted that its harness was cut off
+	// ([Capture.ContextTokens], [Capture.Interrupted]): the run's stamp of
+	// the capture, which a launch continuing the session after its turn
+	// ended reads off the row.
+	ContextTokens int64
+	Interrupted   bool
+
 	// ReadThrough is the position the turn's first launch read the
 	// conversation's head at, zero where it read none, and Absorbs the
 	// turns that read handed out in full ([Head.Absorbs]): both from the one
@@ -275,6 +293,9 @@ func (n NewCapture) validate() error {
 			n.LaunchSeq, n.CaptureSeq)
 	case n.SeatBudget <= 0:
 		return invalid("the capture carries no seat budget")
+	case n.ContextTokens < 0:
+		return invalid("the capture's context is %d tokens, and a request carries none or more",
+			n.ContextTokens)
 	case n.ReadThrough.Seq > 0 && n.ReadThrough.Stream != Domain{}.Stream().Name:
 		return invalid("the head was read on %q, which is not this log", n.ReadThrough.Stream)
 	}
@@ -361,6 +382,7 @@ func (w *Writer) Capture(ctx context.Context, c Call, n NewCapture) (CaptureResu
 		ObjectSize: n.Object.Size, ContentKey: n.ContentKey, ArchiveFormat: n.ArchiveFormat,
 		LaunchSeq: n.LaunchSeq, CaptureSeq: n.CaptureSeq,
 		Home: n.Home, Workspace: n.Workspace, SeatBudget: n.SeatBudget,
+		ContextTokens: n.ContextTokens, Interrupted: n.Interrupted,
 		Absorbs: n.Absorbs,
 	}
 	if n.ReadThrough.Seq > 0 {
@@ -452,10 +474,222 @@ func decideCapture(ctx context.Context, tx *sql.Tx, n NewCapture, at time.Time) 
 		return 0, err
 	}
 	if !fits {
-		return 0, fmt.Errorf("%w: %s's live turns hold more than %d bytes beside this %d-byte "+
-			"capture", ErrOverBudget, n.Handle, n.SeatBudget, n.Object.Size)
+		return 0, fmt.Errorf("%w: %s's live turns, and the bases their first reads hold, take more "+
+			"than %d bytes beside this %d-byte capture", ErrOverBudget, n.Handle, n.SeatBudget,
+			n.Object.Size)
 	}
 	return removal, nil
+}
+
+// ---- begin -------------------------------------------------------------- //
+
+// NewBegin is a turn's first read of its conversation, and the base that read
+// froze: what its first launch publishes once its run is recorded.
+type NewBegin struct {
+	Handle          string
+	Turn            string
+	ConversationKey string
+	WorkKey         string
+
+	// ReadThrough is the position the head was read at ([Head.Position]) and
+	// Absorbs the turns the read handed out that the turn was told of: what
+	// the turn's end absorbs once it has landed a capture.
+	ReadThrough statelog.Position
+	Absorbs     []string
+
+	// BaseTurn is the head the read named, and BaseObject the session its row
+	// named then: what the turn's launches continue while it keeps no
+	// session of its own. Both zero where the read named no head.
+	BaseTurn   string
+	BaseObject objstore.Object
+}
+
+// validate refuses a begin the record could not carry, naming the field.
+func (n NewBegin) validate() error {
+	if err := checkTurn(n.Handle, n.Turn, n.ConversationKey, n.WorkKey); err != nil {
+		return err
+	}
+	switch {
+	case n.ConversationKey == "":
+		return invalid("the begin names no conversation: a turn with none read no head, " +
+			"and continues no session")
+	case n.ReadThrough.Seq == 0:
+		return invalid("the begin names no read: it records where the turn's first launch " +
+			"read its conversation")
+	case n.ReadThrough.Stream != Domain{}.Stream().Name:
+		return invalid("the head was read on %q, which is not this log", n.ReadThrough.Stream)
+	}
+	if _, ok := absorbsOf(n.Absorbs, n.Turn, n.ReadThrough.Packed()); !ok {
+		return invalid("the begin's absorbed turns %s are not what a head read hands out: at "+
+			"most %d canonical turn ids, none twice and never the turn's own",
+			words.AndMore(n.Absorbs, MaxAbsorbs), MaxAbsorbs)
+	}
+	if n.BaseTurn == "" {
+		if !n.BaseObject.Key.IsZero() || n.BaseObject.Hash != "" {
+			return invalid("the begin names a base session and no base turn")
+		}
+		return nil
+	}
+	switch {
+	case !canonicalTurn(n.BaseTurn):
+		return invalid("the base turn %q is not a run id in its canonical spelling", n.BaseTurn)
+	case n.BaseTurn == n.Turn:
+		return invalid("turn %s names itself as its base: a turn continues another's session", n.Turn)
+	case !slices.Contains(n.Absorbs, n.BaseTurn):
+		return invalid("the base turn %s is not among the turns the read handed out, and a "+
+			"read's head always is", n.BaseTurn)
+	}
+	if err := n.BaseObject.Validate(); err != nil {
+		return fmt.Errorf("%w: the base's object: %w", ErrInvalid, err)
+	}
+	return nil
+}
+
+// BeginResult is what a begin answers: the publish's result, and whether the
+// turn's row holds the base the begin named now.
+type BeginResult struct {
+	statelog.Result
+
+	// Held is true when the turn's row was read back holding the base: live,
+	// no capture of its own landed, naming the base. Why says, where it is
+	// false, what kept it from holding — no base named, a base that moved
+	// before the begin landed, a turn already ended or captured, or an
+	// outcome this node has not seen applied yet.
+	Held bool
+	Why  string
+}
+
+// Begin records a turn's first read of its conversation and the base that read
+// froze, which the turn's row then holds against every release while it is
+// live and has landed no capture ([Begin]).
+//
+// Refused at the decide: a turn that has ended or been removed
+// ([ErrTurnEnded]), and one whose row names another conversation or unit of
+// work ([ErrInvalid]). A turn whose row already holds its first read publishes
+// nothing — that read stands, whichever record carried it — and answers what
+// the row holds. The apply repeats every guard, decides in log order whether
+// the base still stands, and the row is read back ([BeginResult.Held]).
+func (w *Writer) Begin(ctx context.Context, c Call, n NewBegin) (BeginResult, error) {
+	if err := c.validate(); err != nil {
+		return BeginResult{}, err
+	}
+	if err := n.validate(); err != nil {
+		return BeginResult{}, err
+	}
+	p := Begin{
+		V: baseRecordVersion, Handle: n.Handle, Turn: n.Turn,
+		ConversationKey: n.ConversationKey, WorkKey: n.WorkKey,
+		ReadThrough: n.ReadThrough.Packed(), Absorbs: n.Absorbs, BaseTurn: n.BaseTurn,
+	}
+	if n.BaseTurn != "" {
+		p.BaseObject, p.BaseHash = n.BaseObject.Key.String(), string(n.BaseObject.Hash)
+	}
+	subject := ConversationSubject(n.Handle, n.ConversationKey, n.Turn)
+	// THE CONVERSATION, NOT THE SEAT: a begin writes its own turn's row and
+	// reads only rows of its own conversation. A capture of another
+	// conversation is not arbitrated against it, and need not be: its apply
+	// asks about the hold in log order, and its seat-wide scope contains this
+	// one, so a node that defers either defers the other.
+	scope := ScopeSet{Subject: true}
+	res, err := publish(ctx, w.publisher, request(subject, scope, c.OpID,
+		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			removal, begun, decideErr := decideBegin(ctx, tx, n)
+			switch {
+			case decideErr != nil:
+				return statelog.Decision{}, decideErr
+			case begun:
+				// THE TURN'S FIRST READ STANDS: nothing to publish, and the
+				// row, read back below, says what it holds.
+				return statelog.Decision{}, nil
+			}
+			decided := p
+			decided.SeenRemoval = removal
+			return decision(stamp, c.By, subject, OpBegin, scope, c.OpID, decided, w.now())
+		}))
+	out := BeginResult{Result: res}
+	if err != nil {
+		return out, err
+	}
+	if res.Outcome != statelog.OutcomeApplied {
+		out.Why = fmt.Sprintf("the log answered %s, and this node has not seen the begin apply",
+			res.Outcome)
+		return out, nil
+	}
+	// READ BACK: the apply decides the guards and the base again in log
+	// order, and only the row says whether the base is held.
+	err = w.db.Read(ctx, func(tx *sql.Tx) error {
+		var readErr error
+		out.Held, out.Why, readErr = beginHolds(ctx, tx, n, p)
+		return readErr
+	})
+	return out, err
+}
+
+// decideBegin is the begin's decide over one snapshot of the turn: a turn
+// already ended or removed, and one whose row names another conversation or
+// unit of work, are refused; a row that already holds the turn's first read is
+// begun, with nothing left to publish. It answers the seat's removal the
+// snapshot holds.
+func decideBegin(ctx context.Context, tx *sql.Tx, n NewBegin) (removal int64, begun bool, err error) {
+	if removal, err = readRemoval(ctx, tx, n.Handle); err != nil {
+		return 0, false, err
+	}
+	_, tombed, err := readTomb(ctx, tx, n.Handle, n.Turn)
+	switch {
+	case err != nil:
+		return 0, false, err
+	case tombed:
+		return 0, false, fmt.Errorf("%w: %s's turn %s", ErrTurnEnded, n.Handle, n.Turn)
+	}
+	row, found, err := readSession(ctx, tx, n.Handle, n.Turn)
+	switch {
+	case err != nil:
+		return 0, false, err
+	case !found:
+		return removal, false, nil
+	case row.ended:
+		return 0, false, fmt.Errorf("%w: %s's turn %s", ErrTurnEnded, n.Handle, n.Turn)
+	case row.conversationKey != n.ConversationKey:
+		return 0, false, invalid("turn %s belongs to another conversation than the begin names", n.Turn)
+	case !sameWork(row.workKey, n.WorkKey):
+		return 0, false, invalid("turn %s was dispatched for work %q and the begin names %q",
+			n.Turn, row.workKey, n.WorkKey)
+	}
+	return removal, row.readThrough > 0, nil
+}
+
+// beginHolds reads back whether the turn's row holds the base the begin named
+// and, where it does not, why.
+func beginHolds(ctx context.Context, tx *sql.Tx, n NewBegin, p Begin) (bool, string, error) {
+	if n.BaseTurn == "" {
+		return false, "the read named no base", nil
+	}
+	row, found, err := readSession(ctx, tx, n.Handle, n.Turn)
+	switch {
+	case err != nil:
+		return false, "", err
+	case !found:
+		return false, "the log holds no row of the turn: its seat was removed before the begin " +
+			"landed", nil
+	case row.ended:
+		return false, "the turn ended before its begin landed", nil
+	case row.launchSeq > 0:
+		return false, "the turn landed a capture of its own first, which its launches continue " +
+			"instead", nil
+	case row.baseTurn == n.BaseTurn:
+		return true, "", nil
+	case row.readThrough != p.ReadThrough:
+		return false, "the turn's first read was recorded at another position, and it stands", nil
+	}
+	why, err := baseStands(ctx, tx, n.Handle, n.ConversationKey, p.ReadThrough, n.BaseTurn,
+		p.BaseObject, p.BaseHash)
+	if err != nil {
+		return false, "", err
+	}
+	if why == "" {
+		why = "the base did not stand when the begin applied"
+	}
+	return false, why, nil
 }
 
 // ---- end ---------------------------------------------------------------- //
@@ -599,8 +833,8 @@ func (w *Writer) EndLost(ctx context.Context, c Call, handle, conversationKey, t
 // DeleteExpired removes one turn's row and tombstone whose last instant is at
 // or before cutoff, as the retention duty, under the operation the duty
 // derived. It is decided again in the conversation's snapshot and once more at
-// the apply, so a turn captured since it was listed is refused [ErrNotDue] or
-// left in place.
+// the apply, so a turn captured since it was listed, or held since as a live
+// turn's base ([held]), is refused [ErrNotDue] or left in place.
 func (w *Writer) DeleteExpired(ctx context.Context, c Call, handle, conversationKey,
 	turn string, cutoff time.Time) (statelog.Result, error) {
 
@@ -645,8 +879,8 @@ func (w *Writer) DeleteExpired(ctx context.Context, c Call, handle, conversation
 		return res, err
 	}
 	if left {
-		return res, fmt.Errorf("%w: %s's turn %s was captured after it was listed",
-			ErrNotDue, handle, turn)
+		return res, fmt.Errorf("%w: %s's turn %s was captured, or held as a live turn's base, "+
+			"after it was listed", ErrNotDue, handle, turn)
 	}
 	return res, nil
 }

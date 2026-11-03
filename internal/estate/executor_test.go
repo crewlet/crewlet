@@ -72,9 +72,9 @@ func sessionOf(handle, turn, conversationKey string) executordomain.Session {
 		Harness: "claude-code", HarnessVersion: "2.1.0", SessionID: "sess-1",
 		Object:     objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 2, CaptureSeq: 3,
-		Home: "/home/agent", Workspace: "/work", CapturedAt: crossedAt,
-		ReadThrough: atLog(4), Absorbs: []string{endedTurn},
-		EndedAt: crossedAt, EndedAtPosition: atLog(5),
+		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
+		CapturedAt: crossedAt, ReadThrough: atLog(4), Absorbs: []string{endedTurn},
+		BaseTurn: endedTurn, EndedAt: crossedAt, EndedAtPosition: atLog(5),
 		Ending:     &ending,
 		AskExcerpt: "what " + handle + " was asked",
 	}
@@ -87,9 +87,18 @@ func captureOf(turn string) executordomain.NewCapture {
 		Harness: "claude-code", HarnessVersion: "2.1.0", SessionID: "sess-1",
 		Object:     objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 1, CaptureSeq: 2,
-		Home: "/home/agent", Workspace: "/work",
+		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
 		ReadThrough: atLog(4), Absorbs: []string{endedTurn},
 		SeatBudget: 64 << 20,
+	}
+}
+
+// beginOf is a begin of one of swe's turns with every field set.
+func beginOf(turn string) executordomain.NewBegin {
+	return executordomain.NewBegin{
+		Handle: "swe", Turn: turn, ConversationKey: conversation, WorkKey: "wk-1",
+		ReadThrough: atLog(4), Absorbs: []string{endedTurn}, BaseTurn: endedTurn,
+		BaseObject: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(endedTurn)), Size: 42},
 	}
 }
 
@@ -137,6 +146,7 @@ type logbook struct {
 	mu       sync.Mutex
 	heard    []string
 	calls    []executordomain.Call
+	begun    []executordomain.NewBegin
 	captured []executordomain.NewCapture
 	ended    []executordomain.NewEnd
 	writes   []string
@@ -188,15 +198,16 @@ func (l *logbook) Session(_ context.Context, handle, turn string,
 		return executordomain.SessionRead{}, fmt.Errorf("%w: %s's turn %s", executordomain.ErrNotFound,
 			handle, turn)
 	}
-	return executordomain.SessionRead{Session: sessionOf(handle, turn, conversation), Position: atLog(7),
-		Complete: true}, nil
+	return executordomain.SessionRead{Session: sessionOf(handle, turn, conversation), Head: endedTurn,
+		Position: atLog(7), Complete: true}, nil
 }
 
 func (l *logbook) Sessions(_ context.Context, handle, cursor string, limit int,
 	fresh statelog.Freshness) (executordomain.Page, error) {
 	l.asked("sessions", fresh)
 	return executordomain.Page{Sessions: []executordomain.Session{sessionOf(handle, liveTurn, conversation)},
-		Next: fmt.Sprintf("%s+%d", cursor, limit), Position: atLog(8), Complete: true}, nil
+		Heads: map[string]string{conversation: endedTurn},
+		Next:  fmt.Sprintf("%s+%d", cursor, limit), Position: atLog(8), Complete: true}, nil
 }
 
 func (l *logbook) Expired(_ context.Context, cutoff time.Time, limit int) ([]executordomain.Expiry, error) {
@@ -221,6 +232,19 @@ func (l *logbook) SealedKeys(context.Context) (executordomain.SealedCount, error
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return executordomain.SealedCount{Values: maps.Clone(l.sealed)}, nil
+}
+
+func (l *logbook) Begin(_ context.Context, c executordomain.Call,
+	n executordomain.NewBegin) (executordomain.BeginResult, error) {
+	if n.Turn == endedTurn {
+		return executordomain.BeginResult{}, fmt.Errorf("%w: %s's turn %s", executordomain.ErrTurnEnded,
+			n.Handle, n.Turn)
+	}
+	res := l.wrote("begin", c)
+	l.mu.Lock()
+	l.begun = append(l.begun, n)
+	l.mu.Unlock()
+	return executordomain.BeginResult{Result: res, Held: true}, nil
 }
 
 func (l *logbook) Capture(_ context.Context, c executordomain.Call,
@@ -378,6 +402,21 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 	sameHere(t, "an empty count", none, hereNone, err)
 
 	writes, hereWrites := f.client.ExecutorWrites(), local.ExecutorWrites()
+	begin := beginOf(liveTurn)
+	whole(t, "the case's begin", begin)
+	beginCall := engineCall("op-begin")
+	begun, err := writes.Begin(ctx, beginCall, begin)
+	if err != nil || !begun.Held || begun.Outcome != statelog.OutcomeApplied ||
+		begun.OpID != beginCall.OpID || begun.Position != atLog(10) {
+		t.Errorf("begin = (%+v, %v)", begun, err)
+	}
+	hereBegun, err := hereWrites.Begin(ctx, beginCall, begin)
+	sameHere(t, "begin", begun, hereBegun, err)
+	if _, err := writes.Begin(ctx, beginCall, beginOf(endedTurn)); !errors.Is(err,
+		executordomain.ErrTurnEnded) {
+		t.Errorf("a begin of an ended turn's refusal crossed as %v", err)
+	}
+
 	call := engineCall("op-capture")
 	capture := captureOf(liveTurn)
 	whole(t, "the case's capture", capture)
@@ -450,8 +489,14 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 			t.Errorf("end %d ran as %+v, want the engine's %+v", i, got, end)
 		}
 	}
+	for i, got := range book.begun {
+		if !reflect.DeepEqual(got, begin) {
+			t.Errorf("begin %d ran as %+v, want the engine's %+v", i, got, begin)
+		}
+	}
 	for i, got := range book.calls {
-		if got.By != call.By || (got.OpID != call.OpID && got.OpID != endCall.OpID) {
+		if got.By != call.By || (got.OpID != call.OpID && got.OpID != endCall.OpID &&
+			got.OpID != beginCall.OpID) {
 			t.Errorf("write %s ran under %+v, want the engine's own call", book.writes[i], got)
 		}
 	}

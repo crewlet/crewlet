@@ -78,23 +78,28 @@ func TestAnEndedTurnTakesNoFurtherCapture(t *testing.T) {
 // captures carry as absorbed go, each only where it ended at or before that
 // read; a turn the read left out (past its bound) stays for the next turn to be
 // shown, and so does a turn named in error that ended after the read, which the
-// read could not have shown.
+// read could not have shown — and a live turn named in error whose begin wrote
+// its row, which no absorption takes, ended rows alone being absorbed.
 //
 // Mutation: absorb every ended row at or below the read, as the rule once was,
 // and the turn the read left out is absorbed although nobody was shown it; drop
 // the end_seq bound from absorbStatement and the turn that ended after the
-// read goes.
+// read goes, and so does the live turn's begun row.
 func TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
 	leftOut, shown, head, concurrent, current := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
+	begun := newTurn()
 	for _, run := range []string{leftOut, shown, head} {
 		e.capture(capturing("ana", "chat:room", run, 1, 1, 100, budget))
 		e.end(ending("ana", "chat:room", run, "", Ending{Outcome: OutcomeCompleted}))
 	}
+	// A LIVE TURN WHOSE BEGIN WROTE ITS ROW, read nothing it holds.
+	e.begin(Begin{V: 1, Handle: "ana", Turn: begun, ConversationKey: "chat:room",
+		ReadThrough: e.at().Packed()})
 	read := capturing("ana", "chat:room", current, 1, 1, 100, budget)
 	read.ReadThrough = e.at().Packed()
-	read.Absorbs = []string{head, shown, concurrent}
+	read.Absorbs = []string{head, shown, concurrent, begun}
 	e.capture(read)
 	// A TURN THAT RAN BESIDE IT and ended after the current turn read the
 	// head: not shown to it, so not absorbed by it, whatever its list says.
@@ -113,7 +118,7 @@ func TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut(t *testing.T) {
 	}
 	for name, kept := range map[string]string{
 		"the turn the read left out": leftOut, "the turn that ended after the read": concurrent,
-		"the ending turn": current,
+		"the ending turn": current, "the live turn whose begin wrote its row": begun,
 	} {
 		if _, found := e.session("ana", kept); !found {
 			t.Errorf("%s was absorbed", name)
@@ -323,8 +328,13 @@ func TestAnEndWithNothingCapturedKeepsTheEndingAlone(t *testing.T) {
 func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
-	stale, landed := newTurn(), newTurn()
+	stale, landed, base, holder := newTurn(), newTurn(), newTurn(), newTurn()
 	unkept := &Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the object store's reservation is spent"}
+	// A LIVE TURN OF THE SAME CONVERSATION HOLDS AN ENDED BASE: the release
+	// takes the ending turn's own object and touches neither.
+	e.capture(capturing("ana", "chat:room", base, 1, 1, 100, budget))
+	e.end(ending("ana", "chat:room", base, "", Ending{Outcome: OutcomeCompleted}))
+	e.begin(beginning(e.head("ana", "chat:room"), "ana", "chat:room", holder, ""))
 
 	e.capture(capturing("ana", "chat:room", stale, 1, 1, 100, budget))
 	e.end(ending("ana", "chat:room", stale, "", Ending{Outcome: OutcomeCompleted, Unkept: unkept}))
@@ -335,6 +345,12 @@ func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
 	}
 	if s.Ending.Unkept == nil || s.Ending.Unkept.LaunchSeq != 2 || !strings.Contains(s.Ending.Unkept.Reason, "reservation") {
 		t.Errorf("the ending says %+v of the capture not kept, want launch 2's and why", s.Ending.Unkept)
+	}
+	if b, _ := e.session("ana", base); !b.HasObject() || !e.holds("ana", base) {
+		t.Errorf("the unkept release reached the base a live turn holds: %+v", b)
+	}
+	if h, _ := e.session("ana", holder); h.Ended() || h.BaseTurn != base {
+		t.Errorf("the unkept release reached the live turn's begun row: %+v", h)
 	}
 
 	e.capture(capturing("ana", "chat:other", landed, 2, 1, 100, budget))
@@ -355,13 +371,17 @@ func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
 func TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
-	oldest, newer, live, next := newTurn(), newTurn(), newTurn(), newTurn()
+	oldest, newer, live, next, begun := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
 	const tight = 100
 	e.capture(capturing("ana", "chat:a", oldest, 1, 1, 40, tight))
 	e.end(ending("ana", "chat:a", oldest, "", Ending{Outcome: OutcomeCompleted}))
 	e.capture(capturing("ana", "chat:b", newer, 1, 1, 40, tight))
 	e.end(ending("ana", "chat:b", newer, "", Ending{Outcome: OutcomeCompleted}))
 	e.capture(capturing("ana", "chat:c", live, 1, 1, 10, tight))
+	// A LIVE TURN WHOSE BEGIN WROTE ITS ROW, holding no base: a row naming no
+	// object, which the budget neither counts nor releases.
+	e.begin(Begin{V: 1, Handle: "ana", Turn: begun, ConversationKey: "chat:f",
+		ReadThrough: e.at().Packed()})
 
 	if _, n := e.capture(capturing("ana", "chat:d", next, 1, 1, 30, tight)); n == 0 {
 		t.Fatal("a capture the budget holds once the oldest ending is released wrote nothing")
@@ -384,6 +404,9 @@ func TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst(t *testing.T) {
 	}
 	if l, _ := e.session("ana", live); !l.HasObject() {
 		t.Error("a live turn's session was released")
+	}
+	if b, found := e.session("ana", begun); !found || b.Ended() || b.ReadThrough.Packed() == 0 {
+		t.Errorf("the budget's release reached a live turn's begun row: (%+v, %v)", b, found)
 	}
 }
 

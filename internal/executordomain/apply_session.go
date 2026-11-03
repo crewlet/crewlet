@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -14,16 +15,30 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE SESSION CASES: a capture, an end and a retention delete on a
+// THE SESSION CASES: a begin, a capture, an end and a retention delete on a
 // conversation's subject, and a seat's removal and the retention of that
 // removal on the seat's.
 //
 // Each reads the rows it decides from IN THIS TRANSACTION, by the same helpers
 // the writer's decide reads them through ([readSession], [readTomb],
-// [readRemoval], [seatPlan], [expiredIn]), so the decide and the apply hold one
-// rule rather than two spellings of it: the decide refuses what it can see is
-// wrong, and the apply repeats every deterministic guard for what changed
-// between the two.
+// [readRemoval], [seatPlan], [expiredIn], [baseStands], [held]), so the decide
+// and the apply hold one rule rather than two spellings of it: the decide
+// refuses what it can see is wrong, and the apply repeats every deterministic
+// guard for what changed between the two.
+//
+// # A held base is released by nothing
+//
+// A turn's first read freezes the conversation's head as the BASE its launches
+// continue while the turn has kept no session of its own, and its `begin`
+// writes the turn's row naming it ([Begin]). While that row is live and has
+// landed no capture, it HOLDS the base: the seat budget's release, an end's
+// absorption and its work-key dedupe, and the retention's delete each skip a
+// held row. Each asks about the one row it is about to release, here, in log
+// order, rather than through a subquery of the statement that releases it, so
+// no statement gives the planner a correlated subquery to rewrite into a read
+// of the whole table (storetest.Decorrelated). A skipped row stays an ordinary
+// ended row: the holder was handed it, so the holder's own end absorbs it once
+// the hold has lifted, and so does the next end whose read showed it.
 //
 // EVERY STATEMENT IS NAMED, here and in the reader, so the plan gate plans the
 // statements this package runs rather than copies of them
@@ -54,6 +69,12 @@ const (
 
 	// seatIdx is a seat's rows in the order they began: its page.
 	seatIdx = "executor_sessions_seat_idx"
+
+	// heldIdx is the bases live turns hold: a PARTIAL index over exactly the
+	// rows that hold one (live, no capture landed, naming a base), whose
+	// predicate every statement through it repeats word for word, which is
+	// what lets the planner and the hint use it.
+	heldIdx = "executor_sessions_held_idx"
 )
 
 // Tombstone reasons: why a turn takes no further record.
@@ -70,7 +91,7 @@ const (
 	// readSessionStatement is one turn's row, by its key.
 	readSessionStatement = `
 		SELECT conversation_key, work_key, launch_seq, capture_seq, read_through,
-		       absorbs, end_seq, object, object_size, last_at
+		       absorbs, end_seq, object, object_hash, object_size, base_turn, last_at
 		FROM executor_sessions INDEXED BY ` + sessionKey + ` WHERE agent_handle = ? AND turn_id = ?`
 
 	// readTombStatement is one turn's tombstone, by its key.
@@ -82,8 +103,8 @@ const (
 	readRemovalStatement = `
 		SELECT at_seq FROM executor_seat_removals WHERE agent_handle = ?`
 
-	// seatHeldStatement is the object bytes a seat's other turns hold.
-	seatHeldStatement = `
+	// seatBytesStatement is the object bytes a seat's other turns name.
+	seatBytesStatement = `
 		SELECT COALESCE(SUM(object_size), 0) FROM executor_sessions
 		WHERE agent_handle = ? AND object IS NOT NULL AND turn_id <> ?`
 
@@ -96,6 +117,21 @@ const (
 		WHERE agent_handle = ? AND end_seq IS NOT NULL AND object IS NOT NULL
 		  AND turn_id <> ?
 		ORDER BY end_seq`
+
+	// heldStatement is whether a live turn of the seat other than one holds
+	// an ended turn as its base: one point read of the bases' index.
+	heldStatement = `
+		SELECT 1 FROM executor_sessions INDEXED BY ` + heldIdx + `
+		WHERE agent_handle = ? AND base_turn = ? AND end_seq IS NULL AND launch_seq = 0
+		  AND base_turn <> '' AND turn_id <> ? LIMIT 1`
+
+	// heldBasesStatement is every base the seat's live turns other than one
+	// hold: what the budget's release, which walks the seat's ended sessions
+	// in order, reads once before it walks rather than once per row.
+	heldBasesStatement = `
+		SELECT base_turn FROM executor_sessions INDEXED BY ` + heldIdx + `
+		WHERE agent_handle = ? AND end_seq IS NULL AND launch_seq = 0
+		  AND base_turn <> '' AND turn_id <> ?`
 )
 
 // The statements an apply writes the rows with.
@@ -107,27 +143,47 @@ const (
 			object_size = 0, content_key = '', version = ?
 		WHERE agent_handle = ? AND turn_id = ?`
 
-	// insertCaptureStatement is a turn's first capture: the row begins
-	// here, at first_seq.
+	// insertCaptureStatement is a turn's first capture where no begin of
+	// it landed first: the row begins here, at first_seq.
 	insertCaptureStatement = `
 		INSERT INTO executor_sessions (
 			agent_handle, turn_id, conversation_key, work_key, harness, harness_version,
 			session_id, object, object_hash, object_size, content_key, archive_format,
-			launch_seq, capture_seq, home, workspace, captured_at, read_through,
-			absorbs, last_at, first_seq, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			launch_seq, capture_seq, home, workspace, context_tokens, interrupted,
+			captured_at, read_through, absorbs, last_at, first_seq, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
 
-	// updateCaptureStatement is a later capture of a live turn: every
-	// value is the one [applyCapture] decided, the turn's first read and
-	// its work key included, so the statement itself decides nothing.
+	// updateCaptureStatement is a later capture of a live turn, or its first
+	// onto the row its begin wrote: every value is the one [applyCapture]
+	// decided, the turn's first read and its work key included, so the
+	// statement itself decides nothing. It leaves the row's base as the
+	// begin wrote it; the capture's own launch_seq is what lifts the hold.
 	updateCaptureStatement = `
 		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, harness = ?, harness_version = ?,
 			session_id = ?, object = ?, object_hash = ?, object_size = ?,
 			content_key = ?, archive_format = ?, launch_seq = ?, capture_seq = ?,
-			home = ?, workspace = ?, captured_at = ?, read_through = ?, absorbs = ?,
-			last_at = ?, version = ?
+			home = ?, workspace = ?, context_tokens = ?, interrupted = ?, captured_at = ?,
+			read_through = ?, absorbs = ?, last_at = ?, version = ?
 		WHERE agent_handle = ? AND turn_id = ? AND end_seq IS NULL AND version < ?`
+
+	// insertBeginStatement is the row of a turn whose begin landed before
+	// any capture: its first read and the base it holds, naming no object,
+	// at launch 0, so the bases' index lists it while it holds one.
+	insertBeginStatement = `
+		INSERT INTO executor_sessions (agent_handle, turn_id, conversation_key, work_key,
+			read_through, absorbs, base_turn, last_at, first_seq, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
+
+	// updateBeginStatement is a begin landing on the row a capture of the
+	// turn wrote first with no read: the read and the base the row names
+	// from then on. It holds nothing, the row having landed a capture.
+	updateBeginStatement = `
+		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, read_through = ?,
+			absorbs = ?, base_turn = ?, version = ?
+		WHERE agent_handle = ? AND turn_id = ? AND end_seq IS NULL AND read_through = 0
+		  AND version < ?`
 
 	// endRowStatement stamps a captured turn's end on its row.
 	endRowStatement = `
@@ -145,18 +201,18 @@ const (
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
 
-	// deliveredAttemptsStatement counts the older ended attempts at one
-	// unit of work in a conversation whose reply went out.
-	deliveredAttemptsStatement = `
-		SELECT COUNT(*) FROM executor_sessions INDEXED BY ` + conversationIdx + `
-		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
-		  AND work_key = ? AND turn_id <> ? AND delivered = 1`
-
-	// dedupeStatement deletes those older attempts.
-	dedupeStatement = `
-		DELETE FROM executor_sessions INDEXED BY ` + conversationIdx + `
+	// attemptsStatement is the older ended attempts at one unit of work in
+	// a conversation, each with whether its reply went out.
+	attemptsStatement = `
+		SELECT turn_id, delivered FROM executor_sessions INDEXED BY ` + conversationIdx + `
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
 		  AND work_key = ? AND turn_id <> ?`
+
+	// dedupeStatement deletes one of those attempts, by its key: one at a
+	// time, each the apply found no live turn holding ([held]).
+	dedupeStatement = `
+		DELETE FROM executor_sessions INDEXED BY ` + sessionKey + `
+		WHERE agent_handle = ? AND turn_id = ? AND end_seq IS NOT NULL`
 
 	// absorbStatement deletes one ended turn the ending turn's first read
 	// handed out, by its key, and only where it ended at or before that read
@@ -214,8 +270,12 @@ type sessionRow struct {
 	readThrough     int64
 	absorbs         string
 	ended           bool
+	endSeq          int64
 	hasObject       bool
+	object          string
+	objectHash      string
 	objectSize      int64
+	baseTurn        string
 	lastAt          int64
 }
 
@@ -228,7 +288,8 @@ func readSession(ctx context.Context, tx *sql.Tx, handle, turn string) (sessionR
 	)
 	err := tx.QueryRowContext(ctx, readSessionStatement, handle, turn).Scan(
 		&row.conversationKey, &row.workKey, &row.launchSeq, &row.captureSeq,
-		&row.readThrough, &row.absorbs, &endSeq, &object, &row.objectSize, &row.lastAt)
+		&row.readThrough, &row.absorbs, &endSeq, &object, &row.objectHash, &row.objectSize,
+		&row.baseTurn, &row.lastAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return sessionRow{}, false, nil
@@ -236,7 +297,8 @@ func readSession(ctx context.Context, tx *sql.Tx, handle, turn string) (sessionR
 		return sessionRow{}, false, fmt.Errorf("executordomain: read %s's turn %s: %w",
 			handle, turn, err)
 	}
-	row.ended, row.hasObject = endSeq.Valid, object.Valid
+	row.ended, row.endSeq = endSeq.Valid, endSeq.Int64
+	row.hasObject, row.object = object.Valid, object.String
 	return row, true, nil
 }
 
@@ -345,21 +407,37 @@ func splitAbsorbs(column string) []string {
 //
 // THE OLDEST ENDINGS GO FIRST, by the position each ended at, and never a live
 // turn's session or this turn's own: a live turn's is the one its next launch
-// continues, and this turn's is being replaced. The release is a total order of
-// the rows (an end's position is unique among them), so every node releases the
-// same sessions. Nothing is chosen when even every ended session released would
-// not make room: the seat's live turns already hold the budget, and the capture
-// is refused whole rather than releasing what does not help.
+// continues, and this turn's is being replaced. NOR A BASE ANOTHER LIVE TURN
+// HOLDS ([held]): that turn's relaunch continues it. A base THIS turn holds is
+// released like any ended session, because this capture is the turn's first
+// landed one and lifts the hold in the same apply: from it on, the turn's
+// launches continue its own session, which holds everything the base did, so
+// releasing the base loses nothing — what keeps a seat at its budget's floor
+// able to take a continued turn's first capture at all.
+//
+// The release is a total order of the rows (an end's position is unique among
+// them), so every node releases the same sessions. Nothing is chosen when even
+// every releasable session released would not make room: the seat's live turns
+// and the bases they hold already fill the budget, and the capture is refused
+// whole rather than releasing what does not help.
 func seatPlan(ctx context.Context, tx *sql.Tx, handle, turn string, size, budget int64) (
 	[]string, bool, error) {
 
-	var held int64
-	if err := tx.QueryRowContext(ctx, seatHeldStatement, handle, turn).Scan(&held); err != nil {
+	var occupied int64
+	if err := tx.QueryRowContext(ctx, seatBytesStatement, handle, turn).Scan(&occupied); err != nil {
 		return nil, false, fmt.Errorf("executordomain: read %s's session bytes: %w", handle, err)
 	}
-	need := held + size
+	need := occupied + size
 	if need <= budget {
 		return nil, true, nil
+	}
+	// THE HOLDS ARE READ WHOLE BEFORE THE WALK, which reads the seat's ended
+	// sessions in their release order and stops once the capture fits: the
+	// bases the seat's live turns hold are a handful, and no statement runs
+	// while the walk's rows are open.
+	holds, err := heldBases(ctx, tx, handle, turn)
+	if err != nil {
+		return nil, false, err
 	}
 	rows, queryErr := tx.QueryContext(ctx, seatReleasableStatement, handle, turn)
 	if queryErr != nil {
@@ -376,12 +454,81 @@ func seatPlan(ctx context.Context, tx *sql.Tx, handle, turn string, size, budget
 		if scanErr := rows.Scan(&ended, &bytes); scanErr != nil {
 			return nil, false, scanErr
 		}
+		if holds[ended] {
+			continue
+		}
 		release = append(release, ended)
 		if need -= bytes; need <= budget {
 			return release, true, rows.Err()
 		}
 	}
 	return nil, false, rows.Err()
+}
+
+// held reports whether a live turn of handle's seat other than except holds
+// turn as its base: its row names turn, has not ended and has landed no
+// capture of its own. What every release of one row asks before it takes it.
+func held(ctx context.Context, tx *sql.Tx, handle, turn, except string) (bool, error) {
+	var one int
+	err := tx.QueryRowContext(ctx, heldStatement, handle, turn, except).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("executordomain: read whether %s's turn %s is held: %w",
+			handle, turn, err)
+	}
+	return true, nil
+}
+
+// heldBases is every base the live turns of handle's seat other than except
+// hold, read in one pass of the bases' index.
+func heldBases(ctx context.Context, tx *sql.Tx, handle, except string) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, heldBasesStatement, handle, except)
+	if err != nil {
+		return nil, fmt.Errorf("executordomain: read the bases %s's live turns hold: %w", handle, err)
+	}
+	out := map[string]bool{}
+	for rows.Next() {
+		var base string
+		if scanErr := rows.Scan(&base); scanErr != nil {
+			_ = rows.Close()
+			return nil, scanErr
+		}
+		out[base] = true
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+// baseStands is why a begin's base cannot be held, or "" where it can: the base
+// turn's row is still there, ended at or before the read that saw it, in the
+// begin's conversation, and naming the very session that read saw. What the
+// apply decides the row's base by, and the writer reads back to say why a
+// begin holds nothing.
+//
+// ANYTHING ELSE IS A BASE THAT MOVED between the read and the record: an end
+// ordered before the begin absorbed or deduped it, a capture released it past
+// the seat's budget, the retention deleted it, or the seat was removed. The
+// begin then holds nothing rather than a row naming another session, or none.
+func baseStands(ctx context.Context, tx *sql.Tx, handle, conversationKey string,
+	readThrough int64, baseTurn, object, hash string) (string, error) {
+
+	row, found, err := readSession(ctx, tx, handle, baseTurn)
+	switch {
+	case err != nil:
+		return "", err
+	case !found:
+		return "the base turn's row is gone: another turn's end absorbed or deduped it, " +
+			"the retention deleted it or its seat was removed", nil
+	case !row.ended || row.endSeq > readThrough:
+		return "the base turn's row is not the ended turn the read saw", nil
+	case row.conversationKey != conversationKey:
+		return "the base turn is another conversation's", nil
+	case !row.hasObject || row.object != object || row.objectHash != hash:
+		return "the base turn's row no longer names the session the read saw: the seat's " +
+			"budget or its turn's end released it", nil
+	}
+	return "", nil
 }
 
 // expiredIn reports whether a turn has a row or a tombstone in conversation
@@ -393,6 +540,11 @@ func seatPlan(ctx context.Context, tx *sql.Tx, handle, turn string, size, budget
 // turn whose run the fleet still holds, so a row with no end and no run is one
 // whose end was lost, and the retention is what bounds it; a rule that kept it
 // would keep it for ever.
+//
+// A ROW A LIVE TURN HOLDS AS ITS BASE IS NOT TAKEN, however old ([held]): that
+// turn's relaunch continues it. The hold lasts until the holder lands a capture
+// or ends, and a holder whose run was lost is ended within [LostAfter], so the
+// row is taken on a pass after that.
 func expiredIn(ctx context.Context, tx *sql.Tx, handle, conversationKey, turn string,
 	cutoff int64) (bool, error) {
 
@@ -401,7 +553,11 @@ func expiredIn(ctx context.Context, tx *sql.Tx, handle, conversationKey, turn st
 		return false, err
 	}
 	if found {
-		return row.conversationKey == conversationKey && row.lastAt <= cutoff, nil
+		if row.conversationKey != conversationKey || row.lastAt > cutoff {
+			return false, nil
+		}
+		holds, holdErr := held(ctx, tx, handle, turn, turn)
+		return !holds, holdErr
 	}
 	marker, tombed, tombErr := readTomb(ctx, tx, handle, turn)
 	if tombErr != nil || !tombed {
@@ -417,6 +573,11 @@ func expiredIn(ctx context.Context, tx *sql.Tx, handle, conversationKey, turn st
 // because the arbitration it passed was about a different object.
 func applyConversation(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
 	switch p := payload.(type) {
+	case Begin:
+		if !c.on(ConversationSubject(p.Handle, p.ConversationKey, p.Turn)) {
+			return 0, nil
+		}
+		return applyBegin(ctx, tx, c, p)
 	case Capture:
 		if !c.on(ConversationSubject(p.Handle, p.ConversationKey, p.Turn)) {
 			return 0, nil
@@ -459,7 +620,7 @@ func (c applyContext) on(subject Subject) bool { return c.record.Subject == subj
 func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (int, error) {
 	absorbs, wellFormed := absorbsOf(p.Absorbs, p.Turn, p.ReadThrough)
 	if !present(p.Handle) || !present(p.Turn) || p.ObjectSize <= 0 || p.SeatBudget <= 0 ||
-		!nameable(p.Object, p.ObjectHash) || !wellFormed {
+		p.ContextTokens < 0 || !nameable(p.Object, p.ObjectHash) || !wellFormed {
 		return 0, nil
 	}
 	// THE SEAT'S REMOVAL FIRST: a capture decided before a removal it did
@@ -517,20 +678,111 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 		res, err = tx.ExecContext(ctx, updateCaptureStatement,
 			work, p.Harness, p.HarnessVersion, p.SessionID, p.Object, p.ObjectHash, p.ObjectSize,
 			p.ContentKey, p.ArchiveFormat, p.LaunchSeq, p.CaptureSeq, p.Home, p.Workspace,
-			c.at(), readThrough, absorbed, c.at(), c.packed,
+			p.ContextTokens, flag(p.Interrupted), c.at(), readThrough, absorbed, c.at(), c.packed,
 			p.Handle, p.Turn, c.packed)
 	} else {
 		res, err = tx.ExecContext(ctx, insertCaptureStatement,
 			p.Handle, p.Turn, p.ConversationKey, work, p.Harness, p.HarnessVersion,
 			p.SessionID, p.Object, p.ObjectHash, p.ObjectSize, p.ContentKey, p.ArchiveFormat,
-			p.LaunchSeq, p.CaptureSeq, p.Home, p.Workspace, c.at(), readThrough,
-			absorbed, c.at(), c.packed, c.packed)
+			p.LaunchSeq, p.CaptureSeq, p.Home, p.Workspace, p.ContextTokens, flag(p.Interrupted),
+			c.at(), readThrough, absorbed, c.at(), c.packed, c.packed)
 	}
 	if err != nil {
 		return written, fmt.Errorf("executordomain: record %s's capture of turn %s at %s: %w",
 			p.Handle, p.Turn, c.position, err)
 	}
 	return written + affected(res), nil
+}
+
+// applyBegin records a turn's first read of its conversation and the base that
+// read froze, which the turn's row then holds while it is live and has landed
+// no capture.
+//
+// EVERY GUARD IS THE DECIDE'S ([Writer.Begin]), repeated in log order:
+//
+//   - THE SHAPE: a read (a position, and the turns it handed out as
+//     [absorbsOf] holds them), on a conversation, and a base that is one of
+//     those turns, not the beginning turn itself, naming a session every
+//     reader can parse — or no base at all;
+//   - THE SEAT AND THE TURN: no removal of the seat newer than the one the
+//     decide saw, and no tombstone of the turn;
+//   - THE TURN'S ROW: none, or a live one of the same conversation and unit of
+//     work that holds no read yet. A turn's FIRST READ STANDS, whichever of
+//     its records carried it first, so a begin landing after it — retried,
+//     or late — writes nothing;
+//   - THE BASE: held only where its row still names the session the read saw
+//     ([baseStands]); a base that moved since is written as none, so the
+//     begin still records the read and holds nothing.
+//
+// A begin and every end, lost end and retention delete of the conversation are
+// arbitrated on one subject, so whichever the log ordered first decides: an end
+// first leaves no base to hold, and a begin first holds the base against the
+// end ([held]).
+func applyBegin(ctx context.Context, tx *sql.Tx, c applyContext, p Begin) (int, error) {
+	absorbs, wellFormed := absorbsOf(p.Absorbs, p.Turn, p.ReadThrough)
+	if !present(p.Handle) || !present(p.Turn) || p.ConversationKey == "" ||
+		p.ReadThrough <= 0 || !wellFormed || !p.baseShaped() {
+		return 0, nil
+	}
+	removal, err := readRemoval(ctx, tx, p.Handle)
+	if err != nil {
+		return 0, err
+	}
+	if removal > p.SeenRemoval {
+		return 0, nil
+	}
+	if _, tombed, tombErr := readTomb(ctx, tx, p.Handle, p.Turn); tombErr != nil || tombed {
+		return 0, tombErr
+	}
+	row, found, err := readSession(ctx, tx, p.Handle, p.Turn)
+	if err != nil {
+		return 0, err
+	}
+	if found && (row.ended || row.conversationKey != p.ConversationKey ||
+		!sameWork(row.workKey, p.WorkKey) || row.readThrough > 0) {
+		return 0, nil
+	}
+	base := p.BaseTurn
+	if base != "" {
+		why, standErr := baseStands(ctx, tx, p.Handle, p.ConversationKey, p.ReadThrough,
+			p.BaseTurn, p.BaseObject, p.BaseHash)
+		if standErr != nil {
+			return 0, standErr
+		}
+		if why != "" {
+			base = ""
+		}
+	}
+	absorbed := strings.Join(absorbs, ",")
+	var res sql.Result
+	if found {
+		work := p.WorkKey
+		if row.workKey != "" {
+			work = row.workKey
+		}
+		res, err = tx.ExecContext(ctx, updateBeginStatement,
+			work, p.ReadThrough, absorbed, base, c.packed, p.Handle, p.Turn, c.packed)
+	} else {
+		res, err = tx.ExecContext(ctx, insertBeginStatement,
+			p.Handle, p.Turn, p.ConversationKey, p.WorkKey, p.ReadThrough, absorbed, base,
+			c.at(), c.packed, c.packed)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("executordomain: record %s's begin of turn %s at %s: %w",
+			p.Handle, p.Turn, c.position, err)
+	}
+	return affected(res), nil
+}
+
+// baseShaped reports a begin's base as a read hands one out: none at all, or a
+// turn in its one spelling other than the beginning one, among the turns the
+// read handed out, naming a session every reader can parse ([nameable]).
+func (p Begin) baseShaped() bool {
+	if p.BaseTurn == "" {
+		return p.BaseObject == "" && p.BaseHash == ""
+	}
+	return canonicalTurn(p.BaseTurn) && p.BaseTurn != p.Turn &&
+		slices.Contains(p.Absorbs, p.BaseTurn) && nameable(p.BaseObject, p.BaseHash)
 }
 
 // endBody is an end's payload with its ending as the bytes the record carries,
@@ -568,7 +820,8 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 		// tombstone, so its end, decided before a removal it did not see,
 		// would write an ending for a seat that is gone. A turn with a row
 		// needs no such check: the removal deleted every row the seat held,
-		// so a row now is one a capture of the seat's next tenure wrote.
+		// so a row now is one a capture or a begin of the seat's next tenure
+		// wrote, each held to the removal it saw.
 		removal, removalErr := readRemoval(ctx, tx, p.Handle)
 		if removalErr != nil {
 			return 0, removalErr
@@ -602,7 +855,10 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 		}
 		written += affected(res)
 	}
-	if found && p.ConversationKey != "" {
+	// ONLY A TURN THAT LANDED A CAPTURE ABSORBS AND DEDUPES: one that never
+	// did, its row its begin's, holds no session that could stand in for
+	// what its read handed out, as a turn with no row at all does not.
+	if found && row.launchSeq > 0 && p.ConversationKey != "" {
 		absorbed, merged, absorbErr := absorb(ctx, tx, c, p, work, row)
 		if absorbErr != nil {
 			return 0, absorbErr
@@ -616,10 +872,11 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 			work, c.at(), c.packed, string(p.Ending.Outcome), flag(delivered),
 			string(body.Ending), p.AskExcerpt, c.at(), c.packed, p.Handle, p.Turn)
 	} else {
-		// NOTHING WAS CAPTURED: an ended row naming no object, which holds
-		// the ending alone, so the conversation's next turn is still told
-		// how this one ended. It absorbs nothing: it read nothing it could
-		// stand in for.
+		// NOTHING WAS CAPTURED AND NOTHING BEGUN: an ended row naming no
+		// object, which holds the ending alone, so the conversation's next
+		// turn is still told how this one ended. It absorbs nothing: it
+		// read nothing it could stand in for. A turn whose begin wrote its
+		// row ends on that row instead, above, and absorbs nothing either.
 		res, err = tx.ExecContext(ctx, insertEndingStatement,
 			p.Handle, p.Turn, p.ConversationKey, work, c.at(), c.packed,
 			string(p.Ending.Outcome), flag(delivered), string(body.Ending), p.AskExcerpt,
@@ -652,6 +909,11 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 // default of a turn with no unit of work to collapse on (ADR-0017), and
 // matching on it would let every keyless turn erase its keyless siblings.
 //
+// NEITHER TAKES A ROW A LIVE TURN HOLDS AS ITS BASE ([held]), asked of each
+// row before it is deleted: that turn's relaunch continues it. What an attempt
+// delivered is merged whether it is deleted or held. A held row stays an
+// ordinary ended row, which its holder's own end absorbs in its turn.
+//
 // Each deleted row's tombstone was written by its own `end`, so nothing
 // recreates it.
 func absorb(ctx context.Context, tx *sql.Tx, c applyContext, p End, work string,
@@ -659,34 +921,81 @@ func absorb(ctx context.Context, tx *sql.Tx, c applyContext, p End, work string,
 
 	written, delivered := 0, false
 	if work != "" {
-		var n int
-		if countErr := tx.QueryRowContext(ctx, deliveredAttemptsStatement,
-			p.Handle, p.ConversationKey, work, p.Turn).Scan(&n); countErr != nil {
-			return 0, false, fmt.Errorf("executordomain: read the attempts at %s's work "+
-				"%s: %w", p.Handle, work, countErr)
+		attempts, listErr := olderAttempts(ctx, tx, p.Handle, p.ConversationKey, work, p.Turn)
+		if listErr != nil {
+			return 0, false, listErr
 		}
-		delivered = n > 0
-		res, dedupeErr := tx.ExecContext(ctx, dedupeStatement,
-			p.Handle, p.ConversationKey, work, p.Turn)
-		if dedupeErr != nil {
-			return 0, false, fmt.Errorf("executordomain: dedupe %s's work %s at %s: %w",
-				p.Handle, work, c.position, dedupeErr)
+		for _, older := range attempts {
+			delivered = delivered || older.delivered
+			n, dropErr := dropUnheld(ctx, tx, c, dedupeStatement, p.Handle, older.turn, p.Turn,
+				p.Handle, older.turn)
+			if dropErr != nil {
+				return written, false, dropErr
+			}
+			written += n
 		}
-		written += affected(res)
 	}
 	if row.readThrough <= 0 {
 		return written, delivered, nil
 	}
 	for _, shown := range splitAbsorbs(row.absorbs) {
-		res, absorbErr := tx.ExecContext(ctx, absorbStatement,
+		n, dropErr := dropUnheld(ctx, tx, c, absorbStatement, p.Handle, shown, p.Turn,
 			p.Handle, shown, p.ConversationKey, row.readThrough)
-		if absorbErr != nil {
-			return written, false, fmt.Errorf("executordomain: absorb %s's turn %s at %s: %w",
-				p.Handle, shown, c.position, absorbErr)
+		if dropErr != nil {
+			return written, false, dropErr
 		}
-		written += affected(res)
+		written += n
 	}
 	return written, delivered, nil
+}
+
+// attempt is one older ended attempt at a unit of work.
+type attempt struct {
+	turn      string
+	delivered bool
+}
+
+// olderAttempts lists the older ended attempts at work in a conversation, read
+// whole and closed before any of them is deleted.
+func olderAttempts(ctx context.Context, tx *sql.Tx, handle, conversationKey, work,
+	turn string) ([]attempt, error) {
+
+	rows, err := tx.QueryContext(ctx, attemptsStatement, handle, conversationKey, work, turn)
+	if err != nil {
+		return nil, fmt.Errorf("executordomain: read the attempts at %s's work %s: %w",
+			handle, work, err)
+	}
+	var out []attempt
+	for rows.Next() {
+		var (
+			a         attempt
+			delivered int
+		)
+		if scanErr := rows.Scan(&a.turn, &delivered); scanErr != nil {
+			_ = rows.Close()
+			return nil, scanErr
+		}
+		a.delivered = delivered == 1
+		out = append(out, a)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+// dropUnheld runs statement, a delete of one ended turn's row, unless a live
+// turn of the seat other than except holds that turn as its base.
+func dropUnheld(ctx context.Context, tx *sql.Tx, c applyContext, statement, handle, turn,
+	except string, args ...any) (int, error) {
+
+	holds, err := held(ctx, tx, handle, turn, except)
+	if err != nil || holds {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return 0, fmt.Errorf("executordomain: delete %s's turn %s at %s: %w",
+			handle, turn, c.position, err)
+	}
+	return affected(res), nil
 }
 
 // tomb writes a turn's tombstone, keeping the first one a turn was given.
