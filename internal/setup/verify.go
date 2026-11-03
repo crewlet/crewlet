@@ -120,6 +120,10 @@ type Check struct {
 	// (`integrations.cloudflare.provisioning.zones`), carried for the one
 	// probe that reads it: a document field with no form field of its own.
 	Zones []string
+
+	// Company is the company's name, carried for Google Cloud's probe: the
+	// federation token it signs names an issuer and a subject made from it.
+	Company string
 }
 
 // Secret is the credential under check, for a probe that must keep it out

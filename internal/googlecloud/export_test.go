@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // SetClock replaces the time a client reads and waits by, so a test's
@@ -72,4 +73,12 @@ func OpenAccess(
 	now func() time.Time, sleep func(context.Context, time.Duration) error,
 ) (seataccess.Session, error) {
 	return vendor.(accessVendor).open(in, hc, &clock{now: now, sleep: sleep})
+}
+
+// ProbeWith is the Test probe on a test's transport and clock.
+func ProbeWith(
+	ctx context.Context, company string, value func(string) string, hc *http.Client,
+	now func() time.Time, sleep func(context.Context, time.Duration) error,
+) (setup.Verdict, error) {
+	return probeCheck(ctx, company, value, hc, &clock{now: now, sleep: sleep})
 }

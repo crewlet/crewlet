@@ -78,3 +78,36 @@ func TestAFieldJudgesItsValue(t *testing.T) {
 		}
 	}
 }
+
+// A GOOGLE IDENTIFIER IS HELD TO ITS SHAPE AND NEVER MINTED: a service
+// account's email and a workload identity provider's full name name something
+// Google made, and a value Crewlet made up would name nothing.
+func TestAGoogleIdentifierIsHeldToItsShapeAndNeverMinted(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		shape setup.Shape
+		value string
+		ok    bool
+	}{
+		{setup.ShapeGoogleServiceAccount, "crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com", true},
+		{setup.ShapeGoogleServiceAccount, "ops@acme.example", false},
+		{setup.ShapeGoogleServiceAccount, "acme-crewlet-id", false},
+		{setup.ShapeGoogleProvider,
+			"projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine", true},
+		{setup.ShapeGoogleProvider, "projects/123456789012/locations/global/workloadIdentityPools/crewlet", false},
+		{setup.ShapeGoogleProvider, "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q", false},
+	} {
+		problem := tc.shape.Problem("provider", tc.value)
+		if (problem == "") != tc.ok {
+			t.Errorf("%s %q: problem %q", tc.shape, tc.value, problem)
+		}
+		if problem != "" && strings.Contains(problem, tc.value) {
+			t.Errorf("%s: the refusal quotes the value", tc.shape)
+		}
+	}
+	for _, shape := range []setup.Shape{setup.ShapeGoogleServiceAccount, setup.ShapeGoogleProvider} {
+		if value, err := shape.Mint(func() string { return "minted" }); err == nil || value != "" {
+			t.Errorf("%s minted %q", shape, value)
+		}
+	}
+}
