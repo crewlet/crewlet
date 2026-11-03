@@ -140,10 +140,11 @@ const (
 	// which a reply that will be the run's next prompt — read again by its
 	// harness at every step after — has no business being. A reply past it
 	// is not recorded as the answer ([ErrAnswerTooLarge]) and goes its way as
-	// the ordinary message it is, so nothing of it is lost, and its author is
-	// told it was not taken as the answer (events' AnswerTooLarge); an answer
-	// by turn is held far under it at its source (internal/agent/builtin's
-	// MaxRunAnswerBytes).
+	// the ordinary message it is, so nothing of it is lost, and the refusal is
+	// recorded for its author as `executor_answered` with the outcome
+	// too_large (events' AnswerTooLarge), which the dashboard draws and the
+	// conversation they replied in does not; an answer by turn is held far
+	// under it at its source (internal/agent/builtin's MaxRunAnswerBytes).
 	MaxAnswerBytes = 512 << 10
 
 	// MaxHeldArgsBytes bounds a held call's arguments as the row holds them
@@ -299,15 +300,15 @@ var ErrStateTooLarge = errors.New("sandbox: the parked turn's state is past its 
 // copies letting it go would owe the seat: refused by
 // [PendingStore.RecordAnswer] before anything is written, as an
 // [*AnswerTooLargeError] naming what it weighs. Nothing of the reply is lost
-// by it: a chat reply goes its way as the ordinary message it is, its author
-// told it was not taken as the answer ([Coordinator.TryResumeFromAnswer]), and
-// the run waits on its question.
+// by it: a chat reply goes its way as the ordinary message it is, the refusal
+// is recorded for its author as `executor_answered` with the outcome too_large
+// ([Coordinator.TryResumeFromAnswer]), and the run waits on its question.
 var ErrAnswerTooLarge = errors.New("sandbox: the reply is past a recorded answer's share of the run's row")
 
 // AnswerTooLargeError is [ErrAnswerTooLarge] for one reply: what it weighs as
 // the row would hold it (the answer, or the copies letting it go would owe,
-// whichever is more) and what an answer may weigh there — the two figures its
-// author is told.
+// whichever is more) and what an answer may weigh there — the two figures the
+// refusal's `executor_answered` record carries.
 type AnswerTooLargeError struct {
 	TurnID string
 	Weighs int

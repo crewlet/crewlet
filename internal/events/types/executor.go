@@ -762,10 +762,12 @@ const (
 	// AnswerTooLarge is a chat reply to the question too large for the
 	// run's record to carry as its answer ([ExecutorAnswered.AnswerBytes]
 	// past [ExecutorAnswered.AnswerMaxBytes]): not recorded, and gone on to
-	// its seat as the ordinary message it is, the question still waiting —
-	// so its author knows to answer again, shorter, rather than taking the
-	// run to have its answer, or the next thing they say in the conversation
-	// to be anything but that.
+	// its seat as the ordinary message it is, the question still waiting.
+	// THIS RECORD IS HOW ITS AUTHOR LEARNS IT, and the only way: the
+	// dashboard draws it on the turn's page and in the activity feed, and
+	// nothing is posted in the conversation they replied in — so a person
+	// who reads only that takes the run to have their reply, and the next
+	// thing they say there may be taken for the answer.
 	AnswerTooLarge AnswerOutcome = "too_large"
 )
 
@@ -838,7 +840,7 @@ type ExecutorAnswered struct {
 
 	// AnswerBytes is what a reply [AnswerTooLarge] weighs as the run's record
 	// would hold it, and AnswerMaxBytes what an answer may weigh there: the
-	// two figures its author is told. Absent on every other outcome.
+	// two figures the record gives its reader. Absent on every other outcome.
 	AnswerBytes    int `json:"answer_bytes,omitempty"`
 	AnswerMaxBytes int `json:"answer_max_bytes,omitempty"`
 }

@@ -2393,8 +2393,10 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 //   - The reply is past what the run's row carries as an answer
 //     ([ErrAnswerTooLarge], [MaxAnswerBytes]): [AnswerNotMine]. Nothing was
 //     written, so nothing is owed it but the ordinary message it is, which
-//     keeps every word of it; the run waits on its question, and the reply's
-//     author is told so ([types.AnswerTooLarge]).
+//     keeps every word of it; the run waits on its question, and the refusal
+//     is recorded for the reply's author as `executor_answered` with the
+//     outcome too_large ([types.AnswerTooLarge]) — on the dashboard, and never
+//     in the conversation they replied in.
 //   - The answer could not be recorded: [AnswerDeferred]. The write MAY have
 //     landed, so this is the ambiguous case, resolved towards the run — the
 //     delivery comes back and, if the record did land, is recognised as the
@@ -2465,16 +2467,20 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 			// which a cut answer or a reply dropped at the broker would not.
 			// The run waits on its question.
 			//
-			// AND ITS AUTHOR IS TOLD SO, with what it weighed and what an
-			// answer may ([types.AnswerTooLarge]): the reply was written as
-			// the answer, and a person who reads no word of it being taken
-			// takes the run to be carrying on with it — and the next thing
-			// they say in the conversation, a "any luck?", is what the
-			// question is answered with.
+			// AND THE REFUSAL IS RECORDED FOR ITS AUTHOR, with what it weighed
+			// and what an answer may and none of its words
+			// ([types.AnswerTooLarge]): the reply was written as the answer,
+			// and the record is where a person reads that it was not taken —
+			// the dashboard draws it on the turn's page and in the activity
+			// feed. NOTHING IS POSTED IN THE CONVERSATION THEY REPLIED IN, so
+			// a person who reads only that takes the run to be carrying on
+			// with the reply, and the next thing they say there, an "any
+			// luck?", is what the question is answered with where it fits.
 			log.WarnContext(ctx, "sandbox_answer_too_large", "turn_id", run.TurnID, "agent", handle,
 				"conversation", reply.Conv.Identity, "error", err.Error(),
 				"detail", "a reply past what a run's row carries as its answer is handled as the "+
-					"ordinary message it is, its author is told, and the run waits on its question")
+					"ordinary message it is, the refusal is recorded as executor_answered with the "+
+					"outcome too_large, and the run waits on its question")
 			by := chatAnswerer(trigger)
 			by.tooLarge = tooLarge
 			c.announceAnswered(ctx, run, types.AnswerViaChat, types.AnswerTooLarge, by)
