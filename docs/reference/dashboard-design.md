@@ -1443,7 +1443,7 @@ one of those positions (`people` after `worklet`, `runbook` after `doclet/pages`
 is Not Found rather than an object the engine never minted, which would draw its
 refusal under a trail naming a page that does not exist.
 
-**Three of those surfaces are the engine answering a question it has always
+**Two of those surfaces are the engine answering a question it has always
 been able to answer.** Search is the ranking a seat gets from `search_work_items` —
 by the words (Keyword, BM25 over the engine's own index), by what they mean
 (Meaning, the wire's `semantic`), or both fused (Hybrid, the default) — which
@@ -1459,10 +1459,8 @@ the prose it renders to, without its `**` and `#` (the knowledge search's
 snippets too). The item's **Woke** tab is who one change
 actually reached and under which of eighteen reasons, which is the fact no
 commercial tracker records: all of them can say you were notified and none can
-say why. And a seat's **Conversations** tab is its own thread ledger — the only
-account of what a seat said on a surface this engine does not own. Every one of
-those readers was written, tested and swept on a retention horizon before any
-of them reached a screen.
+say why. Both readers were written, tested and swept on a retention horizon
+before either reached a screen.
 
 ### An item's address
 
@@ -5837,9 +5835,10 @@ rules fix it, and each one names a specific mechanism:
    heading", the lead run's name in a headed half, would claim a heading the
    prompt does not have. And **the outline is
    the document's own shape**, which mostly means flat and sometimes does not:
-   an executor's sections are peers, but a ledger writes one `###` per prior
-   turn *inside* its block, and hoisting those would put a turn of somebody's
-   conversation between "Earlier in this conversation" and the ask — so a
+   an executor's sections are peers, but the endings block writes one `###`
+   per earlier turn *inside* its block (`### Turn …`, `### Fire …` for a
+   schedule's), and hoisting those would put a turn of somebody's conversation
+   between "How this conversation's earlier turns ended" and the ask — so a
    heading nests under the nearest heading above it of a lower level, and the
    lead run before the first heading is a section of its own, the first one
    read, never hidden.
