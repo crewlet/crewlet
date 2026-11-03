@@ -261,6 +261,16 @@ export interface ToolExecution {
    *  server name for an `mcp:` one. Absent on a call no tool answered. */
   origin?: string;
   server?: string;
+  /**
+   * An executor run's call held for a person's approval (`held`) — recorded
+   * failed, since nothing it asked for happened, and no failure: it is the
+   * run's question for a person — and the call they approved (`approved`).
+   * Both WITHHOLD their arguments, which ride the run's row sealed and are
+   * never on a record in the clear, so `arguments` on either is `{}` and is
+   * not what the call sent. Absent on every other call.
+   */
+  held?: boolean;
+  approved?: boolean;
 }
 
 /**
@@ -934,9 +944,10 @@ export interface ExecutorRow {
    * with how many calls had it and how many of those failed. The count
    * bound costs the board the calls themselves, never which tools the run
    * called how often. Always beside `bridge_calls`, empty where nothing was
-   * dropped or an older engine dropped it without keeping this. Past its own
-   * share of the run's record an entry gives up its digest, and then its
-   * tool too: the count is kept either way.
+   * dropped. Past its own share of the run's record an entry gives up its
+   * digest, and then its tool too: the count is kept either way. Calls an
+   * older engine dropped without keeping their identities are one entry with
+   * no tool, so the entries always account for `bridge_calls_elided`.
    */
   bridge_elided_calls?: ElidedCall[];
   /** The engine withheld this run's body from this reader — see [task_description]. */

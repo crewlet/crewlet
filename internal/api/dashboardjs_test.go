@@ -1627,7 +1627,15 @@ const (
 	// shared chunk the helper landed in +601 bytes, the Executors chunk +524,
 	// the phases chunk +319 and the settled chunk +252; every other chunk kept
 	// its size. 5451 KiB.
-	treeBudget = 5<<20 + 331<<10
+	// A sealed call drawn as one wherever the turn page draws a call (the
+	// execute card, a call's span and the Tools tab's outcome), and the calls
+	// a collected executor's record did not keep counted in the turn's Tool
+	// calls fact, said on the Tools tab and counted by a call's span and the
+	// executors board's rail, took it from 5450.9 KiB to 5452.1 KiB (+1.2
+	// KiB, 1258 bytes): the live chunk +518 bytes, the settled chunk +248,
+	// the Executors chunk +220, the shared chunk the sealed wording landed in
+	// +193 and the phases chunk +79. The initial load did not grow. 5453 KiB.
+	treeBudget = 5<<20 + 333<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

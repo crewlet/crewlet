@@ -72,3 +72,70 @@ test("a row opens its span, or the Timeline when it has none", () => {
   fireEvent.click(row("bridged_call").querySelector(".crewlet-data-grid__row-link")!);
   expect(onOpen).toHaveBeenLastCalledWith("");
 });
+
+/**
+ * THE CALLS NO RECORD LISTS ARE SAID. A collected executor's record keeps its
+ * run's head and tail and counts the middle it dropped, by tool; the tab lists
+ * the calls the records kept and says how many more there were, and what, so
+ * two hundred rows of a run that made more never read as the whole run.
+ *
+ * Mutation: list the rows alone, and the dropped calls are nowhere on the tab.
+ */
+test("the calls no record lists are said above the ones it does", () => {
+  const phase = {
+    ...PHASE,
+    callsElided: 63,
+    elidedCalls: [{ name: "read_file", calls: 63, failed: 2 }],
+  };
+  const model = buildWaterfall({
+    events: [],
+    phases: [phase],
+    now: Date.parse("2026-09-28T10:01:00Z"),
+    running: false,
+    parked: false,
+  });
+  render(
+    <Router>
+      <ToolsTab phases={[phase]} model={model} onOpen={vi.fn()} />
+    </Router>,
+  );
+  expect(screen.getByText(/63 more calls aren’t listed/)).toBeTruthy();
+  expect(screen.getByText(/read_file 63 times \(2 failed\)/)).toBeTruthy();
+});
+
+/**
+ * A HELD CALL IS NEITHER A FAILURE NOR A CALL THAT RETURNED. An executor's call
+ * held for a person's approval is recorded failed only because nothing it
+ * asked for happened: it is the run's question for a person, and the tab says
+ * so, as the execute card and the executors board do. The call they approved
+ * returned.
+ *
+ * Mutation: draw a held call as returned, and the run's question reads as a
+ * call that ran.
+ */
+test("a held call reads as held for approval", () => {
+  const phase = phaseRecord({
+    key: "turn-1|execute|1",
+    startedAt: "2026-09-28T10:00:00Z",
+    durationMs: 4_000,
+    tools: [
+      toolCall({ name: "gh_delete_repo", held: true, result: "held for a person" }),
+      toolCall({ name: "gh_merge", approved: true }),
+    ],
+  });
+  const model = buildWaterfall({
+    events: [],
+    phases: [phase],
+    now: Date.parse("2026-09-28T10:01:00Z"),
+    running: false,
+    parked: false,
+  });
+  render(
+    <Router>
+      <ToolsTab phases={[phase]} model={model} onOpen={vi.fn()} />
+    </Router>,
+  );
+  expect(within(row("gh_delete_repo")).getByText("held for approval")).toBeTruthy();
+  expect(within(row("gh_delete_repo")).queryByText("failed")).toBeNull();
+  expect(within(row("gh_merge")).getByText("returned")).toBeTruthy();
+});

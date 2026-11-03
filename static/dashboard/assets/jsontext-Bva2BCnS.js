@@ -1,6 +1,0 @@
-import{xa as e}from"./authorityRemedy-D1t-8G4T.js";import{an as t}from"./index-Do242xhR.js";function n(n){let r=new Map,i=0;for(let e of n){if(!e.name){i+=e.calls;continue}let t=r.get(e.name)??{calls:0,failed:0};t.calls+=e.calls,t.failed+=e.failed??0,r.set(e.name,t)}let a=[...r.entries()].sort(([e],[t])=>e.localeCompare(t)).map(([e,{calls:t,failed:n}])=>{let r=t===1?`once`:`${t.toLocaleString()} times`;return n>0?`${e} ${r} (${n.toLocaleString()} failed)`:`${e} ${r}`});return i>0&&a.push(`${e(i,`call`)} to tools the record didn’t keep`),a.length===0?``:` By tool: ${t(a)}.`}var r=`  `,i=32;function a(e){return r.repeat(e<i?e:i)}function o(e){if(e===``)return e;try{JSON.parse(e)}catch{return e}let t=``,n=0;for(let r=0;r<e.length;r++){let i=e[r];if(i===`"`){let n=s(e,r);t+=e.slice(r,n),r=n-1;continue}switch(i){case`{`:case`[`:{let o=i===`{`?`}`:`]`,s=c(e,r+1);if(e[s]===o){t+=i+o,r=s;continue}n++,t+=i+`
-`+a(n);continue}case`}`:case`]`:n--,t+=`
-`+a(n)+i;continue;case`,`:t+=`,
-`+a(n);continue;case`:`:t+=`: `;continue;case` `:case`	`:case`
-`:case`\r`:continue;default:t+=i}}return t}function s(e,t){for(let n=t+1;n<e.length;n++){let t=e[n];if(t===`\\`){n++;continue}if(t===`"`)return n+1}return e.length}function c(e,t){let n=t;for(;n<e.length;){let t=e[n];if(t!==` `&&t!==`	`&&t!==`
-`&&t!==`\r`)return n;n++}return n}export{n,o as t};

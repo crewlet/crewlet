@@ -94,6 +94,7 @@ import { useNow } from "~/lib/clock.ts";
 import { andList } from "~/lib/words.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import { droppedWords } from "~/lib/dropped.ts";
+import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
 import type {
   BridgeCall,
   EventRecord,
@@ -433,7 +434,7 @@ function endingLine(ending: ExecutorEnding): string {
  * is it doing"; two hundred tool calls with their arguments and results is the
  * page's job, and `Open ↗` is one click away.
  */
-function BridgeSummary({ run }: { run: ExecutorRow }) {
+export function BridgeSummary({ run }: { run: ExecutorRow }) {
   // NOT KNOWN IS NOT NONE — see [BridgeLog]: absent is a log this reader was
   // not sent, and an empty one is an executor that has called nothing, said so.
   if (run.bridge_calls === undefined) return null;
@@ -448,13 +449,24 @@ function BridgeSummary({ run }: { run: ExecutorRow }) {
   }
   const failures = calls.filter(callFailed).length;
   const last = calls[calls.length - 1];
+  // EVERY CALL THE RUN MADE, the ones its record dropped from the middle
+  // included: the rail's count is the run's, and the log below says which it
+  // does not list.
+  const elided = run.bridge_calls_elided ?? 0;
   return (
     <section className="col gap-2">
       <div className="t-label">Tool calls</div>
       <div className="row gap-2 wrap">
-        <span className="t-cell">{plural(calls.length, "call")} through the MCP bridge</span>
+        <span className="t-cell">
+          {plural(calls.length + elided, "call")} through the MCP bridge
+        </span>
         {failures > 0 && <Tag variant="danger">{plural(failures, "failure")}</Tag>}
       </div>
+      {elided > 0 && (
+        <span className="t-caption">
+          {plural(elided, "call")} from the middle {elided === 1 ? "isn’t" : "aren’t"} listed
+        </span>
+      )}
       {last && (
         <span className="t-caption">
           Last: <InlineCode>{last.name}</InlineCode> · {fmtTime(last.at)}
@@ -1223,24 +1235,6 @@ function noCallsWords(run: ExecutorRow): string {
     ? "No calls through the MCP bridge yet"
     : "Made no calls through the MCP bridge, not even its submission";
 }
-
-/**
- * What a call a person approved ([BridgeCall.approved]) is said to have sent
- * and returned. Neither is on its record: the resume made the call off the
- * arguments the run held sealed, and handed its result to the job that carried
- * the work on sealed too, so "(none)" and "(nothing returned)" would say a call
- * that sent and returned both did neither.
- */
-const SEALED_ARGUMENTS = "(sealed with the approval, not kept on the record)";
-const SEALED_RESULT = "(handed to the run sealed, not kept on the record)";
-
-/**
- * What a call the run held for a person's approval ([BridgeCall.held]) is said
- * to have sent: its arguments ride the run's row sealed beside its question,
- * for whoever may approve it, and are never on the record, so "(none)" would
- * say a call that named them named nothing.
- */
-const HELD_ARGUMENTS = "(sealed beside the run's question, for whoever may approve it)";
 
 /**
  * Whether a bridged call failed. A HELD call is recorded failed, since nothing

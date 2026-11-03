@@ -28,7 +28,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { overflowing } from "~/testing.tsx";
-import { BridgeLog, ExecutorScreen } from "./Executors.tsx";
+import { BridgeLog, BridgeSummary, ExecutorScreen } from "./Executors.tsx";
 import type { ExecutorRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
@@ -123,6 +123,22 @@ test("an elided middle is said out loud, never left to be inferred", () => {
     />,
   );
   expect(screen.getByText("47 calls from the middle aren’t shown.")).toBeTruthy();
+});
+
+test("the rail counts every call the run made, the dropped middle included", () => {
+  // The rail's count is the run's, and the log the page opens says which of
+  // them it does not list. Mutation: count the listed calls alone, and the
+  // rail says one call of a run that made forty-eight.
+  render(
+    <BridgeSummary
+      run={run({
+        bridge_calls: [{ name: "read_file", at: "2026-06-15T12:01:00Z" }],
+        bridge_calls_elided: 47,
+      })}
+    />,
+  );
+  expect(screen.getByText("48 calls through the MCP bridge")).toBeTruthy();
+  expect(screen.getByText("47 calls from the middle aren’t listed")).toBeTruthy();
 });
 
 test("a run that made no calls says so", () => {

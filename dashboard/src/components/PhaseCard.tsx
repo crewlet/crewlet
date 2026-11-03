@@ -101,6 +101,7 @@ import {
   utf8Bytes,
 } from "~/lib/format.ts";
 import { droppedWords } from "~/lib/dropped.ts";
+import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
 import {
   decisionLabel,
   decisionTone,
@@ -156,12 +157,22 @@ function ToolRecords({
   args,
   result,
   failed,
+  held,
+  approved,
 }: {
   name: string;
   args: string;
   result: string;
   failed: boolean;
+  held?: boolean;
+  approved?: boolean;
 }) {
+  // A SEALED CALL'S `{}` IS NOT WHAT IT SENT: a call held for a person's
+  // approval, and the one they approved, keep their arguments sealed on the
+  // run's row and on no record, so their arguments — and the approved one's
+  // result, handed to the run sealed — are said, as the executors board says
+  // them, never drawn as a call made with nothing.
+  const sealedArgs = approved ? SEALED_ARGUMENTS : held ? HELD_ARGUMENTS : "";
   const prettyArgs = useMemo(() => indentJSON(args), [args]);
   // THE RESULT TOO, by the same rule: an MCP server's answer is a JSON
   // document as often as the call was. What is not one — a stack trace, a
@@ -194,13 +205,18 @@ function ToolRecords({
           taller than the box that scrolls it is the transcript's own trap one
           level down — the wheel inside the record while its bottom is below
           the box's. */}
-      <CodeBlock plain selectable label={`${name} · arguments`} code={prettyArgs || "{}"} />
+      <CodeBlock
+        plain
+        selectable
+        label={`${name} · arguments`}
+        code={sealedArgs || prettyArgs || "{}"}
+      />
       <div className="t-label">{failed ? "Error" : "Result"}</div>
       <CodeBlock
         plain
         selectable
         label={`${name} · ${failed ? "error" : "result"}`}
-        code={prettyResult || "(empty)"}
+        code={prettyResult || (approved ? SEALED_RESULT : "(empty)")}
       />
     </div>
   );
@@ -240,12 +256,18 @@ function ToolRow({
   args,
   result,
   failed,
+  held,
+  approved,
   running,
 }: {
   name: string;
   args: string;
   result: string;
   failed: boolean;
+  /** A call held for a person's approval, and the call they approved — see
+   *  [ToolCall.held]. */
+  held?: boolean;
+  approved?: boolean;
   /** The call is still in flight: since when, and the clock it is read on. */
   running?: { since: number; now: number };
 }) {
@@ -268,14 +290,16 @@ function ToolRow({
         // A CALL STILL RUNNING says so the same way, with how long: a call
         // four minutes in is the answer to "why is this phase slow", and it
         // should not take opening the row to find it.
+        // AND A SEALED CALL SAYS WHICH IT IS, as the executors board tags
+        // it: the run's question for a person, or the call they approved.
         meta={
           running
             ? running.since > 0
               ? `running ${fmtElapsed(running.now - running.since)}`
               : "running"
-            : failed
-              ? "failed"
-              : undefined
+            : [held && "held for approval", approved && "approved", failed && "failed"]
+                .filter(Boolean)
+                .join(", ") || undefined
         }
         title={name}
         // A TRANSCRIPT ITEM IS NOT A SECTION OF THE PAGE. uilet wraps a
@@ -293,7 +317,14 @@ function ToolRow({
         {running ? (
           <RunningRecords name={name} args={args} />
         ) : (
-          <ToolRecords name={name} args={args} result={result} failed={failed} />
+          <ToolRecords
+            name={name}
+            args={args}
+            result={result}
+            failed={failed}
+            held={held}
+            approved={approved}
+          />
         )}
       </Disclosure>
       {!running && <WrittenArtifactLink artifact={writtenArtifact(name, args, result, failed)} />}
@@ -622,6 +653,8 @@ function RoundBlock({
                   args={t.args}
                   result={t.result}
                   failed={t.failed}
+                  held={t.held}
+                  approved={t.approved}
                 />
               )),
               ...round.running.map((c, i) => (

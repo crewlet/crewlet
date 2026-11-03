@@ -14,6 +14,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
+import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -1375,6 +1376,68 @@ describe("a round the harness's turn cap ended", () => {
     expect(first!.querySelector(".round-note")).toBeNull();
     expect(second!.querySelector(".round-note.caution")?.textContent).toMatch(
       /harness’s own turn cap ended its run here, with the model still working/,
+    );
+  });
+});
+
+/**
+ * A SEALED CALL IS DRAWN AS THE ONE IT IS.
+ *
+ * An executor's call held for a person's approval, and the call they approved,
+ * keep their arguments sealed on the run's row and on no record: the execute
+ * record carries `{}` for both, and the held one recorded failed, since nothing
+ * it asked for happened. Drawn as they arrive, the approved deletion read as a
+ * call made with no arguments and an empty result, and the held one as a tool
+ * that broke. The card says, as the executors board does, that the arguments
+ * are sealed, that the approved call's result went to the run sealed, and that
+ * the held call is held for approval.
+ *
+ * Mutation: draw a sealed call's `{}`, or tag the held call failed, and the
+ * card says what the run never did.
+ */
+describe("a sealed call", () => {
+  const sealed = (over: Partial<PhaseRecord["tools"][number]>) =>
+    phase({
+      roundsUsed: 1,
+      narration: [{ round: 1, content: "Working.", declined: false }],
+      tools: [
+        {
+          name: "gh_delete_repo",
+          round: 1,
+          args: "{}",
+          result: "",
+          failed: false,
+          durationMs: 0,
+          origin: "mcp:github",
+          server: "github",
+          startedAt: "",
+          callId: "",
+          ...over,
+        },
+      ],
+    });
+
+  test("held for approval says so, with its arguments sealed beside the question", () => {
+    render(<PhaseCard record={sealed({ held: true, result: "held for a person" })} defaultOpen />);
+    const row = screen.getByRole("button", { name: /^gh_delete_repo/ });
+    expect(row.textContent).toContain("held for approval");
+    expect(row.textContent).not.toContain("failed");
+    fireEvent.click(row);
+    expect(screen.getByRole("region", { name: "gh_delete_repo · arguments" }).textContent).toBe(
+      HELD_ARGUMENTS,
+    );
+  });
+
+  test("approved says so, with its arguments and its result sealed", () => {
+    render(<PhaseCard record={sealed({ approved: true })} defaultOpen />);
+    const row = screen.getByRole("button", { name: /^gh_delete_repo/ });
+    expect(row.textContent).toContain("approved");
+    fireEvent.click(row);
+    expect(screen.getByRole("region", { name: "gh_delete_repo · arguments" }).textContent).toBe(
+      SEALED_ARGUMENTS,
+    );
+    expect(screen.getByRole("region", { name: "gh_delete_repo · result" }).textContent).toBe(
+      SEALED_RESULT,
     );
   });
 });

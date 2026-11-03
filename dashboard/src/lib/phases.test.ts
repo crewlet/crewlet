@@ -405,6 +405,31 @@ describe("the round ledger", () => {
     expect(toolCalls([{ name: "a", success: true, result: "ok" }])[0]?.failed).toBe(false);
   });
 
+  test("a sealed call is read as the one it is, and a held call is no failure", () => {
+    // An executor's call held for a person's approval is recorded failed —
+    // nothing it asked for happened — and is the run's question, never a
+    // tool that broke; the call they approved follows it. Both carry `{}` as
+    // their arguments only because no record keeps them in the clear, and
+    // say which they are. Mutation: read `held` as a failure, or drop either
+    // mark, and the card draws the question as a broken call and both as
+    // calls made with nothing.
+    const [held, approved, plain] = toolCalls([
+      {
+        name: "gh_delete_repo",
+        arguments: "{}",
+        result: "held",
+        success: false,
+        error: "held",
+        held: true,
+      },
+      { name: "gh_delete_repo", arguments: "{}", result: "", success: true, approved: true },
+      { name: "read_file", arguments: "{}", result: "", success: true },
+    ]);
+    expect(held).toMatchObject({ held: true, failed: false });
+    expect(approved).toMatchObject({ approved: true, failed: false });
+    expect([plain?.held, plain?.approved]).toEqual([undefined, undefined]);
+  });
+
   test("a call the engine timed and attributed is read as it was written", () => {
     // The row the tool loop and the surface now write: when, how long, and
     // who answered.

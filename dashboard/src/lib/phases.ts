@@ -70,6 +70,12 @@ export interface ToolCall {
    *  so its running row and its answered one are one row. "" where nothing
    *  named the call. */
   callId: string;
+  /** An executor's call held for a person's approval, and the call they
+   *  approved (`held`, `approved`): both with their arguments sealed, never
+   *  on a record, so `args` is not what they sent; and the held one is the
+   *  run's question, never a failure. Absent on every other call. */
+  held?: boolean;
+  approved?: boolean;
 }
 
 /**
@@ -486,7 +492,12 @@ export function toolCalls(raw: unknown): ToolCall[] {
       round: num(rec.round),
       args: str(rec.arguments),
       result: str(rec.result),
-      failed: rec.success === false || Boolean(rec.error),
+      // A HELD CALL IS RECORDED FAILED, since nothing it asked for happened,
+      // and is no failure: it is the run's question for a person, as an ask
+      // is, and the call they let be made follows it marked approved.
+      failed: (rec.success === false || Boolean(rec.error)) && rec.held !== true,
+      ...(rec.held === true ? { held: true } : {}),
+      ...(rec.approved === true ? { approved: true } : {}),
       // How long the call took, and who answered it: the tool loop times
       // every call it runs, the bridge every call an executor run makes
       // over it, and the surface names the origin that served it. Absent
