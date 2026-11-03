@@ -155,8 +155,11 @@ func launchContinuingRun(t *testing.T) continuingRun {
 		}}
 }
 
-// probe calls the probe through session, answering whether it was refused.
-func probe(t *testing.T, session *mcp.ClientSession) bool {
+// guardedCallRefused calls the probe tool, which the required skill guards,
+// through session, answering whether the run's guard refused it. Named apart
+// from the package's `probe` type (retention_internal_test.go), which shares
+// the package's one namespace with every test file.
+func guardedCallRefused(t *testing.T, session *mcp.ClientSession) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -216,7 +219,7 @@ func TestARunTakenOverIsHeldToTheSessionItsBoxSaysAsItsRecordNamesTheBrief(t *te
 			if err != nil {
 				t.Fatalf("the box's own endpoint does not reach the taken-over run: %v", err)
 			}
-			if refused := probe(t, session); refused != tc.fellBack {
+			if refused := guardedCallRefused(t, session); refused != tc.fellBack {
 				t.Fatalf("the guarded call was refused %v, want %v: the guard is the session's the box says "+
 					"it started", refused, tc.fellBack)
 			}
