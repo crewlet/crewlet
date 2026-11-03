@@ -2388,6 +2388,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	var managed *configapi.ManagedError
 	var unanswered *configapi.ActivationUnknownError
 	var seal *setup.SealError
+	var value *setup.ValueError
 	var entity *configapi.EntityError
 	// THE NAMES SEALED BEFORE THE WRITE FAILED, on every answer to a write
 	// that failed after its first credential was sealed — a lost race, a
@@ -2409,6 +2410,13 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	switch {
 	case errors.As(err, &managed):
 		configapi.RefuseManaged(w, managed)
+	case errors.As(err, &value):
+		// A VALUE ITS FIELD REFUSES, before anything was written: the
+		// caller's input, located at the field it was typed into, as a
+		// literal in the config is. Its sentence never holds a credential.
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
+			"detail": value.Problem, "field": value.Field, "path": value.ConfigPath,
+		})
 	case errors.As(err, &literal):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeLiteralInConfig, map[string]string{
 			"path": literal.Path,

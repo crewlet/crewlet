@@ -3031,3 +3031,33 @@ func (noGrants) HeldMCPGrant(context.Context, string) (bool, error) { return fal
 func (noGrants) RevokeMCPServerGrant(context.Context, *config.MCPServer) (string, string, bool, error) {
 	return "", "", false, nil
 }
+
+// A VALUE ITS FIELD REFUSES IS THE CALLER'S, AT THE FIELD: a pasted credential
+// with a space inside, and an address with one, each answer 400 invalid_input
+// naming the field and where it lands, never 500, and never echo a credential.
+func TestARefusedValueIsAnsweredAtItsField(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	for _, tc := range []struct {
+		name, kind, body, field, path string
+	}{
+		{"a wrapped credential", "datadog", `{"values": {"webhook_token": "EXAMPLETOKEN0000 0000000000"}}`,
+			"webhook_token", "integrations.datadog.webhook_token"},
+		{"an address with a space", "gitlab", `{"values": {"url": "https://gitlab example.com"}}`,
+			"url", "integrations.gitlab.url"},
+	} {
+		res := s.do(t, http.MethodPost, "/setup/integrations/"+tc.kind+"/inputs", tc.body, nil)
+		if res.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400: %s", tc.name, res.Code, res.Body)
+			continue
+		}
+		body := decode(t, res)
+		if body["error"] != "invalid_input" || body["field"] != tc.field || body["path"] != tc.path {
+			t.Errorf("%s: answered %v, want invalid_input at %s %s", tc.name, body, tc.field, tc.path)
+		}
+		if strings.Contains(res.Body.String(), "EXAMPLETOKEN") {
+			t.Errorf("%s: the refusal echoes the credential: %s", tc.name, res.Body)
+		}
+	}
+}
