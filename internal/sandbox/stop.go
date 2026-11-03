@@ -92,11 +92,17 @@ import (
 //
 // IDEMPOTENT, which is what lets every way a stop can reach a seat call it — the
 // pause landing, a complete re-read of the pauses, the seat's acquisition while
-// paused: a run already stopped has no row left to list. An ending this node
-// could not finish yet is kept for its retry, with the seat's mail held behind
-// it ([Coordinator.oweEnding]), and reported only in the log; and one whose box
-// is read on another node's host is finished by that retry at once, so no
-// caller's frame waits on another node ([Coordinator.endRun]).
+// paused: a run already stopped has no row left to list.
+//
+// WAITING ON NO JOB: the call decides each stop and closes the run's session,
+// and a run whose job started in a box — on this node's host or another's,
+// whatever `conversation_session.enabled` says — is finished by the ending's
+// own retry, armed at once, which ends the job, reads it, reclaims its box and
+// announces the stop, the seat's mail held behind it until it lands
+// ([Coordinator.oweEnding], [Coordinator.endRun]). Only a stop with no job to
+// end, a launch stopped before its command was recorded, is finished here,
+// its box reclaimed within the teardown grace. An ending that could not be
+// finished yet is kept for the same retry, and reported only in the log.
 func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) error {
 	fence, held := c.leaseOf(handle)
 	if !held {
