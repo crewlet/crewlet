@@ -197,7 +197,7 @@ func conversationEndings(head executordomain.Head, seat string, fires bool,
 }
 
 // turnEndingOf is one ended turn's row as the block tells it: the engine's
-// account of how it ended (its [executordomain.Ending]), and what it was asked.
+// account of how it ended (its executorkeep.Ending), and what it was asked.
 func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
 	t := prompts.TurnEnding{Turn: s.Turn, EndedAt: s.EndedAt, Ask: s.AskExcerpt}
 	e := s.Ending
