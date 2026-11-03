@@ -989,7 +989,8 @@ most a notification, never the state `fleet_health` reads.
 
 Worklet, Doclet's pages and embeddings, the identity
 directory, the artifacts and their datastores, Ask Crewlet's
-conversations, chat and the usage history are each derived on every data node
+conversations, chat, the usage history, the seats' executor sessions and the
+code host's repositories are each derived on every data node
 from an ordered log the fleet shares. A node replays each log from wherever its own
 rows say it stopped — which works only while the log still **holds** those
 records. It does not hold them for ever: once every data node has applied past
