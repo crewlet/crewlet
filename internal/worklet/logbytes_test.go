@@ -151,7 +151,7 @@ const (
 	codeCandidateBytes            = 1_290
 	codeCandidateCheckQueuedBytes = 1_010
 	codeLandBytes                 = 1_530
-	codeCloseSettledBytes         = 680
+	codeCloseSettledBytes         = 690
 	codeCheckDispatchedBytes      = 2_290
 	codeCheckStartedBytes         = 780
 	codeCheckNamedBytes           = 840
@@ -326,8 +326,9 @@ func codeLogDay() []codeLogTerm {
 			"wrote, one a change", changes, codeCandidateBytes, true},
 		{code.OpLand, "the landing of a queued change's tested prefix, its source deleted, routed to its " +
 			"authors, one a change", changes, codeLandBytes, true},
-		{code.OpCloseSettled, "a queued change's work item's close settled closed by its home once the " +
-			"enqueuer's close landed, one a change", changes, codeCloseSettledBytes, true},
+		{code.OpCloseSettled, "a landing's work-item closes settled by its home in one record once the " +
+			"enqueuers' closes landed, one a landing — the reference queued change's own, so one a change, " +
+			"closed", changes, codeCloseSettledBytes, true},
 		{code.OpCheckQueued, "a required check of a queued change's candidate queued by its home's queue " +
 			"worker, naming the candidate and its train's base, three a change", candidates,
 			codeCandidateCheckQueuedBytes, true},
@@ -1068,10 +1069,10 @@ var codeLogFields = map[code.OpKind]struct {
 	},
 	code.OpCloseSettled: {
 		payload: reflect.TypeFor[code.CloseSettled](),
-		carried: []string{"repo_id", "entry_id", "outcome"},
+		carried: []string{"repo_id", "settled.entry_id", "settled.outcome"},
 		absent: map[string]string{
-			"detail": "why a close was not made, which only a not_closed settle carries, and the reference " +
-				"queued change's work item closes",
+			"settled.detail": "why a close was not made, which only a not_closed close carries, and the " +
+				"reference queued change's work item closes",
 			"routing": "whom a not_closed settle tells, and a closed one tells nobody: the reference queued " +
 				"change's work item closes",
 		},

@@ -137,13 +137,12 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 		byKey[noticeKey{k.Change.ChangeID, k.Handle}] = k.Concern
 	}
 	record := noticeRecordID(at)
-	excerpt := excerptOf(payload)
 	written, err := store.InsertRowsReturning(ctx, tx, at.maxVariables, addNoticesSQL, noticeRowSQL,
 		addNoticesTailSQL, len(kept), func(i int) []any {
 			k := kept[i]
 			return []any{record, k.Handle, string(k.kind), repoID, k.Change.ChangeID, k.Change.ChangeRef,
-				string(k.Reason), k.Addressed, k.FallbackOnly, k.FallbackRank, excerpt, at.at(), at.packed,
-				at.position.Stream, int64(at.position.Generation)}
+				string(k.Reason), k.Addressed, k.FallbackOnly, k.FallbackRank, excerptOf(payload, k.Change),
+				at.at(), at.packed, at.position.Stream, int64(at.position.Generation)}
 		}, func(rows *sql.Rows) (err error) {
 			var key noticeKey
 			if err = rows.Scan(&key.handle, &key.change); err != nil {
@@ -193,12 +192,13 @@ func pastHorizon(at applyContext, horizon time.Duration) bool {
 // change, and the one the feed derives the record's wakes from.
 func noticeRecordID(at applyContext) string { return RecordID(at.record.OpID, at.position) }
 
-// excerptOf is what a notice keeps of what its record says, at most
-// [MaxNoticeExcerpt] bytes cut at a character: an open's description, an
+// excerptOf is what a notice about change keeps of what its record says, at
+// most [MaxNoticeExcerpt] bytes cut at a character: an open's description, an
 // edit's new one, a close's reason, an ask's note, a comment's body, a review's
-// summary — and nothing for a record that says nothing of its own, a push's
-// among them, which can name several changes.
-func excerptOf(payload any) string {
+// summary, a settle's sentence for the change it tells — and nothing for a
+// record that says nothing of its own, a push's among them, which can name
+// several changes.
+func excerptOf(payload any, change *ChangeRouting) string {
 	var text string
 	switch p := payload.(type) {
 	case ChangeOpen:
@@ -216,10 +216,11 @@ func excerptOf(payload any) string {
 	case Review:
 		text = p.Summary
 	case CloseSettled:
-		// THE ENGINE'S OWN SENTENCE, why a merged change's work item was
+		// THE ENGINE'S OWN SENTENCE, why this merged change's work item was
 		// left open — what the person reads beside `merged`, as the direct
-		// merge's answer says it (`merged; ENG-42 not closed: …`).
-		text = p.Detail
+		// merge's answer says it (`merged; ENG-42 not closed: …`) — which
+		// its routing carries, since one settle tells of several changes.
+		text = change.NotClosed
 	}
 	return textcut.Within(text, MaxNoticeExcerpt)
 }

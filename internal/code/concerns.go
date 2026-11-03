@@ -301,10 +301,12 @@ type ChangeRouting struct {
 	// merged the change.
 	Conflicted bool `json:"conflicted,omitempty"`
 	Merged     bool `json:"merged,omitempty"`
-	// NotClosed is, on a close_settled that ended not_closed, why the merged
-	// change's work item was not closed (M5-D27): its authors and its
-	// Enqueuer hear it under `merged`, the sentence beside. Under the
-	// condition this file's head states, it rides CloseSettled.Routing's row.
+	// NotClosed is, on a close_settled's routing of a change whose close
+	// ended not_closed, why the merged change's work item was not closed
+	// (M5-D27): its authors and its Enqueuer hear it under `merged`, the
+	// sentence beside — the excerpt of their notice, each change its own.
+	// Under the condition this file's head states, it rides
+	// CloseSettled.Routing's row.
 	NotClosed string `json:"not_closed,omitempty"`
 	// ChecksFailed is a check of the change's head that failed, or errored
 	// past the home's own requeue: its authors and its actor hear.
@@ -623,7 +625,7 @@ func RoutingsOf(payload any) []*ChangeRouting {
 	case CheckFinished:
 		r = p.Routing
 	case CloseSettled:
-		r = p.Routing
+		return pointersTo(p.Routing)
 	case Eject:
 		return pointersTo(p.Routing)
 	case Land:
@@ -761,9 +763,6 @@ func withRouting(payload any, r *ChangeRouting) any {
 		p.Routing = r
 		return p
 	case CheckFinished:
-		p.Routing = r
-		return p
-	case CloseSettled:
 		p.Routing = r
 		return p
 	}

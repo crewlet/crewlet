@@ -6529,9 +6529,12 @@ holds.
   and a close the tracker could not answer are each closed by the next
   turn on whichever home holds the repository, and never lost (an
   archived repository's wait until it is unarchived, since nothing is
-  recorded on one). A close
-  that ENDED is settled by one `close_settled` record on the repository's
-  subject: `closed` (the item closed, or already finished) or
+  recorded on one). The closes
+  a turn ENDED are settled together, by one `close_settled` record on the
+  repository's subject however many changes the landing merged, rather than
+  an append a change one after another inside the turn; a close another
+  home's settle reached first is passed over, the rest recorded. Each ends
+  `closed` (the item closed, or already finished) or
   `not_closed`, for a close no asking again changes — the item is on a
   vendor's tracker, which is closed there by whoever closes it; the
   enqueuer is bound to no seat, has left the chart or may no longer update

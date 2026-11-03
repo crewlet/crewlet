@@ -429,9 +429,10 @@ func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]Que
 
 // MaxOwedCloses is the most owed closes one `queue_due` page answers:
 // [MaxLandEntries], the most one landing leaves owing — so a home settles a
-// whole landing's closes in one turn, and a repository owing more (several
-// landings no home reached) settles the rest on the turns after, each close
-// one tracker write of its enqueuer's.
+// whole landing's closes in one turn and one close_settled record (which
+// holds as many), and a repository owing more (several landings no home
+// reached) settles the rest on the turns after, each close one tracker write
+// of its enqueuer's.
 const MaxOwedCloses = MaxLandEntries
 
 // owedClosesIn is repository repoID's landed entries still owing their work

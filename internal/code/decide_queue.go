@@ -40,15 +40,29 @@ const (
 	// repository's — whatever lies beneath the green: a landing is green by
 	// its position, so no green writes one a landing ([Applier.applyGreen]).
 	greenDecidedRows = 3
-	// closeSettledDecidedRows: the entry's row, the repository's, and the
-	// notices a not_closed one's routing makes.
-	closeSettledDecidedRows = 2 + routingNoticeRows
 )
 
-// owedEntrySQL is an entry by its key with whether it owes its work item's
-// close: what a close_settled's decide, its apply and its answer read.
-const owedEntrySQL = `SELECT ` + entryColumns + `, close_op FROM code_queue INDEXED BY ` + queueKey +
-	` WHERE repo_id = ? AND entry_id = ?`
+// closeSettledRows is the rows a close_settled of n closes makes its apply
+// touch of its own: each entry's row and the repository's. Its routings'
+// notices are kept within what [MaxRecordRows] leaves beside them
+// ([keptRoutings]).
+func closeSettledRows(n int) int { return n + 1 }
+
+// closeSettledDecidedRows is what the committer charges a close_settled of n
+// closes: its own rows and, every close not_closed, a routing's notices each
+// ([routingNoticeRows]) — never past [MaxRecordRows], which its kept
+// routings stay within.
+func closeSettledDecidedRows(n int) int {
+	return min(closeSettledRows(n)+n*routingNoticeRows, MaxRecordRows)
+}
+
+// owedNamedSQL is a repository's entries named by a JSON list, each by its
+// key, with the close each owes its work item ("" for none): what a
+// close_settled's decide, its apply and its answer read — one statement for
+// every close the record settles.
+const owedNamedSQL = `SELECT ` + qualifiedEntryColumns + `, q.close_op FROM json_each(?1) AS j
+		CROSS JOIN code_queue AS q INDEXED BY ` + queueKey + `
+		WHERE q.repo_id = ?2 AND q.entry_id = CAST(j.value AS TEXT)`
 
 // ejectDecidedRows is the most rows an eject of n entries makes its apply
 // touch: each entry ended, its target's train abandoned ([trainRows]), the
@@ -460,56 +474,101 @@ func decideGreen(ctx context.Context, tx *sql.Tx, g Green, d queueDecision) (que
 	return d, nil
 }
 
-// decideCloseSettled is a close_settled's rules over the rows tx holds: the
-// entry LANDED and still OWING its close (stale where it is not: another
-// home's settle reached it first, which the asker reads as done). A
-// not_closed one is stamped whom it tells: the change's authors and its
-// enqueuer, under `merged`, its detail beside — the home's own record, so
-// nobody's actor; nobody where the repository holds the change no more.
+// decideCloseSettled is a close_settled's rules over the rows tx holds: of
+// its closes, those whose entry LANDED and still OWES its close are recorded
+// and every other SKIPPED — another home's settle reached it first, which its
+// asker reads as done — and a record none of whose closes is owed any more is
+// refused stale. Each not_closed close recorded is stamped whom it tells: its
+// change's authors and its enqueuer, under `merged`, its detail beside — the
+// home's own record, so nobody's actor; nobody where the repository holds the
+// change no more.
 func decideCloseSettled(ctx context.Context, tx *sql.Tx, c CloseSettled, repo pushRepo, d queueDecision) (
 	queueDecision, error) {
 
-	entry, op, found, err := owedCloseOf(ctx, tx, c.RepoID, c.EntryID)
-	switch {
-	case err != nil:
+	owed, err := owedClosesNamed(ctx, tx, c.RepoID, c.entries())
+	if err != nil {
 		return queueDecision{}, err
-	case !found || entry.State != QueueLanded || op == "":
-		return d.refuse(MergeRefusalStale, fmt.Sprintf("entry %s owes its work item no close: another settle "+
-			"reached it first, or no landing left it owing one", c.EntryID))
 	}
-	if c.Outcome == CloseNotClosed {
-		row, found, err := changeRowIn(ctx, tx, entry.ChangeID)
-		if err != nil {
-			return queueDecision{}, err
-		}
-		if found {
-			cc := concerning{repoName: repo.name, change: row, authors: true, merged: true,
-				enqueuer: entry.EnqueuedBy.reviewer(), notClosed: c.Detail}
-			if c.Routing, err = routingFor(ctx, tx, cc); err != nil {
-				return queueDecision{}, err
+	stamped := CloseSettled{RepoID: c.RepoID}
+	var notClosed []SettledClose
+	for _, s := range c.Settled {
+		if o, found := owed[s.EntryID]; found && o.entry.State == QueueLanded && o.op != "" {
+			stamped.Settled = append(stamped.Settled, s)
+			if s.Outcome == CloseNotClosed {
+				notClosed = append(notClosed, s)
 			}
 		}
 	}
-	d.payload = c
+	if len(stamped.Settled) == 0 {
+		return d.refuse(MergeRefusalStale, fmt.Sprintf("none of the %d entries named owes its work item a "+
+			"close: another settle reached each first, or no landing left it owing one", len(c.Settled)))
+	}
+	ids := make([]string, len(notClosed))
+	for i, s := range notClosed {
+		ids[i] = owed[s.EntryID].entry.ChangeID
+	}
+	changes, err := changeRowsIn(ctx, tx, ids)
+	if err != nil {
+		return queueDecision{}, err
+	}
+	routings := make([]ChangeRouting, 0, len(notClosed))
+	for _, s := range notClosed {
+		entry := owed[s.EntryID].entry
+		row, found := changes[entry.ChangeID]
+		if !found {
+			continue
+		}
+		routed, routeErr := routingFor(ctx, tx, concerning{repoName: repo.name, change: row, authors: true,
+			merged: true, enqueuer: entry.EnqueuedBy.reviewer(), notClosed: s.Detail})
+		if routeErr != nil {
+			return queueDecision{}, routeErr
+		}
+		if routed != nil {
+			routings = append(routings, *routed)
+		}
+	}
+	room, err := routingRoomBeside(stamped)
+	if err != nil {
+		return queueDecision{}, err
+	}
+	if stamped.Routing, err = keptRoutings(routings, room,
+		MaxRecordRows-closeSettledRows(len(stamped.Settled))); err != nil {
+		return queueDecision{}, err
+	}
+	d.payload = stamped
 	return d, nil
 }
 
-// owedCloseOf reads repository repoID's entry entryID by its key, whether it
-// owes its work item's close (code_queue.close_op), and false where the
-// repository's queues hold no such entry.
-func owedCloseOf(ctx context.Context, tx *sql.Tx, repoID, entryID string) (queueEntry, string, bool, error) {
-	var op string
-	e, err := scanEntry(func(dest ...any) error {
-		return tx.QueryRowContext(ctx, owedEntrySQL, repoID, entryID).Scan(append(dest, &op)...)
-	})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return queueEntry{}, "", false, nil
-	case err != nil:
-		return queueEntry{}, "", false, fmt.Errorf("code: read entry %s of %s's queue: %w", entryID, repoID,
-			err)
+// owedClose is a queue entry and the close it owes its work item
+// (code_queue.close_op), "" for none.
+type owedClose struct {
+	entry queueEntry
+	op    string
+}
+
+// owedClosesNamed reads repository repoID's entries ids by their key, each
+// with the close it owes its work item, in one statement; an entry its
+// queues hold no such row of is absent.
+func owedClosesNamed(ctx context.Context, tx *sql.Tx, repoID string, ids []string) (map[string]owedClose, error) {
+	out := make(map[string]owedClose, len(ids))
+	list, err := jsonList(ids)
+	if err != nil {
+		return nil, err
 	}
-	return e, op, true, nil
+	rows, err := tx.QueryContext(ctx, owedNamedSQL, list, repoID)
+	if err != nil {
+		return nil, fmt.Errorf("code: read %d entries of %s's queues: %w", len(ids), repoID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var op string
+		e, scanErr := scanEntry(func(dest ...any) error { return rows.Scan(append(dest, &op)...) })
+		if scanErr != nil {
+			return nil, fmt.Errorf("code: read %d entries of %s's queues: %w", len(ids), repoID, scanErr)
+		}
+		out[e.EntryID] = owedClose{entry: e, op: op}
+	}
+	return out, rows.Err()
 }
 
 // decideBroken is a broken's rules over the rows tx holds: the landing at its
@@ -902,10 +961,20 @@ func queueRecordHeld(ctx context.Context, tx *sql.Tx, p QueueProposal, at statel
 		}
 		return broken, err
 	case p.CloseSettled != nil:
-		// SETTLED, the entry owing no close any more: the record's apply is
-		// the one write that clears it.
-		_, op, found, err := owedCloseOf(ctx, tx, repoID, p.CloseSettled.EntryID)
-		return found && op == "", err
+		// SETTLED, every entry it names owing no close any more: the
+		// record's apply is the one write that clears one, and an entry its
+		// decide skipped owed none already.
+		ids := p.CloseSettled.entries()
+		owed, err := owedClosesNamed(ctx, tx, repoID, ids)
+		if err != nil {
+			return false, err
+		}
+		for _, id := range ids {
+			if o, found := owed[id]; !found || o.op != "" {
+				return false, nil
+			}
+		}
+		return true, nil
 	}
 	return false, fmt.Errorf("code: queue operation %s is none of the queue's own records", p.OpID)
 }

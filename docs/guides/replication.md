@@ -1047,7 +1047,7 @@ seats' reads take: nearly twice to about eight times what its
 tracker writes and its seats' reads take a day. Its pushes are 4.9 MB of that, the
 records that [compact](../concepts/code-host.md#compaction) their packs, publish
 their layers and sweep what each compaction retired 0.6–4.0 MB, its git
-clients' barriers 2.4–5.0 MB, and its changes' records 14.5–86.3 MB: each
+clients' barriers 2.4–5.0 MB, and its changes' records 14.5–86.4 MB: each
 change's open, its ask of a reviewer, a review asking for changes with two
 findings and the answer to them, two comments and a thread resolved, an
 approving review and its merge, and every revision's facts and mergeability

@@ -1110,7 +1110,8 @@ func TestALandedEntryOwesItsWorkItemsCloseUntilItIsSettled(t *testing.T) {
 	}
 	settling := func(repo, entryID string, outcome code.CloseOutcome, detail string) code.QueueProposal {
 		return queueRecord(func(p *code.QueueProposal) {
-			p.CloseSettled = &code.CloseSettled{RepoID: repo, EntryID: entryID, Outcome: outcome, Detail: detail}
+			p.CloseSettled = &code.CloseSettled{RepoID: repo,
+				Settled: []code.SettledClose{{EntryID: entryID, Outcome: outcome, Detail: detail}}}
 		})
 	}
 
@@ -1137,7 +1138,7 @@ func TestALandedEntryOwesItsWorkItemsCloseUntilItIsSettled(t *testing.T) {
 	}
 	before := n.end()
 	res, err = c.ProposeQueue(t.Context(), settling(repo, entryID, code.CloseClosed, ""))
-	requireQueueRefused(t, n, before, res, err, code.MergeRefusalStale, "owes its work item no close")
+	requireQueueRefused(t, n, before, res, err, code.MergeRefusalStale, "owes its work item a close")
 
 	// NOT CLOSED: the authors and the enqueuer told, under merged.
 	repo, change, entryID, _ := land("api", item)
@@ -1153,5 +1154,139 @@ func TestALandedEntryOwesItsWorkItemsCloseUntilItIsSettled(t *testing.T) {
 	}
 	if got := owed(repo); len(got) != 0 {
 		t.Fatalf("a close settled not_closed is still owed: %+v", got)
+	}
+}
+
+// landedTwoOwingCloses is a repository named name whose two changes — dev's
+// from feature (head B, carrying ENG-7) and from release (head R, carrying
+// ENG-8) — ada queued into main asking their work items closed, and one
+// landing of both applied: the repository, and each change and its entry, in
+// the landing's order.
+func landedTwoOwingCloses(t *testing.T, n *node, c *code.Committer, w *code.ChangeWriter,
+	name string) (repo string, changes, entries [2]string) {
+
+	t.Helper()
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].Gate = queueGate()
+	repo = n.ensure(name, s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
+		set(featureRef, code.ZeroOID, oidOf("B")), set(releaseRef, code.ZeroOID, oidOf("R"))))
+	for i, source := range []struct{ ref, head, key string }{
+		{featureRef, oidOf("B"), "ENG-7"}, {releaseRef, oidOf("R"), "ENG-8"},
+	} {
+		open := opening(repo, source.ref, mainRef, dev)
+		open.Open.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: "task-" + source.key,
+			Key: source.key, Project: "ENG"}
+		opened, err := c.ProposeChange(t.Context(), open)
+		requireChanged(t, opened, err)
+		changes[i] = opened.ChangeID
+		converse(t, w, n.revising(repo, changes[i], 1, source.head, mainRef, nil))
+		converse(t, w, reviewing(repo, changes[i], platLead, 1, code.VerdictApprove, nil))
+		n.passed(repo, source.head, mainRef, "unit")
+		enqueue := enqueueing(repo, changes[i], ada, source.head)
+		enqueue.Enqueue.CloseTask = true
+		res, err := c.ProposeQueue(t.Context(), enqueue)
+		requireQueued(t, res, err, code.QueueWaiting, i+1)
+		entries[i] = enqueue.Enqueue.EntryID
+	}
+	train := trainOf(repo, oidOf("A"), code.CandidateEntry{EntryID: entries[0], Commit: oidOf("M1")},
+		code.CandidateEntry{EntryID: entries[1], Commit: oidOf("M2")})
+	res, err := c.ProposeQueue(t.Context(), train)
+	requireRecorded(t, res, err)
+	n.passed(repo, oidOf("M1"), mainRef, "unit")
+	n.passed(repo, oidOf("M2"), mainRef, "unit")
+	res, err = c.ProposeQueue(t.Context(), landingOf(repo, train.Candidate.Train, oidOf("A"),
+		code.LandEntry{EntryID: entries[0], ChangeID: changes[0], Commit: oidOf("M1")},
+		code.LandEntry{EntryID: entries[1], ChangeID: changes[1], Commit: oidOf("M2")}))
+	requireRecorded(t, res, err)
+	return repo, changes, entries
+}
+
+// ONE SETTLE RECORD SETTLES A LANDING'S CLOSES (M5-D27): a landing's closes
+// are settled by one close_settled of all of them, never a record a change —
+// and each not_closed close tells ITS change's authors and enqueuer ITS OWN
+// sentence, under `merged`. A close another settle already cleared is
+// SKIPPED, the rest of the record applied, and a record whose every close is
+// cleared already is refused stale and appends nothing.
+//
+// Mutations: give every notice of the record one excerpt (the first
+// routing's) — the second change's authors read the first's sentence, red;
+// refuse the whole record where one of its closes owes nothing — the second
+// close stays owed, red; clear the closes of every entry named, owed or not,
+// on the stale record — it is applied, not refused, red.
+func TestOneSettleRecordSettlesALandingsClosesEachToldItsOwn(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	storedBefore(n, time.Hour)
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	owed := func(repo string) []string {
+		t.Helper()
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadQueueDue, Fresh: stale,
+			QueueDue: &code.QueueDueQuery{RepoID: repo}})
+		if err != nil {
+			t.Fatalf("read %s's queue work: %v", repo, err)
+		}
+		var ids []string
+		for _, e := range a.QueueOwedCloses {
+			ids = append(ids, e.EntryID)
+		}
+		return ids
+	}
+	settle := func(repo string, closes ...code.SettledClose) code.QueueProposal {
+		return queueRecord(func(p *code.QueueProposal) {
+			p.CloseSettled = &code.CloseSettled{RepoID: repo, Settled: closes}
+		})
+	}
+	told := func(change, who, why string) int {
+		return n.count(`SELECT COUNT(*) FROM code_notifications WHERE change_id = ? AND recipient = ?
+			AND reason = ? AND excerpt = ?`, change, who, string(code.ReasonMerged), why)
+	}
+
+	// EACH ITS OWN SENTENCE, in one record.
+	repo, changes, entries := landedTwoOwingCloses(t, n, c, w, "web")
+	if got := owed(repo); !slices.Equal(got, entries[:]) {
+		t.Fatalf("the landing of two left %v owing their closes, want both of %v", got, entries)
+	}
+	why := [2]string{"ENG-7 is a jira work item, which is closed where it lives",
+		"ada may no longer update ENG-8"}
+	res, err := c.ProposeQueue(t.Context(), settle(repo,
+		code.SettledClose{EntryID: entries[0], Outcome: code.CloseNotClosed, Detail: why[0]},
+		code.SettledClose{EntryID: entries[1], Outcome: code.CloseNotClosed, Detail: why[1]}))
+	requireRecorded(t, res, err)
+	for i, change := range changes {
+		for _, who := range []string{"dev", ada.Seat} {
+			if got := told(change, who, why[i]); got != 1 {
+				t.Errorf("%s was told %d times why change %d's work item was not closed, want once", who, got,
+					i+1)
+			}
+		}
+	}
+	if got := owed(repo); len(got) != 0 {
+		t.Fatalf("both closes settled in one record, %v still owe one", got)
+	}
+	before := n.end()
+	res, err = c.ProposeQueue(t.Context(), settle(repo,
+		code.SettledClose{EntryID: entries[0], Outcome: code.CloseClosed},
+		code.SettledClose{EntryID: entries[1], Outcome: code.CloseClosed}))
+	requireQueueRefused(t, n, before, res, err, code.MergeRefusalStale, "owes its work item a close")
+
+	// ONE SETTLED ALREADY, the other settled beside it.
+	repo, _, entries = landedTwoOwingCloses(t, n, c, w, "api")
+	res, err = c.ProposeQueue(t.Context(), settle(repo,
+		code.SettledClose{EntryID: entries[0], Outcome: code.CloseClosed}))
+	requireRecorded(t, res, err)
+	if got := owed(repo); !slices.Equal(got, entries[1:]) {
+		t.Fatalf("one close settled, %v still owe one, want %v", got, entries[1:])
+	}
+	res, err = c.ProposeQueue(t.Context(), settle(repo,
+		code.SettledClose{EntryID: entries[0], Outcome: code.CloseClosed},
+		code.SettledClose{EntryID: entries[1], Outcome: code.CloseClosed}))
+	requireRecorded(t, res, err)
+	if got := owed(repo); len(got) != 0 {
+		t.Fatalf("a settle naming a close settled already beside one owed left %v owing, want none", got)
 	}
 }

@@ -373,27 +373,44 @@ func CloseWorkItemOpID(landOpID, entryID string) string {
 	return statelog.StepOpID(landOpID, "close-work-item", entryID)
 }
 
-// applyCloseSettled clears the close a landed entry owed its work item
-// (code_queue.close_op), out of every home's queue work: nothing where the
-// entry owes none — another settle reached it first. Its notices, a
-// not_closed one's, are the caller's ([Applier.noticed]).
+// applyCloseSettled clears the closes landed entries owed their work items
+// (code_queue.close_op), out of every home's queue work, in ONE statement
+// for every close the record settles: an entry owing none — another settle
+// reached it first — is passed over, and a record that clears none writes
+// nothing. Its notices, its not_closed closes', are the caller's
+// ([Applier.noticed]).
 func (a *Applier) applyCloseSettled(ctx context.Context, tx *sql.Tx, at applyContext, c CloseSettled) (int,
 	error) {
 
-	_, op, found, err := owedCloseOf(ctx, tx, c.RepoID, c.EntryID)
-	switch {
-	case err != nil:
+	ids := c.entries()
+	owed, err := owedClosesNamed(ctx, tx, c.RepoID, ids)
+	if err != nil {
 		return 0, err
-	case !found || op == "":
-		return queueNotApplied(ctx, at, c.RepoID, c.EntryID, "it owes its work item no close")
 	}
-	if _, err = tx.ExecContext(ctx, settleCloseSQL, c.RepoID, c.EntryID); err != nil {
-		return 0, fmt.Errorf("code: settle entry %s's close at %s: %w", c.EntryID, at.position, err)
+	settling := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if o, found := owed[id]; found && o.op != "" {
+			settling = append(settling, id)
+			continue
+		}
+		if _, err = queueNotApplied(ctx, at, c.RepoID, id, "it owes its work item no close"); err != nil {
+			return 0, err
+		}
+	}
+	if len(settling) == 0 {
+		return 0, nil
+	}
+	list, err := jsonList(settling)
+	if err != nil {
+		return 0, err
+	}
+	if _, err = tx.ExecContext(ctx, settleClosesSQL, list, c.RepoID); err != nil {
+		return 0, fmt.Errorf("code: settle %d entries' closes at %s: %w", len(settling), at.position, err)
 	}
 	if _, err = tx.ExecContext(ctx, touchedSQL, at.packed, c.RepoID); err != nil {
 		return 0, fmt.Errorf("code: move %s's version at %s: %w", c.RepoID, at.position, err)
 	}
-	return 2, nil
+	return closeSettledRows(len(settling)), nil
 }
 
 // applyGreen moves the target's green row onto the landing record at Through —
@@ -839,9 +856,11 @@ const (
 	insertEntriesSQL = `INSERT INTO code_queue (` + entryColumns + `, ejected, ejected_bytes, close_op) VALUES `
 	entryValuesSQL   = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	// settleCloseSQL clears an entry's owed close by its key.
-	settleCloseSQL = `UPDATE code_queue INDEXED BY ` + queueKey + ` SET close_op = ''
-		WHERE repo_id = ? AND entry_id = ?`
+	// settleClosesSQL clears the owed closes of a repository's entries named
+	// by a JSON list, each by its key.
+	settleClosesSQL = `UPDATE code_queue SET close_op = '' WHERE rowid IN (SELECT q.rowid
+		FROM json_each(?1) AS j CROSS JOIN code_queue AS q INDEXED BY ` + queueKey + `
+		WHERE q.repo_id = ?2 AND q.entry_id = CAST(j.value AS TEXT))`
 
 	resetTrainSQL = `UPDATE code_queue SET state = 'waiting', train = '', candidate_id = '', commit_oid = ''
 		WHERE rowid IN (SELECT rowid FROM code_queue INDEXED BY code_queue_live_idx

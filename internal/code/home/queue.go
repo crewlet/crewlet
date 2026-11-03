@@ -48,7 +48,7 @@ type Tasks interface {
 // to no seat, has left the chart, or may no longer update it; the tracker
 // refuses the close for good (the item gone, or refusing to be set done). Why
 // is the sentence the change's authors and its enqueuer read beside `merged`
-// (code.CloseSettled.Detail), and Err the cause, for errors.Is.
+// (code.SettledClose.Detail), and Err the cause, for errors.Is.
 type NotClosed struct {
 	Why string
 	Err error
@@ -625,31 +625,37 @@ func (w *queue) land(ctx context.Context, repoID string, d code.QueueDue, green 
 // its close (code.ReadAnswer.QueueOwedCloses) — asked closed, AS ITS
 // ENQUEUER under the operation its landing named (code.CloseWorkItemOpID,
 // so a close a home asked before it stopped is the same tracker write
-// asked again, which the tracker's ledger answers once), and settles each
-// whose close ENDED with a close_settled record: closed, or not_closed with
+// asked again, which the tracker's ledger answers once), and settles every
+// close that ENDED in ONE close_settled record: closed, or not_closed with
 // the sentence its change's authors and enqueuer read. A close whose end is
 // not known yet is left owed, for the next turn on whichever home holds the
-// repository, and is this turn's failure.
+// repository, and is this turn's failure — as is every close this turn
+// ended whose settle did not append, each asked again under its landing's
+// operation by the next turn, which the tracker answers done.
 func (w *queue) closeOwed(ctx context.Context, repoID string, owed []code.QueueWorkEntry,
 	at statelog.Position) error {
 
-	var failed []error
+	var (
+		failed  []error
+		settled []code.SettledClose
+		ended   []code.QueueWorkEntry
+	)
 	for _, e := range owed {
 		if ctx.Err() != nil {
 			break
 		}
-		outcome, why := code.CloseClosed, ""
+		s := code.SettledClose{EntryID: e.EntryID, Outcome: code.CloseClosed}
 		if e.WorkItem == nil {
 			// THE CHANGE NAMES NO WORK ITEM ANY MORE, or the repository
 			// holds the change no more: nothing is left to close.
-			outcome, why = code.CloseNotClosed, "the change no longer names a work item to close"
+			s.Outcome, s.Detail = code.CloseNotClosed, "the change no longer names a work item to close"
 		} else {
 			err := w.tasks.CloseWorkItem(ctx, TaskClose{OpID: e.CloseOp, RepoID: repoID, Change: e.Change,
 				WorkItem: *e.WorkItem, As: e.EnqueuedBy})
 			var refused *NotClosed
 			switch {
 			case errors.As(err, &refused):
-				outcome, why = code.CloseNotClosed, refused.Why
+				s.Outcome, s.Detail = code.CloseNotClosed, refused.Why
 			case err != nil:
 				w.log.Warn("code_queue_close_failed", "repo", repoID, "change", e.Change.Number,
 					"work_item", e.WorkItem.ID, "err", err,
@@ -659,37 +665,50 @@ func (w *queue) closeOwed(ctx context.Context, repoID string, owed []code.QueueW
 				continue
 			}
 		}
-		if err := w.settle(ctx, repoID, e, outcome, why, at); err != nil {
+		s.Detail = textcut.Within(s.Detail, code.MaxCloseDetail)
+		settled, ended = append(settled, s), append(ended, e)
+	}
+	// ONE RECORD: both callers hand at most code.MaxOwedCloses — a page's
+	// owed closes, or one landing's entries (code.MaxLandEntries, the same
+	// bound) — and a longer list would be cut at the record's own bound.
+	for start := 0; start < len(settled); start += code.MaxOwedCloses {
+		end := min(start+code.MaxOwedCloses, len(settled))
+		if err := w.settle(ctx, repoID, settled[start:end], ended[start:end], at); err != nil {
 			failed = append(failed, err)
 		}
 	}
 	return errors.Join(failed...)
 }
 
-// settle records how entry e's owed close ended — the record that takes it
-// out of every home's queue work. A settle refused stale is one another
-// home's reached first; one appended and not yet applied is applied by the
-// committer, and a turn that reads the close still owed meanwhile asks the
-// same close again, which the tracker answers done.
-func (w *queue) settle(ctx context.Context, repoID string, e code.QueueWorkEntry, outcome code.CloseOutcome,
-	why string, at statelog.Position) error {
+// settle records how the closes of entries ended — at most
+// code.MaxOwedCloses, closes[i] entries[i]'s — in one close_settled record,
+// which takes each out of every home's queue work. An entry another home's
+// settle reached first is skipped by the committer, and a record of none
+// still owing is refused stale; one appended and not yet applied is applied
+// by the committer, and a turn that reads its closes still owed meanwhile
+// asks the same closes again, which the tracker answers done.
+func (w *queue) settle(ctx context.Context, repoID string, closes []code.SettledClose,
+	entries []code.QueueWorkEntry, at statelog.Position) error {
 
-	s := code.CloseSettled{RepoID: repoID, EntryID: e.EntryID, Outcome: outcome,
-		Detail: textcut.Within(why, code.MaxCloseDetail)}
-	// A FRESH OPERATION, never one derived from the landing's: a settle is
-	// guarded by the row it clears, so asked twice the second is refused
-	// stale, and an id minted at the landing's instant would be one the
-	// log's ledger cannot vouch for once its retention passes it.
+	// A FRESH OPERATION, never one derived from a landing's: a settle is
+	// guarded by the rows it clears, so asked twice the second skips them,
+	// and an id minted at a landing's instant would be one the log's ledger
+	// cannot vouch for once its retention passes it.
 	res, err := w.estate.Queue(ctx, code.QueueProposal{OpID: statelog.NewOpID(w.now(), ""), Seen: at,
-		CloseSettled: &s})
+		CloseSettled: &code.CloseSettled{RepoID: repoID, Settled: closes}})
 	switch {
 	case err != nil:
-		return fmt.Errorf("home: settle the close of change %d's work item: %w", e.Change.Number, err)
+		return fmt.Errorf("home: settle the closes of %d changes' work items: %w", len(closes), err)
 	case res.Refusal != "":
 		w.log.Debug("code_queue_record_refused", "repo", repoID, "write", "close_settled",
-			"entry", e.EntryID, "refusal", res.Refusal, "detail", res.Detail)
-	case outcome == code.CloseNotClosed:
-		w.log.Info("code_queue_close_not_made", "repo", repoID, "change", e.Change.Number, "detail", s.Detail)
+			"closes", len(closes), "refusal", res.Refusal, "detail", res.Detail)
+		return nil
+	}
+	for i, s := range closes {
+		if s.Outcome == code.CloseNotClosed {
+			w.log.Info("code_queue_close_not_made", "repo", repoID, "change", entries[i].Change.Number,
+				"detail", s.Detail)
+		}
 	}
 	return nil
 }

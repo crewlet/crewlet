@@ -367,7 +367,7 @@ const (
 	//     seat's push three times, 9 000 a day, beside thirty people fetching
 	//     every three minutes of a working day (4 800) and, where one runs, a
 	//     CI polling ten repositories a minute (14 400); and the records of
-	//     its 300 changes a day, 14.5–86.3 MB — every push a revision of its
+	//     its 300 changes a day, 14.5–86.4 MB — every push a revision of its
 	//     coding run's change, ten a change, each change opened by a seat's
 	//     tool, asked of one reviewer, reviewed asking for changes with two
 	//     findings, answered, commented on twice, a thread resolved, approved
