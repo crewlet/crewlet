@@ -72,18 +72,6 @@ const FORMAT_WORDS: Record<PastedFormat, string> = {
   "server.json": "Registry server.json",
 };
 
-/**
- * Why a catalogue entry cannot be added here: it signs in with OAuth alone,
- * which this wizard does not set up (its `oauth` block is written in the
- * configuration). Null where it can.
- */
-export function unavailableReason(entry: McpCatalogueEntry): string | null {
-  const usable = entry.auth.some((a) => a !== "oauth") || entry.auth.length === 0;
-  return usable
-    ? null
-    : `${entry.title} signs in with OAuth alone, which this wizard does not set up.`;
-}
-
 /** The sign-ins an entry offers, in a few words. */
 function signInWords(e: McpCatalogueEntry): string {
   return e.auth.length > 0 ? e.auth.map((a) => SIGN_IN[a].label).join(" or ") : "Not declared";
@@ -91,7 +79,6 @@ function signInWords(e: McpCatalogueEntry): string {
 
 /** A catalogue or community entry as a compact choice card. */
 function entryCard(e: McpCatalogueEntry): ChoiceCardOption {
-  const reason = unavailableReason(e);
   return {
     value: e.id,
     label: e.title,
@@ -109,7 +96,6 @@ function entryCard(e: McpCatalogueEntry): ChoiceCardOption {
           { label: "Where", value: e.transport === "http" ? "Remote" : "Local" },
           { label: "Sign-in", value: signInWords(e) },
         ],
-    ...(reason ? { disabled: true, disabledReason: reason } : {}),
   };
 }
 
@@ -289,22 +275,29 @@ function AddressCheck({
       catalogue: entry,
       supported: entry?.auth ?? null,
       detected: found.auth
-        ? { auth: found.auth, from: "server", title: found.title || null }
+        ? {
+            auth: found.auth,
+            from: "server",
+            title: found.title || null,
+            client: found.oauth?.client ?? "",
+          }
         : null,
       ...(entry?.integration
         ? { signIn: "integration" as const, shared: false }
-        : found.auth === "headers"
-          ? {
-              signIn: "headers" as const,
-              ...(draft.headers.length === 0
-                ? {
-                    headers: entry
-                      ? fromCatalogue(entry, draft).headers
-                      : [newRow("Authorization", { required: true })],
-                  }
-                : {}),
-            }
-          : { signIn: "none" as const }),
+        : found.auth === "oauth"
+          ? { signIn: "oauth" as const, oauthClient: found.oauth?.client || "cimd" }
+          : found.auth === "headers"
+            ? {
+                signIn: "headers" as const,
+                ...(draft.headers.length === 0
+                  ? {
+                      headers: entry
+                        ? fromCatalogue(entry, draft).headers
+                        : [newRow("Authorization", { required: true })],
+                    }
+                  : {}),
+              }
+            : { signIn: "none" as const }),
       ...(draft.name ? {} : { name: named || nameFromAddress(url) }),
     });
   };

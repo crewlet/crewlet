@@ -62,6 +62,18 @@ import (
 // marked and its result recorded hands the job that result; one that finds it
 // marked and no result says so, and the call is never made again, since it may
 // or may not have taken effect.
+//
+// # The call it makes is a call of its round
+//
+// The resume makes the call on the engine host, not the job over its bridge,
+// and the write that records its result records the call itself beside every
+// call the round's jobs made ([HeldMade], [BridgeCall.Approved]): answered as
+// the tool answered it, its arguments and output left sealed on the held call.
+// Every reader of whether the turn replied reads the round's log — the
+// collection's own delivery check, a stop's or a loss's account of the turn,
+// a later round's earlier calls — and a call recorded nowhere but in the
+// sealed result read as a reply that never went out: a person told the agent
+// did not answer them, and the next turn invited to post it again.
 
 // The three answers every held call offers, as a [decision.Option] id the
 // person's answer names ([HeldDecision]).
@@ -107,8 +119,26 @@ type HeldResume struct {
 	// as the row then holds it and whether this mark is the first: false
 	// means some attempt marked it before, and it is not made again.
 	Mark func(ctx context.Context) (HeldCall, bool, error)
-	// Record records what the call returned, sealed.
-	Record func(ctx context.Context, sealed string) error
+	// Record records what the call came to: its result, sealed, and the
+	// call as its round's log keeps it.
+	Record func(ctx context.Context, made HeldMade) error
+}
+
+// HeldMade is what a held call came to once a person let it be made, as its
+// run's row records it ([PendingStore.RecordHeldResult]).
+type HeldMade struct {
+	// Result is what the call returned, sealed ([CallSeal.SealResult]), for
+	// the job that carries the work on.
+	Result string
+
+	// Call is the call as its round's log keeps it, in the shape every call
+	// a job made over its bridge takes ([BridgeLog.Calls]): whether
+	// it failed, and who answered it — its origin, server, source and a
+	// refusal's class — as the surface that made it said. The store names
+	// it, places it, marks it approved and names its held call
+	// ([BridgeCall.HeldID]); its arguments and output are never written
+	// beside it, since they ride the row sealed.
+	Call BridgeCall
 }
 
 // askedWith is [askedRun] with the claimed run's held call, where its question
@@ -125,8 +155,8 @@ func (c *Coordinator) askedWith(claimed PendingRun, words AnswerWords) *AskedRun
 		Mark: func(ctx context.Context) (HeldCall, bool, error) {
 			return c.pending.MarkHeldCall(ctx, turnID, launch, fence)
 		},
-		Record: func(ctx context.Context, sealed string) error {
-			recorded, err := c.pending.RecordHeldResult(ctx, turnID, launch, sealed, fence)
+		Record: func(ctx context.Context, made HeldMade) error {
+			recorded, err := c.pending.RecordHeldResult(ctx, turnID, launch, made, fence)
 			if err == nil && !recorded {
 				err = fmt.Errorf("%w: run %s", ErrHeldCallUnclaimed, turnID)
 			}

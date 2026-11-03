@@ -61,9 +61,10 @@ type MCPAgentServer struct {
 	Reason config.MCPReachReason `json:"reason"`
 	// Tools is how many tools the server offers the seat: every tool the
 	// fleet's live listings name for it at a level other than blocked, one
-	// at approve included (it is offered, and each call waits for a person);
-	// a tool refused its name is never listed. 0 for a server turned off,
-	// which is granted to nobody.
+	// at approve included (it is offered, and each call waits for a person),
+	// but one the seat's own limits block for it ([org.Role.LimitOn]); a
+	// tool refused its name is never listed. 0 for a server turned off,
+	// which is granted to nobody, and for one a limit turns off for the seat.
 	Tools int `json:"tools"`
 	// State is the server's own state, its row's ([MCPServerRow.State]): an
 	// agent's own instance of a per-agent server is the server's page's to
@@ -79,7 +80,8 @@ type MCPAgentServer struct {
 // the rule the engine builds the seat's surface and starts its instances by,
 // and are counted as the fleet's live listings name them at the level the
 // server's entry decides ([serverTools]), the reading a server's page lists
-// them by.
+// them by, less each tool the seat's own limits block for it: the seat's
+// surface is cut by the same limits ([org.Role.LimitOn]).
 //
 // WHAT THE GRANT HANDS THE SEAT, WHATEVER ITS INSTANCES ARE DOING NOW: a server
 // that is down still lists what it served, and its tools come back with it, so
@@ -150,8 +152,9 @@ func (s Sources) mcpAgents(ctx context.Context, leases []coord.Lease, status MCP
 			view := MCPAgentServer{Server: server.Name, Reason: reach.Reason, State: states[server.Name]}
 			if server.Grants(seat) {
 				offer := offers[server.Name]
-				view.Tools = offer.count()
-				for _, name := range offer.names {
+				offered := offer.to(seat.LimitOn(server.Name))
+				view.Tools = len(offered) + offer.past
+				for _, name := range offered {
 					names[name] = struct{}{}
 				}
 				past += offer.past
@@ -180,10 +183,12 @@ func unitOf(seat *org.Role, roster *org.Organization) (name, key *string) {
 	return name, key
 }
 
-// mcpOffer is what one server offers each agent its grant reaches.
+// mcpOffer is what one server offers each agent its grant reaches, before
+// the agent's own limits.
 type mcpOffer struct {
-	// names are the tools offered under each name the listings carry.
-	names []string
+	// tools are the tools offered under each name the listings carry, each
+	// with the server's own name for it, which a limit keys a tool by.
+	tools []offeredTool
 	// past is how many tools the listings count beyond the names they carry
 	// ([coord.MaxMCPListedTools]), each offered unless the entry's default
 	// blocks it (no tool starts at blocked): a server that lists that many
@@ -192,7 +197,24 @@ type mcpOffer struct {
 	past int
 }
 
-func (o mcpOffer) count() int { return len(o.names) + o.past }
+// offeredTool is one tool an offer carries: its name, prefix applied, and the
+// server's own.
+type offeredTool struct{ name, raw string }
+
+// to is the names of the tools the offer hands one agent whose limits on the
+// server are limit: every tool but one a limit blocks. A tool past the
+// listing's record is unnamed, so no limit is matched against it, and it stays
+// counted (past), erring toward flagging the agent.
+func (o mcpOffer) to(limit org.ServerLimit) []string {
+	out := make([]string, 0, len(o.tools))
+	for _, t := range o.tools {
+		if level, held := limit.Tool(t.raw); held && level == org.ToolBlocked {
+			continue
+		}
+		out = append(out, t.name)
+	}
+	return out
+}
 
 // offerOf is what server offers each agent it is granted to, as its live
 // listings name its tools: every one at a level other than blocked.
@@ -201,7 +223,7 @@ func offerOf(server *config.MCPServer, listings []coord.MCPListing) mcpOffer {
 	var out mcpOffer
 	for _, t := range tools {
 		if t.Level != config.MCPToolBlocked {
-			out.names = append(out.names, t.Name)
+			out.tools = append(out.tools, offeredTool{name: t.Name, raw: t.Raw})
 		}
 	}
 	if server.Tools.Default != config.MCPToolBlocked {

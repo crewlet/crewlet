@@ -16,10 +16,12 @@
  * EXACTLY WHAT THE ENGINE SENDS, held in both directions by
  * `TestTheToolsScreenReadsWhatTheServerStatusSends` (the list, the state
  * union included) and `TestTheServerPageReadsWhatTheDetailSends` (a server
- * whole) in `internal/api/queries`, `TestTheRemoveDialogReadsWhatTheRemovalSends`
+ * whole) and `TestTheInboxReadsWhatAHeldCallSends` (a parked run's held call)
+ * in `internal/api/queries`, `TestTheRemoveDialogReadsWhatTheRemovalSends`
  * in `internal/api/configapi`, and in `internal/api/mcpapi`
  * `TestTheRestartReadsWhatTheRouteSends`, `TestTheWizardReadsWhatTheCatalogueSends`,
- * `TestTheTestReadsWhatTheCheckSends` and `TestTheReplaceValueReadsWhatTheRouteSends`.
+ * `TestTheTestReadsWhatTheCheckSends`, `TestTheReplaceValueReadsWhatTheRouteSends`,
+ * `TestTheApprovalReadsWhatTheRouteSends` and `TestTheReviewReadsWhatTheRouteSends`.
  */
 
 import type { Coverage } from "./coverage.ts";
@@ -166,7 +168,7 @@ export interface McpMemberServerStatus {
  * server is used. `needs_sign_in`: nobody has signed in. `expired`: past the
  * end its vendor stated. `refresh_failed`: its vendor refused to renew it.
  */
-type McpOAuthStatus = "connected" | "needs_sign_in" | "expired" | "refresh_failed";
+export type McpOAuthStatus = "connected" | "needs_sign_in" | "expired" | "refresh_failed";
 
 /** A renewal a vendor refused for good, in its own words. */
 interface McpOAuthFailure {
@@ -178,7 +180,7 @@ interface McpOAuthFailure {
  * A server's OAuth sign-in as an administrator reads it: never a token, never
  * the client's secret, and never on a member's reading.
  */
-interface McpOAuthView {
+export interface McpOAuthView {
   /**
    * `authorization_code`: a person signs the company in. `client_credentials`:
    * the engine signs in as the company's service identity, nobody signs in,
@@ -382,7 +384,7 @@ export interface McpServersStatusAnswer {
 type McpApprovalStatus = "waiting" | "answered";
 
 /** One call to a tool at Needs approval, held for a person's answer (`POST /mcp-approvals/{id}`). */
-interface McpApproval {
+export interface McpApproval {
   /** What the approval is answered by. */
   id: string;
   /** When the call was held. */
@@ -409,7 +411,7 @@ interface McpApproval {
 }
 
 /** One agent seat's MCP tools, counted against `tool_budget`. */
-interface McpAgentTools {
+export interface McpAgentTools {
   /** The seat's handle. */
   seat: string;
   name: string;
@@ -428,7 +430,7 @@ interface McpAgentTools {
 }
 
 /** One server's part in an agent's tools. */
-interface McpAgentServer {
+export interface McpAgentServer {
   server: string;
   reason: McpReachReason;
   /** The tools it offers the agent: every one it lists at a level other than
@@ -532,7 +534,7 @@ export interface McpToolView {
  * The level a tool of an MCP server runs at: `allow` offers it, `approve`
  * offers it and holds each call for a person's answer, `blocked` never offers it.
  */
-type McpToolLevel = "allow" | "approve" | "blocked";
+export type McpToolLevel = "allow" | "approve" | "blocked";
 
 /** What the server said of itself in its handshake. */
 interface McpServerInfo {
@@ -708,11 +710,14 @@ interface McpServerCalls {
   coverage: Coverage;
 }
 
-/** Who holds an `mcp_env` block naming the server. */
+/** Who holds an `mcp_env` or `mcp_limits` block naming the server. */
 type McpHolderKind = "seat" | "unit";
 
-/** One `mcp_env` block naming the server: the agent's or the team's own values for it. */
-interface McpEnvDependant {
+/**
+ * One agent's or team's block naming the server: its own values for it
+ * (`mcp_env`), or what its lead holds it back to (`mcp_limits`).
+ */
+interface McpBlockDependant {
   kind: McpHolderKind;
   /** The seat's handle or the unit's key. */
   key: string;
@@ -735,8 +740,9 @@ interface McpSandboxDependant {
  * is gone, which may be deleted with it.
  */
 export interface McpDependants {
-  mcp_env: McpEnvDependant[];
+  mcp_env: McpBlockDependant[];
   sandbox: McpSandboxDependant[];
+  mcp_limits: McpBlockDependant[];
   /** Names only, never a value. */
   secrets: string[];
   /** Whether somebody holds an OAuth grant for it, which the removal revokes. */
@@ -779,7 +785,10 @@ export interface McpServerAnswer {
   last_check: McpCheckView | null;
   /** Every header or variable the server is sent, and its OAuth client's secret, by name and never by value. */
   values: McpValueState[];
-  /** Every agent seat the server's grant reaches, and why, whether or not it is on. */
+  /**
+   * Every agent seat the server's grant reaches, and why, whether or not it is
+   * on, with what its team leads' limits hold the server to for it.
+   */
   reaches: McpReach[];
   /** Every change the server made to its tools since their levels were decided, by tool. */
   changes: McpChangeView[];
@@ -817,7 +826,7 @@ interface McpListedView extends McpDefinitionView {
  * `description`, `schema`, `annotations`). Decided with
  * `POST /mcp-servers/{name}/changes` by `after.digest` (null for a removal).
  */
-interface McpChangeView {
+export interface McpChangeView {
   tool: string;
   kinds: string[];
   before: McpAcceptedView | null;
@@ -834,15 +843,42 @@ interface McpChangeView {
  * Why a server reaches an agent: no `access` (every agent), a unit or the seat
  * it names, or the integration lane a vendor-bound server's agents are on at.
  */
-type McpReachReason = "every_agent" | "unit" | "seat" | "integration";
+export type McpReachReason = "every_agent" | "unit" | "seat" | "integration";
 
 /** One agent seat a server reaches. */
-interface McpReach {
+export interface McpReach {
   /** The seat's handle. */
   seat: string;
   reason: McpReachReason;
   /** The granting unit's key for `unit`, the lane for `integration`, null otherwise. */
   via: string | null;
+  /** What the seat's own and its units' `mcp_limits` hold the server to; null where none does. */
+  limited: McpReachLimit | null;
+}
+
+/** The level a limit holds a tool to: never `allow`, which only the server's entry sets. */
+type McpToolLimitLevel = "approve" | "blocked";
+
+/**
+ * What the limits on the way down to one agent hold a server to: the strictest
+ * of its own block and every enclosing team's, each part naming the block
+ * nearest the agent that holds it there.
+ */
+interface McpReachLimit {
+  /** A limit turns the server off for the agent; its grant stands. */
+  off: boolean;
+  /** The key of the team whose limit turns it off; null where the agent's own does, or none. */
+  off_by: string | null;
+  /** Each tool held back, by the server's own name for it. */
+  tools: McpToolLimit[];
+}
+
+/** One tool a limit holds back for an agent; it runs at the stricter of this and its own level. */
+interface McpToolLimit {
+  tool: string;
+  level: McpToolLimitLevel;
+  /** The key of the team whose limit holds it; null for the agent's own. */
+  by: string | null;
 }
 
 /**
@@ -956,8 +992,9 @@ export interface McpSecretDeletion {
 
 /** The fields a written removal cleared with the server. */
 interface McpCleared {
-  mcp_env: McpEnvDependant[];
+  mcp_env: McpBlockDependant[];
   sandbox: McpSandboxDependant[];
+  mcp_limits: McpBlockDependant[];
 }
 
 /** A dry run of a removal that would land: what it checked and what it takes. */
@@ -993,6 +1030,35 @@ interface McpGrantRevocation {
 }
 
 /**
+ * Where a sign-in is: `pending` until the person consents at the vendor,
+ * `completing` while the engine exchanges what the vendor sent back, then
+ * `approved` or `failed` (with `detail`).
+ */
+type McpSignInStatus = "pending" | "completing" | "approved" | "failed";
+
+/**
+ * A sign-in to a server's OAuth: what `POST /mcp-servers/{name}/oauth` answers
+ * and `GET /mcp-sign-ins/{id}` reads. Never a token.
+ */
+export interface McpSignIn {
+  id: string;
+  server: string;
+  status: McpSignInStatus;
+  /** Why it failed, in the engine's or the vendor's words; "" otherwise. */
+  detail: string;
+  started_at: string;
+  /** When the person's consent stops being taken. */
+  expires_at: string;
+  /** Where the person's browser consents: on the start's answer alone, "" on every read. */
+  authorize_url: string;
+}
+
+/** What `DELETE /mcp-servers/{name}/oauth` did with the server's grant. */
+export interface McpSignOut extends McpGrantRevocation {
+  server: string;
+}
+
+/**
  * A restart as recorded (`202`): every node restarts each instance whose
  * state began before `at`, or the node holding `seat` that agent's instance.
  */
@@ -1018,7 +1084,7 @@ export type McpAuthMethod = "integration" | "oauth" | "headers" | "none";
  * publishes its own client metadata, which the vendor reads. `dcr`: it
  * registers a client on first use. `own`: an administrator registered one.
  */
-type McpOAuthClient = "cimd" | "dcr" | "own";
+export type McpOAuthClient = "cimd" | "dcr" | "own";
 
 /** One header or variable a catalogue entry reads, and how to fill it. */
 interface McpCatalogueInput {
@@ -1107,7 +1173,7 @@ export interface McpCatalogueAnswer {
 }
 
 /** One tool a test listed, as the engine would offer it. */
-interface McpCheckedTool {
+export interface McpCheckedTool {
   /** The name it would be offered under, prefix included. */
   name: string;
   /** The server's own name for it. */
@@ -1217,4 +1283,64 @@ export interface McpValueRefusal {
   class: McpFailureClass | "";
   node: string;
   check: McpCheckAnswer;
+}
+
+/**
+ * The call a parked executor's run holds for a person's approval, on its row
+ * of the executors board (`held_call`): who reads the run's question reads
+ * it, never what it would send (`held_arguments`, the seat's trail). It is
+ * answered through `POST /mcp-approvals/{id}`, never the run's own answer.
+ */
+export interface McpHeldCall {
+  /** What the approval is answered by. */
+  id: string;
+  server: string;
+  /** The tool as the run called it, its prefix applied. */
+  tool: string;
+  /** The server's own name for it. */
+  raw: string;
+  /** The definition the call was held on. */
+  digest: string;
+  /** When the call was held; "" where the row does not say. */
+  held_at: string;
+}
+
+/**
+ * How an answer to a held call travels. `pending`: on its way to the node
+ * holding the agent's seat, which makes or refuses the call and carries the
+ * run on. `unknown`: it may or may not have landed, and answering again is
+ * safe, since the seat records one answer.
+ */
+type McpApprovalOutcome = "pending" | "unknown";
+
+/** What `POST /mcp-approvals/{id}` answers: the call it answered, and how the answer travels. */
+export interface McpApprovalAnswer {
+  id: string;
+  server: string;
+  tool: string;
+  seat: string;
+  turn_id: string;
+  launch_id: string;
+  /** `once`, `always` or `deny`, as sent. */
+  answer: string;
+  outcome: McpApprovalOutcome;
+  /** The delivery's id, "" where none was minted. */
+  answer_id: string;
+  /** The configuration's answer to the level `always` wrote; null for `once` and `deny`. */
+  revision: Record<string, unknown> | null;
+}
+
+/**
+ * What `POST /mcp-servers/{name}/changes` answers: the tools whose decision
+ * was written, by the server's own name, and the ones somebody else decided
+ * between the read and the write, which are read again.
+ */
+export interface McpChangesAnswer {
+  server: string;
+  accepted: string[];
+  blocked: string[];
+  /** Decided by somebody else meanwhile: nothing was written for them. */
+  moved: string[];
+  /** The configuration's answer to the levels a block wrote; null where nothing was blocked. */
+  revision: Record<string, unknown> | null;
 }

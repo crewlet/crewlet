@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -113,7 +114,7 @@ type SessionRow struct {
 	// the reviewer's decision, whether a reply reached anybody, who stopped
 	// it, what failed — its model- and person-written fields declared
 	// somebody's words on the type itself; null while the turn runs.
-	Ending *executordomain.Ending `json:"ending"`
+	Ending *executorkeep.Ending `json:"ending"`
 
 	// AskExcerpt is the opening of what the turn was asked, redacted.
 	AskExcerpt string `json:"ask_excerpt" untrusted:"fence"`

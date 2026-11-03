@@ -453,20 +453,21 @@ func ChannelJobs(c Channels) []Job {
 // implementation.
 type Markers interface {
 	// SweepMarkers removes the removal markers written before cutoff from
-	// every record family no clock ages, and every sandbox run's bridged
-	// tool log written before it whose run has no record — what a node that
-	// stopped between a run's two removals leaves — reporting how many went,
-	// both kinds counted together.
+	// every record family no clock ages, and every part beside a sandbox
+	// run (its bridged tool log, the sealed secrets its box was handed)
+	// written before it whose run has no record — what a node that stopped
+	// between a run's removals leaves — reporting how many went, both kinds
+	// counted together.
 	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 // MarkerJobs is the sweep for the coordination store's removal MARKERS: the
 // delete or purge record a KV removal leaves behind in a bucket the broker
 // never ages, which every listing that meets one pays a leader read for. And
-// the one LIVE-LOOKING value a removal can leave there: a sandbox run's bridged
-// tool log whose record is gone, its node stopped between the record's removal
-// and the log's — a value, not a marker, that nothing would ever remove
-// otherwise. The job's swept count is both kinds together.
+// the one LIVE-LOOKING value a removal can leave there: a part beside a sandbox
+// run (its bridged tool log, the sealed secrets its box was handed) whose
+// record is gone, its node stopped between the record's removal and the
+// part's — a value, not a marker, that nothing would ever remove otherwise. The job's swept count is both kinds together.
 //
 // A shared record swept here, beside the channels, the mailboxes and the chat
 // read state, and for their reason: no bucket age can express it. The buckets

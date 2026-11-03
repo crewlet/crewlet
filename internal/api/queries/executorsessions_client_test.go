@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
@@ -37,7 +38,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		texts = append(texts, fmt.Sprintf("message %d", i))
 	}
 	read := sealedSession(t, store, "ana", gzipText(t, openCodeExport(texts...)))
-	read.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeStopped, Decision: "done",
+	read.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
 		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", CompletedWork: "Filed ENG-7.",
 		BlockedOn: "the review", StoppedBy: "ana.diaz", StopReason: "wrong branch",
 		Failure: "the round cap ran out"}
@@ -104,7 +105,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		"TranscriptState":     stringsOf(queries.TranscriptStates),
 		"TranscriptEntryKind": stringsOf(executor.EntryKinds),
 		"TranscriptCut":       stringsOf(executor.TranscriptCuts),
-		"SessionOutcome":      stringsOf(executordomain.Outcomes),
+		"SessionOutcome":      stringsOf(executorkeep.Outcomes),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {

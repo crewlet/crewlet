@@ -860,6 +860,44 @@ describe("the pane", () => {
     expect(screen.getByText("The only cost is the webinar slot.")).toBeTruthy();
   });
 
+  // An ask's headline and reasoning were drawn as words, so their markdown showed.
+  test("an ask's headline, reasoning and row read its markdown, not its syntax", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = askItem({
+      ...DECISION,
+      question: "Merge at head **b003820**?",
+      rationale: "Ship once `make check` passes.",
+    });
+    mount({ answers: { decisions: decisionsOf(ask) } });
+    await settle();
+    // jsdom's accessible name trims each run, so the words are read as text.
+    const heading = screen.getByRole("heading", { name: /^Merge at head\s*b003820\?$/ });
+    expect(heading.textContent).toBe("Merge at head b003820?");
+    expect(heading.querySelector("strong")?.textContent).toBe("b003820");
+    expect(document.querySelector(".crewlet-reading-pane__reasoning code")?.textContent).toBe(
+      "make check",
+    );
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain("Merge at head b003820?");
+    expect(list.textContent).not.toContain("**");
+  });
+
+  // A one-paragraph free-text ask used to be its own headline, unformatted.
+  test("a free-text ask written as one paragraph is read formatted under a plain heading", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = askItem();
+    (ask.ask as { decision?: unknown }).decision = undefined;
+    ask.ask.body =
+      "Thanks for approving. The pull request is still open at head `da7fe81`, clean and " +
+      "QA-approved, but my app is refused on merge, so please merge it yourself.";
+    mount({ answers: { decisions: decisionsOf(ask) } });
+    await settle();
+    expect(screen.getByRole("heading", { name: "A question for you" })).toBeTruthy();
+    const lead = document.querySelector(".crewlet-reading-pane__lead");
+    expect(lead?.querySelector("code")?.textContent).toBe("da7fe81");
+    expect(lead?.textContent).toContain("please merge it yourself.");
+  });
+
   // AN ASK IS ONE MESSAGE: its question's bare `#11` is placed by the
   // repository its context names; an address its asker wrote opens only as
   // the dashboard rebuilt it on the company's own host; and a cited task's
@@ -2481,6 +2519,27 @@ describe("the pane", () => {
       ).toBe("pending");
       expect(outcome()).toBe(
         "Answer recorded. The Senior Backend Engineer is busy executing GP-4 and picks this up next.",
+      );
+    });
+
+    // A RUN WHOSE ENDING IS DECIDED STILL HOLDS THE SEAT, until its turn's end
+    // is recorded, and is executing nothing: said as finishing its turn.
+    //
+    // Mutation: draw a busy run's line off its status alone, and an ended run
+    // reads as still executing.
+    test("says the seat is finishing an ended run's turn while the answer waits for it", async () => {
+      const ending = {
+        ...parked,
+        turn_id: "turn-9",
+        launch_id: "q9",
+        status: "resumed",
+        role: "Senior Backend Engineer",
+        work_item: { backend: "native", id: "t-4", key: "GP-4", project: "GP" },
+        ending: { at: "2026-06-15T12:06:00Z", reason: "", stopped_by: "" },
+      };
+      await answerRun({ status: "answered", answer_ids: ["a1"] }, [ending]);
+      expect(outcome()).toBe(
+        "Answer recorded. The Senior Backend Engineer is finishing its turn on GP-4 and picks this up next.",
       );
     });
 

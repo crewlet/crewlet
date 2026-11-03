@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -379,7 +380,7 @@ var evictedWriters = map[string]evictedWriter{
 			}, executordomain.NewEnd{
 				Handle: "ceo", Turn: uuid.NewSHA1(uuid.NameSpaceOID, []byte("turn-"+tag)).String(),
 				ConversationKey: "chat:evicted-" + tag,
-				Ending:          executordomain.Ending{Outcome: executordomain.OutcomeCompleted},
+				Ending:          executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted},
 			})
 			return res.Position, res.Outcome, err
 		},

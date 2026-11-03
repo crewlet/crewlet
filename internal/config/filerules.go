@@ -333,6 +333,10 @@ const (
 	// MCPReferenceSandbox is an entry of a seat's `sandbox.mcp.servers`,
 	// which gives the seat's executor box the server.
 	MCPReferenceSandbox MCPReferenceField = "sandbox"
+	// MCPReferenceLimits is an `mcp_limits` block keyed on the server's
+	// name: a seat's own, or a unit's, which holds every agent seat beneath
+	// it.
+	MCPReferenceLimits MCPReferenceField = "mcp_limits"
 )
 
 // MCPServerReference is one field of the document that names an MCP server by
@@ -343,7 +347,8 @@ type MCPServerReference struct {
 	// Field is the kind of field.
 	Field MCPReferenceField
 	// Seat is the handle of the seat whose field it is, and Unit the key of
-	// the unit whose `mcp_env` block it is: exactly one of the two is set.
+	// the unit whose `mcp_env` or `mcp_limits` block it is: exactly one of
+	// the two is set.
 	Seat, Unit string
 	// Name is that seat's or unit's display name, for a sentence a person
 	// reads.
@@ -361,9 +366,10 @@ type MCPServerReference struct {
 }
 
 // MCPServerReferences is every field of the document that names the MCP server
-// called name, in document order: each seat's `mcp_env` block keyed on it and
-// each entry of its `sandbox.mcp.servers` listing it, at any depth, then each
-// unit's `mcp_env` block keyed on it.
+// called name, in document order: each seat's `mcp_env` block keyed on it, its
+// `mcp_limits` block keyed on it and each entry of its `sandbox.mcp.servers`
+// listing it, at any depth, then each unit's `mcp_env` and `mcp_limits` blocks
+// keyed on it.
 //
 // THE WRITTEN FIELDS, whether or not a server of that name is declared and
 // whether or not it is on: a block kept for a server turned off is still in
@@ -403,10 +409,14 @@ func (c *Company) MCPServerDependants(name string) []MCPServerReference {
 
 // RemoveMCPServer takes the server called name out of the document with every
 // field that names it alone ([Company.MCPServerDependants]): each seat's and
-// unit's `mcp_env` block for it and each `sandbox.mcp.servers` entry listing
-// it. It answers what it cleared, and whether the server was declared; a
-// server that is not leaves the document as it was. A mapping left empty is
-// dropped rather than written as `{}`.
+// unit's `mcp_env` and `mcp_limits` blocks for it and each
+// `sandbox.mcp.servers` entry listing it. It answers what it cleared, and
+// whether the server was declared; a server that is not leaves the document as
+// it was. A mapping left empty is dropped rather than written as `{}`.
+//
+// A LIMIT GOES WITH ITS SERVER whatever its name: unlike an `mcp_env` block
+// the engine reads by name, nothing reads a limit on a server nobody declares,
+// and one left behind would hold back a later server that took the name.
 func (c *Company) RemoveMCPServer(name string) (cleared []MCPServerReference, found bool) {
 	i := slices.IndexFunc(c.MCPServers, func(s MCPServer) bool { return s.Name == name })
 	if i < 0 {
@@ -425,8 +435,16 @@ func (c *Company) RemoveMCPServer(name string) (cleared []MCPServerReference, fo
 		}
 		return env
 	}
+	unlimit := func(limits org.MCPLimits) org.MCPLimits {
+		delete(limits, name)
+		if len(limits) == 0 {
+			return nil
+		}
+		return limits
+	}
 	for role := range c.EachRole() {
 		role.MCPEnv = drop(role.MCPEnv)
+		role.MCPLimits = unlimit(role.MCPLimits)
 		if role.Sandbox == nil {
 			continue
 		}
@@ -441,6 +459,7 @@ func (c *Company) RemoveMCPServer(name string) (cleared []MCPServerReference, fo
 	}
 	for unit := range c.EachUnit() {
 		unit.MCPEnv = drop(unit.MCPEnv)
+		unit.MCPLimits = unlimit(unit.MCPLimits)
 	}
 	return cleared, true
 }
@@ -471,9 +490,18 @@ func (c *Company) mcpServerReferences() []MCPServerReference {
 			})
 		}
 	}
+	limits := func(seat, unit, name string, path Path, limits org.MCPLimits) {
+		for _, server := range slices.Sorted(maps.Keys(limits)) {
+			out = append(out, MCPServerReference{
+				Server: server, Field: MCPReferenceLimits, Seat: seat, Unit: unit, Name: name,
+				Segments: entry(at(path, "mcp_limits"), server),
+			})
+		}
+	}
 	for role, path := range c.EachRole() {
 		seat := role.IdentityKey()
 		blocks(seat, "", role.Name, path, role.MCPEnv)
+		limits(seat, "", role.Name, path, role.MCPLimits)
 		if role.Sandbox == nil {
 			continue
 		}
@@ -486,13 +514,14 @@ func (c *Company) mcpServerReferences() []MCPServerReference {
 	}
 	for unit, path := range c.EachUnit() {
 		blocks("", unit.IdentityKey(), unit.Name, path, unit.MCPEnv)
+		limits("", unit.IdentityKey(), unit.Name, path, unit.MCPLimits)
 	}
 	return out
 }
 
 // validateMCPServerReferences refuses a field that names an MCP server nothing
-// declares: an `mcp_env` block keyed on one, or a `sandbox.mcp.servers` entry
-// listing one.
+// declares: an `mcp_env` or `mcp_limits` block keyed on one, or a
+// `sandbox.mcp.servers` entry listing one.
 //
 // A SEAT'S `mcp_env` IS KEYED BY SERVER NAME, and the engine reads it from
 // the other end: it walks `mcp_servers`, and for each one looks up that
@@ -578,6 +607,12 @@ func (c *Company) validateMCPServerReferences() error {
 					"A box is given only a server the company declares, so this "+
 					"entry gives the seat's executor nothing: name a declared "+
 					"server, or remove the entry", ref.Server, servers)
+		case MCPReferenceLimits:
+			p.add(ref.Segments, ErrUnknownValue,
+				"%q is not a declared tool server: mcp_servers has %s. A limit "+
+					"holds back a server the company declares, and one naming none "+
+					"would hold back whichever server later takes the name: name a "+
+					"declared server, or remove the entry", ref.Server, servers)
 		}
 	}
 	return p.err()

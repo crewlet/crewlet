@@ -144,6 +144,18 @@ describe("what it surfaces", () => {
     expect(items[0]?.path).toEqual(["live", "executors", "t1"]);
   });
 
+  // AN ENDED RUN WAITS ON NOBODY. A run whose ending is decided keeps its
+  // record, and the status it was ended in, until the ending is finished; it
+  // is over, and no answer reaches it, so it is never somebody's to answer.
+  //
+  // Mutation: queue a parked run off its status alone, and the ended run is
+  // listed as waiting on an answer.
+  test("a parked run whose ending is decided is not waiting on anybody", () => {
+    const ending = { at: "2026-01-01T11:30:00Z", reason: "seat_removed", stopped_by: "" };
+    const items = attentionQueue(input({ runs: [parked("awaiting_clarification", { ending })] }));
+    expect(items.some((item) => item.subject === "run")).toBe(false);
+  });
+
   // WHEN IT PARKED, never when it started: this row is about how long
   // somebody has been waited on, and a run that worked for an hour before
   // asking has been waiting for none of it.
@@ -696,6 +708,27 @@ describe("a model at its usage limit", () => {
 // measurement behind the disclosure. Not running is critical for whoever it
 // stops; a wait and a refused name cost their tools and nothing more.
 describe("an MCP server's alarms", () => {
+  // THE ENGINE'S FIX DECIDES WHERE THE ROW OPENS: an alarm a sign-in clears
+  // opens the server's Sign in dialog, every other one the server's page.
+  // Mutation: open the sign-in for every alarm, or for none, and this is red.
+  test("an alarm a sign-in fixes opens the sign-in", () => {
+    const items = attentionQueue(
+      input({
+        mcpAlarms: [
+          mcpAlarm("mcp_oauth_needs_sign_in", "linear", {
+            fix: { kind: "sign_in", server: "linear", seat: "" },
+          }),
+          mcpAlarm("mcp_server_failing", "github"),
+        ],
+      }),
+    );
+    const byKey = new Map(conditionsToDecide(items).map((i) => [i.id, i]));
+    const signIn = byKey.get("mcp-mcp_oauth_needs_sign_in-linear");
+    expect(signIn?.path).toEqual(["settings", "mcp-tools", "servers", "linear"]);
+    expect(signIn?.query).toEqual({ flow: "signin" });
+    expect(byKey.get("mcp-mcp_server_failing-github")?.query).toBeUndefined();
+  });
+
   test("each server an alarm stands on is a row in Needs you", () => {
     const items = attentionQueue(
       input({

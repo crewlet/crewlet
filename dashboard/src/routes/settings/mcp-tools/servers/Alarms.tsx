@@ -97,29 +97,21 @@ function Fix({
       );
     case "sign_in":
       return (
-        <ButtonLink
-          size="small"
-          variant="secondary"
-          href={href(["settings", "mcp-tools", "servers", server], { tab: "connection" })}
-        >
+        <Button size="small" variant="secondary" onClick={() => onFlow("signin", server)}>
           {FIX.sign_in}
-        </ButtonLink>
+        </Button>
       );
     case "approve":
       return (
-        <ButtonLink size="small" variant="secondary" href={href(["inbox"])}>
+        <Button size="small" variant="secondary" onClick={() => onFlow("approve", server)}>
           {FIX.approve}
-        </ButtonLink>
+        </Button>
       );
     case "review":
       return (
-        <ButtonLink
-          size="small"
-          variant="secondary"
-          href={href(["settings", "mcp-tools", "servers", server], { tab: "tools" })}
-        >
+        <Button size="small" variant="secondary" onClick={() => onFlow("drift", server)}>
           {FIX.review}
-        </ButtonLink>
+        </Button>
       );
   }
 }
@@ -192,7 +184,7 @@ function itemFor(
     case "mcp_oauth_needs_sign_in":
       meta = <>No agent can call its tools{since ? <>, {since}</> : null}</>;
       body =
-        "An administrator signs the company in to it again from its Connection tab, and the engine renews the sign-in from then on.";
+        "An administrator signs the company in to it, and the engine renews the sign-in from then on.";
       break;
     case "mcp_oauth_expiring":
       meta = <>Its vendor set when the sign-in runs out</>;
@@ -241,9 +233,11 @@ export function Alarms({
   /** The integration the server reads its agents' credentials from, where the page knows it. */
   integration?: string;
 }) {
+  // ON A SERVER'S PAGE a waiting call is answered in its own row over this
+  // list (the Overview's held calls), so its alarm would say it twice.
   const items = data.alarms.flatMap((alarm) =>
     alarm.entries
-      .filter((entry) => !server || entry.key === server)
+      .filter((entry) => !server || (entry.key === server && alarm.kind !== "mcp_approval_waiting"))
       .map((entry) => itemFor(alarm, entry, data, Boolean(server), integration, onFlow)),
   );
   return <AttentionList items={items} collapseAfter={3} />;

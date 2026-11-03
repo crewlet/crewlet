@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -94,9 +95,46 @@ func answeringRun(run sandbox.PendingRun) answeringTurn {
 		depth: run.DelegationDepth}
 }
 
+// colleagueAnswer is what the engine answered a colleague's ask with, for the
+// record of how the turn that answered it ended (executorkeep.Ending's
+// Answer and Delivered): the turn's own record of its calls cannot say, since
+// the engine sent it, not the turn.
+type colleagueAnswer struct {
+	// owed says the turn answered an ask: it was woken by one and ended.
+	owed bool
+	// kind is what the answer was, in one word ([answerContent]), or why
+	// none was sent: `unaddressable` (the ask named no channel),
+	// `no_service` (this node runs no agent-to-agent service).
+	kind string
+	// sent is the text sent, where one was.
+	sent string
+	// replied says the colleague has an answer of this turn's: this reply
+	// reached the channel, or — closed, a channel already closed — an
+	// earlier attempt at the same ending answered it before closing it
+	// ([Engine.answeredBefore]). A channel closed with no answer on it —
+	// the asker gave up, or the idle sweep reaped it — is closed and not
+	// replied.
+	replied, closed bool
+}
+
+// onto records the answer on an ending: what the engine sent, and whether the
+// colleague waiting has it — which, for a turn that owed the engine's answer,
+// is the whole of whether its reply was delivered, and known either way.
+func (a colleagueAnswer) onto(ending *executorkeep.Ending) {
+	if !a.owed {
+		return
+	}
+	ending.Answer, ending.DeliveredTo, ending.Delivered = a.kind, replyA2A, a.replied
+	ending.DeliveryUnknown = false
+	if a.closed {
+		ending.Answer = "channel_closed"
+	}
+}
+
 // answerColleague replies on the channel ask opened, with what the turn by
 // concluded — res, and err where the turn ended on one — and closes it; nil
-// ask answers nobody.
+// ask answers nobody. It reports what it sent and whether the reply went, for
+// the turn's end.
 //
 // Best effort in both directions, and deliberately so: the turn has already
 // run and its side effects have already shipped, so a failure here must not
@@ -104,29 +142,31 @@ func answeringRun(run sandbox.PendingRun) answeringTurn {
 // which is what the idle sweep is the backstop for.
 func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTurn,
 	ask *sandbox.ColleagueAsk, res turn.Result, err error,
-) {
+) colleagueAnswer {
 	if ask == nil {
-		return
+		return colleagueAnswer{}
 	}
 	if res.Suspended {
 		// The turn is parked on its executor's run and has not finished.
 		// Answering now would send the asker an artifact from a turn that
 		// is still going. The frame that ends it answers instead, from the
 		// ask the launch wrote onto the run's record.
-		return
+		return colleagueAnswer{}
 	}
 	if ask.ChannelID == "" {
 		log.WarnContext(ctx, "a2a_answer_unaddressable", "seat", by.handle,
 			"detail", "the ask carries no channel id, so there is nowhere to reply")
-		return
+		return colleagueAnswer{owed: true, kind: "unaddressable"}
 	}
 	svc := e.a2aService(c)
 	if svc == nil {
-		return
+		return colleagueAnswer{owed: true, kind: "no_service"}
 	}
 
+	content, kind := answerContent(res, err)
+	sent := colleagueAnswer{owed: true, kind: kind, sent: content}
 	answer := a2a.Answer{
-		ChannelID: ask.ChannelID, Sender: by.handle, Content: answerContent(res, err),
+		ChannelID: ask.ChannelID, Sender: by.handle, Content: content,
 		Question: ask.Question,
 		AskTrace: events.TraceContext{
 			TraceID: ask.TraceID, SpanID: ask.SpanID, ParentSpanID: ask.ParentSpanID,
@@ -161,14 +201,17 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTu
 		// of the end, finds the channel its first attempt closed. Logged
 		// at a level that says so.
 		if errors.Is(replyErr, a2a.ErrClosed) {
+			sent.closed = true
+			sent.replied = e.answeredBefore(ctx, ask.ChannelID)
 			log.InfoContext(ctx, "a2a_answer_channel_closed", "seat", by.handle,
-				"channel_id", ask.ChannelID)
-			return
+				"channel_id", ask.ChannelID, "answered_before", sent.replied)
+			return sent
 		}
 		log.WarnContext(ctx, "a2a_answer_failed", "seat", by.handle,
 			"channel_id", ask.ChannelID, "error", replyErr.Error())
-		return
+		return sent
 	}
+	sent.replied = true
 
 	// ONE ASK, ONE ANSWER, THEN CLOSED — and closed HERE rather than left
 	// to the idle sweep, because the answer wake is documented to land on
@@ -187,6 +230,30 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTu
 			"channel_id", ask.ChannelID, "error", closeErr.Error(),
 			"detail", "the exchange was answered; the idle sweep closes it later")
 	}
+	return sent
+}
+
+// answeredBefore reports whether a channel the engine found closed as it
+// answered had an answer on it already: the ask and an answer are the whole of
+// what crosses a channel ([a2a.Channel.Messages]), and the only party that
+// answers is the asked seat, so two messages are this turn's answer, sent by an
+// earlier attempt at the same ending that closed the channel after it — a
+// repeat after a crash between the reply and the record of the turn's end. One
+// closed with only the ask on it closed unanswered: the asker gave up on it, or
+// the idle sweep found nothing would answer it. A channel that cannot be read
+// is said, and taken for unanswered, which is what a reader is then told.
+func (e *Engine) answeredBefore(ctx context.Context, channelID string) bool {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return false
+	}
+	ch, err := a2a.NewCoordStore(e.backends.Fleet).Get(ctx, channelID)
+	if err != nil {
+		log.WarnContext(ctx, "a2a_channel_unread", "channel_id", channelID, "error", err.Error(),
+			"detail", "the closed channel could not be read to say whether an earlier attempt "+
+				"answered it, so the turn's end says the answer did not reach the asker")
+		return false
+	}
+	return ch.Messages >= 2
 }
 
 // answerLostTurn tells the colleague whose ask a lost run's turn took up that
@@ -202,20 +269,32 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTu
 // BEST EFFORT, like every answer: a reply the broker refuses costs the asker's
 // wake, never the run's ending. A repeat of the step after a crash finds the
 // channel its first attempt closed ([a2a.ErrClosed]).
-func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun) {
-	if run.ColleagueAsk == nil || run.Ending == nil {
-		return
-	}
+//
+// AND IT ANSWERS HOW THE TURN ENDED — lost, whether its reply reached anybody
+// as the turn's own calls say ([sandbox.RunCalls]), and what the engine told
+// the colleague — which the ending owes the executor log on the run's row and
+// records there, where the turn's row on the log keeps it beside the session
+// it kept. No frame of the turn is left to record it.
+func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun,
+	bridged sandbox.RunCalls) executorkeep.Ending {
+
 	company := e.Company()
-	if company == nil {
+	var answered colleagueAnswer
+	switch {
+	case run.ColleagueAsk != nil && company == nil:
 		log.WarnContext(ctx, "a2a_lost_turn_unanswered", "seat", run.AgentHandle,
 			"turn_id", run.TurnID, "channel_id", run.ColleagueAsk.ChannelID,
 			"detail", "the run that would have answered a colleague's ask was lost on a node "+
 				"running no company, so there is no directory to reach the asker through")
-		return
+		answered = colleagueAnswer{owed: true, kind: "no_service"}
+	case run.ColleagueAsk != nil:
+		lost := &runLostError{}
+		if run.Ending != nil {
+			lost.reason, lost.detail = run.Ending.Reason, run.Ending.Detail
+		}
+		answered = e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, lost)
 	}
-	e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{},
-		&runLostError{reason: run.Ending.Reason, detail: run.Ending.Detail})
+	return e.runEnding(company, run, bridged, answered)
 }
 
 // runLostError is a turn ended by the loss of its executor's run: the reason
@@ -268,18 +347,21 @@ func lostRunOf(err error) (*runLostError, bool) {
 // be read back; the work it pushed, if any, is on its branch", and nothing with
 // a request for more detail about a question nobody got to. The sentence is
 // redacted as the announcement is, because it can quote what the run said.
-func answerContent(res turn.Result, err error) string {
+//
+// AND WHAT IT IS, in one word, for the turn's end: `artifact`, `evidence`,
+// `stopped`, `lost`, `guard` or `unproduced`.
+func answerContent(res turn.Result, err error) (string, string) {
 	if turn.Stopped(err) {
 		return "I could not answer this: a person stopped my turn before it finished. " +
-			"Take it up with them, or on a shared surface."
+			"Take it up with them, or on a shared surface.", "stopped"
 	}
 	if lost, ok := lostRunOf(err); ok {
 		return "I could not answer this: my executor's work on it in its box was lost " +
 			"before the turn could finish (" + lost.reason + ": " + redact.Secrets(lost.detail) +
-			"). Please ask again, or take it up on a shared surface."
+			"). Please ask again, or take it up on a shared surface.", "lost"
 	}
 	if res.Decision == phase.Done && res.Artifact != "" {
-		return res.Artifact
+		return res.Artifact, "artifact"
 	}
 	// A DONE TURN THAT IS BLOCKED STILL HAS AN ACCOUNT, and it is the one
 	// way `done` arrives carrying no prose: the seat answered as far as it
@@ -299,15 +381,15 @@ func answerContent(res turn.Result, err error) string {
 	if res.Decision == phase.Done && res.LastWork != nil &&
 		res.LastWork.Outcome == turn.OutcomeBlocked &&
 		strings.TrimSpace(res.LastWork.Evidence) != "" {
-		return res.LastWork.Evidence
+		return res.LastWork.Evidence, "evidence"
 	}
 	if res.Breach != nil {
 		return "I could not answer this: my turn stopped on the engine's " +
 			string(res.Breach.Kind) + " guard. Please ask again more narrowly, " +
-			"or take it up on a shared surface."
+			"or take it up on a shared surface.", "guard"
 	}
 	return "I could not produce an answer for this (" + res.Decision.String() +
-		"). Please ask again with more detail, or take it up on a shared surface."
+		"). Please ask again with more detail, or take it up on a shared surface.", "unproduced"
 }
 
 // askChannel is the channel an ask opened, and therefore where its answer goes.

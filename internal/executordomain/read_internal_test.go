@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
 // turnsOf is the turn ids of sessions, in order.
@@ -30,7 +32,7 @@ func TestAHeadShowsEveryTurnNoEndedTurnWasShown(t *testing.T) {
 	e := newEstate(t)
 	earlier, parked, failed, next := newTurn(), newTurn(), newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:room", earlier, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:room", earlier, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", earlier, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 
 	// THE PARKED TURN READS THE HEAD, captures and waits on a person.
 	first := e.head("ana", "chat:room")
@@ -39,10 +41,10 @@ func TestAHeadShowsEveryTurnNoEndedTurnWasShown(t *testing.T) {
 	}
 	e.capture(launching(first, capturing("ana", "chat:room", parked, 1, 1, 100, budget)))
 	// A TURN BESIDE IT fails before its first capture.
-	e.end(ending("ana", "chat:room", failed, "", Ending{Outcome: OutcomeFailed,
+	e.end(ending("ana", "chat:room", failed, "", executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
 		Failure: "the box was lost before its first collection"}))
 	// THE PARKED TURN resumes and ends after it.
-	e.end(ending("ana", "chat:room", parked, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", parked, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 
 	h := e.head("ana", "chat:room")
 	if h.Session == nil || h.Session.Turn != parked {
@@ -64,7 +66,7 @@ func TestAHeadShowsEveryTurnNoEndedTurnWasShown(t *testing.T) {
 	}
 
 	e.capture(launching(h, capturing("ana", "chat:room", next, 1, 1, 100, budget)))
-	e.end(ending("ana", "chat:room", next, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", next, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	for _, gone := range []string{parked, failed} {
 		if _, found := e.session("ana", gone); found {
 			t.Errorf("turn %s was shown to the next turn and survived its end", gone)
@@ -89,7 +91,7 @@ func TestAHeadBoundsWhatItHandsOutAndWhatItLeavesStays(t *testing.T) {
 	for range MaxSiblings + 2 {
 		run := newTurn()
 		e.capture(capturing("ana", "chat:room", run, 1, 1, 100, budget))
-		e.end(ending("ana", "chat:room", run, "", Ending{Outcome: OutcomeCompleted}))
+		e.end(ending("ana", "chat:room", run, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 		siblings = append(siblings, run)
 	}
 	// The newest of them is the head; the rest are its siblings.
@@ -107,7 +109,7 @@ func TestAHeadBoundsWhatItHandsOutAndWhatItLeavesStays(t *testing.T) {
 	}
 	next := newTurn()
 	e.capture(launching(h, capturing("ana", "chat:room", next, 1, 1, 100, budget)))
-	e.end(ending("ana", "chat:room", next, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", next, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	if _, found := e.session("ana", siblings[0]); !found {
 		t.Fatal("the sibling no launch was offered was absorbed")
 	}
@@ -116,7 +118,7 @@ func TestAHeadBoundsWhatItHandsOutAndWhatItLeavesStays(t *testing.T) {
 	var endings []string
 	for range MaxEndings + 2 {
 		run := newTurn()
-		e.end(ending("ana", "chat:room", run, "", Ending{Outcome: OutcomeFailed}))
+		e.end(ending("ana", "chat:room", run, "", executorkeep.Ending{Outcome: executorkeep.OutcomeFailed}))
 		endings = append(endings, run)
 	}
 	h = e.head("ana", "chat:room")
@@ -131,7 +133,7 @@ func TestAHeadBoundsWhatItHandsOutAndWhatItLeavesStays(t *testing.T) {
 	}
 	last := newTurn()
 	e.capture(launching(h, capturing("ana", "chat:room", last, 1, 1, 100, budget)))
-	e.end(ending("ana", "chat:room", last, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", last, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	h = e.head("ana", "chat:room")
 	if want := []string{siblings[0], endings[0], endings[1]}; !slices.Equal(turnsOf(h.Endings), want) {
 		t.Errorf("after the end of a turn shown the newest, the next read shows %v, want "+
@@ -164,7 +166,7 @@ func TestASeatsPagesKeepEveryRowInItsPlace(t *testing.T) {
 	}
 	// BETWEEN THE PAGES the oldest row is captured again and another ends.
 	e.capture(capturing("ana", "chat:room", runs[0], 2, 1, 100, budget))
-	e.end(ending("ana", "chat:room", runs[1], "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", runs[1], "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	second, err := e.reader().Sessions(t.Context(), "ana", first.Next, 2, stale)
 	if err != nil {
 		t.Fatal(err)
@@ -190,10 +192,10 @@ func TestTheRetentionNominatesRowsTombstonesAndRemovals(t *testing.T) {
 	e := newEstate(t)
 	absorbed, head, fresh := newTurn(), newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:room", absorbed, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:room", absorbed, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", absorbed, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	h := e.head("ana", "chat:room")
 	e.capture(launching(h, capturing("ana", "chat:room", head, 1, 1, 100, budget)))
-	e.end(ending("ana", "chat:room", head, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", head, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	e.removeSeat("ben")
 	cutoff := stamped(e.seq)
 	e.capture(capturing("ana", "chat:other", fresh, 1, 1, 100, budget))
@@ -238,7 +240,7 @@ func TestALostEndIsNominatedOnlyForATurnThatNeverEnded(t *testing.T) {
 	lost, ended, fresh := newTurn(), newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:a", lost, 1, 1, 100, budget))
 	e.capture(capturing("ana", "chat:b", ended, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:b", ended, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:b", ended, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	before := stamped(e.seq)
 	e.capture(capturing("ana", "chat:c", fresh, 1, 1, 100, budget))
 	got, err := e.reader().Unended(t.Context(), before, 10)
@@ -262,7 +264,7 @@ func TestTheSealedCensusCountsWhatTheRowsName(t *testing.T) {
 	const tight = 100
 	older, newer := newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:a", older, 1, 1, 60, tight))
-	e.end(ending("ana", "chat:a", older, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:a", older, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	rotated := capturing("ana", "chat:b", newer, 1, 1, 60, tight)
 	rotated.ContentKey = "k2"
 	// THE OLDER SESSION IS RELEASED to make room for this one.

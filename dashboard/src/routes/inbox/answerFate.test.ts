@@ -43,3 +43,32 @@ test("an answer's fate is the run record's, not the press's", () => {
   // ANOTHER PERSON'S ANSWER LET GO is not this one's.
   expect(answerFate(given, run({ declined_answers: ["a0"] }), true)).toBe("sent");
 });
+
+/**
+ * AN EXECUTOR WHOSE ENDING IS DECIDED IS OVER, as one whose record is gone is:
+ * its record waits only for the ending's last steps — on an engine that records
+ * every turn's end, minutes, while the turn's captures settle — and reads as the
+ * status it was ended in. Read by that status, an ended executor's answer read
+ * as taken, and one let go of read as resumed with.
+ *
+ * Mutation: read the fate off `status` alone, and the ended executor reads as
+ * having taken the answer.
+ */
+test("an executor whose ending is decided is over, whatever its status says", () => {
+  const given: GivenAnswer = {
+    answer: { kind: "reply", text: "use main" },
+    launchId: "q1",
+    answerId: "a1",
+  };
+  const ended = {
+    status: "resumed" as const,
+    launch_id: "q1",
+    declined_answers: [] as string[],
+    ending: { at: "2026-11-02T10:00:00Z", reason: "resume_broken", stopped_by: "" },
+  };
+  expect(answerFate(given, ended, true)).toBe("ended");
+  expect(answerFate(given, ended, true, true)).toBe("taken");
+  expect(answerFate(given, { ...ended, status: "awaiting_clarification" as const }, true)).toBe(
+    "ended",
+  );
+});

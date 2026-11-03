@@ -6,13 +6,14 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
-import type { McpCatalogueEntry, McpCheckAnswer } from "~/contract/mcp.ts";
+import type { McpCatalogueEntry, McpCheckAnswer, McpCheckedTool } from "~/contract/mcp.ts";
 import { Router } from "~/app/router.tsx";
+import { Store } from "~/protocol/index.ts";
 import { TestClient } from "~/test/client.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { createEntity, dryRunCreate, dryRunEntity, putEntity } from "~/protocol/configWrite.ts";
 import { readCatalogue, storeValue, testDraft } from "../api.ts";
-import { mcpData } from "../fixtures.ts";
+import { MCP_ORG, mcpData } from "../fixtures.ts";
 import { ServerWizard, type Saved } from "./ServerWizard.tsx";
 
 const LINEAR: McpCatalogueEntry = {
@@ -143,8 +144,11 @@ function mount(
   saved: Saved | null = null,
   start: Parameters<typeof ServerWizard>[0]["start"] = null,
 ) {
+  // THE CHART the grant picker lists, as the store holds it.
+  const store = new Store();
+  store.applyOrg(MCP_ORG as never);
   render(
-    <TestClient>
+    <TestClient store={store}>
       <ToastProvider>
         <LayerHost>
           <Router>
@@ -170,7 +174,7 @@ const press = async (name: string) => {
   await settle();
 };
 
-/** Sentry from the catalogue, its token typed, walked to the review. */
+/** Sentry from the catalogue, signed in to with a header, its token typed, walked to the review. */
 async function walkSentry() {
   mount();
   await settle();
@@ -181,9 +185,12 @@ async function walkSentry() {
   await press("Continue"); // Name
   await press("Continue"); // Connection
   await press("Continue"); // Sign-in
+  fireEvent.click(screen.getByRole("radio", { name: /^Header/ }));
   fireEvent.change(screen.getByLabelText("Value for Authorization"), {
     target: { value: "  Bearer sntrys_not_real " },
   });
+  await press("Continue"); // Who gets it
+  await press("Continue"); // Tool approvals, which lists the tools
   await press("Continue"); // Test
   await press("Continue"); // Review
 }
@@ -233,7 +240,7 @@ test("a server added from the catalogue is tested with its value, written, then 
   expect(storeValue).toHaveBeenCalledWith("sentry", "Authorization", "Bearer sntrys_not_real", {
     test: true,
   });
-  expect(onSaved).toHaveBeenCalledWith("sentry");
+  expect(onSaved).toHaveBeenCalledWith("sentry", false);
 });
 
 // A VALUE THE SERVER REFUSES leaves the entry saved and the wizard open on
@@ -266,7 +273,7 @@ test("a value refused at save leaves the entry saved, and the retry sends only t
   expect(createEntity).toHaveBeenCalledTimes(1);
   expect(putEntity).not.toHaveBeenCalled();
   expect(storeValue).toHaveBeenCalledTimes(2);
-  expect(onSaved).toHaveBeenCalledWith("sentry");
+  expect(onSaved).toHaveBeenCalledWith("sentry", false);
 });
 
 // THE ENGINE DECIDES: its dry run's problem lands on the field it names and
@@ -353,16 +360,16 @@ test("an edit writes the entry back, every field it does not draw kept", async (
   expect(storeValue).not.toHaveBeenCalled();
 });
 
-// AN OAUTH SERVER'S EDIT keeps its sign-in: the wizard does not set one up,
-// so it offers no choice that would replace it, and writes the `oauth` block
-// and the other headers back untouched. Mutation: draw the choices, or write
-// the headers from rows it has none of, and this is red.
-test("an edit of a server signed in to with OAuth keeps its sign-in as it is", async () => {
+// AN OAUTH SERVER'S EDIT draws its sign-in as its entry says it (the method
+// and the client), and writes the oauth block and its other headers back as
+// they are. Mutation: start an OAuth server's edit on another method, or
+// rebuild the block from defaults, and this is red.
+test("an edit of a server signed in to with OAuth draws its sign-in and writes it back", async () => {
   const entity = {
     name: "linear",
     transport: "http",
     url: "https://mcp.linear.app/mcp",
-    oauth: { scopes: ["read"] },
+    oauth: { client: "dcr", scopes: ["read"] },
     headers: { "X-Team": "${LINEAR_TEAM}" },
   };
   mount(
@@ -376,8 +383,11 @@ test("an edit of a server signed in to with OAuth keeps its sign-in as it is", a
     "signin",
   );
   await settle();
-  expect(screen.getByText("Linear signs in with OAuth")).toBeDefined();
-  expect(screen.queryByRole("radiogroup", { name: "Sign-in" })).toBeNull();
+  const checked = (name: RegExp) =>
+    (screen.getByRole("radio", { name }) as HTMLInputElement).checked;
+  expect(checked(/^OAuth/)).toBe(true);
+  expect(checked(/^Register automatically/)).toBe(true);
+  expect(screen.getByDisplayValue("read")).toBeDefined();
   await press("Review changes");
   expect(dryRunEntity).toHaveBeenCalledWith(
     "mcp-servers",
@@ -387,4 +397,200 @@ test("an edit of a server signed in to with OAuth keeps its sign-in as it is", a
     expect.anything(),
   );
   expect(storeValue).not.toHaveBeenCalled();
+});
+
+/** A tool a test listed, at the level the engine starts it at. */
+const listedTool = (raw: string, over: Partial<McpCheckedTool> = {}): McpCheckedTool => ({
+  name: raw,
+  raw,
+  title: "",
+  description: "",
+  annotations: {
+    read_only: "unknown",
+    destructive: "unknown",
+    idempotent: "unknown",
+    open_world: "unknown",
+  },
+  risk: "destructive",
+  risk_declared: false,
+  external: true,
+  starting_level: "approve",
+  refused: "",
+  ...over,
+});
+
+// WHO GETS IT AND EACH TOOL'S LEVEL are written on the entry: the approvals
+// step is handed every tool the draft's test listed (the test sent without
+// the draft's levels), each at the engine's starting level, and only a level
+// changed from it is written. Mutation: send the levels with the test, or
+// write every tool's starting level, and this is red.
+test("a server is added with the agents chosen for it and the levels set on its tools", async () => {
+  vi.mocked(testDraft).mockResolvedValue({
+    kind: "ok",
+    status: 200,
+    value: {
+      ...PASSED,
+      tools: [
+        listedTool("find_issue", {
+          risk: "read_only",
+          risk_declared: true,
+          starting_level: "allow",
+        }),
+        listedTool("drop_issue"),
+      ],
+    },
+  });
+  mount();
+  await settle();
+  fireEvent.click(screen.getByRole("radio", { name: /Sentry/ }));
+  await press("Continue"); // Name
+  await press("Continue"); // Connection
+  await press("Continue"); // Sign-in
+  fireEvent.click(screen.getByRole("radio", { name: /^Header/ }));
+  fireEvent.change(screen.getByLabelText("Value for Authorization"), {
+    target: { value: "Bearer sntrys_not_real" },
+  });
+  await press("Continue"); // Who gets it
+  fireEvent.click(screen.getByRole("radio", { name: /Chosen teams and agents/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Product Manager" }));
+  await press("Continue"); // Tool approvals: the test lists the tools
+  expect(testDraft).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(testDraft).mock.calls[0]![0]).not.toHaveProperty("tools");
+  expect(screen.getByRole("combobox", { name: "Level for find_issue" }).textContent).toContain(
+    "Always allow",
+  );
+  fireEvent.click(screen.getByRole("combobox", { name: "Level for drop_issue" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Blocked" }));
+  await settle();
+  // A level set back to where the engine starts the tool is no level of its own.
+  fireEvent.click(screen.getByRole("combobox", { name: "Level for find_issue" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Needs approval" }));
+  await settle();
+  fireEvent.click(screen.getByRole("combobox", { name: "Level for find_issue" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Always allow" }));
+  await settle();
+  await press("Continue"); // Test
+  // A test asked again, with a level set, is still sent without the levels.
+  await press("Test again");
+  expect(testDraft).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(testDraft).mock.calls[1]![0]).not.toHaveProperty("tools");
+  await press("Continue"); // Review
+  expect(screen.getByText("1 agent")).toBeDefined();
+  expect(screen.getByText("1 always allow and 1 blocked")).toBeDefined();
+  await press("Add server");
+  expect(createEntity).toHaveBeenCalledWith(
+    "mcp-servers",
+    "sentry",
+    expect.objectContaining({
+      access: { seats: ["pm"] },
+      tools: { levels: { drop_issue: "blocked" } },
+    }),
+    "Added the MCP server sentry",
+    expect.anything(),
+  );
+});
+
+// A NEW SERVER A PERSON SIGNS IN TO is tested as a draft, which is never sent
+// the company's sign-in, so the step says so; it is saved with its oauth
+// block alone and the page goes on to its sign-in. Mutation: store a value
+// for it, or leave the sign-in for later, and this is red.
+test("a new server a person signs in to says its test stops at the sign-in, and signs in next", async () => {
+  mount();
+  await settle();
+  fireEvent.click(screen.getByRole("radio", { name: /Sentry/ }));
+  await press("Continue"); // Name
+  await press("Continue"); // Connection
+  await press("Continue"); // Sign-in: Sentry lists OAuth first
+  expect((screen.getByRole("radio", { name: /^OAuth/ }) as HTMLInputElement).checked).toBe(true);
+  await press("Continue"); // Who gets it
+  await press("Continue"); // Tool approvals, which lists the tools
+  await press("Continue"); // Test
+  expect(screen.getByText("Tested before anyone signs in")).toBeDefined();
+  expect(testDraft).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "sentry", oauth: { client: "cimd" } }),
+    {},
+    "",
+  );
+  await press("Continue"); // Review
+  await press("Add server");
+  expect(createEntity).toHaveBeenCalledWith(
+    "mcp-servers",
+    "sentry",
+    expect.objectContaining({ oauth: { client: "cimd" } }),
+    "Added the MCP server sentry",
+    expect.anything(),
+  );
+  expect(storeValue).not.toHaveBeenCalled();
+  expect(onSaved).toHaveBeenCalledWith("sentry", true);
+});
+
+// HOW THE ENGINE REGISTERS IS THE VENDOR'S TO SAY: an authorization server
+// that reads no published identity and registers nobody takes the company's
+// own client alone, which the step starts on and recommends. Mutation: offer
+// a registration the vendor's metadata rules out, and this is red.
+test("a vendor that registers nobody is signed in to as the company's own client", async () => {
+  vi.mocked(readCatalogue).mockResolvedValueOnce({
+    reading: "admin",
+    curated: [LINEAR, { ...SENTRY, oauth_client: "own" }],
+    community: [],
+    registry: "",
+    reason: "",
+    left_out: 0,
+  });
+  mount();
+  await settle();
+  fireEvent.click(screen.getByRole("radio", { name: /Sentry/ }));
+  await press("Continue"); // Name
+  await press("Continue"); // Connection
+  await press("Continue"); // Sign-in
+  const client = (name: RegExp) => screen.getByRole("radio", { name }) as HTMLInputElement;
+  expect(client(/^Your own client/).checked).toBe(true);
+  expect(client(/^Published identity/).disabled).toBe(true);
+  expect(client(/^Register automatically/).disabled).toBe(true);
+  expect(screen.getByText("Sentry does not read a published identity.")).toBeDefined();
+  expect(screen.getByText("https://crewlet.example.com/webhooks/mcp-oauth")).toBeDefined();
+});
+
+// A SERVICE IDENTITY'S SECRET IS A VALUE: tested with the draft by signing in
+// with it, never written into the entry (the engine points the entry where it
+// stores it), then stored write-only and tested. Mutation: write the secret
+// into the entry, or skip its test, and this is red.
+test("a service identity is tested with its secret, written without it, then its secret stored", async () => {
+  mount();
+  await settle();
+  fireEvent.click(screen.getByRole("radio", { name: /Sentry/ }));
+  await press("Continue"); // Name
+  await press("Continue"); // Connection
+  await press("Continue"); // Sign-in
+  fireEvent.click(screen.getByRole("radio", { name: /^Client credentials/ }));
+  await press("Continue"); // held: the client's id and secret are missing
+  expect(
+    screen.getByText("Give the id the client was registered under at the vendor."),
+  ).toBeDefined();
+  fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "crewlet-agents" } });
+  fireEvent.change(screen.getByLabelText("Client secret"), {
+    target: { value: "svc-secret-not-real" },
+  });
+  await press("Continue"); // Who gets it
+  // A service identity is the company's, like any OAuth sign-in.
+  expect((screen.getByRole("radio", { name: /^Per agent/ }) as HTMLInputElement).disabled).toBe(
+    true,
+  );
+  await press("Continue"); // Tool approvals, which tests the draft for its tools
+  await press("Continue"); // Test
+  const draft = { grant: "client_credentials", client_id: "crewlet-agents" };
+  expect(testDraft).toHaveBeenCalledWith(
+    expect.objectContaining({ oauth: draft }),
+    { "oauth.client_secret": "svc-secret-not-real" },
+    "",
+  );
+  await press("Continue"); // Review
+  await press("Add server");
+  const written = vi.mocked(createEntity).mock.calls[0]![2];
+  expect(written.oauth).toEqual(draft);
+  expect(JSON.stringify(written)).not.toContain("svc-secret-not-real");
+  expect(storeValue).toHaveBeenCalledWith("sentry", "oauth.client_secret", "svc-secret-not-real", {
+    test: true,
+  });
+  expect(onSaved).toHaveBeenCalledWith("sentry", false);
 });

@@ -30,7 +30,7 @@ export function WizardPage({
   /** The step the address names, "" for the first. */
   step: string;
   onClose: () => void;
-  onSaved: (name: string) => void;
+  onSaved: (name: string, signInNext: boolean) => void;
 }) {
   const start = isStep(step) ? step : null;
   if (!editing) {
@@ -60,7 +60,7 @@ function EditWizard({
   server: McpMemberServerStatus;
   start: Parameters<typeof ServerWizard>[0]["start"];
   onClose: () => void;
-  onSaved: (name: string) => void;
+  onSaved: (name: string, signInNext: boolean) => void;
 }) {
   const detail = useServerDetail(server.name);
   const entity = useRest(`mcp-entity-edit:${server.name}`, (signal) =>

@@ -129,6 +129,15 @@ func (p Paths) SessionCarried() string { return p.WorkDir() + "/session-carried"
 // with it, and by the clear before every run ([Runner.ClearArtifacts]).
 func (p Paths) SessionStaging() string { return p.WorkDir() + "/session-staging" }
 
+// SessionPackStaging is the DIRECTORY a pack made on demand ([Runner.PackCapture])
+// packs a capture in before it moves it over [Paths.SessionCapture]: its own,
+// never [Paths.SessionStaging], because the run's script may still be working
+// in that one — a job its turn's cap ended is packed while it runs, and its
+// script packs into the staging directory the moment its harness exits, which
+// would clear a pack made there under the other's feet. Removed whole by the
+// pack when it is done, and by the clear before every run.
+func (p Paths) SessionPackStaging() string { return p.WorkDir() + "/session-pack-staging" }
+
 // SessionDigests is where a box keeps the digest of every archive of a session
 // its own copy holds — one line, `<session> <cksum of the archive>`, for each
 // archive a run's script packed there ([Paths.SessionCapture]) or restored

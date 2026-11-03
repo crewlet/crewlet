@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -225,7 +226,7 @@ func capturing(seat, conversation, turn string, launch, seq, size, budget int64)
 }
 
 // ending is a turn's end in conversation.
-func ending(seat, conversation, turn, work string, e Ending) End {
+func ending(seat, conversation, turn, work string, e executorkeep.Ending) End {
 	return End{V: 1, Handle: seat, Turn: turn, ConversationKey: conversation,
 		WorkKey: work, AskExcerpt: "fix the build", Ending: e}
 }

@@ -959,7 +959,7 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 	}); err != nil || !ok {
 		t.Fatalf("seed the newer build's keys: %v %v", ok, err)
 	}
-	if _, ok, err := runs.MutateSandboxRunLog(ctx, turn, func(current coord.Record, found bool) ([]byte, error) {
+	if _, ok, err := runs.MutateSandboxRunPart(ctx, turn, coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
 		var log map[string]any
 		if err := json.Unmarshal(current.Value, &log); err != nil {
 			return nil, err
@@ -992,7 +992,7 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		if derr := json.Unmarshal(record.Value, &row); derr != nil {
 			t.Fatalf("%s: %v", step, derr)
 		}
-		logged, found, err := runs.SandboxRunLog(ctx, turn)
+		logged, found, err := runs.SandboxRunPart(ctx, turn, coord.RunLog)
 		if err != nil || !found {
 			t.Fatalf("%s: read the raw log: %v %v", step, found, err)
 		}

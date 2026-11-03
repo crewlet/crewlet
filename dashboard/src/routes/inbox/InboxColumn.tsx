@@ -45,9 +45,9 @@ import type { OrgIndex } from "~/lib/seats.ts";
 import type { ItemRef } from "~/lib/work.ts";
 import {
   answerWords,
-  answeredQuestion,
+  answeredPreview,
   answeredTexts,
-  askQuestion,
+  askPreview,
   askTexts,
   budgetLine,
   changeWords,
@@ -349,7 +349,7 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
     case "decision":
       switch (row.subject.kind) {
         case "ask":
-          return { text: askQuestion(row.subject.ask) };
+          return { text: askPreview(row.subject.ask) };
         case "run":
           return {
             // THE QUESTION WHOLE: the row's own clamp cuts a long one.
@@ -364,7 +364,7 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
     case "condition":
       return { text: row.item.title };
     case "answered":
-      return { text: answeredQuestion(row.answered) };
+      return { text: answeredPreview(row.answered) };
     case "notice": {
       const said = noticeText(row.notice, index);
       return said

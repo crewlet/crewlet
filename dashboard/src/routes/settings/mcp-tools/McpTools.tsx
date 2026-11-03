@@ -1,7 +1,8 @@
 /**
  * Settings › MCP & tools: every MCP server the company runs, what each is
  * doing, which agents reach it, the tools it serves and how they were used,
- * and the tools the engine runs itself.
+ * each agent's tools against the budget, and the tools the engine runs
+ * itself.
  *
  * PAGE TABS. The page names itself (a header with one plain line and the
  * primary action), and its views are underline tabs under it (`?view=`),
@@ -10,10 +11,11 @@
  * server is the address (`?flow=`), so an alarm's fix and a menu item open
  * the same dialog.
  *
- * EVERY MEMBER'S. A member reads each server's condition, its tools and how
- * often they were called, in the reading the engine answers them, and is
- * offered no gesture; an administrator reads the launch lines, the alarms and
- * the recent calls, and every gesture is theirs.
+ * EVERY MEMBER'S. A member reads each server's condition, its tools, their
+ * levels and how often they were called, in the reading the engine answers
+ * them, and is offered no gesture; an administrator reads the launch lines,
+ * the alarms, the recent calls, who each server reaches and each agent's
+ * tools (Agent access), and every gesture is theirs.
  */
 
 import { useEffect, useMemo } from "react";
@@ -24,6 +26,7 @@ import { QueryState } from "~/components/common.tsx";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
+import { AgentsView } from "./agents/AgentsView.tsx";
 import { BuiltinCatalogue, builtinRows } from "./builtin/Catalogue.tsx";
 import { useMcpData, type McpData } from "./data.ts";
 import { Flows } from "./flows/Flows.tsx";
@@ -34,13 +37,18 @@ import { WizardPage } from "./wizard/WizardPage.tsx";
 import "~/styles/mcp.css";
 
 /** The views of the list page, as `?view=` names them (servers is no key at all). */
-type View = "servers" | "builtin";
-const VIEWS: readonly View[] = ["servers", "builtin"];
+type View = "servers" | "agents" | "builtin";
+const VIEWS: readonly View[] = ["servers", "agents", "builtin"];
 
-/** The view the address names, and the way to another; a press on one pushes. */
-function useView(): [View, (next: View) => void] {
+/**
+ * The view the address names, and the way to another; a press on one pushes.
+ * Agent access is the administrator's: a member's reading counts no agent's
+ * tools, so the address falls back to the servers.
+ */
+function useView(admin: boolean): [View, (next: View) => void] {
   const [raw, set] = useParam("view", "", "section");
-  const view = (VIEWS as readonly string[]).includes(raw) ? (raw as View) : "servers";
+  const shown = admin ? VIEWS : VIEWS.filter((v) => v !== "agents");
+  const view = (shown as readonly string[]).includes(raw) ? (raw as View) : "servers";
   return [view, (next) => set(next === "servers" ? "" : next)];
 }
 
@@ -81,7 +89,7 @@ function useCanonicalTool(tool: string, data: McpData): "waiting" | "unknown" | 
 
 /** The list page: the header, the tabs and the view the address names. */
 function ListPage({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
-  const [view, setView] = useView();
+  const [view, setView] = useView(data.admin);
   const peek = usePeekControls();
   const alarms = data.alarms.reduce((n, a) => n + a.entries.length, 0);
   const builtin = data.builtin.reduce((n, g) => n + g.tools.length, 0);
@@ -89,7 +97,7 @@ function ListPage({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
     <div className="mcp-page">
       <PageHeader
         title="MCP & tools"
-        description="The MCP servers your agents reach, and the tools the engine runs itself."
+        description="The MCP servers your agents reach, who reaches each, and the tools the engine runs itself."
         actions={data.admin ? <AddServerButton onFlow={onFlow} /> : undefined}
       />
       <div className="tab-detail">
@@ -107,10 +115,12 @@ function ListPage({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
                 ? { marker: { tone: "warning" as const, label: `${alarms} need attention` } }
                 : {}),
             },
+            ...(data.admin ? [{ value: "agents", label: "Agent access" }] : []),
             { value: "builtin", label: "Built-in tools", count: builtin || null },
           ]}
         />
         {view === "servers" ? <ServersTab data={data} onFlow={onFlow} /> : null}
+        {view === "agents" ? <AgentsView data={data} /> : null}
         {view === "builtin" ? (
           <BuiltinCatalogue
             groups={data.builtin}
@@ -176,8 +186,11 @@ export function McpTools({
         editing={editing}
         step={flow.step}
         onClose={flow.close}
-        onSaved={(name) => {
-          nav.to(["settings", "mcp-tools", "servers", name]);
+        onSaved={(name, signInNext) => {
+          nav.to(
+            ["settings", "mcp-tools", "servers", name],
+            signInNext ? { tab: "connection", flow: "signin" } : undefined,
+          );
           data.reload();
         }}
       />

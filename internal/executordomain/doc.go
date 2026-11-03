@@ -57,13 +57,18 @@
 //     then is refused. Because a release may reach any conversation of the
 //     seat, a capture's scope is the SEAT.
 //   - `end` stamps the turn ended with the engine's account of how it ended
-//     ([Ending]) and tombstones it. With no row (nothing was captured) it
+//     ([executorkeep.Ending]) and tombstones it. With no row (nothing was captured) it
 //     writes an ended row naming no object, so the next turn is still told how
 //     this one ended. With a row it ABSORBS exactly the ended turns its first
 //     launch's read of the conversation handed out ([Head.Absorbs], which the
 //     turn's captures carry), and DEDUPES on a non-empty work key, merging
 //     what the older attempt delivered. The end is authoritative for the
-//     turn's work key where its captures carried none.
+//     turn's work key where its captures carried none. And where the turn's
+//     newest capture was NOT KEPT ([executorkeep.Ending.Unkept]: refused, or never
+//     answered) and the row names an older one, the row's object goes: that
+//     session does not hold what the turn did after it, so the row names no
+//     session of the turn rather than one older than its last, and its end
+//     says why.
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a
@@ -115,9 +120,11 @@
 // is provisional until it reads to the end ([SessionStore.Open]). An object
 // that is missing, corrupt or sealed under a key the keyring no longer holds
 // is [ErrUnreadable], which a restorer reads as no session. Every bound is
-// this package's ([SessionMaxBytes], [CompletedWorkMaxBytes] and the rest),
-// and the largest record they admit is held under the domain's declaration
-// ([MaxRecordBytes]).
+// this package's, but for the ones the sandbox that takes a session stops at
+// too — a session's archive and its sealed object, and an ending's fields —
+// which are internal/executorkeep's, the leaf both read because the sandbox
+// links no state log; and the largest record they admit is held under the
+// domain's declaration ([MaxRecordBytes]).
 //
 // # How long a row lives
 //

@@ -498,9 +498,10 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	// phrasing for a person that a refusal of any domain carries beside
 	// its error (ADR-0060). AND THE INBOX RULES', which a person's mark
 	// verb on any domain's inbox is decided by, and the search index's, which
-	// every domain's search answers through. A code is the identifier as Go
+	// every domain's search answers through. And the executor log's keep
+	// vocabulary, whose session bound a refused capture carries. A code is the identifier as Go
 	// code spells it, so a nested package is named by its last element.
-	packages := append([]string{"statelog", "estate", "iam", "iam/session",
+	packages := append([]string{"statelog", "estate", "iam", "iam/session", "executorkeep",
 		"artifacts", "artifacts/manifest", "artifacts/mediatype",
 		"artifactdata/canon", "artifactdata/query", "caveat", "inbox", "search"},
 		crossingDomains(t)...)

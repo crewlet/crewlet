@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -59,14 +60,14 @@ func watchStops(rig *coordRig) *stopSpies {
 		defer spies.mu.Unlock()
 		spies.ended = append(spies.ended, runID)
 	}
-	rig.coordinator.closeStopped = func(_ context.Context, run PendingRun) error {
+	rig.coordinator.closeStopped = func(_ context.Context, run PendingRun, _ RunCalls) (executorkeep.Ending, error) {
 		spies.mu.Lock()
 		defer spies.mu.Unlock()
 		if spies.closeErr != nil {
-			return spies.closeErr
+			return executorkeep.Ending{}, spies.closeErr
 		}
 		spies.closed = append(spies.closed, run)
-		return nil
+		return executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, StoppedBy: run.Stop.By}, nil
 	}
 	return spies
 }
@@ -256,18 +257,23 @@ func TestAStopWhoseBoxCannotBeReadStillEndsTheRun(t *testing.T) {
 	}
 }
 
-// THE TURN IS CLOSED BY THE ENDING ONLY WHERE IT PARKED. A run stopped while
-// still launching has no parked turn on its row: that turn is still in the frame
-// that launched it, which closes it as stopped when its park is refused.
-func TestOnlyAParkedTurnIsClosedByItsRunsStop(t *testing.T) {
+// EVERY STOP ENDS ITS TURN FROM THE RUN'S ENDING, parked or not, once: a run
+// stopped while still launching has no parked turn on its row — that turn is
+// still in the frame that launched it, which closes it on the record when its
+// park is refused — but its end, and its colleague's answer, are the ending's,
+// recorded after the stop's read; the engine closes a turn on the record only
+// where it parked ([CoordinatorOptions.CloseStopped]).
+//
+// Mutation: hand the ending a stop only where the row holds a parked state, as
+// it once did, and a launch stopped before its park ends nowhere.
+func TestEveryStopEndsItsTurnFromTheRunsEnding(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name   string
-		place  func(rig *coordRig)
-		closes bool
+		name  string
+		place func(rig *coordRig)
 	}{
-		{"running", func(rig *coordRig) { rig.launch("t1") }, true},
-		{"launching", func(rig *coordRig) { rig.launching("t1") }, false},
+		{"running", func(rig *coordRig) { rig.launch("t1") }},
+		{"launching", func(rig *coordRig) { rig.launching("t1") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -277,11 +283,14 @@ func TestOnlyAParkedTurnIsClosedByItsRunsStop(t *testing.T) {
 
 			rig.stop(t)
 
-			if got := len(spies.closedTurns()); (got == 1) != tc.closes || got > 1 {
-				t.Fatalf("closed the turn %d times, want closed=%v", got, tc.closes)
+			if got := len(spies.closedTurns()); got != 1 {
+				t.Fatalf("ended the stopped turn %d times, want once", got)
 			}
 			if len(rig.stopAnnouncements()) != 1 {
 				t.Fatal("the stop was not announced")
+			}
+			if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+				t.Fatal("the stopped run's record was left behind its owed end")
 			}
 		})
 	}

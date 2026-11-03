@@ -337,6 +337,9 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // through no path at all. `reseed` is the same fact one step worse — the
     // box was reaped past its pause TTL and only the question survives.
     if (run.status !== "awaiting_clarification" && run.status !== "reseed") continue;
+    // NOR ONE WHOSE ENDING IS DECIDED, whatever status it was ended in: it is
+    // over, and no answer reaches it.
+    if (run.ending) continue;
     out.push({
       id: `executor-${run.turn_id}`,
       severity: "caution",
@@ -396,6 +399,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         // the disclosure for whoever is fixing it.
         technical: entry.detail,
         path: ["settings", "mcp-tools", "servers", entry.key],
+        // AN ALARM THE ENGINE FIXES WITH A SIGN-IN OPENS IT, on the server's page.
+        ...(entry.fix.kind === "sign_in" ? { query: { flow: "signin" } } : {}),
         ...(entry.since ? { at: entry.since } : {}),
         ...(entry.seat ? { who: entry.seat } : {}),
       });

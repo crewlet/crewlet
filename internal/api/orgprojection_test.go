@@ -139,6 +139,7 @@ var roleFields = map[string]classified{
 	"LLMJudge":             {exposureResolved, "provider keys, resolved into the judge's chain", "llm"},
 	"LearningEnabled":      {exposureGuarded, "an operational setting", ""},
 	"MCPEnv":               {exposureGuarded, "tool credentials and their ${VAR} names; which servers they grant is resolved from mcp_servers", ""},
+	"MCPLimits":            {exposureGuarded, "the limits a lead holds the seat's MCP servers to; which servers it holds is resolved into tool_sources, and a lead reads a seat's own through the config query", ""},
 	"Sandbox":              {exposureGuarded, "the executor box's setup commands, env and tool servers, the usual home of a registry credential", ""},
 	"Placement":            {exposureGuarded, "node ids and labels describing the deployment", ""},
 	"Code":                 {exposureGuarded, "how much of a repository this seat may do: which seats can write is a map of what to attack, and it was guarded under integrations.github before it left that block", ""},
@@ -160,6 +161,7 @@ var unitFields = map[string]classified{
 	"Channel":   {exposurePublic, "where the unit talks, which a colleague needs to know", ""},
 	"Knowledge": {exposurePublic, "free-text references, not a read scope", ""},
 	"MCPEnv":    {exposureGuarded, "tool credentials inherited by members", ""},
+	"MCPLimits": {exposureGuarded, "the limits a lead holds its agent seats' MCP servers to, read through the config query", ""},
 	"Project":   {exposureGuarded, "a tracker project key: the container this unit's work is filed in", ""},
 	"Space":     {exposureGuarded, "a knowledge container key: where this unit's pages are written", ""},
 	"Roles":     {exposurePublic, "the tree itself", ""},
@@ -579,7 +581,7 @@ var agentOnlyRoleFields = map[string]bool{
 	"LLM": true, "LLMReview": true, "LLMSubagent": true, "LLMAuxiliary": true,
 	"LLMJudge": true, "Sandbox": true, "TokenBudget": true,
 	"Workers": true, "LearningEnabled": true, "Schedules": true,
-	"MCPEnv": true, "BehavioralGuidelines": true,
+	"MCPEnv": true, "MCPLimits": true, "BehavioralGuidelines": true,
 	// How an AGENT seat is drawn; a human seat is drawn as the person it
 	// is, and the company refuses an avatar on one.
 	"Avatar": true,

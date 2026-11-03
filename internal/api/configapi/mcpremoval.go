@@ -73,7 +73,7 @@ type MCPRemovalRequest struct {
 	DeleteSecrets []string `json:"delete_secrets"`
 }
 
-// MCPHolderKind is whose `mcp_env` block an [MCPEnvDependant] is.
+// MCPHolderKind is whose block an [MCPBlockDependant] is.
 type MCPHolderKind string
 
 const (
@@ -86,14 +86,16 @@ const (
 // Valid reports whether k is one of the two holders.
 func (k MCPHolderKind) Valid() bool { return k == MCPHolderSeat || k == MCPHolderUnit }
 
-// MCPEnvDependant is one `mcp_env` block keyed on the server.
-type MCPEnvDependant struct {
+// MCPBlockDependant is one seat's or unit's block keyed on the server: an
+// `mcp_env` block of its values, or an `mcp_limits` block holding it back.
+type MCPBlockDependant struct {
 	// Kind is whose block it is; Key is the seat's handle or the unit's key,
 	// and Name its display name.
 	Kind MCPHolderKind `json:"kind"`
 	Key  string        `json:"key"`
 	Name string        `json:"name"`
-	// Segments is the written field: ["units", 0, "mcp_env", "linear"].
+	// Segments is the written field: ["units", 0, "mcp_env", "linear"],
+	// ["roles", 3, "mcp_limits", "linear"].
 	Segments config.Path `json:"segments"`
 }
 
@@ -109,10 +111,13 @@ type MCPSandboxDependant struct {
 }
 
 // MCPCleared is every field a removal of a server clears with it, in document
-// order. Neither list is ever null.
+// order. No list is ever null.
 type MCPCleared struct {
-	MCPEnv  []MCPEnvDependant     `json:"mcp_env"`
+	MCPEnv  []MCPBlockDependant   `json:"mcp_env"`
 	Sandbox []MCPSandboxDependant `json:"sandbox"`
+	// MCPLimits is each seat's and unit's `mcp_limits` block for the
+	// server, which holds nothing back once it is gone.
+	MCPLimits []MCPBlockDependant `json:"mcp_limits"`
 }
 
 // MCPDependants is what a removal of an MCP server takes with it: the fields it
@@ -350,10 +355,17 @@ func (m *mcpRemoval) problems(cleared []config.MCPServerReference, unread []stri
 // stillNames is a field the removal would leave naming the server, in a
 // person's words.
 func stillNames(ref config.MCPServerReference) string {
+	holder := ref.Seat
+	if ref.Unit != "" {
+		holder = "unit " + ref.Unit
+	}
 	switch {
 	case ref.Field == config.MCPReferenceSandbox:
 		return fmt.Sprintf("%s's sandbox.mcp.servers still lists %q: send clear to take it "+
 			"out in the same write", ref.Seat, ref.Server)
+	case ref.Field == config.MCPReferenceLimits:
+		return fmt.Sprintf("%s's mcp_limits block for %q still holds it back: send clear to "+
+			"clear it in the same write", holder, ref.Server)
 	case ref.Unit != "":
 		return fmt.Sprintf("unit %s's mcp_env block for %q still holds credentials: send "+
 			"clear to clear it in the same write", ref.Unit, ref.Server)
@@ -589,16 +601,21 @@ func unreadAfter(prior, next *config.Company) []string {
 
 // clearedOf is the fields a removal clears, as the answer names them.
 func clearedOf(refs []config.MCPServerReference) MCPCleared {
-	out := MCPCleared{MCPEnv: []MCPEnvDependant{}, Sandbox: []MCPSandboxDependant{}}
+	out := MCPCleared{MCPEnv: []MCPBlockDependant{}, Sandbox: []MCPSandboxDependant{},
+		MCPLimits: []MCPBlockDependant{}}
+	block := func(ref config.MCPServerReference) MCPBlockDependant {
+		kind, key := MCPHolderSeat, ref.Seat
+		if ref.Unit != "" {
+			kind, key = MCPHolderUnit, ref.Unit
+		}
+		return MCPBlockDependant{Kind: kind, Key: key, Name: ref.Name, Segments: ref.Segments}
+	}
 	for _, ref := range refs {
 		switch ref.Field {
 		case config.MCPReferenceEnv:
-			kind, key := MCPHolderSeat, ref.Seat
-			if ref.Unit != "" {
-				kind, key = MCPHolderUnit, ref.Unit
-			}
-			out.MCPEnv = append(out.MCPEnv, MCPEnvDependant{Kind: kind, Key: key,
-				Name: ref.Name, Segments: ref.Segments})
+			out.MCPEnv = append(out.MCPEnv, block(ref))
+		case config.MCPReferenceLimits:
+			out.MCPLimits = append(out.MCPLimits, block(ref))
 		case config.MCPReferenceSandbox:
 			out.Sandbox = append(out.Sandbox, MCPSandboxDependant{Seat: ref.Seat,
 				Name: ref.Name, Segments: ref.Segments})

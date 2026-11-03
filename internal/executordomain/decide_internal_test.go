@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -75,7 +76,7 @@ func TestACaptureTheRowsCannotTakeIsRefusedAtTheDecide(t *testing.T) {
 		t.Errorf("a capture at the row's own ordinals: %v, want ErrStaleCapture", err)
 	}
 	e.capture(capturing("ana", "chat:room", ended, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:room", ended, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", ended, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	if err := e.decide(newCapture("ana", "chat:room", ended, 2, 1, 100, monday),
 		monday); !errors.Is(err, ErrTurnEnded) {
 		t.Errorf("a capture of an ended turn: %v, want ErrTurnEnded", err)

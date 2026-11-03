@@ -1112,7 +1112,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Record and replay per-conversation history (default on).",
+          "description": "Record and replay per-conversation history, and keep each executor launch's harness session (default on; off keeps no session, and still records how each turn ended).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -2390,6 +2390,39 @@
         "null"
       ]
     },
+    "MCPLimit": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "false turns this server off for the seat, or for every agent seat beneath the unit; the grant and its values stay. A limit cannot turn a server on, so true is refused.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "tools": {
+          "additionalProperties": {
+            "enum": [
+              "approve",
+              "blocked",
+              "",
+              null
+            ]
+          },
+          "description": "One tool held to a stricter level, keyed by the server's own name for it: approve (each call waits for a person's answer) or blocked (never offered).",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "MCPOAuth": {
       "additionalProperties": false,
       "properties": {
@@ -3370,6 +3403,16 @@
             ]
           },
           "description": "Per-seat MCP credentials: env vars (stdio) or headers (http).",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "mcp_limits": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MCPLimit"
+          },
+          "description": "Narrow the MCP servers this agent seat is granted, keyed by server name: off turns one off for the seat, tools holds a tool at approve or blocked. Never widens: the strictest of this, every enclosing unit's and the server's own entry applies.",
           "type": [
             "object",
             "null"
@@ -5012,6 +5055,16 @@
             ]
           },
           "description": "Credentials inherited by this unit's direct agent members.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "mcp_limits": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MCPLimit"
+          },
+          "description": "Narrow the MCP servers granted to every agent seat beneath this unit, at any depth, keyed by server name: off turns one off for them, tools holds a tool at approve or blocked. Never widens: the strictest of this, every enclosing unit's, the seat's own and the server's entry applies.",
           "type": [
             "object",
             "null"

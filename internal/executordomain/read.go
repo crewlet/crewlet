@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -99,7 +100,7 @@ type Session struct {
 	// it ended, nil until then.
 	EndedAt         time.Time
 	EndedAtPosition statelog.Position
-	Ending          *Ending
+	Ending          *executorkeep.Ending
 
 	// AskExcerpt is what the turn was asked: somebody else's words.
 	AskExcerpt string `untrusted:"fence"`
@@ -165,7 +166,7 @@ func scanSession(row rowScanner) (Session, error) {
 	if endSeq.Valid {
 		s.EndedAt = store.DecodeTime(endedAt.Int64)
 		s.EndedAtPosition = statelog.Unpack(stream, endSeq.Int64)
-		var e Ending
+		var e executorkeep.Ending
 		if err := json.Unmarshal([]byte(ending), &e); err != nil {
 			return Session{}, fmt.Errorf("executordomain: %s's turn %s's ending: %w",
 				s.Handle, s.Turn, err)
@@ -173,7 +174,7 @@ func scanSession(row rowScanner) (Session, error) {
 		// THE COLUMNS ARE THE ACCOUNT: the outcome as the row was ended
 		// with, and whether a reply went out, which a dedupe merges into
 		// the row rather than into the ending's bytes.
-		e.Outcome, e.Delivered = Outcome(outcome), delivered == 1
+		e.Outcome, e.Delivered = executorkeep.Outcome(outcome), delivered == 1
 		s.Ending = &e
 	}
 	return s, nil

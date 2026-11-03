@@ -14,6 +14,11 @@
  * per-agent server's own value, which is tested as each agent when that
  * agent's instance starts.
  *
+ * AN OAUTH CLIENT'S SECRET (`oauth.client_secret`) is named as one. A service
+ * identity's is tested by signing in with it; a person's sign-in sends its
+ * client's secret only when the grant renews, which a test does not do, so
+ * that one is stored untested (the engine refuses to test it).
+ *
  * A RECENT STEP-UP is asked by the engine (`step_up_required`), which the
  * dashboard's one ceremony answers and replays.
  */
@@ -26,7 +31,7 @@ import type {
   McpValueRefusal,
   McpValueState,
 } from "~/contract/mcp.ts";
-import { storeValue } from "../api.ts";
+import { CLIENT_SECRET, storeValue } from "../api.ts";
 import { TestResult } from "./TestDialog.tsx";
 
 /** What a store came to, beyond a plain success. */
@@ -55,12 +60,15 @@ function storedWords(answer: McpValueAnswer): { variant: "success" | "warning"; 
 export function ValueDialog({
   server,
   valueKey,
+  grant,
   value,
   onClose,
   onDone,
 }: {
   server: McpMemberServerStatus;
   valueKey: string;
+  /** The server's OAuth grant (`authorization_code`, `client_credentials`), "" with none. */
+  grant: string;
   /** The key as the server's answer lists it; null where it lists no such key yet. */
   value: McpValueState | null;
   onClose: () => void;
@@ -70,8 +78,11 @@ export function ValueDialog({
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<Outcome>({ kind: "idle" });
-  // A PER-AGENT SERVER'S OWN VALUE is tested as each agent, so it is stored untested.
-  const untested = !server.shared;
+  const secret = valueKey === CLIENT_SECRET;
+  // A PER-AGENT SERVER'S OWN VALUE is tested as each agent, and a person's
+  // sign-in's client secret at its next renewal, so each is stored untested.
+  const untested = !server.shared || (secret && grant !== "client_credentials");
+  const named = secret ? "Client secret" : valueKey;
 
   const save = async (test: boolean) => {
     setBusy(true);
@@ -81,7 +92,7 @@ export function ValueDialog({
       const words = storedWords(answer.value);
       toast.show({
         variant: words.variant,
-        title: `${valueKey} ${value?.set ? "replaced" : "stored"}`,
+        title: `${named} ${value?.set ? "replaced" : "stored"}`,
         message: words.message,
       });
       onDone();
@@ -110,7 +121,7 @@ export function ValueDialog({
     <Modal
       open
       onClose={onClose}
-      title={`${value?.set ? "Replace" : "Set"} ${valueKey}`}
+      title={`${value?.set ? "Replace" : "Set"} ${secret ? "the client secret" : valueKey}`}
       subtitle={server.title}
       size="md"
       onSubmit={() => void save(!untested)}
@@ -147,9 +158,11 @@ export function ValueDialog({
         <FormField
           label="New value"
           helper={
-            untested
-              ? `Each agent's instance is started with it. The old value is kept until you save.`
-              : `Tested against ${server.title} first. The old value stays if it is refused.`
+            secret && untested
+              ? `Sent to the authorization server when the sign-in renews. The old secret is kept until you save.`
+              : untested
+                ? `Each agent's instance is started with it. The old value is kept until you save.`
+                : `Tested against ${server.title} first. The old value stays if it is refused.`
           }
           error={outcome.kind === "refused" ? outcome.message : undefined}
         >

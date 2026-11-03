@@ -228,6 +228,16 @@ func (e *Engine) stopFor(seat uuid.UUID, handle string) error {
 type stopError struct {
 	pause  coord.SeatPause
 	handle string
+
+	// ofRun says the stop was DECIDED ON THE RUN the turn's executor was
+	// launching — the launch whose attach it refused
+	// ([sandbox.Coordinator.LaunchStopped]) — rather than met by the turn's
+	// own fence: that stop's own ending then answers the turn's colleague and
+	// owes the turn's end, from the run's record, once its read has kept the
+	// job's session ([sandbox.CoordinatorOptions.CloseStopped]), and the
+	// frame that launched the job answers and owes nothing of its own
+	// ([stoppedByRun]).
+	ofRun bool
 }
 
 func (e *stopError) Error() string {
@@ -236,6 +246,16 @@ func (e *stopError) Error() string {
 }
 
 func (e *stopError) Unwrap() error { return turn.ErrStoppedByPerson }
+
+// stoppedByRun reports whether err is a stop decided on the run the turn was
+// launching ([stopError.ofRun]): the run's ending, not the frame, answers the
+// turn's colleague and records how the turn ended. Answered by the frame as
+// well, two replies reached the asker — each attempt passed the channel's open
+// check before either closed it — and the asker was woken twice.
+func stoppedByRun(err error) bool {
+	var stop *stopError
+	return errors.As(err, &stop) && stop.ofRun
+}
 
 // stopOf recovers the pause that stopped a turn from its error.
 func stopOf(err error) (coord.SeatPause, bool) {

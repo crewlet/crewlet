@@ -322,7 +322,9 @@ func (c *Company) ValidateRunnable() error {
 // address ([Company.validateMCPRegistry]), which only a search reads. And an
 // executor box's listing of an MCP server any tool of which is held back from
 // the agents ([Company.validateBoxToolLevels]), which the box would reach
-// past the engine.
+// past the engine. And every `mcp_limits` block that holds nothing back or
+// names a level a limit cannot hold a tool at, and a box listing of a server a
+// seat's limits hold a tool of back ([Company.validateMCPLimits]).
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -338,7 +340,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateRunOptionalKeys(), c.validateReservedSandboxEnv(), c.validateUnitRooms(),
 		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateSeatAccess(),
 		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateBoxToolLevels(),
-		c.Code.validateAdmission(field("code")))
+		c.validateMCPLimits(o), c.Code.validateAdmission(field("code")))
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See

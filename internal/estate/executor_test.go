@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -55,10 +56,12 @@ func engineCall(opID string) executordomain.Call {
 }
 
 // fullEnding is an ending with every field set.
-func fullEnding() executordomain.Ending {
-	return executordomain.Ending{Outcome: executordomain.OutcomeStopped, Decision: "done",
-		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", CompletedWork: "shipped",
-		BlockedOn: "a review", StoppedBy: "jane", StopReason: "enough", Failure: "a guard"}
+func fullEnding() executorkeep.Ending {
+	return executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
+		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", DeliveryUnknown: true,
+		CompletedWork: "shipped", BlockedOn: "a review", StoppedBy: "jane", StopReason: "enough",
+		Failure: "a guard",
+		Unkept:  &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "refused for space"}}
 }
 
 // sessionOf is one turn's row with every field set, so a field the wire
@@ -631,7 +634,7 @@ func (c *sessionCopy) Head(ctx context.Context, handle, conversationKey string,
 	for _, turn := range ended {
 		out.Endings = append(out.Endings, executordomain.Session{Handle: handle, Turn: turn,
 			ConversationKey: conversationKey,
-			Ending:          &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}})
+			Ending:          &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}})
 	}
 	return out, nil
 }
@@ -777,7 +780,7 @@ func TestAnUnvouchedExecutorWriteMovesOnUnderTheSameOperation(t *testing.T) {
 	endCall := engineCall(executordomain.EndOpID(crossedAt, "swe", liveTurn))
 	res, err := f.client.ExecutorWrites().End(t.Context(), endCall, executordomain.NewEnd{
 		Handle: "swe", Turn: liveTurn, ConversationKey: conversation,
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}})
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}})
 	var unserved *ErrUnserved
 	if err != nil || errors.As(err, &unserved) || res.Outcome != statelog.OutcomeUnknown ||
 		!res.Unvouched || res.OpID != endCall.OpID {
@@ -814,7 +817,7 @@ func TestAConversationReadWaitsForAnEndAnotherNodeMade(t *testing.T) {
 	ctx := t.Context()
 	if _, err := left.ExecutorWrites().End(ctx, engineCall(executordomain.EndOpID(crossedAt, "swe", liveTurn)),
 		executordomain.NewEnd{Handle: "swe", Turn: liveTurn, ConversationKey: conversation,
-			Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
 		t.Fatalf("end: %v", err)
 	}
 

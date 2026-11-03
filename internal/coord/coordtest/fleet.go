@@ -61,7 +61,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"custody", custodyCases},
 		{"rebases", rebaseCases},
 		{"sandbox_runs", runCases},
-		{"sandbox_run_logs", runLogCases},
+		{"sandbox_run_parts", runPartCases},
 		{"secrets", secretCases},
 		{"integrations", integrationCases},
 		{"seat_access", seatAccessCases},

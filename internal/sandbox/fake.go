@@ -37,9 +37,12 @@ type FakeSandbox struct {
 	files map[string][]byte
 	// timeouts is every refresh of the box's timer, with when it came: see
 	// [FakeSandbox.Timeouts].
-	timeouts   []FakeTimeout
-	paused     bool
-	closed     bool
+	timeouts []FakeTimeout
+	paused   bool
+	closed   bool
+	// reclaimed is a box its provider killed ([FakeProvider.Kill]), which
+	// nothing reads any more.
+	reclaimed  bool
 	commands   []string
 	background []string
 	// execs is every command the box was asked to run, foreground and
@@ -323,6 +326,14 @@ func (s *FakeSandbox) Keepalives() int {
 	return len(s.timeouts)
 }
 
+// unreadable reports whether the box can no longer be read: paused, or
+// reclaimed by its provider.
+func (s *FakeSandbox) unreadable() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.paused || s.reclaimed
+}
+
 // Paused reports whether the box is currently snapshotted.
 func (s *FakeSandbox) Paused() bool {
 	s.mu.Lock()
@@ -491,6 +502,11 @@ func (p *FakeProvider) Kill(ctx context.Context, sandboxID string) error {
 	if p.KillErr != nil {
 		return p.KillErr
 	}
+	if box := p.boxes[sandboxID]; box != nil {
+		box.mu.Lock()
+		box.reclaimed = true
+		box.mu.Unlock()
+	}
 	delete(p.boxes, sandboxID)
 	return nil
 }
@@ -569,6 +585,14 @@ type FakeRunner struct {
 	// LiveGate, when set, is waited on by every read of a live reading
 	// before it answers — a box that takes a while to read.
 	LiveGate chan struct{}
+
+	// Session, when set, is the harness session every box this runner is
+	// asked about holds: what [FakeRunner.TakeSession] hands a capture,
+	// and what makes this fake a [SessionTaker]. Set it before the first
+	// collection.
+	Session *FakeSession
+	// takes is every capture asked of this runner, in order.
+	takes []SessionTake
 
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
@@ -868,6 +892,67 @@ func (r *FakeRunner) lostJob(handle RunHandle) (Result, bool) {
 		return Result{}, false
 	}
 	return r.lost.partial, true
+}
+
+// FakeSession is a session a [FakeRunner]'s boxes hold, as a capture takes it.
+type FakeSession struct {
+	// Archive describes it, and Body is its archive's bytes — what the
+	// capture is handed as they are, the fake scrubbing nothing.
+	Archive SessionArchive
+	Body    []byte
+
+	// TakeErr fails the take, as a box whose session cannot be read does,
+	// and KeepErr the record of its digest in the box.
+	TakeErr, KeepErr error
+
+	// kept counts the digests recorded.
+	kept atomic.Int32
+}
+
+// Kept is how many captures of the session recorded their digest in the box.
+func (s *FakeSession) Kept() int { return int(s.kept.Load()) }
+
+// TakeSession hands a capture the runner's [FakeRunner.Session], recording what
+// it was asked ([FakeRunner.Takes]); a runner with none holds no session.
+//
+// A BOX THAT IS PAUSED OR RECLAIMED IS NOT READ, as a remote box paused for its
+// snapshot is not, and a reclaimed one of any cell: a capture made after the
+// pause or the reclaim it must come before is refused here as it would be
+// there.
+func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionTake) (TakenSession, error) {
+	r.mu.Lock()
+	r.takes = append(r.takes, SessionTake{Pack: take.Pack, Scrub: slices.Clone(take.Scrub),
+		MaxBytes: take.MaxBytes})
+	session := r.Session
+	r.mu.Unlock()
+	if fake, ok := box.(*FakeSandbox); ok && fake.unreadable() {
+		return TakenSession{}, fmt.Errorf("fake: box %s is paused or reclaimed, and its session cannot be "+
+			"read", fake.ID())
+	}
+	if session == nil {
+		return TakenSession{}, nil
+	}
+	if session.TakeErr != nil {
+		return TakenSession{}, session.TakeErr
+	}
+	return TakenSession{
+		Archive: session.Archive,
+		Body:    io.NopCloser(bytes.NewReader(session.Body)),
+		Keep: func(context.Context) error {
+			if session.KeepErr != nil {
+				return session.KeepErr
+			}
+			session.kept.Add(1)
+			return nil
+		},
+	}, nil
+}
+
+// Takes is every capture asked of this runner, in order.
+func (r *FakeRunner) Takes() []SessionTake {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.takes)
 }
 
 // Installed reports whether the agent was installed in this box.

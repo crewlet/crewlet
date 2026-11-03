@@ -50,9 +50,15 @@ func (r *stagedRuns) stage(before func(ctx context.Context), fail error) {
 	r.before, r.fail = before, fail
 }
 
-func (r *stagedRuns) MutateSandboxRunLog(ctx context.Context, turnID string,
+// MutateSandboxRunPart stages only the LOG's writes: the attach that starts a
+// job writes its handed set beside the record too, and a stage it consumed
+// would never reach the opening it was armed for.
+func (r *stagedRuns) MutateSandboxRunPart(ctx context.Context, turnID string, part coord.RunPart,
 	decide func(coord.Record, bool) ([]byte, error)) (coord.Record, bool, error) {
 
+	if part != coord.RunLog {
+		return r.records.MutateSandboxRunPart(ctx, turnID, part, decide)
+	}
 	r.mu.Lock()
 	before, fail := r.before, r.fail
 	r.before, r.fail = nil, nil
@@ -63,7 +69,7 @@ func (r *stagedRuns) MutateSandboxRunLog(ctx context.Context, turnID string,
 	if fail != nil {
 		return coord.Record{}, false, fail
 	}
-	return r.records.MutateSandboxRunLog(ctx, turnID, decide)
+	return r.records.MutateSandboxRunPart(ctx, turnID, part, decide)
 }
 
 // A CARRIED-ON ROUND KEEPS ITS CALLS PAST AN OPENING THAT FAILED. A relaunch

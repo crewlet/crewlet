@@ -270,3 +270,61 @@ func TestTheAgentsAreUnknownWhereTheListingsCannotBeRead(t *testing.T) {
 		t.Errorf("a company with no server answers agents %s, want ops holding none", raw)
 	}
 }
+
+// AN AGENT'S COUNT FOLLOWS ITS LIMITS, as its surface is cut by them: a tool
+// its own or its unit's limits block, keyed by the server's own name before
+// tool_prefix, is not counted, one held at approve still is (it is offered and
+// each call waits), and a server a limit turns off counts nothing while its
+// grant is still shown. An agent the limits do not hold counts every tool.
+//
+// Mutation: count the offer whatever the seat's limits, or match a limit
+// against the prefixed name, and this is red.
+func TestAnAgentsCountFollowsItsLimits(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+mcp_servers:
+  - {name: github, command: gh-mcp, tool_prefix: gh_, tools: {default: allow}}
+  - {name: docs, command: docs-mcp, tools: {default: allow}}
+roles:
+  - {name: Chief of Staff, handle: chief}
+units:
+  - name: Engineering
+    id: eng
+    mcp_limits:
+      github: {tools: {merge: blocked, create_issue: approve}}
+    roles:
+      - name: Dev
+        handle: dev
+        mcp_limits:
+          docs: {enabled: false}
+`
+	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	s := agentsSources(t, doc, nil, func(live map[string]int64) []coord.MCPListing {
+		return []coord.MCPListing{
+			{Server: "github", Node: "node-a", Epoch: live["node-a"], At: at, Shared: true, Instances: 1,
+				Tools: []coord.MCPListedTool{tool("gh_create_issue", "create_issue", false),
+					tool("gh_get_issue", "get_issue", false), tool("gh_merge", "merge", false)}, ToolCount: 3},
+			{Server: "docs", Node: "node-a", Epoch: live["node-a"], At: at, Shared: true, Instances: 1,
+				Tools: []coord.MCPListedTool{tool("read_page", "read_page", false)}, ToolCount: 1},
+		}
+	})
+	got := askMCPStatus(t, s)
+	for seat, want := range map[string]map[string]int{
+		"chief": {"github": 3, "docs": 1, "": 4},
+		"dev":   {"github": 2, "docs": 0, "": 2},
+	} {
+		agent := agentNamed(t, got, seat)
+		for _, server := range agent.Servers {
+			if server.Tools != want[server.Server] {
+				t.Errorf("%s counts %d of %s's tools, want %d", seat, server.Tools, server.Server, want[server.Server])
+			}
+		}
+		if len(agent.Servers) != 2 {
+			t.Errorf("%s is shown %d servers, want both grants whatever the limits", seat, len(agent.Servers))
+		}
+		if agent.MCPTools != want[""] {
+			t.Errorf("%s holds %d MCP tools, want %d", seat, agent.MCPTools, want[""])
+		}
+	}
+}

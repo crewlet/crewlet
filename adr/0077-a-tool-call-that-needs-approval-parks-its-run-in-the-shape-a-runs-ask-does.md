@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`
-- **Enforced-by:** `internal/tools.TestACallToAToolAtNeedsApprovalNeverRunsUntilAPersonApprovesIt`, `internal/agent/builtin.TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed`, `internal/agent/builtin.TestAHeldCallIsNotAnsweredByAnswerExecutor`, `internal/sandbox.TestPendingStoreContract`, `internal/sandbox.TestAChatReplyNeverAnswersAHeldCall`, `internal/agent/runner.TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny`, `internal/agent/runner.TestAHeldCallIsMadeOnlyAsItWasApproved`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByItsSeatsLeadOrAnAdministrator`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByNobodyElseAndOnce`, `internal/api/queries.TestAHeldCallIsListedForAnAdministratorAndNoMember`, `internal/mcp.TestAToolNothingSetsStartsAtTheLevelItsHintsGiveIt`, `internal/e2e.TestAHeldCallIsMadeOnceAfterItsApprovalAndTheRunCarriesOn`
+- **Enforced-by:** `internal/tools.TestACallToAToolAtNeedsApprovalNeverRunsUntilAPersonApprovesIt`, `internal/agent/builtin.TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed`, `internal/agent/builtin.TestAHeldCallIsNotAnsweredByAnswerExecutor`, `internal/sandbox.TestPendingStoreContract`, `internal/sandbox.TestAChatReplyNeverAnswersAHeldCall`, `internal/agent/runner.TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny`, `internal/agent/runner.TestAHeldCallIsMadeOnlyAsItWasApproved`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByItsSeatsLeadOrAnAdministrator`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByNobodyElseAndOnce`, `internal/api/queries.TestAHeldCallIsListedForAnAdministratorAndNoMember`, `internal/mcp.TestAToolNothingSetsStartsAtTheLevelItsHintsGiveIt`, `internal/e2e.TestAHeldCallIsMadeOnceAfterItsApprovalAndTheRunCarriesOn`, `internal/engine.TestTheCallAPersonApprovedIsADeliveryOfItsTurn`
 - **Cost-when-tried:** with only `allow` and `blocked`, an operator who wanted a person to look at each call to a destructive tool had one choice, blocking it, and the agent then could not do the work at all; and the executor's harness runs fully permissioned in its box, so its own permission prompts were never an option to fall back on.
 - **Tag-status:** unreleased
 
@@ -42,7 +42,14 @@ other tool at `approve`, one that declares nothing included (`mcp.RiskOf`,
 4. **The call is made at most once**, by the resume the answer drives,
    through the surface the run carries on with: marked on the row under the
    claim's fence before it is made, its result sealed on the row after, and
-   neither cleared by a claim given back. A later attempt at the same answer
+   neither cleared by a claim given back. The write that records the result
+   records the call itself as a call of the run's round, beside the calls its
+   jobs made over the bridge and as the surface answered it, with its
+   arguments and output left sealed (`BridgeCall.Approved`): every reader of
+   whether the turn replied — the collection's own delivery check, a stop's
+   or a loss's account of the turn, a later round's earlier calls — reads the
+   round's calls, and a call recorded nowhere among them read as a reply that
+   never went out. A later attempt at the same answer
    hands the run the recorded result, or says the call may or may not have
    taken effect; it never makes it again. A tool blocked or changed since the
    call was held is not called.

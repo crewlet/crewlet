@@ -801,6 +801,27 @@ export function askQuestion(ask: WorkAskRow): string {
   return ask.decision?.question || firstLine(ask.body) || ask.title;
 }
 
+/** The longest first line a free-text ask is headlined by. */
+const ASK_HEADLINE_MAX = 120;
+
+/** The heading over a free-text ask written as one message. */
+export const ASK_HEADING = "A question for you";
+
+/** Whether a free-text ask is one message rather than a question line over its context. */
+export function askIsMessage(ask: WorkAskRow): boolean {
+  return !ask.decision && askQuestion(ask).length > ASK_HEADLINE_MAX;
+}
+
+/** What an ask's pane heads with: its question, or [ASK_HEADING] over a message. */
+export function askHeadline(ask: WorkAskRow): string {
+  return askIsMessage(ask) ? ASK_HEADING : askQuestion(ask);
+}
+
+/** An ask's question as one row reads it: its markdown stripped to words. */
+export function askPreview(ask: WorkAskRow): string {
+  return plainText(askQuestion(ask));
+}
+
 /**
  * Every text of an ask a reader reads as one message: its question, its
  * context, the asker's reasoning and each option. A bare `#11` in any of them
@@ -820,6 +841,11 @@ export function answeredQuestion(answered: AnsweredDecision): string {
   return "run" in answered ? answered.run.question.trim() : askQuestion(answered.ask);
 }
 
+/** An answered question as one row reads it ([askPreview]). */
+export function answeredPreview(answered: AnsweredDecision): string {
+  return plainText(answeredQuestion(answered));
+}
+
 /** Every text of an answered question a reader reads as one message ([askTexts]). */
 export function answeredTexts(answered: AnsweredDecision): string[] {
   return "run" in answered ? runAskTexts(answered.run) : askTexts(answered.ask);
@@ -827,7 +853,7 @@ export function answeredTexts(answered: AnsweredDecision): string[] {
 
 /** What an ask says beside its question: the body, or what follows its first line. */
 export function askContext(ask: WorkAskRow): string {
-  if (ask.decision) return ask.body.trim();
+  if (ask.decision || askIsMessage(ask)) return ask.body.trim();
   const lines = ask.body.split("\n");
   const first = lines.findIndex((l) => l.trim());
   return first < 0

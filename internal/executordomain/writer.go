@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -290,9 +291,9 @@ func (n NewCapture) validate() error {
 	if err := n.Object.Validate(); err != nil {
 		return fmt.Errorf("%w: the capture's object: %w", ErrInvalid, err)
 	}
-	if n.Object.Size > SealedMaxBytes {
+	if n.Object.Size > executorkeep.SealedMaxBytes {
 		return invalid("the capture's object is %d bytes and a sealed session is at "+
-			"most %d", n.Object.Size, SealedMaxBytes)
+			"most %d", n.Object.Size, executorkeep.SealedMaxBytes)
 	}
 	return nil
 }
@@ -471,7 +472,7 @@ type NewEnd struct {
 	// [AskExcerptMaxBytes], cut on a rune boundary.
 	Ask string
 
-	Ending Ending
+	Ending executorkeep.Ending
 }
 
 // End records how a turn ended, and tombstones it: no capture lands for it
@@ -488,8 +489,8 @@ func (w *Writer) End(ctx context.Context, c Call, n NewEnd) (statelog.Result, er
 	if err := checkTurn(n.Handle, n.Turn, n.ConversationKey, n.WorkKey); err != nil {
 		return statelog.Result{}, err
 	}
-	if err := n.Ending.validate(); err != nil {
-		return statelog.Result{}, err
+	if err := n.Ending.Validate(); err != nil {
+		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if !utf8.ValidString(n.Ask) {
 		return statelog.Result{}, invalid("the ask is not valid UTF-8")
@@ -497,7 +498,7 @@ func (w *Writer) End(ctx context.Context, c Call, n NewEnd) (statelog.Result, er
 	p := End{
 		V: baseRecordVersion, Handle: n.Handle, Turn: n.Turn,
 		ConversationKey: n.ConversationKey, WorkKey: n.WorkKey,
-		AskExcerpt: textcut.Within(n.Ask, AskExcerptMaxBytes), Ending: n.Ending.fit(),
+		AskExcerpt: textcut.Within(n.Ask, AskExcerptMaxBytes), Ending: n.Ending.Fit(),
 	}
 	subject := ConversationSubject(n.Handle, n.ConversationKey, n.Turn)
 	scope := ScopeSet{Subject: true}
@@ -562,12 +563,12 @@ func (w *Writer) EndLost(ctx context.Context, c Call, handle, conversationKey, t
 		return statelog.Result{}, err
 	}
 	n := NewEnd{Handle: handle, Turn: turn, ConversationKey: conversationKey,
-		Ending: Ending{Outcome: OutcomeLost, Failure: lostFailure}}
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeLost, Failure: lostFailure}}
 	if err := checkTurn(handle, turn, conversationKey, ""); err != nil {
 		return statelog.Result{}, err
 	}
 	p := End{V: baseRecordVersion, Handle: handle, Turn: turn,
-		ConversationKey: conversationKey, Ending: n.Ending.fit()}
+		ConversationKey: conversationKey, Ending: n.Ending.Fit()}
 	subject := ConversationSubject(handle, conversationKey, turn)
 	scope := ScopeSet{Subject: true}
 	limit := store.EncodeTime(before)

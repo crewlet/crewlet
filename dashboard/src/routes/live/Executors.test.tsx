@@ -235,6 +235,82 @@ test("a bridged call's arguments are shown as the JSON document they are", () =>
   expect(block?.textContent).toContain('{\n  "path": "a.go",\n  "id": 9007199254740993\n}');
 });
 
+// THE CALL A PERSON LET BE MADE is a call of its round, made by the run's resume
+// rather than over the bridge, and recorded without its arguments or its result,
+// which rode the run sealed: drawn as "(none)" and "(nothing returned)", a reply
+// the call posted read as a call that sent and returned nothing.
+//
+// Mutation: drop the approved tag, or draw an approved call's empty records as
+// any other call's, and this goes red.
+test("a call a person approved is marked so, its sealed records never drawn as empty", () => {
+  const container = overflowing(
+    <Router>
+      <BridgeLog
+        run={run({
+          bridge_calls: [
+            {
+              name: "add_issue_comment",
+              approved: true,
+              origin: "mcp:github",
+              server: "github",
+              at: "2026-06-15T12:03:00Z",
+            },
+          ],
+        })}
+      />
+    </Router>,
+    "height",
+    openFirstCall,
+  );
+  expect(screen.getByText("approved")).toBeTruthy();
+  expect(screen.queryByText("failed")).toBeNull();
+  const args = container.querySelector('[aria-label="add_issue_comment arguments"]');
+  const result = container.querySelector('[aria-label="add_issue_comment result"]');
+  expect(args?.textContent).toContain("(sealed with the approval, not kept on the record)");
+  expect(result?.textContent).toContain("(handed to the run sealed, not kept on the record)");
+});
+
+// THE CALL THE RUN HELD FOR A PERSON'S APPROVAL is recorded failed, since nothing
+// it asked for happened, and without its arguments, which ride the run's row
+// sealed beside its question: counted as a failure and drawn with "(none)", a
+// run that asked and was approved read as a run whose tool broke, and a call
+// that named its arguments as one that named none.
+//
+// Mutation: count a held call among the failures, drop its tag, or draw its
+// empty arguments as any other call's, and this goes red.
+test("a call held for a person's approval is marked so, never as a failure", () => {
+  const container = overflowing(
+    <Router>
+      <BridgeLog
+        run={run({
+          bridge_calls: [
+            {
+              name: "add_issue_comment",
+              held: true,
+              failed: true,
+              output: "add_issue_comment was NOT called: it needs a person's approval",
+              origin: "mcp:github",
+              server: "github",
+              at: "2026-06-15T12:02:00Z",
+            },
+          ],
+        })}
+      />
+    </Router>,
+    "height",
+    openFirstCall,
+  );
+  expect(screen.getByText("held for approval")).toBeTruthy();
+  expect(screen.queryByText("failed")).toBeNull();
+  expect(screen.queryByText(/failure/)).toBeNull();
+  const args = container.querySelector('[aria-label="add_issue_comment arguments"]');
+  const result = container.querySelector('[aria-label="add_issue_comment result"]');
+  expect(args?.textContent).toContain(
+    "(sealed beside the run's question, for whoever may approve it)",
+  );
+  expect(result?.textContent).toContain("was NOT called");
+});
+
 // ---------------------------------------------------------------------------
 // A run's own page
 // ---------------------------------------------------------------------------
@@ -881,4 +957,62 @@ test("a run's page names its model to a reader the entry is withheld from", asyn
   await settle();
   expect(screen.getByText("Launched on")).toBeTruthy();
   expect(screen.getByText("claude-haiku")).toBeTruthy();
+});
+
+// AN EXECUTOR WHOSE ENDING IS DECIDED IS DRAWN AS ENDING, its box as the
+// ending's to reclaim. Its record stays until the ending is finished — on an
+// engine that records every turn's end, minutes, while the turn's captures
+// settle — and the page drew it as the status it was ended in: a finished turn
+// as "Resuming after an answer." beside a live tail of a job that was over.
+//
+// Mutation: draw the status word without the row's `ending`, or the doing line
+// off the status alone, and the page says the executor is still resuming.
+test("an executor whose ending is decided is drawn as ending", async () => {
+  mountPage({
+    executors: {
+      runs: [
+        run({
+          status: "resumed",
+          launch_id: "job-2",
+          box_exists: false,
+          ending: { at: "2026-06-15T12:06:00Z", reason: "", stopped_by: "" },
+        }),
+      ],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.getAllByText("ending").length).toBeGreaterThan(0);
+  expect(screen.queryByText("resumed")).toBeNull();
+  expect(
+    screen.getByText(/Its turn is over; the engine is recording how its turn ended/),
+  ).toBeTruthy();
+  expect(screen.queryByText("Resuming after an answer.")).toBeNull();
+});
+
+// A STOPPED EXECUTOR'S JOB IS OVER, though its status still reads `running`
+// until its ending is finished: the page names who stopped it and asks for no
+// live output of a job its ending is reclaiming.
+//
+// Mutation: open the live output for a `running` row whatever its ending says,
+// and the page polls a job that was stopped.
+test("a stopped executor asks for no live output of its job", async () => {
+  const { asked } = mountPage({
+    executors: {
+      runs: [
+        run({
+          status: "running",
+          launch_id: "job-2",
+          box_exists: false,
+          ending: { at: "2026-06-15T12:06:00Z", reason: "", stopped_by: "jane" },
+        }),
+      ],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(
+    screen.getByText(/Stopped by jane; the engine is recording how its turn ended/),
+  ).toBeTruthy();
+  expect(asked.some((a) => a.what === "executor_tail")).toBe(false);
 });

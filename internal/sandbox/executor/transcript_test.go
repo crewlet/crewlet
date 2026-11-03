@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -1269,9 +1269,9 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 		t.Errorf("a transcript's line is read to %d, and a run's record to %d", bounds.LineBytes,
 			executor.MaxLineBytes)
 	}
-	if bounds.ReadBytes < 8*executordomain.SessionMaxBytes {
+	if bounds.ReadBytes < 8*executorkeep.SessionMaxBytes {
 		t.Errorf("the read budget %d is under eight archives at their bound of %d", bounds.ReadBytes,
-			executordomain.SessionMaxBytes)
+			executorkeep.SessionMaxBytes)
 	}
 	if n := executor.TranscriptReadsAtOnce; n < 2 || n*3*bounds.LineBytes > 200<<20 {
 		t.Errorf("%d reads at once hold up to %d MiB at their worst, want at least two within 200 MiB",

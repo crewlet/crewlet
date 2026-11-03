@@ -7466,6 +7466,12 @@ a.work-cal-chip {
   justify-content: flex-end;
   gap: 6px;
 }
+/* A ROW WHOSE WORDS OPEN (a held call's arguments) keeps its controls on the
+   title's line: centred on the words, the buttons moved under the pointer as
+   the arguments opened. */
+.decision-item.is-pinned > .decision-actions {
+  align-self: start;
+}
 /* A BLOCK UNDER ONE HEAD: a quiet band with the seat's small face, its name,
    and what every row under it shares (the item, the role, how long ago). */
 .decision-group {

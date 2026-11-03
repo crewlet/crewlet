@@ -272,7 +272,8 @@ intent or the results it gathered.
 ```yaml
 turn_engine:
   conversation_session:
-    enabled: true            # the feature gate — a live kill switch
+    enabled: true            # the feature gate — a live kill switch; off also
+                             #   keeps no executor session (code-sandbox.md)
     max_entries: 20          # kept per conversation, trimmed at write time.
                              #   What ONE PROMPT shows is bounded separately,
                              #   at render, by ledger.InjectedMaxChars — see
@@ -286,7 +287,9 @@ Nested under `turn_engine` rather than beside it, which is load-bearing: it
 rides the live the turn-engine settings cell, so it hot-reloads through the
 existing turn-engine diff handler with no extra apply-config wiring. Setting
 `enabled: false` restores the previous prompt exactly — which is why it is
-safe to leave on.
+safe to leave on — and keeps no executor launch's harness session either
+([Code Sandbox](code-sandbox.md#each-launchs-session-kept)): nothing is captured,
+while how each turn ended is still recorded on the executor log.
 
 `retention_days` is the one retention an operator sets rather than the engine
 (a company running quarter-long tickets has a real reason to keep more). It is

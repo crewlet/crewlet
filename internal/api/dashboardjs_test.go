@@ -1654,7 +1654,51 @@ const (
 	// file, and a change's reviews and comments asked again only once spoken)
 	// took it to 5416.6 KiB (+1.0 KiB): the DiffView chunk +0.7 KiB and the
 	// Code workspace +0.2 KiB, all of it fetched on opening Code. 5417 KiB.
-	treeBudget = 5<<20 + 297<<10
+	// A team's MCP limits in the Remove dialog (each seat's and unit's
+	// mcp_limits block a removal clears, listed and counted with the other
+	// fields that name the server) took it from 5384.9 KiB to 5385.2 KiB
+	// (+0.2 KiB, 238 bytes), all of it the settings chunk, which the initial
+	// load does not fetch. 5386 KiB.
+	// Settings › MCP & tools' grants, levels, approvals and changed tools
+	// (the Access tab and its grant picker with each agent's team limits, the
+	// Tools tab's levels, default and held-back marks, the Agent access view,
+	// the wizard's Who gets it and Tool approvals steps, the calls held for
+	// approval on a server's page, the review of a server's changed tools)
+	// and a held call answered from the Inbox's decision row took it from
+	// 5385.2 KiB to 5422.9 KiB (+37.7 KiB): the settings chunk +32.0 KiB and
+	// its sheet +1.1 KiB, the Access chunk +1.6 KiB of shared settings code
+	// Rollup moved into it, and the writes chunk +1.5 KiB and the decision
+	// row's +1.4 KiB (the held call's answers and row). The initial load did
+	// not grow. 5423 KiB.
+	// Signing MCP servers in with OAuth and client credentials (the Sign in
+	// and Revoke dialogs, the Connection tab's sign-in card, a client's
+	// secret named as one, the sign-in alarm opening the dialog, and the
+	// wizard's OAuth and client-credentials choices) took it from 5422.9 KiB
+	// to 5436.1 KiB (+13.2 KiB): the settings chunk +11.8 KiB and its sheet
+	// +0.1 KiB, and useLatestHandlers, which the Sign in dialog is the first
+	// settings screen to read, became a chunk of its own (+1.5 KiB) as Rollup
+	// moved 1.2 KiB of shared settings code into the Access chunk. 5437 KiB.
+	// An executor whose ending is decided drawn as ending (the executors
+	// board, a run's page, the Inbox's busy seat and answer fates), and on a
+	// run's page the call a person approved and the call its run held for
+	// that approval each drawn as what it is, took it from 5436.4 KiB to
+	// 5437.3 KiB (+0.9 KiB, 970 bytes): the Executors chunk +0.7 KiB, the
+	// inbox chunk +0.2 KiB, and 44 bytes of the home, live and entry scripts.
+	// 5438 KiB.
+	// Merged with the code host, each measured on its own side (main's from
+	// 5384.9 KiB, the code host's at 5416.6 KiB, 5,546,592 bytes), the two
+	// add: main's MCP grants, levels, held calls, changed tools, sign-in and
+	// ending executors above are +52.4 KiB (53,639 bytes) — the settings
+	// chunk +44.0 KiB and its sheet +1.2 KiB, the Access chunk +2.8 KiB,
+	// useLatestHandlers +1.5 KiB, the writes chunk +1.5 KiB, the decision
+	// row's +1.4 KiB and the Executors chunk +0.7 KiB, less 0.7 KiB net
+	// elsewhere (1.4 KiB out of the shared chunks against 0.7 KiB more in the
+	// inbox, its column, the entry and the one sheet) — and the merge itself
+	// 158 bytes: the changed tools' review drawn in components/DiffView
+	// rather than the package's diffs (151 bytes of the settings chunk) and
+	// 7 bytes of minified names. Measured 5469.1 KiB (5,600,389 bytes). It
+	// moved by main's own 53 KiB, from the code host's 5417 KiB: 5470 KiB.
+	treeBudget = 5<<20 + 350<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

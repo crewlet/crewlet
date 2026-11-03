@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -103,7 +104,7 @@ type End struct {
 	// AskExcerpt is what the turn was asked, cut to [AskExcerptMaxBytes].
 	AskExcerpt string `json:"ask_excerpt,omitempty"`
 
-	Ending Ending `json:"ending"`
+	Ending executorkeep.Ending `json:"ending"`
 
 	// SeenRemoval is [Capture.SeenRemoval] for the end: an end decided
 	// before a removal of its seat it did not see writes nothing once it

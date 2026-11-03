@@ -322,12 +322,13 @@ func (f *FleetStore) SweepMarkers(ctx context.Context, cutoff time.Time) (int64,
 		if kv.Bucket() != f.runs.Bucket() {
 			continue
 		}
-		// AND THE ONE VALUE A REMOVAL CAN LEAVE: a sandbox run's log
-		// whose record went while its node stopped before the log did —
-		// found in the SAME pass, which already carries every record key
-		// and every log key of the runs bucket, so the logs, up to half a
-		// megabyte each, are walked once a tick rather than twice.
-		n, err = f.sweepRunLogs(ctx, pass, cutoff)
+		// AND THE ONE VALUE A REMOVAL CAN LEAVE: a part beside a sandbox
+		// run — its log, its handed set — whose record went while its node
+		// stopped before the part did — found in the SAME pass, which
+		// already carries every record key and every part key of the runs
+		// bucket, so the logs, up to half a megabyte each, are walked once
+		// a tick rather than twice.
+		n, err = f.sweepRunParts(ctx, pass, cutoff)
 		swept += n
 		if err != nil {
 			errs = append(errs, err)
