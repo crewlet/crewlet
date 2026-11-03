@@ -1602,7 +1602,17 @@ const (
 	// the settings chunk +1134 bytes, the integrations model chunk +485 bytes
 	// and its sheet +179 bytes, the kit's chunks +313 bytes net, the Problems
 	// chunk +66 bytes, and 72 bytes across the rest. 5444 KiB.
-	treeBudget = 5<<20 + 324<<10
+	// A conversation's next turn continuing the session its last turn left —
+	// the Sessions view saying which launch would continue each session
+	// (`continued_by`), naming the session a turn's first launch was handed
+	// (`base_turn`, a link to that session) and whether its reply reached the
+	// party waiting, net of the Memory tab's Conversations section it
+	// replaces, with its thread list and their turns — took it from 5443.7
+	// KiB to 5441.3 KiB (-2.4 KiB, 2452 bytes), all of it the agents chunk the
+	// tab loads in (about 0.3 KiB gzipped). The initial load did not grow: its
+	// files are the same bytes but for the chunk names they list. It moved
+	// down to 5442 KiB, the measured size's next KiB.
+	treeBudget = 5<<20 + 322<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
