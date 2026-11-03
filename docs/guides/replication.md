@@ -1041,10 +1041,10 @@ the code log's lowered, then the log you want longer raised.
 
 **The code log's share is two thirds because every node reserves it**,
 before the company document says whether the company hosts any code — not
-because that is what the code log writes. Below about 626 GiB free it is room
+because that is what the code log writes. Below about 652 GiB free it is room
 the other logs give up: a first boot's mutation log about a fifth shorter,
 and a year-five re-embedding still fits the vector changelog at 100 GiB free
-with about a fifth of it to spare (the table and the figures above). A share
+with 13 % of it to spare (the table and the figures above). A share
 at the code log's byte rate would cost every company far more, codeless ones
 included: at twice the mutation log's ceiling a first boot on 100 GiB free
 creates the mutation log about 40 % shorter than without the code log, and at
