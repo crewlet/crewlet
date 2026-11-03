@@ -383,6 +383,16 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		}
 		add("expo", in.Expo.Enabled, nil, map[string]any{"account_name": account})
 	}
+	if in.GoogleCloud != nil {
+		// PROVISIONING ALONE, like Expo's: nothing arrives from Google, so
+		// there is no delivery secret. The provisioner, whose project holds
+		// every agent's account, is what the row names.
+		var prov string
+		if in.GoogleCloud.Provisioning != nil {
+			prov = in.GoogleCloud.Provisioning.Provisioner
+		}
+		add("google_cloud", in.GoogleCloud.Enabled, nil, map[string]any{"provisioner": prov})
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product. Jira and Confluence are
 		// sites this engine reads as an account; this is where the account

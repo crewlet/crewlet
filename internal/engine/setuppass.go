@@ -74,6 +74,10 @@ import (
 //
 // Cloudflare reads its provisioner token and account, and its access sync
 // mints, narrows, rolls and deletes one account API token per agent.
+//
+// Google Cloud reaches its provisioner by federation and reads the levels'
+// roles and the identity project's accounts, and its access sync makes,
+// grants, disables and deletes one service account per agent.
 func (e *Engine) setupPasses() []setup.Pass {
 	return []setup.Pass{
 		&slackPass{engine: e},
@@ -85,6 +89,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&datadogPass{engine: e},
 		&cloudflarePass{engine: e},
 		&expoPass{engine: e},
+		&googleCloudPass{engine: e},
 		&atlassianPass{engine: e},
 	}
 }
