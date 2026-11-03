@@ -415,6 +415,9 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 			}
 		}
 		o.Lane = lane
+		if registered {
+			o = seataccess.WithReach(o, vendor, company, roster)
+		}
 		if !provisioned {
 			o.Managed, o.Rotatable = seataccess.ManagedExternal, false
 		}

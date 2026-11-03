@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/crewlet/crewlet/internal/org"
 	"net/http"
 	"slices"
 	"strconv"
@@ -435,9 +436,27 @@ func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess
 			Administers: Administration(role.BaseAccessLevel),
 		})
 	}
-	out.Scope = slices.Clone(s.cfg.Provisioning.Projects)
-	out.ScopeOpen = len(out.Scope) == 0
+	r := gitlabReach(s.cfg)
+	out.Scope, out.ScopeOpen = r.Scope, r.Open
 	return out, nil
+}
+
+// Reach implements [seataccess.DocumentReach]: the projects the company block
+// lists, or the whole group where it lists none.
+func (Vendor) Reach(c *config.Company, _ *org.Organization, _ seataccess.Lane) seataccess.Reach {
+	if c == nil {
+		return gitlabReach(nil)
+	}
+	return gitlabReach(c.Integrations.GitLab)
+}
+
+// gitlabReach is what cfg's connection reaches.
+func gitlabReach(cfg *config.GitLab) seataccess.Reach {
+	var projects []string
+	if cfg != nil && cfg.Provisioning != nil {
+		projects = slices.Clone(cfg.Provisioning.Projects)
+	}
+	return seataccess.Reach{Scope: projects, Open: len(projects) == 0}
 }
 
 // access resolves a stored level to what a membership is written with. A
