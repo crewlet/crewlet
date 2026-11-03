@@ -31,9 +31,9 @@ const ToolEnv = "DIGITALOCEAN_ACCESS_TOKEN"
 // GitHub on 2026-11-03.
 const DoctlRelease = "2.1.0"
 
-// TokensURL is the control panel's personal access tokens page, and
-// NewTokenURL the page that creates one, where a person takes every step only
-// DigitalOcean can.
+// TokensURL is the control panel's personal access tokens list, where each
+// token's row offers Regenerate Token, and NewTokenURL the form that creates
+// one, which a wait for a new token links.
 const (
 	TokensURL   = "https://cloud.digitalocean.com/account/api/tokens"
 	NewTokenURL = "https://cloud.digitalocean.com/account/api/tokens/new"
