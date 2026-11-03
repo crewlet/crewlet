@@ -639,6 +639,48 @@ func TestAResumeAbandonedBeforeItsTurnHandsTheAnswerOn(t *testing.T) {
 			t.Fatalf("announced %+v, want one answer that reached a run that is gone", got)
 		}
 	})
+	// A RUN WHOSE ENDING IS DECIDED IS GONE to an answer, though its record
+	// is not deleted yet: on a coordinator that records every turn's end, the
+	// ending's last steps — the end's write, and the delete after it — are its
+	// retry's, so the copy it handed back at its second step reaches the seat
+	// while the record still waits. Read as a live run "not waiting", the copy
+	// was announced `not_awaiting`, and the person was never told their answer
+	// reached a run that had ended without it.
+	//
+	// Mutation: drop AnswerByTurn's check of a decided ending, and the copy is
+	// announced not_awaiting.
+	t.Run("an answer by turn reaching an ending that owes its turn's end finds the run gone", func(t *testing.T) {
+		rig, writes := loggingRig(t)
+		parkOnAQuestion(t, rig)
+		rig.resumer.failWith(ErrResumeAbandoned)
+		rig.resumer.beforeTurn = true
+		given := types.ExecutorAnswerGiven{TurnID: "t1", Agent: sweID, AgentHandle: "swe", Answer: "use main",
+			LaunchID: rig.get("t1").LaunchID}
+		ev := events.New(given, events.TraceContext{})
+		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerConsumed {
+			t.Fatalf("disposition = %q, want the answer recorded on its run", d)
+		}
+		rig.fireRetries()
+		if run := rig.get("t1"); run.Ending == nil || len(run.OwedEnd) == 0 {
+			t.Fatalf("the premise: the record holds its ending (%v) and still owes its turn's end (%s)",
+				run.Ending != nil, run.OwedEnd)
+		}
+		copied := rig.lastHandedBack(t)
+		answer, _ := events.DataAs[*types.ExecutorAnswerGiven](copied)
+		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), *answer, copied); d != AnswerNotMine {
+			t.Fatalf("the copy = %q, want it spent on a run that is gone", d)
+		}
+		for range 3 {
+			rig.fireRetries()
+		}
+		rig.finished("t1")
+		if ends := writes.endedRecords(); len(ends) != 1 {
+			t.Fatalf("recorded %d ends of the turn, want 1", len(ends))
+		}
+		if got := rig.answeredRecords(); len(got) != 1 || got[0].Outcome != types.AnswerGone {
+			t.Fatalf("announced %+v, want one answer that reached a run that is gone", got)
+		}
+	})
 }
 
 // A RETRIED RESUME WHOSE TURN TOOK THE ANSWER SPENDS ITS DELIVERY AT THE TAKE,

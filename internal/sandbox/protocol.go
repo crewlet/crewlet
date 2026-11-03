@@ -338,6 +338,13 @@ type Result struct {
 	// error stream says.
 	Captured *SessionArchive
 
+	// Kept is what the read that collected this result kept of the job's
+	// session ([Coordinator.takeCapture]), made on the node whose host the
+	// box is on and carried back with the result to whichever node collects,
+	// for the launch's own record; nil where nothing was taken. Set by the
+	// coordinator, never by a runner.
+	Kept *SessionKept
+
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
 	// where the harness reported none. It is what the launch's own record counts

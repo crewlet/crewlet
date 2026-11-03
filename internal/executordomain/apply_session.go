@@ -587,6 +587,21 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	}
 	delivered := p.Ending.Delivered
 	written := 0
+	if u := p.Ending.Unkept; found && row.hasObject && u != nil && u.supersedes(row.launchSeq, row.captureSeq) {
+		// THE TURN'S LAST ATTEMPT WAS NOT KEPT, and the object the row
+		// names is an older capture of the turn that does not hold what
+		// came after it: it goes, and the ending stays, as a release by the
+		// budget leaves it. Decided on the row's own place, in log order, so
+		// a capture of that very attempt that landed after all — its
+		// record was out when the end was decided — is the row's place, and
+		// is kept.
+		res, releaseErr := tx.ExecContext(ctx, releaseStatement, c.packed, p.Handle, p.Turn)
+		if releaseErr != nil {
+			return 0, fmt.Errorf("executordomain: release %s's stale session of turn %s at %s: %w",
+				p.Handle, p.Turn, c.position, releaseErr)
+		}
+		written += affected(res)
+	}
 	if found && p.ConversationKey != "" {
 		absorbed, merged, absorbErr := absorb(ctx, tx, c, p, work, row)
 		if absorbErr != nil {

@@ -406,6 +406,21 @@ const passwordMarker = Marker + "password]"
 // to drift from it.
 var passwordKeys = []string{"password", "passwd", "pwd"}
 
+// NamesPassword reports whether name — the key a structured document names a
+// value by, a JSON object's member — names a password: it holds one of
+// [passwordKeys], whatever its case. What a reader that takes a document apart
+// asks of a key, where the rules read the key in the text itself: one list, so
+// a word added there is a key both readings take a value under.
+func NamesPassword(name string) bool {
+	lower := strings.ToLower(name)
+	for _, key := range passwordKeys {
+		if strings.Contains(lower, key) {
+			return true
+		}
+	}
+	return false
+}
+
 // passwordClose is what closes a password's key before its separator, and
 // passwordSeparator the separator: the quote or the markup a key is written
 // in, and the operator a language assigns or compares it with.
@@ -1756,6 +1771,25 @@ var (
 // that block's, and a certificate's body is base64 at the same width as a
 // key's.
 var pemArmour = regexp.MustCompile(`-----(?:BEGIN|END) [A-Z0-9][A-Z0-9 ]*-----`)
+
+// Unarmoured is line, trimmed, cut at every PEM armour it holds ([pemArmour]):
+// what of it is left, in order and each trimmed, empty pieces dropped — the
+// whole line where it holds no armour.
+//
+// FOR A READER THAT TAKES TEXT OUT BY VALUE (a kept session's scrub of the
+// secrets the engine handed a box): a key's armour is every key's of its kind,
+// no secret of any one, and the lines this package reads a key's block by
+// ([Secrets]). Taken out by value, every other key of that kind in the text
+// lost the armour the redaction looks for, and its body went unredacted.
+func Unarmoured(line string) []string {
+	var out []string
+	for _, piece := range pemArmour.Split(line, -1) {
+		if piece = strings.TrimSpace(piece); piece != "" {
+			out = append(out, piece)
+		}
+	}
+	return out
+}
 
 // pemArmourAt is [pemArmour] held to begin where it is tried.
 var pemArmourAt = regexp.MustCompile(`^` + pemArmour.String())

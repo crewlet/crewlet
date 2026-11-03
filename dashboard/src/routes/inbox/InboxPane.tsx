@@ -1211,6 +1211,12 @@ function answeredAt(record: ExecutorRow, now: number, who: boolean): string {
  */
 function busyLine(busy: ExecutorRow, name: string): string {
   const who = busy.role ? `The ${busy.role}` : name;
+  if (busy.ending) {
+    // OVER, and still holding the seat: its ending records how its turn ended
+    // before the seat takes its next work, this answer's resume included.
+    const turn = busy.work_item?.key ? `its turn on ${busy.work_item.key}` : "another turn";
+    return `${who} is finishing ${turn} and picks this up next.`;
+  }
   const on = busy.work_item?.key ? `executing ${busy.work_item.key}` : "executing another turn";
   return `${who} is busy ${on} and picks this up next.`;
 }

@@ -23,7 +23,8 @@ import (
 //
 // So each section that a later build may add fields to carries an Extra of its
 // own, filled by its decode and written back by its encode under the rule the
-// record's top follows: [RunSteer], [RunNote], [NoteRead] and [BridgeCall]. A
+// record's top follows: [RunSteer], [RunNote], [NoteRead], [BridgeCall] and
+// [SessionCapture]. A
 // section that does not is extended the other way, with a key of its own at
 // the top of the record (as [PendingRun.Stop] is, beside [RecordedEnding]).
 

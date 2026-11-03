@@ -44,10 +44,12 @@ import (
 //   - `api session.get` prints a held session's usage report on one line, and
 //     fails for any other, as OpenCode answers an id it does not hold;
 //   - `session export` prints a held session's export document — its info
-//     and its messages, or FAKE_SESSION_EXPORT where that is set, a document
-//     of a run's whole conversation for a case that reads one back — and
-//     fails for any other, recording in `exported` the
-//     session and whether the server was still serving; `session import` keeps the
+//     and its messages, those `export-messages` in the case's directory holds
+//     where it is there — or FAKE_SESSION_EXPORT where that is set, a
+//     document of a run's whole conversation for a case that reads one back
+//     — through the server or with `--standalone` beside it, and fails for
+//     any other, recording in `exported` the session and whether the server
+//     was still serving; `session import` keeps the
 //     file it was handed (`imported-session`) and the directory it was told
 //     (`import-directory`), and holds the session the file names and prints
 //     `Imported session: <id>`, as 2.0.32 does — or, where FAKE_IMPORT is
@@ -152,11 +154,12 @@ api)
 session)
   case "$2" in
   export)
-    [ "$3" != --server ] || authed
-    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$5 serving" >> "$d/exported"; else echo "$5 stopped" >> "$d/exported"; fi
-    held "$5" || { echo "Error: Session not found: $5" >&2; exit 1; }
+    if [ "$3" = --standalone ]; then id=$4; else [ "$3" != --server ] || authed; id=$5; fi
+    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
+    held "$id" || { echo "Error: Session not found: $id" >&2; exit 1; }
     if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then printf '%s\n' "$FAKE_SESSION_EXPORT"; else
-      printf '{"info":{"id":"%s","title":"crewlet"},"messages":[{"id":"msg_1","type":"user","text":"fix the flake"}]}\n' "$5"; fi ;;
+      msgs=$(cat "$d/export-messages" 2> /dev/null) || msgs='[{"id":"msg_1","type":"user","text":"fix the flake"}]'
+      printf '{"info":{"id":"%s","title":"crewlet"},"messages":%s}\n' "$id" "$msgs"; fi ;;
   import)
     shift 2; dir=
     while [ $# -gt 1 ]; do case "$1" in --directory) dir=$2; shift 2;; *) shift;; esac; done

@@ -385,12 +385,16 @@ type Result struct {
 	// reached at all" — a fact a later round cannot undo, and one the
 	// prior-work ledger forbids that round to establish a second time.
 	//
-	// It exists for the conversation ledger, which files the turn's
-	// artifact as the seat's own "You replied" and had no way to ask. On a
-	// turn that delivered nothing it wrote a reply that never happened into
-	// the one record the seat's NEXT turn on that thread reads back — so
-	// the failure sealed itself, and a follow-up asking "did you do it?"
-	// was answered against a fiction.
+	// It exists for the record of how the turn ENDED, kept on the turn's row
+	// of the executor log beside the session the turn kept: the log's end
+	// (internal/executordomain's Ending.Delivered), and
+	// the conversation ledger it replaces, which files the turn's artifact
+	// as the seat's own "You replied". Neither can ask the session: a
+	// transcript in which the seat was about to reply does not say whether
+	// the reply went. On a turn that delivered nothing the ledger once wrote
+	// a reply that never happened into the one record the next turn reads
+	// back — so the failure sealed itself, and a follow-up asking "did you
+	// do it?" was answered against a fiction.
 	Delivered bool
 
 	// WorkedThrough are completion-ledger keys for EARLIER triggers this

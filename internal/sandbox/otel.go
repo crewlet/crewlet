@@ -175,8 +175,13 @@ func (r *OtelReceiver) EndpointFor(traceID string, onHost bool, ttl time.Duratio
 	if base == "" {
 		return ""
 	}
-	return base + "/otlp/" + r.tokens.Mint(traceID, ttl)
+	return base + otelTokenPath + r.tokens.Mint(traceID, ttl)
 }
+
+// otelTokenPath is what precedes a run's own export token in its endpoint
+// ([OtelReceiver.EndpointFor]): what follows it is the token, a credential of
+// the run's that a capture of its box's session scrubs out ([handedSecrets]).
+const otelTokenPath = "/otlp/"
 
 // Validate reports the trace a token is scoped to, or empty.
 func (r *OtelReceiver) Validate(token string) string { return r.tokens.Validate(token) }

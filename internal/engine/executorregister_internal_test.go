@@ -394,7 +394,11 @@ func TestTheExecutorTermAndBudgetAreKnownOnlyOnANodeServingTheFleetsRevision(t *
 			e.epoch.current.Store(company)
 
 			term, termErr := e.executorRetention(t.Context())
-			budget, budgetErr := e.ExecutorSessionBudget(t.Context())
+			policy, budgetErr := e.executorPolicy(t.Context())
+			budget := policy.SeatBudget
+			if budgetErr == nil && !policy.Keep {
+				t.Errorf("the policy keeps no session on a company that keeps them by default")
+			}
 			if tc.known != (termErr == nil) || (tc.known && term != 7*24*time.Hour) {
 				t.Errorf("the term reads %v (%v), want it known (%v) at a week only on a "+
 					"node serving the fleet's activation", term, termErr, tc.known)

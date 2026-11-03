@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 )
 
 // THE ONE PROPERTY: a call that takes a run out of the set of things that will
@@ -264,6 +266,31 @@ var coordinatorEntries = map[string][]entryDrive{
 			if _, _, err := rig.coordinator.ReadHostedBox(t.Context(), "t1", run.LaunchID,
 				run.SandboxID, BoxReadCollect); err != nil {
 				t.Logf("ReadHostedBox: %v", err)
+			}
+		},
+	}},
+	"OweEnd": {{
+		// IT ENDS NOTHING: it writes onto the run's record the end its turn
+		// owes the executor log, which the run's own ending records before
+		// its delete — so whatever ends the run says so as it always does.
+		name: "the end a turn's frame decided, owed on its run's record",
+		call: func(t *testing.T, rig *coordRig) {
+			if _, err := rig.coordinator.OweEnd(t.Context(), "t1",
+				executordomain.Ending{Outcome: executordomain.OutcomeCompleted}); err != nil {
+				t.Logf("OweEnd: %v", err)
+			}
+		},
+	}},
+	"EndTurn": {{
+		// IT ENDS NOTHING: it records a turn's end for a frame that found no
+		// run's record to owe it on — on the executor log where the record
+		// is gone, and owed on the record where it is there after all, for
+		// the run's own ending to record — and deletes nothing.
+		name: "the end of a turn whose frame found no run's record",
+		call: func(t *testing.T, rig *coordRig) {
+			if err := rig.coordinator.EndTurn(t.Context(), TurnEnd{Handle: "swe", TurnID: "t1",
+				Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+				t.Logf("EndTurn: %v", err)
 			}
 		},
 	}},
@@ -971,11 +998,12 @@ func (s *refusingStore) MarkHeldCall(ctx context.Context, turnID, launch string,
 	return s.inner.MarkHeldCall(ctx, turnID, launch, fence)
 }
 
-func (s *refusingStore) RecordHeldResult(ctx context.Context, turnID, launch, sealed string, fence Fence) (bool, error) {
+func (s *refusingStore) RecordHeldResult(ctx context.Context, turnID, launch string, made HeldMade,
+	fence Fence) (bool, error) {
 	if s.called("RecordHeldResult") {
 		return false, errRefusedCall
 	}
-	return s.inner.RecordHeldResult(ctx, turnID, launch, sealed, fence)
+	return s.inner.RecordHeldResult(ctx, turnID, launch, made, fence)
 }
 
 func (s *refusingStore) ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error) {
@@ -1012,4 +1040,25 @@ func (s *refusingStore) WatchNotes(ctx context.Context, turnID string) (<-chan N
 		return nil, errRefusedCall
 	}
 	return s.inner.WatchNotes(ctx, turnID)
+}
+
+func (s *refusingStore) StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
+	if s.called("StampCapture") {
+		return false, errRefusedCall
+	}
+	return s.inner.StampCapture(ctx, turnID, capture)
+}
+
+func (s *refusingStore) OweEnd(ctx context.Context, turnID string, ending json.RawMessage) (PendingRun, bool, error) {
+	if s.called("OweEnd") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.OweEnd(ctx, turnID, ending)
+}
+
+func (s *refusingStore) ClearEnd(ctx context.Context, turnID string, owed json.RawMessage) (bool, error) {
+	if s.called("ClearEnd") {
+		return false, errRefusedCall
+	}
+	return s.inner.ClearEnd(ctx, turnID, owed)
 }

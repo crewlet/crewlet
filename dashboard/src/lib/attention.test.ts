@@ -144,6 +144,18 @@ describe("what it surfaces", () => {
     expect(items[0]?.path).toEqual(["live", "executors", "t1"]);
   });
 
+  // AN ENDED RUN WAITS ON NOBODY. A run whose ending is decided keeps its
+  // record, and the status it was ended in, until the ending is finished; it
+  // is over, and no answer reaches it, so it is never somebody's to answer.
+  //
+  // Mutation: queue a parked run off its status alone, and the ended run is
+  // listed as waiting on an answer.
+  test("a parked run whose ending is decided is not waiting on anybody", () => {
+    const ending = { at: "2026-01-01T11:30:00Z", reason: "seat_removed", stopped_by: "" };
+    const items = attentionQueue(input({ runs: [parked("awaiting_clarification", { ending })] }));
+    expect(items.some((item) => item.subject === "run")).toBe(false);
+  });
+
   // WHEN IT PARKED, never when it started: this row is about how long
   // somebody has been waited on, and a run that worked for an hour before
   // asking has been waiting for none of it.

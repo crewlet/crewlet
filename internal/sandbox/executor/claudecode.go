@@ -481,13 +481,19 @@ func claudeSessionGate(session Session, paths Paths) string {
 // its start with the engine's words rather than the harness's. A box without tar
 // and gzip, or a pack that failed, is said on the error stream, and the run's
 // own status is never the pack's.
-func claudeCapture(paths Paths) string {
+func claudeCapture(paths Paths) string { return claudePack(paths, paths.SessionStaging()) }
+
+// claudePack is [claudeCapture] packing in the staging directory staged: the
+// run's script's own, or the one a pack made on demand works in
+// ([Paths.SessionPackStaging]). ONE PACK for both, so a session packed by the
+// run's script and one packed while the run could not are the same archive of
+// the same files, and each keeps its digest.
+func claudePack(paths Paths, staged string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellQuote
 	cfg := paths.ClaudeConfigDir()
 	project := "projects/" + claudeProjectDir
-	staged := paths.SessionStaging()
 	line(`if [ -s %s/"$s".jsonl ]; then`, q(cfg+"/"+project))
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
 	line(`    set -- %s/"$s".jsonl`, q(project))
@@ -495,8 +501,12 @@ func claudeCapture(paths Paths) string {
 		q(cfg+"/"+project), q(cfg+"/"+project), q(project))
 	line(`    if [ -d %s/"$s" ] && [ ! -L %s/"$s" ]; then set -- "$@" tasks/"$s"; fi`,
 		q(cfg+"/tasks"), q(cfg+"/tasks"))
-	line(`    rm -rf %s; if mkdir -p %s && tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s && mv -f %s %s; then d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$s" "$d" >> %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(staged), q(staged), q(staged+"/capture"), q(cfg), q(staged+"/error"),
+	// A FILE THE HARNESS APPENDED TO WHILE TAR READ IT — a pack made on demand
+	// of a job still working — is GNU tar's exit 1 and a complete archive of
+	// what it read, which is the session as it stood; any other failure is
+	// none.
+	line(`    rm -rf %s; if mkdir -p %s && { tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s; t=$?; [ "$t" = 0 ] || { [ "$t" = 1 ] && grep -q 'changed as we read it' %s; }; } && mv -f %s %s; then packed=1; d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$s" "$d" >> %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(staged), q(staged), q(staged+"/capture"), q(cfg), q(staged+"/error"), q(staged+"/error"),
 		q(staged+"/capture"), q(paths.SessionCapture()), q(paths.SessionCapture()),
 		q(paths.SessionDigests()), q(staged+"/error"))
 	line(`    rm -rf %s`, q(staged))
@@ -693,6 +703,23 @@ func (ClaudeCode) ArchiveFormat() int { return claudeArchiveFormat }
 
 // VersionCommand prints a box's Claude Code release ([carrier]).
 func (ClaudeCode) VersionCommand() string { return "claude --version" }
+
+// Pack packs session now, as a run's script packs the session its harness ran
+// in once the harness exits ([carrier], [claudeCapture]): the same members,
+// into its own staging directory, its digest kept — ending [packNothing] where
+// the harness wrote no transcript, and [packFailed] where it did and no archive
+// was made, its error stream saying why ([Runner.PackCapture]).
+func (ClaudeCode) Pack(paths Paths, session string) string {
+	transcript := paths.ClaudeConfigDir() + "/projects/" + claudeProjectDir + "/" + session + ".jsonl"
+	return "s=" + shellQuote(session) + " packed=\n" +
+		fmt.Sprintf("[ -s %s ] || exit %d\n", shellQuote(transcript), packNothing) +
+		claudePack(paths, paths.SessionPackStaging()) +
+		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
+}
+
+// layout is a Claude Code archive's: a gzipped tar of the session's files
+// ([claudeArchiveFormat]).
+func (ClaudeCode) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Claude Code release writer
 // can be continued in a box whose Claude Code is release box ([carrier]): the

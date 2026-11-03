@@ -345,10 +345,13 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		recorded string
 	)
 	result, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
-		Turn:        ref,
-		Spec:        spec,
-		Setup:       runEnv.setup,
-		MCPServers:  servers,
+		Turn:       ref,
+		Spec:       spec,
+		Setup:      runEnv.setup,
+		MCPServers: servers,
+		// WHAT OF ITS ENVIRONMENT IS A CREDENTIAL, which only this side can
+		// tell, for its session's scrub.
+		Secrets:     launchSecrets(agent, runEnv, run.env),
 		Skills:      req.Skills.Box(),
 		Model:       run.model,
 		ProviderKey: member.Key,
@@ -421,13 +424,24 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		failed := runner.Launched{LaunchID: recorded}
 		decided, stopped := coordinator.LaunchStopped(l.turn.RunID)
 		switch {
-		case turn.Stopped(err):
-			return failed, err
 		case stopped:
+			// A STOP DECIDED ON THE RUN, whether or not the turn's own fence
+			// refused the launch beside it: the stop's ending answers the
+			// turn's colleague and records its end, so the error says the
+			// stop is the run's ([stoppedByRun]) and the frame does neither.
 			log.InfoContext(ctx, "executor_launch_stopped", "seat", handle, "turn_id", l.turn.RunID,
 				"error", err, "detail", "a person stopped the seat's running work while its "+
 					"executor was launching; the launch is ended and the turn stops")
-			return failed, &stopError{pause: pauseOfStop(decided), handle: handle}
+			return failed, &stopError{pause: pauseOfStop(decided), handle: handle, ofRun: true}
+		case turn.Stopped(err):
+			// THE TURN'S OWN FENCE REFUSED IT once the record was written:
+			// the launch abandoned the record under it
+			// ([sandbox.Coordinator.Launch]), so no ending of the run owes the
+			// turn's end, and the frame that ends the turn records it.
+			if recorded != "" {
+				e.abandonedLaunches.Store(l.turn.RunID, struct{}{})
+			}
+			return failed, err
 		}
 		return failed, err
 	}

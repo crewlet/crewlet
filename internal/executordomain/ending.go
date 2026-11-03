@@ -62,6 +62,13 @@ type Ending struct {
 	DeliveredTo string `json:"delivered_to,omitempty"`
 	Answer      string `json:"answer,omitempty"`
 
+	// DeliveryUnknown says the engine cannot tell whether the reply went:
+	// the turn's record of its calls is incomplete — calls were elided from
+	// it to keep it bounded — and the calls it kept show no delivery. Never
+	// set beside Delivered. A reader tells the next turn it is not known,
+	// rather than that the reply did not go.
+	DeliveryUnknown bool `json:"delivery_unknown,omitempty"`
+
 	// CompletedWork is the reviewer's account of what landed: model-written
 	// prose, somebody else's words to the next turn that reads it.
 	CompletedWork string `json:"completed_work,omitempty" untrusted:"fence"`
@@ -81,6 +88,38 @@ type Ending struct {
 	// the same: a guard's account quotes the tool or the error it tripped
 	// on, which came from a box.
 	Failure string `json:"failure,omitempty" untrusted:"fence"`
+
+	// Unkept is the turn's NEWEST capture where it is not one the turn's row
+	// names: the object store or the log refused it, or its record was never
+	// answered. Nil where the newest capture landed, or the turn took none.
+	//
+	// THE END IS WHERE IT IS SAID, because the run's record that knew it is
+	// deleted with the turn, and the turn's row would otherwise go on naming
+	// an older capture of the turn — one that does not hold what the turn's
+	// later launch did — as the turn's last word, for whatever continues the
+	// conversation's session to take for it. The apply takes that older
+	// object off the row ([applyEnd]), so the row names no session of the
+	// turn, and the end says why.
+	Unkept *Unkept `json:"unkept,omitempty"`
+}
+
+// Unkept is a capture of a turn's session that no row names: its place among
+// the turn's captures, and why it was not kept.
+type Unkept struct {
+	// LaunchSeq and CaptureSeq are its place, the ordinals every capture of
+	// the turn carries ([Capture.LaunchSeq]).
+	LaunchSeq  int64 `json:"launch_seq"`
+	CaptureSeq int64 `json:"capture_seq"`
+
+	// Reason is why, in the engine's words, which quote what refused it — an
+	// error a box or a store wrote — and so are fenced.
+	Reason string `json:"reason" untrusted:"fence"`
+}
+
+// supersedes reports whether u is a later capture than the one at (launch,
+// capture): the row's newest is then older than the turn's last attempt.
+func (u Unkept) supersedes(launch, capture int64) bool {
+	return newer(u.LaunchSeq, u.CaptureSeq, launch, capture)
 }
 
 // validate refuses an ending the engine could not mean: an unknown outcome,
@@ -103,12 +142,20 @@ func (e Ending) validate() error {
 			return err
 		}
 	}
-	for _, prose := range []struct{ field, value string }{
+	prose := []struct{ field, value string }{
 		{"completed_work", e.CompletedWork}, {"blocked_on", e.BlockedOn},
 		{"stop_reason", e.StopReason}, {"failure", e.Failure},
-	} {
-		if !utf8.ValidString(prose.value) {
-			return invalid("the ending's %s is not valid UTF-8", prose.field)
+	}
+	if u := e.Unkept; u != nil {
+		if u.LaunchSeq <= 0 || u.CaptureSeq <= 0 {
+			return invalid("the ending's unkept capture is placed at (%d, %d), and every capture "+
+				"is placed from (1, 1)", u.LaunchSeq, u.CaptureSeq)
+		}
+		prose = append(prose, struct{ field, value string }{"unkept reason", u.Reason})
+	}
+	for _, p := range prose {
+		if !utf8.ValidString(p.value) {
+			return invalid("the ending's %s is not valid UTF-8", p.field)
 		}
 	}
 	return nil
@@ -122,6 +169,11 @@ func (e Ending) fit() Ending {
 	e.BlockedOn = textcut.Within(e.BlockedOn, BlockedOnMaxBytes)
 	e.StopReason = textcut.Within(e.StopReason, StopReasonMaxBytes)
 	e.Failure = textcut.Within(e.Failure, FailureMaxBytes)
+	if e.Unkept != nil {
+		unkept := *e.Unkept
+		unkept.Reason = textcut.Within(unkept.Reason, UnkeptReasonMaxBytes)
+		e.Unkept = &unkept
+	}
 	return e
 }
 
@@ -134,5 +186,7 @@ func (e Ending) within() bool {
 		len(e.Answer) <= WordMaxBytes && len(e.StoppedBy) <= ActorMaxBytes &&
 		len(e.CompletedWork) <= CompletedWorkMaxBytes &&
 		len(e.BlockedOn) <= BlockedOnMaxBytes &&
-		len(e.StopReason) <= StopReasonMaxBytes && len(e.Failure) <= FailureMaxBytes
+		len(e.StopReason) <= StopReasonMaxBytes && len(e.Failure) <= FailureMaxBytes &&
+		(e.Unkept == nil || (e.Unkept.LaunchSeq > 0 && e.Unkept.CaptureSeq > 0 &&
+			len(e.Unkept.Reason) <= UnkeptReasonMaxBytes))
 }

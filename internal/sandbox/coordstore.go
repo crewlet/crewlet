@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // CoordStore is the pending-run store, on the FLEET's coordination store.
@@ -127,6 +129,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// Nor is the name of the job, and it is new on every launch, the
 	// reset below included: a completion claims only the job it names.
 	run.LaunchID = uuid.NewString()
+	// NOR ITS ORDINAL: the first launch of a turn is 1, and the reset below
+	// numbers each later one past the row's ([PendingRun.LaunchSeq]).
+	run.LaunchSeq = 1
 	run.UpdatedAt = now
 	// And the job's own record starts here: the instant the launch exists
 	// is the instant it began, and a previous job's record — its start, its
@@ -203,13 +208,17 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		prior = PriorBox{
 			SandboxID: existing.SandboxID, Placement: existing.Placement,
 			Harness: existing.Harness, Status: existing.Status,
-			LaunchNode: existing.LaunchNode,
+			LaunchNode: existing.LaunchNode, Handed: existing.Handed,
 		}
 		// And whether the job it replaces asked, which the reset clears
 		// below and the round's cut is decided by.
 		continuesAnswer := run.Continues && existing.asked()
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
+		// ONE PAST THE ROW'S, in the write that names the job, so the
+		// launch's ordinal and its name are never apart: a row an older build
+		// wrote holds none, and this launch is its 1.
+		existing.LaunchSeq++
 		existing.Launch = run.Launch
 		// The turn's cap is the turn's, the same on every launch of it —
 		// written anyway, so the row says what this launch was told.
@@ -233,8 +242,11 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			existing.RoundLosses++
 		}
 		existing.Lost = nil
-		// AND THE PREVIOUS JOB'S COMMAND AND SESSION ARE NOT THIS JOB'S.
-		existing.CommandID, existing.SessionID = "", ""
+		// AND THE PREVIOUS JOB'S COMMAND AND SESSION ARE NOT THIS JOB'S, nor
+		// what its box was handed: the launch writes its own, carrying the
+		// previous job's forward where it continues in the same box
+		// ([PriorBox.Handed]).
+		existing.CommandID, existing.SessionID, existing.Handed = "", "", ""
 		// A hold was on the previous job's resume, which is over.
 		existing.HeldFor, existing.HeldUntil = "", time.Time{}
 		if fence.Fenced() {
@@ -283,8 +295,15 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// asked starts after every call the row holds now
 		// ([PendingRun.AnsweredThrough]). A job that continues a lost one
 		// keeps the cut it had, and a new round has none.
+		//
+		// WHAT A NEW ROUND TAKES OFF THE ROW IS FOLDED INTO THE TURN'S
+		// EARLIER CALLS FIRST ([PendingRun.PriorCalls]): by name and outcome,
+		// which is all the run's own ending needs to know whether an earlier
+		// round delivered the turn's reply.
 		switch {
 		case !run.Continues:
+			existing.PriorCalls, existing.PriorCallsElided = foldPriorCalls(existing.PriorCalls,
+				existing.BridgeCalls, existing.PriorCallsElided || existing.BridgeCallsElided > 0)
 			existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
 			existing.AnsweredThrough = 0
 		case continuesAnswer:
@@ -322,6 +341,84 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
 	run, _, found, err := s.read(ctx, turnID)
 	return run, found, err
+}
+
+// StampCapture records one capture of the turn's session on its row. See the
+// contract on [PendingStore].
+//
+// THROUGH THE WRITE EVERY STATE TAKES ([CoordStore.mutateAny]), as a bridged
+// call's append is: a capture is a fact about what left the box, and a stop's is
+// stamped once its ending is decided.
+func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
+	if capture.LaunchSeq <= 0 || capture.CaptureSeq <= 0 || !capture.State.Valid() {
+		return false, fmt.Errorf("sandbox: a capture of run %s is placed at (%d, %d) in state %q, and "+
+			"every capture is placed from (1, 1) in one of %s", turnID, capture.LaunchSeq,
+			capture.CaptureSeq, capture.State, words.Or(CaptureStates))
+	}
+	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		return stampOnto(run, capture)
+	})
+	return won, err
+}
+
+// OweEnd records the end the run's turn owes the executor log. See the contract
+// on [PendingStore].
+//
+// THROUGH THE WRITE EVERY STATE TAKES ([CoordStore.mutateAny]): a loss's or a
+// stop's end is decided by that ending's own steps, on a row whose ending is
+// decided.
+func (s *CoordStore) OweEnd(ctx context.Context, turnID string, ending json.RawMessage) (PendingRun, bool, error) {
+	if len(bytes.TrimSpace(ending)) == 0 {
+		return PendingRun{}, false, fmt.Errorf("sandbox: run %s is owed an end with no ending", turnID)
+	}
+	// THE ROW AS IT STANDS where an end is owed already: the caller records
+	// that one, so it is answered rather than the zero row a write that
+	// changed nothing answers.
+	var seen PendingRun
+	written, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		seen = *run
+		if len(run.OwedEnd) > 0 || run.EndRecorded {
+			return false
+		}
+		run.OwedEnd = bytes.Clone(ending)
+		return true
+	})
+	if err != nil || won {
+		return written, won, err
+	}
+	return seen, false, nil
+}
+
+// ClearEnd removes the end a row owes once the log has taken it, and marks it
+// recorded in the same write. See the contract on [PendingStore].
+func (s *CoordStore) ClearEnd(ctx context.Context, turnID string, owed json.RawMessage) (bool, error) {
+	_, cleared, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		if len(run.OwedEnd) == 0 || !bytes.Equal(run.OwedEnd, owed) {
+			return false
+		}
+		run.OwedEnd, run.EndRecorded = nil, true
+		return true
+	})
+	return cleared, err
+}
+
+// foldPriorCalls is the turn's earlier successful calls, by name, with calls'
+// successful ones added, and whether any of what they came from was elided
+// ([PendingRun.PriorCalls]).
+//
+// A SET OF NAMES, sorted, never a log: whether a round delivered is whether a
+// call to a delivering tool succeeded, which a name and an outcome answer, and
+// a set is bounded by the seat's catalogue rather than by how many calls a
+// turn makes.
+func foldPriorCalls(prior []string, calls []BridgeCall, elided bool) ([]string, bool) {
+	names := slices.Clone(prior)
+	for _, call := range calls {
+		if !call.Failed && call.Name != "" && !slices.Contains(names, call.Name) {
+			names = append(names, call.Name)
+		}
+	}
+	slices.Sort(names)
+	return names, elided
 }
 
 // ClaimForResume flips a run holding the tail's launch, in one of the tail's
@@ -612,20 +709,28 @@ func (s *CoordStore) MarkHeldCall(ctx context.Context, turnID, launch string, fe
 	return held, won, nil
 }
 
-// RecordHeldResult records what a marked held call returned. See the contract on
-// [PendingStore].
-func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch, sealed string, fence Fence) (bool, error) {
-	claimed, made := false, false
+// RecordHeldResult records what a marked held call came to: its result, and the
+// call in its round's log. See the contract on [PendingStore].
+func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string, made HeldMade,
+	fence Fence) (bool, error) {
+
+	claimed, already := false, false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if claimed = heldClaim(*run, launch, fence) && run.HeldCall.Calling(); !claimed {
 			return false
 		}
-		if made = run.HeldCall.Made(); made {
+		if already = run.HeldCall.Made(); already {
 			return false
 		}
+		now := s.clock()
 		held := *run.HeldCall
-		held.Result, held.MadeAt = sealed, s.clock()
+		held.Result, held.MadeAt = made.Result, now
 		run.HeldCall = &held
+		call := made.Call
+		call.Name, call.Approved, call.At = held.Tool, true, now
+		call.Args, call.Output, call.Held = "", "", false
+		call.Seq = run.LastBridgeSeq() + 1
+		run.BridgeCalls, run.BridgeCallsElided = appendBounded(run.BridgeCalls, run.BridgeCallsElided, call)
 		return true
 	})
 	switch {
@@ -634,7 +739,7 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch, seale
 	case !claimed:
 		return false, fmt.Errorf("%w: run %s, launch %s", ErrHeldCallUnclaimed, turnID, launch)
 	}
-	return won || made, nil
+	return won || already, nil
 }
 
 // OweHandBack lets go of the recorded answer a run whose ending is decided still
@@ -946,6 +1051,9 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		// names no command, and unsays nothing.
 		if box.CommandID != "" {
 			run.Launch.Started = true
+			// AND WHAT THE JOB WAS HANDED, with the job: what a capture
+			// of its box scrubs out ([PendingRun.Handed]).
+			run.Handed = box.Handed
 		}
 		// The box's cell moves with the box — see [BoxRef.Placement] — and
 		// so does its host ([BoxRef.Node]).
@@ -1238,14 +1346,17 @@ func (s *CoordStore) Finish(ctx context.Context, turnID, ending string) (Pending
 		case run.answerOwed():
 			refused = fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrAnswerOwed)
 			return coord.SandboxRunChange{}, refused
+		case len(run.OwedEnd) > 0:
+			refused = fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrEndOwed)
+			return coord.SandboxRunChange{}, refused
 		}
 		return coord.SandboxRunChange{Delete: true}, nil
 	})
 	switch {
 	case err != nil && refused != nil && errors.Is(err, refused):
 		// THE ROW AS IT STANDS rides an owed refusal, for the ending to
-		// hand back what it still owes and finish again.
-		if errors.Is(err, ErrHandBackOwed) || errors.Is(err, ErrAnswerOwed) {
+		// hand back, or record, what it still owes and finish again.
+		if errors.Is(err, ErrHandBackOwed) || errors.Is(err, ErrAnswerOwed) || errors.Is(err, ErrEndOwed) {
 			return run, false, err
 		}
 		return PendingRun{}, false, err

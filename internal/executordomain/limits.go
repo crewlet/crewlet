@@ -76,6 +76,11 @@ const (
 	StopReasonMaxBytes = 1 << 10
 	FailureMaxBytes    = 1 << 10
 
+	// UnkeptReasonMaxBytes bounds why the turn's newest capture was not kept
+	// ([Unkept]): the engine's sentence, quoting the refusal it met, as a
+	// failure's account does.
+	UnkeptReasonMaxBytes = 1 << 10
+
 	// WordMaxBytes bounds the ending's engine words: the reviewer's
 	// decision, the surface a reply was delivered to and the engine's own
 	// answer outcome. Each is a short identifier the engine chooses, so one

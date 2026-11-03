@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -29,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
@@ -38,6 +40,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -343,6 +346,13 @@ type runEnv struct {
 	// body read as the content it is.
 	setup []sandbox.SetupStep
 
+	// secrets is what of env and setup sits in a credential position by
+	// where it came from: every value a reference resolved to — the
+	// engine's own identity facts aside — and every setup file whose body
+	// was one reference whole ([sandbox.LaunchRequest.Secrets],
+	// [launchSecrets]).
+	secrets []string
+
 	// gap is what of either resolved to nothing and is not declared
 	// optional, judged against the integrations minting it — nil when
 	// nothing. keys and files name where it sits, for a log line.
@@ -463,6 +473,9 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		switch {
 		case len(missing) == 0:
 			out.env[key] = resolver.Value(l.value)
+			if !l.fact {
+				out.secrets = append(out.secrets, referencedValues(resolver, l.value)...)
+			}
 		case l.fact:
 			facts.hold(key, missing, false, "", false)
 			out.facted = append(out.facted, l.path)
@@ -489,6 +502,12 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 			}
 			if unresolved == "" {
 				files[path] = content
+				if _, whole := envref.Whole(body); whole {
+					// THE REFERENCE'S VALUE, byte for byte: a deploy key, a
+					// token file. A body written in the document is its
+					// own words, expanded in the box from the environment.
+					out.secrets = append(out.secrets, content)
+				}
 				continue
 			}
 			if gap.hold(path, []string{unresolved}, slices.Contains(step.OptionalKeys, path), where, false) {
@@ -694,8 +713,49 @@ var _ sandbox.Resumer = (*resumer)(nil)
 // Unrecovered, it skipped the coordinator's revert as well as its settle, so
 // the run row was stranded in resumed while the queue redelivered a completion
 // the claim then refused.
+//
+// AND A PANIC AFTER THE TURN BEGAN ENDS THE TURN ON THE EXECUTOR LOG: the
+// coordinator settles a begun turn that broke without a word of its own
+// ([sandbox.ErrResumeAbandoned]), its frame — which owes the turn's end on
+// every other way out — is what panicked, and no ending of the run owes one
+// for a turn that came back. So the end is owed here, failed, saying it
+// panicked ([panickedEnding]), for the run's ending to record. A panic BEFORE
+// the turn began is the coordinator's to announce as a loss, which owes the
+// turn's end itself ([sandbox.CoordinatorOptions.TurnLost]).
 func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
-	return r.engine.guardResume(ctx, req.Run, func() error { return r.resume(ctx, req) })
+	return r.engine.resumeGuarded(ctx, req, r.resume)
+}
+
+// resumeGuarded is [resumer.Resume] over the resume body run: run guarded
+// ([Engine.guardResume]), and a panic once its turn began ended on the executor
+// log as failed ([panickedEnding]).
+func (e *Engine) resumeGuarded(ctx context.Context, req sandbox.ResumeRequest,
+	run func(context.Context, sandbox.ResumeRequest) error) error {
+
+	var began atomic.Bool
+	if begin := req.Begin; begin != nil {
+		req.Begin = func(ctx context.Context) error {
+			if err := begin(ctx); err != nil {
+				return err
+			}
+			began.Store(true)
+			return nil
+		}
+	}
+	err := e.guardResume(ctx, req.Run, func() error { return run(ctx, req) })
+	var panicked *turn.PanicError
+	if began.Load() && errors.As(err, &panicked) {
+		e.oweExecutorEnd(ctx, req.Run, panickedEnding(panicked))
+	}
+	return err
+}
+
+// panickedEnding is how a resumed turn that panicked once it had begun ended:
+// failed, saying it panicked and with what — redacted, since a panic's value
+// can quote what a tool or a box said. The stack stays in the log.
+func panickedEnding(panicked *turn.PanicError) executordomain.Ending {
+	return executordomain.Ending{Outcome: executordomain.OutcomeFailed,
+		Failure: redact.Secrets(fmt.Sprintf("the resumed turn panicked and was abandoned: %v", panicked.Value))}
 }
 
 // resume is [resumer.Resume]'s body, separated so the recovery around it is
@@ -1100,20 +1160,36 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// the ask answers nothing for a turn that parked (a2a.go). After the
 	// completion above, as on that frame, and only on a way out that ends
 	// the turn: a retry, a hold and a park again leave it to a later segment.
-	answer := func(res turn.Result, err error) {
-		e.answerColleague(ctx, company, answeringRun(in.Run), in.Run.ColleagueAsk, res, err)
+	answer := func(res turn.Result, err error) colleagueAnswer {
+		return e.answerColleague(ctx, company, answeringRun(in.Run), in.Run.ColleagueAsk, res, err)
 	}
 	// stopped settles the resumed turn as a person's stop ended it: said
 	// (agent_turn_stopped, under the pause that stopped it), its colleague
-	// answered, and the run settled rather than reverted (below).
+	// answered, its end owed on the run's record for the run's ending to
+	// record on the executor log, and the run settled rather than reverted
+	// (below).
+	//
+	// UNLESS THE STOP WAS DECIDED ON THE RUN this segment's relaunch was
+	// launching ([stoppedByRun]): that stop's own ending answers the
+	// colleague and owes the turn's end, from the run's record, once this
+	// frame has returned and the stop's read has kept the relaunched job's
+	// session ([sandbox.CoordinatorOptions.CloseStopped]); answered here as
+	// well, the colleague was answered twice.
 	stopped := func(stop error, why string) error {
 		pause, _ := stopOf(stop)
 		role, agentID := seatIdentity(company, in.Turn.Handle())
 		e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
 			in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
-		answer(res, stop)
+		if !stoppedByRun(stop) {
+			answered := answer(res, stop)
+			e.oweExecutorEnd(ctx, in.Run, stoppedEnding(res, resumedReply, stop, answered))
+		}
 		return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, why, stop)
 	}
+	// A LAUNCH THIS SEGMENT'S FENCE REFUSED once its record was written is
+	// this segment's to end, which the ways out below do: no other frame
+	// takes it off ([Engine.abandonedLaunches]).
+	defer e.abandonedLaunches.Delete(in.Run.TurnID)
 	if err != nil {
 		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
 		// stop after the run's completion was claimed, or while its
@@ -1180,9 +1256,25 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// The indicator comes down with it: the run is settled,
 			// the box reclaimed and the record deleted, so nothing is
 			// coming back for this turn — and the colleague is told it
-			// could not be answered.
-			answer(res, err)
+			// could not be answered, and the executor log how it ended.
+			e.oweExecutorEnd(ctx, in.Run, abandonedEnding(res, resumedReply, answer(res, err), reason, err))
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
+		}
+		// A RETRY NEEDS THE RUN'S RECORD AS THE CLAIM LEFT IT, and a relaunch
+		// that failed in its launch — no box, no attach, no start — abandoned
+		// the run under it ([sandbox.Coordinator.Launch]): its ending is
+		// decided, and its record waits for this frame to say how the turn
+		// ended before it goes ([sandbox.Coordinator.OweEnd]). Reverted, the
+		// claim would find nothing to hand back, the completion nothing to
+		// claim again, and the turn would end in silence, its colleague
+		// unanswered and its end nowhere. So a segment that broke on a run
+		// whose ending is decided, or whose record is gone, ends the turn
+		// here, as one abandoned, and settles rather than reverts.
+		if e.runEnded(ctx, in.Run.TurnID) {
+			e.oweExecutorEnd(ctx, in.Run, abandonedEnding(res, resumedReply, answer(res, err),
+				"its relaunch failed, and its run was ended with it", err))
+			return fmt.Errorf("%w (the resumed turn's relaunch failed and its run was ended with it): %w",
+				sandbox.ErrResumeAbandoned, err)
 		}
 		// Reverted, so the turn is not over — and BOTH KINDS OF RESUME COME
 		// BACK rather than wait for a further signal.
@@ -1239,9 +1331,13 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
 				in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
 			// Not parked after all: the run it relaunched is ended, and so
-			// is the turn.
+			// is the turn. Its colleague's answer and its end are that
+			// stop's own ending's, which records them from the run's record
+			// once its read has kept the relaunched job's session
+			// ([sandbox.CoordinatorOptions.CloseStopped]); answered here
+			// as well, the colleague would find the channel the first answer
+			// closed.
 			res.Suspended = false
-			answer(res, parkErr)
 			return fmt.Errorf("%w (a person stopped the run the resumed turn relaunched): %w",
 				sandbox.ErrResumeAbandoned, parkErr)
 		}
@@ -1249,8 +1345,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	}
 	// A SEGMENT THAT PARKED AGAIN answers nothing here: answerColleague
 	// leaves a suspended result to the segment that ends the turn.
-	answer(res, nil)
-	e.recordResume(ctx, in, res)
+	e.recordResume(ctx, in, res, resumedReply, answer(res, nil))
 	return nil
 }
 
@@ -1463,14 +1558,19 @@ func (h heldCommit) Begin(ctx context.Context) (runner.HeldPrior, error) {
 	return runner.HeldPrior{Made: true, Result: result}, nil
 }
 
-// Record seals and records what the held call returned; see
+// Record seals and records what the held call returned, and the call itself as
+// a call of its run's round, as the surface that made it answered it; see
 // [runner.HeldCommit].
-func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult) error {
+func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error {
 	sealed, err := h.seal.SealResult(h.held.TurnID, h.held.Call, result)
 	if err != nil {
 		return err
 	}
-	return h.held.Record(ctx, sealed)
+	return h.held.Record(ctx, sandbox.HeldMade{Result: sealed, Call: sandbox.BridgeCall{
+		Name: h.held.Call.Tool, Failed: answered.Failed,
+		Origin: answered.Origin, Server: answered.Server, Source: answered.Source,
+		Refusal: string(answered.Refusal()),
+	}})
 }
 
 // runnerLost is the coordinator's account of a lost job in the runner's terms,
@@ -1553,7 +1653,19 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // declines it, for both paths and for the same reason: it has not finished,
 // so there is no reply to file. The completion that eventually lands comes
 // back through this same frame and records then.
-func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result) {
+//
+// AND THE TURN'S END, owed on its run's record for the run's ending to record
+// on the executor log once the turn's captures settle ([Engine.oweExecutorEnd]):
+// how it ended — its decision and breach (never the reviewer's last word, which
+// reads `done` after the loop overrode it), whether its reply reached the party
+// waiting and on what, what the reviewer said landed, what stopped a blocked
+// round, and answered, the engine's own answer to a colleague's ask — which the
+// turn's row on the log keeps beside the session the turn kept ([endingOf]).
+func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
+	answered colleagueAnswer) {
+	if !res.Suspended {
+		e.oweExecutorEnd(ctx, in.Run, endingOf(res, reply, answered))
+	}
 	// THE RUN THE ROW NAMES, and the work key it rode in on: a resume
 	// re-enters the run that suspended, so the entry names that one rather
 	// than a fresh id, and it dedupes against the same trigger the dispatch
@@ -2050,6 +2162,10 @@ func sandboxMCP(
 		}
 		if server.Kind() == config.TransportHTTP {
 			box.Headers = values.values
+			// WHAT ITS URL'S REFERENCES RESOLVED TO, for the scrub of the
+			// box's session: a secret kept in a URL's path is in the box's
+			// MCP configuration as surely as a header is.
+			box.Secrets = referencedValues(env, server.URL)
 		} else {
 			box.Env = values.values
 		}
@@ -2315,15 +2431,22 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// [sandbox.CoordinatorOptions.Stopped].
 		Stopped: e.releaseWorkingStatus,
 		// A turn parked on a run a person stopped is closed on the record
-		// as stopped, by whichever node finishes the run's ending — see
-		// runstop.go.
+		// as stopped, and its end recorded on the executor log, by
+		// whichever node finishes the run's ending — see runstop.go.
 		CloseStopped: e.closeStoppedTurn,
 		// AND A TURN LOST WITH ITS RUN — the run's box gone, its
 		// suspension never recorded, its tail abandoned — tells the
-		// colleague whose ask it took up that it was lost, by whichever
-		// node finishes the run's ending: no frame of that turn is left to
-		// answer. See a2a.go.
+		// colleague whose ask it took up that it was lost, and the
+		// executor log how it ended, by whichever node finishes the run's
+		// ending: no frame of that turn is left to. See a2a.go.
 		TurnLost: e.answerLostTurn,
+		// EVERY LAUNCH'S HARNESS SESSION IS KEPT, and every turn's end
+		// recorded, through the ESTATE ROUTER's executor writes — a seat's
+		// box is wherever its seat runs, a seats-only node included, which
+		// holds no log of its own — with the engine's policy, secrets,
+		// minting and sealed upload beside them. See executorsession.go.
+		Sessions: e.executorLog,
+		Keep:     executorKeep{engine: e},
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
@@ -3500,6 +3623,42 @@ func newCodingRun(agent *harness.Provider, seatEnv map[string]string) codingRun 
 		run.files[executor.CredentialDocument] = doc
 	}
 	return run
+}
+
+// launchSecrets is every value a launch's run environment hands its box out of
+// a credential position, for the scrub of its session
+// ([sandbox.LaunchRequest.Secrets]): what its references resolved to and its
+// setup files that are one reference whole (runEnv's secrets), and the value of
+// every variable of env — the run environment the box is handed, the entry's
+// beneath the seat's — whose name says it carries a credential
+// ([harnessprofile.IsCredentialName], the one predicate the backend asks of a
+// name) or that signs the entry's harness in, written or referenced alike.
+//
+// BY WHERE IT CAME FROM AND WHAT IT IS NAMED, never the whole environment: the
+// seat's handle and email, a base URL, a protocol's name are no secrets, and
+// scrubbed by value each was lost from every kept transcript that named it.
+func launchSecrets(agent *harness.Provider, run runEnv, env map[string]string) []string {
+	secrets := slices.Clone(run.secrets)
+	signIn := agent.CredentialEnvNames()
+	for _, key := range slices.Sorted(maps.Keys(env)) {
+		if harnessprofile.IsCredentialName(key) || slices.Contains(signIn, key) {
+			secrets = append(secrets, env[key])
+		}
+	}
+	return secrets
+}
+
+// referencedValues is what every reference in value resolved to under env —
+// what the operator kept out of the document, a credential position whatever
+// the variable is named — each non-empty value once.
+func referencedValues(env *config.Resolver, value string) []string {
+	var out []string
+	for _, name := range envref.Names(value) {
+		if v := env.Lookup(name); strings.TrimSpace(v) != "" && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // entryEnv is what an entry contributes to a run's environment, beneath what

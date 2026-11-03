@@ -286,3 +286,54 @@ func TestTheSeatBudgetFloorHoldsOneSessionAtItsBound(t *testing.T) {
 			config.DefaultSessionBytesPerSeat, config.SessionBytesPerSeatFloor)
 	}
 }
+
+// A SESSION SEALED TO A SPOOL UPLOADS AS THE OBJECT ITS SEAL MINTED, AND READS
+// BACK AS THE ARCHIVE: the spool — what rests on a node's disk between a take
+// and its keep — holds nothing of the archive in the clear; its size is what
+// the upload stores, under the key the seal minted and bound in; the object
+// opens under the seat and turn it was sealed for and under no other; and an
+// archive past its bound is refused at the seal, before anything is uploaded.
+//
+// Mutation: spool the archive in the clear, mint the upload's key anew, or let
+// the seal pass an archive past its bound, and a check here goes red.
+func TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted(t *testing.T) {
+	t.Parallel()
+	store, backend := sessionStore(t, "k1")
+	turn := statelog.NewOpID(time.Now(), "")
+	plain := archive(t, 2*secrets.StreamChunkBytes+5)
+	var spool bytes.Buffer
+	sealed, err := store.Seal("ana", turn, bytes.NewReader(plain), &spool)
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if bytes.Contains(spool.Bytes(), []byte("transcript-marker:")) {
+		t.Fatal("the spool carries the archive in the clear")
+	}
+	if sealed.Size != int64(spool.Len()) || sealed.ContentKey != "k1" ||
+		sealed.Size != secrets.SealedStreamSize(int64(len(plain)), "k1") {
+		t.Fatalf("the seal answered %+v for a spool of %d bytes", sealed, spool.Len())
+	}
+	spooled := bytes.Clone(spool.Bytes())
+	put, err := store.Upload(t.Context(), sealed, &spool)
+	if err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if put.Object.Key.Name() != sealed.Key.Name() || put.Object.Size != sealed.Size || put.ContentKey != "k1" {
+		t.Fatalf("the upload answered %+v, want the key the seal minted, at the spool's size", put)
+	}
+	if stored := storedBytes(t, backend, put.Object.Key.Name()); !bytes.Equal(stored, spooled) {
+		t.Fatal("the object holds other bytes than the spool")
+	}
+	got, err := readAll(t, store, executordomain.Session{Handle: "ana", Turn: turn, Object: put.Object})
+	if err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("the session read back (%d bytes, %v), want the archive", len(got), err)
+	}
+	if _, err := readAll(t, store, executordomain.Session{Handle: "ben", Turn: turn,
+		Object: put.Object}); !errors.Is(err, executordomain.ErrUnreadable) {
+		t.Errorf("the object named by another seat: %v, want ErrUnreadable", err)
+	}
+	if _, err := store.Seal("ana", turn, io.LimitReader(zeros{}, executordomain.SessionMaxBytes+1),
+		io.Discard); !errors.Is(err, executordomain.ErrSessionTooLarge) {
+		t.Errorf("an archive a byte past its bound was sealed: %v, want ErrSessionTooLarge", err)
+	}
+}

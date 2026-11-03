@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 )
 
 // A TURN LOST WITH ITS RUN IS HANDED TO THE ENGINE, as a step of the run's
@@ -45,12 +46,13 @@ func watchLosses(rig *coordRig) *lostSpy {
 	return spy
 }
 
-func (s *lostSpy) lost(ctx context.Context, run PendingRun) {
+func (s *lostSpy) lost(ctx context.Context, run PendingRun) executordomain.Ending {
 	_, recorded, _ := s.rig.pending.Get(ctx, run.TurnID)
 	announced := len(s.rig.announcements())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, lostCall{run: run, recorded: recorded, announced: announced})
+	return executordomain.Ending{Outcome: executordomain.OutcomeLost}
 }
 
 func (s *lostSpy) seen() []lostCall {

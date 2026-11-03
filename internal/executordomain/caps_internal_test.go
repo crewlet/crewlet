@@ -35,6 +35,7 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 		CompletedWork: worst(CompletedWorkMaxBytes), BlockedOn: worst(BlockedOnMaxBytes),
 		StoppedBy: worst(ActorMaxBytes), StopReason: worst(StopReasonMaxBytes),
 		Failure: worst(FailureMaxBytes),
+		Unkept:  &Unkept{LaunchSeq: 1 << 62, CaptureSeq: 1 << 62, Reason: worst(UnkeptReasonMaxBytes)},
 	}.fit()
 	if !ending.within() {
 		t.Fatal("the premise: an ending fitted to its caps is outside them")
@@ -122,5 +123,14 @@ func TestAnEndingsProseIsCutToItsBoundAndMarked(t *testing.T) {
 	}
 	if err := (Ending{Outcome: "abandoned"}).validate(); err == nil {
 		t.Error("an outcome this build does not know was accepted")
+	}
+	if err := (Ending{Outcome: OutcomeCompleted, Unkept: &Unkept{Reason: "refused"}}).validate(); err == nil {
+		t.Error("an unkept capture placed nowhere was accepted")
+	}
+	cut := Ending{Outcome: OutcomeCompleted,
+		Unkept: &Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: long}}.fit()
+	if len(cut.Unkept.Reason) > UnkeptReasonMaxBytes || !cut.within() {
+		t.Errorf("the unkept capture's reason is %d bytes past its %d-byte cap",
+			len(cut.Unkept.Reason), UnkeptReasonMaxBytes)
 	}
 }
