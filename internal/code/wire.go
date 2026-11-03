@@ -1146,6 +1146,15 @@ const (
 	// and the query's narrowing, each marked and carrying what its change
 	// says — held to the asker's grant on each notice's repository.
 	ReadInbox ReadKind = "inbox"
+	// ReadNoticeCards is WHAT THE CARDS OF AN INBOX PAGE DRAW (inboxread.go):
+	// each change [ReadQuery.NoticeCards] names, as a card of a notice about
+	// it reads it — its row, the opening of its description, the agent
+	// findings standing open on it and, while it is live, where its merge
+	// stands, judged for the asker ([NoticeChange]) — held to the asker's
+	// grant on each change's repository. Asked after an inbox page is
+	// composed, for the changes of the code notices the page kept, and only
+	// by a read that draws them: an `inbox` read carries none of it.
+	ReadNoticeCards ReadKind = "notice_cards"
 )
 
 // ReadKinds is the closed set.
@@ -1164,15 +1173,15 @@ const (
 // [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
 // that read [ReadQuery.Target], `queue_due` the only one that reads
 // [ReadQuery.QueueDue], `commit` the only one that reads
-// [ReadQuery.Commit], and `inbox` the only one that reads
-// [ReadQuery.Inbox].
+// [ReadQuery.Commit], `inbox` the only one that reads [ReadQuery.Inbox],
+// and `notice_cards` the only one that reads [ReadQuery.NoticeCards].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadImportsDue,
 		ReadMirrorsDue, ReadMirrorPush, ReadBranchChanges, ReadChangesDue, ReadIndexed,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
-		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox}
+		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards}
 }
 
 // Valid reports a kind this build knows.
@@ -1231,9 +1240,33 @@ type ReadQuery struct {
 	Repo string `json:"repo,omitempty"`
 	// Status filters a repos listing; empty is active and archived.
 	Status []RepoStatus `json:"status,omitempty"`
+	// Protected narrows a repos listing to the repositories a rule protects
+	// — at least one row of code_protections, which code_repos.protected
+	// says on the row — walked by the index of those alone
+	// (code_repos_protected_idx, [protectedReposKey]): a page of them costs
+	// what the protected repositories cost, however many the company holds
+	// that no rule protects. Settings › Code's Branch protection card lists
+	// them so; filtered after the read, a protected repository past the
+	// first page of every repository was never shown. Refused on every other
+	// kind, before any kind's own rules.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
+	// build that carries the code domain has run without this field — none
+	// of the domain is on main, so no image and no release serves a code
+	// read. A build that predated it would decode and ignore it, and answer
+	// every repository to a read that asked for the protected ones alone; so
+	// were a build without it ever to run first, the protected listing would
+	// move to a kind of its own, which such a build refuses as a kind it does
+	// not know, rather than ride a field it ignores.
+	Protected bool `json:"protected,omitempty"`
 	// Prefix narrows a refs listing to the refs under it: "refs/heads/"
 	// (the default) or "refs/tags/", or a deeper prefix ending in "/" — a
-	// seat's own namespace.
+	// seat's own namespace. It narrows a repositories listing to the names
+	// it begins — a name whole, or the opening of one — read as one range
+	// of the index by name, so a page of them costs what they cost however
+	// many repositories sort before them: what a picker asks with what was
+	// typed into it, since a company's repositories outnumber one page.
 	Prefix string `json:"prefix,omitempty"`
 	// Brief asks a push history for its rows IN BRIEF: the commits each push
 	// introduced counted and not listed, and the commands of a push of more
@@ -1347,8 +1380,9 @@ type ReadQuery struct {
 	// across trackers, `<backend>:<id>` ([types.WorkItem.Ref]). Repo, where
 	// set, narrows the listing to one repository.
 	//
-	// A LISTING NAMES A REPOSITORY, A WORK ITEM OR A STATE — what the indexes
-	// it walks lead with — and is refused naming none: there is no index of
+	// A LISTING NAMES A REPOSITORY, A WORK ITEM, A STATE OR A WINDOW — what
+	// the indexes it walks lead with, beside the reviewer and the need below —
+	// and is refused naming none: there is no index of
 	// every change the company holds, and an owner's changes are kept by
 	// state. It walks the ONE index its filters lead (changeread.go): a work
 	// item's changes; an owner's in a state; a repository's in a state; a
@@ -1381,6 +1415,14 @@ type ReadQuery struct {
 	// refuses the kind whole.
 	Reviewer string `json:"reviewer,omitempty"`
 	Needs    Need   `json:"needs,omitempty"`
+	// Window narrows a `changes` listing to the changes that moved within
+	// it ([ChangeWindow], [ChangeSummary.UpdatedAt]), refused on every other
+	// kind. A listing that names nothing else an index leads by — no
+	// repository, work item, reviewer or need — walks the two indexes of
+	// when its changes last moved (changewindow.go), newest move first, and
+	// tests a state and an owner on the rows it read; one that names any of
+	// those walks that one's index and tests the window on each row.
+	Window ChangeWindow `json:"window,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
 	// reviews, its findings or the asker's own standing findings
@@ -1551,6 +1593,13 @@ type ReadQuery struct {
 	// Inbox is an `inbox` read's question: whose inbox, and how it is
 	// narrowed ([InboxQuery]). Only that kind reads it.
 	Inbox *InboxQuery `json:"inbox,omitempty"`
+	// NoticeCards is a `notice_cards` read's question: the ids of the
+	// changes whose cards it answers, each once — at most [MaxNoticeCards],
+	// what one composed page of an inbox can name. REQUIRED for that kind
+	// and refused on every other; an estate request's field and no
+	// record's, so it takes no versionedFields row: a node of a build that
+	// predates the kind refuses the read as a kind it does not know.
+	NoticeCards []string `json:"notice_cards,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -1696,6 +1745,13 @@ type ReadAnswer struct {
 	// commits no train of their target tests or landed ([AbandonedCheck]):
 	// what its home cancels once its targets have taken their steps.
 	QueueAbandoned []AbandonedCheck `json:"queue_abandoned,omitempty"`
+	// QueueOwedCloses is, on the same first page, the repository's landed
+	// entries still owing their change's work item its close (M5-D27,
+	// code_queue.close_op), at most [MaxOwedCloses]: what its home closes
+	// as each entry's enqueuer and settles (close_settled), whichever home
+	// asked the landing. An answer between nodes, so an older reader drops it
+	// and leaves the closes owed for a newer home.
+	QueueOwedCloses []QueueWorkEntry `json:"queue_owed_closes,omitempty"`
 	// Queue is a page of a `queue` read's live entries, in queue order;
 	// Trains a `queue` read's candidates of the trains testing the targets
 	// its page reaches; Ejected, on a named repository's first page, the
@@ -1711,7 +1767,13 @@ type ReadAnswer struct {
 	Commit *CommitChanges `json:"commit,omitempty"`
 	// Inbox is an `inbox` read's page: the person's notices and their marks.
 	Inbox *InboxPage `json:"inbox,omitempty"`
-	Next  string     `json:"next,omitempty"`
+	// NoticeCards is a `notice_cards` read's answer: what each change it
+	// names says, by id ([NoticeChange]) — none for a change no row holds
+	// any more, or on a repository the asker may not read. AN ESTATE
+	// ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
+	// only that kind answers it, which a build that predates it refuses.
+	NoticeCards map[string]*NoticeChange `json:"notice_cards,omitempty"`
+	Next        string                   `json:"next,omitempty"`
 	// TipsNext is a `checks_due` page of one repository's tip work cut at its
 	// bound: the target it ended at, which the next page goes on after
 	// ([ChecksDueQuery.TipsAfter]) before any head — so a repository whose
@@ -2514,6 +2576,12 @@ type RepoDetail struct {
 	// repository's gates are half a mebibyte of JSON. A read that asked and
 	// finds none answers none.
 	Gates []RuleGate `json:"gates,omitempty"`
+	// RuleSources are who set each of its rules and when ([RuleSource]),
+	// every rule's — a gate's or none — in pattern order, and to the read
+	// that asks for the gates alone: the two are a rule in detail, which the
+	// row never carries, read in the same transaction as the rules it does,
+	// so every source names a rule of the row.
+	RuleSources []RuleSource `json:"rule_sources,omitempty"`
 	// Expunge is where the repository's expunges stand ([ExpungeState]):
 	// the one open, the purge a person asked for and not yet served, and the
 	// last one committed — the repository's own row, read with the rest of
@@ -2525,6 +2593,28 @@ type RepoDetail struct {
 	// with its expunge in one seek of its row, never on the [RepoRef] every
 	// push and fetch reads, which needs only [RepoRef.Mirrored].
 	Remotes RemoteState `json:"remotes,omitzero"`
+}
+
+// RuleSource is who set one of a repository's rules and when, named by the
+// rule's pattern: the decider of the record that last CHANGED the rule — its
+// push controls or its gate — and that record's instant (code_protections,
+// replicated 0147). A record that carries the rule unchanged, as every
+// settings change carries every rule, leaves its source as it was
+// ([rulesSourced]).
+//
+// A READ'S ANSWER, never a record's field: the columns are derived from what
+// every record already carries, its envelope's decider and its broker
+// instant, so none of it takes a versionedFields row (0147 states the
+// condition the derivation holds under).
+type RuleSource struct {
+	Pattern string `json:"pattern"`
+	// SetBy is the decider as the record names it: a seat's handle (SetByKind
+	// agent), a person's human seat or an unbound credential's login
+	// (operator, iam.ActorFor), and "" where the configuration set it
+	// (config), which no principal decides.
+	SetBy     string    `json:"set_by,omitempty"`
+	SetByKind ActorKind `json:"set_by_kind"`
+	SetAt     time.Time `json:"set_at"`
 }
 
 // RemoteState is a repository's other hosts as its row holds them
@@ -2674,6 +2764,25 @@ type ChangeSummary struct {
 	// that is no longer live, which merges nothing. A change read in brief
 	// judges none ([ReadAnswer.ChangeBrief]), and its row carries none.
 	Readiness *Readiness `json:"readiness,omitempty"`
+	// OpenFindings is how many of the change's findings stand open — none of
+	// its authors has answered them (code_conversations.open_findings) — 0 for
+	// a change nobody has reviewed.
+	OpenFindings int64 `json:"open_findings"`
+	// UpdatedAt is when the change last moved: the later of the last record
+	// on its repository's subject that changed its row — its open, an edit, a
+	// close, a merge, a push that moved its head — and the last one somebody
+	// wrote about it on its own subject — an ask for review, a comment, a
+	// review, an answer to a finding — never the home's facts (replicated
+	// 0146). What a listing narrowed to a window ([ReadQuery.Window]) keeps.
+	// A change read in brief ([ReadAnswer.ChangeBrief]) reads no
+	// conversation, and carries its lifecycle's last move alone, and no
+	// count of its findings.
+	//
+	// UNDER THE CODE DOMAIN'S STATED CONDITION (M3-O84 §2 item 5) these two
+	// are an answer's fields, never a record's, and take no versionedFields
+	// row: a build that predates them answers a listing without them, which
+	// no build serving the dashboard is, since none of the domain is on main.
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ChangeDetail is one change in detail: its summary, its description and its
@@ -4444,8 +4553,9 @@ type LandedInAnswer struct {
 	// Detail says why LandedBy is nil: the landing predates what the index
 	// holds, falls in a range it has not read yet, or lies past what the
 	// search checked — its bound of checks (internal/code/query's
-	// MaxLandedProbes) or the read's budget of git — named with the oldest
-	// push the search knows kept the commit.
+	// MaxLandedProbes), the read's budget of git, its answer falling due or
+	// a read lane busy past gitproc.SlotWait — named with the oldest push the
+	// search knows kept the commit.
 	Detail string `json:"detail,omitempty"`
 }
 

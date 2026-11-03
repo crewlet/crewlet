@@ -57,7 +57,6 @@ import {
   EmptyState,
   EmptyValue,
   SegmentedMeter,
-  Select,
   Skeleton,
   Tag,
 } from "@crewlethq/ui";
@@ -81,15 +80,10 @@ import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useLatestChecks } from "~/lib/useLatestChecks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import type {
-  CodeCheckRow,
-  CodeEjectedRow,
-  CodeParty,
-  CodeQueueAnswer,
-  CodeRepoSummary,
-} from "~/protocol/index.ts";
+import type { CodeCheckRow, CodeEjectedRow, CodeParty, CodeQueueAnswer } from "~/protocol/index.ts";
 import { CHECKS_POLL_MS } from "./checks/CheckList.tsx";
 import { REPO_PARAM } from "./paths.ts";
+import { RepoPicker } from "./RepoPicker.tsx";
 
 /**
  * How often the queues are read again: HALF A MINUTE, the checks listings'
@@ -101,7 +95,6 @@ const QUEUE_POLL_MS = CHECKS_POLL_MS;
 export function Queue() {
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
   const named = repo !== "" && isRepoName(repo);
-  const choices = useCodeQuery("code_repos");
   const params = useMemo(() => (named ? { repo } : {}), [named, repo]);
   const read = useCodeQuery("code_queue", params, {
     pollMs: QUEUE_POLL_MS,
@@ -131,7 +124,7 @@ export function Queue() {
   return (
     <>
       <div className="toolbar">
-        <QueueRepoPicker repo={repo} onChoose={setRepo} listing={choices.data?.repos ?? []} />
+        <RepoPicker repo={repo} onChoose={setRepo} every="Every repository" />
         {repo === "" && (
           <span className="t-caption">
             Every repository’s queues; choose one for its trains, its checks and what it put out
@@ -190,38 +183,6 @@ export function Queue() {
         </>
       )}
     </>
-  );
-}
-
-function QueueRepoPicker({
-  repo,
-  onChoose,
-  listing,
-}: {
-  repo: string;
-  onChoose: (name: string) => void;
-  listing: readonly CodeRepoSummary[];
-}) {
-  // EVERY REPOSITORY IS AN OPTION OF ITS OWN, the unnarrowed answer; the
-  // chosen name stays one where the listing's first page lacks it, so an
-  // address naming any repository reads as itself.
-  const options = [
-    { value: "", label: "Every repository" },
-    ...listing.map((r) => ({ value: r.name, label: r.name })),
-  ];
-  if (repo !== "" && !options.some((o) => o.value === repo))
-    options.splice(1, 0, { value: repo, label: repo });
-  return (
-    <Select
-      width="auto"
-      searchable
-      value={repo}
-      onChange={(value) => onChoose(String(value))}
-      options={options}
-      ariaLabel="Repository"
-      emptyMessage="No repository matches"
-      active={repo !== ""}
-    />
   );
 }
 

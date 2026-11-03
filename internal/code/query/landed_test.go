@@ -295,18 +295,117 @@ func TestALandingSearchTheBudgetEndsSaysHowFarItReached(t *testing.T) {
 	})
 }
 
+// A LANDING SEARCH ITS ANSWER FALLING DUE OR A BUSY READ LANE ENDS SAYS HOW
+// FAR IT REACHED, as one its bound or its budget ends does. Each check of the
+// search is a git process that queues for a read-lane slot of its own, a wait
+// the read's budget of git charges nothing, so on a busy node the read's
+// answer falls due, or the lane stays busy past gitproc.SlotWait, while the
+// search still has checks and budget left. Either leaves it knowing the
+// oldest move that kept the commit, which is answered — never the read
+// refused unready, which would throw that away and send the next git node to
+// run the same checks under the same kind of queue. The check against the
+// tip is not the search's: ended so, nothing is known, and the read is
+// unready at the share as any read's git is. main is rewritten as in the
+// budget's case, and the fourth ancestry check — the search's third — ends.
+//
+// Mutations: landing.stopped without its due and busy cases — the search's
+// read is refused unready, red for both ends; answer every check the share's
+// ends stop as the busy lane's — the due end's detail names the lane, red.
+func TestALandingSearchItsAnswerFallingDueOrABusyLaneEndsSaysHowFarItReached(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, forceable())
+	x.commit(map[string]string{"base.txt": "base\n"}, "base")
+	kept := x.commit(map[string]string{"kept.txt": "kept\n"}, "the commit asked about")
+	x.commit(map[string]string{"top.txt": "0\n"}, "a tip to rewrite")
+	var rewrites []string
+	for _, m := range []string{"a", "b", "c", "d", "e"} {
+		x.git("commit", "-q", "--amend", "-m", "rewritten "+m)
+		x.push(codetest.RepoName, "main")
+		rewrites = append(rewrites, x.p.Head(x.work))
+	}
+	repo := x.repo(codetest.RepoName)
+	tip, at := x.tip("refs/heads/main")
+	q := landedQ(repo, kept, "refs/heads/main", tip, at, false)
+	reached := x.pushesMoving(repo, "refs/heads/main", rewrites[3])[0]
+	pool := x.f.Nodes()[0].Pool()
+
+	for _, end := range []struct {
+		name, within string
+		// ends is the check's end, handed what makes the read's answer due.
+		ends func(due context.CancelCauseFunc) func(context.Context, gitproc.Cmd) (gitproc.Result, error)
+	}{
+		{"its answer falls due", "the read's attempt, whose answer fell due",
+			func(due context.CancelCauseFunc) func(context.Context, gitproc.Cmd) (gitproc.Result, error) {
+				// The due instant reached while the check waits for its
+				// slot, answered as gitproc answers a wait its caller ended.
+				return func(ctx context.Context, _ gitproc.Cmd) (gitproc.Result, error) {
+					due(code.ErrAnswerDue)
+					return gitproc.Result{}, fmt.Errorf("gitproc: waiting for a read slot: its caller went away: %w",
+						context.Cause(ctx))
+				}
+			}},
+		{"its read lane is busy", fmt.Sprintf("this node's read lane, busy past %s", gitproc.SlotWait),
+			func(context.CancelCauseFunc) func(context.Context, gitproc.Cmd) (gitproc.Result, error) {
+				return func(context.Context, gitproc.Cmd) (gitproc.Result, error) {
+					return gitproc.Result{}, fmt.Errorf("%w: all 2 read slots on this node stayed busy for %v",
+						gitproc.ErrBusy, gitproc.SlotWait)
+				}
+			}},
+	} {
+		t.Run(end.name+", a check of the search", func(t *testing.T) {
+			ctx, due := context.WithCancelCause(t.Context())
+			defer due(nil)
+			s := x.server(0, query.Options{Git: &checkEnding{Pool: pool, n: 4, ends: end.ends(due)}})
+			ans, err := s.Read(ctx, q)
+			if err != nil {
+				t.Fatalf("a read whose search %s = %v, want how far the search reached", end.name, err)
+			}
+			a := ans.LandedIn
+			switch {
+			case !a.Landed:
+				t.Fatalf("the commit is not landed in main: %+v", a)
+			case a.LandedBy != nil:
+				t.Errorf("a search that ended so named push %s", a.LandedBy.PushID)
+			case a.Probes != 3:
+				t.Errorf("the search ran %d checks, want the 3 it ended on", a.Probes)
+			case !strings.Contains(a.Detail, "landed at or before push "+reached.PushID) ||
+				!strings.Contains(a.Detail, "4 forced moves of refs/heads/main were not searched past within "+
+					end.within):
+				t.Errorf("the answer's detail is %q, want it to name push %s, the second rewrite from the top, the "+
+					"4 forced moves at and below it, and %q", a.Detail, reached.PushID, end.within)
+			}
+		})
+		t.Run(end.name+", the check against the tip", func(t *testing.T) {
+			ctx, due := context.WithCancelCause(t.Context())
+			defer due(nil)
+			s := x.server(0, query.Options{Git: &checkEnding{Pool: pool, n: 1, ends: end.ends(due)}})
+			_, err := s.Read(ctx, q)
+			var unready *code.ErrGitUnready
+			if !errors.As(err, &unready) || unready.Reason != code.UnreadyShare {
+				t.Errorf("a read whose check against the tip ended as %s = %v, want ErrGitUnready{share}",
+					end.name, err)
+			}
+		})
+	}
+}
+
 // checkEnding is a query.Pool whose n-th ancestry check — the first a
-// landed-in read runs being its check against the tip — runs out all the
-// read's budget of git had left, answered as gitproc answers a run killed at
-// its deadline; every other process runs on the pool beneath.
+// landed-in read runs being its check against the tip — ends as ends says,
+// or, where ends is nil, runs out all the read's budget of git had left,
+// answered as gitproc answers a run killed at its deadline; every other
+// process runs on the pool beneath.
 type checkEnding struct {
 	query.Pool
 	n    int64
+	ends func(context.Context, gitproc.Cmd) (gitproc.Result, error)
 	seen atomic.Int64
 }
 
 func (p *checkEnding) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
 	if c.Args[0] == "merge-base" && p.seen.Add(1) == p.n {
+		if p.ends != nil {
+			return p.ends(ctx, c)
+		}
 		return gitproc.Result{Exit: -1, Took: c.Deadline}, fmt.Errorf("gitproc: git merge-base ran past its %v "+
 			"deadline and was killed: %w", c.Deadline, gitproc.ErrDeadline)
 	}

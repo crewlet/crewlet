@@ -19,13 +19,13 @@
  *
  * Several of the code host's refusals share one class — a head that moved and
  * a train whose base moved are both `stale_version` — so the controls answer
- * by the host's own word (`hostRefusal`, `contract/merge.ts`), and fall back
- * to the engine's sentence where theirs would say less: a gate the change
- * does not meet yet (`not_ready`), or why this reader may not
- * (`not_permitted`). That sentence is a person's words for the refusal where
- * the engine has them, and its code's own sentence where nobody has worded
- * it yet (ADR-0060), which for `not_ready` sends the reader to the change's
- * readiness: the gate's every unmet condition and who clears it.
+ * by the host's own word (`hostRefusal`, `contract/merge.ts`), and draw the
+ * engine's words where only the engine knows what to say: a gate the change
+ * does not meet yet (`not_ready`, saying what it still waits for and whom), a
+ * branch the merge may not delete, a repository at its size, and a merge
+ * asked for somebody who may not make it. Those are a person's words from the
+ * engine's refusal catalog (ADR-0060), never the sentence it writes for a
+ * model, and a refusal nobody has worded yet answers its code's own sentence.
  *
  * WHAT THIS IS NOT: a landing-policy choice or an auto-revert consent. A
  * gated target's queue lands each change tested merged on the branch, the
@@ -57,11 +57,10 @@ const METHOD_LABELS: Readonly<Record<MergeMethod, { label: string; title: string
 
 /**
  * What the controls say for each of the code host's refusals, or `null` for
- * the engine's own sentence: a person's words for the refusal where the
- * engine has worded it for one, and its code's own sentence otherwise
- * (ADR-0060) — for a gate the change does not meet yet, one that sends the
- * reader to the change's readiness, which names every unmet condition and
- * who clears it. COMPLETE OVER `MERGE_REFUSALS` by
+ * the engine's words: a person's words the engine writes for a refusal whose
+ * sentence needs what only the engine knows (the conditions a gate still
+ * waits for, and whom), and its code's own sentence for a refusal nobody has
+ * worded yet (ADR-0060). COMPLETE OVER `MERGE_REFUSALS` by
  * the compiler, so a refusal the engine grows is a type error here before
  * it is a sentence in the general words of its class.
  */
@@ -192,7 +191,7 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
       <p className={held ? "muted" : undefined}>
         {readiness
           ? `${readiness.met} of ${readiness.total} of its gate's conditions met${
-              held ? ` — ${held}` : ": it may merge."
+              held ? `. ${held}` : ": it may merge."
             }`
           : held}
       </p>
@@ -343,8 +342,8 @@ function OverrideDialog({
       }
     >
       <Callout variant="warning">
-        It merges now, directly, whatever its gate still waits on
-        {held ? ` — ${held}` : ""}. Your reason is kept with the merge, and the override is audited.
+        It merges now, directly, whatever its gate still waits on.{held ? ` ${held}` : ""} Your
+        reason is kept with the merge, and the override is audited.
       </Callout>
       <Textarea
         aria-label="Reason"

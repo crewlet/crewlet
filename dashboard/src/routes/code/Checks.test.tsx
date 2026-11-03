@@ -16,7 +16,9 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
 import { Checks, checkBars } from "./Checks.tsx";
+import { failureHref } from "./checks/CheckList.tsx";
 import { RepoChecks } from "./checks/RepoChecks.tsx";
+import { commitHref } from "./paths.ts";
 
 afterEach(() => {
   cleanup();
@@ -154,10 +156,10 @@ test("the chart buckets ended attempts by when they ended, failures apart", () =
 });
 
 // ONE ATTEMPT, WHOLE: what it said, each failure a link into the diff it was
-// checked on — the comparison of its base and its commit, on the file — and
-// the tail; its log is asked only when the reader asks, by its object.
-// Mutation: link a failure to the commit alone, or read the log on open, and
-// this fails.
+// checked on — the comparison of its base and its commit, on the file at its
+// line — and the tail; its log is asked only when the reader asks, by its
+// object. Mutation: link a failure to the commit alone, drop its line from
+// the link, or read the log on open, and this fails.
 test("an attempt opens whole, its failures linked into its diff and its log read on demand", async () => {
   const asked = stubCodeEngine({
     "/query/code_checks": LISTED,
@@ -177,6 +179,7 @@ test("an attempt opens whole, its failures linked into its diff and its log read
   expect(target.hash).toContain(`base=${BASE}`);
   expect(target.hash).toContain(`head=${OID}`);
   expect(target.hash).toContain("file=app%2Fretry.go");
+  expect(target.hash).toContain("line=12");
   expect(within(pane).getByText("--- FAIL: TestRetry")).toBeTruthy();
   expect(asked.some((u) => u.pathname === "/query/code_check_log")).toBe(false);
 
@@ -186,6 +189,26 @@ test("an attempt opens whole, its failures linked into its diff and its log read
   expect(log.searchParams.get("object")).toBe("objects/log-1");
   expect(log.searchParams.get("offset")).toBe("0");
   expect(within(pane).getByText("That is the whole log.")).toBeTruthy();
+});
+
+// AN ATTEMPT WITH NO BASE has no diff to point into: a failure naming a line
+// opens the file at the attempt's own commit on that line, and one naming no
+// line the commit's page. Mutation: open the file at no line, at another
+// commit, or the commit's page for a failure with a line, and this fails.
+test("a failure of an attempt with no base opens the file at its commit on its line", () => {
+  const row = attempt("unit", "failed", { base: "" });
+  const at = new URL(
+    failureHref("web", row, { path: "app/retry.go", line: 12, message: "never stopped" }),
+    "http://x",
+  );
+  expect(at.hash).toContain("/code/repos/web?");
+  expect(at.hash).toContain("tab=files");
+  expect(at.hash).toContain(`ref=${OID}`);
+  expect(at.hash).toContain("path=app%2Fretry.go");
+  expect(at.hash).toContain("lines=12");
+  expect(failureHref("web", row, { path: "app/retry.go", message: "never stopped" })).toBe(
+    commitHref("web", OID),
+  );
 });
 
 // A REPOSITORY'S TAB is its own listing, which takes no window.

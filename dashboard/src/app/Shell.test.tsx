@@ -325,6 +325,9 @@ describe("the Inbox badge", () => {
     await settle();
     const inbox = asked.find((a) => a.what === "inbox");
     expect(inbox?.params).toMatchObject({ handle: "ada", unread: true, primary_only: true });
+    // A COUNT DRAWS NO CARD, so it asks the engine to judge none: the badge's
+    // read runs behind every screen of every tab.
+    expect(inbox?.params).not.toHaveProperty("cards");
     const row = screen.getByRole("link", { name: /^Inbox/ });
     expect(row.textContent).toContain("1");
   });

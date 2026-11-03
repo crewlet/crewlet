@@ -7,11 +7,12 @@
  * so every answer here is immutable and the tab keeps it (`lib/useCodeQuery.ts`,
  * its most recently read 64) — a file read again, a reviewer moving from one
  * file to another and back, is answered with no request while the tab keeps
- * it. `file=` is the file whose patch is drawn and
+ * it. `file=` is the file whose patch is drawn, `line=` the line of its newer
+ * side the patch marks and opens at (a check's failure points there), and
  * `layout=` how, each a filter of the page it is on.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Button, Select, Skeleton, Stack } from "@crewlethq/ui";
 import { useParam } from "~/app/router.tsx";
 import { DiffView } from "~/components/DiffView.tsx";
@@ -22,6 +23,12 @@ import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type { CodeDiffFile, CodeGitAnswer } from "~/protocol/index.ts";
 import { PatchPager } from "../PatchPager.tsx";
+import { repoHref } from "../paths.ts";
+
+/** A `line=` as the address spells it: a line number, or 0 for none. */
+function lineOf(param: string): number {
+  return /^[1-9][0-9]*$/.test(param) ? Number(param) : 0;
+}
 
 /** What git's status letter says of a file. */
 function statusWord(f: CodeDiffFile): string {
@@ -41,6 +48,7 @@ function statusWord(f: CodeDiffFile): string {
 export function DiffFiles({ repo, base, head }: { repo: string; base: string; head: string }) {
   const [file, setFile] = useParam("file", "", "filter");
   const [layout, setLayout] = useParam("layout", "unified", "filter");
+  const [lineParam] = useParam("line", "", "filter");
   const params = useMemo(() => ({ name: repo, base, head }), [repo, base, head]);
   const first = useCodeQuery("code_diff", params);
   const paged = usePaged(
@@ -139,6 +147,9 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
               path={shown}
               listed={files.find((f) => f.path === shown)}
               layout={layout === "split" ? "split" : "unified"}
+              // A LINE IS THE FILE'S THE ADDRESS NAMES, never the first file
+              // drawn where it names none.
+              line={file !== "" && shown === file ? lineOf(lineParam) : 0}
             />
           )}
         </div>
@@ -156,6 +167,12 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
  * its modes and whether git calls it binary — so a file the address names
  * past the pages listed is described by the read that draws it. One the
  * listing holds is known binary before anything is asked, and nothing is.
+ *
+ * A LINE THE ADDRESS NAMES (`line`, of the newer side) is marked where the
+ * patch draws it and scrolled into view once, as it is first drawn. One the
+ * patch does not draw, read to its end, is outside what the diff changes:
+ * said, with the file itself at `head` offered on that line, rather than a
+ * patch drawn as if it held the line.
  */
 function FilePatch({
   repo,
@@ -164,6 +181,7 @@ function FilePatch({
   path,
   listed,
   layout,
+  line,
 }: {
   repo: string;
   base: string;
@@ -171,6 +189,7 @@ function FilePatch({
   path: string;
   listed: CodeDiffFile | undefined;
   layout: "unified" | "split";
+  line: number;
 }) {
   const params = useMemo(() => ({ name: repo, base, head, file: path }), [repo, base, head, path]);
   const read = useCodeQuery("code_diff", params, { enabled: !listed?.binary });
@@ -178,8 +197,21 @@ function FilePatch({
     codeRest.query("code_diff", { ...params, cursor }),
   );
   const entry = listed ?? file;
+  const drawn = line > 0 && hunks.some((h) => h.lines.some((l) => l.after === line));
+  const region = useRef<HTMLElement>(null);
+  const scrolled = useRef("");
+  useEffect(() => {
+    const place = `${path}\u0000${line}`;
+    if (!drawn || scrolled.current === place) return;
+    const marked = region.current?.querySelector<HTMLElement>(".diff-view__line[data-picked]");
+    if (!marked) return;
+    scrolled.current = place;
+    marked.scrollIntoView?.({ block: "center" });
+  }, [drawn, path, line]);
+  const outside =
+    line > 0 && !drawn && !!entry && !entry.binary && !!read.data && !read.loading && !paged.more;
   return (
-    <section aria-label={`Changes to ${path}`} className="code-file">
+    <section ref={region} aria-label={`Changes to ${path}`} className="code-file">
       {entry?.binary ? (
         <p className="muted">A binary file: git draws no lines of it.</p>
       ) : read.loading && !read.data ? (
@@ -201,9 +233,25 @@ function FilePatch({
         </p>
       ) : (
         <Stack gap={2}>
-          <DiffView hunks={hunks} layout={layout} aria-label={`Changes to ${path}`} />
+          <DiffView
+            hunks={hunks}
+            layout={layout}
+            aria-label={`Changes to ${path}`}
+            picked={line > 0 ? (l) => l.after === line : undefined}
+          />
           <PatchPager paged={paged} />
         </Stack>
+      )}
+      {outside && (
+        <p className="muted">
+          {`Line ${line} is outside what this diff changes. `}
+          <a
+            className="t-link"
+            href={repoHref(repo, { tab: "files", ref: head, path, lines: String(line) })}
+          >
+            {`Open ${path} at line ${line}`}
+          </a>
+        </p>
       )}
     </section>
   );

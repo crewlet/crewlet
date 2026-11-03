@@ -110,8 +110,8 @@ type Uploader interface {
 // copy's dropping view.
 type Cache interface {
 	Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error)
-	Packs(s cache.Synced) []code.PackRow
-	DroppingPacks(s cache.Synced) []code.PackRow
+	Packs(s cache.Synced) ([]code.PackRow, error)
+	DroppingPacks(s cache.Synced) ([]code.PackRow, error)
 	Chain(s cache.Synced) cache.Chain
 	MaintenanceCharge(objects int64, limits code.Limits) int64
 	Damaged() []code.RepoRef
@@ -240,8 +240,10 @@ func (o Outcome) Valid() bool { return slices.Contains(Outcomes(), o) }
 // (code.RefusalStoreFull), one name for one fact — a build that wrote more
 // outputs than one compaction records, an output past the bundle rule even at
 // a smaller cut, a layer git wrote without a bitmap, and a layer past what its
-// parts hold.
+// parts hold — and, busy rather than refused, a copy a swap replaced after the
+// pass's sync pinned it (cache.ErrSuperseded), which the next pass syncs past.
 const (
+	reasonSuperseded     = "superseded"
 	reasonMemory         = "memory"
 	reasonStoreFull      = string(code.RefusalStoreFull)
 	reasonOutputs        = "outputs"

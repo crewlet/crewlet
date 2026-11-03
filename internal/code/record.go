@@ -594,9 +594,20 @@ const (
 	// queue_sweep", Since: 2, Path: []string{"op"}, Equals:
 	// string(OpQueueSweep)}, with the same companions. It is no gate.
 	OpQueueSweep OpKind = "queue_sweep"
+
+	// OpCloseSettled settles the closes landed queue entries owe their
+	// changes' work items, each closed or definitively not, every close a
+	// turn of their home ended in one record ([CloseSettled]) — made as each
+	// entry's enqueuer, recorded on the repository's own subject.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// close_settled", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpCloseSettled)}, with the same companions. It is no gate.
+	OpCloseSettled OpKind = "close_settled"
 )
 
-// OpKinds are the fifty-five, in the order they are documented.
+// OpKinds are the fifty-six, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
@@ -607,7 +618,7 @@ var OpKinds = []OpKind{
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
 	OpMergeabilityKept, OpAsks,
 	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpMerge, OpEnqueue, OpDequeue,
-	OpMarks, OpCandidate, OpEject, OpLand, OpGreen, OpBroken, OpQueueSweep,
+	OpMarks, OpCandidate, OpEject, OpLand, OpGreen, OpBroken, OpQueueSweep, OpCloseSettled,
 }
 
 // CheckOps are the ops of a repository's CHECKS, in [OpKinds]' order: every
@@ -767,7 +778,8 @@ type RecordEnvelope struct {
 	// any kind rule, on a node that may not decode the payload at all.
 	Writer string `json:"writer,omitempty"`
 
-	// Scope is the complete set of objects this record's apply may write.
+	// Scope is every object this record's apply may write and every object
+	// its decide read (scope.go).
 	Scope Scope `json:"scope"`
 }
 

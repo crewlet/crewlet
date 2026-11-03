@@ -328,6 +328,19 @@ archived repository is not warned about: it takes no push at all, so nothing
 can move or delete its branch until it is unarchived, and the revision that
 unarchives it brings the warning back.
 
+**Every rule names who last changed it, and when.** The rules are carried
+whole by every record that carries a repository's settings — its create, a
+settings change, a restore — and each rule's row keeps the decider of the
+record that last CHANGED it (its push controls or its gate) and that
+record's instant: a seat by its handle, a person by their human seat, an
+unbound credential by its login, and nobody for a rule the company document
+declares, whose source is the configuration. A record that carries a rule
+unchanged, as a description edit or another pattern's protection does,
+leaves the rule's source as it was. A read of one repository in detail that
+asks for its gates answers each rule's source beside them (`rule_sources`:
+`pattern`, `set_by`, `set_by_kind` and `set_at`), and Settings › Code and the
+repository's Settings tab draw it under each rule.
+
 A declared repository's rules change only with its declaration. Those of a
 repository a tool made change one pattern at a time through a lifecycle
 request, where a seat may add a rule or tighten one and only a person removes
@@ -1690,7 +1703,9 @@ moves — and each push of a record sees what the ones before it did.
   one commit holds another is git's to say — so the repository's home finds
   it when it reads the revision's facts and lands the change: `merged`, by
   `push`, at the target's tip it found holding the head, and made by whoever
-  pushed that tip, who is told nothing of it ([The home's change
+  made the push that brought the head into the target — never whoever moved
+  the target last, who may have pushed on top of the merge before the home
+  read it — who is told nothing of it ([The home's change
   work](#the-homes-change-work)).
 - **Deleting the source branch closes the change**: `closed`, its reason
   `source_deleted` — after the same push's merges, so a push that sets the
@@ -1717,17 +1732,37 @@ answer that holds every record the code log had committed when it was asked.
 - **A listing of changes**, newest first, a page at a time. It names a
   **repository**, a **work item** — by its identity across trackers,
   `<backend>:<id>`, such as `native:<task id>`, which is what a change's row
-  holds; the code tools also take a Worklet item's key or id, as the change
-  writes do, and ask for the identity it resolves to — a **state**, a **reviewer**
-  or **what its changes wait on**, and may narrow further by an **owner** (a
+  holds; the code tools also take a Worklet item's key, as the change writes
+  do, and ask for the identity it resolves to, while an identity (a Worklet
+  task's id, bare or under `native:`) is listed as named, with no read of the
+  tracker — a **state**, a **reviewer**, **what its changes wait on** or a
+  **window** they moved in, and may narrow further by an **owner** (a
   seat by its handle, or a person by the human seat they hold) and by
   whichever of the others it did not name. One that names none of them is
   refused: no index holds every change the company has, and an owner's
   changes are kept by state, so an owner's are listed in a state, or in a
   repository, or on a work item. A repository's changes are listed by
   number; a reviewer's by the change's id, which is minted as the change is
-  opened; every other listing in the order the records that opened its
-  changes landed on the code log.
+  opened; a window's, where nothing else leads it, by when each change last
+  moved; every other listing in the order the records that opened its
+  changes landed on the code log. Every change it lists says how many of its
+  findings stand open — none of its authors has answered them — and **when it
+  last moved**.
+- **When a change last moved** is the later of two instants, one a subject it
+  moves on: the last record on its repository's subject that changed its row
+  (its open, an edit, a draft, a retarget, a close, a reopen, a landing, a
+  merge, and every push that moved its head, closed it or merged it), and the
+  last one somebody wrote about it on its own (an ask for review, a comment, a
+  thread resolved, a review, an answer to a finding). Its home's facts — a
+  revision's facts, a mergeability — date nothing: a target branch that moves
+  has its home check every live change into it again, and a change listed as
+  moved because its target did would put every change of a busy branch in
+  every day's window. A **window** (`24h`, `7d` or `30d`) lists the changes
+  that moved within the last day, week or month. Named with nothing else an
+  index leads by — no repository, work item, reviewer or need — it walks the
+  two instants' indexes together, newest move first, each change once, and
+  tests a state and an owner on the rows it read; named beside one of those,
+  it is tested on the rows that one's walk read.
 - **The changes waiting on a reviewer** are a listing that names a
   `reviewer` — the changes whose ask of that reviewer still **waits** — or
   `needs=review`, the **live** ones alone, the asker's own where it names no
@@ -1826,7 +1861,11 @@ the same ones ([The company's code](../guides/tools-and-mcp.md#the-companys-code
 `code_list_changes` is the listing — its `work` named as `code_open_change`
 names the item a change carries, so a seat woken on `ENG-42` lists that
 item's changes by the key it holds, resolved through Worklet's own read to the
-item's identity before the listing is asked — and `code_get_change` one change a part at
+item's identity before the listing is asked. Only a key is resolved: an item
+named by its identity, as a change prints it (`native:<task id>`, or the id
+alone), is listed as named, so it costs no second read and still lists the
+changes that carry an item whose task was purged, which a purge leaves in
+place — and `code_get_change` one change a part at
 a time — its summary, its [merge readiness](#merge-readiness), a revision's
 files and a file's patch from the base its facts record or, since an earlier
 revision, what changed between the two ([What changed between two
@@ -2404,8 +2443,9 @@ repository's own row on every write (whether it is archived or deleted, and
 the owner and visibility a seat's rerun is judged by), each change a head
 dispatch queues at, and the change a seat's rerun reads its authors from or a
 failed head's ending routes to. So the record's scope names the repository
-and its checks, and each of those changes — the whole code domain for a
-dispatch of more changes than a record's scope holds. A node holding a
+and its checks, and each of those changes by name, however many a dispatch
+queues at — never the whole code domain, which would meet a record about
+every other repository too. A node holding a
 record it cannot decode — a newer build's, mid-upgrade — that covers any of
 them answers the write unavailable (`deferred`) and publishes nothing, and
 the asker asks the next node, whose rows are current: a rerun is never
@@ -3306,7 +3346,9 @@ take at most half the node's cores, one each,
 in a slot that is free or not at all, so they never make a push or a fetch
 wait; and only as many run at once as a quarter of a gibibyte a core holds
 beside the largest, so a node that has just joined does not index all its
-largest repositories at once.
+largest repositories at once. A repository read so steadily that one read's
+sync starts as the last ends is indexed all the same, in its turn: the run starts
+between the two, and neither waits for the other.
 
 **The commit-graph first.** A copy the node has just read whole — after a cold
 sync or a rebuild, or on a node that has just joined — gets its commit-graph at
@@ -4803,9 +4845,11 @@ which ask a path owner to review or a reviewer to look again: a revision is
 somebody's push, the opener's for the first and whoever moved the head for
 every later one, so the facts name that pusher, and a seat asked to review a
 colleague's revision reads for both grants — and a change it found landed:
-the push that moved the target to the tip holding the change's head merged
-it, so the landing names whoever made that push, and the change's other
-authors told it merged read for that pusher's grant too. A
+the push after which the target held the change's head merged it, which the
+home finds by walking the target's moves back from the tip, since a push on
+top of the merge may have moved the target since; the landing names whoever
+made that push, and the change's other authors told it merged read for that
+pusher's grant too. A
 credential acting as no seat holds no seat a ceiling could be decided for, so
 the turn its change wakes reads nothing, as a stranger's does. The seat's own
 voice is never its requester: when the outcome of its own act opens a thread,
@@ -5617,11 +5661,19 @@ names a move the commit was reachable before: where the commit already stood
 on the branch before the oldest move the index holds of it, or before the
 first move past its gap, the answer names no push and says which range the
 landing lies in. A search runs at most 1 024 ancestry checks, and they share
-the read's ten seconds of git with its check against the tip; whichever ends it
-first, it names how far it reached and how many forced moves it did not search
-past, rather than refusing the read. The count is the most checks that fit
-those ten seconds at what one check measured, so a branch forced about five
-hundred times since the commit landed on it is searched whole.
+the read's ten seconds of git with its check against the tip. The count is the
+most checks whose **running** fits those ten seconds at what one check
+measured, so a branch forced about five hundred times since the commit landed
+on it is searched whole. It is not fitted to the read's wall time: each check
+is a git process of its own that waits its turn for the node's read lane,
+behind people's pushes and the node's syncs, and those waits count against no
+budget, so on a busy node a long search can run out of the time its asker
+waits for the answer before it runs out of checks or of git. Whichever ends
+it — the count, the ten seconds, the asker's wait, or a read lane busy for ten
+seconds — it names how far it reached and how many forced moves it did not
+search past, rather than refusing the read. Only the check against the tip,
+before the search, is refused as any read is: too large where it runs out the
+ten seconds, and on a busy node answered by another git node.
 
 **Kept like the rest of the copy.** The index is a set of immutable runs under
 `crewlet/` in the repository's directory, merged in the background eight
@@ -5675,7 +5727,10 @@ reached. Each check is a git process walking by generation once the node has
 written the copy's commit-graph, 6.7 ms at the 99th percentile, so the 1 025
 checks of a search at its bound fit the read's ten seconds of git where 2 049
 would not; walking by date, without the graph, one check over the same history
-took 26 ms.
+took 26 ms. These are an idle node's figures, with nothing else waiting for
+its read lane: on a busy one each check also waits its turn, so the same
+search takes longer than its 4.8 s of git, and answers how far it reached
+where the asker's wait ends first.
 
 ---
 
@@ -5921,7 +5976,16 @@ tip as the rows hold it, then either
   target past it — as a record on the repository's subject the committer
   decides against the change's head and the tip the home read: a head pushed
   since, a retarget or the target moved again are each refused `stale`,
-  recorded nowhere, for the home's next read; or
+  recorded nowhere, for the home's next read. The landing names the push
+  that merged the change: the home walks the target's moves back from that
+  tip, asking its own git of each whether the commit the move left behind
+  held the head, and the first that did not is the push after which the
+  target held it through to the tip. The walk costs the moves since the
+  merge, a page of one record's pushes at a time and at most 256 pushes;
+  where it finds none — the head was in the target before every move the
+  history keeps, or past that bound — the landing names nobody, and every
+  author is told. The committer holds the push it names to the rows: a move
+  of the target, applied, no older than the change's head revision; or
 - **records its facts**, its touched paths matched against the repository's
   path owners on the home ([Recorded on the change](#recorded-on-the-change));
 
@@ -6489,9 +6553,30 @@ holds.
   that asked it has its change's work item closed — set `done` in
   Worklet — **as its enqueuer**, decided by the authority table
   as theirs and attributed to them, under an operation id derived from the
-  landing's, so a close asked again is the same write. An item already
-  finished is left as it is; one on a vendor's tracker is closed there, by
-  whoever closes it, and the home logs that it closed nothing.
+  landing's, so a close asked again is the same write. The close is
+  **owed on the entry's row** from the landing's apply until its home
+  settles it: the landing records the close's operation on each entry it
+  lands that asked it (`code_queue.close_op`), and every home's queue work
+  lists the repositories owing one. So a landing answered `pending`, a home
+  that stops or hands the repository on between the landing and the close,
+  and a close the tracker could not answer are each closed by the next
+  turn on whichever home holds the repository, and never lost (an
+  archived repository's wait until it is unarchived, since nothing is
+  recorded on one). The closes
+  a turn ENDED are settled together, by one `close_settled` record on the
+  repository's subject however many changes the landing merged, rather than
+  an append a change one after another inside the turn; a close another
+  home's settle reached first is passed over, the rest recorded. Each ends
+  `closed` (the item closed, or already finished) or
+  `not_closed`, for a close no asking again changes — the item is on a
+  vendor's tracker, which is closed there by whoever closes it; the
+  enqueuer is bound to no seat, has left the chart or may no longer update
+  it; or Worklet refuses the close for good, the item gone or its content
+  or its state (the trash, say) refusing it done. A `not_closed` settle tells the change's authors and its enqueuer,
+  under `merged`, why the item was left open (`Change … was merged through
+  its queue, and its work item was not closed: …`). A close no home could
+  make for `code.QueueHistory` is given up with its row, which the queue's
+  history removes.
 
 #### How fast a queue lands
 
@@ -6533,6 +6618,18 @@ rate of its own:
 The remedy for both is the same: a deeper queue or a larger batch lands more
 a round, faster or fewer required checks shorten it, and more branches or
 repositories each have a queue of their own.
+
+Before the alarm fires, the home's own instruments show how its queues are
+going ([Metrics](../reference/metrics.md)): `crewlet.code.queue.landed`
+counts the changes its land records landed, which against the enqueues
+`crewlet.code.queue.proposals` counts is the queue's throughput;
+`crewlet.code.queue.rounds` counts its trains by how each ended — `landed`,
+`bisected` down to a culprit, `ejected` by a landing that would not land
+them, or `abandoned` under a person's push, a dequeue or a newer train —
+so a rising share of `bisected` is changes queued red; and
+`crewlet.code.queue.ejected` counts what it put out, by reason.
+`crewlet.code.queue.round.duration` is each landed round, timed from the
+same two instants the alarm prices a round at.
 
 ### Tip checks and code_green
 
@@ -6773,7 +6870,7 @@ chart holds, in the snapshot, and not the asker's list beside them.
 | `dequeued` | The change's authors, and whoever put it in the queue | A record that put the change's entry out of its target's queue: an ejection, or a dequeue somebody asked |
 | `finding_replied` | The raiser of the finding a comment replies to, or an answer answers | A reply to a finding; an answer to findings |
 | `ready_to_merge` | The change's authors who may merge it into its target; where none may, the effective lead of the repository's owner | The mergeability whose stored answer goes from not ready to ready |
-| `merged` | The change's authors, but whoever merged it: the pusher of the push that set the target to its head, or — on the home's landing — of the push that moved the target to the tip the home found its head in; the merger of a merge record; the enqueuer of an entry the queue landed | The push that sets the target to the change's head; the home's landing; the merge record that merged it; the queue's landing of it |
+| `merged` | The change's authors, but whoever merged it: the pusher of the push that set the target to its head, or — on the home's landing — of the push that brought its head into the target, which the home finds walking the target's moves back from the tip it found the head in (never the push that moved the target last, which may be somebody's push on top); the merger of a merge record; the enqueuer of an entry the queue landed | The push that sets the target to the change's head; the home's landing; the merge record that merged it; the queue's landing of it |
 | `review_submitted` | The change's authors | A review that approves or comments |
 | `re_review` | The reviewers whose standing verdict asks for changes on an earlier revision | A revision's first facts |
 | `thread` | Everybody who said something in the thread | A comment |
@@ -6903,7 +7000,8 @@ stops after its record committed loses no wake.
   decided for both grants ([Reads made for somebody else](#reads-made-for-somebody-else));
   the home's own records — a conflict, a change ready to merge — are nobody's,
   a revision's facts are whoever pushed the revision, and a change it found
-  landed whoever pushed the target's tip it found the change's head in.
+  landed whoever made the push that brought the change's head into its
+  target.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a

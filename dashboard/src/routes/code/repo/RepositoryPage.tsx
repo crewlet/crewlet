@@ -54,7 +54,7 @@ import { indexOrg, unitByKey, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
-import { gateLine, pushRuleLine } from "~/lib/protection.ts";
+import { gateLine, pushRuleLine, ruleSourceLine } from "~/lib/protection.ts";
 import {
   importStanding,
   pullMirrorStanding,
@@ -378,6 +378,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
   const settings = useCodeQuery("code_repo", { name: repo.name, path_owners: true, gates: true });
   const full = settings.data?.repo;
   const gates = new Map((full?.gates ?? []).map((g) => [g.pattern, g.gate]));
+  const sources = new Map((full?.rule_sources ?? []).map((s) => [s.pattern, s]));
   const owners = full?.path_owners ?? [];
   const detailState =
     settings.loading && !full ? (
@@ -464,6 +465,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
           <ul className="code-rules">
             {rules.map((rule) => {
               const gate = gates.get(rule.pattern);
+              const source = sources.get(rule.pattern);
               return (
                 <li key={rule.pattern}>
                   <span className="mono">{rule.pattern}</span>
@@ -471,6 +473,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
                     {pushRuleLine(rule)}
                     {gate ? `; a merge into it is ${gateLine(gate)}` : ""}
                   </span>
+                  {source && <span className="t-caption">{ruleSourceLine(source)}</span>}
                 </li>
               );
             })}

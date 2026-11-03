@@ -5754,18 +5754,20 @@ export interface InboxPosition {
 }
 
 /** What a code notice carries of its change, read with the page
- *  (`code.NoticeChange`). */
+ *  (`code.NoticeChange`): its title, state and work item — and, where the
+ *  read asked for `cards`, what its card draws besides, read once the page
+ *  was composed for the notices it kept. */
 export interface CodeNoticeChange {
   title: string;
   state: string;
   work_item?: { backend: string; id: string; key: string; project?: string };
-  /** The description's first KiB; `body_cut` says there is more. */
+  /** The description's first KiB; `body_cut` says there is more. A card's. */
   body?: string;
   body_cut?: boolean;
-  /** The findings seats raised that stand open, by severity. */
+  /** The findings seats raised that stand open, by severity. A card's. */
   agent_findings?: Record<string, number>;
-  /** Where a live change's merge stands, judged at the read for its reader;
-   *  absent for a merged or closed change, which merges nothing. */
+  /** Where a live change's merge stands, judged for its reader; absent for a
+   *  merged or closed change, which merges nothing. A card's. */
   readiness?: CodeNoticeReadiness;
 }
 
@@ -8402,6 +8404,19 @@ export interface CodeChangeSummary extends CodeChangeRow {
   access?: string;
   /** Absent for a change that is no longer live, which merges nothing. */
   readiness?: CodeReadiness;
+  /**
+   * How many of its findings stand open — none of its authors has answered
+   * them (`code_conversations.open_findings`); 0 for a change nobody reviewed.
+   */
+  open_findings: number;
+  /**
+   * When it last moved: the later of its lifecycle's last record (an open, an
+   * edit, a close, a merge, a push that moved its head) and the last thing
+   * somebody wrote about it (an ask for review, a comment, a review, an answer
+   * to a finding) — never the home's facts. What `window=` narrows by. A
+   * change read in brief carries its lifecycle's alone.
+   */
+  updated_at: string;
 }
 
 /**
@@ -8717,6 +8732,20 @@ export interface CodeRuleGate {
   gate: CodeMergeGate;
 }
 
+/**
+ * Who set one of a repository's rules and when, named by the rule's pattern
+ * (`code.RuleSource`): the decider of the record that last changed the rule —
+ * a seat's handle (`agent`), a person's seat or a credential's login
+ * (`operator`), nobody where the configuration set it (`config`) — and that
+ * record's instant.
+ */
+export interface CodeRuleSource {
+  pattern: string;
+  set_by?: string;
+  set_by_kind: "operator" | "config" | "system" | "agent" | (string & {});
+  set_at: string;
+}
+
 /** Who owns which of a repository's paths, for review (`code.PathOwner`): globs over its tree. */
 export interface CodePathOwner {
   owner: CodeOwner;
@@ -8727,7 +8756,7 @@ export interface CodePathOwner {
  * One repository in detail (`code.RepoDetail`): its summary, how many
  * branches, tags and deleted refs it holds, when it was declared, and — to
  * this question, which asks for them — who owns its paths and its rules'
- * merge gates.
+ * merge gates, with who set each rule and when (asked for with the gates).
  */
 export interface CodeRepoDetail extends CodeRepoSummary {
   branches: number;
@@ -8736,6 +8765,7 @@ export interface CodeRepoDetail extends CodeRepoSummary {
   created_at: string;
   path_owners?: CodePathOwner[];
   gates?: CodeRuleGate[];
+  rule_sources?: CodeRuleSource[];
   /** Where its expunges stand (`code.ExpungeState`); absent for one never purged with none asked. */
   expunge?: CodeExpungeState;
   /** Where it stands with other hosts (`code.RemoteState`); absent for none. */

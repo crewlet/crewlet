@@ -151,7 +151,7 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
           {
             label: "Closed",
             value: `${change.closed_at ? fmtDateTime(change.closed_at) : ""}${
-              change.close_reason ? ` — ${change.close_reason}` : ""
+              change.close_reason ? ` · ${change.close_reason}` : ""
             }`,
           },
         ]
@@ -207,7 +207,7 @@ export function Woke({ change }: { change: CodeChangeDetail }) {
                 {r.recipients.map((who) => (
                   <li key={who.handle}>
                     {seatBadge(who.handle).name}{" "}
-                    <span className="muted">— {codeReasonPhrase(who.reason, "about")}</span>
+                    <span className="muted">· {codeReasonPhrase(who.reason, "about")}</span>
                     {who.addressed && (
                       <Tag size="sm" appearance="outline">
                         asked

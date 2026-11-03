@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -303,13 +304,18 @@ func (t *codeMergeChange) closeTask(ctx context.Context, cv conversing, op strin
 // mergeRefused answers a merge, an enqueue or a dequeue its committer or its
 // git node refused, in the refusal's class ([mergeRefusalClass]): a gate the
 // change does not meet yet as not_ready, naming every unmet precondition and
-// whom it waits on.
+// whom it waits on. A person's words ride beside the sentence for a model
+// wherever the catalog has them ([mergeRefusalWords], [caveat.MergeGateUnmet]).
 func mergeRefused(tool, change, target string, refusal code.MergeRefusal, detail string,
 	unmet []code.Precondition) tools.Result {
 
 	cause := writeRefusalError(string(refusal), detail)
 	if refusal != code.MergeRefusalGateUnmet {
-		return refusedBy(mergeRefusalClass(refusal), cause, fmt.Sprintf("%s: %s (%s).", tool, detail, refusal))
+		r := refusedBy(mergeRefusalClass(refusal), cause, fmt.Sprintf("%s: %s (%s).", tool, detail, refusal))
+		if words := mergeRefusalWords(tool, refusal); !words.IsZero() {
+			r = toPerson(r, words)
+		}
+		return r
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s: %s does not yet meet %s's merge gate, so nothing was merged or queued. Unmet:", tool,
@@ -326,43 +332,91 @@ func mergeRefused(tool, change, target string, refusal code.MergeRefusal, detail
 		b.WriteString(";")
 	}
 	b.WriteString(" a ready_to_merge wake follows once it does, so end the turn rather than ask again.")
-	return refusedBy(tools.RefusalNotReady, cause, b.String())
+	return toPerson(refusedBy(tools.RefusalNotReady, cause, b.String()), caveat.MergeGateUnmet(gateConditions(unmet)))
 }
 
-// mergeRefusalClass is the class a merge refusal is answered in, by what
-// CLEARS it — the class tells its reader what to do next (M5.md §2.10's
-// mapping, read against mcp's definition of each class):
+// gateConditions is unmet as the refusal catalog takes it: each precondition's
+// kind and the handles of whoever it waits on, and nothing of its sentence,
+// which is written for a model.
+func gateConditions(unmet []code.Precondition) []caveat.GateCondition {
+	out := make([]caveat.GateCondition, 0, len(unmet))
+	for _, p := range unmet {
+		c := caveat.GateCondition{Kind: string(p.Kind)}
+		for _, party := range p.WaitsOn {
+			c.WaitsOn = append(c.WaitsOn, party.Handle)
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// mergeRefusalWords is a person's words for the merge refusals the change
+// page's controls leave to the engine (the dashboard's
+// MERGE_REFUSAL_SENTENCES draws the engine's words for them): a merge that
+// would delete a branch it may not, a repository at its size, and a merge or
+// a dequeue asked by or for somebody who may not make it. The gate's own is
+// [caveat.MergeGateUnmet]. Every other merge refusal is answered in the
+// controls' own words on the change page, by the host's word beside its class,
+// and in its code's own sentence everywhere else: the floor ADR-0060 sets.
+func mergeRefusalWords(tool string, refusal code.MergeRefusal) caveat.Refusal {
+	switch refusal {
+	case code.MergeRefusalSourceRefused:
+		return caveat.MergeWouldDeleteAKeptBranch()
+	case code.MergeRefusalRepoSize:
+		return caveat.RepositoryFull()
+	case code.MergeRefusalNotPermitted:
+		if tool == CodeDequeueChangeTool {
+			return caveat.QueueEntryNotYours()
+		}
+		return caveat.MergeAskedForSomebodyWhoMayNot()
+	}
+	return caveat.Refusal{}
+}
+
+// mergeRefusalClass is the class a merge refusal is answered in, by
+// internal/mcp's one rule for every domain ([tools.Refusal]'s doc) — what the
+// refusal is about and what would make the same request land — which a push's
+// ([pushClass]), a change's ([changeClass]) and a conversation's
+// ([conversationClass]) follow too, so one state is one class on every code
+// tool:
 //
 //   - NOT_READY: a gate the change does not meet yet, which its people
 //     clear and a ready_to_merge wake reports;
 //   - STALE_VERSION: a head, a target or a change that moved since its
 //     caller read it — read again;
-//   - CONFLICT: only what clears ON ITS OWN, so the same call shortly after
-//     lands — a target moving faster than a merge is built onto it, a
-//     committer busy, a repository its compaction has not caught up with, a
-//     queue full until it lands what it holds;
-//   - UNAVAILABLE: what waiting on the node clears, as a push's is
-//     ([pushClass]) — an import finishing, an expunge that began, a pack
-//     uploaded too long ago (its builder builds it again), a log that
-//     refused or a record applied nowhere;
+//   - CONFLICT: the change or its repository in a state that refuses the
+//     merge until somebody changes it — a change closed or merged, a draft its
+//     owner or a person marks ready, a repository archived or a pull mirror —
+//     a merge that lost its race to a target moving faster than a merge is
+//     built onto it, and a queue holding all it may, its contents at their
+//     cap until it lands what it holds;
+//   - QUOTA_EXCEEDED: a repository the merge would take past
+//     code.limits.repo_max_bytes, as a push's repo_size is, which no
+//     permission lifts and no retry clears;
+//   - UNAVAILABLE: what waiting on the node clears, as a push's is, and in
+//     the same class wherever the code host answers it — a committer busy,
+//     a repository its compaction has not caught up with, an import
+//     finishing, an expunge that began, a pack the merge's own builder
+//     uploaded too long ago (it builds it again), a log that refused or a
+//     record applied nowhere;
 //   - FORBIDDEN: a rule refusing the caller — a seat asking a person's
-//     override, an asker the repository or the change does not let, an
-//     archived repository, a pull mirror, a repository at its size, as a
-//     push's are;
+//     override, an asker the repository or the change does not let;
 //   - NOT_FOUND: a repository, a change or a queue entry that is not there —
 //     a dequeue of a change no queue holds live among them, which a re-read
 //     or a retry never brings back;
 //   - EXISTS: a change its target's queue already holds;
-//   - INVALID: what only another call clears — a change closed or merged,
-//     which never reopens by itself; a draft, which waits on its owner or a
-//     person; a queue target asked directly, a target with no queue asked to
-//     queue, a source branch the merger may not delete — and the queue's own
-//     records' refusals (not_green, not_red, no_landing, record_full), which
-//     its home git node answers and no tool's call is ever refused.
+//   - INVALID: the request itself, which only another call clears — a queue
+//     target asked directly, a target with no queue asked to queue, a source
+//     branch the merger may not delete — and the queue's own records'
+//     refusals (not_green, not_red, no_landing, record_full), which its home
+//     git node answers and no tool's call is ever refused.
 //
-// Never conflict for what does not clear on its own: a seat told to try
-// again shortly asks to merge a closed change, or dequeue a landed one, for
-// ever. Every value is listed, so a refusal the domain adds is examined here
+// NEVER INVALID OR FORBIDDEN FOR A STATE: a merge of a closed change or into
+// an archived repository asks nothing wrong of a caller who may ask it, so
+// "send something different" and "you may not" both mislead its reader; the
+// object refuses it, and the same request lands once somebody changes that
+// (or, for a change merged, never). Every value is listed, so a refusal the
+// domain adds is examined here
 // (TestEveryMergeRefusalIsClassedByWhatClearsIt walks code.MergeRefusals());
 // one off the wire this build does not know is invalid, the class that says
 // nothing more specific.
@@ -372,22 +426,24 @@ func mergeRefusalClass(r code.MergeRefusal) tools.Refusal {
 		return tools.RefusalNotReady
 	case code.MergeRefusalStale, code.MergeRefusalHeadMoved, code.MergeRefusalTargetMoved:
 		return tools.RefusalStaleVersion
-	case code.MergeRefusalTargetMoving, code.MergeRefusalBusy, code.MergeRefusalCompactionBehind,
-		code.MergeRefusalQueueFull:
+	case code.MergeRefusalChangeNotOpen, code.MergeRefusalChangeDraft, code.MergeRefusalRepoArchived,
+		code.MergeRefusalRepoMirrored, code.MergeRefusalTargetMoving, code.MergeRefusalQueueFull:
 		return tools.RefusalConflict
-	case code.MergeRefusalRepoImporting, code.MergeRefusalExpunging, code.MergeRefusalUploadExpired,
-		code.MergeRefusalUnavailable, code.MergeRefusalNotApplied:
+	case code.MergeRefusalRepoSize:
+		return tools.RefusalQuotaExceeded
+	case code.MergeRefusalBusy, code.MergeRefusalCompactionBehind, code.MergeRefusalRepoImporting,
+		code.MergeRefusalExpunging, code.MergeRefusalUploadExpired, code.MergeRefusalUnavailable,
+		code.MergeRefusalNotApplied:
 		return tools.RefusalUnavailable
-	case code.MergeRefusalNotPerson, code.MergeRefusalNotPermitted, code.MergeRefusalRepoArchived,
-		code.MergeRefusalRepoMirrored, code.MergeRefusalRepoSize:
+	case code.MergeRefusalNotPerson, code.MergeRefusalNotPermitted:
 		return tools.RefusalForbidden
 	case code.MergeRefusalRepoDeleted, code.MergeRefusalChangeNotFound, code.MergeRefusalNotQueued:
 		return tools.RefusalNotFound
 	case code.MergeRefusalAlreadyQueued:
 		return tools.RefusalExists
-	case code.MergeRefusalChangeNotOpen, code.MergeRefusalChangeDraft, code.MergeRefusalQueueTarget,
-		code.MergeRefusalNoQueue, code.MergeRefusalSourceRefused, code.MergeRefusalNotGreen,
-		code.MergeRefusalNotRed, code.MergeRefusalNoLanding, code.MergeRefusalRecordFull:
+	case code.MergeRefusalQueueTarget, code.MergeRefusalNoQueue, code.MergeRefusalSourceRefused,
+		code.MergeRefusalNotGreen, code.MergeRefusalNotRed, code.MergeRefusalNoLanding,
+		code.MergeRefusalRecordFull:
 		return tools.RefusalInvalid
 	}
 	return tools.RefusalInvalid

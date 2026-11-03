@@ -382,6 +382,32 @@ func TestAReplayOfPreChangeRecordsWakesNobody(t *testing.T) {
 	}
 }
 
+// A MERGED WAKE WHOSE CLOSE WAS NOT MADE SAYS WHY (M5-D27): the wake a
+// close_settled that ended not_closed sends under `merged` tells its seat the
+// work item was left open, the reason beside, and what to do about it; a
+// plain merged wake says only that the change merged.
+//
+// Mutation: drop the opener's not_closed case — the seat reads only that its
+// change merged, red.
+func TestAMergedWakeWhoseCloseWasNotMadeSaysWhy(t *testing.T) {
+	t.Parallel()
+	p := code.Prompt{}
+	why := "ENG-7 is a jira work item, which is closed where it lives"
+	wake := func(meta map[string]string) string {
+		meta[code.MetaVia], meta[code.MetaChangeRef] = string(code.ReasonMerged), "web!42"
+		return p.Build(notify.Inbound{Source: code.Source, Subject: "web!42: Retry the upload",
+			Metadata: meta}, nil)
+	}
+	if text := wake(map[string]string{code.MetaNotClosed: why}); !strings.Contains(text, why) ||
+		!strings.Contains(text, "its work item was not closed") {
+		t.Errorf("a merged wake whose close was not made does not say so and why:\n%s", text)
+	}
+	if text := wake(map[string]string{}); strings.Contains(text, "not closed") ||
+		!strings.Contains(text, "web!42 was merged.") {
+		t.Errorf("a plain merged wake says more than that the change merged:\n%s", text)
+	}
+}
+
 // THE PROMPT IS THE CHANGE'S: a code wake keys its conversation on the
 // change's id, never its name, which a repository's rename moves; it is
 // always a pointer at the change; it asks for an answer exactly under the

@@ -751,10 +751,10 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 // arguments as they were sent (a seat's reads naming the colleague they are
 // made for, whose grant the answering node judges too), their answers come
 // back as they were given — a snapshot's layers, packs, refs, pushes,
-// retirements and cursor, a repository's detail and its limits, the refs and
-// the introducing pushes, the due listings, a resolved ref, a page of a diff,
-// a preview's conflicted paths — and a refusal keeps the identity the host
-// and the cache branch on.
+// retirements and cursor, a repository's detail, its limits and who set its
+// rules, the refs and the introducing pushes, the due listings, a resolved
+// ref, a page of a diff, a preview's conflicted paths — and a refusal keeps
+// the identity the host and the cache branch on.
 func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -828,6 +828,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				Checks:  []string{"lint", "unit"},
 				Landing: code.Landing{Depth: 2, Batch: 3}, OwnersApprove: true,
 				DeleteSource: code.DeleteNone, AgentsEditChecks: true}}},
+			RuleSources: []code.RuleSource{{Pattern: "refs/heads/main", SetBy: "founder",
+				SetByKind: code.ActorOperator, SetAt: created}},
 		}, Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 			Position: at}}, Introduced: []code.IntroducedRow{introduced},
 			Due: []code.CompactionCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, LiveObjects: 4_000,

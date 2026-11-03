@@ -1597,6 +1597,11 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// (inboxread.go).
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.inbox(ctx, tx, q, chart, &out) }
+	case ReadNoticeCards:
+		// A SET READ OF THE DOMAIN, as an `inbox` read is: the changes it
+		// names lie on any repository's subjects (inboxread.go).
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.noticeCards(ctx, tx, q, chart, &out) }
 	case ReadExpungeTips:
 		// A POINT READ OF THE REPOSITORY, as an `introduced` read is: a
 		// record this node deferred on the repository may carry a drop the
@@ -1657,6 +1662,14 @@ func (q ReadQuery) validate() error {
 	if q.Resolve && !q.resolves() {
 		return fmt.Errorf("%w: resolve: only a change read, or a listing of one repository's changes or "+
 			"checks, resolves the repository it names", ErrInvalid)
+	}
+	// A FIELD ONE PRINCIPAL'S KIND READS ALONE is refused on every other
+	// kind here, before any kind's own rules, for the resolution's reason:
+	// the engine's own reads below validate against lists of their own,
+	// which a field added after them is missing from, and were answered
+	// with it ignored.
+	if err := q.kindOwnedField(); err != nil {
+		return err
 	}
 	switch q.Kind {
 	case ReadIntroduced:
@@ -1731,8 +1744,6 @@ func (q ReadQuery) validate() error {
 	case q.QueueDue != nil:
 		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
 			"in", ErrInvalid)
-	case q.Inbox != nil && q.Kind != ReadInbox:
-		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case q.Target != "" && q.Kind != ReadQueue && q.Kind != ReadLandings && q.Kind != ReadGreen:
 		return fmt.Errorf("%w: target: only a queue, a landings or a green read names a branch's queue",
 			ErrInvalid)
@@ -1746,11 +1757,14 @@ func (q ReadQuery) validate() error {
 			"changes it answers", ErrInvalid)
 	case q.MinPacks != 0:
 		return fmt.Errorf("%w: min_packs: only a compaction_due read names a floor of live packs", ErrInvalid)
-	case q.Prefix != "" && q.Kind != ReadRefs:
-		return fmt.Errorf("%w: prefix: only a refs listing names a prefix", ErrInvalid)
-	case q.Prefix != "" && !validRefPrefix(q.Prefix):
+	case q.Prefix != "" && q.Kind != ReadRefs && q.Kind != ReadRepos:
+		return fmt.Errorf("%w: prefix: only a refs listing and a repositories listing name a prefix", ErrInvalid)
+	case q.Prefix != "" && q.Kind == ReadRefs && !validRefPrefix(q.Prefix):
 		return fmt.Errorf("%w: prefix: %q is not refs/heads/ or refs/tags/ or a directory of refs under "+
 			"either, ending in /", ErrInvalid, q.Prefix)
+	case q.Prefix != "" && q.Kind == ReadRepos && !validRepoPrefix(q.Prefix):
+		return fmt.Errorf("%w: prefix: no repository name begins %q: a name is lowercase letters, digits and "+
+			"hyphens, beginning with a letter or a digit, and a seat's own holds one dot", ErrInvalid, q.Prefix)
 	case q.Brief && q.Kind != ReadPushes && q.Kind != ReadChange:
 		return fmt.Errorf("%w: brief: only a push history and a change's first page are read in brief",
 			ErrInvalid)
@@ -1784,6 +1798,9 @@ func (q ReadQuery) validate() error {
 	case q.Needs != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: needs: only a listing of changes is narrowed to what its changes wait on",
 			ErrInvalid)
+	case q.Window != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: window: only a listing of changes is narrowed to the changes that moved "+
+			"within a window", ErrInvalid)
 	case q.Part != "" && q.Kind != ReadChange:
 		return fmt.Errorf("%w: part: only a change read names a part of the change", ErrInvalid)
 	case q.Part != "" && !q.Part.Valid():
@@ -1799,17 +1816,19 @@ func (q ReadQuery) validate() error {
 	case len(q.FindingIDs) > 0 && q.Limit != 0:
 		return fmt.Errorf("%w: finding_ids: the findings named are the read's rows, which no limit cuts",
 			ErrInvalid)
-	case q.Commit != "" && q.Kind != ReadCommit:
-		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	}
 	switch {
 	case q.Kind == ReadInbox && q.Repo != "":
 		return fmt.Errorf("%w: repo: an inbox is read across every repository the asker may read", ErrInvalid)
+	case q.Kind == ReadNoticeCards && q.Repo != "":
+		return fmt.Errorf("%w: repo: an inbox page's cards are read across every repository its changes are on",
+			ErrInvalid)
 	case q.Kind == ReadReviews && q.Repo != "":
 		return fmt.Errorf("%w: repo: a reviewer's reviews are listed across every repository the asker may "+
 			"read, and a change's own reviews are a change read's part", ErrInvalid)
 	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "", q.Kind == ReadChecks && q.Repo == "",
-		q.Kind == ReadQueue && q.Repo == "", q.Kind == ReadReviews, q.Kind == ReadInbox:
+		q.Kind == ReadQueue && q.Repo == "", q.Kind == ReadReviews, q.Kind == ReadInbox,
+		q.Kind == ReadNoticeCards:
 	case !ValidName(q.Repo):
 		return fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
 	}
@@ -1846,6 +1865,10 @@ func (q ReadQuery) validate() error {
 		if err := q.validateInbox(); err != nil {
 			return err
 		}
+	case ReadNoticeCards:
+		if err := q.validateNoticeCards(); err != nil {
+			return err
+		}
 	case ReadChecks, ReadCheck:
 		if err := q.validateChecks(); err != nil {
 			return err
@@ -1868,6 +1891,26 @@ func (q ReadQuery) validate() error {
 	case q.Limit > bound:
 		return fmt.Errorf("%w: limit: %d is past the %d one page of %s carries", ErrInvalid,
 			q.Limit, bound, q.Kind)
+	}
+	return nil
+}
+
+// kindOwnedField refuses a field that one kind a principal reads alone reads
+// — a commit, an inbox, an inbox page's cards, the narrowing of a listing of
+// repositories to the ones a rule protects — on a read of any other kind,
+// the engine's own reads included ([ReadQuery.validate]).
+func (q ReadQuery) kindOwnedField() error {
+	switch {
+	case q.Protected && q.Kind != ReadRepos:
+		return fmt.Errorf("%w: protected: only a listing of repositories is narrowed to the ones a rule "+
+			"protects", ErrInvalid)
+	case q.Commit != "" && q.Kind != ReadCommit:
+		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
+	case q.Inbox != nil && q.Kind != ReadInbox:
+		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
+	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
+		return fmt.Errorf("%w: notice_cards: only a notice_cards read names the changes whose cards it reads",
+			ErrInvalid)
 	}
 	return nil
 }
@@ -2018,7 +2061,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
-		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"window", q.Window != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
@@ -2070,7 +2113,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"branch_changes", q.BranchChanges != nil},
 		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
-		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"window", q.Window != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
@@ -2113,7 +2156,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
-		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"window", q.Window != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
@@ -2166,7 +2209,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
-		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"window", q.Window != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
@@ -2226,7 +2269,7 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
-		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"window", q.Window != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
@@ -2270,7 +2313,7 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"expunge_tips", q.ExpungeTips != nil}, {"cursor", q.Cursor != ""},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
-		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"window", q.Window != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
@@ -2278,7 +2321,7 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil},
 		{"branch_changes", q.BranchChanges != nil},
-		{"scanned_before", !q.ScannedBefore.IsZero()}, {"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
+		{"scanned_before", !q.ScannedBefore.IsZero()},
 	} {
 		if f.set {
 			return refused(f.field, "a mirror_push read answers one repository's push mirror and green rows, "+
@@ -2371,14 +2414,13 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"cursor", q.Cursor != ""}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
-		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"window", q.Window != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil},
-		{"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a branch_changes read answers its repositories' branches' live changes "+
@@ -2473,6 +2515,23 @@ func validRefPrefix(prefix string) bool {
 		strings.HasSuffix(prefix, "/") && ValidRef(prefix+"x")
 }
 
+// validRepoPrefix reports a prefix a repositories listing may name: a
+// repository name whole, or the opening of one — which a "0" completes,
+// since a digit may end either label of a name and follow its hyphen or its
+// dot. A prefix no name could begin with is refused rather than answered
+// empty, as a refs listing's is.
+func validRepoPrefix(prefix string) bool {
+	return ValidName(prefix) || ValidName(prefix+"0")
+}
+
+// prefixEnd is the first string past every one prefix begins: prefix with its
+// last byte one higher, so [prefix, prefixEnd) is one range of an index by
+// name. A refs listing's prefix ends in "/" and a repository name is ASCII
+// throughout, so the last byte is never 0xff and the step never carries.
+func prefixEnd(prefix string) string {
+	return prefix[:len(prefix)-1] + string([]byte{prefix[len(prefix)-1] + 1})
+}
+
 // limitOr is a limit, or its kind's default.
 func limitOr(limit, fallback int) int {
 	if limit == 0 {
@@ -2510,7 +2569,36 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		return err
 	}
 	limit := min(limitOr(q.Limit, defaultRepoLimit), r.pageRows)
-	rows, err := tx.QueryContext(ctx, reposSQL, list, q.Cursor, limit)
+	// THE PROTECTED ONES BY THEIR OWN INDEX ([ReadQuery.Protected]): the
+	// same rows in the same order, walked by an index that holds no
+	// repository a rule does not protect. AND THE NAMES A PREFIX BEGINS
+	// ([ReadQuery.Prefix]) in one range of either index, from the prefix
+	// itself to its end — so a picker finds the repository typed into it
+	// however many sort before it — past a cursor that must be one of them.
+	var (
+		listing string
+		args    []any
+	)
+	switch {
+	case q.Prefix == "":
+		listing, args = reposSQL, []any{list, q.Cursor, limit}
+		if q.Protected {
+			listing = protectedReposSQL
+		}
+	case q.Cursor == "":
+		listing, args = reposUnderFirstSQL, []any{list, q.Prefix, prefixEnd(q.Prefix), limit}
+		if q.Protected {
+			listing = protectedReposUnderFirstSQL
+		}
+	case !strings.HasPrefix(q.Cursor, q.Prefix):
+		return fmt.Errorf("%w: %q is not a repository name beginning %q", ErrBadCursor, q.Cursor, q.Prefix)
+	default:
+		listing, args = reposUnderAfterSQL, []any{list, q.Cursor, prefixEnd(q.Prefix), limit}
+		if q.Protected {
+			listing = protectedReposUnderAfterSQL
+		}
+	}
+	rows, err := tx.QueryContext(ctx, listing, args...)
 	if err != nil {
 		return fmt.Errorf("code: list repositories: %w", err)
 	}
@@ -2663,8 +2751,13 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	// AND THE GATES ONLY TO A READ THAT ASKS ([ReadQuery.Gates]), for the
 	// path owners' reason: read in the same transaction as the rules the row
 	// carries, so every gate names a rule of the row.
+	// WITH WHO SET EACH RULE AND WHEN, every rule's: the rules in detail, as
+	// a person reading a repository's protection asks for them.
 	if q.Gates {
 		if out.Repo.Gates, err = gatesIn(ctx, tx, id); err != nil {
+			return err
+		}
+		if out.Repo.RuleSources, err = ruleSourcesIn(ctx, tx, id); err != nil {
 			return err
 		}
 	}
@@ -2852,8 +2945,7 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 		after = q.Cursor
 	}
 	limit := min(limitOr(q.Limit, defaultRefLimit), r.pageRows)
-	rows, err := tx.QueryContext(ctx, refsUnderSQL, id, after,
-		strings.TrimSuffix(prefix, "/")+"0", limit)
+	rows, err := tx.QueryContext(ctx, refsUnderSQL, id, after, prefixEnd(prefix), limit)
 	if err != nil {
 		return fmt.Errorf("code: read %s's refs under %s: %w", q.Repo, prefix, err)
 	}
@@ -4465,14 +4557,39 @@ const (
 	pushesAfterSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		AND position <= ? AND (position < ? OR push_id < ?)
 		ORDER BY position DESC, push_id DESC LIMIT ?`
-	reposSQL = `SELECT r.id, r.name, r.status, r.managed_by, r.kind, r.owner_kind, r.owner, r.visibility,
+	reposColumns = `SELECT r.id, r.name, r.status, r.managed_by, r.kind, r.owner_kind, r.owner, r.visibility,
 		r.search, r.mirror_from != '', r.default_branch, r.description, r.deleted_at, r.last_activity_at, r.refs,
 		r.live_packs,
-		r.live_bytes, r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target
-		FROM code_repos r LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
-			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''
-		WHERE r.status IN (SELECT value FROM json_each(?)) AND r.name > ?
-		ORDER BY r.name LIMIT ?`
+		r.live_bytes, r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target`
+	reposHead = ` LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
+			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''`
+	// reposFrom is a listing's rows, by name, and protectedReposFrom those
+	// of the repositories a rule protects ([ReadQuery.Protected]), walked by
+	// [protectedReposKey] — NAMED, since code_repos_name_idx serves the same
+	// order and the planner may take either — with its predicate repeated
+	// verbatim, so the planner may use the partial index at all. Each ends
+	// at the range of names a page reads, which the statements below spell.
+	reposFrom = reposColumns + `
+		FROM code_repos r` + reposHead + `
+		WHERE r.status IN (SELECT value FROM json_each(?)) AND `
+	protectedReposFrom = reposColumns + `
+		FROM code_repos r INDEXED BY ` + protectedReposKey + reposHead + `
+		WHERE r.` + protectedRepos + ` AND r.status IN (SELECT value FROM json_each(?)) AND `
+	// reposSQL is a page of the whole listing, past its cursor, and
+	// protectedReposSQL a page of the protected ones.
+	reposSQL          = reposFrom + `r.name > ? ORDER BY r.name LIMIT ?`
+	protectedReposSQL = protectedReposFrom + `r.name > ? ORDER BY r.name LIMIT ?`
+	// THE NAMES A PREFIX BEGINS ([ReadQuery.Prefix]), in the one range of
+	// the index below the prefix's end ([prefixEnd]): FROM the prefix itself
+	// on a first page, since a name may be the prefix whole, and PAST the
+	// cursor after one. Two statements, and not one beside both lower
+	// bounds, which would leave the planner to choose the bound it seeks by
+	// and filter by the other — and a first page sought by its empty cursor
+	// walks every name below the prefix.
+	reposUnderFirstSQL          = reposFrom + `r.name >= ? AND r.name < ? ORDER BY r.name LIMIT ?`
+	reposUnderAfterSQL          = reposFrom + `r.name > ? AND r.name < ? ORDER BY r.name LIMIT ?`
+	protectedReposUnderFirstSQL = protectedReposFrom + `r.name >= ? AND r.name < ? ORDER BY r.name LIMIT ?`
+	protectedReposUnderAfterSQL = protectedReposFrom + `r.name > ? AND r.name < ? ORDER BY r.name LIMIT ?`
 	// pushRulesOfSQL is a listing page's rules as a push is judged by them,
 	// in one statement ([protectionsOf]) — pushRulesSQL for every repository
 	// the page keeps, never selecting the gate.

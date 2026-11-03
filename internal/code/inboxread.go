@@ -55,28 +55,53 @@ import (
 // last notice it scanned, as every listing across repositories pages
 // ([Reader.repos]).
 //
-// # What each notice carries of its change
+// # What a notice carries of its change, and what its card reads
 //
-// Its title, its state, the work item it implements, the first
-// [MaxNoticeBody] bytes of its description, the agent findings standing open
-// on it by severity and, while it is live, where its merge stands — read for
-// the page's changes in the same snapshot, one statement each over the
-// page's changes: what a person decides a notice by without opening the
-// change. That is the inbox card's whole question (the dashboard asks
-// nothing more of a card), which is why the readiness rides here rather than
-// on a read of each change.
+// A notice carries its change's title, its state and the work item it
+// implements — its row's own columns, read for the page's changes in the same
+// snapshot by one statement — which is every word a count, a badge or a row
+// of a list is drawn from. What a person decides a notice by without opening
+// the change — the first [MaxNoticeBody] bytes of its description, the agent
+// findings standing open on it by severity and, while it is live, where its
+// merge stands — is its CARD, which a `notice_cards` read answers
+// ([ReadNoticeCards], [Reader.noticeCards]) and an `inbox` read never does.
 //
-// The readiness is JUDGED HERE, as a listing of changes judges it
-// ([readinessIn]: [ReadinessOf] over this transaction and this read's one
+// A CARD IS READ ONLY WHERE ONE IS DRAWN. The busiest reads of an inbox draw
+// none: the frame's count of what waits on a person asks a page of fifty
+// every minute and on every push of their inbox, behind every screen of every
+// tab they have open, and Home's Updates and the Snoozed link's count do the
+// same; each reads only how many notices came back and their titles. Judged
+// on every one of them, a page's readiness alone was ten statements or more
+// and a merge-gate judgment per live change, for an answer nobody drew.
+//
+// AND ONLY FOR THE NOTICES THE DRAWN PAGE KEEPS. A composed inbox asks each
+// domain for the page's whole limit and cuts the merge back to it
+// (internal/inbox's Compose), so the code host's page holds notices that the
+// tracker's newer ones push off the page; their cards would be judged for
+// nothing. So the composition asks for the cards of the code notices it
+// took, after the cut ([inbox.Carded]), floored at the position the code
+// host's page was read at — a card never describes its change as it stood
+// before the notice it is drawn beside.
+//
+// The readiness is JUDGED in the card read, as a listing of changes judges
+// it ([readinessIn]: [ReadinessOf] over that read's transaction and its one
 // chart), never the `ready` a change's last mergeability record stored: that
 // is a refresh's input, current only as of the home's last pass, and a card
 // that read it would say "ready" past a review that just asked for changes.
-// A notice carries the judgment's counts and its first sentence and not its
-// preconditions: fifty notices a page, each with up to
-// [MaxReadinessBlockers] blockers named, would be a page of what the
-// change's own page reads in full, one change at a time.
+// A card carries the judgment's counts and its first sentence and not its
+// preconditions: fifty cards a page, each with up to [MaxReadinessBlockers]
+// blockers named, would be a page of what the change's own page reads in
+// full, one change at a time.
+//
+// Measured on this tree (BenchmarkACodeInbox, -benchtime 20x -count 1 on two
+// pinned cores of a shared machine, one repository of 50 live changes behind
+// one merge gate, every change with a notice to one person): an `inbox` read
+// of the fifty is 3.9 ms; the same read beside the `notice_cards` read of
+// their fifty changes is 8.7 ms — the cards alone 4.8 ms, 1.2 times what the
+// list read costs, which every count of what waits and every Home poll no
+// longer pays.
 
-// MaxNoticeBody is how much of a change's description a notice carries: ONE
+// MaxNoticeBody is how much of a change's description a card carries: ONE
 // KIBIBYTE, cut at a character — a card's worth of the intent behind the
 // change, beside its title; the change's own page reads the whole.
 const MaxNoticeBody = 1 << 10
@@ -152,23 +177,31 @@ type InboxNotice struct {
 	SnoozedUntil *time.Time `json:"snoozed_until,omitzero"`
 }
 
-// NoticeChange is what a notice carries of its change.
+// NoticeChange is what a notice carries of its change — its title, its state
+// and its work item — and, answered by a `notice_cards` read alone, the rest
+// of what its card draws (this file's head).
 type NoticeChange struct {
 	Title    string          `json:"title" untrusted:"name"`
 	State    ChangeState     `json:"state"`
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
 	// Body is the description's first [MaxNoticeBody] bytes, and BodyCut
-	// whether there is more of it.
+	// whether there is more of it: a card's alone.
 	Body    string `json:"body,omitempty" untrusted:"fence"`
 	BodyCut bool   `json:"body_cut,omitempty"`
 	// AgentFindings counts the findings seats raised that stand open on the
-	// change, by severity; absent for none.
+	// change, by severity; absent for none, and on a notice — a card's alone.
 	AgentFindings map[Severity]int `json:"agent_findings,omitempty"`
-	// Readiness is where the change's merge stands, judged at the read for
-	// its asker — this file's head; nil for a change no longer live, which
-	// merges nothing.
+	// Readiness is where the change's merge stands, judged at the card's
+	// read for its asker — this file's head; nil for a change no longer
+	// live, which merges nothing, and on a notice — a card's alone.
 	Readiness *NoticeReadiness `json:"readiness,omitempty"`
 }
+
+// MaxNoticeCards is the most changes one `notice_cards` read names: what one
+// composed page of an inbox can name — [inbox.MaxRows] notices, and past
+// them the rest of the last record's, at most [MaxRecordRows] — each notice
+// about one change at the most.
+const MaxNoticeCards = inbox.MaxRows + MaxRecordRows
 
 // NoticeReadiness is what a notice carries of its change's [Readiness]: how
 // many of its preconditions are met of how many, and its FIRST sentence —
@@ -302,7 +335,7 @@ func (r *Reader) inbox(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 			changes = append(changes, n.ChangeID)
 		}
 	}
-	said, err := noticeChangesIn(ctx, tx, changes, repos, chart, q.Asker, r.limits().MergeByFloor)
+	said, err := noticeChangesIn(ctx, tx, changes)
 	if err != nil {
 		return err
 	}
@@ -493,15 +526,10 @@ func inboxScanOf(q ReadQuery, marks inbox.Classifier, now time.Time) (inboxScan,
 	return s, true, nil
 }
 
-// noticeChangesIn is what each change of ids says now, by its id — its row,
-// its description cut at [MaxNoticeBody], the agent findings standing open on
-// it by severity, and a live one's readiness judged against chart for asker
-// under floor ([readinessIn]), every repository a change names in repos — one
-// statement each over the page's changes, the readiness's own a kind at a
-// time. A change no row holds any more says nothing.
-func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[string]listedRepo, chart Roster,
-	asker Principal, floor MergeBy) (map[string]*NoticeChange, error) {
-
+// noticeChangesIn is what each change of ids says now on its notices, by its
+// id — its title, its state and its work item, off its row: ONE statement over
+// the page's changes. A change no row holds any more says nothing.
+func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]*NoticeChange, error) {
 	out := map[string]*NoticeChange{}
 	if len(ids) == 0 {
 		return out, nil
@@ -510,25 +538,102 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 	if err != nil {
 		return nil, fmt.Errorf("code: read the changes an inbox page names: %w", err)
 	}
-	// IN THE PAGE'S ORDER, never the map's: the readiness reads its rows a
+	for id, row := range held {
+		out[id] = noticeChangeOf(row)
+	}
+	return out, nil
+}
+
+// noticeChangeOf is what a notice carries of the change row is.
+func noticeChangeOf(row changeRow) *NoticeChange {
+	c := &NoticeChange{Title: row.title, State: row.state}
+	if row.work.ID != "" {
+		work := row.work
+		c.WorkItem = &work
+	}
+	return c
+}
+
+// validateNoticeCards is [ReadQuery.validate] for a `notice_cards` read: the
+// changes it names, each once by its id, at most [MaxNoticeCards] of them —
+// the read's rows, which no cursor or limit pages.
+func (q ReadQuery) validateNoticeCards() error {
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	switch {
+	case len(q.NoticeCards) == 0:
+		return refused("notice_cards", "a notice_cards read names the changes whose cards it reads")
+	case len(q.NoticeCards) > MaxNoticeCards:
+		return refused("notice_cards", fmt.Sprintf("%d changes named, past the %d one page of an inbox can "+
+			"name", len(q.NoticeCards), MaxNoticeCards))
+	case q.Cursor != "":
+		return refused("cursor", "the changes a notice_cards read names are its rows, which no cursor pages")
+	case q.Limit != 0:
+		return refused("limit", "the changes a notice_cards read names are its rows, which no limit cuts")
+	}
+	for i, id := range q.NoticeCards {
+		switch {
+		case !canonicalUUID(id):
+			return refused("notice_cards", fmt.Sprintf("%q is not a change's id in its canonical lowercase "+
+				"spelling", id))
+		case slices.Contains(q.NoticeCards[:i], id):
+			return refused("notice_cards", fmt.Sprintf("%s is named twice: a card is read once a change", id))
+		}
+	}
+	return nil
+}
+
+// noticeCards serves a `notice_cards` read ([ReadNoticeCards]): the card of
+// each change q names that a row holds, on a repository the asker — and the
+// seat it reads for — may read ([listedReposAmong], as an inbox page holds
+// its notices), by id. A change no row holds, or on a repository either may
+// not read, has none.
+func (r *Reader) noticeCards(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
+	held, err := changesByIDIn(ctx, tx, q.NoticeCards)
+	if err != nil {
+		return fmt.Errorf("code: read the changes an inbox page's cards name: %w", err)
+	}
+	repoIDs := make([]string, 0, len(held))
+	for _, row := range held {
+		repoIDs = append(repoIDs, row.repoID)
+	}
+	repos, err := listedReposAmong(ctx, tx, repoIDs, q.Asker, q.CeilingSeat, chart, "an inbox page's cards")
+	if err != nil {
+		return err
+	}
+	// IN THE QUERY'S ORDER, never the map's: the readiness reads its rows a
 	// kind at a time over these, in one order whatever a map hands back.
 	named := make([]changeRow, 0, len(held))
-	for _, id := range ids {
+	for _, id := range q.NoticeCards {
 		row, found := held[id]
-		if !found {
-			continue
+		if _, listed := repos[row.repoID]; found && listed {
+			named = append(named, row)
 		}
-		named = append(named, row)
-		c := &NoticeChange{Title: row.title, State: row.state}
-		if row.work.ID != "" {
-			work := row.work
-			c.WorkItem = &work
-		}
-		out[id] = c
 	}
-	judged, err := readinessIn(ctx, tx, named, repos, chart, asker, floor)
+	out.NoticeCards, err = noticeCardsIn(ctx, tx, named, repos, chart, q.Asker, r.limits().MergeByFloor)
+	return err
+}
+
+// noticeCardsIn is the card of each change of rows, by its id — what its notice
+// carries of it, its description cut at [MaxNoticeBody], the agent findings
+// standing open on it by severity, and a live one's readiness judged against
+// chart for asker under floor ([readinessIn]), every repository a row names in
+// repos — one statement each over the rows' changes, the readiness's own a
+// kind at a time.
+func noticeCardsIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[string]listedRepo, chart Roster,
+	asker Principal, floor MergeBy) (map[string]*NoticeChange, error) {
+
+	out := make(map[string]*NoticeChange, len(rows))
+	if len(rows) == 0 {
+		return out, nil
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out[row.id] = noticeChangeOf(row)
+		ids = append(ids, row.id)
+	}
+	judged, err := readinessIn(ctx, tx, rows, repos, chart, asker, floor)
 	if err != nil {
-		return nil, fmt.Errorf("code: judge the readiness of the changes an inbox page names: %w", err)
+		return nil, fmt.Errorf("code: judge the readiness of the changes an inbox page's cards name: %w", err)
 	}
 	for id, readiness := range judged {
 		out[id].Readiness = &NoticeReadiness{Met: readiness.Met, Total: readiness.Total, First: readiness.First}
@@ -537,35 +642,36 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, noticeBodiesSQL, list)
+	rowsOf, err := tx.QueryContext(ctx, noticeBodiesSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page names: %w", err)
+		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page's cards name: %w", err)
 	}
-	for rows.Next() {
+	for rowsOf.Next() {
 		var id, body string
-		if err = rows.Scan(&id, &body); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page names: %w", err)
+		if err = rowsOf.Scan(&id, &body); err != nil {
+			_ = rowsOf.Close()
+			return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page's cards name: %w",
+				err)
 		}
 		if c, found := out[id]; found {
 			c.Body = textcut.Within(body, MaxNoticeBody)
 			c.BodyCut = len(c.Body) < len(body)
 		}
 	}
-	if err = rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page names: %w", err)
+	if err = rowsOf.Err(); err != nil {
+		_ = rowsOf.Close()
+		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page's cards name: %w", err)
 	}
-	_ = rows.Close()
-	rows, err = tx.QueryContext(ctx, noticeFindingsSQL, list)
+	_ = rowsOf.Close()
+	rowsOf, err = tx.QueryContext(ctx, noticeFindingsSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: count the findings of the changes an inbox page names: %w", err)
+		return nil, fmt.Errorf("code: count the findings of the changes an inbox page's cards name: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
+	defer func() { _ = rowsOf.Close() }()
+	for rowsOf.Next() {
 		var id, severity string
-		if err := rows.Scan(&id, &severity); err != nil {
-			return nil, fmt.Errorf("code: count the findings of the changes an inbox page names: %w", err)
+		if err := rowsOf.Scan(&id, &severity); err != nil {
+			return nil, fmt.Errorf("code: count the findings of the changes an inbox page's cards name: %w", err)
 		}
 		c, found := out[id]
 		if !found {
@@ -576,7 +682,7 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 		}
 		c.AgentFindings[Severity(severity)]++
 	}
-	return out, rows.Err()
+	return out, rowsOf.Err()
 }
 
 // The inbox's statements, each registered in plan_test.go.
@@ -600,9 +706,9 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 // to the read's bounds, reasons and snooze scope. No order and no limit: the
 // read merges them into the range's page.
 //
-// noticeBodiesSQL reads each change's description by its key: the change's
-// row is changesByIDSQL's, which the readiness judges too, so a page reads
-// code_changes once; noticeFindingsSQL reads each change's open agent
+// noticeBodiesSQL reads each change's description by its key, for a card: the
+// change's row is changesByIDSQL's, which the readiness judges too, so a card
+// read reads code_changes once; noticeFindingsSQL reads each change's open agent
 // findings' severities by one covering seek of code_findings_open_agent_idx,
 // which holds those alone (replicated 0136) — never the change's every
 // finding of every revision, superseded and dismissed ones included — counted

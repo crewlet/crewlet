@@ -52,7 +52,12 @@
 // then a segmented binary search of the branch's moves in the index — never a
 // walk of the log or of the history — bounded by MaxLandedProbes and by the
 // read's one budget of git, either of which ends it with how far it reached
-// (TestALandingSearchTheBudgetEndsSaysHowFarItReached). It names the first
+// (TestALandingSearchTheBudgetEndsSaysHowFarItReached), as the read's answer
+// falling due and a read lane busy past gitproc.SlotWait do: each check
+// queues for a slot of its own, a wait the budget does not charge, so those
+// two end a search the budget would not
+// (TestALandingSearchItsAnswerFallingDueOrABusyLaneEndsSaysHowFarItReached).
+// It names the first
 // move after which every move kept the commit, and never a move the commit
 // was reachable before: a landing older than the index's oldest move of the
 // branch, or inside its gap, is answered with no push and the range it lies
@@ -173,7 +178,10 @@
 // classes, answered incomplete (facts.go), and a history's walk, whose page
 // answers the commits it reached with its cursor past them (log.go). Its wait
 // for each process's read-lane slot is charged nothing, since it is the
-// node's contention and not the read's size. The short checks before it
+// node's contention and not the read's size — so the budget holds a read's
+// git to its run time, never to its wall time, which a read of many
+// processes, a landed-in search's thousand checks above all, spends in the
+// lane's queue as much as in git. The short checks before it
 // (objects.go) run to their own bound, outside it; a revision's facts' own
 // lookup of its trees and blobs, inside it, is charged to it like the rest.
 //
@@ -182,7 +190,9 @@
 // wait it ends is answered code.ErrGitUnready while the asker still listens
 // (code.AnswerDue) — syncing during the sync, share during a wait for the
 // node's git or a run of it, a history's walk that reached a commit answering
-// those it reached — never the context's error and never too large:
+// those it reached, and a landed-in search past its check against the tip
+// answering how far it reached, as it does for a lane busy past
+// gitproc.SlotWait — never the context's error and never too large:
 // a run the due instant ended had less than its budget. So time the asker's
 // attempt does not hold for — the read lane's queue and the short checks, left
 // out of its sum — makes a read unready under load, never late
@@ -325,7 +335,10 @@
 // 6.7 ms at the 99th percentile and 11.3 ms at the slowest of 3 075, a git
 // process each, the figure MaxLandedProbes is derived from. One check walking
 // by date over the same history, with no commit-graph — the commit against
-// the branch's tip — takes 26 ms.
+// the branch's tip — takes 26 ms. Every figure is of an idle node, no other
+// process queued for the read lane, so each check's wait for its slot is in
+// none of them: under load the waits add to the 4.8 s, and the read's answer
+// falling due ends such a search with how far it reached (landed.go).
 //
 // BenchmarkRevisionFacts over a change rewriting every fourth line of files of
 // 256 KiB, three reads an arm (-benchtime 3x, one count, git 2.56.0 on two

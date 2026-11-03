@@ -199,10 +199,14 @@ type entry struct {
 	// lastAdded is when a round last added packs: the maintainer's debounce.
 	lastAdded time.Time
 	// maintainerOwed: a full round converged, or a pass found the repository
-	// due while an adoption held it, and the maintainer is to be woken once
-	// no round runs on it (run) and no adoption holds it (releaseWrite),
+	// due while an adoption held it (oweWake), and the maintainer is to be woken
+	// once no round runs on it (run) and no adoption holds it (releaseWrite),
 	// since a pass starts no run on one either holds (runnable).
 	maintainerOwed bool
+	// runOwed: a pass found the repository due while a round held it, and the
+	// run starts as that round ends (startOwed), before the round queued behind
+	// it — where a wake could only race that next round for the gap.
+	runOwed bool
 	// uncoveredSince is when the oldest pack the maintainer's index does not
 	// cover arrived — set by the round that adds packs while none wait, and
 	// cleared by a run whose index covers every pack — and zero when none
@@ -454,7 +458,8 @@ type incarnation struct {
 	// the tree, or the janitor listed it (listMemos); a boot's copy is not,
 	// until its first listing. memoUnlisted: the copy's last listing failed
 	// (code_cache_memo_unlisted), so the janitor lists it again only at its
-	// tick (listMemos); written under entry.mu. memoVersion moves with every
+	// tick (listMemos); written under entry.mu, and moved with the tree
+	// beside memoListed (carryMemo). memoVersion moves with every
 	// change to the record (setMemo) and memoStated is the version the state
 	// last written
 	// records, which the janitor writes again at its tick once they differ

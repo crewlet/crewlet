@@ -396,7 +396,7 @@ const (
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
 	//     sized at, worklet.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
-	//   - the code log 22.4–99.9 MB a day: 3 000 pushes at 1 625 bytes,
+	//   - the code log 22.4–100.2 MB a day: 3 000 pushes at 1 625 bytes,
 	//     MEASURED for a seat's coding box's push alone in its record, the
 	//     most a seat's push takes, at which every one of the reference
 	//     company's is priced (internal/code's BenchmarkPushLogBytes, its
@@ -421,7 +421,7 @@ const (
 	//     seat's push three times, 9 000 a day, beside thirty people fetching
 	//     every three minutes of a working day (4 800) and, where one runs, a
 	//     CI polling ten repositories a minute (14 400); and the records of
-	//     its 300 changes a day, 14.5–86.1 MB — every push a revision of its
+	//     its 300 changes a day, 14.5–86.4 MB — every push a revision of its
 	//     executor's change, ten a change, each change opened by a seat's
 	//     tool, asked of one reviewer, reviewed asking for changes with two
 	//     findings, answered, commented on twice, a thread resolved, approved
@@ -445,7 +445,7 @@ const (
 	//
 	// Every figure is of SIGNED records (ADR-0031).
 	//
-	// So the code log takes 1.85–8.24 of the mutation log's day — 0.40 on
+	// So the code log takes 1.85–8.26 of the mutation log's day — 0.40 on
 	// its push records alone (0.49 of the tracker's records) — and TWO
 	// THIRDS IS BELOW THAT RANGE: under a blocked trim a code log at two
 	// thirds of the mutation log's ceiling fills in 0.36 of the mutation

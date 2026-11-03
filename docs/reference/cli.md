@@ -1869,7 +1869,11 @@ from the refs already landed. A blob past `code.limits.max_blob_bytes`, or a
 history past `code.limits.repo_max_bytes`, ends the import early: the
 repository turns `active` holding what landed, and the import is not tried
 again. `crewlet code status -repo <name>` shows it `importing` until the import
-ends.
+ends, and an `import:` line naming its source and how many chunks have landed:
+`still running`, `done on` when it landed whole, or `ended short on` with the
+sentence it ended on, the repository keeping what landed. A repository's
+mirrors print as `mirror from:` (the source it follows, what it fetches with,
+its last sync) and `mirror to:` (the target, as which seat, and which refs).
 
 - `-owner` is required: the project's owner, `unit:<key>` or `seat:<handle>`,
   as `code_create_repo` takes one.

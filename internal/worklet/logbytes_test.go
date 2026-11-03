@@ -146,10 +146,12 @@ const (
 	codeEnqueueBytes              = 980
 	// A queued change as its home's queue worker takes it on: its train of one
 	// candidate, a check of the candidate's tip queued (its claim, its box and
-	// its ending carry a head's keys, priced at theirs) and its landing.
+	// its ending carry a head's keys, priced at theirs), its landing, and its
+	// work item's close settled once the enqueuer's close landed (M5-D27).
 	codeCandidateBytes            = 1_290
 	codeCandidateCheckQueuedBytes = 1_010
 	codeLandBytes                 = 1_530
+	codeCloseSettledBytes         = 690
 	codeCheckDispatchedBytes      = 2_290
 	codeCheckStartedBytes         = 780
 	codeCheckNamedBytes           = 840
@@ -324,6 +326,9 @@ func codeLogDay() []codeLogTerm {
 			"wrote, one a change", changes, codeCandidateBytes, true},
 		{code.OpLand, "the landing of a queued change's tested prefix, its source deleted, routed to its " +
 			"authors, one a change", changes, codeLandBytes, true},
+		{code.OpCloseSettled, "a landing's work-item closes settled by its home in one record once the " +
+			"enqueuers' closes landed, one a landing — the reference queued change's own, so one a change, " +
+			"closed", changes, codeCloseSettledBytes, true},
 		{code.OpCheckQueued, "a required check of a queued change's candidate queued by its home's queue " +
 			"worker, naming the candidate and its train's base, three a change", candidates,
 			codeCandidateCheckQueuedBytes, true},
@@ -721,6 +726,8 @@ var routingReasons = map[string]string{
 		"record, and the reference change lands",
 	"enqueuer": "who queued the change, which only the queue's records about its entry route",
 	"lead":     "the effective lead of the repository's owner, which only a broken record routes",
+	"not_closed": "why a merged change's work item was left open, which only a close_settled that ended " +
+		"not_closed routes, and the reference queued change's item closes",
 }
 
 // routingAbsent is every key of a change's routing under prefix that a term's
@@ -1059,6 +1066,16 @@ var codeLogFields = map[code.OpKind]struct {
 				"routing.enqueuer": "the change's enqueuer, whom a landing never tells: the queue lands the " +
 					"change as them",
 			}),
+	},
+	code.OpCloseSettled: {
+		payload: reflect.TypeFor[code.CloseSettled](),
+		carried: []string{"repo_id", "settled.entry_id", "settled.outcome"},
+		absent: map[string]string{
+			"settled.detail": "why a close was not made, which only a not_closed close carries, and the " +
+				"reference queued change's work item closes",
+			"routing": "whom a not_closed settle tells, and a closed one tells nobody: the reference queued " +
+				"change's work item closes",
+		},
 	},
 	code.OpCheckQueued: {
 		payload: reflect.TypeFor[code.CheckQueued](),
@@ -1674,7 +1691,10 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		{"the keys a five-year-old project writes are under a tenth of one percent of the day",
 			keyBytes / records, 0, 0.001},
 		{"the code log takes nearly twice this log's day at its least", codeLeast, 1.75, 1.95},
-		{"and about eight times it at its most", codeMost, 7.75, 8.25},
+		// ABOUT EIGHT is eight to the nearest whole: the words name no
+		// fraction, so a term that moves the most by a hundredth (a queued
+		// change's close_settled, 0.02) leaves them true.
+		{"and about eight times it at its most", codeMost, 7.5, 8.5},
 		{"two thirds is below that range", share / codeLeast, 0, 1},
 		{"so a code log at two thirds of this log's ceiling fills in a little over a third of this log's " +
 			"time at its least", share / codeLeast, 0.34, 0.4},
@@ -2053,7 +2073,7 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 		"publication_tail": codePublicationTailBytes, "publication_one": codePublicationOneBytes,
 		"tip_check_queued": codeTipCheckQueuedBytes, "green": codeGreenBytes, "broken": codeBrokenBytes,
 		"candidate": codeCandidateBytes, "candidate_check_queued": codeCandidateCheckQueuedBytes,
-		"land": codeLandBytes,
+		"land": codeLandBytes, "close_settled": codeCloseSettledBytes,
 	} {
 		line := fmt.Sprintf("%q: %s,", name, strings.ReplaceAll(spaced(bytes), " ", "_"))
 		if !strings.Contains(measured, line) {

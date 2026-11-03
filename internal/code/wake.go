@@ -35,6 +35,10 @@ const (
 	MetaVia = "routed_via"
 	// MetaVerdict is a review's verdict, on a wake a review sent.
 	MetaVerdict = "verdict"
+	// MetaNotClosed is why a merged change's work item was not closed, on
+	// the wake a close_settled sent for a close that ended not_closed
+	// ([ChangeRouting.NotClosed]).
+	MetaNotClosed = "not_closed"
 	// MetaWorkBackend, MetaWorkID, MetaWorkKey and MetaWorkProject are the
 	// work item the change implements ([ChangeRouting.WorkItem]), each absent
 	// where it carries none.
@@ -201,6 +205,9 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 	if r.Verdict != "" {
 		meta[MetaVerdict] = string(r.Verdict)
 	}
+	if r.NotClosed != "" {
+		meta[MetaNotClosed] = r.NotClosed
+	}
 	if item := r.WorkItem; item != nil && item.ID != "" {
 		meta[MetaWorkBackend], meta[MetaWorkID] = string(item.Backend), item.ID
 		meta[MetaWorkKey], meta[MetaWorkProject] = item.Key, item.Project
@@ -228,7 +235,7 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 		// WHO WROTE WHAT THE WAKE ANNOUNCES, by the routing's own record of
 		// it: a person as the seat they hold, a seat as itself — a revision's
 		// facts and a landing, which the home records, as whoever pushed the
-		// revision and the tip the home found the change's head in — and
+		// revision and the push the home found merging the change — and
 		// nobody, the engine, for the home's other records. The record's ACTOR
 		// is the deciding node for every code record, so the routing's actor
 		// is the writer here.

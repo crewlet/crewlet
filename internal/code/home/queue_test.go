@@ -66,6 +66,17 @@ type queueRows struct {
 	// attempt the worker ended, in order.
 	landed    map[string]bool
 	cancelled []code.CheckFinished
+	// owed is every landed entry still owing its work item's close, as a
+	// landing's apply leaves it (code_queue.close_op), until a settle
+	// clears it; settles every close a close_settled applied settled, in
+	// order, and settleRecords how many records applied them — kept apart
+	// from records, which are the queue's trains and landings.
+	owed          []code.QueueWorkEntry
+	settles       []code.SettledClose
+	settleRecords int
+	// pending, where set, answers a land pending: its rows applied, as the
+	// committer's would be, but not yet on the asker's.
+	pending bool
 }
 
 func newQueueRows(tip string, depth, batch int) *queueRows {
@@ -179,14 +190,14 @@ func (r *queueRows) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, 
 	case q.Kind != code.ReadQueueDue || q.QueueDue == nil:
 		return code.ReadAnswer{}, errors.New("the queue asked a read that is not its listing")
 	case q.QueueDue.RepoID == "":
-		if len(r.entries) == 0 && len(r.givenUp()) == 0 {
+		if len(r.entries) == 0 && len(r.givenUp()) == 0 && len(r.owed) == 0 {
 			return code.ReadAnswer{Position: r.position()}, nil
 		}
 		return code.ReadAnswer{DueRepos: []string{repoA}, Position: r.position()}, nil
 	}
-	abandoned := r.givenUp()
+	abandoned, owed := r.givenUp(), slices.Clone(r.owed)
 	if len(r.entries) == 0 {
-		return code.ReadAnswer{QueueAbandoned: abandoned, Position: r.position()}, nil
+		return code.ReadAnswer{QueueAbandoned: abandoned, QueueOwedCloses: owed, Position: r.position()}, nil
 	}
 	d := &code.QueueDue{TargetRef: queueMain, Repo: "web", Tip: r.tip, Depth: r.depth,
 		Batch: r.batch, Required: slices.Clone(r.required), Entries: slices.Clone(r.entries),
@@ -207,7 +218,8 @@ func (r *queueRows) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, 
 		}
 		d.Train = append(d.Train, c)
 	}
-	return code.ReadAnswer{DueQueue: d, QueueAbandoned: abandoned, Position: r.position()}, nil
+	return code.ReadAnswer{DueQueue: d, QueueAbandoned: abandoned, QueueOwedCloses: owed,
+		Position: r.position()}, nil
 }
 
 func (r *queueRows) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -264,6 +276,26 @@ func (r *queueRows) Queue(_ context.Context, p code.QueueProposal) (code.QueueRe
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if s := p.CloseSettled; s != nil {
+		// EACH CLOSE STILL OWED SETTLED, every other skipped, and a record
+		// settling none refused stale, as the decide does.
+		var settled []code.SettledClose
+		for _, c := range s.Settled {
+			i := slices.IndexFunc(r.owed, func(e code.QueueWorkEntry) bool { return e.EntryID == c.EntryID })
+			if i >= 0 {
+				r.owed = slices.Delete(r.owed, i, i+1)
+				settled = append(settled, c)
+			}
+		}
+		if len(settled) == 0 {
+			return code.QueueResult{Refusal: code.MergeRefusalStale, Detail: "none owes its work item a close"},
+				nil
+		}
+		r.settles = append(r.settles, settled...)
+		r.settleRecords++
+		r.seq++
+		return code.QueueResult{Outcome: statelog.OutcomeApplied, Position: r.position()}, nil
+	}
 	r.records = append(r.records, p)
 	switch {
 	case (p.Candidate != nil || p.Land != nil) && p.DropEpoch != r.epoch:
@@ -302,11 +334,20 @@ func (r *queueRows) Queue(_ context.Context, p code.QueueProposal) (code.QueueRe
 			}
 		}
 		for _, e := range p.Land.Entries {
+			// THE CLOSE IT OWES, as the land's apply leaves it.
+			if landed := r.entries[r.entry(e.EntryID)]; landed.CloseTask && landed.WorkItem != nil {
+				landed.State, landed.CloseOp = code.QueueLanded, code.CloseWorkItemOpID(p.OpID, e.EntryID)
+				r.owed = append(r.owed, landed)
+			}
 			r.entries = slices.Delete(r.entries, r.entry(e.EntryID), r.entry(e.EntryID)+1)
 			r.landed[e.Commit] = true
 		}
 		r.tip = p.Land.TipOID
 		r.abandon()
+		if r.pending {
+			r.seq++
+			return code.QueueResult{Outcome: statelog.OutcomePending, Position: r.position()}, nil
+		}
 	}
 	r.seq++
 	return code.QueueResult{Outcome: statelog.OutcomeApplied, Position: r.position()}, nil
@@ -395,17 +436,43 @@ func (c *queueChains) built() int {
 	return len(c.builds)
 }
 
-// queueTasks is every work item a landing asked closed, in order.
+// queueTasks is every work item a landing asked closed, in order: closed
+// those it closed, and asked every close asked, fail's included.
 type queueTasks struct {
 	mu     sync.Mutex
 	closed []home.TaskClose
+	asked  []home.TaskClose
+	// fail, where set, answers a close it returns an error for with that
+	// error, closing nothing.
+	fail func(home.TaskClose) error
 }
 
 func (q *queueTasks) CloseWorkItem(_ context.Context, c home.TaskClose) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.asked = append(q.asked, c)
+	if q.fail != nil {
+		if err := q.fail(c); err != nil {
+			return err
+		}
+	}
 	q.closed = append(q.closed, c)
 	return nil
+}
+
+// closes is what q closed and what it was asked, in order.
+func (q *queueTasks) closes() (closed, asked []home.TaskClose) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return slices.Clone(q.closed), slices.Clone(q.asked)
+}
+
+// settled is every close a close_settled the rows applied settled, and the
+// closes still owed.
+func (r *queueRows) settled() ([]code.SettledClose, []code.QueueWorkEntry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.settles), slices.Clone(r.owed)
 }
 
 // queueLoop is a loop over rows, building with chains and closing with tasks,
@@ -1017,5 +1084,236 @@ func TestTheQueueEjectsWhatItCannotLand(t *testing.T) {
 		}) {
 		t.Fatalf("a train whose base defines no unit queued %+v and recorded %+v, want nothing queued and "+
 			"both entries ejected check_failed naming unit", queued, records[len(records)-1])
+	}
+}
+
+// landsOne queues one change on rows asking its work item closed, builds its
+// train in a turn of l, passes its tip's check and lands it in the next: the
+// entry, the landing's operation id and the landing turn's error, which a
+// close left owed makes.
+func landsOne(t *testing.T, rows *queueRows, l *home.Loop) (code.QueueWorkEntry, string, error) {
+	t.Helper()
+	e := rows.enqueue(t, 1)[0]
+	rows.mu.Lock()
+	i := rows.entry(e.EntryID)
+	rows.entries[i].CloseTask = true
+	rows.entries[i].WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: "task-" + e.EntryID[:8],
+		Key: "ENG-" + e.EntryID[:4]}
+	e = rows.entries[i]
+	rows.mu.Unlock()
+	turn(t, l, rows)
+	train, _ := rows.snapshot()
+	if len(train) != 1 {
+		t.Fatalf("one change waiting built a train of %d candidates, want 1", len(train))
+	}
+	rows.ended(train[0].TipOID, "unit", code.CheckStatePassed)
+	rows.mu.Lock()
+	at := rows.position()
+	rows.mu.Unlock()
+	err := home.QueueWork(t.Context(), l, repoA, at)
+	records, _ := rows.asked()
+	land := records[len(records)-1]
+	if land.Land == nil {
+		t.Fatalf("the turn after its tip passed recorded %+v, want its landing", land)
+	}
+	return e, land.OpID, err
+}
+
+// A LAND ANSWERED PENDING CLOSES ON THE NEXT TURN (M5-D27): the home closes a
+// landed change's work item only once its landing has APPLIED, so a landing
+// its committer answered pending closes nothing in the turn that asked it —
+// but the landing's apply leaves the close owed on the entry's row, and the
+// next turn reads it there and closes the item as the enqueuer, under the
+// landing's own step (code.CloseWorkItemOpID), and settles it closed.
+//
+// Mutation: drop the owed closes a queue_due read's first page answers
+// (Work keeps no QueueOwedCloses) — the pending landing's item is never
+// closed, red.
+func TestALandAnsweredPendingClosesOnTheNextTurn(t *testing.T) {
+	t.Parallel()
+	rows := newQueueRows(oid("a"), 1, 1)
+	rows.pending = true
+	tasks := &queueTasks{}
+	l := queueLoop(t, rows, &queueChains{}, tasks)
+	e, landOp, err := landsOne(t, rows, l)
+	if err != nil {
+		t.Fatalf("the turn whose landing was answered pending: %v", err)
+	}
+	if closed, _ := tasks.closes(); len(closed) != 0 {
+		t.Fatalf("a landing answered pending closed %+v, want nothing closed on its word", closed)
+	}
+	if _, owed := rows.settled(); len(owed) != 1 {
+		t.Fatalf("the pending landing left %d closes owed, want its entry's", len(owed))
+	}
+
+	rows.mu.Lock()
+	rows.pending = false
+	rows.mu.Unlock()
+	turn(t, l, rows)
+	closed, _ := tasks.closes()
+	if len(closed) != 1 || closed[0].OpID != code.CloseWorkItemOpID(landOp, e.EntryID) ||
+		closed[0].As != e.EnqueuedBy || closed[0].WorkItem != *e.WorkItem || closed[0].RepoID != repoA {
+		t.Fatalf("the next turn closed %+v, want %s's work item closed as %+v under its landing's step", closed,
+			e.EntryID, e.EnqueuedBy)
+	}
+	if settles, owed := rows.settled(); len(settles) != 1 || settles[0].EntryID != e.EntryID ||
+		settles[0].Outcome != code.CloseClosed || len(owed) != 0 {
+		t.Fatalf("the close settled %+v with %d still owed, want the entry settled closed", settles, len(owed))
+	}
+}
+
+// A FAILED CLOSE IS RETRIED (M5-D27): a close whose end the tracker cannot
+// state — unreachable, its answer unknown — fails the turn and is NOT
+// settled, so the next turn asks the same close again, under the same
+// operation, and settles it once it lands; a close the tracker will never
+// make (home.NotClosed: a vendor's item, an enqueuer who may not) is settled
+// not_closed at once, its sentence on the record, and never asked again.
+//
+// Mutations: settle a close whose error is not a NotClosed — it is never
+// asked again, red; settle a NotClosed one closed — its outcome is wrong,
+// red.
+func TestAFailedCloseIsRetried(t *testing.T) {
+	t.Parallel()
+	rows := newQueueRows(oid("a"), 1, 1)
+	unreachable := errors.New("the tracker did not answer")
+	tasks := &queueTasks{fail: func(home.TaskClose) error { return unreachable }}
+	l := queueLoop(t, rows, &queueChains{}, tasks)
+	e, landOp, err := landsOne(t, rows, l)
+	if !errors.Is(err, unreachable) {
+		t.Fatalf("a turn whose close failed answered %v, want the close's failure", err)
+	}
+	if settles, owed := rows.settled(); len(settles) != 0 || len(owed) != 1 {
+		t.Fatalf("a close the tracker did not answer settled %+v with %d owed, want it left owed", settles,
+			len(owed))
+	}
+	rows.mu.Lock()
+	at := rows.position()
+	rows.mu.Unlock()
+	if err := home.QueueWork(t.Context(), l, repoA, at); !errors.Is(err, unreachable) {
+		t.Fatalf("the next turn, its close failing again, answered %v, want the close's failure", err)
+	}
+
+	tasks.mu.Lock()
+	tasks.fail = nil
+	tasks.mu.Unlock()
+	turn(t, l, rows)
+	closed, asked := tasks.closes()
+	want := code.CloseWorkItemOpID(landOp, e.EntryID)
+	if len(asked) != 3 || len(closed) != 1 || closed[0].OpID != want || asked[0].OpID != want ||
+		asked[1].OpID != want {
+		t.Fatalf("the close was asked %+v and made %+v, want the same close under %s asked on every turn "+
+			"until it landed", asked, closed, want)
+	}
+	if settles, owed := rows.settled(); len(settles) != 1 || settles[0].Outcome != code.CloseClosed ||
+		len(owed) != 0 {
+		t.Fatalf("the retried close settled %+v with %d owed, want it settled closed", settles, len(owed))
+	}
+
+	why := "ENG-9 is a jira work item, which is closed where it lives"
+	tasks.mu.Lock()
+	tasks.fail = func(home.TaskClose) error { return &home.NotClosed{Why: why} }
+	tasks.mu.Unlock()
+	refused, _, err := landsOne(t, rows, l)
+	if err != nil {
+		t.Fatalf("a turn whose close was refused for good answered %v, want it settled, not failed", err)
+	}
+	settles, owed := rows.settled()
+	if len(settles) != 2 || settles[1].EntryID != refused.EntryID || settles[1].Outcome != code.CloseNotClosed ||
+		settles[1].Detail != why || len(owed) != 0 {
+		t.Fatalf("a close the tracker will not make settled %+v with %d owed, want it settled not_closed "+
+			"saying %q", settles, len(owed), why)
+	}
+	_, before := tasks.closes()
+	turn(t, l, rows)
+	if _, after := tasks.closes(); len(after) != len(before) {
+		t.Fatalf("a settled close was asked again: %+v", after[len(before):])
+	}
+}
+
+// A LANDING'S CLOSES ARE SETTLED IN ONE RECORD (M5-D27): a landing of three
+// changes, each asking its work item closed, is three tracker writes, each
+// as its enqueuer under its own step of the landing — and ONE close_settled
+// record of how all three ended, in the landing's order, the one the tracker
+// will not make settled not_closed with its sentence beside the two closed:
+// never a code-log append a change, one after another inside the queue turn.
+//
+// Mutation: settle each close in a record of its own → three records, red.
+func TestALandingsClosesAreSettledInOneRecord(t *testing.T) {
+	t.Parallel()
+	rows := newQueueRows(oid("a"), 1, 4)
+	why := "ENG-2 is a jira work item, which is closed where it lives"
+	entries := rows.enqueue(t, 3)
+	rows.mu.Lock()
+	for i := range rows.entries {
+		rows.entries[i].CloseTask = true
+		rows.entries[i].WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: fmt.Sprintf("task-%d", i),
+			Key: fmt.Sprintf("ENG-%d", i+1)}
+	}
+	rows.mu.Unlock()
+	tasks := &queueTasks{fail: func(c home.TaskClose) error {
+		if c.WorkItem.Key == "ENG-2" {
+			return &home.NotClosed{Why: why}
+		}
+		return nil
+	}}
+	l := queueLoop(t, rows, &queueChains{}, tasks)
+	turn(t, l, rows)
+	train, _ := rows.snapshot()
+	if len(train) != 1 || len(train[0].Commits) != 3 {
+		t.Fatalf("the premise: three changes at depth 1 and batch 4 built %+v, want one candidate of three", train)
+	}
+	rows.ended(train[0].TipOID, "unit", code.CheckStatePassed)
+	turn(t, l, rows)
+
+	if _, asked := tasks.closes(); len(asked) != 3 {
+		t.Fatalf("the landing asked %d closes, want its three changes'", len(asked))
+	}
+	rows.mu.Lock()
+	records := rows.settleRecords
+	rows.mu.Unlock()
+	settles, owed := rows.settled()
+	if records != 1 || len(settles) != 3 || len(owed) != 0 {
+		t.Fatalf("the landing's closes were settled by %d records as %+v with %d still owed, want one record "+
+			"of all three", records, settles, len(owed))
+	}
+	for i, s := range settles {
+		want := code.SettledClose{EntryID: entries[i].EntryID, Outcome: code.CloseClosed}
+		if i == 1 {
+			want.Outcome, want.Detail = code.CloseNotClosed, why
+		}
+		if s != want {
+			t.Errorf("close %d was settled %+v, want %+v", i, s, want)
+		}
+	}
+}
+
+// A NEW HOME CLOSES WHAT THE OLD ONE OWED (M5-D27): a home that stops between
+// its landing applying and its close — here, one whose tracker could not
+// answer — leaves the close on the rows, not in itself, so the home that
+// takes the repository over closes the item in its first turn, under the
+// landing's step the row names, as the enqueuer, and settles it.
+//
+// Mutation: close an owed item under an operation of the turn's own rather
+// than the row's (TaskClose.OpID not CloseOp) — the new home's close is
+// another write than the old one's, red.
+func TestANewHomeClosesWhatTheOldOneOwed(t *testing.T) {
+	t.Parallel()
+	rows := newQueueRows(oid("a"), 1, 1)
+	gone := &queueTasks{fail: func(home.TaskClose) error { return errors.New("the home stopped") }}
+	e, landOp, err := landsOne(t, rows, queueLoop(t, rows, &queueChains{}, gone))
+	if err == nil {
+		t.Fatal("the old home's turn answered no failure for a close it could not make")
+	}
+
+	tasks := &queueTasks{}
+	turn(t, queueLoop(t, rows, &queueChains{}, tasks), rows)
+	closed, _ := tasks.closes()
+	if len(closed) != 1 || closed[0].OpID != code.CloseWorkItemOpID(landOp, e.EntryID) ||
+		closed[0].As != e.EnqueuedBy {
+		t.Fatalf("the new home closed %+v, want %s's work item closed as its enqueuer under its landing's step",
+			closed, e.EntryID)
+	}
+	if settles, owed := rows.settled(); len(settles) != 1 || settles[0].EntryID != e.EntryID || len(owed) != 0 {
+		t.Fatalf("the new home settled %+v with %d owed, want the old home's close settled", settles, len(owed))
 	}
 }

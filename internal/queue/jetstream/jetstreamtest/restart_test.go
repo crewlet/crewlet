@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -12,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
@@ -41,7 +45,7 @@ func TestARestartedMemberRejoinsAsItself(t *testing.T) {
 	appendN := func(from, to int) {
 		t.Helper()
 		for n := from; n < to; n++ {
-			if _, _, err := log.Append(t.Context(), "crewlet.restart.a", fmt.Sprintf("m-%d", n), nil,
+			if err := landAppend(t.Context(), c, log, spec.Name, "crewlet.restart.a", fmt.Sprintf("m-%d", n),
 				[]byte(fmt.Sprintf("record %d", n))); err != nil {
 				t.Fatalf("append record %d: %v", n, err)
 			}
@@ -94,6 +98,66 @@ func TestARestartedMemberRejoinsAsItself(t *testing.T) {
 				err, want)
 		}
 	}
+}
+
+// landAppend appends one record to the replicated log named stream through log
+// and answers once it has landed, asked again under the same message id while
+// nobody answers.
+//
+// NOBODY ANSWERING IS NOT A REFUSAL, and a member coming or going is when nobody
+// does. A stream's subjects are served by its leader alone, so a publish through
+// any member needs a leader — a member that stops hands its leadership to a peer
+// it believes healthy, and a transfer that does not take waits out an election
+// of up to nine seconds (server/raft.go) — and that leader's interest in the
+// subject on a route to this member, which a member's route peers do not prove:
+// they name a peer from the first connection of its pool, and the stream's
+// account may ride a later one (server/route.go). Until both hold the publish
+// meets no responders, and the client gives up after two more tries a quarter of
+// a second apart. Half a second against a window of seconds is why a single
+// append through a member just restarted failed one run in many, with "no
+// response from stream": measured on the rotation case, one restart in 27
+// left no member leading the stream for 3.5 s, and the seventh ask landed.
+//
+// THE ENGINE'S WRITER READS THAT AS NO ANSWER, never as a failure
+// (internal/statelog's classify): it reads the log at [jsprovision.LookupBudget]
+// to learn whether its record landed, then publishes again under the same
+// operation id. So this asks again under the same message id, which the log's
+// duplicate window collapses onto the first copy if an acknowledgement was what
+// went missing — a case holding the log's end to its records notices one that
+// landed twice.
+//
+// AT MOST [jsprovision.LookupBudget], the longest silence the server keeps: a
+// group past it has an answer to give, so a member's appends still unanswered
+// are a member that is broken rather than slow, and the error says so, naming
+// what it last heard and who believes they lead the stream. Anything but silence
+// — a refusal, a closed connection — is answered at once: no wait changes it.
+func landAppend(ctx context.Context, c *Cluster, log *js.DomainLog, stream, subject, msgID string, body []byte) error {
+	deadline := time.Now().Add(jsprovision.LookupBudget)
+	for {
+		_, _, err := log.Append(ctx, subject, msgID, nil, body)
+		switch {
+		case err == nil:
+			return nil
+		case !jsprovision.Unanswered(ctx, err) && !errors.Is(err, jetstream.ErrNoStreamResponse):
+			return err
+		case time.Now().After(deadline):
+			return fmt.Errorf("still unanswered after %s, the longest silence the server keeps, with %v "+
+				"leading the stream: %w", jsprovision.LookupBudget, c.streamLeaders(stream), err)
+		}
+	}
+}
+
+// streamLeaders names the members that believe, right now, that they lead
+// stream: asked of each in process, so a member that does not lead it says so
+// rather than staying silent ([js.Server.LeadsStream]).
+func (c *Cluster) streamLeaders(stream string) []string {
+	var leaders []string
+	for i, srv := range c.Servers {
+		if srv.LeadsStream(stream) {
+			leaders = append(leaders, c.Configs[i].ServerName)
+		}
+	}
+	return leaders
 }
 
 // routeListener dials a member's route port as a peer does and answers the

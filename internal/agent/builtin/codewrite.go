@@ -1297,35 +1297,52 @@ func writeRefusalError(refusal, detail string) error {
 	return &HostRefusal{Refusal: refusal, Detail: detail}
 }
 
-// pushClass is the class a refused push's code is answered in — chosen by
-// what each class tells its reader, since a person's surface shows the tool's
-// own sentence for `invalid` and `forbidden` alone:
+// pushClass is the class a refused push's code is answered in, by internal/mcp's
+// one rule for every domain ([tools.Refusal]'s doc): what the refusal is about,
+// and what would make the same request land.
 //
-//   - a rule of the repository refusing the caller — the grant, a protection,
-//     the seat's daily quota, a read-only repository or a pull mirror, its
-//     bounds — is FORBIDDEN, the sentence naming the rule and, for the quota,
-//     when the day turns; never budget_exhausted, which is the company's
-//     token budget;
-//   - a branch the engine's names refuse, or a pack past what one push may
-//     store, is INVALID: the fix is another call;
+//   - the caller refused by a rule — its grant, a protection, the seat's daily
+//     quota of pushes — is FORBIDDEN, the sentence naming the rule and, for
+//     the quota, when the day turns; never budget_exhausted, which is the
+//     company's token budget;
+//   - the REPOSITORY in a state that refuses the push until somebody changes
+//     it — archived and so read-only, or a pull mirror its syncs alone move —
+//     is CONFLICT, the same push landing once a person unarchives it or turns
+//     its mirror off;
+//   - the repository at a limit on what it keeps — its bytes past
+//     code.limits.repo_max_bytes, its live refs at MaxRefsPerRepo — is
+//     QUOTA_EXCEEDED, which no permission lifts and no retry clears;
+//   - the PUSH ITSELF — a branch the engine's names refuse, a blob or a pack
+//     past what one push may carry — is INVALID: the fix is another push;
+//   - a ref whose path another live ref holds (feature beside feature/x) is
+//     EXISTS, the same name landing once that ref is gone;
 //   - a head that moved is STALE_VERSION, a repository gone NOT_FOUND, a store
 //     with no room STORE_FULL;
 //   - what waiting clears — a busy or compacting repository, one being
-//     imported, an expunge that began, a log or a store that refused, a push
-//     applied nowhere — is UNAVAILABLE, the same call again being the same
-//     write;
+//     imported, an expunge that began, an upload of the engine's own it makes
+//     afresh, a log or a store that refused, a push applied nowhere — is
+//     UNAVAILABLE, the same call again being the same write;
 //   - and what no engine write can be answered — an --atomic push, a tag moved,
 //     a push of more changes than a record holds, a commit claiming the
 //     engine's committer (forged_committer, which only a coding box's pack is
 //     read for: an engine write's commits are the engine's by right) — is the
 //     engine's own fault.
+//
+// The change, conversation, merge and lifecycle refusals are classed by the
+// same rule ([changeClass], [conversationClass], [mergeRefusalClass],
+// [lifecycleRefused]), so one state is one class on every code tool.
 func pushClass(r code.Refusal) (tools.Refusal, bool) {
 	switch r {
 	case code.RefusalNotPermitted, code.RefusalProtectedForce, code.RefusalProtectedDelete,
-		code.RefusalProtectedDirect, code.RefusalPushQuota, code.RefusalRepoArchived, code.RefusalRepoMirrored,
-		code.RefusalRepoSize, code.RefusalRepoRefs, code.RefusalBlobTooLarge, code.RefusalRefConflict:
+		code.RefusalProtectedDirect, code.RefusalPushQuota:
 		return tools.RefusalForbidden, true
-	case code.RefusalReservedRef, code.RefusalBadRef, code.RefusalPackTooLarge:
+	case code.RefusalRepoArchived, code.RefusalRepoMirrored:
+		return tools.RefusalConflict, true
+	case code.RefusalRepoSize, code.RefusalRepoRefs:
+		return tools.RefusalQuotaExceeded, true
+	case code.RefusalRefConflict:
+		return tools.RefusalExists, true
+	case code.RefusalReservedRef, code.RefusalBadRef, code.RefusalPackTooLarge, code.RefusalBlobTooLarge:
 		return tools.RefusalInvalid, true
 	case code.RefusalStale:
 		return tools.RefusalStaleVersion, true
@@ -1363,15 +1380,26 @@ func pushRefused(ctx context.Context, tool, repo, branch string, cmd code.Comman
 		}
 	case tools.RefusalForbidden:
 		said += " That is a rule of the repository, so the same call is refused again."
+	case tools.RefusalConflict:
+		said += fmt.Sprintf(" That is the repository's state, which the sentence names: read it with %s "+
+			"before you decide, since the same call does not land while it stands.", CodeGetRepoTool)
+	case tools.RefusalQuotaExceeded:
+		said += " Nothing was committed, and trying again does not clear it: something the repository keeps " +
+			"has to go, or the limit has to be raised."
+	case tools.RefusalExists:
+		said += " Another ref holds that name's path: use another name, or delete that ref first."
 	case tools.RefusalInvalid:
 		said += " The same call is refused again; change what it names."
 	}
 	return refusedBy(class, cause, said)
 }
 
-// lifecycleRefused is a lifecycle request the data node refused, in its class:
-// a rule of the repository or the company FORBIDDEN, a name taken EXISTS, a
-// repository gone NOT_FOUND, and a repository that moved between the decide
+// lifecycleRefused is a lifecycle request the data node refused, in its class,
+// by [pushClass]'s rule: a rule of the repository or the company FORBIDDEN —
+// the caller's grant, a repository the company document declares; a name
+// taken EXISTS; the seat's scratch repositories, or the company's, at their
+// limit QUOTA_EXCEEDED, which no permission lifts and no retry clears; a
+// repository gone NOT_FOUND; and a repository that moved between the decide
 // and its apply STALE_VERSION.
 func lifecycleRefused(tool, repo string, res code.LifecycleResult) tools.Result {
 	cause := writeRefusalError(string(res.Refusal), res.Detail)
@@ -1379,6 +1407,9 @@ func lifecycleRefused(tool, repo string, res code.LifecycleResult) tools.Result 
 	switch res.Refusal {
 	case code.LifecycleNameTaken:
 		return refusedBy(tools.RefusalExists, cause, said)
+	case code.LifecycleScratchLimit, code.LifecycleRepoLimit:
+		return refusedBy(tools.RefusalQuotaExceeded, cause, said+" Trying again does not clear it: a "+
+			"repository has to go, or the limit has to be raised.")
 	case code.LifecycleRepoDeleted, code.LifecycleRefDeleted:
 		// GONE: the repository, or — a hold's alone — the seat's branch
 		// it names.

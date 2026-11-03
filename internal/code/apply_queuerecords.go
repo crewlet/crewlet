@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -278,7 +279,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		if entry.EnqueuedBy.Kind == PartyPerson {
 			next.mergedOperator = entry.EnqueuedOperator
 		}
-		next.version, next.position = row.version+1, at.packed
+		next.version, next.position, next.updatedAt = row.version+1, at.packed, at.at()
 		merged[i] = &next
 	}
 	if err = writeChanges(ctx, tx, at.maxVariables, changeMerged, merged); err != nil {
@@ -299,7 +300,11 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		next := entries[e.EntryID]
 		next.State, next.EndedAt, next.EndedPosition, next.EndReason, next.CommitOID = QueueLanded, at.at(),
 			at.packed, "", e.Commit
-		ended[i] = entryRow{queueEntry: next}
+		// THE CLOSE IT OWES, where its enqueue asked it of a change carrying
+		// a work item (M5-D27): its home closes the item as its enqueuer and
+		// settles the ask (close_settled), on whichever turn and home reaches
+		// it first — never only the turn that asked the landing.
+		ended[i] = entryRow{queueEntry: next, closeOp: closeOpOf(at, next, changes[i])}
 	}
 	if err = writeEntries(ctx, tx, at.maxVariables, entryLanded, ended); err != nil {
 		return 0, fmt.Errorf("code: land %d entries at %s: %w", len(ended), at.position, err)
@@ -345,6 +350,67 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		return 0, err
 	}
 	return rows + pushed, nil
+}
+
+// closeOpOf is the operation a landed entry's work item is closed under
+// (code_queue.close_op): [CloseWorkItemOpID] of the landing's own operation,
+// where entry asked its close of a change carrying a work item, and "" —
+// owing none — otherwise.
+func closeOpOf(at applyContext, entry queueEntry, change changeRow) string {
+	if !entry.CloseTask || change.work.ID == "" {
+		return ""
+	}
+	return CloseWorkItemOpID(at.record.OpID, entry.EntryID)
+}
+
+// CloseWorkItemOpID is the operation a landed entry's work item is closed
+// under — step 2 of a queued merge (M5-D27), a step of its LANDING's
+// operation, as a direct merge's close is a step of the merge's: whichever
+// home asks it, on whichever turn, it is the same tracker write, which the
+// tracker's ledger answers once. Recorded on the entry's row as the landing
+// applies, since nothing else the row holds names the landing's operation.
+func CloseWorkItemOpID(landOpID, entryID string) string {
+	return statelog.StepOpID(landOpID, "close-work-item", entryID)
+}
+
+// applyCloseSettled clears the closes landed entries owed their work items
+// (code_queue.close_op), out of every home's queue work, in ONE statement
+// for every close the record settles: an entry owing none — another settle
+// reached it first — is passed over, and a record that clears none writes
+// nothing. Its notices, its not_closed closes', are the caller's
+// ([Applier.noticed]).
+func (a *Applier) applyCloseSettled(ctx context.Context, tx *sql.Tx, at applyContext, c CloseSettled) (int,
+	error) {
+
+	ids := c.entries()
+	owed, err := owedClosesNamed(ctx, tx, c.RepoID, ids)
+	if err != nil {
+		return 0, err
+	}
+	settling := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if o, found := owed[id]; found && o.op != "" {
+			settling = append(settling, id)
+			continue
+		}
+		if _, err = queueNotApplied(ctx, at, c.RepoID, id, "it owes its work item no close"); err != nil {
+			return 0, err
+		}
+	}
+	if len(settling) == 0 {
+		return 0, nil
+	}
+	list, err := jsonList(settling)
+	if err != nil {
+		return 0, err
+	}
+	if _, err = tx.ExecContext(ctx, settleClosesSQL, list, c.RepoID); err != nil {
+		return 0, fmt.Errorf("code: settle %d entries' closes at %s: %w", len(settling), at.position, err)
+	}
+	if _, err = tx.ExecContext(ctx, touchedSQL, at.packed, c.RepoID); err != nil {
+		return 0, fmt.Errorf("code: move %s's version at %s: %w", c.RepoID, at.position, err)
+	}
+	return closeSettledRows(len(settling)), nil
 }
 
 // applyGreen moves the target's green row onto the landing record at Through —
@@ -720,11 +786,14 @@ func moveGreen(ctx context.Context, tx store.Execer, at applyContext, repoID, ta
 	return nil
 }
 
-// entryRow is a queue entry as a queue record writes it back: its row, and
-// the ejection's JSON an eject keeps on it ("" for any other write).
+// entryRow is a queue entry as a queue record writes it back: its row, the
+// ejection's JSON an eject keeps on it ("" for any other write), and whether
+// a landing leaves it owing its work item's close (code_queue.close_op,
+// which only a land sets and only a close_settled clears).
 type entryRow struct {
 	queueEntry
 	ejected string
+	closeOp string
 }
 
 // entryWrite is what a queue record did to its entries: the conflict clause
@@ -744,7 +813,7 @@ const (
 		ejected = excluded.ejected, ejected_bytes = excluded.ejected_bytes`
 	entryLanded entryWrite = `ON CONFLICT (repo_id, entry_id) DO UPDATE SET state = excluded.state,
 		ended_at = excluded.ended_at, ended_position = excluded.ended_position, end_reason = excluded.end_reason,
-		commit_oid = excluded.commit_oid`
+		commit_oid = excluded.commit_oid, close_op = excluded.close_op`
 )
 
 // writeEntries writes a queue record's entries back over their rows by w —
@@ -763,7 +832,7 @@ func writeEntries(ctx context.Context, tx store.Execer, maxVariables int, w entr
 			return []any{e.RepoID, e.EntryID, e.TargetRef, e.ChangeID, e.Seq, e.HeadOID, string(e.Method),
 				e.DeleteSource, e.CloseTask, e.EnqueuedBy.Handle, string(e.EnqueuedBy.Kind), e.EnqueuedOperator,
 				string(e.State), e.Train, e.CandidateID, e.CommitOID, e.EnqueuedAt, e.EndedAt, e.EndedPosition,
-				string(e.EndReason), e.ejected, len(e.ejected)}
+				string(e.EndReason), e.ejected, len(e.ejected), e.closeOp}
 		})
 	return err
 }
@@ -782,9 +851,16 @@ func writeEntries(ctx context.Context, tx store.Execer, maxVariables int, w entr
 // last one past the history.
 const (
 	// insertEntriesSQL and entryValuesSQL are entry rows as [writeEntries]
-	// writes them: every column [entryColumns] reads, and the ejection.
-	insertEntriesSQL = `INSERT INTO code_queue (` + entryColumns + `, ejected, ejected_bytes) VALUES `
-	entryValuesSQL   = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	// writes them: every column [entryColumns] reads, the ejection, and the
+	// close a landing leaves owed.
+	insertEntriesSQL = `INSERT INTO code_queue (` + entryColumns + `, ejected, ejected_bytes, close_op) VALUES `
+	entryValuesSQL   = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	// settleClosesSQL clears the owed closes of a repository's entries named
+	// by a JSON list, each by its key.
+	settleClosesSQL = `UPDATE code_queue SET close_op = '' WHERE rowid IN (SELECT q.rowid
+		FROM json_each(?1) AS j CROSS JOIN code_queue AS q INDEXED BY ` + queueKey + `
+		WHERE q.repo_id = ?2 AND q.entry_id = CAST(j.value AS TEXT))`
 
 	resetTrainSQL = `UPDATE code_queue SET state = 'waiting', train = '', candidate_id = '', commit_oid = ''
 		WHERE rowid IN (SELECT rowid FROM code_queue INDEXED BY code_queue_live_idx

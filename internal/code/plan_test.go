@@ -357,14 +357,14 @@ func registeredStatements() map[string]statement {
 		"marker":              {markerSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"purged":              {purgedSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"repo version":        {repoVersionSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", strings.Repeat("a", 64), strings.Repeat("b", 64), "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", strings.Repeat("a", 64), strings.Repeat("b", 64), 1, "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"mirror import":       {mirrorImportSQL, []any{`{"url":"https://forge.example.com/a/web.git"}`, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"clear protections":   {clearProtectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"path owners":         {pathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"path owners of":      {pathOwnersOfSQL, []any{`["repo-1","repo-2"]`}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"clear path owners":   {clearPathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"delete repo":         {deleteRepoSQL, []any{1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
-		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", strings.Repeat("a", 64), strings.Repeat("b", 64), "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", strings.Repeat("a", 64), strings.Repeat("b", 64), 1, "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"refs named":          {refsNamedSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j", refsKey + " (repo_id=? AND ref=?)"}},
 		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, false, 1, false, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
@@ -396,6 +396,8 @@ func registeredStatements() map[string]statement {
 		"protections":         {protectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"push rules":          {pushRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"gates":               {gatesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
+		"rule sources":        {ruleSourcesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
+		"sourced rules":       {sourcedRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"rule":                {ruleSQL, []any{"repo-1", "refs/heads/main"}, []string{protectionKey + " (repo_id=? AND pattern=?)"}},
 		"read back":           {readBackSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo view":           {repoViewSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
@@ -419,6 +421,7 @@ func registeredStatements() map[string]statement {
 		"pushes above after":  {pushesAboveAfterSQL, []any{"repo-1", 10, 100, 10, "p", 100}, []string{"code_pushes_repo_idx (repo_id=? AND position>=? AND position<=?)"}},
 		"pushes below":        {pushesBelowSQL, []any{"repo-1", 100, 100}, []string{"code_pushes_repo_idx (repo_id=? AND position<?)"}},
 		"repos":               {reposSQL, []any{`["active","archived"]`, "", 100}, []string{"code_repos_name_idx (name>?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"repos protected":     {protectedReposSQL, []any{`["active","archived"]`, "", 100}, []string{protectedReposKey + " (name>?)", refsKey + " (repo_id=? AND ref=?)"}},
 		"protections of":      {protectionsOfSQL, []any{`["repo-1","repo-2"]`}, []string{protectionKey + " (repo_id=?)"}},
 		"push rules of":       {pushRulesOfSQL, []any{`["repo-1","repo-2"]`}, []string{protectionKey + " (repo_id=?)"}},
 		"live ref":            {liveRefSQL, []any{"repo-1", "refs/heads/main"}, []string{refsKey + " (repo_id=? AND ref=?)"}},
@@ -430,6 +433,19 @@ func registeredStatements() map[string]statement {
 		"count a gate reject": {countRejectSQL, []any{1, "repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"decide repo":         {decideRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"decide deletion":     {decideDeletionSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
+		// THE NAMES A PREFIX BEGINS, in a listing's order: one range of its
+		// index, from the prefix on a first page and past the cursor after
+		// one, up to the prefix's end — never a walk of the names before it.
+		"repos under first": {reposUnderFirstSQL, []any{`["active","archived"]`, "r01", "r02", 100},
+			[]string{"code_repos_name_idx (name>=? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"repos under after": {reposUnderAfterSQL, []any{`["active","archived"]`, "r0150", "r02", 100},
+			[]string{"code_repos_name_idx (name>? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"protected repos under first": {protectedReposUnderFirstSQL,
+			[]any{`["active","archived"]`, "r01", "r02", 100},
+			[]string{protectedReposKey + " (name>=? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"protected repos under after": {protectedReposUnderAfterSQL,
+			[]any{`["active","archived"]`, "r0150", "r02", 100},
+			[]string{protectedReposKey + " (name>? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
 		// A SEAT'S DAY IS ONE ROW, read by its key for every seat a round
 		// names, and its oldest day beyond its two newest forgotten by the
 		// same key, read newest first — never a count over the push history,
@@ -857,6 +873,19 @@ func registeredStatements() map[string]statement {
 			[]string{"code_checks_train_idx (repo_id=?)", untestedKey, dequeuedKey}},
 		"repositories holding a given-up train's checks": {abandonedReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"code_checks_train_idx (repo_id>?)", untestedKey, repoKey + " (id=?)"}},
+		// AN OWED CLOSE (queuework.go, decide_queue.go): a repository's landed
+		// entries owing their work item's close, and the repositories holding
+		// one, by the index partial on exactly those; an entry's owed close
+		// read and settled by its key.
+		"a repository's owed closes": {owedClosesSQL, []any{"repo-1", MaxOwedCloses},
+			[]string{"code_queue_close_owed_idx (repo_id=?)"}},
+		"repositories owing a close": {closeOwedReposSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_queue_close_owed_idx (repo_id>?)", repoKey + " (id=?)"}},
+		"entries named, with their owed closes": {owedNamedSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
+			[]string{"SCAN json_each AS j", "sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"settle entries' closes": {settleClosesSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
+			[]string{"SCAN json_each AS j", "sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
 		"a target's landings": {landingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, 200},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>=?)"}},
 		"a target's green": {greenSQL, []any{"repo-1", "refs/heads/main"},
@@ -932,8 +961,10 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=?)"}},
 		"who pushed a failed head": {headPusherSQL, []any{"change-1", 2},
 			[]string{revisionKey + " (change_id=? AND n=?)"}},
-		"who pushed a landed tip": {tipPushersSQL, []any{"repo-1", 1000},
-			[]string{"code_pushes_repo_idx (repo_id=? AND position=?)"}},
+		"where a landed revision was pushed": {revisionPositionSQL, []any{"change-1", 2},
+			[]string{revisionKey + " (change_id=? AND n=?)"}},
+		"the push a landing names": {landingPushSQL, []any{"repo-1-push-000001", "repo-1", 1000},
+			[]string{pushKey + " (push_id=?)"}},
 		"a landing": {landingSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
 		"a landing broken": {landingBrokenSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
@@ -1064,6 +1095,22 @@ func registeredStatements() map[string]statement {
 			[]string{revisionKey + " (change_id=?)", factsKey + " (change_id=? AND n=?)"}},
 		"revisions after": {revisionsAfterSQL, []any{"repo-1-change-000001", 2, 200},
 			[]string{revisionKey + " (change_id=? AND n<?)", factsKey + " (change_id=? AND n=?)"}},
+		// A WINDOW'S WALK (changewindow.go): the changes whose lifecycle
+		// moved within it and those somebody spoke of within it, each a
+		// first page and a page after a cursor, newest first, the
+		// conversation's partial index walked and each change sought by its
+		// key; and the conversations of a page's changes, driven from their
+		// list.
+		"changes moved": {changesMovedSQL, []any{1000, 50}, []string{changesMovedKey + " (updated_at>=?)"}},
+		"changes moved after": {changesMovedAfterSQL, []any{1000, 2030, 2030, "repo-1-change-000031", 50},
+			[]string{changesMovedKey + " (updated_at<=? AND updated_at>=?)"}},
+		"changes spoken of": {conversationsMovedSQL, []any{1000, 50},
+			[]string{conversationsMovedKey + " (updated_at>=?)", changeKey + " (id=?)"}},
+		"changes spoken of after": {conversationsMovedAfterSQL,
+			[]any{1000, 2030, 2030, "repo-1-change-000031", 50},
+			[]string{conversationsMovedKey + " (updated_at<=? AND updated_at>=?)", changeKey + " (id=?)"}},
+		"conversations of changes": {conversationsOfSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)"}},
 		"listed repos": {listedReposSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		// THE READS OF A CHANGE'S CONVERSATION (conversationread.go): a
 		// reviewer's standing asks newest first, a first page and a page

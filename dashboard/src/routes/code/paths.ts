@@ -52,17 +52,20 @@ export function commitHref(repo: string, sha: string): string {
 /**
  * A comparison of two revisions of a repository, `#/code/repos/{name}/compare`:
  * `base=` (none is the default branch) and `head=`, each as a revision is
- * named on the repository's page, and `file=`, the path its diff opens on —
- * where a check's failure points.
+ * named on the repository's page, `file=`, the path its diff opens on, and
+ * `line=`, the line of that file's NEWER side the diff marks and opens at —
+ * where a check's failure points. A line names nothing without its file, so
+ * it is spelled only beside one.
  */
 export function compareHref(
   repo: string,
-  at: { base?: string; head?: string; file?: string } = {},
+  at: { base?: string; head?: string; file?: string; line?: number } = {},
 ): string {
   const query: Record<string, string> = {};
   if (at.base) query.base = at.base;
   if (at.head) query.head = at.head;
   if (at.file) query.file = at.file;
+  if (at.file && at.line && at.line > 0) query.line = String(at.line);
   return href([...repoPath(repo), "compare"], query);
 }
 

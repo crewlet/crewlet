@@ -185,8 +185,13 @@ func graphOf(c *Case, n Node, repoID string) (string, bool) {
 }
 
 // awaitGraph waits for node n's copy of repoID to hold its commit-graph — the
-// file its background indexing writes first, at once, over a copy it has just
-// read whole — a minute at most, and answers its path.
+// file its background indexing writes first, at its next pass, over a copy it
+// has read whole — and answers its path.
+//
+// A MINUTE AT MOST, which is six times what it should ever take. The next tick
+// is at most cache.MidxDebounce away; a tick that lands in one of the rounds this
+// wait's own syncs make is owed a wake as that round lets go; and the write is a
+// walk of a few commits. What is left of the minute is a starved runner's.
 func awaitGraph(c *Case, n Node, repoID string) string {
 	c.T.Helper()
 	var path string

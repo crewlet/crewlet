@@ -47,6 +47,15 @@ export interface Module {
 
 let cached: { modules: Module[]; suites: Module[] } | null = null;
 
+/**
+ * Whether a file is one Vitest runs rather than one the dashboard is built
+ * from: a suite (`.test.`), or a benchmark (`.bench.`), which `vitest bench`
+ * runs as `vitest run` runs a suite. A benchmark ships no more than a suite
+ * does, so a gate over what ships reads neither, and a gate over the suites
+ * reads both: a case in either is the same `test` with the same budgets.
+ */
+const isSuite = (name: string) => name.includes(".test.") || name.includes(".bench.");
+
 /** The one walk: every `.ts` and `.tsx` file under `src/`, modules and suites apart, each sorted by path. */
 function tree(): { modules: Module[]; suites: Module[] } {
   if (cached) return cached;
@@ -61,7 +70,7 @@ function tree(): { modules: Module[]; suites: Module[] } {
       }
       if (!/\.tsx?$/.test(entry)) continue;
       const lang: Lang = entry.endsWith(".d.ts") ? "dts" : entry.endsWith(".tsx") ? "tsx" : "ts";
-      (entry.includes(".test.") ? suites : modules).push({
+      (isSuite(entry) ? suites : modules).push({
         path: relative(SRC, full).split("\\").join("/"),
         text: readFileSync(full, "utf8"),
         lang,
@@ -87,8 +96,9 @@ export function modules(): Module[] {
 }
 
 /**
- * Every suite under `src/` — a file whose name carries `.test.` — sorted by
- * path, from the same walk: what a gate over the suites themselves reads.
+ * Every suite under `src/` — a file whose name carries `.test.`, or `.bench.`
+ * for a benchmark — sorted by path, from the same walk: what a gate over the
+ * suites themselves reads.
  */
 export function suites(): Module[] {
   return tree().suites;
@@ -249,6 +259,16 @@ export function isLocalSource(source: string): boolean {
 export interface ShippedText {
   text: string;
   line: number;
+  /**
+   * Whether the text is ALL its expression shows: a string literal, a
+   * template with nothing substituted, or a run of JSX text that is its
+   * element's only child. A constant part of a template that substitutes
+   * something, and a run of JSX text beside an expression, are not whole:
+   * each is a piece of a sentence whose other pieces are computed, so a gate
+   * that excuses a text by what it is alone (a lone mark) excuses only a
+   * whole one.
+   */
+  whole: boolean;
 }
 
 /**
@@ -265,7 +285,7 @@ export interface ShippedText {
 export function shippedText(module: Module): ShippedText[] {
   const line = lineOf(module.text);
   const out: ShippedText[] = [];
-  walk(parse(module.text, module.lang), (node: Node) => {
+  walk(parse(module.text, module.lang), (node: Node, parent: Node | null) => {
     const text =
       node.type === "Literal"
         ? typeof node.value === "string"
@@ -276,7 +296,26 @@ export function shippedText(module: Module): ShippedText[] {
           : node.type === "JSXText"
             ? String(node.value)
             : "";
-    if (text !== "") out.push({ text, line: line(node.start) });
+    if (text !== "") out.push({ text, line: line(node.start), whole: isWhole(node, parent) });
   });
   return out;
+}
+
+/**
+ * Whether a text node is all its expression shows (`ShippedText.whole`): a
+ * template's part only where the template substitutes nothing, and a run of
+ * JSX text only where its element has no other child.
+ */
+function isWhole(node: Node, parent: Node | null): boolean {
+  switch (node.type) {
+    case "TemplateElement":
+      return parent?.type === "TemplateLiteral" && (parent.expressions as Node[]).length === 0;
+    case "JSXText":
+      return (
+        (parent?.type === "JSXElement" || parent?.type === "JSXFragment") &&
+        (parent.children as Node[]).length === 1
+      );
+    default:
+      return true;
+  }
 }

@@ -184,7 +184,8 @@ else. Reach for one of those two rather than plain `gofmt -w`, which cannot
 fix what the linter reports.
 
 Run the dashboard's suites through `npm test` (or `npm test -- <file>` for
-one file, `npm run test:watch` for the watch loop), never a bare
+one file, `npm run test:watch` for the watch loop), and its benchmarks (a
+`.bench.ts` beside the module it times) through `npm run bench`, never a bare
 `npx vitest`. Vitest's forks pool writes every transformed module into a
 fresh directory under the system temp directory and never removes it — 16 to
 48 MB a run, which over a day of gate runs left 11.9 GB on the machine that
@@ -194,9 +195,16 @@ disk full fails a case for a reason nothing in the change explains. It used
 to fail every node boot first, while the test brokers still sized their
 storage from the volume's free space; they declare a fixed size now
 (`internal/queue/jetstream/brokertest`), which ended that failure and not the
-leak. Both scripts run Vitest through `dashboard/scripts/owned-tmpdir.mjs`,
-which points `TMPDIR` at a directory it creates and removes;
-`src/test/ownedTmpdir.test.ts` fails a run that was started without it.
+leak. All three scripts run Vitest through
+`dashboard/scripts/owned-tmpdir.mjs`, which points `TMPDIR` at a directory it
+creates and removes; `src/test/ownedTmpdir.test.ts` fails a run that was
+started without it.
+
+No gate runs a benchmark, since a time is the machine's it was taken on. A
+benchmark is the measurement a bound's comment quotes (`src/lib/lineDiff.bench.ts`
+for the line diff's two bounds), kept so a change to the code under the bound
+is timed against the cases that set it: rerun it, and update the figures the
+comment quotes, with the machine they came from.
 
 A dashboard case also fails on what it writes to `console.error` or
 `console.warn` (`dashboard/src/test/console.ts`, judged after every case by

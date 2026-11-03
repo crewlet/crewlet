@@ -66,6 +66,13 @@ const (
 	// liveRefsKey is code_refs_live_idx, (repo_id, ref) WHERE target != ''
 	// (replicated migration 0081): the live refs alone, in key order.
 	liveRefsKey = "code_refs_live_idx"
+	// protectedReposKey is code_repos_protected_idx, (name) WHERE
+	// [protectedRepos] (replicated migration 0144): the repositories a rule
+	// protects, in name order.
+	protectedReposKey = "code_repos_protected_idx"
+	// protectedRepos is the predicate code_repos_protected_idx is partial
+	// on, which a statement over it repeats verbatim.
+	protectedRepos = `protected = 1`
 	// packsKey is code_packs' PRIMARY KEY index, (repo_id, pack_id, part).
 	packsKey = "sqlite_autoindex_code_packs_1"
 	// changesNumberKey is code_changes_number_idx, (repo_id, number)

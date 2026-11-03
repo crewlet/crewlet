@@ -12,9 +12,9 @@ import {
   changeRef,
   lineToOpenAt,
   omittedOf,
+  openingLine,
   parseChangeRef,
   preconditionWord,
-  standingBlockers,
 } from "./code.ts";
 
 describe("what a push read in brief left out", () => {
@@ -75,34 +75,6 @@ describe("a change's reference", () => {
 });
 
 describe("a change's readiness, as a row says it", () => {
-  // THE STANDING BLOCKERS ARE THE READINESS'S: those it names and those it
-  // counts beyond them, and none where the precondition is met.
-  test("counts the blockers it names and those beyond, and none once met", () => {
-    const at = (state: string) => ({
-      met: 0,
-      total: 1,
-      first: "",
-      preconditions: [
-        {
-          kind: "blocker",
-          state,
-          detail: "",
-          blockers: [
-            {
-              finding_id: "f",
-              state: "open",
-              cleared_by: { raiser: { handle: "a", kind: "agent" } },
-            },
-          ],
-          blockers_omitted: 4,
-        },
-      ],
-    });
-    expect(standingBlockers(at("unmet"))).toBe(5);
-    expect(standingBlockers(at("met"))).toBe(0);
-    expect(standingBlockers(undefined)).toBe(0);
-  });
-
   // A KIND A NEWER ENGINE JUDGES is said by its own word rather than dropped.
   test("names a precondition this build knows, and one it does not by its kind", () => {
     expect(preconditionWord("approval")).toBe("Approved");
@@ -134,5 +106,20 @@ describe("where a file's lines begin for the line an address picks", () => {
     expect(lineToOpenAt(at(30), 1800, { start: 1800, end: 3000 }, 3000)).toBe(1);
     expect(lineToOpenAt(at(20), 1, { start: 1, end: 5 }, 3000)).toBe(20);
     expect(lineToOpenAt(at(2400), 2350, { start: 2350, end: 2360 }, 3000)).toBe(2400);
+  });
+
+  // THE FIRST READ IS ASKED WHERE THE LINE IS, before anything is known of
+  // the file but its line count where the caller has it: PICK_CONTEXT lines
+  // before a picked line, line 1 for none, near the top, or one past the
+  // file's end. Mutation: open every file at line 1, or at the picked line
+  // whatever the file's lines, and this fails.
+  test("open PICK_CONTEXT lines before the picked line, from line 1 where none fits", () => {
+    expect(openingLine(at(2400))).toBe(2400 - PICK_CONTEXT);
+    expect(openingLine(at(2400), 3000)).toBe(2400 - PICK_CONTEXT);
+    expect(openingLine({ start: 300, end: 320 }, 3000)).toBe(300 - PICK_CONTEXT);
+    expect(openingLine(at(30), 3000)).toBe(1);
+    expect(openingLine(null, 3000)).toBe(1);
+    expect(openingLine(at(3001), 3000)).toBe(1);
+    expect(openingLine(at(3000), 3000)).toBe(3000 - PICK_CONTEXT);
   });
 });

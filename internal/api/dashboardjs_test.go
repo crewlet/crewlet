@@ -1640,7 +1640,16 @@ const (
 	// the code host's +28 KiB on main's 5384.9 KiB, less main's 0.8 KiB of
 	// wire protocol that static/protocol keeps out of the tree, measured
 	// 5412.5 KiB. 5413 KiB.
-	treeBudget = 5<<20 + 293<<10
+	// The code host's round merged on top (a change list's open findings,
+	// updated column and window, a change's reviews, comments and findings a
+	// page at a time, who set each protection rule, every protected
+	// repository and any repository found in the pickers, a file's earlier
+	// lines a page at a time) took it to 5415.6 KiB (+3.1 KiB): the changes
+	// chunk +1.7 KiB, the Code workspace +0.5 KiB, Settings +0.4 KiB, the
+	// quiet-input hook +0.3 KiB and the Inbox +0.2 KiB, less 0.3 KiB of the
+	// page-link module and +0.3 KiB net elsewhere, all of it fetched on
+	// opening Code or Settings. 5416 KiB.
+	treeBudget = 5<<20 + 296<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

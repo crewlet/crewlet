@@ -358,9 +358,11 @@ type ChangeReopen struct {
 // what the home read: the change's revision and head, its target branch, and
 // the tip that branch was at. A head that moved since, a retarget, or a target
 // moved on is the landing decided against rows the home did not read — stale,
-// and its next pass reads the rows again. Its routing names whoever pushed
-// that tip as its actor, as the committer's decide reads them, since that
-// push is what merged the change.
+// and its next pass reads the rows again. Its routing names whoever made the
+// push that MERGED the change as its actor (PushID), never whoever last moved
+// the target: the target may move again, by somebody else's push on top, in
+// the same group-commit record or a later one, before the home's pass reads
+// it.
 type ChangeLanded struct {
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`
@@ -375,6 +377,25 @@ type ChangeLanded struct {
 	// Node is the git node that found it: the repository's home as it took
 	// itself to be.
 	Node string `json:"node"`
+	// PushID and PushPosition name the push that MERGED the change, as the
+	// home's walk of the target's moves found it: the latest move of
+	// TargetRef, at or below TargetOID's record, whose old commit did not
+	// hold HeadOID, so the target held the head at every move from it
+	// through the tip (internal/code/home's merger). Whether one commit holds
+	// another is git's to say, so the home finds the push and the committer
+	// holds it to the rows ([landingPusher]); its pusher is the landing's
+	// actor. Both zero where the walk named no push: the head was in the
+	// target before every move the rows still keep, or before the walk's
+	// bound.
+	//
+	// BASE FORMAT, under the condition [OpChangeLanded] states: once a build
+	// without them has run, they take {Name: "ChangeLanded.Push", Since: 2,
+	// Op: "change_landed", Path: []string{"mutation", "push_id"}} in
+	// versionedFields — the one row both ride, since a home sends both or
+	// neither — which an older build defers the record by rather than route
+	// a merge's news to the push that made it.
+	PushID       string            `json:"push_id,omitempty"`
+	PushPosition statelog.Position `json:"push_position,omitzero"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// COMMITTER from its snapshot and chart; an asker sends none.
 	Routing *ChangeRouting `json:"routing,omitempty"`

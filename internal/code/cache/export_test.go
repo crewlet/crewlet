@@ -443,6 +443,44 @@ func MaintainerTicksFrom(o *Options, ticks <-chan time.Time) {
 	o.knobs.maintTicks = ticks
 }
 
+// RoundQueued reports whether a round is queued on repoID behind the one
+// running.
+func RoundQueued(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.next != nil
+}
+
+// AskRepairRound marks repoID's copy as a report does, for a forced check, and
+// queues the full round that mark asks (repairRound).
+func AskRepairRound(c *Cache, repoID string) {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.current.repair.forces++
+	c.repairRound(e)
+}
+
+// QueueRebuild queues a rebuild of repoID's copy for its shape, as Rebuild does
+// (queueRebuild), with no caller waiting on it.
+func QueueRebuild(c *Cache, repoID string) {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	c.queueRebuild(e, e.current, RebuildShape, nil)
+}
+
+// StartMaintenanceOf asks for a run of repo as a pass asks of a candidate its
+// walk found runnable (startMaintenance), whatever has happened to the
+// repository since, and answers whether one started.
+func StartMaintenanceOf(c *Cache, repo string) bool {
+	lane := c.git.Slots(gitproc.ClassMaintenance)
+	m, _, _ := c.startMaintenance(context.Background(), lookup(c, repo), maintenanceRuns(lane), lane,
+		c.maint.budgetNow(), reservation{})
+	return m != nil
+}
+
 // MaintainerKicked reports whether a kick is waiting for the maintainer, and
 // takes it: a case that answers the kicks itself sees each one once.
 func MaintainerKicked(c *Cache) bool {

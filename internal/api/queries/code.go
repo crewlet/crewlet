@@ -215,6 +215,7 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 	case code.ReadChanges:
 		q.Repo, q.State, q.Owner = p.String("repo"), code.ChangeState(p.String("state")), p.String("owner")
 		q.Work, q.Reviewer, q.Needs = p.String("work"), p.String("reviewer"), code.Need(p.String("needs"))
+		q.Window = code.ChangeWindow(p.String("window"))
 	case code.ReadReviews:
 		q.Reviewer = p.String("reviewer")
 	case code.ReadQueue:
@@ -239,9 +240,10 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 	default:
 		q.Repo = p.String("name")
 	}
-	// A REFS LISTING NAMES ITS PREFIX, the reader's to refuse where it is
-	// none it lists under.
-	if kind == code.ReadRefs {
+	// A REFS LISTING NAMES ITS PREFIX, and a repositories listing the
+	// opening of the names it lists — a picker's typed text — each the
+	// reader's to refuse where it is none it lists under.
+	if kind == code.ReadRefs || kind == code.ReadRepos {
 		q.Prefix = strings.TrimSpace(p.String("prefix"))
 	}
 	// A CHANGE IS THE PATH'S TOO, by its number on the repository — web!42's
@@ -272,6 +274,14 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 		return code.ReadQuery{}, err
 	}
 	if q.Brief, err = askedFor(p, "brief"); err != nil {
+		return code.ReadQuery{}, err
+	}
+	// THE PROTECTED REPOSITORIES ALONE ([code.ReadQuery.Protected]) are a
+	// listing's, asked the same way, `protected=true`: the reader walks an
+	// index of those alone, so a page of them costs what they cost however
+	// many repositories no rule protects, and on any other read the filter
+	// is the reader's to refuse, naming it.
+	if q.Protected, err = askedFor(p, "protected"); err != nil {
 		return code.ReadQuery{}, err
 	}
 	for v := range strings.SplitSeq(p.String("status"), ",") {

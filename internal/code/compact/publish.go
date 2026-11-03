@@ -552,7 +552,15 @@ func (c *Compactor) publish(ctx context.Context, cand code.PublicationCandidate,
 	}
 	defer s.Release()
 
-	chain, live := c.o.Cache.Chain(s), c.o.Cache.Packs(s)
+	chain := c.o.Cache.Chain(s)
+	live, err := c.o.Cache.Packs(s)
+	switch {
+	case errors.Is(err, cache.ErrSuperseded):
+		c.log.Debug("code_publication_busy", "repo", cand.Name, "reason", reasonSuperseded, "error", err)
+		return OutcomeBusy, err
+	case err != nil:
+		return c.publicationFailed(cand, "packs", err)
+	}
 	cap := c.capFor(cand.ID)
 	p, verdict := planLayer(chain, live, cap, c.bounds, 0)
 	if out, refusal := c.buildable(cand, p, verdict); out != "" {

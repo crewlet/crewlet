@@ -1,10 +1,11 @@
 package home_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"go/build"
-	"log/slog"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -72,7 +73,10 @@ type estate struct {
 	// recording, where set, runs as each mergeability is recorded: a case's
 	// slow change writer.
 	recording func()
-	changed   chan struct{}
+	// pushes is the repositories' pushes in log order, as a landing's walk
+	// reads them back newest first (an `introduced` read below a position).
+	pushes  []code.IntroducedRow
+	changed chan struct{}
 }
 
 func newEstate() *estate {
@@ -141,6 +145,8 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 			e.checkFloors = append(e.checkFloors, q.Fresh)
 		}
 		return code.ReadAnswer{Position: e.at}, nil
+	case q.Kind == code.ReadIntroduced:
+		return e.introduced(q)
 	case q.Kind != code.ReadChangesDue:
 		return code.ReadAnswer{}, errors.New("the home asked a read that is not its listing")
 	case q.ChangesDue == nil || q.ChangesDue.RecheckBefore.IsZero():
@@ -173,6 +179,40 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	again = slices.Clone(again[:min(len(again), q.ChangesDue.Rechecks)])
 	return code.ReadAnswer{DueChanges: slices.Clone(e.due[repo]), Rechecks: again, PathOwners: e.owners[repo],
 		Gates: e.gates[repo], AskSettles: slices.Clone(e.unsettle[repo]), Position: e.at}, nil
+}
+
+// introduced answers a landing walk's read as the reader's descending
+// `introduced` read does: the pushes of q's repository below its bound,
+// newest first — the position, then the push id — at most its limit a page,
+// keyset after the last served. Under mu.
+func (e *estate) introduced(q code.ReadQuery) (code.ReadAnswer, error) {
+	in := q.Introduced
+	if in == nil || in.RepoID == "" || !in.Descending || in.Before.IsZero() || q.Limit < 1 {
+		return code.ReadAnswer{}, fmt.Errorf("a landing's walk read no repository's pushes below a position, "+
+			"newest first and a page at a time: %+v", q)
+	}
+	var below []code.IntroducedRow
+	for _, row := range e.pushes {
+		if row.Position.Packed() < in.Before.Packed() {
+			below = append(below, row)
+		}
+	}
+	slices.SortStableFunc(below, func(a, b code.IntroducedRow) int {
+		if c := cmp.Compare(b.Position.Packed(), a.Position.Packed()); c != 0 {
+			return c
+		}
+		return strings.Compare(b.PushID, a.PushID)
+	})
+	from := 0
+	if q.Cursor != "" {
+		from = slices.IndexFunc(below, func(r code.IntroducedRow) bool { return r.PushID == q.Cursor }) + 1
+	}
+	page := below[from:min(len(below), from+q.Limit)]
+	out := code.ReadAnswer{Introduced: slices.Clone(page), Position: e.at}
+	if from+len(page) < len(below) {
+		out.Next = page[len(page)-1].PushID
+	}
+	return out, nil
 }
 
 func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -829,93 +869,6 @@ func (w *stopWatch) Stop() {
 	w.n.mu.Lock()
 	defer w.n.mu.Unlock()
 	w.stopped = true
-}
-
-// A CHANGE WHOSE HEAD IS IN ITS TARGET IS LANDED: its facts read, finding the
-// head inside the target's tip — the target moved past it — the home asks the
-// committer for the landing, at the change's revision and head and the tip it
-// read, and records no facts of it; a change whose head is not in its target
-// has its facts recorded, its touched paths matched against the repository's
-// path owners on the home, beside the digest of the owners matched against.
-//
-// Mutation: record the facts of a head its target holds rather than land it,
-// and the landing is never asked.
-func TestAChangeWhoseHeadIsInItsTargetIsLanded(t *testing.T) {
-	t.Parallel()
-	e := newEstate()
-	owners := []code.PathOwner{{Owner: code.Owner{Kind: code.OwnerUnit, Ref: "Platform"}, Paths: []string{"upload/**"}},
-		{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "cto"}, Paths: []string{"docs/*.md"}}}
-	e.owners[repoA] = owners
-	landed := e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("a"),
-		HeadInTarget: true, Touched: []string{}})
-	measured := e.hold(repoA, 2, oid("b"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("9"),
-		PatchID: oid("e"), Touched: []string{"upload/retry.go", "README.md"}})
-	p := &placement{homes: map[string]string{repoA: "node-a"}}
-	loopOn(t, "node-a", e, p, newNudges(), time.Hour)
-	e.waitDone(t, repoA, 10*time.Second)
-	revises, landings := e.wrote()
-	want := code.ChangeLanded{RepoID: repoA, ChangeID: landed.ID, Revision: landed.Revision, HeadOID: landed.Head,
-		TargetRef: landed.TargetRef, TargetOID: landed.Tip, Node: "node-a"}
-	if len(landings) != 1 || landings[0] != want {
-		t.Fatalf("the home asked the landings %+v, want %+v", landings, want)
-	}
-	if len(revises) != 1 || revises[0].ChangeID != measured.ID {
-		t.Fatalf("the home recorded the facts of %+v, want change 2's alone", revises)
-	}
-	r := revises[0]
-	matched, digest := code.MatchOwners(owners, []string{"upload/retry.go", "README.md"}, false)
-	if !slices.Equal(r.RequestedOwners, matched) || r.OwnersDigest != digest || len(matched) != 1 ||
-		r.TargetPosition != measured.TipPosition || r.BaseOID != oid("9") || r.PatchID != oid("e") {
-		t.Fatalf("change 2's facts are %+v, want them matched to %v under digest %s at the tip's position %s",
-			r, matched, digest, measured.TipPosition)
-	}
-}
-
-// A LANDING THAT DECIDED NOTHING FAILS THE TURN: a change whose head its
-// target holds, owing its facts and its merge, whose landing the committer
-// answers busy — or whose Change call fails before any answer — ends its
-// turn FAILED, counted so and logged code_home_turn_failed, and that turn does
-// no more work on the change: no merge is asked of it (the loop's cache and
-// pool are stand-ins any use of which fails the case), and the landing is
-// asked once. A repository whose landings keep failing reads as failing,
-// never as healthy.
-//
-// Mutation: drop the landing's error on the facts branch of the change's step
-// (answer `true, nil` once a landing was asked), and both turns count worked.
-func TestALandingThatDecidedNothingFailsTheTurn(t *testing.T) {
-	t.Parallel()
-	for name, refuse := range map[string]func(*estate){
-		"the committer answers busy": func(e *estate) { e.landRefusal = code.ChangeRefusalBusy },
-		"the Change call fails": func(e *estate) {
-			e.landErr = errors.New("the router reached no committer")
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			e := newEstate()
-			due := e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("a"),
-				HeadInTarget: true, Touched: []string{}})
-			e.mu.Lock()
-			e.due[repoA][0].MergeDue = true
-			refuse(e)
-			e.mu.Unlock()
-			logs := &lines{}
-			p := &placement{homes: map[string]string{repoA: "node-a"}}
-			_, rec := loopOver(t, home.Options{Chart: noChart, Estate: e, Placement: asNode{placement: p, node: "node-a"},
-				Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
-				Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2),
-				Logger: slog.New(slog.NewTextHandler(logs, nil))},
-				time.Hour)
-			waitTurns(t, rec, 1)
-			assertTurnFailed(t, rec, logs)
-			if _, landings := e.wrote(); len(landings) != 1 || landings[0].ChangeID != due.ID {
-				t.Errorf("the turn asked the landings %+v, want change 1's once", landings)
-			}
-			if merged := e.merged(); len(merged) != 0 {
-				t.Errorf("the turn recorded %+v of a change it found landed, want nothing more of it", merged)
-			}
-		})
-	}
 }
 
 // assertTurnFailed fails t unless rec counts the change work's one turn

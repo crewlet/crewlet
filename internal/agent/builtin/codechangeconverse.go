@@ -207,17 +207,20 @@ func (cv conversing) page(ctx context.Context, out codeConversationAnswer) (tool
 // conversationClass is the class a refusal of a change's conversation is
 // answered in, on [changeClass]'s reading: a rule of the change refusing the
 // caller — who may ask, review, answer or dismiss — FORBIDDEN; a revision the
-// deciding node has not reached STALE_VERSION; a write only a live change
-// takes, of one that is not, CONFLICT; a repository, a change, a thread or a
-// finding gone NOT_FOUND; a reviewer no seat holds and an ask or a review past
-// its bound INVALID — the fix is another call; and what waiting clears
-// UNAVAILABLE. superseded is the home's own refusal, never a caller's, and
-// has none.
+// deciding node has not reached STALE_VERSION; the change or its repository in
+// a state that refuses the write until somebody changes it CONFLICT — a
+// change closed or merged, a repository archived; a repository, a change, a
+// thread or a finding gone NOT_FOUND; a reviewer no seat holds and an ask or
+// a review past its bound INVALID — the fix is another call; and what waiting
+// clears UNAVAILABLE. superseded is the home's own refusal, never a caller's,
+// and has none.
 func conversationClass(r code.ConversationRefusal) (tools.Refusal, bool) {
 	switch r {
 	case code.ConversationRefusalNotPermitted, code.ConversationRefusalNotAuthor,
-		code.ConversationRefusalNotRaiser, code.ConversationRefusalRepoArchived:
+		code.ConversationRefusalNotRaiser:
 		return tools.RefusalForbidden, true
+	case code.ConversationRefusalRepoArchived:
+		return tools.RefusalConflict, true
 	case code.ConversationRefusalUnknownRevision:
 		return tools.RefusalStaleVersion, true
 	case code.ConversationRefusalChangeClosed, code.ConversationRefusalChangeMerged:
@@ -251,6 +254,10 @@ func conversationRefused(tool string, res code.ConversationResult) tools.Result 
 		said += " Nothing was written; make the same call again — it is the same write."
 	case tools.RefusalForbidden:
 		said += " That is a rule of the change, so the same call is refused again."
+	case tools.RefusalConflict:
+		said += fmt.Sprintf(" That is the change's or the repository's state, which the sentence names: read "+
+			"the change again with %s before you decide, since the same call does not land while it stands.",
+			CodeGetChangeTool)
 	default:
 		said += " The same call is refused again; change what it asks for."
 	}

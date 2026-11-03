@@ -239,20 +239,23 @@ func TestAClauseReadsEachListItNamesOnce(t *testing.T) {
 
 // A PLAN READS EACH LIST ITS CLAUSES NAME ONCE. A pattern's clauses share
 // trigrams as an alternation's literals do — foo_a.*foo_b's two clauses both
-// hold foo's — and a pattern repeating a part requires it once for each time
-// it does: (foo.*){100} is a hundred clauses of foo to regexlit.Required. So
-// a lookup decodes a list more than one clause reads once for all of them,
-// and looks up no clause another implies.
+// hold foo's — and two clauses that differ only in case are two to
+// regexlit.Required, which compares substrings as they are, and one to an
+// index that lowers them both: (foo.*(?i:foo).*){16} is the clause foo and the
+// clause (?i)foo there, a repeat of each dropped. So a lookup decodes a list
+// more than one clause reads once for all of them, and looks up no clause
+// another implies.
 //
 // Over a segment of 2 048 blobs, each holding every one of 32 words —
 // w000word, w001word, ... — so that every list the words name names every
 // blob: the plan of all 32, one clause a word, reads no more bytes of
 // postings than the lists it names hold, each once, though every clause
 // holds "wor" and "ord", ten each hold "w00", and so on; and the plan of one
-// word repeated 32 times looks up one clause, reading and allocating what
-// the plan of the word alone does. Looked up a clause at a time, the 32
-// clauses read 393 216 bytes of the 163 840 their lists hold; and each of
-// the 32 repeated clauses, looked up, held every blob again.
+// word repeated 16 times as it is and 16 times folded looks up one clause,
+// reading and allocating what the plan of the word alone does. Looked up a
+// clause at a time, the 32 clauses read 393 216 bytes of the 163 840 their
+// lists hold; and the word's folded clause, looked up beside its plain one,
+// held every blob again.
 func TestAPlanReadsEachListItsClausesNameOnce(t *testing.T) {
 	// Not parallel: runtime.MemStats counts every goroutine's allocations,
 	// and a parallel case's would be counted as the plan's.
@@ -293,11 +296,16 @@ func TestAPlanReadsEachListItsClausesNameOnce(t *testing.T) {
 	}
 	every := lookup(strings.Join(alts, ".*"))
 	alone := lookup(alts[0])
-	repeated := lookup(fmt.Sprintf("(%s.*){%d}", alts[0], words))
+	repeated := lookup(fmt.Sprintf("(%s.*(?i:%s).*){%d}", alts[0], alts[0], words/2))
 	t.Logf("over %d blobs, the plan of %d words, a clause each, read %d bytes of postings (its lists hold %d); the "+
-		"plan of one word read %d and allocated %d, and of it repeated %d times, %d clauses, read %d and "+
-		"allocated %d", blobs, words, every.read, every.named, alone.read, alone.allocated, words,
-		repeated.clauses, repeated.read, repeated.allocated)
+		"plan of one word read %d and allocated %d, and of it repeated %d times, as it is and folded, %d "+
+		"clauses, read %d and allocated %d", blobs, words, every.read, every.named, alone.read, alone.allocated,
+		words, repeated.clauses, repeated.read, repeated.allocated)
+	if before := len(regexlit.Required(regexp.MustCompile(fmt.Sprintf("(%s.*(?i:%s).*){%d}", alts[0], alts[0],
+		words/2))).Clauses()); before != 2 {
+		t.Fatalf("regexlit.Required makes %d clauses of the word as it is and folded, want its 2: the case does not "+
+			"reach the index's own dropping", before)
+	}
 	if every.clauses != words {
 		t.Fatalf("the plan of %d words is %d clauses: the case is not the one it claims", words, every.clauses)
 	}

@@ -126,6 +126,9 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 	if movesReadiness(payload) {
 		counts.readiness = 1
 	}
+	if spoken(payload) {
+		counts.spokenAt = at.at()
+	}
 	if err := touchConversation(ctx, tx, at, repoID, changeID, counts); err != nil {
 		return 0, err
 	}
@@ -158,6 +161,22 @@ func movesReadiness(payload any) bool {
 	return false
 }
 
+// spoken reports a record SOMEBODY WROTE about the change — an ask for
+// review, a comment, a thread resolved, a review, an answer to a finding —
+// which dates its conversation's last move (code_conversations.updated_at,
+// replicated 0146): what a listing says of when the change last moved, and
+// what one narrowed to a window walks. The home's facts and the engine's
+// settling of the asks date nothing: a target branch that moves re-checks
+// every live change into it, and a change listed as moved because its target
+// did would put every change of a busy branch in every day's window.
+func spoken(payload any) bool {
+	switch payload.(type) {
+	case ReviewerRequest, Comment, ThreadResolve, Review, FindingResolve:
+		return true
+	}
+	return false
+}
+
 // movesAsks reports a record whose apply moves an ask's state
 // (code_reviewers): an ask for review, a review — which answers its
 // reviewer's own — a revision's facts — whose path owners it asks and whose
@@ -176,20 +195,30 @@ func movesAsks(payload any) bool {
 // answered — and its STANDING BLOCKERS, the blockers that hold the change back
 // whatever their authors answered (S40); how many reviewers' standing verdict
 // asks for changes; what its wide text weighs; and its readiness inputs'
-// version, by one for a record that moves what the readiness reads.
+// version, by one for a record that moves what the readiness reads; and the
+// broker instant (store.EncodeTime) of a record somebody wrote ([spoken]), 0
+// for one nobody did.
 type conversationCounts struct {
-	comments, reviews, openFindings, openBlockers, changesRequested, textBytes, readiness int64
+	comments, reviews, openFindings, openBlockers, changesRequested, textBytes, readiness, spokenAt int64
 }
 
 // touchConversation moves changeID's conversation by one record: its counters
 // by counts, its version by one and its position to the record's own — the
-// row made by the change's first conversation record.
+// row made by the change's first conversation record — and, for a record
+// somebody wrote, its instant to the record's ([spoken]). A record nobody
+// wrote names no instant, so its write rewrites no entry of
+// code_conversations_updated_idx (the driver rewrites an index entry for
+// every column a write names, whatever the value).
 func touchConversation(ctx context.Context, tx *sql.Tx, at applyContext, repoID, changeID string,
 	counts conversationCounts) error {
 
-	if _, err := tx.ExecContext(ctx, touchConversationSQL, changeID, repoID, counts.comments, counts.reviews,
+	stmt := touchConversationSQL
+	if counts.spokenAt > 0 {
+		stmt = touchSpokenConversationSQL
+	}
+	if _, err := tx.ExecContext(ctx, stmt, changeID, repoID, counts.comments, counts.reviews,
 		counts.openFindings, counts.openBlockers, counts.changesRequested, counts.textBytes, counts.readiness,
-		at.packed); err != nil {
+		at.packed, counts.spokenAt); err != nil {
 		return fmt.Errorf("code: move change %s's conversation at %s: %w", changeID, at.position, err)
 	}
 	return nil
@@ -595,10 +624,12 @@ func conversationNotApplied(ctx context.Context, at applyContext, repoID, change
 // on a key is a skip or a merge, never an abort, which would stall the log on
 // every node.
 const (
-	changeRepoSQL        = `SELECT repo_id FROM code_changes WHERE id = ?`
+	changeRepoSQL = `SELECT repo_id FROM code_changes WHERE id = ?`
+	// touchConversationSQL is a record's move of its conversation, and
+	// touchSpokenConversationSQL a move by one somebody wrote, which dates it.
 	touchConversationSQL = `INSERT INTO code_conversations (change_id, repo_id, comments, reviews, open_findings,
-			open_blockers, changes_requested, text_bytes, readiness_version, version, position)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+			open_blockers, changes_requested, text_bytes, readiness_version, version, position, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 		ON CONFLICT (change_id) DO UPDATE SET comments = code_conversations.comments + excluded.comments,
 			reviews = code_conversations.reviews + excluded.reviews,
 			open_findings = code_conversations.open_findings + excluded.open_findings,
@@ -607,6 +638,7 @@ const (
 			text_bytes = code_conversations.text_bytes + excluded.text_bytes,
 			readiness_version = code_conversations.readiness_version + excluded.readiness_version,
 			version = code_conversations.version + 1, position = excluded.position`
+	touchSpokenConversationSQL = touchConversationSQL + `, updated_at = excluded.updated_at`
 	// A review's writes: the reviewer's standing verdict before this one, by
 	// their participant row's key; the review, its findings and their texts,
 	// each a conflict on its key a skip; the supersession of the findings the

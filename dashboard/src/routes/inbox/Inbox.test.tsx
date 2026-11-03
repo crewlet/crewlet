@@ -588,6 +588,40 @@ describe("the list", () => {
     expect(earlier.queryByText("something about r-1")).toBeNull();
   });
 
+  // CARDS ONLY WHERE A ROW OPENS: Updates, and Snoozed and Earlier once each is
+  // opened, are lists a code notice opens onto its card from, so each asks the
+  // engine for `cards`; the Snoozed link's count draws no row and asks for
+  // none, so a closed list judges nothing. Mutations: drop `cards` from
+  // Updates' read — red; read the Snoozed count with cards — red.
+  test("the lists a row opens from ask for cards, and the Snoozed count asks for none", async () => {
+    mount({
+      answers: {
+        inbox: inboxes({
+          unread: [notice("r-1")],
+          snoozed: [notice("r-9", { snoozed: true, snoozed_until: "2030-01-01T09:00:00Z" })],
+          all: [notice("r-1"), notice("r-5", { read: true, excerpt: "an old one" })],
+        }),
+      },
+    });
+    await settle();
+    const reads = () => asked.filter((a) => a.kind === "inbox").map((a) => a.params);
+    const updates = reads().filter((p) => p.unread === true && p.snoozed === "exclude");
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates.every((p) => p.cards === true)).toBe(true);
+    const counts = reads().filter((p) => p.snoozed === "only");
+    expect(counts.length).toBeGreaterThan(0);
+    expect(counts.some((p) => "cards" in p)).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "1 snoozed" }));
+    await settle();
+    expect(reads().some((p) => p.snoozed === "only" && p.cards === true)).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Earlier updates" }));
+    await settle();
+    const earlier = reads().filter((p) => p.unread === false);
+    expect(earlier.length).toBeGreaterThan(0);
+    expect(earlier.every((p) => p.cards === true)).toBe(true);
+  });
+
   // FROM "SHOW MORE" THE FIRST PAGE STAYS LIVE, AND NOTHING FALLS OUT: a
   // poll, an inbox push and a reconnect each ask Earlier's first page again,
   // and when it has moved under the page loaded after it (a newer notice

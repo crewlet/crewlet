@@ -21,6 +21,8 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -292,6 +294,200 @@ func TestAMergesLandingThatDecidedNothingFailsTheTurn(t *testing.T) {
 	}
 	if merged := h.e.merged(); len(merged) != 0 {
 		t.Errorf("the turn recorded %+v of a change its ancestry found landed, want no merge", merged)
+	}
+}
+
+// pushID is the n-th push id a case names, in the order the pushes applied:
+// ascending, as a record's pushes are ordered.
+func pushID(n int) string { return fmt.Sprintf("01920000-0000-7000-8000-%012d", n) }
+
+// onLog is seq on the code log.
+func onLog(seq uint64) statelog.Position {
+	return statelog.Position{Stream: topics.CodeLogStream, Seq: seq}
+}
+
+// moving is push n's row in the record at seq, as the history keeps it: its
+// one applied command, moving ref from old to new.
+func moving(n int, seq uint64, ref, old, new string) code.IntroducedRow {
+	return code.IntroducedRow{PushedBy: code.PushedBy{PushID: pushID(n), Position: onLog(seq)},
+		Moves: []code.RefMove{{Ref: ref, Old: old, New: new}}}
+}
+
+// mergedRepo is a repository whose change's head is merged into main and
+// pushed on: base, then main moved on to a, the change's head — a child of
+// base on its own branch — merged into main by the merge commit m1, and m2
+// committed on top of it; both branches pushed, so the node's copy holds
+// every commit a walk asks about.
+func mergedRepo(h *gitHome) (base, a, head, m1, m2 string) {
+	h.t.Helper()
+	base = h.commit(map[string]string{"a.go": "a\n"}, "base")
+	h.git("checkout", "-q", "-b", "change", base)
+	head = h.commit(map[string]string{"a.go": "a, changed\n"}, "the change")
+	h.git("checkout", "-q", "main")
+	a = h.commit(map[string]string{"b.go": "b\n"}, "main moves on")
+	h.git("merge", "-q", "--no-ff", "-m", "merge the change", "change")
+	m1 = strings.TrimSpace(h.git("rev-parse", "HEAD"))
+	m2 = h.commit(map[string]string{"c.go": "c\n"}, "pushed on top of the merge")
+	h.push("refs/heads/main", "refs/heads/change")
+	return base, a, head, m1, m2
+}
+
+// A LANDING NAMES THE PUSH THAT BROUGHT ITS HEAD IN, never the push that
+// moved its target last: a change merged by dev's push of a merge commit onto
+// main (a → m1), and pushed on by somebody else (m1 → m2) before the home
+// read the target, is found in m2 — and the landing names dev's push, whether
+// the push on top shared its group-commit record or landed in a later one, a
+// push of another branch to the same commit in the record beside them telling
+// nothing. The walk goes newest first from the tip, each move's old commit
+// asked of git: a target forced back behind the head and merged again names
+// the push that merged it again; a target made at a commit holding the head
+// names the push that made it; and one whose every move the history keeps
+// already held the head names nobody.
+//
+// Mutation: name the push that moved the target to the tip (stop the walk at
+// its first move) → the two pushed-on cases name the push on top; skip the
+// old commit's ancestry and take the oldest move read → the forced case
+// names the first merge, and the held-before case names one.
+func TestALandingNamesThePushThatBroughtItsHeadIn(t *testing.T) {
+	t.Parallel()
+	h := newGitHome(t, codetest.Settings())
+	_, a, head, m1, m2 := mergedRepo(h)
+	l, _ := h.homeLoop(t, newNudges(), time.Hour, nil)
+	const main, release = "refs/heads/main", "refs/heads/release"
+	for _, tc := range []struct {
+		name string
+		// pushes is the history in log order; tip is the record the target
+		// last moved in.
+		pushes []code.IntroducedRow
+		tip    uint64
+		// want is the push named, by its number, or 0 for none; at its record.
+		want int
+		at   uint64
+	}{
+		{name: "pushed on within the merge's record", tip: 20, want: 2, at: 20, pushes: []code.IntroducedRow{
+			moving(1, 20, release, code.ZeroOID, m1), moving(2, 20, main, a, m1), moving(3, 20, main, m1, m2),
+		}},
+		{name: "pushed on in a later record", tip: 25, want: 2, at: 20, pushes: []code.IntroducedRow{
+			moving(1, 20, release, code.ZeroOID, m1), moving(2, 20, main, a, m1), moving(3, 25, main, m1, m2),
+		}},
+		{name: "forced back behind the head and merged again", tip: 24, want: 3, at: 24,
+			pushes: []code.IntroducedRow{
+				moving(1, 20, main, a, m1), moving(2, 22, main, m1, a), moving(3, 24, main, a, m2),
+			}},
+		{name: "made holding the head", tip: 25, want: 1, at: 20, pushes: []code.IntroducedRow{
+			moving(1, 20, main, code.ZeroOID, m1), moving(2, 25, main, m1, m2),
+		}},
+		{name: "held the head before every move kept", tip: 25, pushes: []code.IntroducedRow{
+			moving(2, 25, main, m1, m2),
+		}},
+	} {
+		h.e.mu.Lock()
+		h.e.pushes = tc.pushes
+		h.e.mu.Unlock()
+		due := h.due(head, m2)
+		due.TipPosition = onLog(tc.tip)
+		landed, err := home.MergeChange(t.Context(), l, h.repo, due, h.e.at)
+		if err != nil || !landed {
+			t.Fatalf("%s: the merge step answered landed %v, %v; want the change landed", tc.name, landed, err)
+		}
+		_, landings := h.e.wrote()
+		want := code.ChangeLanded{RepoID: h.repo, ChangeID: due.ID, Revision: 1, HeadOID: head, TargetRef: main,
+			TargetOID: m2, Node: h.node().ID()}
+		if tc.want != 0 {
+			want.PushID, want.PushPosition = pushID(tc.want), onLog(tc.at)
+		}
+		if len(landings) == 0 || landings[len(landings)-1] != want {
+			t.Errorf("%s: the home asked the landings %+v, want the last %+v", tc.name, landings, want)
+		}
+	}
+}
+
+// A CHANGE WHOSE HEAD IS IN ITS TARGET IS LANDED: its facts read, finding the
+// head inside the target's tip — the target moved past it — the home lands it
+// through its merge step, at the change's revision and head and the tip it
+// read, naming the push that merged it, and records no facts of it; a change
+// whose head is not in its target has its facts recorded, its touched paths
+// matched against the repository's path owners on the home, beside the digest
+// of the owners matched against.
+//
+// Mutation: record the facts of a head its target holds rather than land it,
+// and the landing is never asked.
+func TestAChangeWhoseHeadIsInItsTargetIsLanded(t *testing.T) {
+	t.Parallel()
+	h := newGitHome(t, codetest.Settings())
+	_, a, head, m1, m2 := mergedRepo(h)
+	owners := []code.PathOwner{{Owner: code.Owner{Kind: code.OwnerUnit, Ref: "Platform"}, Paths: []string{"upload/**"}},
+		{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "cto"}, Paths: []string{"docs/*.md"}}}
+	h.e.mu.Lock()
+	h.e.owners[h.repo] = owners
+	h.e.pushes = []code.IntroducedRow{moving(1, 20, "refs/heads/main", a, m1),
+		moving(2, 30, "refs/heads/main", m1, m2)}
+	h.e.mu.Unlock()
+	landed := h.e.hold(h.repo, 1, head, m2, code.RevisionFactsAnswer{MergeBase: head, HeadInTarget: true,
+		Touched: []string{}})
+	measured := h.e.hold(h.repo, 2, oid("b"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("9"),
+		PatchID: oid("e"), Touched: []string{"upload/retry.go", "README.md"}})
+	h.homeLoop(t, newNudges(), time.Hour, nil)
+	h.e.waitDone(t, h.repo, 30*time.Second)
+	revises, landings := h.e.wrote()
+	want := code.ChangeLanded{RepoID: h.repo, ChangeID: landed.ID, Revision: landed.Revision, HeadOID: landed.Head,
+		TargetRef: landed.TargetRef, TargetOID: landed.Tip, Node: h.node().ID(), PushID: pushID(1),
+		PushPosition: onLog(20)}
+	if len(landings) != 1 || landings[0] != want {
+		t.Fatalf("the home asked the landings %+v, want %+v", landings, want)
+	}
+	if len(revises) != 1 || revises[0].ChangeID != measured.ID {
+		t.Fatalf("the home recorded the facts of %+v, want change 2's alone", revises)
+	}
+	r := revises[0]
+	matched, digest := code.MatchOwners(owners, []string{"upload/retry.go", "README.md"}, false)
+	if !slices.Equal(r.RequestedOwners, matched) || r.OwnersDigest != digest || len(matched) != 1 ||
+		r.TargetPosition != measured.TipPosition || r.BaseOID != oid("9") || r.PatchID != oid("e") {
+		t.Fatalf("change 2's facts are %+v, want them matched to %v under digest %s at the tip's position %s",
+			r, matched, digest, measured.TipPosition)
+	}
+}
+
+// A LANDING THAT DECIDED NOTHING FAILS THE TURN: a change whose head its
+// target holds, owing its facts and its merge, whose landing the committer
+// answers busy — or whose Change call fails before any answer — ends its
+// turn FAILED, counted so and logged code_home_turn_failed, and that turn does
+// no more work on the change: no merge is recorded of it, and the landing is
+// asked once. A repository whose landings keep failing reads as failing,
+// never as healthy.
+//
+// Mutation: drop the landing's error on the facts branch of the change's step
+// (answer the merge step's landing with a nil error), and both turns count
+// worked.
+func TestALandingThatDecidedNothingFailsTheTurn(t *testing.T) {
+	t.Parallel()
+	for name, refuse := range map[string]func(*estate){
+		"the committer answers busy": func(e *estate) { e.landRefusal = code.ChangeRefusalBusy },
+		"the Change call fails": func(e *estate) {
+			e.landErr = errors.New("the router reached no committer")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newGitHome(t, codetest.Settings())
+			_, _, head, _, m2 := mergedRepo(h)
+			due := h.e.hold(h.repo, 1, head, m2, code.RevisionFactsAnswer{MergeBase: head, HeadInTarget: true,
+				Touched: []string{}})
+			h.e.mu.Lock()
+			h.e.due[h.repo][0].MergeDue = true
+			refuse(h.e)
+			h.e.mu.Unlock()
+			h.logs = &lines{}
+			_, rec := h.homeLoop(t, newNudges(), time.Hour, nil)
+			waitTurns(t, rec, 1)
+			assertTurnFailed(t, rec, h.logs)
+			if _, landings := h.e.wrote(); len(landings) != 1 || landings[0].ChangeID != due.ID {
+				t.Errorf("the turn asked the landings %+v, want change 1's once", landings)
+			}
+			if merged := h.e.merged(); len(merged) != 0 {
+				t.Errorf("the turn recorded %+v of a change it found landed, want nothing more of it", merged)
+			}
+		})
 	}
 }
 

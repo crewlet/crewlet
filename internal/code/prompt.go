@@ -152,6 +152,12 @@ func wakeOpener(reason Reason, meta map[string]string) string {
 		// it is not.
 		return "Change " + ref + " is ready to merge: every precondition its target's gate asks is met."
 	case ReasonMerged:
+		if why := meta[MetaNotClosed]; why != "" {
+			// THE QUEUE'S STEP TWO LEFT UNDONE (M5-D27): the change landed,
+			// and the work item its enqueue asked closed was not.
+			return "Change " + ref + " was merged through its queue, and its work item was not closed: " +
+				strings.TrimSuffix(why, ".") + ". Close it where it lives, or say on it why it stays open."
+		}
 		return "Your change " + ref + " was merged."
 	case ReasonReviewSubmitted:
 		if Verdict(meta[MetaVerdict]) == VerdictApprove {
@@ -224,8 +230,8 @@ func wakeHandling(reason Reason) string {
 
 // wakeSender renders who made the change as a colleague, by handle — the actor on
 // a code wake is a handle, or nobody for the home's records but a revision's
-// facts and a landing, which name its pusher and the pusher of the tip it
-// found.
+// facts and a landing, which name its pusher and the pusher of the push that
+// brought the change's head into its target.
 func wakeSender(n notify.Inbound, parties notify.Parties) string {
 	actor := n.Metadata[notify.ActorField]
 	if actor == "" {

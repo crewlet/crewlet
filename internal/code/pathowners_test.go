@@ -329,6 +329,7 @@ func everyReadAsked(id string) map[code.ReadKind]code.ReadQuery {
 		code.ReadLandings:      {Asker: asker, Repo: "web", Target: "refs/heads/main"},
 		code.ReadGreen:         {Asker: asker, Repo: "web"},
 		code.ReadInbox:         {Asker: asker, Inbox: &code.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude}},
+		code.ReadNoticeCards:   {Asker: asker, NoticeCards: []string{"0192f4c8-0000-7000-8000-000000000001"}},
 	}
 }
 
@@ -390,6 +391,57 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||
 			!strings.Contains(err.Error(), "path_owners") {
 			t.Errorf("a %s read asking for path owners = %v, want ErrInvalid naming path_owners", kind, err)
+		}
+	}
+}
+
+// A FIELD ONE KIND READS IS REFUSED ON EVERY OTHER, the engine's own reads
+// included: a read of each kind this build reads, as everyReadAsked asks it,
+// that also names a commit, an inbox, an inbox page's cards or the narrowing
+// to protected repositories — fields only a `commit`, an `inbox`, a
+// `notice_cards` and a `repos` read read — is refused naming the field, never
+// answered with it ignored. The engine's own reads validate
+// against lists of their own, and a field added after a list was written
+// passed it unseen.
+//
+// Mutation: check the kind-owned fields after the engine's own reads'
+// validators instead of before (ReadQuery.validate) — an imports_due read
+// naming an inbox is answered, red.
+func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := n.ensure("web", suiteSettings(), t1).RepoID
+	asks := everyReadAsked(id)
+	for _, field := range []struct {
+		name  string
+		owner code.ReadKind
+		set   func(q *code.ReadQuery)
+	}{
+		{"commit", code.ReadCommit, func(q *code.ReadQuery) { q.Commit = strings.Repeat("6", 40) }},
+		{"inbox", code.ReadInbox, func(q *code.ReadQuery) {
+			q.Inbox = &code.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude}
+		}},
+		{"notice_cards", code.ReadNoticeCards, func(q *code.ReadQuery) {
+			q.NoticeCards = []string{"0192f4c8-0000-7000-8000-000000000001"}
+		}},
+		{"protected", code.ReadRepos, func(q *code.ReadQuery) { q.Protected = true }},
+	} {
+		for _, kind := range code.ReadKinds() {
+			q, named := asks[kind]
+			switch {
+			case kind == field.owner:
+				continue
+			case !named:
+				t.Errorf("a %s read is never asked here: name it in everyReadAsked, so its refusals are held",
+					kind)
+				continue
+			}
+			q.Kind = kind
+			field.set(&q)
+			if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||
+				!strings.Contains(err.Error(), field.name) {
+				t.Errorf("a %s read naming %s = %v, want ErrInvalid naming %s", kind, field.name, err, field.name)
+			}
 		}
 	}
 }

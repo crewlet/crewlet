@@ -1670,6 +1670,310 @@ func TestAFullRoundWakesTheMaintainerOnceItLetsTheRepositoryGo(t *testing.T) {
 	})
 }
 
+// A RUN A ROUND HELD BACK STARTS AS THE ROUND ENDS. A pass starts no run on a
+// repository a round holds (runnable), and the next tick is no promise of a gap:
+// every linearizable read is a round, so a repository read steadily is in one for
+// much of its time and a tick lands in one about that often. Owing nothing, each
+// landing cost another MidxDebounce, and a graph due at once was left to the
+// odds — the code host's suite, polling a copy for it, saw a minute's ticks all
+// land in a round and no graph at all.
+//
+// The copy is read whole empty and takes its first pack by a delta, so no full
+// round's wake stands in. A pass runs inside the round that applied the pack, as
+// a tick landing there runs it: the walk finds the round holding the repository;
+// or, in the second arm, the walk found it runnable and the round began before
+// the pass came to start the run. Either way it starts nothing, and the round's
+// end starts the run, with no tick and no other pass.
+//
+// Mutations: drop Cache.run's startOwed — no run follows the round; start runs
+// under a round (startRun's round term) — the pass in the round starts one.
+func TestARunARoundHeldBackStartsAsTheRoundEnds(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// pass is what a tick landing in the round runs, and answers whether
+		// it started a run.
+		pass func(c *cache.Cache, repo string) bool
+	}{
+		{name: "held back at its walk", pass: func(c *cache.Cache, _ string) bool {
+			started, _ := cache.StartMaintainerPass(c)
+			return len(started) > 0
+		}},
+		{name: "held back as it starts the run", pass: cache.StartMaintenanceOf},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			var c *cache.Cache
+			var inRound, started atomic.Bool
+			c = w.open(t, func(o *cache.Options) {
+				cache.BeforeRoundEnds(o, func(string) {
+					// The cache is never started: no pass but this one runs.
+					if inRound.Swap(false) {
+						started.Store(tc.pass(c, repo))
+					}
+				})
+			})
+			w.sync(t, c, repo)
+			eventually(t, "the full round's own wake", func() bool { return cache.MaintainerKicked(c) })
+			if ran := cache.MaintainerPass(c); len(ran) != 0 {
+				t.Fatalf("a pass over a copy holding no pack ran %v", ran)
+			}
+
+			w.push(t, repo, "refs/heads/main", nil)
+			inRound.Store(true)
+			w.sync(t, c, repo)
+			if inRound.Load() {
+				t.Fatal("no round reached the knob: the case held nothing")
+			}
+			if started.Load() {
+				t.Error("a pass started a run on a repository a round holds")
+			}
+			eventually(t, "the run the round's end owes the pass it held back", func() bool {
+				_, _, graphed := cache.Indexed(c, repo)
+				return graphed
+			})
+		})
+	}
+}
+
+// ROUNDS BACK TO BACK STILL GET THE MAINTAINER ITS RUN, AND THEIR CALLERS NEVER
+// WAIT FOR IT. Every linearizable read is a round, and a caller that arrives
+// during one is queued behind it, so a repository read faster than its rounds
+// take has no moment between them: each starts under the lock the last ended
+// under, a pass finds a round holding it at every tick, and a wake it was owed
+// waits for a gap that does not come. Its graph, its index and its bitmap would
+// wait out its traffic, on the copy that most needs them.
+//
+// Here no gap opens by construction: every round, before it lets go, has the
+// caller of the next one queued behind it. One tick comes. The run the pass found
+// due starts between two rounds, and is held in flight while more rounds end —
+// the callers wait for nothing of it — and then writes the graph, the rounds
+// still going.
+//
+// Mutations: drop Cache.run's startOwed, or move it behind c.start — no run ever
+// starts, since the next round is always already running; have startOwed wait
+// for the run it started — the rounds stop while it is held.
+func TestRoundsBackToBackStillGetTheMaintainersRun(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	ticks := make(chan time.Time)
+	reached, release := make(chan struct{}), make(chan struct{})
+	letGo := sync.OnceFunc(func() { close(release) })
+	var (
+		c       *cache.Cache
+		once    sync.Once
+		steady  atomic.Bool
+		rounds  atomic.Int64
+		callers sync.WaitGroup
+	)
+	c = w.open(t, func(o *cache.Options) {
+		cache.MaintainerTicksFrom(o, ticks)
+		cache.BeforeMaintaining(o, func(ctx context.Context, _ string) {
+			once.Do(func() { close(reached) })
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		})
+		cache.BeforeRoundEnds(o, func(string) {
+			rounds.Add(1)
+			if !steady.Load() {
+				return
+			}
+			callers.Add(1)
+			go func() {
+				defer callers.Done()
+				s, err := c.Sync(context.WithoutCancel(t.Context()), repo, linearizable)
+				if err != nil {
+					t.Errorf("a read of the steady stream: %v", err)
+					return
+				}
+				s.Release()
+			}()
+			for steady.Load() && !cache.RoundQueued(c, repo) {
+				time.Sleep(100 * time.Microsecond)
+			}
+		})
+	})
+	// READ WHOLE, its full round's own wake taken before the maintainer runs, so
+	// the one tick below is all that can tell it the copy is due.
+	w.sync(t, c, repo)
+	eventually(t, "the full round's own wake", func() bool { return cache.MaintainerKicked(c) })
+	c.Start(t.Context())
+
+	// A READ THAT COMES AFTER THE STREAM IS TOLD TO STOP is answered by a round
+	// that began after that, whose end queues nothing: every caller is queued by
+	// then, and each is answered by that round or an earlier one.
+	stop := sync.OnceFunc(func() {
+		steady.Store(false)
+		letGo()
+		if s, err := c.Sync(context.WithoutCancel(t.Context()), repo, linearizable); err == nil {
+			s.Release()
+		}
+		callers.Wait()
+	})
+	steady.Store(true)
+	t.Cleanup(stop)
+	s := w.sync(t, c, repo)
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(hangDetector):
+		t.Fatal("the maintainer did not take its tick")
+	}
+	select {
+	case <-reached:
+	case <-time.After(hangDetector):
+		t.Fatalf("with rounds back to back no maintenance run started in %v: %d rounds ended", hangDetector,
+			rounds.Load())
+	}
+	from := rounds.Load()
+	eventually(t, "more rounds ending while the run is held in flight", func() bool { return rounds.Load() >= from+3 })
+	if !cache.Maintaining(c, repo) {
+		t.Error("the run held in flight is not on the entry")
+	}
+	letGo()
+	graph := filepath.Join(s.Dir, "objects", "info", "commit-graph")
+	eventually(t, "the graph the run was due to write", func() bool { return statOK(t, graph) })
+	stop()
+}
+
+// A REPOSITORY A ROUND HOLDS KEEPS ITS PLACE IN THE PASS'S ORDER. No pass can
+// start its run, and left out of the order it would come last for as long as its
+// rounds ran back to back, behind every repository a pass can start. So on a lane
+// of one slot a pass inside the round of the repository first in its order starts
+// nothing behind it, and the room it keeps is the room that repository's run is
+// admitted in at the round's end, rather than beside. The one behind runs next.
+//
+// Mutations: answer a repository a round holds notDue rather than heldBack
+// (startRun) — the pass starts the one behind it in the only slot; admit the run
+// beside its own room (standingBeside's own term) — it is refused and never runs.
+func TestARepositoryARoundHoldsKeepsItsPlaceInThePass(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	hot, behind := w.repo(t, 1), w.repo(t, 2)
+	// More packs left uncovered is first in the order, both copies graph-less.
+	w.push(t, hot, "refs/heads/main", nil)
+	w.push(t, hot, "refs/heads/main", nil)
+	w.push(t, behind, "refs/heads/main", nil)
+	var c *cache.Cache
+	var inRound atomic.Bool
+	var started []string
+	c = w.open(t, func(o *cache.Options) {
+		cache.BeforeRoundEnds(o, func(string) {
+			if inRound.Swap(false) {
+				started, _ = cache.StartMaintainerPass(c)
+			}
+		})
+	})
+	if got := w.pool.Slots(gitproc.ClassMaintenance); got != 1 {
+		t.Fatalf("the pool has %d maintenance slots, want 1", got)
+	}
+	w.sync(t, c, hot)
+	w.sync(t, c, behind)
+	eventually(t, "the full rounds' own wake", func() bool { return cache.MaintainerKicked(c) })
+
+	inRound.Store(true)
+	w.sync(t, c, hot)
+	if inRound.Load() {
+		t.Fatal("no round reached the knob: the case held nothing")
+	}
+	if len(started) != 0 {
+		t.Errorf("the pass started %v behind the repository a round holds, first in its order", started)
+	}
+	eventually(t, "the run of the repository the room was kept for", func() bool {
+		_, _, graphed := cache.Indexed(c, hot)
+		return graphed && !cache.Maintaining(c, hot)
+	})
+	if _, _, graphed := cache.Indexed(c, behind); graphed {
+		t.Error("the repository behind it was graphed before the pass it comes next in")
+	}
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{behind}) {
+		t.Errorf("the pass after the run ran %v, want %s, next in the order", ran, behind)
+	}
+}
+
+// AN OWED RUN WAITS OUT A QUEUED ROUND THAT WOULD STOP IT. A full round's sweep
+// stops every run on the copy and waits for it to end, and a rebuild replaces the
+// copy under it. A run started for the round queued behind to stop would be a git
+// begun only to be killed, with that round's callers waiting for it to die. So the
+// debt stands for that round's end, and no run begins before then.
+//
+// Mutations: answer no from queuedRoundStops's full term, or its rebuild term —
+// the run begins between the two rounds.
+func TestAnOwedRunWaitsOutAQueuedRoundThatWouldStopIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		queue func(c *cache.Cache, repo string)
+	}{
+		{"a round a repair mark makes full", cache.AskRepairRound},
+		{"a rebuild", cache.QueueRebuild},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			w.push(t, repo, "refs/heads/main", nil)
+			queuedEnded, release := make(chan struct{}), make(chan struct{})
+			var (
+				c        *cache.Cache
+				armed    atomic.Bool
+				rounds   atomic.Int32
+				begun    atomic.Int32
+				tooEarly atomic.Bool
+			)
+			c = w.open(t, func(o *cache.Options) {
+				cache.BeforeMaintaining(o, func(ctx context.Context, _ string) {
+					begun.Add(1)
+					select {
+					case <-release:
+					case <-ctx.Done():
+					}
+				})
+				cache.BeforeRoundEnds(o, func(string) {
+					if !armed.Load() {
+						return
+					}
+					switch rounds.Add(1) {
+					case 1:
+						cache.StartMaintainerPass(c)
+						tc.queue(c, repo)
+					case 2:
+						// A run begun at the first round's end has reached the
+						// knob by now if this round stopped it, and is on the
+						// entry if it did not.
+						tooEarly.Store(begun.Load() > 0 || cache.Maintaining(c, repo))
+						close(queuedEnded)
+					}
+				})
+			})
+			w.sync(t, c, repo)
+			eventually(t, "the full round's own wake", func() bool { return cache.MaintainerKicked(c) })
+
+			armed.Store(true)
+			w.sync(t, c, repo)
+			select {
+			case <-queuedEnded:
+			case <-time.After(hangDetector):
+				t.Fatal("the queued round never ended")
+			}
+			if tooEarly.Load() {
+				t.Error("the owed run began for the round queued behind to stop")
+			}
+			close(release)
+			eventually(t, "the owed run, at the queued round's end", func() bool {
+				_, _, graphed := cache.Indexed(c, repo)
+				return graphed
+			})
+		})
+	}
+}
+
 // A STARTED CACHE MAINTAINS AT ITS TICKS, AND STOP ENDS A RUN: Start runs
 // the maintainer, which looks at every tick and runs what is due then — not
 // before — and Stop cancels a run in flight and waits for it, so the

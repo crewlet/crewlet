@@ -133,6 +133,11 @@ type QueueWorkEntry struct {
 	// WorkItem is the change's work item, nil for none: what a landing
 	// closes where its entry asked it to.
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
+	// CloseOp is, on an owed close ([ReadAnswer.QueueOwedCloses]), the
+	// operation its work item is closed under ([CloseWorkItemOpID] of the
+	// landing's), "" on every other entry. An answer between nodes, so an
+	// older reader drops it and leaves the close owed for a newer home.
+	CloseOp string `json:"close_op,omitempty"`
 }
 
 // QueueWorkCandidate is one candidate of a target's live train: its id, its
@@ -297,6 +302,9 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 			return err
 		}
 		out.QueueAbandoned = abandoned
+		if out.QueueOwedCloses, err = owedClosesIn(ctx, tx, repoID); err != nil {
+			return err
+		}
 	}
 	stmt, args := queueOfRepoSQL, []any{repoID, 1}
 	if cursor != "" {
@@ -418,6 +426,93 @@ func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]Que
 	}
 	return out, nil
 }
+
+// MaxOwedCloses is the most owed closes one `queue_due` page answers:
+// [MaxLandEntries], the most one landing leaves owing — so a home settles a
+// whole landing's closes in one turn and one close_settled record (which
+// holds as many), and a repository owing more (several landings no home
+// reached) settles the rest on the turns after, each close one tracker write
+// of its enqueuer's.
+const MaxOwedCloses = MaxLandEntries
+
+// owedClosesIn is repository repoID's landed entries still owing their work
+// item's close (code_queue.close_op), at most [MaxOwedCloses] in entry id
+// order — one seek of code_queue_close_owed_idx, the operation read beside
+// each row — each with its enqueuer, its change and the change's work item.
+// An entry whose change the repository holds no more is answered with its
+// change's id alone and no work item, which its home settles as not closed.
+func owedClosesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]QueueWorkEntry, error) {
+	owed, ops, err := owedEntriesIn(ctx, tx, repoID)
+	if err != nil || len(owed) == 0 {
+		return nil, err
+	}
+	ids := make([]string, len(owed))
+	for i, e := range owed {
+		ids[i] = e.ChangeID
+	}
+	rows, err := changeRowsIn(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]QueueWorkEntry, len(owed))
+	for i, e := range owed {
+		out[i] = QueueWorkEntry{EntryID: e.EntryID, Seq: unpacked(e.Seq), State: e.State, HeadOID: e.HeadOID,
+			Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(), CloseOp: ops[i],
+			Change: ChainChange{ID: e.ChangeID}}
+		row, found := rows[e.ChangeID]
+		if !found {
+			continue
+		}
+		out[i].Change = ChainChange{ID: row.id, Number: row.number, Title: row.title, SourceRef: row.source,
+			Owner: row.owner}
+		if row.work.ID != "" {
+			item := row.work
+			out[i].WorkItem = &item
+		}
+	}
+	return out, nil
+}
+
+// owedEntriesIn is repository repoID's entries owing a close and the
+// operation each owes it under, in entry id order, at most [MaxOwedCloses]:
+// [owedClosesSQL]'s one seek.
+func owedEntriesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]queueEntry, []string, error) {
+	rows, err := tx.QueryContext(ctx, owedClosesSQL, repoID, MaxOwedCloses)
+	if err != nil {
+		return nil, nil, fmt.Errorf("code: read %s's owed closes: %w", repoID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var (
+		owed []queueEntry
+		ops  []string
+	)
+	for rows.Next() {
+		var (
+			op string
+			e  queueEntry
+		)
+		if e, err = scanEntry(func(dest ...any) error { return rows.Scan(append(dest, &op)...) }); err != nil {
+			return nil, nil, fmt.Errorf("code: read %s's owed closes: %w", repoID, err)
+		}
+		owed, ops = append(owed, e), append(ops, op)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("code: read %s's owed closes: %w", repoID, err)
+	}
+	return owed, ops, nil
+}
+
+// The owed closes' reads, by the index partial on exactly them (replicated
+// 0145), its predicate spelled as declared: a repository's, and the active
+// repositories holding one, grouped on the index's leading column.
+const (
+	owedClosesSQL = `SELECT ` + entryColumns + `, close_op FROM code_queue INDEXED BY code_queue_close_owed_idx
+		WHERE repo_id = ? AND close_op != '' ORDER BY entry_id LIMIT ?`
+	closeOwedReposSQL = `SELECT q.repo_id FROM code_queue AS q INDEXED BY code_queue_close_owed_idx
+		WHERE q.close_op != '' AND q.repo_id > ?1
+			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = q.repo_id AND r.status = 'active')
+		GROUP BY q.repo_id ORDER BY q.repo_id LIMIT ?2`
+)
 
 // descriptionsOf fills in each of entries' change's body and authors, by
 // handle: two statements driven from the list of the changes, one over the

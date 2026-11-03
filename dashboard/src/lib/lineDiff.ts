@@ -55,17 +55,30 @@ import type { DiffLine, DiffSection } from "@crewlethq/ui";
  * between the start and the end the two texts share.
  *
  * WITH [MAX_EDITS] IT BOUNDS THE WORK, which grows with the lines read times
- * the edits found, all of it on the thread that draws. A pair at both bounds —
- * 20,000 lines a side, every tenth one edited, so 4,000 lines removed and
- * added — took 95 ms (the median of five runs, the worst 121 ms) in Node 24 on
- * two efficiency cores of a Core Ultra 7 265U: about the 100 ms in which an
- * answer to a click still reads as immediate. One line edited in the same text
- * took 2.6 ms. So a comparison is made in the render that draws it rather than
- * handed to a Worker, which would make every diff a round trip and a loading
- * state to spare the rare one that costs more than a frame. And a text this
- * long in what changed is past any page of ordinary lines the engine keeps: a
- * page body is at most 512 KiB, so twenty thousand of its lines average 26
- * bytes.
+ * the edits found, all of it on the thread that draws. `lineDiff.bench.ts` is
+ * the measurement that decides both bounds (`npm run bench --
+ * src/lib/lineDiff.bench.ts`), and the one a change to the comparison is timed
+ * against. Its pair at both bounds — 20,000 lines of code a side, about every
+ * tenth one edited, so 4,000 lines removed and added — took 97 ms on average
+ * over twenty runs, 87 ms at best and 140 ms at worst, in Node 24 on two
+ * efficiency cores of a Core Ultra 7 265U. One line edited in the same text
+ * took 2.1 ms.
+ *
+ * SO THE BOUNDED WORST CASE IS PAST THE 100 MS in which an answer to a click
+ * still reads as immediate, and a phone is slower again: no phone's figure was
+ * taken, and a budget phone's main thread can run several times slower than
+ * these cores, which would hold the same pair for a few hundred milliseconds.
+ * That is a judgment, and accepted. The pair is the rarest one the dashboard
+ * draws, a tenth of a long text's lines rewritten each in its own place; it is
+ * compared once (`DiffView` memoizes it for as long as the two texts are the
+ * same), so it costs one late answer, not a stutter in every frame; and bounds
+ * low enough to keep it inside 100 ms on such a phone, about a third of
+ * either, would refuse to draw changes people do make, which is worse than
+ * drawing them late. Nor is a comparison handed to a Worker, which would make
+ * every diff a round trip and a loading state to spare the rare one that costs
+ * more than a frame. And a text this long in what changed is past any page of
+ * ordinary lines the engine keeps: a page body is at most 512 KiB, so twenty
+ * thousand of its lines average 26 bytes.
  */
 export const MAX_COMPARE_LINES = 20_000;
 
@@ -76,10 +89,11 @@ export const MAX_COMPARE_LINES = 20_000;
  * THE OTHER HALF OF THE WORK'S BOUND (see [MAX_COMPARE_LINES]), and the point
  * where a diff stops being read as a change: four thousand marked lines is a
  * rewrite of what they stand in, whose two versions are the better read. A pair
- * past it is answered sooner than one at it, on the same machine: two
- * 20,000-line texts that share no line in 11.5 ms, read off how often each
- * line occurs ([distanceFloor]), and 20,000 lines of code against the same
- * lines shuffled, which only the rounds can tell from a close edit, in 50 ms.
+ * past it is answered sooner than one at it, by the same benchmark on the same
+ * machine (averages of twenty runs): two 20,000-line texts that share no line
+ * in 10.5 ms, read off how often each line occurs ([distanceFloor]), and
+ * 20,000 lines of code against the same lines shuffled, which only the rounds
+ * can tell from a close edit, in 45 ms.
  */
 export const MAX_EDITS = 4_000;
 

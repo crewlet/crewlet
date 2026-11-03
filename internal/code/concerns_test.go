@@ -1,6 +1,7 @@
 package code_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -112,6 +114,9 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 			code.ReasonChangesRequested, nil},
 		"conflicted": {func(r *code.ChangeRouting) { r.Conflicted = true }, code.ReasonConflicted, nil},
 		"merged":     {func(r *code.ChangeRouting) { r.Merged = true }, code.ReasonMerged, nil},
+		"merged, its work item not closed": {func(r *code.ChangeRouting) {
+			r.Merged, r.NotClosed = true, "ENG-7 is a jira work item"
+		}, code.ReasonMerged, []string{"e:merged"}},
 		"review submitted": {func(r *code.ChangeRouting) { r.Verdict = code.VerdictApprove },
 			code.ReasonReviewSubmitted, nil},
 		"checks failed": {func(r *code.ChangeRouting) { r.ChecksFailed = true }, code.ReasonChecksFailed, nil},
@@ -337,23 +342,29 @@ func TestAPushThatMovesNoChangeConcernsNobody(t *testing.T) {
 	}
 }
 
-// A LANDING IS MADE BY WHOEVER PUSHED THE TIP ITS HOME FOUND: a change whose
-// target is moved PAST its head — an author's merge commit pushed onto it, the
-// common agent flow — is merged by no push's own apply, since the target is
-// not at the head; its home finds the head in the tip and records the landing.
-// That push merged it, so the landing names its pusher as the actor: a seat
-// that merged its own change hears nothing of it while the change's other
-// author is told `merged`, and a person who merged it is named among the
-// routing's persons. The push is told from the others of its record — up to
-// 64 unrelated clients share one — by its applied command setting the target
-// to that tip: a push of the same record that set another branch to the same
-// commit, or whose own command on the target was refused, did not.
+// A LANDING IS MADE BY THE PUSH THAT BROUGHT ITS HEAD IN: a change whose
+// target is moved PAST its head — an author's merge commit pushed onto it,
+// the common agent flow — is merged by no push's own apply, since the target
+// is not at the head; its home finds the head in the tip, walks the target's
+// moves for the push after which the target held it, and records the landing
+// naming that push. Its pusher is the landing's actor: a seat that merged its
+// own change hears nothing of it while the change's other author is told
+// `merged`, and a person who merged it is named among the routing's persons —
+// and that holds when somebody else pushed on top of the merge before the
+// home read the target, in the merge's own group-commit record or in a later
+// one, so the push that moved the target LAST merged nothing. The committer
+// holds the push named to the rows: one whose applied command moved no
+// target, one recorded before the change's head revision (whose head no
+// earlier move brought in as this change's), or none at all names nobody,
+// and every author is told.
 //
-// Mutation: name nobody as the landing's actor, and dev is told of its own
-// merge and founder is named nowhere; take the first push of the record, or
-// one whose command set another ref or was refused, and the bystander is
-// named as the merger.
-func TestALandingIsMadeByWhoeverPushedTheTipItsHomeFound(t *testing.T) {
+// Mutation: name the pusher of the push that set the target to the tip the
+// landing found (the record the target's row says last moved it, matching
+// `c.New == tip`) → both pushed-on cases name cto, and dev is told of its own
+// merge; drop the check that the push moved the target applied → the cases
+// naming a push of another branch and a refused push name cto; drop the
+// revision's bound → the merge before the revision names dev.
+func TestALandingIsMadeByThePushThatBroughtItsHeadIn(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	c, _ := committerOn(t, n, n.pub)
@@ -362,53 +373,121 @@ func TestALandingIsMadeByWhoeverPushedTheTipItsHomeFound(t *testing.T) {
 		e.Principal = who
 		return e
 	}
-	refused := code.Command{Ref: mainRef, Old: oidOf("A"), New: oidOf("M"), Result: code.ResultNG,
+	refused := code.Command{Ref: mainRef, Old: oidOf("A"), New: oidOf("M1"), Result: code.ResultNG,
 		Reason: code.RefusalNotPermitted}
+	// records is how a case writes its history: push appends one push
+	// record of its entries, and revise the change's revision 2 (B → B2).
+	type records struct {
+		push   func(entries ...code.PushEntry) statelog.Position
+		revise func()
+	}
 	for _, tc := range []struct {
 		name, repo string
-		// record is the push record that moves main to M, past the change's
-		// head B2, given two push ids in increasing order.
-		record func(first, second string) []code.PushEntry
+		// merged records the case's pushes onto main past the head B2 and
+		// answers the push the home names as the merger, where it names
+		// one, its record, and the tip the home found.
+		merged func(r records) (named string, at statelog.Position, tip string)
 		actor  string
 		person bool
 		heard  []string
 	}{
 		{
 			// The seat dev, which owns the change, pushes the merge commit;
-			// the person on harness, an author since it pushed revision 2,
-			// set release to M earlier in the same record.
-			name: "a seat's own merge", repo: "web", actor: "dev", heard: []string{"harness:merged"},
-			record: func(first, second string) []code.PushEntry {
-				return []code.PushEntry{
-					entry(first, set(releaseRef, oidOf("R"), oidOf("M"))),
-					pushedBy(dev, second, set(mainRef, oidOf("A"), oidOf("M"))),
-				}
+			// cto pushes on top of it in the same record, and the person on
+			// harness, an author since it pushed revision 2, set release to
+			// M1 earlier in it.
+			name: "a seat's merge pushed on within its record", repo: "web", actor: "dev",
+			heard: []string{"harness:merged"},
+			merged: func(r records) (string, statelog.Position, string) {
+				r.revise()
+				merge := uuid.Must(uuid.NewV7()).String()
+				at := r.push(entry(uuid.Must(uuid.NewV7()).String(), set(releaseRef, oidOf("R"), oidOf("M1"))),
+					pushedBy(dev, merge, set(mainRef, oidOf("A"), oidOf("M1"))),
+					pushedBy(cto, uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("M1"), oidOf("M2"))))
+				return merge, at, oidOf("M2")
+			},
+		},
+		{
+			name: "a seat's merge pushed on in a later record", repo: "app", actor: "dev",
+			heard: []string{"harness:merged"},
+			merged: func(r records) (string, statelog.Position, string) {
+				r.revise()
+				merge := uuid.Must(uuid.NewV7()).String()
+				at := r.push(pushedBy(dev, merge, set(mainRef, oidOf("A"), oidOf("M1"))))
+				r.push(pushedBy(cto, uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("M1"), oidOf("M2"))))
+				return merge, at, oidOf("M2")
 			},
 		},
 		{
 			// ada, the person on founder and no author, pushes the merge
-			// commit; the seat cto, later in the record, set release to M
+			// commit; the seat cto, later in the record, set release to M1
 			// and was refused main.
 			name: "a person's merge", repo: "api", actor: "founder", person: true,
 			heard: []string{"dev:merged", "harness:merged"},
-			record: func(first, second string) []code.PushEntry {
-				return []code.PushEntry{
-					pushedBy(ada, first, set(mainRef, oidOf("A"), oidOf("M"))),
-					pushedBy(cto, second, set(releaseRef, oidOf("R"), oidOf("M")), refused),
-				}
+			merged: func(r records) (string, statelog.Position, string) {
+				r.revise()
+				merge := uuid.Must(uuid.NewV7()).String()
+				at := r.push(pushedBy(ada, merge, set(mainRef, oidOf("A"), oidOf("M1"))),
+					pushedBy(cto, uuid.Must(uuid.NewV7()).String(), set(releaseRef, oidOf("R"), oidOf("M1")),
+						refused))
+				return merge, at, oidOf("M1")
+			},
+		},
+		{
+			name: "a push of another branch named", repo: "cli", heard: []string{"dev:merged", "harness:merged"},
+			merged: func(r records) (string, statelog.Position, string) {
+				r.revise()
+				other := uuid.Must(uuid.NewV7()).String()
+				at := r.push(pushedBy(cto, other, set(releaseRef, oidOf("R"), oidOf("M1"))),
+					pushedBy(dev, uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("M1"))))
+				return other, at, oidOf("M1")
+			},
+		},
+		{
+			name: "a push refused the target named", repo: "docs", heard: []string{"dev:merged", "harness:merged"},
+			merged: func(r records) (string, statelog.Position, string) {
+				r.revise()
+				refusedPush := uuid.Must(uuid.NewV7()).String()
+				at := r.push(pushedBy(cto, refusedPush, set(releaseRef, oidOf("R"), oidOf("M1")), refused),
+					pushedBy(dev, uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("M1"))))
+				return refusedPush, at, oidOf("M1")
+			},
+		},
+		{
+			name: "a merge before the head's revision named", repo: "ops",
+			heard: []string{"dev:merged", "harness:merged"},
+			merged: func(r records) (string, statelog.Position, string) {
+				merge := uuid.Must(uuid.NewV7()).String()
+				at := r.push(pushedBy(dev, merge, set(mainRef, oidOf("A"), oidOf("M1"))))
+				r.revise()
+				return merge, at, oidOf("M1")
+			},
+		},
+		{
+			name: "no push named", repo: "lib", heard: []string{"dev:merged", "harness:merged"},
+			merged: func(r records) (string, statelog.Position, string) {
+				r.revise()
+				r.push(pushedBy(dev, uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("M1"))))
+				return "", statelog.Position{}, oidOf("M1")
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo, change := discussed(t, n, tc.repo)
-			n.revise(repo, "B", "B2")
-			first, second := uuid.Must(uuid.NewV7()).String(), uuid.Must(uuid.NewV7()).String()
-			if pushed := n.push(repo, tc.record(first, second)...); len(routingAt(t, n, pushed.Position)) != 0 {
-				t.Fatalf("the push of a merge commit past the head routes %+v, want nothing: no push's own "+
-					"apply sees the change merged", routingAt(t, n, pushed.Position))
-			}
-
-			res, err := c.ProposeChange(t.Context(), landing(repo, change, 2, oidOf("B2"), mainRef, oidOf("M")))
+			named, at, tip := tc.merged(records{
+				push: func(entries ...code.PushEntry) statelog.Position {
+					pushed := n.push(repo, entries...)
+					if routings := routingAt(t, n, pushed.Position); len(routings) != 0 {
+						t.Fatalf("a push past the head routes %+v, want nothing: no push's own apply sees the "+
+							"change merged", routings)
+					}
+					return pushed.Position
+				},
+				revise: func() { n.revise(repo, "B", "B2") },
+			})
+			p := landing(repo, change, 2, oidOf("B2"), mainRef, tip)
+			p.Landed.PushID, p.Landed.PushPosition = named, at
+			res, err := c.ProposeChange(t.Context(), p)
 			if err != nil || res.Outcome != statelog.OutcomeApplied || res.Unchanged {
 				t.Fatalf("the landing answered %+v, %v; want applied", res, err)
 			}
@@ -417,15 +496,55 @@ func TestALandingIsMadeByWhoeverPushedTheTipItsHomeFound(t *testing.T) {
 				t.Fatalf("the landing carries %+v, want one routing of the change, merged", routings)
 			}
 			r := routings[0]
-			if r.Actor != tc.actor || r.Person(tc.actor) != tc.person {
-				t.Errorf("the landing names %q as its actor (a person: %v), want %q (a person: %v), who pushed "+
-					"the tip it found", r.Actor, r.Person(tc.actor), tc.actor, tc.person)
+			if r.Actor != tc.actor || (tc.actor != "" && r.Person(tc.actor) != tc.person) {
+				t.Errorf("the landing names %q as its actor (a person: %v), want %q (a person: %v), who made the "+
+					"push that brought the head in", r.Actor, r.Person(r.Actor), tc.actor, tc.person)
 			}
 			if got := heard(code.Concerns(routings)); !slices.Equal(got, tc.heard) {
 				t.Errorf("the landing tells %v, want %v: the change's authors but whoever merged it", got,
 					tc.heard)
 			}
 		})
+	}
+}
+
+// A LANDING NAMING A PUSH IS HELD TO ITS SHAPE: a push id with no position, a
+// position with no push id, one on another log, or an id that is no push id
+// is refused before anything is decided, each naming what it lacks — a home
+// sends the push it found whole, or none.
+//
+// Mutation: drop any arm of the landing's push check in validFields → its
+// case is accepted, or refused by a later arm for what it does not lack.
+func TestALandingNamingAPushIsHeldToItsShape(t *testing.T) {
+	t.Parallel()
+	id := uuid.Must(uuid.NewV7()).String()
+	at := statelog.Position{Stream: topics.CodeLogStream, Seq: 7}
+	for _, tc := range []struct {
+		name, why string
+		set       func(l *code.ChangeLanded)
+	}{
+		{"an id with no position", "named at no position", func(l *code.ChangeLanded) { l.PushID = id }},
+		{"a position with no id", "landed.push_id", func(l *code.ChangeLanded) { l.PushPosition = at }},
+		{"a position on another log", "another log", func(l *code.ChangeLanded) {
+			l.PushID, l.PushPosition = id, statelog.Position{Stream: topics.ChatLogStream, Seq: 7}
+		}},
+		{"an id that is no push id", "is not a push id", func(l *code.ChangeLanded) {
+			l.PushID, l.PushPosition = "push-1", at
+		}},
+	} {
+		p := landing("01920000-0000-7000-8000-00000000000a", "01920000-0000-7000-8000-00000000000b", 1,
+			oidOf("B"), mainRef, oidOf("M"))
+		tc.set(p.Landed)
+		if err := p.Validate(); !errors.Is(err, code.ErrInvalidProposal) || !strings.Contains(err.Error(), tc.why) {
+			t.Errorf("%s: a landing naming its push so validates %v, want refused invalid for %q", tc.name, err,
+				tc.why)
+		}
+	}
+	p := landing("01920000-0000-7000-8000-00000000000a", "01920000-0000-7000-8000-00000000000b", 1,
+		oidOf("B"), mainRef, oidOf("M"))
+	p.Landed.PushID, p.Landed.PushPosition = id, at
+	if err := p.Validate(); err != nil {
+		t.Errorf("a landing naming its push whole validates %v, want accepted", err)
 	}
 }
 

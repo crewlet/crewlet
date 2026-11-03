@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY CHANGE TOOL NAMES THE ACCESS IT NEEDS: the one table of what each
@@ -116,6 +117,24 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 				name, need, changeToolNeeds[name])
 		case need >= code.AccessWrite:
 			t.Errorf("belowWriteNeeds names %s at %s, which no tier below write reaches", name, need)
+		}
+	}
+}
+
+// EVERY ID create_work_item MINTS IS ONE A LISTING TAKES AS NAMED: the code
+// tools list a Worklet item's changes by its id with no read of the tracker
+// only where worklet.IsTaskID takes the id, so an id minted in another
+// spelling would cost every such listing the read it is spared.
+//
+// Mutation: createdTaskID spelling its uuid in upper case → red.
+func TestACreatedItemsIDIsOneAListingTakesAsNamed(t *testing.T) {
+	t.Parallel()
+	for project, args := range map[string]map[string]any{
+		"ENG": {"title": "the follow-up", "project": "ENG"},
+		"OPS": {"title": "another item", "project": "OPS"},
+	} {
+		if id := createdTaskID(seatInATurn(), CreateWorkItemTool, project, args); !worklet.IsTaskID(id) {
+			t.Errorf("create_work_item mints %q, which a listing resolves rather than taking as named", id)
 		}
 	}
 }

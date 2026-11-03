@@ -373,7 +373,11 @@
 // them, which bounds its walk to what moved since; resumed, it walks the whole
 // history. A copy whose objects/ still holds the begin's inputs would hide
 // every object the rescue must save, so a rescue over one answers busy and
-// the next pass syncs again (cache.ErrInputsLeaving). The commit's one
+// the next pass syncs again (cache.ErrInputsLeaving); and so does every pass —
+// a scan's, a compaction's, a publication's, a commit's read of its dropping
+// packs — whose copy a swap replaced after its sync pinned it, which the swap
+// left no packs to read (cache.ErrSuperseded): planned over none, a weekly
+// scan would judge clean a repository it never weighed. The commit's one
 // precondition is its expunge, open at its epoch, so no push starves it. Its
 // crash points are codefault.ExpungePath: a cycle stopped at any of them
 // leaves nothing, an expunge open — which the next pass, on whichever node

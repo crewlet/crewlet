@@ -35,17 +35,7 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import {
-  Button,
-  Callout,
-  Disclosure,
-  Input,
-  Select,
-  Skeleton,
-  Stack,
-  Tag,
-  Textarea,
-} from "@crewlethq/ui";
+import { Button, Disclosure, Input, Select, Skeleton, Stack, Tag, Textarea } from "@crewlethq/ui";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useParam } from "~/app/router.tsx";
 import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
@@ -83,7 +73,8 @@ import {
   partMovedBy,
   revisionInputs,
   useAskAgainWhenMoved,
-  useChangePart,
+  usePagedComments,
+  usePagedFindings,
 } from "./reads.ts";
 
 /** A whole number from 1 off the address, or null. */
@@ -132,8 +123,8 @@ export function Files({
   const [fileParam, setFile] = useParam("file", "", "filter");
   const [layout, setLayout] = useParam("layout", "unified", "filter");
   const [thread] = useParam("thread", "", "filter");
-  const comments = useChangePart(change, "comments");
-  const threadRoot = (comments.data?.comments ?? []).find((c) => c.id === thread && c.anchor);
+  const comments = usePagedComments(change);
+  const threadRoot = comments.items.find((c) => c.id === thread && c.anchor);
   // A THREAD NAMED BY THE ADDRESS opens the file and the revision it is on,
   // where the address names neither.
   const rev = Math.min(
@@ -171,13 +162,27 @@ export function Files({
   );
   // Every page the reader holds is asked again: a moved input is a new listing.
   useAskAgainWhenMoved(diffMoved, true, pagedFiles.refresh);
-  const findings = useChangePart(
+  const findings = usePagedFindings(
     change,
-    "findings",
-    { revision: rev },
-    true,
+    rev,
     `${partMovedBy(change, "findings")}/${revisionInputs(rows, rev)}`,
   );
+  // WHERE EACH FINDING SITS ON THE REVISION READ, from every page loaded: each
+  // page places its own findings.
+  const placed = useMemo(
+    () => Object.assign({}, ...findings.answers.map((a) => a.placed ?? {})),
+    [findings.answers],
+  );
+  // THE NEXT PAGE OF EACH PART THAT HAS ONE, at one press: a line's findings
+  // and its threads are drawn together, so one read further than the other
+  // would leave a line half drawn.
+  const loadMoreSaid = () => {
+    if (findings.more) findings.next();
+    if (comments.more) comments.next();
+  };
+  const pagingSaid = findings.paging || comments.paging;
+  // A PAGE THAT FAILED is said beside the press that asks it again.
+  const saidPageError = findings.pageError ?? comments.pageError;
   // A FINDING IS DRAFTED ON THE HEAD, read whole: the lines a review of the
   // head judges, never an interdiff's or an earlier revision's.
   const drafting = rev === change.revision && since === null && changeLive(change.state);
@@ -228,12 +233,17 @@ export function Files({
           </Tag>
         )}
       </div>
-      {(findings.data?.next || comments.data?.next) && (
-        <Callout variant="neutral">
-          More findings and comments were raised on this change than one page holds: the newest are
-          neither drawn on their lines here nor counted as outdated.
-        </Callout>
+      {(findings.more || comments.more) && (
+        <Button
+          variant="secondary"
+          onClick={loadMoreSaid}
+          disabled={pagingSaid}
+          loading={pagingSaid}
+        >
+          Load more findings and comments
+        </Button>
       )}
+      {saidPageError && <PageFailed error={saidPageError} />}
       {files.loading && !files.data && (
         <Skeleton variant="text" rows={4} label="Loading the files" />
       )}
@@ -293,9 +303,9 @@ export function Files({
               path={file}
               entry={listed.find((f) => f.path === file)}
               layout={layout === "split" ? "split" : "unified"}
-              findings={findings.data?.findings ?? []}
-              placed={findings.data?.placed ?? {}}
-              comments={comments.data?.comments ?? []}
+              findings={findings.items}
+              placed={placed}
+              comments={comments.items}
               drafts={drafting ? drafts : null}
               thread={thread}
               moved={diffMoved}
@@ -553,7 +563,7 @@ function FindingNote({
       {where && (
         <p className="muted mono">
           {finding.path}:{finding.line_start}
-          {finding.line_end !== finding.line_start ? `–${finding.line_end}` : ""} — {where}
+          {finding.line_end !== finding.line_start ? `–${finding.line_end}` : ""} · {where}
         </p>
       )}
       {finding.body && <div className="prose md">{renderMarkdown(finding.body)}</div>}

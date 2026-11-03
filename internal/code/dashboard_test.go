@@ -245,6 +245,25 @@ func TestTheDashboardKnowsEveryNeedOfAListingOfChanges(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD NARROWS A LISTING OF CHANGES TO A WINDOW IN THE ENGINE'S
+// WORDS, every one of them.
+//
+// Code › Changes offers `CHANGE_WINDOWS` (`contract/code.ts`) as the `window`
+// its listing narrows to — the changes that moved within the last day, week or
+// month. A window the engine grew that the list lacks is a listing nobody can
+// ask for; one the list keeps that the engine dropped is a choice refused
+// `bad_params` on every press.
+//
+// Mutation: drop a window from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardKnowsEveryWindowOfAListingOfChanges(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "CHANGE_WINDOWS"), spelledOut(code.ChangeWindows())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CHANGE_WINDOWS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
 // THE DASHBOARD KNOWS EVERY PRECONDITION A CHANGE'S READINESS JUDGES, in the
 // engine's order, and every state one stands in.
 //
@@ -411,10 +430,9 @@ func TestTheDashboardStatesTheCodePolicysDefaults(t *testing.T) {
 // narrower.
 //
 // The Files tab asks a blame's lines a range at a time, each range
-// `CODE_MAX_BLAME_LINES` (`contract/code.ts`) wide, and reads a file's earlier
-// lines in steps of the same size: a range wider than [code.MaxBlameLines] is
-// refused by every blame it asks, and a narrower one asks the engine more
-// often than a file's lines need.
+// `CODE_MAX_BLAME_LINES` (`contract/code.ts`) wide, forward and back: a range
+// wider than [code.MaxBlameLines] is refused by every blame it asks, and a
+// narrower one asks the engine more often than a file's lines need.
 //
 // Mutation: change the bound on either side, and this fails.
 func TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers(t *testing.T) {

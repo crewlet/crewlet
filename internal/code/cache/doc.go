@@ -837,6 +837,13 @@
 // pass starts no run on a repository a round holds: woken from inside, it met
 // the round still running and left the copy to its next tick.
 //
+// A repository read without a pause is maintained too. Every linearizable read
+// is a round, and one queued behind another starts as it ends, so such a
+// repository may have no moment between rounds for a pass to find, at a tick or
+// woken. A pass that finds a round holding a repository due keeps its place in
+// the order, and the run starts as that round ends, before the next round starts:
+// neither waits for the other, since the run holds a pin and never the round.
+//
 // # Background work never takes a person's slot
 //
 // The maintainer writes a multi-pack-index with its bitmap — the bitmap
@@ -869,7 +876,10 @@
 // slot of the maintainer's own — because without one every walk git makes
 // over it goes by date, and a push of a commit dated before its parent walks
 // every commit in each of them; the window is the graph's own write rather
-// than the maintainer's queue (maintain.go, GRAPH FIRST).
+// than the maintainer's queue (maintain.go, GRAPH FIRST). A copy read whole with
+// no pack in it — a repository created empty — takes its first pack by a delta
+// or an adoption, which wake nothing, so its graph waits for the next tick, at
+// most [MidxDebounce].
 //
 // And never a step the node's memory cannot hold. Every git process the cache
 // runs over a whole repository holds memory in proportion to its objects —

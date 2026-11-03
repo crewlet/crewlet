@@ -496,7 +496,13 @@ the same operation, so the same call made again is the same close, and the
 tracker's write, so it is decided as `update_work_item` is: a person who does
 not use the tracker has the change merged and the item left as it was. A
 close that fails or is refused leaves the change merged and says why
-(`merged; ENG-42 not closed: …`), and a queued change's landing closes it. `override_reason` is a
+(`merged; ENG-42 not closed: …`). A queued change's landing closes it as
+whoever queued it, once the landing has applied: the close stays owed on the
+queue's rows until it is made, so a home that stops or a tracker that does not
+answer delays it to the next turn rather than losing it, and a close that will
+never be made (a vendor's item, a queuer who may no longer update it, an item
+Worklet no longer holds or will not set done) is told
+to the change's authors and the queuer under `merged`. `override_reason` is a
 person's reason to merge past the gate, merged directly and recorded on the
 change; a seat cannot override.
 
@@ -527,9 +533,12 @@ engine's answer:
 A refusal is said beside the controls in words of its own: a head that moved
 ("somebody pushed to it since you loaded it"), a target that moved under every
 rebuild of the merge, a change that does not merge cleanly onto the target's
-tip, a full queue; and in the engine's own words where those say more — a gate
-the change does not meet yet (`not_ready`), which sends you to the change's
-readiness for every unmet condition and who clears it, or why you may not.
+tip, a full queue; and in the engine's words, written for a person, where only
+the engine knows what to say — a gate the change does not meet yet
+(`not_ready`), named by what it still waits for and who can move it forward;
+a merge that would delete a branch a protection rule keeps, or one you may
+not delete; a repository at the most it may hold; and a merge asked for
+somebody who may not make it.
 
 ## Protecting a branch
 
@@ -568,9 +577,16 @@ before it lands ([The merge queue](../concepts/code-host.md#the-merge-queue)),
 and `main`'s tip is checked again once it lands, `code_green` advancing on
 green ([From a push to a green branch](../concepts/code-host.md#from-a-push-to-a-green-branch)).
 
-**Settings › Code** lists every protected repository, each rule with what it
-lets a push do and what its gate asks, and says where the repository's rules
-are set — the company document, or the code tools. A repository's own page
+**Settings › Code** lists every protected repository, a page at a time with
+**Load more** — the engine's own listing of them, `GET
+/code/repos?protected=true`, which reads an index of the protected
+repositories alone — each rule with what it lets a push do and, once its fold
+is opened, what its gate asks and **who set it and when**: the seat, the
+person or the credential whose request last changed the rule, or the company
+document for a declared one, and when that change landed. A change to
+something else (the description, another rule) leaves a rule naming whoever
+last set it. The card also says where the repository's rules are set: the
+company document, or the code tools. A repository's own page
 shows the same under its **Settings** tab. A seat may tighten a gate and never
 loosen it ([Who may change a
 protection](../concepts/code-host.md#who-may-change-a-protection)); every
@@ -864,7 +880,10 @@ Press an attempt to open it: what it was checking (a change's head, a queue's
 candidate, a branch's tip, a landing bisected), the commit and branch, how
 long it ran, its exit code and why it ended; its **failures**, each
 `path:line` a link into the diff it was checked on — the comparison of its
-base and its commit, opened on that file; its **tail**; and **Read its log**,
+base and its commit, opened on that file with the failing line marked and
+scrolled to (where the line is outside what the diff changes, the page says
+so and offers the file at the attempt's commit, opened on that line; an
+attempt that records no base opens the file there directly); its **tail**; and **Read its log**,
 which reads the log a failed run kept a page at a time, only when you ask. A
 check measures durations and exit codes, never tokens: it runs no model.
 
