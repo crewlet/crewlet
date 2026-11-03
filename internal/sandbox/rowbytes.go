@@ -163,10 +163,19 @@ const (
 	// ([PendingRun.AudienceHandles]). TWO HUNDRED AND FIFTY-SIX: a `team`
 	// audience is every person in the asking seat's unit, which nothing else
 	// bounds, and a question put to more people than that is put to nobody in
-	// particular. The resolution names the nearest first — the requester,
-	// the manager, a unit's lead before its members — so the seats past it
-	// are the ones furthest from the question, and they still see it on the
-	// board; it is just not listed as theirs.
+	// particular. Every other audience is one or two seats — the requester,
+	// the manager — and a `team` one is resolved as the unit's lead first and
+	// then its members in the chart's order, so a unit past the bound keeps
+	// its lead and its first members.
+	//
+	// WHAT A SEAT PAST IT LOSES is being the question's audience: the list is
+	// what the board shows a question's body to, and what puts it in a
+	// person's own "waiting on me". A member past the bound with no reach of
+	// their own into the asking seat — its lead's, or an admin's, who are
+	// shown every question of it — sees the run with its question, its
+	// context and its decision withheld, and is not asked. Who may ANSWER is
+	// unchanged: an answer is authorized on the seat and its requester, never
+	// on this list.
 	MaxAudienceHandles = 256
 )
 

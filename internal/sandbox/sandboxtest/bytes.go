@@ -44,7 +44,7 @@ var bytesCases = []struct {
 	{"AnAnswerPastItsShareIsRefused", testAnAnswerPastItsShareIsRefused},
 	{"AHeldCallPastItsShareIsRefused", testAHeldCallPastItsShareIsRefused},
 	{"ANotePastItsBoundIsRefused", testANotePastItsBoundIsRefused},
-	{"AQuestionIsPutToTheNearestOfItsAudience", testAQuestionIsPutToTheNearestOfItsAudience},
+	{"AQuestionIsPutToTheFirstOfItsAudience", testAQuestionIsPutToTheFirstOfItsAudience},
 }
 
 // bytesRawCases are the cases that read the raw record.
@@ -764,15 +764,16 @@ func testANotePastItsBoundIsRefused(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// A QUESTION IS PUT TO THE NEAREST OF ITS AUDIENCE. A `team` audience is every
+// A QUESTION IS PUT TO THE FIRST OF ITS AUDIENCE. A `team` audience is every
 // person in the asking seat's unit, which nothing else bounds, and the row
 // carries the seats a question is put to; the park holds them to their bound
-// (sandbox's MaxAudienceHandles) and keeps the first, which the resolution
-// names nearest first.
+// (sandbox's MaxAudienceHandles) and keeps the first, in the order the
+// resolution names them — the unit's lead, then its members in the chart's
+// order.
 //
 // Mutation: park the question on every seat it resolved to, and a unit of
 // thousands rides the row.
-func testAQuestionIsPutToTheNearestOfItsAudience(t *testing.T, s sandbox.PendingStore) {
+func testAQuestionIsPutToTheFirstOfItsAudience(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bytes-audience")
 	mustLaunched(t, s, r)
@@ -788,7 +789,7 @@ func testAQuestionIsPutToTheNearestOfItsAudience(t *testing.T, s sandbox.Pending
 	got := mustGet(t, s, r.TurnID).AudienceHandles
 	if len(got) != sandbox.MaxAudienceHandles || got[0] != handles[0] ||
 		got[len(got)-1] != handles[sandbox.MaxAudienceHandles-1] {
-		t.Errorf("the question is put to %d seats, %v first; want the nearest %d", len(got), got[:1],
+		t.Errorf("the question is put to %d seats, %v first; want the first %d", len(got), got[:1],
 			sandbox.MaxAudienceHandles)
 	}
 }
