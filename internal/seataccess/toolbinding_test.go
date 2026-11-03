@@ -10,6 +10,7 @@ import (
 	_ "github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
@@ -95,10 +96,11 @@ func TestTheToolStateComesFromTheResolvedBinding(t *testing.T) {
 func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 	t.Parallel()
 	vendors := map[string][]string{
-		"datadog":    datadog.CredentialKeys,
-		"gitlab":     gitlab.CredentialKeys,
-		"github":     github.CredentialKeys,
-		"cloudflare": cloudflare.CredentialKeys,
+		"datadog":      datadog.CredentialKeys,
+		"gitlab":       gitlab.CredentialKeys,
+		"github":       github.CredentialKeys,
+		"cloudflare":   cloudflare.CredentialKeys,
+		"google_cloud": googlecloud.CredentialKeys,
 	}
 	for _, b := range catalogue.Bindings() {
 		keys, ok := vendors[b.Vendor]
@@ -174,7 +176,7 @@ func TestEveryLaneAServerReadsNamesItsEntry(t *testing.T) {
 		seataccess.LaneCloudflare: "cloudflare", seataccess.LaneGitLab: "gitlab",
 		seataccess.LaneSlack: "slack", seataccess.LaneMattermost: "mattermost",
 		seataccess.LaneJira: "atlassian", seataccess.LaneConfluence: "atlassian",
-		seataccess.LaneExpo: "",
+		seataccess.LaneExpo: "", seataccess.LaneGoogleCloud: "google-cloud-monitoring",
 	} {
 		if got := seataccess.ToolServerOf(&config.Company{}, lane); got != want {
 			t.Errorf("%s: %q, want %q", lane, got, want)

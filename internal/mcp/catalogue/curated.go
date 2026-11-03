@@ -26,6 +26,9 @@ var (
 	// Cloudflare's remote server reads an account API token as a bearer
 	// header, and has no local counterpart this build binds.
 	cloudflareKeys = []SeatKey{{Field: "API_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
+	// Google's managed servers read a short-lived OAuth access token as a
+	// bearer header: each agent's own, issued at use.
+	googleCloudKeys = []SeatKey{{Field: "ACCESS_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
 	// glab reads GITLAB_TOKEN, the community GitLab servers
 	// GITLAB_PERSONAL_ACCESS_TOKEN: one integration, two spellings.
 	glabKeys          = []SeatKey{{Field: "TOKEN", Env: "GITLAB_TOKEN", Header: "Private-Token"}}
@@ -38,6 +41,28 @@ var (
 )
 
 func yes() *bool { v := true; return &v }
+
+// googleCloud is one of Google's managed remote MCP servers: Streamable HTTP
+// at the product's own host, read with the agent's own issued access token,
+// and gated by the product's API and MCP Tool User on the project.
+func googleCloud(name, title, host, path, about string) Entry {
+	return Entry{
+		ID: name, Name: name, Title: title, Vendor: "google-cloud",
+		Description: about + " Through Google's own server.",
+		Transport:   TransportHTTP, URL: "https://" + host + path,
+		Headers: []Input{{Name: "Authorization", Required: true, Secret: true, FromIntegration: true,
+			Format: "Bearer <access token>",
+			Description: "A Google OAuth access token: each agent's own, issued for an hour at a time, " +
+				"where the Google Cloud integration is on."}},
+		Auth:        []AuthMethod{AuthIntegration, AuthHeaders},
+		Integration: "google_cloud",
+		Prerequisite: "The product's API is enabled on the project, and the agent holds MCP Tool User " +
+			"there, which every Google Cloud level grants.",
+		Docs:      "https://docs.cloud.google.com/mcp/supported-products",
+		ReadAt:    "2026-11-03",
+		recognise: []recognition{{match: hostIs(host), keys: googleCloudKeys}},
+	}
+}
 
 // curated is the table, built once.
 var curated = sync.OnceValue(func() []Entry {
@@ -167,6 +192,23 @@ var curated = sync.OnceValue(func() []Entry {
 			ReadAt:      "2026-11-01",
 			recognise:   []recognition{{match: hostIs("mcp.cloudflare.com"), keys: cloudflareKeys}},
 		},
+		// THE CONVENTIONAL GOOGLE CLOUD SERVER IS THE FIRST: Monitoring.
+		googleCloud("google-cloud-monitoring", "Cloud Monitoring", "monitoring.googleapis.com", "/mcp",
+			"Metrics, alerting policies, dashboards and uptime checks."),
+		googleCloud("google-cloud-logging", "Cloud Logging", "logging.googleapis.com", "/mcp",
+			"Log entries, log buckets and sinks."),
+		googleCloud("google-cloud-compute", "Compute Engine", "compute.googleapis.com", "/mcp",
+			"VMs, disks, networks, firewall rules and load balancers."),
+		googleCloud("google-cloud-gke", "Google Kubernetes Engine", "container.googleapis.com", "/mcp",
+			"GKE clusters and node pools, and the workloads they run."),
+		googleCloud("google-cloud-run", "Cloud Run", "run.googleapis.com", "/mcp",
+			"Cloud Run services, revisions and jobs."),
+		googleCloud("google-cloud-sql", "Cloud SQL", "sqladmin.googleapis.com", "/mcp",
+			"Cloud SQL instances, databases and backups."),
+		googleCloud("google-cloud-storage", "Cloud Storage", "storage.googleapis.com", "/storage/mcp",
+			"Buckets and the objects in them."),
+		googleCloud("google-cloud-resource-manager", "Resource Manager", "cloudresourcemanager.googleapis.com", "/mcp",
+			"Projects and folders, and their allow policies."),
 		{
 			// OAUTH ONLY, AND NO SEAT BINDING: the server is its own
 			// authorization server (scope mcp:access), and whether it takes an

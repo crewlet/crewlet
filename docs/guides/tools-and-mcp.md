@@ -1362,6 +1362,14 @@ or without egress. `GET /mcp-catalogue` serves it (see the
 | `sentry` | Sentry's remote server | OAuth |
 | `stripe` | Stripe's remote server | OAuth, or an agent API key header |
 | `cloudflare` | The Cloudflare API server | the Cloudflare integration (each agent's own scoped token), OAuth, or an API token header |
+| `google-cloud-monitoring` | Google's Cloud Monitoring server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-logging` | Google's Cloud Logging server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-compute` | Google's Compute Engine server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-gke` | Google's Google Kubernetes Engine server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-run` | Google's Cloud Run server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-sql` | Google's Cloud SQL server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-storage` | Google's Cloud Storage server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-resource-manager` | Google's Resource Manager server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
 | `expo` | Expo's hosted server | OAuth, as the person who signs it in. Each agent's own robot token signs in the EAS CLI instead, through its `sandbox.env` (see [Expo](../integrations/expo.md#the-agents-expo-tools)) |
 | `gitlab` | `glab mcp serve`, one per agent | the GitLab integration |
 | `slack` | `slack-mcp-server` 1.3.0, one per agent | the Slack integration |
@@ -2165,7 +2173,7 @@ mcp_servers:
     shared: false
     url: "https://mcp.example.com/"
     seat_credentials:
-      - kind: atlassian          # atlassian | cloudflare | datadog | expo | github | gitlab | mattermost | slack
+      - kind: atlassian          # atlassian | cloudflare | datadog | expo | github | gitlab | google_cloud | mattermost | slack
         field: EMAIL             # optional: Atlassian's TOKEN or EMAIL; empty is the credential itself
         key: X-Atlassian-User    # the variable (stdio) or header (http) the server reads
       - kind: atlassian
@@ -2183,6 +2191,7 @@ recognition:
 |---|---|---|
 | Datadog's remote server | a `datadoghq.` or `ddog-gov.` host | `DD_APPLICATION_KEY` |
 | The Cloudflare API server | `mcp.cloudflare.com` | `Authorization: Bearer <seat token>` |
+| Google's managed Google Cloud servers | the host of each: `monitoring`, `logging`, `compute`, `container`, `run`, `sqladmin`, `storage` and `cloudresourcemanager`, each `.googleapis.com` | `Authorization: Bearer <the agent's issued access token>` |
 | GitHub's remote server | `api.githubcopilot.com` | `Authorization: Bearer <installation token>` |
 | GitHub's local server | a `github-mcp-server` command or image | `GITHUB_PERSONAL_ACCESS_TOKEN` |
 | `glab mcp serve` | the `glab` command with `mcp` | `GITLAB_TOKEN` |

@@ -46,6 +46,13 @@ const Backend = "google_cloud"
 // which is never sealed.
 const AccessTokenField = "ACCESS_TOKEN"
 
+// CredentialKeys are the keys a seat's access token is read under by a
+// recognised tool server: Google's managed MCP servers read it as a bearer
+// Authorization header.
+//
+//nolint:gochecknoglobals // an immutable list, not state
+var CredentialKeys = []string{"Authorization"}
+
 // FederationKeySecret is the sealed name the engine's federation key is kept
 // under.
 const FederationKeySecret = "GOOGLE_CLOUD_FEDERATION_KEY"
