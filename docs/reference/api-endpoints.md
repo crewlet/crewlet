@@ -10558,8 +10558,12 @@ held back, unstarted, for a credential a
 [provisioning pass mints for that seat](../guides/tools-and-mcp.md#shared-vs-per-role-servers)
 and has not sealed yet, where nothing that pass last reported says it cannot —
 neither started nor failed, since nothing is wrong and each starts once the
-seal reaches its node. One whose pass reports that a person must act first
-(its own credential missing or refused, an approval outstanding, the seat's
+seal reaches its node. So does an instance whose token the engine issues at
+use while its integration is still settling it (a grant the vendor is still
+applying): nobody has to act and nothing is sealed, so its node asks for the
+token again on the restart schedule (15 seconds, doubling to 5 minutes) and
+starts the instance once it is issued. One whose pass reports that a person
+must act first (its own credential missing or refused, an approval outstanding, the seat's
 account failed or switched off, or the integration being disconnected) counts
 as `failed`, judged again at every heartbeat, since a wait with no end is a
 failure somebody has to act on:

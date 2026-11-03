@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -13,7 +14,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -31,12 +34,14 @@ var errFakeWaiting = errors.New("fakecloud: the agent's account is not made yet"
 // issuer the shared paths must serve without a branch for its kind. It issues
 // for the seats in ready, holding each seat's token while it is good for the
 // life asked, waits for every other agent, and refuses every issue with
-// refuse while it is set.
+// refuse while it is set. With settles, an agent not ready waits on the fake
+// itself settling its grant rather than on a person's step.
 type fakeIssuer struct {
 	mu      sync.Mutex
 	ready   map[string]bool
 	refuse  error
 	passes  bool
+	settles bool
 	renewIn time.Duration
 	issues  int
 	held    map[string]issuedToken
@@ -67,6 +72,8 @@ func (f *fakeIssuer) issuing(_ *Company, seat *org.Role, _ *config.Resolver) iss
 		switch {
 		case f.refuse != nil:
 			return issuedToken{}, f.refuse
+		case !f.ready[handle] && f.settles:
+			return issuedToken{}, fmt.Errorf("fakecloud: the agent's grant is still being applied: %w", errIssueSettling)
 		case !f.ready[handle]:
 			return issuedToken{}, errFakeWaiting
 		}
@@ -82,7 +89,10 @@ func (f *fakeIssuer) issuing(_ *Company, seat *org.Role, _ *config.Resolver) iss
 }
 
 func (f *fakeIssuer) refusal(err error) (string, bool) {
-	if errors.Is(err, errFakeWaiting) {
+	switch {
+	case errors.Is(err, errIssueSettling):
+		return "", true
+	case errors.Is(err, errFakeWaiting):
 		return "", false
 	}
 	return err.Error(), f.passes
@@ -236,8 +246,9 @@ func TestEveryIssuerMeetsTheContract(t *testing.T) {
 				}
 				m := credentialGap(r.waiting, []string{name}, env,
 					&seatMint{kinds: r.e.mintedFor(r.c, r.waiting), token: tokens})
-				if m == nil || !m.waiting() || tokens.refused() {
-					t.Fatalf("missing = %v, refused = %v: want a wait", m, tokens.refused())
+				if m == nil || !m.waiting() || tokens.refused() || tokens.settling() {
+					t.Fatalf("missing = %v, refused = %v, settling = %v: want a wait on a person's step",
+						m, tokens.refused(), tokens.settling())
 				}
 				says := m.Error()
 				for _, want := range []string{
@@ -260,8 +271,9 @@ func TestEveryIssuerMeetsTheContract(t *testing.T) {
 				}
 				m := credentialGap(r.ready, []string{name}, env,
 					&seatMint{kinds: r.e.mintedFor(r.c, r.ready), token: tokens})
-				if m == nil || m.waiting() || !tokens.refused() {
-					t.Fatalf("missing = %v, refused = %v: want a failure", m, tokens.refused())
+				if m == nil || m.waiting() || !tokens.refused() || tokens.settling() {
+					t.Fatalf("missing = %v, refused = %v, settling = %v: want a failure",
+						m, tokens.refused(), tokens.settling())
 				}
 				says := m.Error()
 				for _, want := range []string{"${" + name + "} could not be issued", r.says, issuer.words().refused} {
@@ -563,5 +575,56 @@ func TestABoxFilesVariableNamesAFileTheBoxHolds(t *testing.T) {
 	}
 	if _, written := waiting.setup[0].Files[issued]; written {
 		t.Error("a file whose token waits was written at launch")
+	}
+}
+
+// A SETTLING ISSUE IS RETRIED UNTIL ITS TOOL GOES LIVE, with no revision, no
+// seal and nobody acting: the integration's own wait clears by itself, so the
+// seat's children ask again on the restart schedule ([seatToken.settling]).
+// Meanwhile the server reads waiting, never failed, and nothing is written at
+// error. Mutation: retry only a refusal, and the server waits for an apply
+// that never comes.
+func TestASettlingIssuersToolGoesLiveOnTheNextRetry(t *testing.T) {
+	logs := captureEngineLogs(t)
+	company, _ := helperCompany(t, false, nil)
+	fake := newFakeIssuer()
+	fake.settles = true
+	company.Org.AgentSeatByHandle("ceo").MCPEnv["tracker"]["SEAT_TOKEN"] = "${" + fake.variable(company, "ceo") + "}"
+	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{}), mcpRetryBase: 50 * time.Millisecond,
+		issuers: []seatIssuer{fake}}
+	e.epoch.current.Store(company)
+	ceo := heldSeatChildren(t, e, "ceo", func() bool { return true })
+
+	e.convergeSeat(t.Context(), ceo, true)
+	readings := e.mcpReadings(t.Context())
+	if len(readings) != 1 || readings[0].state != coord.MCPInstanceWaiting {
+		t.Fatalf("the server while its grant settles reads %+v, want one instance waiting", readings)
+	}
+	ceo.mu.Lock()
+	armed := ceo.retry != nil
+	ceo.mu.Unlock()
+	if !armed {
+		t.Fatal("a settling issue armed no retry, so only an apply would start the server")
+	}
+
+	fake.mu.Lock()
+	fake.ready["ceo"] = true
+	fake.mu.Unlock()
+	for deadline := time.Now().Add(10 * time.Second); !seatChild(ceo).Serving; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the server never went live once its grant settled: %+v", e.mcpReadings(t.Context()))
+		}
+	}
+	logs.mu.Lock()
+	written := logs.buf.String()
+	logs.mu.Unlock()
+	for _, line := range strings.Split(strings.TrimSpace(written), "\n") {
+		if strings.Contains(line, `"level":"ERROR"`) && strings.Contains(line, `"seat":"ceo"`) {
+			t.Errorf("a settling issue was written at error: %s", line)
+		}
+	}
+	if awaiting := logs.records("mcp_server_awaiting_credential", "ceo"); len(awaiting) == 0 ||
+		awaiting[0]["level"] != "INFO" {
+		t.Errorf("mcp_server_awaiting_credential = %v, want the wait said at info", awaiting)
 	}
 }
