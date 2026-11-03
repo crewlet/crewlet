@@ -46,7 +46,7 @@ import (
 // executor and reviewer loop against a scripted model behind the real harness
 // backend, and reads the result off a WebSocket dialled the way the dashboard
 // dials it, then feeds those exact frames through the dashboard's OWN protocol
-// module (the store and the socket, built as static/dashboard/protocol.js).
+// module (the store and the socket, built as static/protocol/protocol.js).
 //
 // It is the only test that can catch the class of bug it was written for. The
 // turn engine emitted NO events at all when this was written: every payload
@@ -1031,13 +1031,13 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 
 // The replay script beside this file, replayScript, drives the dashboard's
 // own protocol module, the store and the socket built as
-// static/dashboard/protocol.js, over the frames this server produced; it is
-// told where that build is through dashboardEnv. The script is named relative
+// static/protocol/protocol.js, over the frames this server produced; it is
+// told where that build is through protocolEnv. The script is named relative
 // to this package's directory, where `go test` runs every test binary by
 // contract, so its path has no depth to count.
 const (
 	replayScript  = "replay.mjs"
-	dashboardEnv  = "CREWLET_DASHBOARD_ROOT"
+	protocolEnv   = "CREWLET_PROTOCOL_ROOT"
 	replayTimeout = 60 * time.Second
 )
 
@@ -1471,7 +1471,7 @@ func pruneRoom(t *testing.T, n *node, b *browser, channelID string) statelog.Pos
 	if err != nil {
 		t.Fatalf("the prune of %s answered a position a read cannot take back: %v", channelID, err)
 	}
-	if err := n.engine.WaitCommitted(t.Context(), at); err != nil {
+	if err := n.engine.WaitReached(t.Context(), at); err != nil {
 		t.Fatalf("waiting for the prune of %s: %v", channelID, err)
 	}
 	return at
@@ -1722,7 +1722,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		t.Fatalf("writing the capture: %v", err)
 	}
 
-	tree := filepath.Join(sourcetree.Root(t), "static", "dashboard")
+	protocol := filepath.Join(sourcetree.Root(t), "static", "protocol")
 
 	runCtx, runCancel := context.WithTimeout(t.Context(), replayTimeout)
 	defer runCancel()
@@ -1735,7 +1735,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		t.Fatalf("writing the chat capture: %v", err)
 	}
 	cmd := exec.CommandContext(runCtx, node, replayScript, path, actPath, chatPath)
-	cmd.Env = append(os.Environ(), dashboardEnv+"="+tree)
+	cmd.Env = append(os.Environ(), protocolEnv+"="+protocol)
 	out, err := cmd.CombinedOutput()
 	if runCtx.Err() != nil {
 		t.Fatalf("the replay did not finish within %s:\n%s", replayTimeout, out)

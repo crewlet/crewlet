@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -24,8 +27,11 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -105,9 +111,11 @@ func attrString(attrs metrics.Attrs) string {
 
 // harness is one node: the pipeline over its stores and a domain of its own.
 type harness struct {
-	t       *testing.T
-	clock   *clock
-	backend *memobj.Backend
+	t     *testing.T
+	clock *clock
+	// backend is what the store writes through, which [harness.stored]
+	// lists.
+	backend objstore.Backend
 	objects *objstore.Store
 	fleet   *memory.Fleet
 	domain  *domainNode
@@ -115,6 +123,12 @@ type harness struct {
 	meter   *meter
 	judged  *judged
 	svc     *artifactupload.Service
+
+	// fillable is the backend a fillable harness fills, nil otherwise.
+	fillable *fillableBackend
+	// bucket is the in-process S3 bucket an s3 harness's store writes to,
+	// which [harness.fill] fills; nil otherwise.
+	bucket *s3fake.Server
 
 	mu     sync.Mutex
 	limits artifacts.Limits
@@ -148,6 +162,15 @@ type options struct {
 
 	// noVendor turns the copying of CDN files off.
 	noVendor bool
+
+	// fillable makes the object store's backend one a case fills
+	// ([harness.fill]).
+	fillable bool
+
+	// s3 makes the object store S3, through the production backend over an
+	// in-process bucket a case fills ([harness.fill]) as a provider with no
+	// room refuses writes.
+	s3 bool
 }
 
 func newHarness(t *testing.T, o options) *harness {
@@ -155,12 +178,26 @@ func newHarness(t *testing.T, o options) *harness {
 	h := &harness{t: t, clock: &clock{t: start}, fleet: memory.NewFleet(),
 		meter:  &meter{counts: map[string]uint64{}, gauges: map[string]float64{}},
 		judged: &judged{}, limits: defaultLimits()}
-	h.backend = memobj.NewAt(h.clock.Now)
-	var backend objstore.Backend = h.backend
-	if o.presign {
-		backend = &signingBackend{Backend: h.backend}
+	mem := memobj.NewAt(h.clock.Now)
+	h.backend = mem
+	switch {
+	case o.presign:
+		h.backend = &signingBackend{Backend: mem}
+	case o.fillable:
+		h.fillable = &fillableBackend{Backend: mem}
+		h.backend = h.fillable
+	case o.s3:
+		h.bucket = s3fake.Start(t, "files")
+		b, err := s3obj.Open(t.Context(), s3obj.Config{
+			Endpoint: h.bucket.URL, Region: "us-east-1", Bucket: "files", PathStyle: true,
+			AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+		})
+		if err != nil {
+			t.Fatalf("opening the S3 fake: %v", err)
+		}
+		h.backend = b
 	}
-	store, err := objstore.NewStoreAt(backend, h.clock.Now)
+	store, err := objstore.NewStoreAt(h.backend, h.clock.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +251,23 @@ func defaultLimits() artifacts.Limits {
 		CompanyBytes: artifacts.DefaultCompanyBytes, Artifacts: artifacts.DefaultArtifacts,
 		DataBytes: artifacts.DefaultDataBytes, DataStoreBytes: artifacts.DefaultDataStoreBytes,
 		PendingBytes: artifacts.DefaultPendingBytes,
+	}
+}
+
+// fill makes a fillable or an s3 harness's bucket full, or makes room in it
+// again: an s3 bucket refuses every write `507 XMinioStorageFull`, as MinIO
+// does at its drives' free-space floor.
+func (h *harness) fill(full bool) {
+	h.t.Helper()
+	switch {
+	case h.fillable != nil:
+		h.fillable.full.Store(full)
+	case h.bucket != nil && full:
+		h.bucket.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+	case h.bucket != nil:
+		h.bucket.Fill(0, "")
+	default:
+		h.t.Fatal("fill on a harness whose store is not fillable")
 	}
 }
 
@@ -428,7 +482,7 @@ type domainNode struct {
 	reader  *artifactsdomain.Reader
 	applier *artifactsdomain.Applier
 	waiter  *waiter
-	verify  *statelog.Verifier
+	verify  *recordseal.Verifier
 
 	mu       sync.Mutex
 	consumed uint64
@@ -487,11 +541,11 @@ func newDomainNode(t *testing.T, clock *clock) *domainNode {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +603,7 @@ func (n *domainNode) drain() {
 			continue
 		}
 		body, verdict := n.verify.Open(payload)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			n.t.Errorf("record %d did not verify: %s", seq, verdict)
 			return
 		}
@@ -629,11 +683,15 @@ func (w *waiter) Committed() statelog.Position {
 	return w.at
 }
 
+// Reached is Committed: this rig moves its position when it applies a record,
+// in one step, so it reaches nothing its commit has not.
+func (w *waiter) Reached() statelog.Position { return w.Committed() }
+
 func (w *waiter) StreamIdentity() error                         { return nil }
 func (w *waiter) Truncated() error                              { return nil }
 func (w *waiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
-func (w *waiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *waiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
 		if w.Committed().Packed() >= p.Packed() {
 			return nil
@@ -654,7 +712,7 @@ func (w *waiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
 }
 
 func (w *waiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statelog.Position) error {
-	return w.WaitCommitted(ctx, p)
+	return w.WaitReached(ctx, p)
 }
 
 // ---- the CDN and the bucket ---------------------------------------------- //
@@ -694,6 +752,31 @@ func (c *fakeCDN) set(path, contentType, body string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.files[path] = cdnFile{contentType: contentType, body: body}
+}
+
+// fillableBackend is the object store's twin as the fleet's own bucket, which
+// a case fills: once full, every put reads its content and is refused as a
+// backend refuses one for room ([objstore.Full]), storing nothing and naming
+// [caseRemedy].
+type fillableBackend struct {
+	*memobj.Backend
+	full atomic.Bool
+}
+
+// caseRemedy is the room a full [fillableBackend] names: a case's own, so a
+// sentence naming it spliced the store's remedy rather than a spelling of the
+// pipeline's own.
+const caseRemedy = "an operator makes room in this case's own bucket"
+
+func (f *fillableBackend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
+	if !f.full.Load() {
+		return f.Backend.Put(ctx, name, r, m)
+	}
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return err
+	}
+	return &objstore.Full{Remedy: caseRemedy, Err: fmt.Errorf(
+		"natsobj: put %s: OBJ_crewlet_files holds as many bytes as it reserves", name)}
 }
 
 // signingBackend is the object store's twin as a bucket whose provider proved

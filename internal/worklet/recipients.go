@@ -1,6 +1,10 @@
 package worklet
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/routing"
+)
 
 // Who hears about a change, and why the answer is TWO functions.
 //
@@ -11,11 +15,22 @@ import "slices"
 // and the wake path call it on a different node minutes later, and get the
 // same answer.
 //
-// [Route] is the post-filter, and it needs two facts a record cannot carry:
-// who the company employs RIGHT NOW, and who made the change. Splitting them
-// is what makes the applier's `tracker_notifications` row a complete record of
-// everyone the change concerned, while the wake goes only to the people still
-// there — and why the parity test can assert that the two surfaces agree.
+// [Route] is the post-filter, and it needs the one fact a record cannot carry:
+// who the company employs RIGHT NOW. Who made the change is on the record, so
+// the applier takes Route's actor step too ([routing.Candidate.Hears]) and
+// leaves only the roster to the wake. That split makes the applier's
+// `tracker_notifications` rows a complete record of everyone the change
+// concerned but its author, while the wake goes only to the people still
+// there — and it is why the parity test can assert that the two surfaces
+// agree.
+//
+// THE RULE BOTH APPLY IS internal/routing's, shared with every native domain:
+// one reason per handle, the first offered; the ordered fallback; the
+// post-filter's five steps. What stays here is what is the tracker's own — its
+// eighteen reasons, the ORDER [Candidates] offers them in, which is their
+// precedence, the one reason that reaches the actor, and WHICH NOTICES START A
+// TURN ([Reason.StartsTurn]): everybody a change concerns is told, by a notice
+// row, and only those it asks something of are woken.
 
 // Reason is why one handle hears about a change.
 type Reason string
@@ -60,6 +75,13 @@ const (
 // role was about to claim: behind `assignee` they were shadowed on the one
 // person most likely to be the subject, and `blocking` — whose only handle IS
 // the blocker's assignee — could never name anybody at all.
+//
+// THE PRECEDENCE IS WRITTEN TWICE, then — here for the surfaces that print and
+// filter by reason, and as the offer order in [Candidates], which is the one
+// the routing obeys — so a test holds the two together:
+// TestEveryKindOffersItsReasonsInTheDeclaredPrecedence walks every kind with
+// a different handle in every field and requires the candidates to come back
+// in this order, so a reordered arm and a reordered list both fail it.
 var Reasons = []Reason{
 	ReasonMention, ReasonPrioritised, ReasonBlocking, ReasonAsked,
 	ReasonAnswered, ReasonAssignee, ReasonUnassigned, ReasonReporter,
@@ -151,47 +173,17 @@ func (r Reason) StartsTurn(asked bool) bool {
 	return false
 }
 
-// Candidate is one handle and why it is a candidate.
-type Candidate struct {
-	Handle string
-	Reason Reason
-
-	// Addressed marks a wake that asks something of its recipient — a
-	// turn that must answer rather than absorb.
-	Addressed bool
-
-	// FallbackOnly marks a candidate kept only when no ordinary one
-	// survives, and FallbackRank orders those among themselves.
-	FallbackOnly bool
-	FallbackRank int
-
-	// InboxOnly marks a candidate written to the inbox and never woken.
-	InboxOnly bool
-
-	// Wakes marks a candidate whose notice starts a turn ([Reason.StartsTurn]).
-	// One that does not is still written to the inbox, and still counts as
-	// somebody who heard about the change when [Route] decides whether a
-	// fallback lead is needed.
-	Wakes bool
-
-	// Task names the task this candidate is about when it is NOT the
-	// subject of the change — which today is the unblocked notice alone.
-	//
-	// It is what makes that notice survive the one-reason-per-handle rule:
-	// the person who closed ENG-1 and owns the ENG-2 it unblocked would
-	// otherwise be deduped under `assignee` for ENG-1 and dropped as the
-	// actor, and would never learn that ENG-2 became workable — which is
-	// the entire feature.
-	Task string
-}
-
 // WakesActor reports the one reason that reaches the person who made the
 // change.
 //
-// An unblocked notice is about somebody ELSE's task becoming workable, so the
-// actor closing their own blocker is exactly who needs to hear it. Every other
-// reason is dropped for the actor, because telling somebody what they just did
-// is noise a model spends a round on.
+// That a task of yours became workable is news whoever wrote the record that
+// says so: the notice is about the task, not about anything its writer did.
+// Its one writer today is the unblocked repair ([Writer.TellUnblocked]),
+// which the engine runs as its node, so the notice never meets its own
+// author; the rule is the reason's, and it keeps the notice reaching its
+// person through any writer that tells them, the person themself included.
+// Every other reason is dropped for the actor, because telling somebody what
+// they just did is noise a model spends a round on.
 func (r Reason) WakesActor() bool { return r == ReasonUnblocked }
 
 // Candidates is every handle a change concerns, in precedence order.
@@ -202,42 +194,27 @@ func (r Reason) WakesActor() bool { return r == ReasonUnblocked }
 // commit leaves no notification row either. Without it a quiet walk would
 // write rows nobody would ever be woken for, and an inbox would fill with
 // changes the company deliberately did not announce.
-func Candidates(n *Notify) []Candidate {
+func Candidates(n *Notify) []routing.Candidate[Reason] {
 	if n == nil {
 		return nil
 	}
 	task := n.Kind.TaskCommit()
 	finishedEdge := n.Snapshot.PrevStatusGroup.Finished() != n.Snapshot.StatusGroup.Finished()
-	wakes := func(reason Reason) bool { return reason.StartsTurn(n.asks(reason)) }
 
-	var out []Candidate
-	// seen is where each handle's one candidate sits, so a later reason
-	// that names the same handle can still decide its wake.
-	seen := map[string]int{}
+	// TOLD UNDER THE FIRST REASON, WOKEN BY ANY: the builder keeps each
+	// handle's first reason and adds every later ordinary reason's wake to
+	// it ([routing.Builder.StartsTurn]), so a stronger fact that starts no
+	// turn never swallows a weaker one that does — the reporter who also
+	// wrote in the thread a reply lands in is told "a task you reported",
+	// and is still woken, because the reply is to something they wrote.
+	b := routing.Builder[Reason]{
+		StartsTurn: func(reason Reason) bool { return reason.StartsTurn(n.asks(reason)) },
+	}
 	add := func(handle string, reason Reason, addressed bool) {
-		if handle == "" {
-			return
-		}
-		// THE FIRST REASON IS WHAT THE HANDLE IS TOLD, AND ANY REASON
-		// WAKES IT. Precedence decides which fact a recipient reads, and
-		// a stronger fact that starts no turn must not swallow a weaker
-		// one that does: the reporter of a task who also wrote in the
-		// thread a reply lands in is told "a task you reported", and is
-		// still woken, because the reply is to something they wrote.
-		if i, ok := seen[handle]; ok {
-			out[i].Wakes = out[i].Wakes || wakes(reason)
-			return
-		}
-		seen[handle] = len(out)
-		out = append(out, Candidate{
-			Handle: handle, Reason: reason, Addressed: addressed,
-			Wakes: wakes(reason),
-		})
+		b.Add(handle, reason, addressed)
 	}
 	addAll := func(handles []string, reason Reason, addressed bool) {
-		for _, h := range handles {
-			add(h, reason, addressed)
-		}
+		b.AddAll(handles, reason, addressed)
 	}
 
 	addAll(n.Mentions, ReasonMention, true)
@@ -283,18 +260,19 @@ func Candidates(n *Notify) []Candidate {
 	if n.Kind == ChangeComment {
 		addAll(n.Snapshot.ThreadParticipants, ReasonThread, false)
 	}
-	// THE UNBLOCKED NOTICES ARE NOT DEDUPED AGAINST THE REST, because they
-	// are about OTHER tasks: one commit legitimately tells one person both
-	// "your task is done" and "this other one is now workable", and the
-	// second is the only wake that reaches the person who made the change.
+	// THE UNBLOCKED NOTICE TAKES ITS PLACE LIKE ANY OTHER REASON, because its
+	// record is one of its own: [Writer.TellUnblocked] — the repair, and the
+	// only writer of `Snapshot.Unblocked` — publishes a relations commit on
+	// the DEPENDENT naming its assignee and nobody else, so no earlier arm
+	// can claim the handle first. A notice about another task on a record
+	// about this one would be a second notice to one person on one record,
+	// which neither the notice row (keyed on record and recipient) nor the
+	// wake (whose id is derived from the two) can carry — the second collapses
+	// into the first — so it is never written that way. And it is never
+	// ADDRESSED: a turn that cannot start yet would otherwise be forced to
+	// post something on every unblock.
 	for _, party := range n.Snapshot.Unblocked {
-		if party.Assignee == "" {
-			continue
-		}
-		out = append(out, Candidate{
-			Handle: party.Assignee, Reason: ReasonUnblocked, Task: party.Task,
-			Wakes: wakes(ReasonUnblocked),
-		})
+		add(party.Assignee, ReasonUnblocked, false)
 	}
 	if n.Kind == ChangeRouted {
 		add(n.Snapshot.RoutedTo, ReasonRoutedTo, false)
@@ -311,15 +289,12 @@ func Candidates(n *Notify) []Candidate {
 	if task {
 		addAll(n.Snapshot.Watchers, ReasonWatcher, false)
 	}
+	// AN UNWATCH IS A RECORD, NOT A WAKE: a human learns that a lead removed
+	// her watch, and an agent is not woken about a decision that was not its
+	// own.
 	if n.Kind == ChangeWatchers {
 		for _, h := range n.Snapshot.RemovedWatchers {
-			if _, ok := seen[h]; h == "" || ok {
-				continue
-			}
-			seen[h] = len(out)
-			out = append(out, Candidate{
-				Handle: h, Reason: ReasonUnwatched, InboxOnly: true,
-			})
+			b.InboxOnly(h, ReasonUnwatched)
 		}
 	}
 	if n.Kind == ChangePurged {
@@ -334,38 +309,27 @@ func Candidates(n *Notify) []Candidate {
 	// reaches NOBODY; with the list, the unit lead is dropped as the actor
 	// and the project lead gets the copy.
 	if n.Kind.mayFallBack() {
-		for rank, handle := range []string{
-			n.Snapshot.RoutingUnitLead, n.Snapshot.ProjectLead,
-		} {
-			if _, ok := seen[handle]; handle == "" || ok {
-				continue
-			}
-			seen[handle] = len(out)
-			out = append(out, Candidate{
-				Handle: handle, Reason: ReasonLeadFallback,
-				FallbackOnly: true, FallbackRank: rank,
-				Wakes: wakes(ReasonLeadFallback),
-			})
-		}
+		b.Fallback(ReasonLeadFallback, n.Snapshot.RoutingUnitLead, n.Snapshot.ProjectLead)
 	}
-	return out
+	return b.Candidates()
 }
 
 // CandidateFor is how handle hears the change n describes, as [Candidates]
 // decides it: its reason, whether its notice starts a turn and whether that
-// turn is asked to answer; false when the change does not concern it. An
-// unblocked notice, which is about another task, is not this change's.
+// turn is asked to answer; false when the change does not concern it. Every
+// candidate is this change's: an unblocked notice rides a record of its own,
+// on the task that became workable (see [Candidates]).
 //
 // FOR A WRITER THAT TELLS ITS CALLER WHO WILL ACT, so what it says is the
 // routing's own answer for the record it is about to publish, never a second
 // copy of the rule that drifts from it.
-func CandidateFor(n *Notify, handle string) (Candidate, bool) {
+func CandidateFor(n *Notify, handle string) (routing.Candidate[Reason], bool) {
 	for _, c := range Candidates(n) {
-		if c.Handle == handle && c.Task == "" {
+		if c.Handle == handle {
 			return c, true
 		}
 	}
-	return Candidate{}, false
+	return routing.Candidate[Reason]{}, false
 }
 
 // asks reports whether this change asks something of the seat that hears it
@@ -477,72 +441,21 @@ func (k ChangeKind) mayFallBack() bool {
 	return false
 }
 
-// Route is the post-filter: who is actually woken.
+// Route is the post-filter — who is actually woken — with the tracker's one
+// reason that reaches the person who made the change ([Reason.WakesActor]).
 //
-// Five steps, in this order. The fourth is the whole reason the fallback is a
-// list, and the fifth is why it comes last:
-//
-//  1. Drop the inbox-only candidates — they are a record, not a wake.
-//  2. Drop handles the company no longer employs.
-//  3. Drop the actor, except under the one reason that wakes them.
-//  4. If no ordinary candidate survived, keep the LOWEST-RANKED surviving
-//     fallback and only that one.
-//  5. Keep only the candidates whose notice starts a turn ([Candidate.Wakes]).
-//
-// THE FIFTH STEP RUNS AFTER THE FALLBACK IS DECIDED, never before it. A task
-// whose watchers heard about a change has an audience, and that is what the
-// fallback asks; filtering the watchers out first would make every quiet
-// comment on a watched task reach a lead instead, which is the noise this
-// step exists to remove.
-//
-// ONE NAME IS THE ACTOR. A person bound to a seat writes AS that seat — the
-// author iam.ActorFor records for them — so the handle their own gestures
-// land on is the author itself, and a credential nobody is bound through
-// writes, and is watched, under its own login.
-func Route(candidates []Candidate, registry func(string) bool, actor string) []Candidate {
-	var ordinary, fallback []Candidate
-	for _, c := range candidates {
-		if c.InboxOnly {
-			continue
-		}
-		if registry != nil && !registry(c.Handle) {
-			continue
-		}
-		if c.Handle == actor && !c.Reason.WakesActor() {
-			continue
-		}
-		if c.FallbackOnly {
-			fallback = append(fallback, c)
-			continue
-		}
-		ordinary = append(ordinary, c)
-	}
-	if len(ordinary) > 0 {
-		return waking(ordinary)
-	}
-	if len(fallback) == 0 {
-		return nil
-	}
-	best := fallback[0]
-	for _, c := range fallback[1:] {
-		if c.FallbackRank < best.FallbackRank {
-			best = c
-		}
-	}
-	return waking([]Candidate{best})
-}
+// Its five steps are [routing.Route]'s: drop the inbox-only candidates, drop
+// the actor except under `unblocked`, drop handles the company no longer
+// employs, keep the lowest-ranked fallback still employed only when no
+// ordinary candidate survived — the step that is the whole reason the
+// fallback [Candidates] offers is a list — and, last, keep only the
+// candidates whose notice starts a turn ([Reason.StartsTurn]). Last, because
+// a watcher an agent's quiet comment does not wake still heard it, and so
+// keeps the lead's fallback copy quiet. The registry is asked only about a
+// handle whose answer could change the result, never about the actor or
+// about a chain somebody ordinary made unnecessary.
+func Route(candidates []routing.Candidate[Reason], registry func(string) bool,
+	actor string) []routing.Candidate[Reason] {
 
-// waking is the fifth step of [Route]: the candidates whose notice starts a
-// turn, in the order given.
-func waking(heard []Candidate) []Candidate {
-	out := heard[:0:0]
-	for _, c := range heard {
-		if c.Wakes {
-			out = append(out, c)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return routing.Route(candidates, registry, actor, Reason.WakesActor)
 }

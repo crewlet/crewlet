@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // beacon is a one-way frame as a test spells it: who it names, and when it
@@ -18,7 +18,7 @@ type beacon struct {
 
 func (b beacon) Expires() time.Time { return b.Until }
 
-func oneWay(t *testing.T, name string, ring statelog.Keyring) *OneWay[beacon] {
+func oneWay(t *testing.T, name string, ring recordseal.Keyring) *OneWay[beacon] {
 	t.Helper()
 	w, err := NewOneWay[beacon](name, ring)
 	if err != nil {
@@ -61,7 +61,7 @@ func TestAOneWayFrameTheFleetDidNotSealIsBelievedInNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stranger := oneWay(t, "test.presence", statelog.OneKey("k1", "somebody else's key material"))
+	stranger := oneWay(t, "test.presence", recordseal.OneKey("k1", "somebody else's key material"))
 	theirs, err := stranger.Seal(here)
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestAOneWayFrameTheFleetDidNotSealIsBelievedInNothing(t *testing.T) {
 // says so, still believing nothing it names.
 func TestAOneWayFrameUnderAKeyThisNodeDoesNotHoldNamesTheKey(t *testing.T) {
 	t.Parallel()
-	rotated := statelog.Keyring{ActiveID: "k2", Keys: []statelog.Key{
+	rotated := recordseal.Keyring{ActiveID: "k2", Keys: []recordseal.Key{
 		{ID: "k1", Material: "the signed-ask suite's fleet key material"},
 		{ID: "k2", Material: "the next key"},
 	}}

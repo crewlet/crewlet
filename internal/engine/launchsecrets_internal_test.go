@@ -62,8 +62,8 @@ roles:
 		t.Fatalf("the executor chain: %v", err)
 	}
 	agent := member.Provider.(*harness.Provider)
-	coding := newCodingRun(agent, run.env, nil)
-	secrets := launchSecrets(agent, run, coding.env)
+	executor := newExecutorRun(agent, run.env, nil)
+	secrets := launchSecrets(agent, run, executor.env)
 
 	for class, want := range map[string]string{
 		"a reference inside a setting":        "the-proxys-own-password",

@@ -123,7 +123,7 @@ CREATE TABLE pages_titles (
     container   TEXT    NOT NULL,
     -- The TOKEN the claim was arbitrated on: a digest of the normalised title,
     -- because a subject is a broker path and a title is prose that routinely
-    -- carries a space, a dot or a wildcard. See [pages.TitleToken].
+    -- carries a space, a dot or a wildcard. See [doclet.TitleToken].
     title_token TEXT    NOT NULL,
     -- And the normalised title itself, so a listing can report what a claim
     -- holds without a reverse lookup nothing can perform: a digest has no

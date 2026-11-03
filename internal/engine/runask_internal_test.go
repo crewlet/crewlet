@@ -47,23 +47,23 @@ func TestAnAskOnANodeWithNoRunStoreIsAnError(t *testing.T) {
 
 // A RESUMED ROUND IS CUT WHERE ITS ROW SAYS THE ANSWER CUT IT. The collection
 // reports only a submission made after a person's answer carried the round on,
-// and the place it cuts at is the row's own (sandbox.PendingRun.AnsweredThrough),
+// and the place it cuts at is the log's own (sandbox.BridgeLog.AnsweredThrough),
 // handed to the runner with the calls it cuts.
 //
 // Mutation: leave Answered unset, and the runner replays a submission the
 // asking job made before it knew the answer.
 func TestAResumeIsCutWhereTheAnswerCutTheRound(t *testing.T) {
 	t.Parallel()
-	got := runnerResume(resumeInput{Run: sandbox.PendingRun{
+	got := runnerResume(resumeInput{Bridged: sandbox.BridgeLog{
 		AnsweredThrough: 2,
-		BridgeCalls: []sandbox.BridgeCall{
+		Calls: []sandbox.BridgeCall{
 			{Name: runner.SubmitWorkTool, Seq: 1},
 			{Name: builtin.AskAndWaitTool, Seq: 2},
 			{Name: runner.SubmitWorkTool, Seq: 3},
 		},
 	}}, nil, nil)
 	if got.Answered != 2 || len(got.Bridged) != 3 {
-		t.Fatalf("the resume is cut at %d over %d calls, want 2 over the row's 3",
+		t.Fatalf("the resume is cut at %d over %d calls, want 2 over the log's 3",
 			got.Answered, len(got.Bridged))
 	}
 }

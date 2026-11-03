@@ -42,14 +42,22 @@ other tool at `approve`, one that declares nothing included (`mcp.RiskOf`,
 4. **The call is made at most once**, by the resume the answer drives,
    through the surface the run carries on with: marked on the row under the
    claim's fence before it is made, its result sealed on the row after, and
-   neither cleared by a claim given back. The write that records the result
-   records the call itself as a call of the run's round, beside the calls its
-   jobs made over the bridge and as the surface answered it, with its
-   arguments and output left sealed (`BridgeCall.Approved`): every reader of
-   whether the turn replied — the collection's own delivery check, a stop's
-   or a loss's account of the turn, a later round's earlier calls — reads the
-   round's calls, and a call recorded nowhere among them read as a reply that
-   never went out. A later attempt at the same answer
+   neither cleared by a claim given back. The call itself is a call of the
+   run's round, beside the calls its jobs made over the bridge and as the
+   surface answered it, with its arguments and output left sealed
+   (`BridgeCall.Approved`): every reader of whether the turn replied — the
+   collection's own delivery check, a stop's or a loss's account of the turn,
+   a later round's earlier calls — reads the round's calls, and a call
+   recorded nowhere among them read as a reply that never went out. The row
+   and the round's log are two keys the store writes in no one step, so the
+   write that records the result records the call's entry on the row with it
+   (`HeldCall.Call`), and the call is appended to the log after it, once by
+   the held call's id (`BridgeCall.HeldID`). Where that append never lands,
+   the call is still the round's: an ending reads it off the row
+   (`PendingStore.TurnLog`), and the reset that opens the next job carries it
+   on the row to that job's opening (`PendingRun.OwedCall`), which appends it
+   where the log lacks it, until a job of the round has launched past it.
+   A later attempt at the same answer
    hands the run the recorded result, or says the call may or may not have
    taken effect; it never makes it again. A tool blocked or changed since the
    call was held is not called.

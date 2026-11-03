@@ -47,7 +47,7 @@ A deployment's durable state lives in six places:
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
-| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md), every data node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day), the artifacts and their datastores, Ask Crewlet's conversations, the engine's own chat and the rows naming each seat's executor sessions), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md), the company's [git repositories](../concepts/code-host.md), every data node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day), the artifacts and their datastores, Ask Crewlet's conversations, the engine's own chat and the rows naming each seat's executor sessions), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload, and of each seat's sealed executor sessions, one object per capture. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, the executors' records, each human seat's chat read state, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
@@ -104,9 +104,11 @@ why the manifest is written last.
 ├── manifest.json                          what was captured, from which node
 ├── store.db                               the node estate, self-contained
 ├── store-replicated.db                    the replicated estate, self-contained
-├── objects/                               s3 only: every object that copy names,
-│   └── files/                               one file per object, under its key —
-│       └── 0199a3c2-…                       the bucket's own layout under its prefix
+├── objects/                               s3 only: every object a live row of that
+│   └── files/                               copy names, and every object a record a
+│       └── 0199a3c2-…                       restore replays from it names — one file
+│                                            per object, under its key: the bucket's
+│                                            layout under its prefix
 └── streams/
     ├── CREWLET_AGENT.snapshot             a mailbox stream
     ├── KV_crewlet_secrets.snapshot        a coordination bucket
@@ -123,6 +125,30 @@ What is worth knowing about it:
   a surprise on the worst day of the deployment's life; the digest is what
   tells a copy that was truncated in transit from one that was bad when it was
   made. Each is self-contained: no `-wal` travels with it.
+- **Each store copy is one moment**: the database as it stood when its copy
+  began — every write that had committed by then is in it, and nothing
+  committed while it ran is. The engine holds a read transaction open across
+  the copy to make it so, because the database engine's own `VACUUM INTO`
+  holds none: without it a copy could miss writes that had already committed,
+  or hold two halves of one write. While a copy runs, the store's write-ahead
+  log is not checkpointed past its moment, so the `-wal` beside the live file
+  grows by whatever the node commits meanwhile and is folded back in by the
+  first checkpoint after the copy ends. **How much** is the node's write rate
+  times the copy's run, and the run is the file's size over the rate the copy
+  reads it — measured at about 104 MB/s on the engine's own driver, so about
+  seven minutes for the year-five estate of ≈ 44 GB below, over which a node
+  writing 1 MB/s to its log holds back about 420 MB of it, and one writing
+  2.5 MB/s a gibibyte, where [`wal_large`](../reference/alarms.md) fires: it
+  names the copy holding the log and says the copy's end folds it back in.
+  Each copy measures what it held back, and **before it copies anything a
+  backup checks** that each database's own volume has room for what the last
+  copy of that file held back, scaled to the file as it stands, and refuses
+  otherwise, because that log grows on the volume the node commits to and the
+  node would stop committing once it filled. `volume_low` counts the same log
+  in the room it wants beside a second copy. The first copy after the node
+  starts has nothing measured to go on, and nothing foresees a burst of
+  writes past the rate the last copy saw: `wal_large` and `volume_low` name
+  either while it happens.
 - **`VACUUM INTO` needs a writable temporary directory.** The database engine
   builds the copy on a connection of its own, which keeps a temporary database
   in a new directory under `TURSO_TMPDIR`, `SQLITE_TMPDIR` or `TMPDIR` (the
@@ -152,26 +178,82 @@ What is worth knowing about it:
   it**, rather than writing a manifest without it; take it again once the node
   reports the estate serving. A node without `data` holds none, and is never
   asked for a backup: the route is `ingress`'s, which requires `data`.
-- **The objects come from the object store, not from this node's disk.** On
+- **The objects come from the object store, not from this node's disk.** The
+  rows that name them are the declared live references — a Worklet project's
+  files (`tracker_files`), an artifact's objects, assets and brand files
+  (`artifact_objects`, `artifact_assets`, `artifact_brand_files`), the files
+  attached to an Ask Crewlet conversation (`assistant_files`), the pack bundles
+  the company's [git repositories'](../concepts/code-host.md) pushes stored
+  (`code_packs`) and the logs of their checks (`code_check_logs`). A
+  repository's rows, its refs and settings among them, are in the replicated
+  store copy like every other replicated row, and its packs ride the backup as
+  these objects. On
   `nats` they are already a stream — `OBJ_crewlet_files` — and the stream
   snapshot the backup takes anyway carries them, so no object is copied on its
   own: the manifest's `objects.stream` names the stream. Once the snapshot is
-  taken, the backup asks the stream's leader about every object the replicated
-  copy names, and `objects.objects` and `objects.bytes` count the ones it holds
-  — a key is never reused, so an object the store holds after the snapshot
-  finished is one the snapshot holds too. On `s3` the backup reads every
-  object the replicated copy **names** — read from the copy itself, for the
-  position's reason below — from the bucket, four at a time so a backup never
-  saturates the store every upload and download also uses, and streams each
-  to disk, checking it against its file's size and SHA-256 as it is written.
-  Each lands under `objects/files/<key>` — the bucket's own layout under its
-  prefix — first under a temporary name, renamed only once it has checked out.
+  taken, the backup asks the stream's leader about every object a live row of
+  the replicated copy names, **thirty-two at a time** — the collector's audit
+  asks the same question at the same depth — and `objects.objects` and
+  `objects.bytes` count the ones it holds: a key is never reused, so an object
+  the store holds after the snapshot finished is one the snapshot holds too. On
+  `s3` the backup reads every object a **live** row of the replicated copy names
+  — read from the copy itself, for the position's reason below — from the
+  bucket, **thirty-two at a time**. A first copy is bound by how long each
+  request waits for its first byte rather than by the link: S3 answers in about
+  100 to 200 ms, and thirty-two out keep a 1 Gbit/s link busy at the lower end —
+  sixteen left it a third idle, and the large model's first copy (about 2.1
+  million objects, 1.15 TB) took about five hours where thirty-two took about
+  three on the host it was measured on — and about three fifths of it at the
+  upper end, where that first copy takes about four hours (worked out rather
+  than measured). Thirty-two out stay under a twentieth of what S3 serves one
+  prefix, so the company's own downloads keep the rest. Each is streamed
+  to disk and checked against its row's size and SHA-256 as it is written,
+  and lands under `objects/files/<key>` — the
+  bucket's own layout under its prefix — first under a temporary name, renamed
+  only once it has checked out. Either way the copy's rows are read **a page at
+  a time**, in key order across every table, while the objects of the page
+  before are fetched: the backup holds a page of references, never the
+  company's whole inventory. An object only a
+  [retired or derived](../concepts/object-store.md#live-retired-and-derived-references)
+  row names is neither copied nor asked after: a restore brings the row back
+  without it, and nothing is owed it — a retired object was let go, and the
+  engine builds a derived one again.
+- **The files written while the backup ran come too.** A restore brings the
+  store copy back and replays each log from the copy's position to the last
+  record its snapshot captured — the snapshot is a copy of the stream as it
+  stood when it was asked for, however much is appended while it transfers — so
+  a file uploaded and named after the copy was taken is a file the restored
+  company has. Once the streams are snapshotted, the backup reads each log that
+  writes a table of files from the copy's position to that last record, and
+  the records the copy's applier had held back to apply later, and carries
+  every object those records name: on `s3` copied like the rest, thirty-two at
+  a time; on `nats` asked after like the rest, since the `OBJ_crewlet_files`
+  stream is snapshotted **after every other stream** and so holds every object
+  a captured record names. `objects.replayed` counts the ones only those
+  records name. A record this build cannot read that may write a file — a
+  newer build's, during a rolling upgrade: a file record, one of a kind this
+  build has never heard of, or one whose writer said it may touch a whole
+  project — **refuses the backup** (`409 record_unreadable`), since it may
+  name a file the backup would not carry: take it from a node running the
+  newer build. So does a record missing from the log between the copy and the
+  snapshot (`503 log_gap`: take it again), and a copy whose position is on an
+  earlier instance of a log that has since been recreated (`409
+  log_recreated`: take it once this node has re-keyed to the live log). A
+  newer record whose writer said it touches no file — a task's, say — refuses
+  nothing. Every record is read as the appliers read it, its signature
+  checked under this node's `secrets.keys` first
+  ([ADR-0031](../../adr/0031-every-state-log-record-is-signed.md)): one signed
+  under a key this node does not hold refuses the backup (`409
+  record_unverified`) — add the key and restart the node, or take the backup
+  from a node that holds it — and one whose signature does not verify refuses
+  it as bytes no node of the fleet signed (`500 backup_failed`, the reason in
+  this node's log).
 - **A backup takes what its previous one holds** (`s3`). A key is minted for
   one upload and never names other bytes, so an object this node's previous
   backup already holds is the same object: when that backup's directory is
   still on this host (the `dir` this node last announced), each object in it
   is **linked** into the new backup — copied where the filesystem refuses a
-  link, another mount among them — and read back against its file's size and
+  link, another mount among them — and read back against its row's size and
   SHA-256 before it counts, so a copy that rotted in the earlier artefact is
   fetched again rather than carried forward. Only what is new since is read
   from the bucket. Each one is a complete file of the new backup, never a
@@ -189,12 +271,33 @@ What is worth knowing about it:
   `backup_objects_lost`, and is announced like
   any other. Refusing it would refuse every later backup too, and with them
   the trim of every log in the fleet, over one lost file. The
-  `objects_missing` alarm is what sends somebody to replace the file. An
-  object the store did not *answer* about may be intact there, so it **fails
-  the backup** (`POST /backup` answers 503 `objects_unreachable`), naming it:
-  take it again once the store answers. The manifest's `objects` records
-  `dir` or `stream`, `objects`, `bytes`, `reused`, `reused_from` and `lost`; a
-  copy naming no file has none.
+  `objects_missing` alarm is what sends somebody to replace the file. Only
+  what a restore names is lost: a file the copy names that a record after the
+  copy replaced or removed — and whose old object the collector has since
+  deleted — is owed by nothing the restore brings back, so it is not listed
+  (`backup_objects_removed_since_copy` counts them). An
+  object the store did not *answer* about is **asked again** — up to four
+  times, a second, two and four apart, within the time one read of it is given
+  — since a reset or a stall part way through one of millions of reads is no
+  reason to refuse hours of copying (`backup_objects_retried` counts the ones
+  that needed it). On `s3` each of those reads already asks a request the
+  bucket refused again until the read cannot begin within a minute, so a
+  bucket that fails one object every time spends that object's whole read
+  time — about two minutes for a small file — on two such reads rather than
+  four. One the store still does not answer for may be intact there,
+  so it **fails the backup** (`POST /backup` answers 503
+  `objects_unreachable`), naming it: take it again once the store answers. The
+  **first** such object stops the backup, with nothing left in flight — it is
+  refused for that one whatever the rest do, and a store that has stopped
+  answering is not sent the rest of the company's files. The manifest's `objects` records
+  `dir` or `stream`, `objects`, `bytes`, `replayed`, `reused`, `reused_from`
+  and `lost`; a backup owing no file has none.
+- **One backup at a time per node.** A backup asked for while another runs on
+  the same node is refused (`POST /backup` answers `409 backup_running`) and
+  writes nothing, its directory included: the trim hold a backup takes is
+  keyed on the node, so two at once would share one pin, and the first to
+  finish would release the pin the other's replay still needs. Schedule them
+  so one finishes before the next starts.
 - **Streams are enumerated, not listed.** A namespace stream is created on
   first publish and a coordination bucket's name depends on a configurable
   prefix, so what gets captured is what is actually there.
@@ -274,8 +377,9 @@ behind. A directory refused before the copy began (relative, not empty, or one
 the host cannot create or write because of the path itself) wrote nothing,
 answers `400`, and is not recorded. A disk that fails or fills while the
 directory is prepared is the node's failure rather than the path's: it answers
-`500` and is recorded, and so is a refusal that arrives once part of the copy
-is already in the directory. Filter the event log on `source=operator` to see it beside every other
+`500` and is recorded, and so is a backup refused because a database's own
+volume has no room for the log its copy would hold back, and a refusal that
+arrives once part of the copy is already in the directory. Filter the event log on `source=operator` to see it beside every other
 change a person made through the engine; see
 [the runtime audit](../reference/api-endpoints.md#the-runtime-audit-sourceoperator).
 
@@ -320,13 +424,13 @@ A node is **two** database files, and they answer differently.
 The **replicated estate** is a copy of state every data node holds: the
 tracker's projects, tasks, comments and history, the knowledge base's pages and
 revisions, the vectors search reads, the org chart's units and seats, the
-identity directory's people, credentials and sessions, every data node's
-usage history, the artifacts and their datastores, Ask Crewlet's
-conversations, the company's own chat — its rooms, who is in them, and
-every message — and the rows naming each seat's executor sessions, each
-derived from its own ordered log by an applier that runs
-identically on every data node. Any healthy data node's copy of it is the
-company's, in the same sense the stream estate is.
+identity directory's people, credentials and sessions, the code host's
+repositories, refs and pack lists, every data node's usage history, the
+artifacts and their datastores, Ask Crewlet's conversations, the company's
+own chat — its rooms, who is in them, and every message — and the rows naming
+each seat's executor sessions, each derived from its own ordered log by an
+applier that runs identically on every data node. Any healthy data node's copy
+of it is the company's, in the same sense the stream estate is.
 
 The **node estate** is that node's alone, and what only lives there is what
 only *that node* did: its audit event log (and, on a data node, the events it
@@ -454,6 +558,38 @@ this path makes them easier to forget: the directory holds every credential
 the company has, so treat it exactly as you treat the secret store; and the
 **keyring must not travel with it**, or the sealing is undone.
 
+### A purge and the backups before it
+
+A backup is never rewritten. When a person purges a repository's
+unreachable objects — the commit a leaked secret was force-pushed away from,
+the history a deleted branch left ([Expunge](../concepts/code-host.md#expunge))
+— the purge takes them out of the repository, every git node's cache and,
+a day later, the object store, but not out of a backup that already holds
+them:
+
+- **A backup taken before the purge commits holds them, for as long as it is
+  kept.** Its replicated copy names the packs that held them as live, and
+  its objects carry those packs: on `s3` in its `objects/`, on `nats` in the
+  bucket's stream snapshot.
+- **On `nats`, so does a backup taken after the commit and before the store
+  deletes them** — a day after the commit, then the collector's next hourly
+  pass. Its stream snapshot carries every byte the bucket holds, the retired
+  packs' among them, uncounted. On `s3` a backup taken after the commit
+  copies only what a live row names, so it holds none of them.
+- **Restoring a backup taken before the commit brings them back.** Its rows name the
+  packs as the repository's own again, served to every clone. On `s3`, copy
+  the backup's `objects/` into the bucket as [Restoring](#restoring) says
+  even where the bucket otherwise needs nothing — the collector has deleted
+  those packs, and without them the next audit raises `objects_missing` —
+  then purge the repository again once the fleet runs.
+
+So what a purge is for is tidiness after the credential has been
+**rotated**, never instead of it: expire the backups taken before it on
+your own schedule, and treat each as holding the old secret until it goes.
+`code_get_repo`'s `expunge.expunged_at` — and `crewlet code status -repo
+<name>`'s `expunge:` line — is the instant the purge committed: a backup
+whose manifest's `taken_at` is earlier holds the purged objects.
+
 ## Moving the files to a bucket
 
 `crewlet objects migrate --to s3` moves the company's files from the fleet's
@@ -536,23 +672,48 @@ The object half depends on the backend. On **`nats`** there is nothing to do
 apart from the streams: the objects are the `OBJ_crewlet_files` snapshot and
 restore with every other stream below. On **`s3`** the bucket is not part of
 the fleet and usually needs nothing at all — it kept its own copies while the
-fleet was down. If it lost data, or the company is restoring into a new bucket,
-copy the backup's `objects/` directory into the bucket under the configured
-prefix: it is laid out as the bucket is, each object at `files/<key>`, and a
-key never names two different objects, so it is one sync, merged into whatever
-is there —
+fleet was down. If it lost data, or the company is restoring into a
+[new bucket](#restoring-into-a-new-bucket), copy the backup's `objects/`
+directory into the bucket under the configured prefix: it is laid out as the
+bucket is, each object at `files/<key>`, and a key never names two different
+objects, so it is one sync, merged into whatever is there —
 
 ```sh
 aws s3 sync objects/ s3://acme-files/crewlet/
 ```
 
 — with the bucket and prefix from `store.objects.s3`, and the provider's own
-tool or `--endpoint-url` for a store that is not Amazon's. An object the
-restored rows name and the store does not hold is reported by the collector's
-next audit (`objects_missing`); `crewlet objects status` lists the files.
+tool or `--endpoint-url` for a store that is not Amazon's. An object a live
+row of the restored copy names and the store does not hold is reported by the
+collector's next audit (`objects_missing`); `crewlet objects status` lists the
+files. A backup taken before a repository's purge restores what the purge
+took out, and its packs are among those the bucket no longer holds: copy
+them back, then purge again ([A purge and the backups before
+it](#a-purge-and-the-backups-before-it)). One only a
+[retired or derived](../concepts/object-store.md#live-retired-and-derived-references)
+row names is never reported: the backup never carried it and nothing is owed
+it — a retired row goes once its grace has passed, and the engine builds a
+derived object again.
+The derived objects are the code host's
+[published layers](../concepts/code-host.md#when-a-layer-is-missing). On
+`s3` a restore brings none back, and on `nats` the bucket's snapshot brings
+back whatever parts it held, uncounted: every git node installs a part the
+store holds once it passes the checks any layer is held to, and refuses a
+layer with a part it lacks as `missing`, serving from the layers below it — or
+from its own index, slower and never wrong — until the repository's
+[maintainer](../concepts/code-host.md#who-maintains-a-repository) publishes
+again: one walk of the repository's history, once, for a chain the store lost
+whole — about half a minute for a gigabyte of a source repository's packs,
+measured, and about a quarter of an hour, extrapolated, for the largest
+repository the default `repo_max_bytes` admits.
+`crewlet.code.cache.layers{outcome=missing}` counts each layer a node
+refused, and `crewlet.code.cache.chained` climbs back to the repositories held
+as their maintainers publish; nothing alarms meanwhile.
 The stream half is restored into a broker with `nats stream restore` per
 snapshot for an external cluster; for the embedded topology, restore into a
-fresh `stream.store_dir` on a node started for that purpose. Then:
+fresh `stream.store_dir` on a node started for that purpose — every snapshot,
+except the one a restore into a [new bucket](#restoring-into-a-new-bucket)
+leaves out. Then:
 
 - **Restore whole estates together, then cold-start the whole fleet.** The
   fencing epochs and the activation pointer must never move backwards while
@@ -565,15 +726,49 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   `CREWLET_NODE_ID`): a node restored under a fresh
   name is a new peer, its old replicas are orphaned, and the stream sits short
   of quorum waiting for a server that will never return.
+- **Keep each stream's configuration as its snapshot recorded it.** What a
+  node's rows are keyed to is each log's creation instant as the engine
+  stamped it into the stream's configuration when it created the stream
+  (`crewlet.created_at`), not the broker's own creation time: a restore dates
+  every stream to the moment of the restore, and the stamp survives because
+  the restore request hands the recorded configuration back. Restored that
+  way, each log is the stream the rows came from, so a node restored from the
+  same backup set resumes every log at its copy's position and replays the
+  records past it, and the memory changelog hydrates every seat. A
+  configuration edited on the way back — the stamp dropped or changed — is a
+  recreated stream to every node, which then refuses that log as
+  `wrong_stream` until it is
+  [re-anchored](retention.md#re-anchoring-a-recreated-or-restored-log).
+  The converse holds for a stream deleted and remade outside a restore: one
+  created from a configuration that still carries `crewlet.created_at` — the
+  configuration `nats stream info --json` printed, passed to `nats stream add
+  --config`, on an embedded fleet through a member's client listener with the
+  [operator key](deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool) — is the same stream to every node, judged only by where it ends
+  and what it holds at each node's checkpoint, and re-anchored as the restored
+  case (followed from its end) rather than the recreated one. To make a
+  deliberate rebuild read as a recreation, remove that metadata key from the
+  configuration before creating the stream.
 - **Expect bounded duplicates, not loss.** Mailboxes hold exactly the unacked
   backlog, and a restored completion ledger and dedupe window are older than
   the outside world — so some already-handled triggers re-run. That is the
   same at-least-once posture the engine holds after any crash. The reverse
   skew is the one to avoid: a ledger *newer* than the mailboxes it acquits
   writes off work that never ran, which is why the embedded topology's
-  one-directory, one-instant copy is the paved path. On an external NATS
+  one-directory, one-instant copy is the paved path. A restored log's
+  **duplicate window** — the broker collapsing an operation id appended twice
+  ([replication](replication.md)) — is rebuilt from its records' ids when its
+  broker next starts, not by the restore itself (nats-server 2.15.0, solo
+  restore, measured): the embedded path starts its broker again with the node,
+  and a stream restored into a running external cluster may serve without one
+  until its servers restart. That matters only for a backup restored inside the
+  window (two minutes) of being taken, since the window holds only records the
+  broker stored that recently. On an external NATS
   cluster, `nats stream backup` / `nats account backup` against the cluster
   are the equivalent, taken across the streams and KV buckets as one session.
+  A node on an external cluster snapshots no stream, so its backup has no last
+  record to read the logs to: it carries the objects its copy names and none
+  written after the copy — copy the bucket (`aws s3 sync`) at the moment the
+  cluster's backup is taken, as the cold path does.
 - **A node's usage history never shrinks under a restore.** A backup copies
   the store before the streams, and a fleet restore puts one node's store
   beside another node's streams, so a restored node's event log can stop
@@ -611,6 +806,39 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   ceiling gets the whole allowance back until that window turns over),
   executors' records vanish (a billed box leaks until its own TTL), and the
   completion ledger forgets (bounded duplicate turns).
+
+### Restoring into a new bucket
+
+A restore whose `store.objects.s3` names another store than the backed-up
+fleet did — another endpoint, bucket or prefix — restores every stream
+**except** `KV_crewlet_objects` (`streams/KV_crewlet_objects.snapshot`). That
+coordination bucket records which store the fleet's files are in, and restored
+it names the old one: every node compares its own `store.objects` against it
+at boot and refuses to start against the new one, naming both (see
+[One store per fleet](../concepts/object-store.md#one-store-per-fleet)). Left
+out, the first node to boot records the new store. The bucket's other record,
+the object collector's last report, described the old store and goes with it,
+so the collector's first two passes are a collection and an
+[audit](../concepts/object-store.md#collection-and-audit) of the new one — and
+an object the sync above missed is reported by that audit, as
+`objects_missing`.
+
+Restoring into the **same** bucket — it lost data, or it was emptied —
+restores everything, the record included: it names the store every node is
+configured with.
+
+Two ways of restoring put every stream back at once, with no snapshot to leave
+out:
+
+- **An external cluster restored whole** (`nats account restore`): delete the
+  record after the restore and before any node starts —
+  `nats kv del crewlet_objects backend`, the gesture a
+  [move](../concepts/object-store.md#one-store-per-fleet) makes. The
+  collector's report left beside it names the old store, and the collector
+  sets it aside rather than picking it up.
+- **A cold copy** of an embedded member's `stream.store_dir`: it carries the
+  bucket in the broker's own files rather than as a snapshot to leave out, so
+  a restore into a new bucket is taken from a `crewlet backup` instead.
 
 ### The last step is `crewlet iam invalidate-all`
 

@@ -101,6 +101,20 @@ export function chatViewOf(screen: string): ChatView | null {
  * read as a container called `skills`.
  */
 export const CONTAINER_SHAPE = /^[^a-z]+$/;
+/**
+ * A change's number on its repository: a whole number from 1, as the engine
+ * numbers them (`code_repos.next_change`), with no leading zero — `web!042`
+ * is no change's reference, so `…/changes/042` is no change's page.
+ */
+export const CHANGE_NUMBER_SHAPE = /^[1-9][0-9]{0,15}$/;
+/**
+ * A commit's WHOLE id, as a commit's page names it: forty hex digits, the
+ * engine's repositories being object-format sha1 (`gitref.OIDHexLen`). An
+ * abbreviation is no page, because the engine's `code_commit` takes none —
+ * the object an abbreviation finds can change as objects arrive, and a page
+ * is an address that says the same thing tomorrow.
+ */
+export const COMMIT_ID_SHAPE = /^[0-9a-f]{40}$/;
 
 /** My work's sections below its queue. */
 export type MeSection =
@@ -110,7 +124,8 @@ export type MeSection =
   | "unblocked"
   | "collaborating"
   | "watching"
-  | "checklist";
+  | "checklist"
+  | "reviews";
 
 const ME_SECTIONS: readonly MeSection[] = [
   "asked-of-me",
@@ -119,6 +134,7 @@ const ME_SECTIONS: readonly MeSection[] = [
   "collaborating",
   "watching",
   "checklist",
+  "reviews",
 ];
 
 /**
@@ -232,6 +248,16 @@ export type FramedScreen =
   | { screen: "worklet-search" }
   | { screen: "project"; key: string }
   | { screen: "item"; id: string }
+  | { screen: "code-changes" }
+  | { screen: "code-change"; repo: string; number: number }
+  | { screen: "code-repos" }
+  | { screen: "code-search" }
+  | { screen: "code-repo"; repo: string }
+  | { screen: "code-commit"; repo: string; sha: string }
+  | { screen: "code-compare"; repo: string }
+  | { screen: "code-pushes" }
+  | { screen: "code-queue" }
+  | { screen: "code-checks" }
   | { screen: "principles" }
   | { screen: "brand" }
   | { screen: "brand-setup" }
@@ -286,6 +312,7 @@ export type FramedScreen =
   | { screen: "config"; revisions: boolean; revision?: string }
   | { screen: "backups"; domain?: string }
   | { screen: "storage" }
+  | { screen: "code-settings" }
   | { screen: "account" };
 
 /** Every screen the dashboard draws. */
@@ -363,6 +390,8 @@ export function resolve(path: string[]): Route {
       return company(rest, screen, under);
     case "worklet":
       return worklet(rest, screen, under);
+    case "code":
+      return code(rest, screen, under);
     case "chatlet":
       return chatlet(rest, screen, under);
     case "live":
@@ -441,6 +470,65 @@ function worklet(rest: string[], screen: Make, under: Under): Route {
   // still to come) asked Worklet for an item called that and drew its refusal
   // under a trail naming a page that does not exist.
   return missing("worklet", under("Worklet"));
+}
+
+/**
+ * Code's sections, each a list that takes no tail: the company's changes, at
+ * the bare `#/code` — the row's landing, as Worklet's projects are at `#/worklet` —
+ * the repositories the engine hosts, one repository's pushes, which
+ * `repo=` names rather than a segment, since a section is a path and the
+ * repository is what it is narrowed to, the merge queues (narrowed the same
+ * way) and every repository's checks over a window. Under Repositories, each repository's
+ * own page, `repos/{name}`, and the objects under it.
+ */
+function code(rest: string[], screen: Make, under: Under): Route {
+  const [first, ...tail] = rest;
+  if (first === undefined) return screen({ screen: "code-changes" });
+  // A REPOSITORY'S OWN PAGE, by its name: the page holds the name to the
+  // engine's grammar and says in place what one no repository can have is,
+  // as a change's page does.
+  if (first === "repos" && tail.length === 1 && tail[0]) {
+    return screen({ screen: "code-repo", repo: tail[0] });
+  }
+  // A COMPARISON OF TWO OF ITS REVISIONS, which `base=` and `head=` name.
+  if (first === "repos" && tail.length === 2 && tail[0] && tail[1] === "compare") {
+    return screen({ screen: "code-compare", repo: tail[0] });
+  }
+  // A COMMIT'S OWN PAGE, by its whole id: see [COMMIT_ID_SHAPE].
+  if (first === "repos" && tail.length === 3 && tail[1] === "commits") {
+    const [repo, , sha] = tail;
+    if (repo && sha && COMMIT_ID_SHAPE.test(sha)) {
+      return screen({ screen: "code-commit", repo, sha });
+    }
+    return missing("code", under("Code"), "A commit's page names its commit by its whole id");
+  }
+  // A CHANGE'S OWN PAGE, under its repository: `repos/{name}/changes/{n}`,
+  // the path its reference (web!42) is the short form of — and the engine's
+  // own REST path for it. The number is a whole number from 1, decided by its
+  // shape; the name is the page's to hold to the engine's grammar, which it
+  // says in place.
+  if (first === "repos" && tail.length === 3 && tail[1] === "changes") {
+    const [repo, , n] = tail;
+    if (repo && n && CHANGE_NUMBER_SHAPE.test(n)) {
+      return screen({ screen: "code-change", repo, number: Number(n) });
+    }
+    return missing("code", under("Code"), "A change is numbered from 1 on its repository");
+  }
+  if (tail.length > 0) return missing("code", under("Code"));
+  switch (first) {
+    case "repos":
+      return screen({ screen: "code-repos" });
+    case "search":
+      return screen({ screen: "code-search" });
+    case "pushes":
+      return screen({ screen: "code-pushes" });
+    case "queue":
+      return screen({ screen: "code-queue" });
+    case "checks":
+      return screen({ screen: "code-checks" });
+    default:
+      return missing("code", under("Code"));
+  }
 }
 
 /**
@@ -675,6 +763,7 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     "sign-in": { screen: "sign-in" },
     audit: { screen: "audit" },
     storage: { screen: "storage" },
+    code: { screen: "code-settings" },
   };
   const plain = Object.hasOwn(bare, first) ? bare[first] : undefined;
   if (plain) return tail.length ? none() : screen(plain);

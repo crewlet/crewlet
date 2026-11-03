@@ -204,7 +204,7 @@ func (ClaudeCode) Session(req sandbox.RunRequest) Session {
 // the assistant's deep work's included, is told what THIS launch's standing
 // instructions say.
 func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string {
-	return "sh -c " + shellQuote(claudeScript(req, session, paths, configPath, sandbox.JobStopGrace))
+	return "sh -c " + sandbox.ShellQuote(claudeScript(req, session, paths, configPath, sandbox.JobStopGrace))
 }
 
 // claudeScript is a Claude Code run's script — see [ClaudeCode.Command] —
@@ -222,20 +222,20 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		`"$@"`,
 	}
 	if req.System != "" && !req.Steer.Set() {
-		parts = append(parts, "--append-system-prompt-file", shellQuote(paths.System()))
+		parts = append(parts, "--append-system-prompt-file", sandbox.ShellQuote(paths.System()))
 	}
 	// VERBATIM, because the only entry that reaches this runner is a
 	// claude-code one, which already names the model in Claude Code's own
 	// terms — its alias or id exactly as its runs on the engine host pass
 	// it. A launch passes over every other harness's entry, so none reaches here.
 	if req.Model != "" {
-		parts = append(parts, "--model", shellQuote(req.Model))
+		parts = append(parts, "--model", sandbox.ShellQuote(req.Model))
 	}
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-turns", strconv.Itoa(req.Limits.MaxTurns))
 	}
 	if configPath != "" {
-		parts = append(parts, "--mcp-config", shellQuote(configPath))
+		parts = append(parts, "--mcp-config", sandbox.ShellQuote(configPath))
 	}
 	// THE SERVERS IT IS HANDED ALONE only for a run held to them
 	// ([sandbox.RunRequest.OnlyMCPServers]): the assistant's deep work, with
@@ -287,7 +287,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// where it did. The release last, as the harness printed it
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
-		shellQuote(paths.SessionRecord()))
+		sandbox.ShellQuote(paths.SessionRecord()))
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
@@ -390,10 +390,10 @@ const claudeCarriedWriterFloor = "2.1.300"
 func claudeNotesGate(settings, notes, plain string) string {
 	older := "set --"
 	if plain != "" {
-		older = "set -- --append-system-prompt-file " + shellQuote(plain)
+		older = "set -- --append-system-prompt-file " + sandbox.ShellQuote(plain)
 	}
-	return "if at " + floorArgs(claudeNotesFloor) + "; then set -- --settings " + shellQuote(settings) +
-		" --append-system-prompt-file " + shellQuote(notes) + "; else " + older + "; " +
+	return "if at " + floorArgs(claudeNotesFloor) + "; then set -- --settings " + sandbox.ShellQuote(settings) +
+		" --append-system-prompt-file " + sandbox.ShellQuote(notes) + "; else " + older + "; " +
 		`echo "crewlet: this box runs Claude Code $n, older than ` + claudeNotesFloor + `, the oldest ` +
 		`that reads a note at the run's finish; the run starts without the hooks that read its notes, ` +
 		`is not told of them, and they wait for its review" >&2; fi` + "\n"
@@ -439,7 +439,7 @@ func claudeNotesGate(settings, notes, plain string) string {
 func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := shellQuote
+	q := sandbox.ShellQuote
 	if !session.Continues {
 		line(`s=%s k=no w=`, q(session.ID))
 		line(`set -- "$@" --session-id %s`, q(session.ID))
@@ -561,7 +561,7 @@ func claudeCapture(paths Paths) string { return claudePack(paths, paths.SessionS
 func claudePack(paths Paths, staged string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := shellQuote
+	q := sandbox.ShellQuote
 	cfg := paths.ClaudeConfigDir()
 	project := "projects/" + claudeProjectDir
 	line(`if [ -s %s/"$s".jsonl ]; then`, q(cfg+"/"+project))
@@ -812,8 +812,8 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 // was made, its error stream saying why ([Runner.PackCapture]).
 func (ClaudeCode) Pack(paths Paths, session string) string {
 	transcript := paths.ClaudeConfigDir() + "/projects/" + claudeProjectDir + "/" + session + ".jsonl"
-	return "s=" + shellQuote(session) + " packed=\n" +
-		fmt.Sprintf("[ -s %s ] || exit %d\n", shellQuote(transcript), packNothing) +
+	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
+		fmt.Sprintf("[ -s %s ] || exit %d\n", sandbox.ShellQuote(transcript), packNothing) +
 		claudePack(paths, paths.SessionPackStaging()) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }

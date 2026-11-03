@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -83,7 +85,7 @@ type writeNode struct {
 	writer   *executordomain.Writer
 	applier  *executordomain.Applier
 	waiter   *nodeWaiter
-	verifier *statelog.Verifier
+	verifier *recordseal.Verifier
 
 	mu       sync.Mutex
 	consumed uint64
@@ -106,7 +108,7 @@ func newWriteNode(t *testing.T, log *js.DomainLog, nodeID string) *writeNode {
 		return statelog.LogEnds{First: first, Last: last}, err
 	}
 	waiter := &nodeWaiter{}
-	fence.Committed = waiter.Committed
+	fence.Committed = waiter.Reached
 	reserve, err := statelog.NewReserve(spec, func(ctx context.Context) (statelog.Usage, error) {
 		stats, err := log.Stats(ctx)
 		return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -114,11 +116,11 @@ func newWriteNode(t *testing.T, log *js.DomainLog, nodeID string) *writeNode {
 	if err != nil {
 		t.Fatalf("build the gate reserve: %v", err)
 	}
-	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -165,7 +167,7 @@ func (n *writeNode) drain() {
 			continue
 		}
 		body, verdict := n.verifier.Open(payload)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			n.t.Fatalf("record %d did not verify: %s", seq, verdict)
 		}
 		n.applyBody(spec, seq, body, storedAt)
@@ -253,7 +255,7 @@ func (n *writeNode) row(handle, turn string) (object string, ended, found bool) 
 // this node has applied through.
 func (n *writeNode) reader() *executordomain.Reader {
 	n.t.Helper()
-	authority, err := statelogtest.LocalReader(executordomain.Domain{}, n.db, n.waiter.Committed())
+	authority, err := statelogtest.LocalReader(executordomain.Domain{}, n.db, n.waiter.Reached())
 	if err != nil {
 		n.t.Fatalf("build the read authority: %v", err)
 	}
@@ -291,7 +293,7 @@ func (w *nodeWaiter) reach(p statelog.Position) {
 	}
 }
 
-func (w *nodeWaiter) Committed() statelog.Position {
+func (w *nodeWaiter) Reached() statelog.Position {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.at
@@ -301,9 +303,9 @@ func (w *nodeWaiter) StreamIdentity() error                         { return nil
 func (w *nodeWaiter) Truncated() error                              { return nil }
 func (w *nodeWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
-func (w *nodeWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *nodeWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
-		if w.Committed().Packed() >= p.Packed() {
+		if w.Reached().Packed() >= p.Packed() {
 			return nil
 		}
 		w.mu.Lock()
@@ -316,7 +318,7 @@ func (w *nodeWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 			return context.DeadlineExceeded
 		}
 		advance()
-		if w.Committed().Packed() >= p.Packed() {
+		if w.Reached().Packed() >= p.Packed() {
 			return nil
 		}
 		select {
@@ -328,7 +330,7 @@ func (w *nodeWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 }
 
 func (w *nodeWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statelog.Position) error {
-	return w.WaitCommitted(ctx, p)
+	return w.WaitReached(ctx, p)
 }
 
 // engineCall is a write as the engine makes one, under a fresh operation.
@@ -703,7 +705,7 @@ func TestAHolderWhoseEndWasLostIsEndedLostAndItsHoldLifts(t *testing.T) {
 		t.Fatalf("a lost end of the holder past its begin: %v", err)
 	}
 	s := n.session("ana", holder)
-	if !s.Ended() || s.Ending.Outcome != executordomain.OutcomeLost || s.BaseTurn != base ||
+	if !s.Ended() || s.Ending.Outcome != executorkeep.OutcomeLost || s.BaseTurn != base ||
 		strings.Contains(s.Ending.Failure, "capture") {
 		t.Errorf("the holder's row is %+v, want it ended lost, naming the base it was handed and "+
 			"no capture it never took", s)
@@ -730,7 +732,7 @@ func (n *writeNode) completed(handle, turn, conversation string) {
 	n.t.Helper()
 	if _, err := n.writer.End(n.t.Context(), engineCall(), executordomain.NewEnd{Handle: handle,
 		Turn: turn, ConversationKey: conversation,
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
 		n.t.Fatalf("end %s: %v", turn, err)
 	}
 }

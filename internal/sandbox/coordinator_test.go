@@ -282,6 +282,8 @@ type coordRig struct {
 	resumer     *resumeSpy
 	accountant  *ledgerSpy
 	audience    *audienceSpy
+	// pushes is what the coordinator reads a collected run's pushes from.
+	pushes *pushSpy
 
 	mu      sync.Mutex
 	stopped []string
@@ -327,8 +329,10 @@ func newCoordRig(t *testing.T) *coordRig {
 		resumer:    &resumeSpy{},
 		accountant: &ledgerSpy{},
 		audience:   &audienceSpy{},
+		pushes:     &pushSpy{},
 	}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   rig.pushes,
 		Audience: rig.audience, Answers: rigAnswers(),
 		Queue: base.queue, Pending: base.pending, Manager: base.manager,
 		Resume: rig.resumer, Account: rig.accountant,
@@ -1227,6 +1231,79 @@ func TestARelaunchWhoseBoxIsGoneStartsInAFreshOne(t *testing.T) {
 	}
 }
 
+// A RELAUNCH DOES NOT CONTINUE IN A BOX A WEEK OLD. A box's checkouts are as
+// old as the box, and every job continued in it is a fresh launch with a fresh
+// credential, so send-backs and answered parks could keep one checkout pushing
+// for as long as the turn lasts — past the two weeks the code host keeps a
+// deleted seat branch's engine commits, after which such a push is refused as
+// a forgery ([KeptBoxMaxAge]). Past the bound the box is reclaimed and the job
+// starts in a fresh one, from the pushed branch, dated anew.
+func TestARelaunchOfABoxPastItsKeptAgeStartsFresh(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	rig.now = rig.now.Add(KeptBoxMaxAge)
+	var relaunch LaunchResult
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
+		res, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID))
+		if err != nil {
+			t.Errorf("a relaunch whose box is too old must still run: %v", err)
+		}
+		relaunch = res
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if relaunch.Reused || relaunch.SandboxID == "" || relaunch.SandboxID == run.SandboxID {
+		t.Fatalf("relaunch = %+v, want a fresh box in place of the week-old %q", relaunch, run.SandboxID)
+	}
+	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
+		t.Fatalf("killed %v, want the week-old box %q reclaimed before it was replaced",
+			killed, run.SandboxID)
+	}
+	got := rig.get("t1")
+	if got.SandboxID != relaunch.SandboxID || !got.BoxSince.Equal(rig.now) {
+		t.Fatalf("row names %q dated %v, want the fresh box %q dated %v",
+			got.SandboxID, got.BoxSince, relaunch.SandboxID, rig.now)
+	}
+}
+
+// A KEPT BOX IS DATED FROM ITS FIRST ATTACH, NOT ITS LATEST. A job continued
+// in the turn's box attaches it again, and a box re-dated by each of those
+// would never reach [KeptBoxMaxAge]: one a second short of it is continued
+// in, and its date stays the one its first job's attach wrote.
+func TestAKeptBoxIsDatedFromItsFirstAttach(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	first := rig.now
+	rig.now = first.Add(KeptBoxMaxAge - time.Second)
+	var relaunch LaunchResult
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
+		res, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID))
+		if err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
+		relaunch = res
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if !relaunch.Reused || relaunch.SandboxID != run.SandboxID {
+		t.Fatalf("relaunch = %+v, want it continued in the turn's box %q, short of a week old",
+			relaunch, run.SandboxID)
+	}
+	if got := rig.get("t1"); !got.BoxSince.Equal(first) {
+		t.Fatalf("the continued box is dated %v, want its first attach's %v", got.BoxSince, first)
+	}
+}
+
 // A RELAUNCH ON ANOTHER HARNESS RECLAIMS THE BOX IT LEAVES. Launch-time fallback
 // picks a member at every launch, so a turn's next job can run another harness
 // than its last — which the box was installed for and no other harness can run in.
@@ -1729,6 +1806,7 @@ func TestASettleSomebodyElseEndedReportsNoStop(t *testing.T) {
 	rig.launch("t1")
 	var stopped []string
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Answers:  rigAnswers(),
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
@@ -1837,6 +1915,7 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Answers:  rigAnswers(),
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
@@ -2138,6 +2217,7 @@ func TestAnAnswerDoesNotClaimTheJobThatReplacedTheAsker(t *testing.T) {
 	rig.suspend("t1")
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Answers:  rigAnswers(),
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
@@ -2197,6 +2277,7 @@ func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
 	rig.runner.Finish(Result{})
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Answers:  rigAnswers(),
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
@@ -2271,6 +2352,7 @@ func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
 
 			spy := &statusAtAsk{recorder: rig.queue, rig: rig}
 			coordinator, err := NewCoordinator(CoordinatorOptions{
+				Pushes:   &pushSpy{},
 				Answers:  rigAnswers(),
 				Lease:    leased(rigLease),
 				Audience: &audienceSpy{},
@@ -2348,6 +2430,7 @@ func (r relaunchThenBreak) Resume(ctx context.Context, req ResumeRequest) error 
 func (r *coordRig) withResumer(t *testing.T, resume Resumer) *Coordinator {
 	t.Helper()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   r.pushes,
 		Answers:  rigAnswers(),
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
@@ -2501,6 +2584,7 @@ func TestADrainThatBreaksAResumeStillHandsTheClaimBack(t *testing.T) {
 	delivery, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Answers:  rigAnswers(),
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
@@ -2662,6 +2746,7 @@ func TestARetryOnAnotherNodeChargesTheRunOnce(t *testing.T) {
 	// charging the same fleet counter.
 	successor := &ledgerSpy{}
 	next, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Answers:  rigAnswers(),
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
@@ -2704,6 +2789,7 @@ func TestAChargeIsRecordedByTheWriteThatHandsTheClaimBack(t *testing.T) {
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
 	resumer := &resumeSpy{err: fmt.Errorf("%w: the seat moved", ErrResumeUnavailable)}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Answers:  rigAnswers(),
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
@@ -3921,6 +4007,7 @@ func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Answers:  rigAnswers(),
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
@@ -4092,7 +4179,7 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 	if err == nil {
 		t.Fatal("a coordinator with no queue, store, manager or resumer was accepted")
 	}
-	for _, field := range []string{"Queue", "Pending", "Manager", "Resume", "Audience", "Answers"} {
+	for _, field := range []string{"Queue", "Pending", "Manager", "Resume", "Audience", "Pushes", "Answers"} {
 		if !strings.Contains(err.Error(), "CoordinatorOptions."+field) {
 			t.Errorf("the refusal does not name CoordinatorOptions.%s: %v", field, err)
 		}
@@ -4100,11 +4187,21 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 
 	rig := newCoordRig(t)
 	if _, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Audience: &audienceSpy{}, Answers: rigAnswers(),
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
 	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Resume") ||
 		strings.Contains(err.Error(), "CoordinatorOptions.Answers") {
 		t.Fatalf("a coordinator with no resumer = %v, want it refused naming Resume", err)
+	}
+	// AND ONE THAT CANNOT READ WHAT A RUN PUSHED: it would hand every run
+	// given a repository back saying nothing of its pushes, which its report
+	// reads as none.
+	if _, err := NewCoordinator(CoordinatorOptions{
+		Audience: &audienceSpy{}, Resume: &resumeSpy{}, Answers: rigAnswers(),
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Pushes") {
+		t.Fatalf("a coordinator with no reader of a run's pushes = %v, want it refused naming Pushes", err)
 	}
 }
 
@@ -4439,6 +4536,7 @@ func TestARunsBoxIsReclaimedBeforeItsRecordIsDeleted(t *testing.T) {
 	run := rig.launch("t1")
 	witness := &finishWitness{PendingStore: rig.pending, provider: rig.provider, box: run.SandboxID}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Answers:  rigAnswers(),
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},

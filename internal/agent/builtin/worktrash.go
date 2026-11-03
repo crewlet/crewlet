@@ -97,7 +97,7 @@ func (t *removeWorkItem) Description() string {
 }
 
 func (t *removeWorkItem) Parameters() map[string]any {
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -233,7 +233,7 @@ func (t *restoreWorkItem) Description() string {
 }
 
 func (t *restoreWorkItem) Parameters() map[string]any {
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{

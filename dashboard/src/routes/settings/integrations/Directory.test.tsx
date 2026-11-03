@@ -134,7 +134,12 @@ const MEMBER = {
 };
 const NOBODY = { login: "", owner: "", grants: [], acts: [] };
 
-const BUILT_IN: OrgServices = { tracker: "worklet", knowledge: "doclet", chat: "chatlet" };
+const BUILT_IN: OrgServices = {
+  tracker: "worklet",
+  knowledge: "doclet",
+  chat: "chatlet",
+  code: "native",
+};
 
 interface Mounted {
   /** Every socket question the page asked. */
@@ -422,7 +427,7 @@ test("coming back to an app through the list does not reopen the arrival's form"
 
 // A HOME WITH NOTHING IN USE says so and points at the list.
 test("a company with nothing in use is told to pick from the list", async () => {
-  mount(MEMBER, undefined, { tracker: "none", knowledge: "none", chat: "none" });
+  mount(MEMBER, undefined, { tracker: "none", knowledge: "none", chat: "none", code: "none" });
   expect(await screen.findByText("Nothing is in use yet")).toBeTruthy();
   expect(screen.queryByRole("region", { name: /^In use/ })).toBeNull();
 });
@@ -576,9 +581,8 @@ test("the integration is read again the moment a sync ends", async () => {
   await screen.findByRole("table", { name: "Agents on Datadog" });
   const before = asked.filter((q) => q === "integrations").length;
   syncing = false;
-  await waitFor(
-    () => expect(asked.filter((q) => q === "integrations").length).toBeGreaterThan(before),
-    { timeout: 5_000 },
+  await waitFor(() =>
+    expect(asked.filter((q) => q === "integrations").length).toBeGreaterThan(before),
   );
 });
 
@@ -672,18 +676,6 @@ test("a reader nobody signed in is offered the sign-in", async () => {
 
 // --- Crewlet's own services -------------------------------------------------------- //
 
-// THE INBOX HORIZON IS WORKLET'S OWN POLICY, read where the company document
-// keeps it (`tracker.worklet`), and an unset one is the engine's default.
-// Mutation: read it off the tracker block itself and the 90 days are never
-// said.
-test("Worklet's settings read the inbox horizon from its own policy", async () => {
-  mount(ADMIN, "worklet", BUILT_IN, undefined, {
-    tracker: { backend: "worklet", worklet: { inbox_retention_days: 90 } },
-  });
-  fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
-  expect(await screen.findByText("90 days")).toBeTruthy();
-});
-
 test("a service the company runs is in use, with its way in", async () => {
   mount(MEMBER, "worklet");
   expect(await screen.findByRole("heading", { level: 2, name: "Worklet" })).toBeTruthy();
@@ -726,6 +718,7 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
     tracker: "jira",
     knowledge: "doclet",
     chat: "chatlet",
+    code: "none",
   });
   expect(await screen.findByText("Jira does this for your company")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open Jira" }).getAttribute("href")).toBe(
@@ -735,8 +728,21 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
   expect(asked).not.toContain("work_projects");
 });
 
+// THE INBOX HORIZON IS THE COMPANY'S, read where its document keeps it — at the
+// top level, `inbox.retention_days` — with the engine's default where it is
+// unset. It was read off the `tracker` block, under a key no document wrote
+// there, so the pane said the default whatever a company set. Mutation: read
+// it under `tracker` again, and a company keeping ninety days is told the
+// engine's default.
+test("Worklet's settings say how long the company's inbox keeps a notice", async () => {
+  mount(ADMIN, "worklet", BUILT_IN, undefined, { name: "Acme", inbox: { retention_days: 90 } });
+  fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+  const row = (await screen.findByText("Inbox keeps a notice for")).parentElement as HTMLElement;
+  await waitFor(() => expect(row.textContent).toContain("90 days"));
+});
+
 test("a service the company runs none of says so, with no product to open", async () => {
-  mount(ADMIN, "doclet", { tracker: "worklet", knowledge: "none", chat: "chatlet" });
+  mount(ADMIN, "doclet", { tracker: "worklet", knowledge: "none", chat: "chatlet", code: "none" });
   expect(await screen.findByText("Nothing does this for your company")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Open Confluence/ })).toBeNull();
 });

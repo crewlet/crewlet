@@ -21,7 +21,10 @@
 # them FAIL saying what to install, which is the same posture CI takes
 # (CONTRIBUTING.md, "A skip is not a pass"). Every queue backend certifies
 # itself with no external service: the JetStream suite starts an embedded
-# broker per test.
+# broker per test. The suite's git is the same posture's: every target that
+# runs Go tests runs the git the engine image builds, which `make git` builds
+# once a machine, and a machine without a C compiler or libcurl's headers is
+# told so by name rather than handed its own git (`##@ The pinned gits`).
 #
 # THE BUILT DASHBOARD IS COMMITTED, and that is deliberate rather than lazy:
 # `go build ./...` and `go install …@latest` must work on a clean checkout with
@@ -43,6 +46,15 @@
 # installs go.mod's own toolchain and exports GOTOOLCHAIN=local, which this
 # `?=` leaves as it is.
 export GOTOOLCHAIN ?= auto
+
+# No recipe here reads CDPATH, and every `cd` in one is relative to this tree:
+# `cd $(UI)` is `cd dashboard`, and scripts/git.sh, run as `scripts/git.sh`,
+# finds its own directory with `cd scripts`. A CDPATH a developer exported is
+# searched before the current directory: measured, an entry holding a
+# dashboard/ of its own took `cd dashboard` there, so `npm ci` and the build
+# would have run in that other tree. Unexported, it reaches no recipe; each
+# script that cds also drops it itself, for the runs by hand.
+unexport CDPATH
 
 GO ?= go
 
@@ -232,8 +244,8 @@ COMPANY ?=
 
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
-        check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
-        require-npm \
+        check fmt-check tidy-check signoff-check signoff-test git-test vet lint test test-norace test-cross test-solo \
+        require-npm bench git test-gitproc \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -298,12 +310,22 @@ clean: ## remove the build output (./crewlet, dist/ and build/)
 
 # The dashboard's source lives here; its BUILD OUTPUT is committed to
 # static/dashboard and static/artifacts (the page runtime and the artifact
-# kit, the third build target), both of which package static embeds.
+# kit, the third build target), both of which package static embeds, and to
+# static/protocol (the wire protocol alone, the second), which it does not.
 UI := dashboard
 
 # Every tree the dashboard's build writes, and so every tree the drift gate
-# judges.
-UI_OUT := static/dashboard static/artifacts
+# judges: the two package static embeds, and static/protocol, the wire
+# protocol alone, which internal/e2e replays frames through and no binary
+# carries.
+#
+# And every tree .github/workflows/dependabot-dashboard.yml commits for a
+# dependency bump, which reads it HERE rather than keep a list of its own: its
+# build job asks make, and its push job, which holds a token and so runs
+# nothing of this checkout, reads this line as TEXT. So it stays ONE
+# `UI_OUT :=` line of directories directly under static/; that job refuses
+# any other shape rather than guess at it.
+UI_OUT := static/dashboard static/artifacts static/protocol
 
 # npm ci rather than npm install: the lockfile is the pin, and `install` is
 # allowed to move it. A build whose dependency versions drift is a build whose
@@ -313,7 +335,7 @@ $(UI)/node_modules: $(UI)/package-lock.json | require-npm
 	cd $(UI) && npm ci
 	@touch $(UI)/node_modules
 
-dashboard: $(UI)/node_modules ## build the dashboard into static/dashboard and static/artifacts (commit the result)
+dashboard: $(UI)/node_modules ## build the dashboard into static/dashboard, static/artifacts and static/protocol (commit the result)
 	cd $(UI) && npm run build
 
 dashboard-dev: $(UI)/node_modules ## run the dashboard dev server against a local engine on :8000
@@ -347,8 +369,8 @@ dashboard-lint: $(UI)/node_modules ## check the dashboard's formatting (ci: dash
 # the index.html that imports the new chunk and the deletion of the old one,
 # the diff is empty, and the binary serves a shell asking for a module it does
 # not embed. The second question is `git ls-files --others`: is there
-# anything on disk under static/dashboard or static/artifacts the index does
-# not hold at all.
+# anything on disk under static/dashboard, static/artifacts or
+# static/protocol the index does not hold at all.
 #
 # `--others` WITHOUT `--exclude-standard`, so an ignored file fails too. The
 # embed is `all:dashboard`, which ships every file on disk whatever
@@ -365,18 +387,67 @@ dashboard-lint: $(UI)/node_modules ## check the dashboard's formatting (ci: dash
 # checkout the index IS HEAD, so the two readings agree there. The listing
 # drops the staged-only lines (`grep -v '^. '`, an unchanged second column)
 # for the same reason: what it prints is the drift and nothing else.
-dashboard-check: $(UI)/node_modules ## fail if static/dashboard or static/artifacts is not what dashboard/ builds (ci: dashboard)
+dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifacts or static/protocol is not what dashboard/ builds (ci: dashboard)
 	cd $(UI) && npm run build
 	@untracked="$$(git ls-files --others -- $(UI_OUT))" || exit 1; \
 	if ! git diff --exit-code -- $(UI_OUT) || [ -n "$$untracked" ]; then \
 	  { echo; \
-	    echo "static/dashboard or static/artifacts is not what dashboard/ builds."; \
+	    echo "static/dashboard, static/artifacts or static/protocol is not what dashboard/ builds."; \
 	    echo "What a rebuild changed or wrote that the index does not carry:"; \
 	    git status --porcelain --untracked-files=all --ignored=matching \
 	      -- $(UI_OUT) | grep -v '^. '; \
 	    echo "run: make dashboard && git add -A -- $(UI_OUT)"; } >&2; \
 	  exit 1; \
 	fi
+
+##@ The pinned gits
+
+# THE GITS THE SUITE RUNS, built from the release tarballs scripts/git-pin.env
+# pins by scripts/git.sh — the recipe the engine image builds its own git with —
+# once a machine, into a per-user cache (CREWLET_GIT_CACHE, by default
+# ~/.cache/crewlet/git; a pin bump or a change to the recipe is a new build
+# beside the old). The code host runs real git, and what a case asserts about it
+# is the git's behaviour as much as the engine's, so the suite runs the git a
+# git node runs rather than whichever one the machine has: every target that
+# runs Go tests depends on `git` and runs under GIT_ENV, and so do CI's two test
+# jobs and its `git recipe (macOS)` job, which call those targets.
+#
+# EVERY PIN IS BUILT, the floors' as well as the node's, so a pin whose version
+# or digest is wrong fails here — at the download its SHA-256 refuses — rather
+# than in whichever later run first needs it. About four minutes for the three
+# on four vCPUs, once; after that git.sh finds each build and answers at once.
+GIT_PINS := node node-floor client-floor
+
+git: ## build the pinned gits the suite and the image run (scripts/git-pin.env; needs a C compiler and libcurl's headers)
+	@for pin in $(GIT_PINS); do scripts/git.sh $$pin >/dev/null || exit 1; done
+
+# GIT_ENV puts the node pin first on PATH, so every pool and every client a case
+# starts runs it, and names the two floors' builds where the floors' arm finds
+# them (gittest.NodeFloor and gittest.ClientFloor read CREWLET_TEST_GIT_NODE_FLOOR
+# and CREWLET_TEST_GIT_CLIENT_FLOOR: every pool of host's
+# TestTheGitFloorsPassTheSuite on the node floor, gitproc.NodeMinVersion, and
+# every person's git on the client floor, gitproc.ClientMinVersion) —
+# REQUIRED there (CREWLET_REQUIRE_GIT_FLOOR=1), so a run whose floors are
+# missing fails naming them rather than skipping the arm, which only a bare
+# `go test` outside make does. STATEMENTS rather than a prefix of assignments:
+# a prefix `PATH="$(scripts/git.sh node):$PATH" go test …` whose command
+# failed runs the suite on the machine's own git with nothing said, which is
+# the one outcome this group exists to rule out. A recipe line starts with it,
+# and what follows it runs with the pin on PATH and the floors named.
+GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; \
+	node_floor="$$(scripts/git.sh node-floor)" || exit 1; \
+	client_floor="$$(scripts/git.sh client-floor)" || exit 1; \
+	export PATH="$$node_git:$$PATH" CREWLET_TEST_GIT_NODE_FLOOR="$$node_floor/git" \
+	  CREWLET_TEST_GIT_CLIENT_FLOOR="$$client_floor/git" CREWLET_REQUIRE_GIT_FLOOR=1;
+
+# gitproc's own suite on the pinned gits, alone: what ci.yml's `git recipe
+# (macOS)` job runs, so the recipe's macOS branch (shasum, sysctl's core count,
+# the SDK's libcurl) is built on every pull request and the gits it builds run
+# gitproc's floor judgement, a real pool and the floors' own gits. On Linux
+# `make test` runs these packages with the rest, so `check` does not depend on
+# it.
+test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (ci: git recipe (macOS))
+	$(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json ./internal/code/gitproc/...
 
 ##@ Gates — `make check` is all of them
 
@@ -422,7 +493,7 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard or static/artifa
 # TestAFleetOfThree/EveryNodeMintsIntoOneKeySpace (then a test of its own)
 # with `ensure stream CREWLET_NOTIFICATIONS: context deadline exceeded`, and
 # passed alone.
-check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test git-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@status=0; \
 	$(MAKE) test || status=1; \
 	$(MAKE) test-solo || status=1; \
@@ -481,6 +552,22 @@ signoff-check: ## fail if a commit on this branch is not signed off (ci: sign-of
 # why the suite exists and why it mutation-tests its own assertions.
 signoff-test: ## run the sign-off gate's own suite (ci: sign-off)
 	@scripts/check-signoff_test.sh
+
+# The OWN SUITE of the git recipe (scripts/git.sh) and of the weekly pin check
+# (scripts/git-pin-check.sh, which .github/workflows/git-pin.yml runs). Both are
+# shell no Go test reaches, and each fails silently in the direction that
+# matters: a recipe that installs over a git another checkout's suite is
+# running, a check that calls every pin current because it read nothing, or
+# that verifies a signature without asking whose it is. The suite runs the real
+# scripts against local stand-ins — a source tarball, a release listing,
+# signing keys of its own — so it builds no git and reads no network, and runs
+# itself once more, by a relative path, under a developer's most hostile
+# environment (the scripts' knobs, a GnuPG home, a curl configuration, a
+# CDPATH naming another scripts/) to hold that it reads none of it:
+# about twelve seconds, half of them that second run. It needs make, tar, xz,
+# curl, sha256sum (or shasum) and GnuPG.
+git-test: ## run the git recipe's and the pin check's own suite (ci: build + vet)
+	@scripts/git-pin_test.sh
 
 vet: ## run go vet (ci: build + vet)
 	$(GO) vet ./...
@@ -545,9 +632,9 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # whole run — and the prerequisite says so before anything runs. ci.yml's
 # `test (race)` installs node for the same reason. (internal/e2e's dashboard
 # replay is node's other consumer, in the solo half below.)
-test: require-node ## the suite, minus the packages that run alone (ci: test (race))
+test: require-node git ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, or go list failing)" >&2; exit 1; }
-	$(SKIPGATE)$(if $(TEST_TIMINGS), -timings $(TEST_TIMINGS)) -- $(GOTEST) -json $(PARALLEL_PKGS)
+	$(GIT_ENV) $(SKIPGATE)$(if $(TEST_TIMINGS), -timings $(TEST_TIMINGS)) -- $(GOTEST) -json $(PARALLEL_PKGS)
 
 # The solo half: every package that needs the runner to itself.
 #
@@ -560,12 +647,12 @@ test: require-node ## the suite, minus the packages that run alone (ci: test (ra
 # effect: cmd/go runs compile, link and test actions on ONE pool of -p workers,
 # so every package in the half's dependency tree compiled one at a time before
 # the first test started. On CI that was 266s of a 992s step running no test
-# at all. So the half is compiled FIRST at the default -p by SOLO_PREBUILD,
-# which starts no test binary and so forms no cluster, and the -p 1 run finds
-# every compile in the build cache. Measured from a cold cache (4 vCPUs, the
-# machine shared): 423s serial, against 144s for the prebuild plus 19s for a
-# -p 1 run left with seven links and the seven generated test mains, which is
-# all it compiles.
+# at all. So the half is compiled FIRST at the default -p by PREBUILD, which
+# starts no test binary and so forms no cluster, and the -p 1 run finds every
+# compile in the build cache. Every other run at -p 1 (`bench`) is prebuilt
+# the same way. Measured from a cold cache (4 vCPUs, the machine shared): 423s
+# serial, against 144s for the prebuild plus 19s for a -p 1 run left with
+# seven links and the seven generated test mains, which is all it compiles.
 #
 # `go list -export` rather than `go test -c -o /dev/null`, which leaves the run
 # exactly the same work but LINKS every binary in the prebuild too — and its
@@ -585,12 +672,15 @@ test: require-node ## the suite, minus the packages that run alone (ci: test (ra
 # the probe package (and failed it), plus the other's test main and link. The
 # flag changes how a load error is REPORTED and nothing about what is
 # compiled, so the action IDs are the run's either way.
-SOLO_PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(SOLO_PKGS) > /dev/null
+#
+# $(1) is the flags that change what is compiled — the run's own, so the two
+# share action IDs — and $(2) the packages.
+PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(2) > /dev/null
 
-test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates)
+test-solo: require-node git ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (go list failing, or no package importing internal/solo)" >&2; exit 1; }
-	$(call SOLO_PREBUILD,$(GOTESTBUILD))
-	$(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
+	$(call PREBUILD,$(GOTESTBUILD),$(SOLO_PKGS))
+	$(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
@@ -614,12 +704,12 @@ test-solo: require-node ## the packages that need a runner to themselves (ci: en
 #
 # The same flags as the gates bar -race (GOTESTRUN), and the same prebuild for
 # the solo half, compiled without it.
-test-norace: require-node ## the full suite without -race (faster; not a gate)
-	@status=0; \
+test-norace: require-node git ## the full suite without -race (faster; not a gate)
+	@$(GIT_ENV) status=0; \
 	echo "==> parallel partition"; \
 	$(GO) test $(GOTESTRUN) $(PARALLEL_PKGS) || status=1; \
 	echo "==> solo partition"; \
-	{ $(call SOLO_PREBUILD,) && $(GO) test $(GOTESTRUN) -p 1 $(SOLO_PKGS); } || status=1; \
+	{ $(call PREBUILD,,$(SOLO_PKGS)) && $(GO) test $(GOTESTRUN) -p 1 $(SOLO_PKGS); } || status=1; \
 	exit $$status
 
 # Every target reports in one run rather than stopping at the first failure —
@@ -669,6 +759,136 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 	  echo "  Install any current node, as ci.yml does, and re-run."; \
 	  exit 1; \
 	} >&2
+
+##@ Benchmarks — measurements, never a gate
+
+# THE BENCHMARKS THE DESIGN'S CAPACITY FIGURES COME FROM, so each figure is
+# measured rather than derived: the object store on every backend
+# (objstoretest.Bench, the broker's bucket at three replicas among them, the
+# SHA-256 floor under every verified byte, and what one throttle costs a burst
+# of requests to an S3 bucket), an arbitrated write end to end
+# and the applier's drain (internal/statelog), the store's own drain
+# (internal/store), what a stream's leader takes to list the subjects it
+# holds, a page at a time (internal/jsapi), the company's token counter
+# charged by many nodes at once, each a leaf of its own, a gated lease claim
+# and what a coding box's request costs its run's record on three members
+# (internal/coord/kv), a git process through the pool end to end,
+# receive-pack's index-pack at one thread, and a person's clone on a transfer
+# lane one CI token has filled, with the fair share and without it, and beside
+# coding boxes with their cap and without it, and one
+# grant of a lane ten thousand waiters deep (internal/code/gitproc), the git
+# cache's cold and delta syncs and a bundle's own file work, its index
+# maintenance and what a request pays across many packs, a node's boot of its
+# cache and what a directory sync costs a file (internal/code/cache), the code
+# domain's applier, decide, reconcile and snapshot reads and what a push's
+# history costs every data node's disk (internal/code), the code host's
+# commit chain on one and three members and an engine write's route between
+# them (internal/code/codecluster), a push, a warm fetch, cold and warm
+# clones, a blobless clone's lazy blame, and a seat's engine write from its
+# tool's call to its pack adopted and its build alone, end to end, and a
+# coding box's two clone recipes, its own git in a wide work tree and a copy
+# borrowed from the node (internal/code/host), a seat's reads of a
+# repository by object id on a git node, warm and cold (internal/code/query), the
+# pace a client's connection is held to, on a real connection
+# (internal/api/paced), and what every push pays to start its proc-receive
+# hook (cmd/crewlet). Each package's doc records what it measured, and on what
+# machine.
+#
+# NOT A GATE, AND NO CI JOB RUNS IT: a benchmark on a shared runner measures
+# the runner's neighbours, and a gate on figures that noisy is one somebody
+# turns off. Compare two trees on one idle machine instead — BENCH_COUNT=6 on
+# each, then benchstat (golang.org/x/perf/cmd/benchstat).
+#
+# -p 1: one package's binary at a time. Two measuring at once measure each
+# other, and internal/statelog, internal/objstore/natsobj/replicated and
+# internal/code/codecluster stand up three-member clusters, which is what
+# internal/solo exists to keep alone.
+# Compiled first at full -p by PREBUILD, for test-solo's reason.
+# -run '^$': -bench alone runs every test as well.
+# No -race: the detector multiplies costs unevenly, so a figure taken under it
+# describes the detector.
+# -v: a SKIPPED benchmark prints nothing without it. The real-bucket arms skip
+# unless CREWLET_BENCH_S3_BUCKET names a bucket (internal/objstore/s3obj's
+# package doc), and the arms whose fixture takes minutes and gigabytes —
+# internal/code/cache's cold syncs of 2 048 and of 10 000 pushes, its
+# 10 000-pack repositories, its 5 GB index and its published layers, its
+# gigabyte split into hundreds of packs, its installer catching up 10 000
+# repositories and BenchmarkBigNode's 5 GB monorepo,
+# internal/code/host's gigabyte history, hundred thousand refs,
+# 100 000-file tree and a box's million-file one, internal/code/query's
+# gigabyte history under a 100 000-file tree read by object id and its
+# gigabyte history blamed and logged by path, and internal/jsapi's streams of a
+# million and of three million subjects (about five minutes a count on four
+# cores) — unless CREWLET_BENCH_LARGE=1; an arm that silently did not run
+# reads as one that measured nothing worth showing. BenchmarkBigNode's 12 GB
+# monorepo also needs CREWLET_BENCH_BIGNODE=1 and a machine of at least 64 GB:
+# its fixture builds for hours, so it runs alone, under the day's timeout
+# CREWLET_BENCH_LARGE=1 gives a run (BENCH_TIMEOUT below). Not through
+# skipgate, for the same reason: an allowance there would make that skip
+# silent again. The code host's pools and every client run the node pin, which
+# GIT_ENV puts first on PATH as it does for every test target, so a figure is
+# of the git the engine image builds and never of whichever one the machine
+# had: a package doc quoting it names that version.
+# BENCH_TIME 3s: the 128 MiB cases take most of a second an operation, so at
+# go's default of one second they are one or two operations whose first-touch
+# page faults are the figure; at three they are several.
+# BENCH_TIMEOUT is a hang detector, as TEST_TIMEOUT is. The longest package
+# is internal/code/cache, whose fixtures are real git: at BENCH_COUNT=6 on
+# four vCPUs its arms took an hour and three quarters, half an hour of it
+# BenchmarkBoot's thousand repositories, and BenchmarkMidx's memory arms add
+# about five minutes a count (the gigabyte's clone walking its history a
+# minute and a half of it); with CREWLET_BENCH_LARGE=1 about six and a half
+# hours, two of them the gigabyte split into packs, whose clones with no index
+# take minutes each, and an hour BenchmarkColdSync's cold syncs of the pack
+# bound's 2 048 pushes and of an uncompacted 10 000, from memory and from the
+# S3 fake at 30, 100 and 200 ms (seven and a half minutes of syncs a count,
+# and a quarter of an hour of fixtures once). The next is
+# internal/code/host: fifty minutes at six counts, and with
+# CREWLET_BENCH_LARGE=1 about two and a half hours — half an hour of it
+# BenchmarkPushSmall's gigabyte history and an hour BenchmarkCloneCold's
+# 2 000-push tree; its coding boxes' (BenchmarkBoxClone, BenchmarkBoxWorktree,
+# BenchmarkBoxDissociate) took twelve minutes more at one count of ten
+# operations on two E-cores, BenchmarkBoxWorktree's eleven sessions of an
+# agent's commands about twelve more at one, and their gigabyte arms twenty at one, the
+# million-file tree's unmeasured (BENCH_TIME=10x, or 1x, each figure says
+# which); its engine writes' BenchmarkEngineWrite took nine and a half
+# minutes at BENCH_TIME=10x on two cores once it compacted its repositories
+# between rounds (one run of each store), and BenchmarkEngineCommit, the
+# 100 000-file tree and directory included, adds its own; at the default
+# three seconds both take several rounds an arm more. A fixture is built once a
+# run whatever BENCH_COUNT says,
+# since go test repeats only a leaf benchmark a count: the gigabyte's is ten
+# minutes and its arms four a count, the tree's eleven and its clones eight.
+# internal/code/cache's published layers' arms came after those runs, and add
+# — an ESTIMATE from each arm's one bounded count on two cores, never a run of
+# six — about an hour and a half at six counts (12 minutes a count, a quarter
+# of an hour of fixtures once), and with CREWLET_BENCH_LARGE=1 about five and
+# a half more: their 5 GB arms (some 25 minutes a count, a whole-history walk
+# growing sevenfold from a gigabyte to 5 GB as git 2.43's did),
+# BenchmarkBigNode's 5 GB monorepo and the installer's 10 000-repository
+# catch-up (a quarter of an hour a count, most of it the 20 000 syncs that
+# set each count up) — about thirteen hours for the package at six counts.
+# The timeout is each package's, as -p 1 runs them in turn. Eight hours holds
+# six counts of everything a default run measures with room for a slower
+# machine, and a day six counts of the large arms too; a real bucket's arm is
+# bounded by its link.
+BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
+                 ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
+                 ./internal/objstore/s3obj ./internal/statelog ./internal/store \
+                 ./internal/jsapi ./internal/coord/kv ./internal/code/gitproc \
+                 ./internal/code/cache ./internal/code/compact ./internal/code \
+                 ./internal/code/codecluster ./internal/code/host ./internal/code/query \
+                 ./internal/usage ./internal/api/paced ./cmd/crewlet
+BENCH_PATTERN ?= .
+BENCH_TIME    ?= 3s
+BENCH_COUNT   ?= 1
+BENCH_TIMEOUT ?= $(if $(filter 1,$(CREWLET_BENCH_LARGE)),24h,8h)
+
+bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, the code host's pushes, clones and engine writes, a coding box's git and its run's record, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
+	$(call PREBUILD,,$(BENCH_PKGS))
+	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
+	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \
+	  -p 1 -v $(BENCH_PKGS)
 
 ##@ Local vendor loops
 
@@ -815,8 +1035,10 @@ snapshot: ## rehearse a release locally (needs goreleaser and docker)
 # carries, which neither way goreleaser runs can do, so the build is written
 # out here with .goreleaser.yaml's settings (CGO_ENABLED=0, -trimpath, -s -w,
 # the -X stamp) and staged in the layout its dockers_v2 stages: each binary
-# under its platform, beside the license and both notices files the Dockerfile
-# copies. A change to the release build is a change to both files.
+# under its platform, beside the license, both notices files and the git pin
+# and recipe (scripts/git-pin.env, scripts/git.sh) the Dockerfile's git stage
+# builds from — the files .goreleaser.yaml's extra_files names. A change to the
+# release build is a change to both files.
 #
 # VERSION is required, because an unstamped binary reports a module version:
 # a name for a build nobody made. And the binary this host can run is run and
@@ -836,9 +1058,10 @@ image-context: ## stage the engine image's build context, stamped VERSION (ci: m
 	done
 	$(GO) run ./scripts/notices -out $(IMAGE_CONTEXT)/build/notices/THIRD_PARTY_NOTICES.txt \
 	  -main ./cmd/crewlet -targets $$(echo $(IMAGE_PLATFORMS) | tr ' ' ',')
-	mkdir -p $(IMAGE_CONTEXT)/static/dashboard
+	mkdir -p $(IMAGE_CONTEXT)/static/dashboard $(IMAGE_CONTEXT)/scripts
 	cp LICENSE $(IMAGE_CONTEXT)/LICENSE
 	cp static/dashboard/THIRD_PARTY_NOTICES.txt $(IMAGE_CONTEXT)/static/dashboard/
+	cp scripts/git-pin.env scripts/git.sh $(IMAGE_CONTEXT)/scripts/
 	@host=$$($(GO) env GOHOSTOS)/$$($(GO) env GOHOSTARCH); \
 	case " $(IMAGE_PLATFORMS) " in \
 	  *" $$host "*) \

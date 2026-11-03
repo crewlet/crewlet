@@ -139,8 +139,8 @@ func TestASpoolNeverOutlivesItsCapture(t *testing.T) {
 func TestAJobContinuingInItsTurnsBoxScrubsWhatTheJobsBeforeItWereHanded(t *testing.T) {
 	t.Parallel()
 	for name, earlier := range map[string]bool{
-		"the earlier job's secrets on the record": true,
-		"none on the record":                      false,
+		"the earlier job's secrets kept beside the record": true,
+		"none kept for the earlier job":                    false,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -168,7 +168,7 @@ func TestAJobContinuingInItsTurnsBoxScrubsWhatTheJobsBeforeItWereHanded(t *testi
 			if !relaunch.Reused || relaunch.SandboxID != run.SandboxID {
 				t.Fatalf("relaunch = %+v, want it continued in the turn's box %q", relaunch, run.SandboxID)
 			}
-			sealed := rig.get("t1").Handed
+			sealed := rig.handedOf(t, "t1")
 			if !earlier {
 				if sealed != "" {
 					t.Fatalf("sealed %q for a box whose earlier jobs' secrets are unknown, want nothing", sealed)

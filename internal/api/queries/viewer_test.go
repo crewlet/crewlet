@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -92,6 +93,11 @@ func (flatChart) LeadsAnyone(context.Context, string) (bool, error) {
 // MemberOf answers that nobody sits in any unit: no case here shares an
 // artifact with a team.
 func (flatChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+// SeatGranted answers that no role carries a grant: no question names one.
+func (flatChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
 	return false, nil
 }
 
@@ -640,7 +646,7 @@ func TestEveryInboxFilterReachesTheReader(t *testing.T) {
 		t.Fatalf("work_inbox: %v", err)
 	}
 	q := work.inboxQuery
-	if !q.Unread || !q.PrimaryOnly || q.Snoozed != worklet.SnoozeOnly {
+	if !q.Unread || !q.PrimaryOnly || q.Snoozed != inbox.SnoozeOnly {
 		t.Errorf("the three filters reached the reader as %+v", q)
 	}
 	if q.Limit != 7 || q.Cursor != "c-9" {
@@ -679,9 +685,9 @@ func TestTheSnoozedScopeDefaultsToExcludeAndRefusesAnUnknownOne(t *testing.T) {
 		map[string]any{}); err != nil {
 		t.Fatalf("work_inbox: %v", err)
 	}
-	if work.inboxQuery.Snoozed != worklet.SnoozeExclude {
+	if work.inboxQuery.Snoozed != inbox.SnoozeExclude {
 		t.Errorf("an absent `snoozed` reached the reader as %q, want %q",
-			work.inboxQuery.Snoozed, worklet.SnoozeExclude)
+			work.inboxQuery.Snoozed, inbox.SnoozeExclude)
 	}
 	_, err := askAsOperator(t, viewerSources(t, &stubWork{}), "work_inbox",
 		map[string]any{"snoozed": "bogus"})

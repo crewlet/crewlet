@@ -18,12 +18,15 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -140,14 +143,16 @@ func TestAnExecutorRecordFromANewerBuildKeepsItsSubjectAcrossTheWire(t *testing.
 // reason (`op_reused` has a remedy of its own), and the cause is what still
 // answers errors.Is — a stream recreated behind `wrong_stream` — so a
 // refusal rebuilt as its message alone would lose both. And the writer of a
-// copy it names crosses too: whether the reason is the serving node's standing
-// or another node's is what its remedy turns on.
+// copy it names crosses too, and whether the record it names is the
+// operation's own: whether the reason is the serving node's standing or
+// another node's, and whether a record of the write landed at all, are what
+// its remedy turns on.
 func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 	t.Parallel()
 	original := fmt.Errorf("write: %w", &statelog.Unavailable{
 		Reason: statelog.ReasonOpReused, Detail: "the op wrote elsewhere",
 		Position: statelog.Position{Stream: trackerStream, Generation: 2, Seq: 41},
-		OpID:     "op-1", CopyWriter: "node-b",
+		OpID:     "op-1", CopyWriter: "node-b", Dropped: true,
 		Cause: fmt.Errorf("because: %w", statelog.ErrStreamRecreated),
 	})
 	got := throughWire(t, original)
@@ -157,7 +162,7 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 	}
 	if refusal.Reason != statelog.ReasonOpReused || refusal.OpID != "op-1" ||
 		refusal.Position.Seq != 41 || refusal.Detail != "the op wrote elsewhere" ||
-		refusal.CopyWriter != "node-b" {
+		refusal.CopyWriter != "node-b" || !refusal.Dropped {
 		t.Errorf("the refusal's fields did not survive: %+v", refusal)
 	}
 	if !errors.Is(refusal.Cause, statelog.ErrStreamRecreated) {
@@ -220,16 +225,20 @@ func TestAnIdentityRefusalCrossesWithWhatLiftsIt(t *testing.T) {
 
 // THE ROUTER'S OWN WORDS CROSS TOO, and so does every answer the router's
 // failover turns on. An estate nobody served says who was asked on the far
-// side of a second hop; and an unvouched step rebuilt from the wire must still
-// read as one another node's ledger may answer, or a router that met it on
-// another node would stop at it rather than ask the next, under its operation
-// id.
+// side of a second hop, and whether they were data nodes or git nodes; and an
+// unvouched step rebuilt from the wire must still read as one another node's
+// ledger may answer, or a router that met it on another node would stop at it
+// rather than ask the next, under its operation id.
 func TestTheRouterReadsARefusalTheWayItWasSent(t *testing.T) {
 	t.Parallel()
 	var unserved *ErrUnserved
-	if !errors.As(throughWire(t, &ErrUnserved{Detail: "data-a: no answer"}), &unserved) ||
-		unserved.Detail != "data-a: no answer" {
+	if !errors.As(throughWire(t, &ErrUnserved{Detail: "data-a: no answer", NodeSilent: true}), &unserved) ||
+		unserved.Detail != "data-a: no answer" || !unserved.Silent() || unserved.Git {
 		t.Fatalf("an unserved estate crossed as %+v", unserved)
+	}
+	if !errors.As(throughWire(t, &ErrUnserved{Detail: "git-a: no answer", Git: true}), &unserved) ||
+		!unserved.Git || !strings.Contains(unserved.Error(), "no git node") {
+		t.Fatalf("an unserved git walk crossed as %+v", unserved)
 	}
 	unvouchedStep := throughWire(t, fmt.Errorf("walk: %w", worklet.ErrStepUnvouched))
 	if !unvouched(opCreateTask.spec, nil, unvouchedStep) {
@@ -323,6 +332,12 @@ func TestARefusalsSentenceSurvivesTheWire(t *testing.T) {
 		{"chat", &chatlet.InvalidError{Field: "name",
 			Why: "is longer than 80 bytes — shorten it"},
 			[]error{chatlet.ErrInvalid}, chatlet.Sentence, chatRefusal},
+		// A MARK ON A PERSON'S INBOX, decided on the data node whose copy
+		// holds it. Mutation: drop inbox.Refusal from typedKinds and this
+		// fails.
+		{"inbox", &inbox.Refusal{Mark: inbox.ErrFull,
+			Why: "the read list holds 256 notices — mark them read through one"},
+			[]error{inbox.ErrFull}, inbox.Sentence, inboxRefusal},
 		// A RETENTION GESTURE'S TOLD REFUSAL, which a node without the
 		// data role reaches through the estate router like any other.
 		// Mutation: drop statelog.Telling from typedKinds and this fails.
@@ -397,6 +412,14 @@ func chatRefusal(err error) error {
 	return nil
 }
 
+func inboxRefusal(err error) error {
+	var r *inbox.Refusal
+	if errors.As(err, &r) {
+		return r
+	}
+	return nil
+}
+
 // AN IDENTITY THIS BUILD DOES NOT KNOW IS DROPPED AND THE WORDS KEPT — a
 // newer peer's sentinel mid-upgrade must not turn an answer into a failure to
 // decode one.
@@ -424,6 +447,23 @@ var neverCrosses = map[string]string{
 		"to rebuild: its message is the error it wraps, and what it is crosses " +
 		"as that error's identities and as the caveat.Said beside it, which is " +
 		"registered; nothing outside caveat can ask errors.As for it",
+	"estate.declined": "a half that ran nothing for a reason of its own, which " +
+		"the server answers as the unserved status no_backend with the half's " +
+		"reason as its detail (ranNothingDetail), and the router's own walk " +
+		"reads in process: the asker moves on, so no error crosses",
+	"estate.unreadyGit": "a git half's code.ErrGitUnready as the walk reads it, " +
+		"which the server answers as the unserved status behind with the " +
+		"half's sentence as its detail and its reason beside it (reply.Unready): " +
+		"what crosses is that status, never this wrapper",
+	"code.checksFileError": "a .crewlet/checks.yaml refused where its bytes are " +
+		"read, and answered there: no estate operation answers one, and its " +
+		"faults' kinds, errors, would not survive the wire's JSON; a caller " +
+		"reads it as a join of *config.Fault that IS code.ErrInvalid, never " +
+		"as the type",
+	"code.formatError": "a layer file's bytes refused by the git node reading " +
+		"them, which CheckLayer and LayLayer answer as code.ErrBadLayer — the " +
+		"registered sentinel — and isFormat alone asks errors.As for it, in " +
+		"the code package itself",
 }
 
 // THE REGISTRY IS COMPLETE, and this is the gate that keeps it so: every
@@ -456,11 +496,14 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	// the session's, whose answers a person verb is decided on; the
 	// artifacts' vocabularies their domains' answers carry; and the
 	// phrasing for a person that a refusal of any domain carries beside
-	// its error (ADR-0060). A code is the identifier as Go code spells it,
-	// so a nested package is named by its last element.
-	packages := append([]string{"statelog", "estate", "iam", "iam/session",
+	// its error (ADR-0060). AND THE INBOX RULES', which a person's mark
+	// verb on any domain's inbox is decided by, and the search index's, which
+	// every domain's search answers through. And the executor log's keep
+	// vocabulary, whose session bound a refused capture carries. A code is the identifier as Go
+	// code spells it, so a nested package is named by its last element.
+	packages := append([]string{"statelog", "estate", "iam", "iam/session", "executorkeep",
 		"artifacts", "artifacts/manifest", "artifacts/mediatype",
-		"artifactdata/canon", "artifactdata/query", "caveat"},
+		"artifactdata/canon", "artifactdata/query", "caveat", "inbox", "search"},
 		crossingDomains(t)...)
 	for _, pkg := range packages {
 		vars, types := declaredErrors(t, filepath.Join(root, "internal", filepath.FromSlash(pkg)))
@@ -514,9 +557,9 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 // domain declares itself — held against [floorStreams] by [crossingDomains],
 // so a domain the router floors is one whose package the error gate reads.
 var flooredDomains = []statelog.Domain{
-	worklet.Domain{}, doclet.Domain{}, iamdomain.Domain{},
-	artifactsdomain.Domain{}, artifactdata.Domain{}, chatlet.Domain{},
-	executordomain.Domain{},
+	worklet.Domain{}, doclet.Domain{}, usage.Domain{}, code.Domain{},
+	iamdomain.Domain{}, artifactsdomain.Domain{}, artifactdata.Domain{},
+	chatlet.Domain{}, executordomain.Domain{},
 }
 
 // crossingDomains is the package of every domain an operation floors on,

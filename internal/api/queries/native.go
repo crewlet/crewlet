@@ -35,6 +35,18 @@ import (
 // every answer carries the level it was served at and the position it
 // answered at, rather than a flag saying whether the copy was ready.
 //
+// # The halves are found PER QUESTION
+//
+// A node's Worklet and Doclet come up with its first company, which a node
+// that booted with none meets at an apply, long after this surface was wired —
+// so the sources `crewlet run` hands it (internal/api's `NativeSources`)
+// resolve their half for every question rather than once. A half not up yet
+// answers [ErrUnavailable]; a half this company keeps on a vendor answers
+// [ErrUnknown], exactly as a question nothing registered would, since no wait
+// brings it; and a question merging several halves asks each source first, as
+// a [Keeper], so it leaves out the half this company does not keep rather than
+// refusing whole.
+//
 // # A COPY THAT HAS NOT CAUGHT UP SAYS SO rather than answering empty
 //
 // Both native backends are state-log domains, so both say it the same way:
@@ -43,7 +55,7 @@ import (
 // file the duplicate, they conclude the migration failed — and a node that has
 // not caught up must never be able to say it without saying so.
 
-// freshness is what THIS caller said about how old the answer may be,
+// Freshness is what THIS caller said about how old the answer may be,
 // resolved against this surface's own rules.
 //
 // # Why every question calls it, and why it is not a second parser
@@ -75,7 +87,12 @@ import (
 // [statelog.LevelFor], and a dashboard is the one caller allowed to choose at
 // all — it renders the level and the lag beside the rows, so a person who
 // asked for a weaker answer is shown the one they got.
-func freshness(p Params) (statelog.Freshness, error) {
+//
+// What a reader does not serve stays its own refusal: a floor on a log the
+// question does not read, which the reader refuses as the request's mistake
+// ([ClassifyFailure]), never this grammar, which cannot know which log a
+// question reads.
+func Freshness(p Params) (statelog.Freshness, error) {
 	got, err := statelog.ParseFreshness(p)
 	if err != nil {
 		return got, refusedBy(err, builtin.ReadRefusalSentence(err))
@@ -339,7 +356,7 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	if ref == "" {
 		return nil, badParams("id", "", nil)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -475,7 +492,7 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	if ref == "" {
 		return nil, badParams("item", "", nil)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +563,7 @@ func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
 	if ref == "" {
 		return nil, badParams("id", "", nil)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -589,7 +606,7 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -619,9 +636,9 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 		Units: s.chartUnits(),
 		// THE CALLER'S OWN, resolved to this surface's default when they
 		// said nothing — which is `stale`, like every other dashboard
-		// poll. See [freshness] and [Sources.workItems].
+		// poll. See [Freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Floors: fresh.Floors,
 		// THE COUNT BESIDE A PIN IS THE BOARD IT OPENS: the view run on
 		// the company's own clock, which every relative date in it is
 		// cut on — the pair `work_items` parses with.
@@ -664,7 +681,7 @@ var errNoPins = fmt.Errorf("%w: counts=true counts the views pinned on your "+
 // record ([iam.RecordOwner]) and never a name they typed, and only a record
 // has pins to count.
 func (s Sources) workSavedViews(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -681,8 +698,8 @@ func (s Sources) workSavedViews(ctx context.Context, p Params) (any, error) {
 		Viewer: viewer,
 		Units:  s.chartUnits(),
 		Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
-		Counts:      counts, Now: s.clock(), Zone: s.zone(),
+		Floors: fresh.Floors,
+		Counts: counts, Now: s.clock(), Zone: s.zone(),
 	})
 	if err != nil {
 		return nil, err
@@ -739,16 +756,16 @@ func viewContainer(p Params) (worklet.Container, error) {
 // which fields are required would file work that is refused on the next
 // breath.
 func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
 	answer, err := s.Work.Catalogue(ctx, worklet.CatalogueQuery{
-		Archived:    p.Bool("archived", false),
-		Level:       fresh.Level,
-		MaxLag:      fresh.MaxLag,
-		MaxLagSeq:   fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Archived:  p.Bool("archived", false),
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
+		Floors:    fresh.Floors,
 	})
 	if err != nil {
 		return nil, err
@@ -778,16 +795,16 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
 	state, err := s.Work.Person(ctx, worklet.PersonQuery{
-		Handle:      handle,
-		Level:       fresh.Level,
-		MaxLag:      fresh.MaxLag,
-		MaxLagSeq:   fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Handle:    handle,
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
+		Floors:    fresh.Floors,
 	}, s.clock())
 	if err != nil {
 		return nil, err
@@ -849,13 +866,13 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	// THE CALLER'S OWN, defaulting to `stale` like every other dashboard
 	// poll: a screen that redraws every twenty seconds and took a quorum
 	// round trip to do it would put the fleet's whole read rate on the
-	// log. See [freshness] and [Sources.workItems].
+	// log. See [Freshness] and [Sources.workItems].
 	//
 	// THE WHOLE FRESHNESS — the bounds and the floor beside the level.
 	// This handed over the level alone once, on the claim that a bound
 	// had nowhere to be enforced on a page read; it is enforced against
 	// this node's lag before any row is read, on every read alike.
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -895,7 +912,7 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 }
 
 func (s Sources) containers(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -959,7 +976,7 @@ func badParams(field, got string, allowed []string) error {
 
 // workProjects answers the company's projects with their maintained counts.
 func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -973,9 +990,9 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	}
 	q.Units = s.chartUnits()
-	// THE CALLER'S OWN — see [freshness].
+	// THE CALLER'S OWN — see [Freshness].
 	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
-	q.MinPosition = fresh.MinPosition
+	q.Floors = fresh.Floors
 	listing, err := s.Work.Projects(ctx, q)
 	if err != nil {
 		return nil, err
@@ -993,18 +1010,18 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 	if key == "" {
 		return nil, badParams("key", "", nil)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
 	detail, err := s.Work.Project(ctx, worklet.ProjectDetailQuery{
-		Project:     key,
-		ForType:     strings.TrimSpace(p.String("for_type")),
-		Units:       s.chartUnits(),
-		Level:       fresh.Level,
-		MaxLag:      fresh.MaxLag,
-		MaxLagSeq:   fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Project:   key,
+		ForType:   strings.TrimSpace(p.String("for_type")),
+		Units:     s.chartUnits(),
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
+		Floors:    fresh.Floors,
 	})
 	switch {
 	case errors.Is(err, worklet.ErrNoProject):
@@ -1029,7 +1046,7 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 // about everybody at once, which is the whole question — "who is carrying the
 // most" has no answer that names a person in advance.
 func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -1040,7 +1057,7 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 		// handed, and each row holds the unit's key.
 		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Floors: fresh.Floors,
 	}, s.clock(), s.zone())
 	if err != nil {
 		return nil, err
@@ -1077,12 +1094,12 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		Limit:    p.Int("limit", 0),
 		Cursor:   strings.TrimSpace(p.String("cursor")),
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
 	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
-	q.MinPosition = fresh.MinPosition
+	q.Floors = fresh.Floors
 	if raw := strings.TrimSpace(p.String("container")); raw != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		container, err := viewContainer(p)
@@ -1192,7 +1209,7 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -1200,9 +1217,9 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		Handle: handle,
 		// THE CALLER'S OWN, defaulting to `stale`: this is a POLL of
 		// somebody's day, not a read-back of a write they just made —
-		// see [freshness] and [Sources.workItems].
+		// see [Freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Floors: fresh.Floors,
 	}, s.clock(), s.zone())
 	if err != nil {
 		return nil, err

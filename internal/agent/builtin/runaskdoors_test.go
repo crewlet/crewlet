@@ -32,7 +32,7 @@ import (
 //
 // Mutation: fence answer_executor's question by the hosted rule again, or read
 // a decisions route's answer by its path alone, and the door that does is red.
-func TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor(t *testing.T) {
+func TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor(t *testing.T) {
 	t.Parallel()
 	want := provenance.Executor("").Trust
 	ask := &decision.Decision{Question: "Which database?", Role: decision.RoleApprover,

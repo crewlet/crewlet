@@ -402,7 +402,7 @@ func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 			"orchestrator can probe it:\n%s", logged.String())
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
-	if surface.app != nil || surface.projector != nil {
+	if surface.app != nil || surface.projector != nil || surface.drainGit != nil {
 		t.Error("a node without the ingress role built the whole API")
 	}
 	if !strings.Contains(logged.String(), "api_probes_listening") {
@@ -495,7 +495,9 @@ func TestANodeWithoutIngressServesItsProbesAlone(t *testing.T) {
 			t.Fatalf("%v: a node without ingress bound no listener for its probes:\n%s", roles, logged.String())
 		}
 		t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
-		if surface.app != nil || surface.projector != nil {
+		// Nor its git: a node without ingress serves no git request, so it
+		// has none for its shutdown to wait out.
+		if surface.app != nil || surface.projector != nil || surface.drainGit != nil {
 			t.Errorf("%v: a node without the ingress role built the whole API", roles)
 		}
 
@@ -606,6 +608,35 @@ func TestANodeServesItsOwnHealth(t *testing.T) {
 	}
 	if body["queue"] == "" || body["queue"] == nil {
 		t.Errorf("queue = %v, want the broker named", body["queue"])
+	}
+}
+
+// AN INGRESS NODE'S SHUTDOWN FINISHES ITS GIT REQUESTS. The surface a node is
+// served through hands [shutdown] the API's own wait for them, which
+// TestTheShutdownFinishesGitBeforeTheListenerCloses holds in its place: a
+// surface built without it would close the listener under every clone and
+// push the node was serving.
+func TestAnIngressNodesShutdownFinishesItsGitRequests(t *testing.T) {
+	t.Parallel()
+	e := testEngine(t)
+	boot := bootstrapFor(t, reservePort(t))
+	surface, err := serveNode(t, boot, e)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	if surface.app == nil {
+		t.Fatal("a node with the ingress role built no API")
+	}
+	if surface.drainGit == nil {
+		t.Fatal("the node serves git through its API and its shutdown would not wait for one request of it")
+	}
+	// The API's own wait, which on a node that served no git has nothing to
+	// wait for.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := surface.drainGit(ctx); err != nil {
+		t.Errorf("a node that served no git waited for some: %v", err)
 	}
 }
 
@@ -930,6 +961,16 @@ var reserved = struct {
 // took in that gap.
 func reservePort(t *testing.T) int {
 	t.Helper()
+	//nolint:errcheck // Listen on a TCP address always yields *TCPAddr.
+	return reserveSocket(t).Addr().(*net.TCPAddr).Port
+}
+
+// reserveSocket is [reservePort]'s socket itself, for a case that asks it
+// afterwards whether it is still listening ([listening]): the node it is
+// handed to is what closes this very socket, whatever has taken its port by
+// the time the case looks.
+func reserveSocket(t *testing.T) net.Listener {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve a port: %v", err)
@@ -943,8 +984,7 @@ func reservePort(t *testing.T) int {
 			_ = l.Close()
 		}
 	})
-	//nolint:errcheck // Listen on a TCP address always yields *TCPAddr.
-	return l.Addr().(*net.TCPAddr).Port
+	return l
 }
 
 // takeReserved removes and returns the socket reserved for addr, or nil.
@@ -1582,7 +1622,7 @@ func TestValidateRefusesAnUnknownTier(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown tier ran")
 	}
-	if !strings.Contains(err.Error(), `-tier "middle" is not one of "auto", "company" or "bootstrap"`) {
+	if !strings.Contains(err.Error(), `-tier "middle" is not one of "auto", "company", "bootstrap" or "checks"`) {
 		t.Errorf("the error does not name the set: %v", err)
 	}
 }
@@ -1798,6 +1838,42 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	}
 	if !slices.Equal(located, want) {
 		t.Errorf("warnings = %v, want %v\n%s", located, want, out.String())
+	}
+}
+
+// THE TWO-FILE FORM SAYS WHAT THE PAIR DOES TOGETHER: a company hosting code
+// on a fleet whose files bucket is the default object store is valid twice
+// over, and every member holding the bucket then holds every pack — which
+// neither file shows alone. It is a warning, so the run still exits 0.
+//
+// Mutation: drop TierWarnings from validateBoth, and the advisory is missing.
+func TestValidatingBothFilesPrintsTheCrossTierWarnings(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fleet := "node:\n  roles: [data, git, ingress, seats, workers]\n" +
+		"store:\n  path: " + filepath.Join(dir, "crewlet.db") + "\n" +
+		"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n  replicas: 3\n" +
+		"  cluster:\n    name: acme\n    peers: [nats://b.example.com:6222, nats://c.example.com:6222]\n" +
+		"coordination:\n  type: embedded-kv\n" + fixtureKeyring
+	var out, errOut bytes.Buffer
+	args := append([]string{"validate", "-json"},
+		configPair(t, fleet, companyYAML+"code:\n  native: true\n")...)
+	if err := run(args, &out, &errOut); err != nil {
+		t.Fatalf("validate: %v\n%s", err, out.String())
+	}
+	var got struct {
+		Valid    bool             `json:"valid"`
+		Warnings []config.Warning `json:"warnings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
+	}
+	found := slices.ContainsFunc(got.Warnings, func(w config.Warning) bool {
+		return w.Kind == config.WarningAdvisory && w.Path == "store.objects.backend"
+	})
+	if !got.Valid || !found {
+		t.Fatalf("valid %t, warnings %+v: want a valid pair carrying the store.objects.backend "+
+			"advisory", got.Valid, got.Warnings)
 	}
 }
 

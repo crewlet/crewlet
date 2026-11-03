@@ -49,7 +49,7 @@ func newEngineHost(t *testing.T) engineHost {
 			writeExecutable(t, f.path, f.body)
 			continue
 		}
-		if err := os.WriteFile(f.path, []byte(f.body), 0o700); err != nil {
+		if err := os.WriteFile(f.path, []byte(f.body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

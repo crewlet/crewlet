@@ -1,0 +1,320 @@
+package httpx
+
+import (
+	"context"
+	"fmt"
+	"net/netip"
+	"sync"
+)
+
+// notGlobal4 are the IPv4 blocks no address on the public internet is in.
+//
+// They are IANA's IPv4 Special-Purpose Address Registry, held whole: every
+// block it marks not globally reachable is here or inside a block that is, and
+// TestEveryReservedRangeIsNotPublic copies the registry row by row. Two more
+// join them. 192.88.99.0/24, the 6to4 relay anycast RFC 7526 retired, whose
+// terminated row carries no flags any more: a relay still answering it
+// delivers to the IPv4 address a 6to4 packet carries. And multicast, which
+// IANA keeps in a registry of its own: no connection is made to a group.
+//
+// 192.0.0.0/24 is refused whole, although the registry marks two addresses in
+// it globally reachable (192.0.0.9 and 192.0.0.10): each is an anycast service
+// (PCP, TURN), never a host a dial here means to reach.
+//
+// IPv4 is held to a list of what is reserved, where IPv6 is held to a list of
+// what is allocated ([global6]), because IPv4 has no unallocated remainder: it
+// is allocated whole, so the registry's list is the complete answer.
+var notGlobal4 = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),       // "this network" (RFC 791); 0.0.0.0 is in it
+	netip.MustParsePrefix("10.0.0.0/8"),      // private use (RFC 1918)
+	netip.MustParsePrefix("100.64.0.0/10"),   // shared address space, carrier-grade NAT (RFC 6598)
+	netip.MustParsePrefix("127.0.0.0/8"),     // loopback (RFC 1122)
+	netip.MustParsePrefix("169.254.0.0/16"),  // link local (RFC 3927): the cloud metadata address
+	netip.MustParsePrefix("172.16.0.0/12"),   // private use (RFC 1918)
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments (RFC 6890), whole
+	netip.MustParsePrefix("192.0.2.0/24"),    // documentation (RFC 5737)
+	netip.MustParsePrefix("192.88.99.0/24"),  // 6to4 relay anycast, deprecated (RFC 7526)
+	netip.MustParsePrefix("192.168.0.0/16"),  // private use (RFC 1918)
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking (RFC 2544)
+	netip.MustParsePrefix("198.51.100.0/24"), // documentation (RFC 5737)
+	netip.MustParsePrefix("203.0.113.0/24"),  // documentation (RFC 5737)
+	netip.MustParsePrefix("224.0.0.0/4"),     // multicast (RFC 5771)
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved (RFC 1112); 255.255.255.255 is in it
+}
+
+// global6 is global unicast, the one block IANA allocates IPv6 unicast
+// addresses from (its IPv6 Address Space registry: "IANA unicast address
+// assignments are currently limited to ... 2000::/3"). Every IPv6 address on
+// the public internet is in it.
+var global6 = netip.MustParsePrefix("2000::/3")
+
+// notGlobal6 are the blocks inside [global6] that are not on the public
+// internet: those IANA's IPv6 Special-Purpose Address Registry marks not
+// globally reachable, and the two that carry an IPv4 address a relay delivers
+// to.
+//
+// 2001::/23 is refused whole. It holds Teredo, benchmarking and ORCHID, and
+// the entries the registry marks globally reachable inside it are anycast
+// services (PCP, TURN, DNS-SD, AMT, AS112) and identifiers (ORCHIDv2, drone
+// tags), never a host a dial here means to reach.
+var notGlobal6 = []netip.Prefix{
+	netip.MustParsePrefix("2001::/23"),     // IETF protocol assignments (RFC 2928), whole
+	netip.MustParsePrefix("2001:db8::/32"), // documentation (RFC 3849)
+	netip.MustParsePrefix("2002::/16"),     // 6to4 (RFC 3056), which carries an IPv4 address
+	netip.MustParsePrefix("3fff::/20"),     // documentation (RFC 9637)
+}
+
+// Resolver is what the rule asks of a resolver: the addresses a name has, of
+// the family network names ("ip" for every address, "ip6" for AAAA records
+// alone). *net.Resolver has it; a test answers it from a table and reaches no
+// network.
+type Resolver interface {
+	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
+}
+
+// Rule is the public-address rule as it holds on one network: which addresses
+// are on the public internet there, given the NAT64 prefixes the network
+// translates IPv6 to IPv4 through, which its resolver names. [NewRule] is the
+// only way to a Rule that calls any address public, so no dial judges an
+// address whose verdict the network's prefixes can change without them
+// ([Public], which names no network, is for a caller with no dial): an
+// address in a network-specific prefix inside 2000::/3 that carries a private
+// IPv4 address would otherwise be called public. The zero Rule, and a nil
+// one, name no network, and refuse every address.
+//
+// A Rule is one dial's or one resolve's. It asks the network's resolver for
+// the prefixes at most once, when an address it judges first needs them
+// ([Rule.Public]), and nothing keeps the answer past it (discoverNAT64 says
+// why). It is safe for concurrent use, as a dialer racing a name's address
+// families uses it.
+type Rule struct {
+	// resolver is the network's own, the one the host judged is resolved
+	// with. It is nil in the zero Rule.
+	resolver Resolver
+
+	// mu holds the one ask: a judgment that needs its answer while it is out
+	// waits for it.
+	mu sync.Mutex
+	// asked is set once the resolver has been asked. nat64 and err are what
+	// it answered: the network-specific NAT64 prefixes it named where they
+	// count ([honoured]), or the failure that kept it from naming any. The
+	// well-known prefix counts on every network, and is not among them.
+	asked bool
+	nat64 []netip.Prefix
+	err   error
+}
+
+// NewRule returns the public-address rule on the network r resolves on. r
+// must be the resolver the host to be judged is resolved with, since only a
+// network's own resolver names the prefixes it translates through (RFC 7050;
+// discoverNAT64 says how). It asks r nothing until an address needs it.
+func NewRule(r Resolver) *Rule {
+	return &Rule{resolver: r}
+}
+
+// Public reports whether ip is an address on the public internet on the
+// rule's network (public says which addresses those are), or the failure that
+// kept it from being judged.
+//
+// THE NETWORK'S PREFIXES ARE ASKED FOR ONLY WHERE THEY CAN CHANGE THE VERDICT:
+// for an IPv6 address that a prefix the network names could hold where it
+// counts, in global unicast or in RFC 8215's local-use block (namedCanHold),
+// the first time the rule judges one. Every other address is judged as on a
+// network naming none, which is its verdict whatever the network names: an
+// IPv4 address, one in the well-known prefix, and one the allowlist refuses
+// outside those two places. So when the resolver cannot answer for the
+// prefixes, only an address that needed the answer is refused, with the
+// resolver's failure wrapped, and the rule is never applied on a guess; an
+// IPv4 host is never refused for a lookup it did not need, nor kept waiting
+// on one.
+//
+// What that one ask answers, a failure included, stands for the rule's life.
+// It runs under the context of the judgment that needs it first, in a dialer
+// that address's share of the dial's bound, and a judgment that needs the
+// answer while the ask is out waits for it: in a dial that never happens,
+// since net.Dialer tries one address of a family at a time, and an IPv4
+// address needs no answer.
+//
+// It judges ONE address, and what makes it a wall is where a dialer asks it:
+// of the very address each connection is made to, once the name is resolved,
+// so a resolver that answers twice (once public, once internal) cannot slip
+// between the judgment and the dial. A dialer in this process asks it in its
+// net.Dialer's ControlContext, which is handed each address the dialer is
+// about to connect to, before the connection is made. Asked there, the dial
+// stays net.Dialer's own: it resolves the name, races its address families
+// and splits its bound across a family's addresses, all of which a dialer
+// handing it one judged address at a time forgoes. [Guarded]'s dialer is the
+// worked example: it makes the rule once a dial, on the resolver its
+// net.Dialer resolves with.
+func (r *Rule) Public(ctx context.Context, ip netip.Addr) (bool, error) {
+	if r == nil || r.resolver == nil {
+		return false, nil
+	}
+	if !namedCanHold(ip) {
+		return public(ip, nil), nil
+	}
+	nat64, err := r.named(ctx)
+	if err != nil {
+		return false, fmt.Errorf("httpx: %s cannot be judged until the resolver answers an AAAA lookup of %s, "+
+			"even with no record: it names the NAT64 prefixes this network translates through (RFC 7050): %w",
+			ip, ipv4onlyArpa, err)
+	}
+	return public(ip, nat64), nil
+}
+
+// named is what the network's resolver answers when asked for its NAT64
+// prefixes, asked the first time it is called and kept for the rule's life.
+// Not a sync.OnceValues: the ask takes the context of the judgment that needs
+// it first, which a OnceValues' function cannot be handed.
+func (r *Rule) named(ctx context.Context) ([]netip.Prefix, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.asked {
+		r.nat64, r.err = discoverNAT64(ctx, r.resolver)
+		r.asked = true
+	}
+	return r.nat64, r.err
+}
+
+// ResolvePublic returns the addresses host names, once each is judged to be on
+// the public internet by the rule on r's network ([NewRule]): host itself
+// where it is an address, and otherwise every address r resolves it to. Each
+// comes back as the address to dial, an IPv4 address written in IPv6 form
+// unmapped. One that is not public refuses the host with [ErrNotPublic]: a
+// name answering both ways is one its owner can point either way between this
+// call and the next.
+//
+// It is the door for a dialer that cannot judge an address at a socket of its
+// own, because it hands the address to another program to connect to. What
+// makes it a wall is how such a dialer uses it: the dial goes to an address it
+// returned, never to the name again, so a resolver that answers twice (once
+// public, once internal) cannot slip between the judgment and the dial. A
+// dialer that makes its connections itself judges each at its socket with
+// [Rule.Public] instead, and keeps net.Dialer's own resolution and races.
+//
+// THE NAT64 PREFIXES ARE ASKED OF r ITSELF, the resolver the host is resolved
+// with, at most once a call and only when one of the host's addresses needs
+// them ([Rule.Public] says which do): a host whose addresses are all IPv4
+// costs no lookup beyond its own, and no failure of that lookup refuses it.
+// One that fails refuses the host when an address needed it, unless another
+// of its addresses is not public, which refuses it with [ErrNotPublic]
+// instead: the more definite answer, given whichever order the resolver
+// answers in.
+func ResolvePublic(ctx context.Context, r Resolver, host string) ([]netip.Addr, error) {
+	var addrs []netip.Addr
+	literal, err := netip.ParseAddr(host)
+	if err == nil {
+		addrs = []netip.Addr{literal}
+	} else {
+		if addrs, err = r.LookupNetIP(ctx, "ip", host); err != nil {
+			return nil, err
+		}
+		if len(addrs) == 0 {
+			return nil, fmt.Errorf("httpx: %s resolves to no address", host)
+		}
+	}
+	rule := NewRule(r)
+	judged := make([]netip.Addr, 0, len(addrs))
+	var unjudged error
+	for _, ip := range addrs {
+		ip = ip.Unmap()
+		ok, err := rule.Public(ctx, ip)
+		switch {
+		case err != nil:
+			if unjudged == nil {
+				unjudged = err
+			}
+		case !ok:
+			if literal.IsValid() {
+				return nil, fmt.Errorf("%w: %s", ErrNotPublic, host)
+			}
+			return nil, fmt.Errorf("%w: %s resolves to %s", ErrNotPublic, host, ip)
+		default:
+			judged = append(judged, ip)
+		}
+	}
+	if unjudged != nil {
+		return nil, unjudged
+	}
+	return judged, nil
+}
+
+// public reports whether ip is an address on the public internet, on a network
+// that translates IPv6 to IPv4 through the NAT64 prefixes nat64 (those
+// discoverNAT64 found; the well-known one counts on every network).
+//
+// An IPv4 address is public unless it is in a block IANA reserves
+// ([notGlobal4]); one written in IPv6 form (::ffff:a.b.c.d) is judged as the
+// IPv4 address it is. An IPv6 address that carries a zone is never public. An
+// IPv6 address in a NAT64 prefix is judged by the IPv4 address it carries, and
+// by nothing else. Any other IPv6 address is public only inside global
+// unicast, 2000::/3, and outside the four blocks there that are not on the
+// internet ([notGlobal6]): 2001::/23, the two documentation blocks and 6to4.
+// Every other IPv6 address is not public, whatever block it is in:
+// unique-local, link-local, site-local, multicast, IPv4-compatible (::/96),
+// the local-use NAT64 block 64:ff9b:1::/48 where the network names no prefix
+// in it, and every block the IETF still holds in reserve.
+//
+// AN IPv6 ADDRESS THAT CARRIES A ZONE (fe80::1%eth0) IS REFUSED BEFORE ANY
+// BLOCK IS ASKED, the NAT64 prefixes included. A zone tells apart the links of
+// this host that one non-global address can be on (RFC 4007, section 6), so no
+// host on the internet is named with one. A block never contains a zoned
+// address (netip.Prefix.Contains answers false), so the blocks would refuse
+// one anyway, but only by that accident: netip's own predicates
+// (IsGlobalUnicast among them) judge a zoned address as they judge it without
+// the zone, and so does carried, so a rule reshaped around either would call
+// 2606:4700::1%eth0 or 64:ff9b::6810:1%eth0 public. Refused first, a zone
+// steps around no block whatever shape the rule takes next. An IPv4 address in
+// IPv6 form loses its zone when it is unmapped, and is judged as the IPv4
+// address it is.
+//
+// IPv6 IS AN ALLOWLIST because a list of what is reserved cannot be completed.
+// IANA keeps carving blocks out of the unallocated space (5f00::/16 in 2024,
+// 100:0:0:1::/64 in 2025), and a denylist calls each one public until somebody
+// adds its row: the one this replaced called NAT64, 6to4, Teredo and
+// IPv4-compatible addresses public, each a way to reach a private IPv4 address
+// through an IPv6 one. Outside 2000::/3 nothing is public, whatever IANA
+// reserves there next. A block it reserves inside 2000::/3, as it did
+// 3fff::/20 in 2024, still needs its row here.
+//
+// A NAT64 ADDRESS IS JUDGED BY THE IPv4 ADDRESS IT CARRIES because that is
+// where a translator delivers it: 64:ff9b::a00:5 reaches 10.0.0.5. Nor can the
+// prefix be refused whole, since on an IPv6-only network with DNS64 every host
+// with no IPv6 address of its own (github.com among them) resolves into it.
+// The carried address is judged BEFORE the allowlist, and alone: a
+// network-specific prefix may sit inside 2000::/3, where the allowlist would
+// call an address carrying 10.0.0.5 public.
+func public(ip netip.Addr, nat64 []netip.Prefix) bool {
+	ip = ip.Unmap()
+	switch {
+	case ip.Is4():
+		return !inAny(notGlobal4, ip)
+	case ip.Is6():
+		if ip.Zone() != "" {
+			// Before any block is asked: none contains a zoned address.
+			return false
+		}
+		if in, carriesPublic := translated(ip, nat64); in {
+			return carriesPublic
+		}
+		return allowlisted(ip)
+	}
+	return false
+}
+
+// allowlisted reports whether ip is in global unicast and outside every block
+// there that is not on the internet ([notGlobal6]): the allowlist an IPv6
+// address no NAT64 prefix holds is judged by.
+func allowlisted(ip netip.Addr) bool {
+	return global6.Contains(ip) && !inAny(notGlobal6, ip)
+}
+
+// inAny reports whether ip is in one of blocks.
+func inAny(blocks []netip.Prefix, ip netip.Addr) bool {
+	for _, b := range blocks {
+		if b.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}

@@ -47,9 +47,11 @@
 //     instead: it brings back the `op_id` its call was answered with, or is
 //     minted one; that operation carries the instant it was minted and NAMES
 //     THE CALL — the tool and a digest of its arguments — so it is accepted
-//     only with that call ([WorkDeps.bindOperation]): the same call made
-//     again is the same operation, and anything else under it is refused
-//     before a write.
+//     only with that call: the same call made again is the same operation,
+//     and anything else under it is refused before a write. That is ONE rule
+//     for every family of write tools — Worklet's, the artifacts', the
+//     datastore's and the code host's ([operations]) — and only what a turn
+//     or a key derives stays each family's own.
 //   - WITH NEITHER — a tool that takes no `op_id`, called over MCP — each
 //     write is fresh, since nothing will repeat it. The page and chat tools
 //     are such tools, and so are write_project and write_work_catalogue,

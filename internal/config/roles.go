@@ -6,10 +6,13 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Role is the AUTHORED shape of one seat — a `roles:` entry.
@@ -153,6 +156,25 @@ type Role struct {
 	// anywhere, which is what a single-process deployment always means.
 	Placement *RolePlacement `yaml:"placement,omitempty" json:"placement,omitempty" desc:"Which nodes may run this seat. Absent = any node that runs seats."`
 
+	// Code is this seat's access to the company's code on the engine's own
+	// code host: how much of a repository it may do there. A GitHub App's
+	// access is its own permissions ([RoleGitHub.Permissions]). See
+	// [RoleCode].
+	Code *RoleCode `yaml:"code,omitempty" json:"code,omitempty" desc:"This seat's access to the company's code on the engine's own code host (code.native)."`
+
+	// HealthTools gives this AGENT seat the deployment's health: the
+	// fleet_health and code_status tools, an administrator's reads, which its
+	// role's grant admits it to (see [org.Role.HealthTools]), and a wake each
+	// time an alarm fires or clears on a node (internal/alarmwake). It is not a
+	// lead's to set: a lead who could give a seat in their team the
+	// administrator's view would read it through that seat's trail, so the
+	// field is listed apart for admin wherever a write is judged against the
+	// subtree rule (internal/config's org diff).
+	//
+	// Its schema description names the two tools, so it is derived from
+	// their constants ([Role.fieldDescriptions]) rather than written in a tag.
+	HealthTools bool `yaml:"health_tools,omitempty" json:"health_tools,omitempty"`
+
 	// Integrations is this seat's own identity on external surfaces: its
 	// chat apps and its GitHub App. See [RoleIntegrations].
 	Integrations RoleIntegrations `yaml:"integrations,omitempty" json:"integrations,omitzero"`
@@ -166,6 +188,17 @@ type Role struct {
 
 	// Schedules are this seat's own recurring work.
 	Schedules []org.Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty" desc:"Recurring work fired into this seat's inbox."`
+}
+
+// fieldDescriptions is the schema's description of each of Role's fields whose
+// text names a tool, which a `desc` tag cannot read from its constant.
+func (Role) fieldDescriptions() map[string]string {
+	return map[string]string{
+		"health_tools": "Agent seats: offer this seat " + toolname.FleetHealth + " and " +
+			toolname.CodeStatus + ", the administrator's reads of the deployment's health, " +
+			"and wake it each time an alarm fires or clears on a node. Setting or clearing " +
+			"it takes admin.",
+	}
 }
 
 // RolePlacement is the authored form of a seat's placement constraint. It
@@ -218,7 +251,7 @@ func (p *RolePlacement) Seat() placement.SeatPlacement {
 // the one difference the reader cannot see.
 func (p *RolePlacement) validate(path Path) error {
 	var probs problems
-	if p.Node != "" && !nodeIDPattern.MatchString(p.Node) {
+	if p.Node != "" && !nodeIDPattern().MatchString(p.Node) {
 		hint := ""
 		if envref.Has(p.Node) {
 			// Tier B resolves a ${VAR} only where a provider or transport
@@ -318,7 +351,11 @@ type RoleSandbox struct {
 
 	// Env is injected into this seat's executor run. External service
 	// tokens are DECLARED here — the engine names no tool-specific
-	// variable of its own, and only LLM credentials derive automatically.
+	// variable of its own, and only LLM credentials derive automatically —
+	// but for the engine's own code host: a run given repositories on it is
+	// handed its run's git credential and git configuration by the engine
+	// (ADR-0093), whose variables ([ReservedSandboxEnv]) no value here may
+	// set.
 	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's executor run; declare external tokens here."`
 
 	// OptionalKeys names the keys of Env whose value may resolve to nothing,
@@ -515,6 +552,85 @@ func (g *RoleGitHub) validate(path Path) error {
 	return p.err()
 }
 
+// RoleCode is a seat's code access on the engine's own code host
+// (`code.native`): the tier the native host caps what the chart grants the
+// seat by (internal/code's Tier).
+//
+// A SEAT'S GITHUB APP IS NOT CAPPED HERE. Its access is the App's own
+// permissions in GitHub's terms ([RoleGitHub.Permissions]), which the seat
+// path registers the App at; a tier is the vocabulary of a host whose
+// permissions the engine itself defines, and on GitHub the vendor defines
+// them. So this setting grants nothing on a company with no `code.native`.
+//
+// An AGENT seat's setting. A person acts on the native host as their own
+// identity, with a token bound to them, so a tier on a human seat would cap
+// nothing, and [Company.ValidateAdmission] refuses one.
+//
+// ONE SPELLING PER TIER, compared exactly: no hyphen for the underscore, and
+// no case or space folded. No tag shipped this field, so nothing was ever
+// written in another spelling and nothing needs reading in one: a second
+// spelling would be a compatibility path for a version that never existed,
+// and the published schema, which lists the field's enum, would have to carry
+// it too, since the schema must refuse nothing the engine runs.
+type RoleCode struct {
+	// Access is how much of a repository this seat may do: read_only,
+	// review or full_access. Empty is read_only, the least this engine
+	// hands out and the right answer for a seat nobody has thought about
+	// yet.
+	//
+	// Its js enum is [CodeAccessTiers], every value the validator accepts
+	// and nothing else, which TestSchemaEnumsMatchTheValidators holds, so
+	// the schema refuses nothing the engine runs.
+	Access string `yaml:"access,omitempty" json:"access,omitempty" js:"enum=read_only|review|full_access" desc:"read_only, review or full_access on the engine's own code host. Empty means read_only."`
+}
+
+// IsZero lets an unset block drop out of a round trip: a block that says
+// nothing is the same seat as no block.
+func (c *RoleCode) IsZero() bool { return c == nil || c.Access == "" }
+
+// AccessOrDefault is the tier this seat runs at.
+//
+// READ ONLY when the document is silent (nil-safe), which is the least this
+// engine hands out: a seat nobody has thought about should ask for more
+// rather than already hold it. A value the validator refuses never reaches a
+// running engine, and reads read only here too, the narrow direction.
+func (c *RoleCode) AccessOrDefault() string {
+	if c != nil && slices.Contains(CodeAccessTiers, c.Access) {
+		return c.Access
+	}
+	return TierReadOnly
+}
+
+// validate refuses an access the native code host has no tier for.
+func (c *RoleCode) validate(path Path) error {
+	var p problems
+	if c.Access != "" && !slices.Contains(CodeAccessTiers, c.Access) {
+		p.add(at(path, "access"), ErrUnknownValue,
+			"%q is not an access tier; give one of %s, spelled exactly so. "+
+				"An unknown tier would run the seat read-only, which is safe "+
+				"and is not what the document says",
+			c.Access, words.Or(CodeAccessTiers))
+	}
+	return p.err()
+}
+
+// The access tiers a seat's role.code.access can be set to.
+//
+// OWNED HERE, by the field a person writes them in. The native code host
+// (internal/code) spells its Tier as these constants and maps each to what
+// the chart may grant, and a test holds the two lists to each other: config
+// is the leaf every package depends on, so the vocabulary lives where it is
+// validated and the host that enforces it imports it, never the other way.
+const (
+	TierReadOnly   = "read_only"
+	TierReview     = "review"
+	TierFullAccess = "full_access"
+)
+
+// CodeAccessTiers is the closed set, in order of how much it grants, and
+// every value role.code.access accepts.
+var CodeAccessTiers = []string{TierReadOnly, TierReview, TierFullAccess}
+
 // RoleSlack is a seat's own Slack app.
 //
 // One app per agent is what makes an agent's messages come from that agent
@@ -651,6 +767,9 @@ func (r *Role) validate(path Path) error {
 	// THE SEAT'S TOKEN BUDGET IS NOT CHECKED HERE: org.Role.Validate holds
 	// it to the one rule ([org.TokenCeilings.Faults]) and reports it at this
 	// seat's `token_budget.<window>` — see [TokenBudget.validate].
+	if r.Code != nil {
+		p.wrap(r.Code.validate(at(path, "code")))
+	}
 	if g := r.Integrations.GitHub; g != nil {
 		p.wrap(g.validate(at(path, "integrations.github")))
 	}
@@ -752,6 +871,15 @@ func (r *Role) Seat() *org.Role {
 	}
 	seat.Project = strings.TrimSpace(r.Project)
 	seat.Space = strings.TrimSpace(r.Space)
+	if r.Code != nil {
+		// What was WRITTEN — one of the three tiers, which is all the
+		// validator admits, or empty where the block says nothing. The
+		// default is the reader's: the native code host reads silence as
+		// read_only through its own reading of the tier, so writing one
+		// here would be a second statement of that default.
+		seat.CodeAccess = r.Code.Access
+	}
+	seat.HealthTools = r.HealthTools
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))
@@ -910,7 +1038,7 @@ func (Unit) identityIsDocumentWide() {}
 // rules (its name, its schedules) are the org model's, like a seat's.
 func (u *Unit) validate(path Path) error {
 	var p problems
-	if id := strings.TrimSpace(u.ID); id != "" && !entityID.MatchString(id) {
+	if id := strings.TrimSpace(u.ID); id != "" && !entityID().MatchString(id) {
 		p.add(at(path, "id"), ErrShape,
 			"%q is not a unit id: lowercase letters, digits, `-` and `_`, "+
 				"starting with a letter, up to 64 characters. It is chosen once "+
@@ -924,7 +1052,7 @@ func (u *Unit) validate(path Path) error {
 	// would also make the published schema, which carries this same pattern
 	// and cannot trim anything, stricter than the engine. That is the one
 	// direction the schema must never take.
-	if u.Channel != "" && !unitChannel.MatchString(u.Channel) {
+	if u.Channel != "" && !unitChannel().MatchString(u.Channel) {
 		p.add(at(path, "channel"), ErrShape,
 			"%q isn't a channel name. Use lowercase letters, digits, `-` and "+
 				"`_`, starting with a letter or a digit, up to 64 characters, "+
@@ -950,7 +1078,11 @@ func (u *Unit) validate(path Path) error {
 // ONE pattern for both, because they are the same kind of thing and a second
 // regexp differing by one character is how a schema starts accepting what the
 // engine refuses.
-var entityID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var entityID = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+})
 
 // unitChannel is what a unit's channel may look like.
 //
@@ -990,7 +1122,11 @@ var entityID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 // already has. Folding the two into one pattern would either refuse that
 // company's real channel or let an id start with a digit, and the second is
 // a key [MintUnitID] would then have to stop prefixing.
-var unitChannel = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var unitChannel = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+})
 
 // MintUnitID is the id a unit gets when its document declares none: its name,
 // reduced to the key grammar [entityID] accepts.

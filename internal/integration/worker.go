@@ -1038,8 +1038,8 @@ func (w *Worker) stillHoldsDuty(ctx context.Context) bool {
 // also a promise: [Schedule.Settled] is "the horizon on which an
 // administrator who revokes an agent's access by hand is noticed", and
 // stretching it would make that horizon longer than it says. Ten per cent is
-// enough to decorrelate eight surfaces within one tick of each other and
-// small enough that no cadence's meaning changes.
+// enough to decorrelate every surface of [Kinds] within one tick of each
+// other and small enough that no cadence's meaning changes.
 func spreadWait(d time.Duration) time.Duration {
 	if d <= 0 {
 		return d

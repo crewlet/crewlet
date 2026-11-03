@@ -21,13 +21,13 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // keptLog is the executor log and the session store a relaunch continues a kept
@@ -38,19 +38,17 @@ type keptLog struct {
 	archives map[string][]byte
 }
 
-func (k *keptLog) Session(_ context.Context, handle, turn string,
-	_ statelog.Freshness) (executordomain.Session, error) {
-
+func (k *keptLog) Session(_ context.Context, handle, turn string) (executorkeep.TurnRow, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	row, ok := k.rows[turn]
 	if !ok || row.Handle != handle {
-		return executordomain.Session{}, executordomain.ErrNotFound
+		return executorkeep.TurnRow{}, executordomain.ErrNotFound
 	}
-	return row, nil
+	return row.Kept(), nil
 }
 
-func (k *keptLog) Fetch(_ context.Context, row executordomain.Session, dst io.Writer) error {
+func (k *keptLog) Fetch(_ context.Context, row executorkeep.TurnRow, dst io.Writer) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	body, ok := k.archives[row.Object.Key.String()]
@@ -61,7 +59,7 @@ func (k *keptLog) Fetch(_ context.Context, row executordomain.Session, dst io.Wr
 	return err
 }
 
-func (k *keptLog) OpenSpooled(_ executordomain.Session, sealed io.Reader) (io.Reader, error) {
+func (k *keptLog) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
 	return sealed, nil
 }
 
@@ -731,6 +729,7 @@ func TestABoxOnAnotherNodesHostAddsNothingToALaunchsFloor(t *testing.T) {
 	moved, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Answers: testAnswers(), Audience: noAudience{}, Queue: k.e.backends.Queue, Pending: rt.pending,
 		Manager: k.l.company.catalogue, Resume: &resumer{engine: k.e}, Node: "node-b",
+		Pushes: noPushes{},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)

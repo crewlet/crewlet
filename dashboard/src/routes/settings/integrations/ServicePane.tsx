@@ -19,8 +19,8 @@
  *    was a second copy of that page. No delivery count, because a built-in
  *    service has no inbound edge to count.
  *  - THE SETTINGS. The company document's `tracker` and `knowledge` blocks,
- *    with the engine's own defaults where a key is unset, read only by an
- *    Admin, as the `config` question is.
+ *    and its top-level `inbox` horizon, with the engine's own defaults where a
+ *    key is unset, read only by an Admin, as the `config` question is.
  *  - CHATLET COUNTS NOTHING: the rooms it answers for are the reader's own
  *    seat's, never the company's, so its page names no count and no roster,
  *    only what it gives and the way in, which is offered to a holder of Chatlet
@@ -106,7 +106,7 @@ function homeOf(
 
 function block(
   doc: CompanyDocument | null | undefined,
-  key: "tracker" | "knowledge",
+  key: "tracker" | "knowledge" | "inbox",
 ): Record<string, unknown> {
   return asRecord((doc as Record<string, unknown> | null | undefined)?.[key]);
 }
@@ -343,12 +343,16 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
   const keys = feed.data?.keys ?? {};
   const nameOf = (handle: string | undefined) =>
     agents.find((a) => a.handle === handle)?.name ?? handle ?? "Someone";
-  // THE INBOX HORIZON IS WORKLET'S OWN POLICY, kept in the tracker block's
-  // `worklet` section (`config.Tracker.Worklet`), never on the block itself.
-  // AN UNSET KEY IS THE ENGINE'S DEFAULT, said as such: a copy of the
-  // engine's constant here would be a second answer that drifts.
-  const days = asRecord(block(config.data, "tracker").worklet).inbox_retention_days;
-  const retention = typeof days === "number" && days > 0 ? `${days} days` : DEFAULT;
+  // THE COMPANY'S HORIZON, at the top of its document (`inbox.retention_days`)
+  // and not under `tracker`: a person's inbox is every native domain's
+  // notices, and this pane says how long Worklet's are kept. AN UNSET KEY
+  // IS THE ENGINE'S DEFAULT, said as such: a copy of the engine's constant here
+  // would be a second answer that drifts.
+  const inbox = block(config.data, "inbox");
+  const retention =
+    typeof inbox.retention_days === "number" && inbox.retention_days > 0
+      ? `${inbox.retention_days} days`
+      : DEFAULT;
 
   if (!enabled) {
     return (
@@ -468,7 +472,7 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
               items={[
                 ["Work tracker", "Worklet"],
                 [
-                  "Inbox keeps a row for",
+                  "Inbox keeps a notice for",
                   viewer.admin ? retention : <EmptyValue label="Admins see this" />,
                 ],
                 [

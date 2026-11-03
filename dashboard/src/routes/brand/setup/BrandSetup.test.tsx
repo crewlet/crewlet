@@ -11,6 +11,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BrandSetup } from "./BrandSetup.tsx";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import {
   applyPageAction,
   pageActionPreview,
@@ -174,6 +175,7 @@ function mount(
         <ViewerProvider>
           <Router>
             <BrandSetup />
+            <AppAnnouncer />
           </Router>
         </ViewerProvider>
       </SessionReading>

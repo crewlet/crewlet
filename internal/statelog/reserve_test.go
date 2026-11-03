@@ -347,15 +347,17 @@ func (smallPurgingDomain) InstallsGate(env statelog.Envelope) bool {
 	return env.Kind == "eviction" || env.Op == "purge"
 }
 
-// purgeRecord is that purge, carrying body.
-func purgeRecord(stamp statelog.Stamp, opID, body string) []byte {
+// purgeRecord is that purge, on subject and declaring scope as [probeRecord]
+// does, carrying body.
+func purgeRecord(stamp statelog.Stamp, subject statelog.Subject, scope statelog.ScopeSet,
+	opID, body string) []byte {
 	payload, err := json.Marshal(struct {
 		statelog.Envelope
 		Body string
 	}{
 		Envelope: statelog.Envelope{
-			V: 1, Kind: "object", Op: "purge", OpID: opID,
-			Gen: stamp.Gen, Writer: stamp.Writer,
+			V: 1, Kind: "object", Op: "purge", Subject: subject, OpID: opID,
+			Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Body: body,
 	})
@@ -366,15 +368,17 @@ func purgeRecord(stamp statelog.Stamp, opID, body string) []byte {
 }
 
 // evictionRecord is a gate record on the probe log: an eviction, which
-// [gatingDomain] says installs a gate, carrying body.
-func evictionRecord(stamp statelog.Stamp, opID, body string) []byte {
+// [gatingDomain] says installs a gate, on subject and declaring scope as
+// [probeRecord] does, carrying body.
+func evictionRecord(stamp statelog.Stamp, subject statelog.Subject, scope statelog.ScopeSet,
+	opID, body string) []byte {
 	payload, err := json.Marshal(struct {
 		statelog.Envelope
 		Body string
 	}{
 		Envelope: statelog.Envelope{
-			V: 1, Kind: "eviction", Op: "evict", OpID: opID,
-			Gen: stamp.Gen, Writer: stamp.Writer,
+			V: 1, Kind: "eviction", Op: "evict", Subject: subject, OpID: opID,
+			Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Body: body,
 	})
@@ -384,18 +388,22 @@ func evictionRecord(stamp statelog.Stamp, opID, body string) []byte {
 	return payload
 }
 
-// gate publishes one gate record through the harness's publisher.
-func (h *harness) gate(node, opID, body string, record func(statelog.Stamp, string, string) []byte) (statelog.Result, error) {
+// gate publishes one gate record through the harness's publisher, record
+// written on the gate's subject and declaring the scope its request does.
+func (h *harness) gate(node, opID, body string,
+	record func(statelog.Stamp, statelog.Subject, statelog.ScopeSet, string, string) []byte,
+) (statelog.Result, error) {
 	h.t.Helper()
 	subject := statelog.Subject{Kind: "eviction", ID: node}
+	scope := statelog.ScopeSet{Paths: []string{subject.String()}}
 	return h.pub.Publish(h.t.Context(), statelog.Request{
 		Subject:  subject,
-		Scope:    statelog.ScopeSet{Paths: []string{subject.String()}},
+		Scope:    scope,
 		OpID:     opID,
 		Pattern:  statelog.PatternArbitrated,
 		NodeGate: true,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return statelog.Decision{Payload: record(stamp, opID, body), Version: 1}, nil
+			return statelog.Decision{Payload: record(stamp, subject, scope, opID, body), Version: 1}, nil
 		},
 	})
 }

@@ -132,7 +132,10 @@ longer than a reconnect.
 The **store** is never one of these: it stays one file per node, which is why
 everything genuinely shared lives in coordination instead. See
 [Running a Fleet](../guides/fleet.md) and
-[Deployment](../guides/deployment.md) for sizing and broker authentication.
+[Deployment](../guides/deployment.md) for sizing, and
+[Deployment § The fleet's broker admits only its own nodes](../guides/deployment.md#the-fleets-broker-admits-only-its-own-nodes)
+for broker authentication: every route, leaf link and operator connection to an
+embedded fleet's broker presents a key derived from `secrets.keys`.
 
 ---
 
@@ -285,6 +288,34 @@ unset for the former, name the instance for the latter:
 A company can run **both** hosts: they are two hosts with different
 repositories on them, which is what a migration and an open-source presence
 both look like.
+
+### Option C: the engine's own host — `code.native`
+
+The engine can host the company's repositories itself, on its own state log,
+with each push's bytes in the [object store](../concepts/object-store.md):
+set `code.native` and declare the repositories in `code.repos`, and every
+activation creates, settles and retires them (see
+[Code Host](../concepts/code-host.md)). It is **not exclusive** — the GitLab
+and GitHub integrations keep working beside it, so a company may host some
+repositories natively and keep others on a vendor.
+
+Today it is a place for **people and agents** to keep and review their code:
+people clone, fetch and push over HTTPS with their own API token ([Hosting
+Code](../guides/code.md)), and every push is recorded as whoever made it.
+Agents change it through their code tools — a small commit, a revert or a
+pick, a branch, each built by the engine and recorded as the seat's push — or
+push from a coding box's clone with their run's own credential ([Coding
+boxes](../concepts/code-host.md#coding-boxes)). A **change** proposes one
+branch into another, and people and agents review it, raising findings, a
+blocker among them holding it back until it is cleared ([Review a
+change](../guides/code.md#review-a-change)), while the repository's home git
+node queues its checks, and a change is merged as its branch's gate allows —
+through the branch's merge queue where its gate requires a check ([The merge
+queue](../concepts/code-host.md#the-merge-queue)). Read [What it does not do
+yet](../concepts/code-host.md#what-it-does-not-do-yet) before choosing it as
+an engineering team's only host. A company that hosts
+code on it takes the [S3 object store](../concepts/object-store.md#an-s3-bucket--s3)
+in production, since its repositories grow for as long as it works in them.
 
 ---
 
@@ -471,7 +502,7 @@ offers two); a company whose every such entry names its own needs none — as
 long as *something* names a cell, since a backend is only built for a cell
 that is reached.
 
-Coding-agent choice: the harness **is** the harness of the entry the seat's
+Harness choice: the executor's harness **is** the harness of the entry the seat's
 executor launches on (the first member of its `llm` chain that can run one),
 with that entry's model, its `env` and its sign-in, so it needs no extra secret.
 **Claude Code** runs a `claude-code` entry; **OpenCode** — version 2, the
@@ -509,8 +540,8 @@ Two bundled **Nimbus examples** model the same seven-seat company at opposite
 ends of this page. `examples/nimbus.company.yaml` + `examples/nimbus.config.yaml`
 is the **reference**: a pick from every row — GitLab, Mattermost, open models
 through OpenCode on an OpenRouter key, a sandbox its engineers push merge
-requests from, and
-Worklet and Doclet rather than a vendor's. Read it to
+requests from, Worklet and Doclet rather than a vendor's, and two repositories
+on the engine's own code host beside GitLab's. Read it to
 see what a full stack looks like written out, and
 [Jira](../integrations/jira.md) / [Confluence](../integrations/confluence.md)
 for the blocks that move those two halves to Atlassian.

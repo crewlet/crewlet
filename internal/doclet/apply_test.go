@@ -46,7 +46,7 @@ func newHarness(t *testing.T, skills doclet.SkillDetector) *harness {
 		}
 	})
 	return &harness{
-		t: t, db: db, applier: doclet.NewApplier("node-a", skills, nil),
+		t: t, db: db, applier: doclet.NewApplier(skills, nil),
 		maxVariables: db.Caps().MaxVariables,
 	}
 }

@@ -3,7 +3,7 @@
  * engine answered and what only an administrator reads stays theirs.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
@@ -13,6 +13,7 @@ import { answerHeldCall } from "~/lib/heldCall.ts";
 import { putEntity } from "~/protocol/configWrite.ts";
 import { Store } from "~/protocol/index.ts";
 import { TestClient } from "~/test/client.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { setLevels, type ServerDetail } from "../api.ts";
 import type { McpData } from "../data.ts";
 import {
@@ -74,12 +75,6 @@ function mountAt(tab: string, data: McpData, onFlow: (...a: unknown[]) => void =
       </ToastProvider>
     </TestClient>,
   );
-}
-
-async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
 }
 
 /** Choose `option` in the kit select named `name`. */
@@ -284,14 +279,14 @@ test("the tools' levels are set by the server's own name for each tool, and read
   // The custom level's tag, beside the filter chip of the same name.
   expect(screen.getAllByText("Custom")).toHaveLength(2);
   choose("Level for linear_list_issues", "Blocked");
-  await settle();
+  await afterMicrotasks();
   expect(setLevels).toHaveBeenLastCalledWith(
     "linear",
     { levels: { list_issues: "blocked" } },
     "linear_list_issues set to Blocked",
   );
   choose("Level for linear_delete_issue", /Server default/);
-  await settle();
+  await afterMicrotasks();
   expect(setLevels).toHaveBeenLastCalledWith(
     "linear",
     { levels: { delete_issue: null } },
@@ -301,7 +296,7 @@ test("the tools' levels are set by the server's own name for each tool, and read
     "By each tool's hints",
   );
   choose("Default level", "Needs approval");
-  await settle();
+  await afterMicrotasks();
   expect(setLevels).toHaveBeenLastCalledWith(
     "linear",
     { default: "approve" },
@@ -309,7 +304,7 @@ test("the tools' levels are set by the server's own name for each tool, and read
   );
   fireEvent.click(screen.getByRole("button", { name: "Set 2 shown" }));
   fireEvent.click(screen.getByRole("menuitem", { name: "Always allow" }));
-  await settle();
+  await afterMicrotasks();
   expect(setLevels).toHaveBeenLastCalledWith(
     "linear",
     { levels: { list_issues: "allow", delete_issue: "allow" } },
@@ -345,7 +340,7 @@ test("a level the engine refuses is said in its words", async () => {
   });
   mountAt("tools", mcpData("admin"));
   choose("Level for linear_list_issues", "Needs approval");
-  await settle();
+  await afterMicrotasks();
   expect(screen.getAllByText(/Nothing was changed/).length).toBeGreaterThan(0);
   expect(screen.getAllByText(/Take linear out of the box first/).length).toBeGreaterThan(0);
 });
@@ -404,7 +399,7 @@ test("the access tab lists who the server reaches and writes who gets it on its 
   expect(screen.queryByRole("button", { name: "Save access" })).toBeNull();
   fireEvent.click(screen.getByRole("checkbox", { name: "Product Manager" }));
   fireEvent.click(screen.getByRole("button", { name: "Save access" }));
-  await settle();
+  await afterMicrotasks();
   expect(putEntity).toHaveBeenCalledWith(
     "mcp-servers",
     "linear",
@@ -444,7 +439,7 @@ test("a grant the engine refuses says why and saves nothing", async () => {
   fireEvent.click(await screen.findByRole("radio", { name: /Chosen teams and agents/ }));
   fireEvent.click(screen.getByRole("checkbox", { name: "Product Manager" }));
   fireEvent.click(screen.getByRole("button", { name: "Save access" }));
-  await settle();
+  await afterMicrotasks();
   expect(screen.getByText("Nothing was saved")).toBeDefined();
   expect(screen.getByText(/name a server it would no longer reach/)).toBeDefined();
 });
@@ -474,7 +469,7 @@ test("a call held for approval is answered on the server's overview, and its tab
   expect(screen.getByText("linear_delete_issue")).toBeDefined();
   expect(screen.getByText("ENG-12")).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
-  await settle();
+  await afterMicrotasks();
   expect(answerHeldCall).toHaveBeenCalledWith(LINEAR_APPROVAL.id, "once");
   expect(screen.getByText("Approval answered")).toBeDefined();
   expect(reload).toHaveBeenCalled();

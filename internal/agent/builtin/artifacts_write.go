@@ -21,7 +21,6 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -184,7 +183,7 @@ func (t *createArtifact) Description() string {
 }
 
 func (t *createArtifact) Parameters() map[string]any {
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"kind": map[string]any{
@@ -587,6 +586,7 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		mismatch *artifactupload.UploadMismatch
 		pending  *artifactupload.UploadsOutstanding
 		quota    *artifactsdomain.QuotaExceeded
+		full     *artifactupload.StoreFull
 		gone     *artifactsdomain.CarriedObjectGone
 	)
 	said := artifactupload.Sentence(err)
@@ -640,6 +640,18 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 			"Nothing was published. Say so: an operator raises the quota, or somebody "+
 			"removes artifacts the company no longer needs.", tool, quota.Usage,
 			quota.Limit, quota.Key)), caveat.ArtifactQuotaReached())
+	case errors.As(err, &full):
+		// NO ROOM, WHICH NO RETRY MAKES: the store refuses the same file the
+		// same way until an operator makes the room it names — never the
+		// fault a failure nothing classified reads as. The store's own words
+		// name its bucket, which is the log's ([objectFailure]'s line, with
+		// them).
+		log.WarnContext(ctx, "builtin_tool_object_store_failed", "tool", tool,
+			"class", string(tools.RefusalStoreFull), "path", full.Path, "error", full.Err)
+		return refusedBy(tools.RefusalStoreFull, err, fmt.Sprintf("%s "+
+			"refused that: the object store has no room left for %s, so nothing was "+
+			"published. Making the call again is refused the same until %s — say so, "+
+			"and say the version was not published.", tool, full.Path, full.Remedy))
 	case errors.As(err, &pending):
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
@@ -671,13 +683,6 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s could not land: "+
 			"somebody else kept changing the artifact. Read it again with "+GetArtifactTool+" "+
 			"before retrying.", tool))
-	case errors.Is(err, objstore.ErrFull):
-		// NO RETRY LANDS until somebody makes room, as write_project_file
-		// tells it: read as a fault, the model was told only that the
-		// publish failed, with nothing to say about why or who can fix it.
-		return objectFailure(ctx, tool, tools.RefusalUnavailable, err, fmt.Sprintf("%s: "+
-			"nothing was saved: the company's file storage is full. Don't try again: "+
-			"say it couldn't be saved and that an administrator needs to make room.", tool))
 	}
 	if class, ok := WriterClass(err); ok {
 		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see
@@ -718,7 +723,7 @@ func (t *publishArtifact) Description() string {
 }
 
 func (t *publishArtifact) Parameters() map[string]any {
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"artifact": artifactParam(),
@@ -1105,7 +1110,7 @@ func (t *updateArtifact) Description() string {
 }
 
 func (t *updateArtifact) Parameters() map[string]any {
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"artifact":    artifactParam(),

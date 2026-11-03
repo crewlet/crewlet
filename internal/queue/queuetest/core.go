@@ -1113,7 +1113,7 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		// deliver into a handler the case has already returned from.
 		_ = unsub(ctx)
 	}
-	stopServing, serveErr := q.Serve(ctx, topic, func(context.Context, []byte) ([]byte, error) {
+	stopServing, serveErr := q.Serve(ctx, topic, queue.ConcurrentAnswers, func(context.Context, []byte) ([]byte, error) {
 		return nil, nil
 	})
 	if stopServing != nil {

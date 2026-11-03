@@ -15,7 +15,7 @@
  * picked as Admin — one switch that includes every app — and one box per app.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { useState } from "react";
@@ -42,6 +42,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import { withDerived } from "~/test/org.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -175,7 +176,7 @@ async function reach(node: React.ReactNode, chat: OrgServices["chat"]) {
     withDerived({
       name: "Acme",
       roles: [],
-      services: { tracker: "worklet", knowledge: "doclet", chat },
+      services: { tracker: "worklet", knowledge: "doclet", chat, code: "native" },
     }),
   );
   const socket = { query: vi.fn(async (what: string) => (what === "viewer" ? viewer : {})) };
@@ -196,10 +197,9 @@ function Holding({ seat, grants }: { seat: { handle: string; name: string }; gra
   );
 }
 
-/** Every answer in flight lands. */
+/** Every answer in flight lands, and what it draws. */
 async function settle() {
-  await act(async () => {});
-  await act(async () => {});
+  await afterMicrotasks();
 }
 
 beforeEach(() => {

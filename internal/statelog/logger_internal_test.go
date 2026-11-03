@@ -8,6 +8,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -140,16 +141,16 @@ func (loggerProbe) Tables() map[string]TableClass     { return nil }
 func (loggerProbe) DeferredTable() string             { return "logger_probe_deferred" }
 func (loggerProbe) ScopeIndex() string                { return "logger_probe_scope" }
 func (loggerProbe) OpsTable() string                  { return "" }
-func (loggerProbe) ReadinessInput() bool              { return false }
+func (loggerProbe) GatesSeatAdmission() bool          { return false }
 func (loggerProbe) ClaimsIdentity() bool              { return false }
 func (loggerProbe) FeedGroup() string                 { return "" }
 
 // loggerProbeVerifier is a verifier for [loggerProbe], which every runner must
 // be handed: one built without it would apply any record that reached the
 // broker.
-func loggerProbeVerifier(t *testing.T) *Verifier {
+func loggerProbeVerifier(t *testing.T) *recordseal.Verifier {
 	t.Helper()
-	verifier, err := NewVerifier(loggerProbe{}.Name(), OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(loggerProbe{}.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -158,9 +159,9 @@ func loggerProbeVerifier(t *testing.T) *Verifier {
 
 // loggerProbeSigner is [loggerProbeVerifier]'s other half, which every
 // publisher must be handed: an unsigned record is refused by every node.
-func loggerProbeSigner(t *testing.T) *Signer {
+func loggerProbeSigner(t *testing.T) *recordseal.Signer {
 	t.Helper()
-	signer, err := NewSigner(loggerProbe{}.Name(), OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(loggerProbe{}.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}

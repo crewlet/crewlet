@@ -95,10 +95,10 @@ type servedQueue struct {
 // subject: a search answerer and the estate server are different claims on
 // the fleet, and a count of both together would let one leak while the other
 // was withdrawn twice.
-func (q *servedQueue) Serve(ctx context.Context, subject string,
+func (q *servedQueue) Serve(ctx context.Context, subject string, answers int,
 	fn queue.AnswerFunc) (queue.Unsubscribe, error) {
 
-	stop, err := q.Queue.Serve(ctx, subject, fn)
+	stop, err := q.Queue.Serve(ctx, subject, answers, fn)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -174,10 +174,14 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve the node id: %v", err)
 	}
-	if got := served[estate.Subject(nodeID)]; got != 1 {
-		t.Fatalf("this node registered %d estate servers, want 1 — a data "+
-			"node registers it before the native start, so this case expects "+
-			"exactly one", got)
+	// BOTH OF ITS LANES: a node left answering proposals for repositories
+	// it commits for would decide pushes from a runtime being torn down.
+	for _, subject := range []string{estate.Subject(nodeID), estate.ProposalSubject(nodeID)} {
+		if got := served[subject]; got != 1 {
+			t.Fatalf("this node registered the estate server's %s %d time(s), "+
+				"want 1 — a data node registers both of its lanes before the "+
+				"native start, so this case expects exactly one each", subject, got)
+		}
 	}
 	// THE HISTORY ANSWERER TOO, which is armed before the native start on
 	// every node: a case that saw only the search answerer could pass with
@@ -206,6 +210,51 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 			"none: this node told the fleet it was about to publish and never "+
 			"took it back, so a capacity operation has to treat a process "+
 			"that is not running as a possible publisher", len(admissions))
+	}
+}
+
+// A FAILED BOOT WITHDRAWS ITS CODE HOST'S STATUS ANSWERER TOO. The code host is
+// built inside the native start, and its status answerer registered beside it
+// (codestatus.go), so a boot that dies after the native start — the embedding
+// model resolving to nothing, as above — must leave no node answering the
+// fleet's code status for a host its own unwind has stopped: an answerer left
+// behind would tell every asker of a cache that is gone. The same company
+// hosting code, on a node whose roles are every role.
+//
+// Mutation: withdraw nothing in native.stopCodeHost, and the answerer is left
+// registered.
+func TestAFailedBootWithdrawsItsCodeHostsStatus(t *testing.T) {
+	t.Parallel()
+	b := testBootstrap(t)
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
+	cfg, err := config.ParseCompany([]byte(bootCleanupCompany + "code:\n  native: true\n"))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	RequireNodeGit(t, &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	real, ok := back.Queue.(*jetstream.Queue)
+	if !ok {
+		t.Fatalf("the stream is %T, not the JetStream backend this case needs", back.Queue)
+	}
+	watched := &servedQueue{Queue: real, served: map[string]int{}, withdrawn: map[string]int{}}
+	borrowed := *back
+	borrowed.Queue = watched
+
+	if _, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: &borrowed}); err == nil {
+		t.Fatal("a company whose embedding model resolves to nothing built an engine anyway — this case " +
+			"needs a boot that fails AFTER the native start built the code host")
+	}
+	served, withdrawn := watched.tallies()
+	if served[topics.CodeStatus] != 1 || withdrawn[topics.CodeStatus] != 1 {
+		t.Fatalf("the boot failed after building the code host, and its status answerer was registered %d "+
+			"time(s) and withdrawn %d, want once each", served[topics.CodeStatus], withdrawn[topics.CodeStatus])
 	}
 }
 

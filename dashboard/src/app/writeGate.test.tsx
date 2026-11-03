@@ -124,6 +124,45 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "whose reason the page draws on its action for a reader who cannot file",
     suite: "routes/artifacts/new/fileTask.test.tsx",
   },
+  "routes/code/change/ChangePage.tsx": {
+    why:
+      "a change's page bar — Approve, Request changes, Comment, Request review, " +
+      "Close and Reopen — and the dialogs each opens",
+    suite: "routes/code/change/ChangePage.test.tsx",
+  },
+  "routes/code/change/Conversation.tsx": {
+    why: "a change's comment, a reply to a thread or a finding, and a thread's Resolve",
+    suite: "routes/code/change/ChangePage.test.tsx",
+  },
+  "routes/code/change/Files.tsx": {
+    why: "a finding's Apply suggestion, on the line the finding is on",
+    suite: "routes/code/change/ChangePage.test.tsx",
+  },
+  "routes/code/change/Merge.tsx": {
+    why:
+      "a change's merge controls — Merge or Add to queue, Override and its dialog, and " +
+      "Re-run checks — each a WriteButton held with the gate's sentence",
+    suite: "routes/code/change/ChangePage.test.tsx",
+  },
+  "routes/code/ImportRepo.tsx": {
+    why:
+      "the repositories' Import a repository — one code_import_repo, a new repository " +
+      "filled from another host or made its pull mirror — and the dialog it opens",
+    suite: "routes/code/Repositories.test.tsx",
+  },
+  "routes/code/repo/RepoWrites.tsx": {
+    why:
+      "a repository's settings writes — its search mode, its pull and push mirrors " +
+      "(code_update_repo) and Purge unreachable history (code_purge_unreachable) — " +
+      "each a WriteButton held with the gate's sentence",
+    suite: "routes/code/repo/RepositoryPage.test.tsx",
+  },
+  "routes/code/commit/ComparePage.tsx": {
+    why:
+      "a comparison's Open change — one code_open_change of the branch compared into " +
+      "the base branch — and the dialog it opens",
+    suite: "routes/code/commit/CommitPage.test.tsx",
+  },
   "routes/worklet/NewTask.tsx": {
     why:
       "the New task sheet's Create — one create_work_item carrying the whole task — " +

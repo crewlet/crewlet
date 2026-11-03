@@ -131,14 +131,18 @@ export function actionApps(tool: ActionTool): readonly App[] {
 /**
  * The service built into Crewlet a change lands in, read off the same
  * `domain`: Worklet for the `tracker` log, Doclet for the `pages` log, Chatlet
- * for the `chat` log. A company running another system in its place, or
- * none, has nowhere for the change to land.
+ * for the `chat` log, the code host for the `code` log. A company running
+ * another system in its place, or none, has nowhere for the change to land.
+ * The code log is no app's (ADR-0033 has no code app: every person reads every
+ * repository), so [actionApps] names none for it and only the service can
+ * hold a code change.
  */
 export function actionService(tool: ActionTool): Service | null {
   const domain: string | null = ACTIONS[tool].domain;
   if (domain === "tracker") return "tracker";
   if (domain === "pages") return "knowledge";
   if (domain === "chat") return "chat";
+  if (domain === "code") return "code";
   return null;
 }
 
@@ -152,6 +156,7 @@ export const SERVICE_OFF_REASONS: Readonly<Record<Service, string>> = {
   tracker: "Worklet is not in use, so no task can be filed or changed here.",
   knowledge: "Doclet is not in use, so no page can be written here.",
   chat: "Chatlet is not in use, so nothing can be said in a room here.",
+  code: "This company hosts no code in the engine, so no repository can be changed here.",
 };
 
 /** The sentence a change is held with when the reader holds none of its apps. */

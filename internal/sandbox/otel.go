@@ -332,6 +332,8 @@ const (
 	// launching node's host. Unset, such a box gets no in-box telemetry,
 	// which is the ordinary configuration — and a box on the host gets its
 	// node's own listener where the node forwards ([BuildOtelReceiver]).
+	// Set, it is an absolute http or https URL with a host ([ParseBoxURL]),
+	// or the node refuses to boot.
 	OtelReceiverURLVar = "CREWLET_SANDBOX_OTEL_RECEIVER_URL"
 
 	// OtelUpstreamEndpointVar and OtelUpstreamHeadersVar are the real
@@ -369,6 +371,14 @@ const otelBoxEndpointVar = "OTEL_EXPORTER_OTLP_ENDPOINT"
 // A node with neither the variable nor a host address it forwards from builds
 // none, and its route is absent rather than refusing.
 //
+// The address is read through [ParseBoxURL], so a value that is set and that
+// a box's exporter cannot use — no scheme, a scheme other than http or https,
+// no host or one the box's URL parser refuses, a port outside 1 to 65535,
+// user information, a query or a fragment — is an error naming the variable,
+// which the engine refuses its boot on. Handed on as it was, it
+// minted every run an endpoint the box's exporter could not dial, and the
+// run's telemetry went nowhere with nothing to say so.
+//
 // material is the Tier A keyring, which every process already loads — FROM THE
 // KEYRING, the one secret every Crewlet process holds, and never from the
 // database, which a token check on an endpoint reachable without other
@@ -382,7 +392,10 @@ func BuildOtelReceiver(env func(string) string, material runtoken.Material,
 	if env == nil {
 		return nil, nil
 	}
-	base := strings.TrimSpace(env(OtelReceiverURLVar))
+	base, err := ParseBoxURL(OtelReceiverURLVar, env(OtelReceiverURLVar))
+	if err != nil {
+		return nil, err
+	}
 	upstream := strings.TrimSpace(env(OtelUpstreamEndpointVar))
 	host := ""
 	if upstream != "" {

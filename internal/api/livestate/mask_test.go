@@ -572,7 +572,7 @@ func TestAnOverlayViewStatesLiveCallAndTurnAlways(t *testing.T) {
 //
 // Mutation: withhold the question from its audience, or show the task to
 // them, and this fails.
-func TestACodingRunShowsItsQuestionToThePeopleItIsPutTo(t *testing.T) {
+func TestAnExecutorShowsItsQuestionToThePeopleItIsPutTo(t *testing.T) {
 	t.Parallel()
 	entry := ExecutorEntry{TurnID: "turn-1", Task: "fix the build", Status: ExecutorAwaiting,
 		Question: "which branch?", AudienceHandles: []string{"dana"},

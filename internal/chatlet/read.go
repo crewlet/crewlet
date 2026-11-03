@@ -40,7 +40,7 @@ import (
 // # Read-your-own-writes is the framework's floor, not a level of ours
 //
 // A write returns the position its record landed at and a wake carries one.
-// A caller that holds either names it as [statelog.Freshness.MinPosition] and
+// A caller that holds either names it as [statelog.Freshness.Floors] and
 // is served nothing from before it — at every level, with a `behind` refusal
 // rather than rows from before the write when this node has not got there.
 // There is no chat read level, no `wait_for` parameter and no second waiter:

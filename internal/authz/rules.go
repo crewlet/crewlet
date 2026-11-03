@@ -81,11 +81,153 @@ const (
 	// thread they were asked to answer on.
 	ActionWorkThread Action = "work.thread"
 
+	// --- the company's code ----------------------------------------- //
+	//
+	// ADMITTED AT THE ROUTE AND DECIDED PER REPOSITORY, as a work item's
+	// thread is. Who may read a repository, fetch from it or push to it is
+	// a GRANT the serving node derives from the chart for the repository a
+	// request names (code.GrantOf, ADR-0088): a person maintains every
+	// repository, and a seat holds the least of its code tier and its
+	// relation to the repository's owner — a question the route cannot ask
+	// before the repository is read, and that this table has no chart arm
+	// for. So the route admits everybody the guard resolved, and the grant
+	// decides. DOTTED, because no tool is named for either.
+	//
+	// ActionCodeRead admits the code host's rows: the repositories, one
+	// repository, its push history — the query registry's code questions,
+	// decided by this verb on whichever transport asks them, REST or the
+	// socket.
+	ActionCodeRead Action = "code.read"
+	// ActionCodeGit admits the git transport — the advertisement, a
+	// fetch's upload-pack and a push's receive-pack — whose grant then
+	// decides by service: a push is refused at its advertisement to a
+	// principal that may push nothing, and every command it carries is
+	// judged by the grant's ref rule.
+	ActionCodeGit Action = "code.git"
+
+	// THE CODE READ TOOLS, a seat's and an operator's assistant's, named
+	// after the tools and decided as the REST reads above are: admitted for
+	// every principal, and judged per repository by the grant the SERVING
+	// node derives from its own chart — a listing leaves out what the asker
+	// may not read, and a read of one such repository is refused
+	// `not_permitted`. ActionCodeReadFile is the tool `code_read`, a file
+	// or a directory at a commit, and is named apart from ActionCodeRead
+	// because that name is the dotted verb of the REST reads.
+	ActionCodeListRepos Action = "code_list_repos"
+	ActionCodeGetRepo   Action = "code_get_repo"
+	ActionCodeResolve   Action = "code_resolve"
+	ActionCodeReadFile  Action = "code_read"
+	ActionCodeDiff      Action = "code_diff"
+	ActionCodeCompare   Action = "code_compare"
+	ActionCodeLandedIn  Action = "code_landed_in"
+	ActionCodeLog       Action = "code_log"
+	ActionCodeBlame     Action = "code_blame"
+	// AND THE CHANGE READS, the same footing: a listing of changes and one
+	// change a part at a time, each held where it is answered to the grant on
+	// the change's repository, as every read of the repository's rows is.
+	ActionCodeListChanges Action = "code_list_changes"
+	ActionCodeGetChange   Action = "code_get_change"
+	// ActionCodeSearch is the tool `code_search`: the lines matching a
+	// search across every repository the asker may read, each repository
+	// judged by the grant its answering git node derives. The question of
+	// the same name, on REST and the socket, is decided by ActionCodeRead,
+	// the dotted verb every code question is decided by.
+	ActionCodeSearch Action = "code_search"
+	// ActionCodeRepoReaders is WHO READ a `visibility: unit` repository —
+	// the operator tool `code_repo_readers` and the query registry's
+	// question of the same name, on `GET /code/repos/{name}/readers` and
+	// the socket, ONE verb asked two ways — whose answer names the persons,
+	// the credentials and the seats that read it and how much.
+	ActionCodeRepoReaders Action = "code_repo_readers"
+	// ActionCodeMarkInbox is a person's gesture over their own CODE notices
+	// — the operator tool `code_mark_inbox` — the code log's half of what
+	// `mark_inbox` is on the tracker's: marks are kept by each domain on its
+	// own log (internal/inbox), so each domain's are written by a verb of
+	// its own.
+	ActionCodeMarkInbox Action = "code_mark_inbox"
+
+	// THE CODE WRITE TOOLS, a seat's and a person's assistant's, named after
+	// the tools and decided as the git transport's push is: admitted for
+	// every principal, and judged per repository where it is decided — an
+	// engine write by the grant's ref rule and the protections on the git
+	// node that builds it and again at the repository's committer, a
+	// repository's lifecycle by the one lifecycle rule on the data node that
+	// decides it (code.GrantOf and the lifecycle's refusal, ADR-0088). Five
+	// change a branch — files committed, a commit reverted or picked, a
+	// branch created or deleted — and five a repository: made, changed
+	// (settings, archive, rename), deleted, restored, or a branch protected.
+	// Named apart from the dotted ActionCodeRead and ActionCodeGit, which no
+	// tool serves.
+	ActionCodeCommitFiles   Action = "code_commit_files"
+	ActionCodeRevert        Action = "code_revert"
+	ActionCodeCherryPick    Action = "code_cherry_pick"
+	ActionCodeCreateBranch  Action = "code_create_branch"
+	ActionCodeDeleteBranch  Action = "code_delete_branch"
+	ActionCodeCreateRepo    Action = "code_create_repo"
+	ActionCodeUpdateRepo    Action = "code_update_repo"
+	ActionCodeDeleteRepo    Action = "code_delete_repo"
+	ActionCodeRestoreRepo   Action = "code_restore_repo"
+	ActionCodeProtectBranch Action = "code_protect_branch"
+	// AND THE CHANGE WRITES, the same footing: a change opened, edited — its
+	// title, description or work item, a draft's state, its target — closed
+	// or reopened, each one write of the change's lifecycle the repository's
+	// committer decides from its own chart (D21: who may push the source to
+	// open one; the change's owner, a maintainer or a person to steer it).
+	ActionCodeOpenChange   Action = "code_open_change"
+	ActionCodeUpdateChange Action = "code_update_change"
+	ActionCodeCloseChange  Action = "code_close_change"
+	// And its conversation: reviewers asked, a review with its findings, a
+	// comment and a thread's state, findings answered — each one write the
+	// change's writer decides from its own chart (D21: who may ask, review,
+	// answer or dismiss).
+	ActionCodeRequestReview   Action = "code_request_review"
+	ActionCodeReviewChange    Action = "code_review_change"
+	ActionCodeCommentOnChange Action = "code_comment_on_change"
+	ActionCodeResolveFinding  Action = "code_resolve_finding"
+	// And its findings' suggestions applied: an engine write onto the
+	// change's branch, judged as every engine write is — the grant's ref rule
+	// and the protections, on the git node and at the committer.
+	ActionCodeApplySuggestions Action = "code_apply_suggestions"
+	// And its commits rebased onto its target: an engine write of its source,
+	// a forced push of it, judged as every engine write is.
+	ActionCodeRebaseChange Action = "code_rebase_change"
+	// And it merged into its target, or put in its target's queue where the
+	// target's gate requires a check — its merge authority, its gate and a
+	// person's override judged by the committer from its own chart (M5-D2,
+	// M5-D7) — and taken out of that queue again.
+	ActionCodeMergeChange   Action = "code_merge_change"
+	ActionCodeDequeueChange Action = "code_dequeue_change"
+	// And a merged change reverted by a change of its own, opened by the
+	// push of its revert's branch (M5-D25), judged as every engine write is.
+	ActionCodeRevertChange Action = "code_revert_change"
+	// A commit's CHECKS: what a check that failed said — its failures, its
+	// summary, its tail and pages of its log — read by the repository's
+	// grant; an attempt run again, decided by the repository's checks writer
+	// from its own chart (a seat reruns only what its infrastructure ended,
+	// on a repository it may write or a change it wrote); and a person's own
+	// CI reporting a check of a commit, a person's alone.
+	ActionCodeGetCheckFailures Action = "code_get_check_failures"
+	ActionCodeRerunChecks      Action = "code_rerun_checks"
+	ActionCodeReportCheck      Action = "code_report_check"
+	// ActionCodePurgeUnreachable is a person's purge of a repository's
+	// unreachable objects: a request its maintainer serves by expunging
+	// every object no ref reaches.
+	ActionCodePurgeUnreachable Action = "code_purge_unreachable"
+	// ActionCodeImportRepo is a person's create of a project repository
+	// filled from one at another host, once or kept in step as a pull
+	// mirror.
+	ActionCodeImportRepo Action = "code_import_repo"
+
 	// --- somebody's own record -------------------------------------- //
-	ActionPersonRead    Action = "get_person"
-	ActionMyWork        Action = "my_work"
-	ActionInboxRead     Action = "work_inbox"
-	ActionInboxMark     Action = "mark_inbox"
+	ActionPersonRead Action = "get_person"
+	ActionMyWork     Action = "my_work"
+	ActionInboxRead  Action = "work_inbox"
+	ActionInboxMark  Action = "mark_inbox"
+	// ActionInbox is reading a person's COMPOSED inbox — every native
+	// domain's notices in one list (the query registry's `inbox`). DOTTED:
+	// no tool serves it, a seat being woken rather than shown a list, and
+	// `work_inbox` stays the tracker's own question and tool.
+	ActionInbox         Action = "inbox.read"
 	ActionPinsSet       Action = "set_pins"
 	ActionViewSave      Action = "save_work_view"
 	ActionPrioritiesSet Action = "set_priorities"
@@ -268,9 +410,17 @@ const (
 	// shows such a raise, and refused to a machine token: an agent made an
 	// administrator at a vendor is a decision a person makes at a keyboard.
 	ActionSetupAccessRaise Action = "setup.access.raise"
-	ActionFleetOperate     Action = "fleet.operate"
+	// ActionFleetOperate is the deployment's own controls: a backup, the
+	// retention gestures, the capacity window, the fleet broker's
+	// membership — and a verify of a git node's cache of one repository,
+	// which reads every byte of THIS NODE's copy, holds a maintenance slot
+	// and the memory its check needs, and with a repair rewrites the copy
+	// every fetch on the node is served from: an operation on the node, as
+	// a backup of it is, and nothing a repository's own grant decides.
+	ActionFleetOperate Action = "fleet.operate"
 	// ActionFleetRead is the deployment's own controls READ — the
-	// maintenance window's status and the value a reanchor must echo.
+	// maintenance window's status, the value a reanchor must echo and a
+	// verify's outcome.
 	// Admin's as [ActionFleetOperate] is, and its own verb because it asks
 	// for no step-up: a read changes nothing, and a status an operator
 	// cannot see without re-proving who they are is a status they stop
@@ -324,6 +474,25 @@ const (
 	// does.
 	ActionToolsRead Action = "tools.read"
 	ActionAuditRead Action = "audit.read"
+	// ActionFleetHealth is the tool `fleet_health`: every live node as its
+	// own heartbeat states it, with the alarms its own table has firing.
+	// ActionCodeStatus is the tool `code_status`: the git nodes' caches and
+	// the repositories they served most, or one repository's state on each.
+	// READS OF THE DEPLOYMENT, admin's as the `fleet` question is — and a
+	// SEAT'S only where its role carries the health grant
+	// ([SeatGrantHealth], `role.health_tools`); see [rule.seatGrant].
+	ActionFleetHealth Action = "fleet_health"
+	ActionCodeStatus  Action = "code_status"
+	// ActionFleetHealthRead is the deployment's health read FOR whoever woke a
+	// granted seat's turn: the requester ceiling's question of `fleet_health`
+	// ([DecideWithin]), which the tool asks of that somebody before it reads
+	// anything, and never a route or a tool of its own — DOTTED, because no
+	// tool is named for it. Not [ActionFleetHealth] again: a requester holds
+	// no admin (a person is composed as a colleague, never an administrator)
+	// and a colleague seat no grant of the asker's, so the tool's own row
+	// would refuse every turn anybody woke. What the seat reads is its grant's;
+	// this decides only for whom it may read it.
+	ActionFleetHealthRead Action = "fleet.health.read"
 
 	// --- one seat's own trail, read by somebody else ----------------- //
 	//
@@ -576,6 +745,34 @@ var Presences = []Presence{
 // Valid reports whether a presence is one this build knows.
 func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 
+// SeatGrant is an authority a seat's ROLE carries in the company document —
+// `role.health_tools: true` — that admits an AGENT SEAT to the verbs whose
+// rows name it ([rule.seatGrant]), in place of their class.
+//
+// A FACT ABOUT THE ROLE, NOT A PERMISSION. A seat holds every app and never
+// admin (internal/agent/turnctx), and a permission is a decision about a
+// PERSON; what a seat may do beyond the apps is its role's to say, in the
+// document an administrator writes — which is why the field that carries a
+// grant is admin's to set and never a lead's (internal/config's org diff
+// lists it apart). The chart answers whether a role carries one
+// ([Chart.SeatGranted]).
+//
+// Its zero is no grant: a row naming none decides every principal by its
+// class.
+type SeatGrant string
+
+const (
+	// SeatGrantHealth is `role.health_tools`: the fleet's health and the
+	// code host's status, which a person reads as an administrator.
+	SeatGrantHealth SeatGrant = "health_tools"
+)
+
+// SeatGrants are every grant, in declaration order.
+var SeatGrants = []SeatGrant{SeatGrantHealth}
+
+// Valid reports whether a grant is one this build knows.
+func (g SeatGrant) Valid() bool { return slices.Contains(SeatGrants, g) }
+
 // AssistClass is what the Dashboard Assistant may do with a verb: take it
 // under a read grant, carry it only as the one approved request an exec grant
 // binds, or never (ADR-0052). See [rule.assist].
@@ -688,6 +885,29 @@ type rule struct {
 	// that is both.
 	seatOnly bool
 
+	// seatGrant is the ROLE GRANT that decides an AGENT SEAT on this verb in
+	// place of the class ([SeatGrant]): an agent is admitted exactly where the
+	// chart says its role carries the grant ([Chart.SeatGranted]), whatever
+	// permission it holds, and refused everywhere else — and every other
+	// principal, a person, a token and the engine, is decided by the class
+	// as on any row.
+	//
+	// IT EXISTS FOR A VERB WHOSE CLASS NO SEAT MEETS. The health tools are
+	// admin's, as the `fleet` question is, and a seat never holds admin
+	// (internal/agent/turnctx), so without this a seat that watches the
+	// deployment could never be given them; with admin itself handed to a
+	// seat it could rewrite the company it runs inside. The grant opens the
+	// two reads and nothing else.
+	//
+	// READ BY [Decide], AND SO BY EVERYTHING THAT ASKS IT: the gate on every
+	// call, and the question a surface asks before it offers a verb at all
+	// (internal/agent/builtin's Admits, which withholds a verb from a seat's
+	// surfaces when the table refuses it before any object is named). One
+	// rule, so a seat is offered a granted verb exactly where it is admitted
+	// to it. A walk refuses a row that names a grant beside humanOnly, which
+	// would never reach an agent, or beside seatOnly, which would leave the
+	// class deciding nobody.
+	seatGrant SeatGrant
 	// seated marks a verb made AS A SEAT: what it writes is attributed to a
 	// seat handle, or what it reads is answered for one, so a principal
 	// acting as itself — a Tier A token, a service account the identity
@@ -876,6 +1096,135 @@ var rules = map[Action]rule{
 	// [ActionWorkThread].
 	ActionWorkThread: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
 
+	// THE CODE ROUTES ADMIT EVERYBODY and decide nothing: the repository's
+	// grant decides once the repository is read. See [ActionCodeRead] and
+	// [ActionCodeGit]. A machine token takes both — the git transport is
+	// what a person's token is for — and neither asks a proof, since a
+	// read changes nothing and a push is decided per ref by its grant.
+	ActionCodeRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeGit:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND THE CODE READ TOOLS, on the same footing: the gate admits every
+	// principal and the repository's grant decides on the node that answers
+	// the read. Not seat-only — a person's assistant reads through them too —
+	// and not human-only, since reading the code is a seat's work. Neither
+	// asks a proof: a read changes nothing.
+	ActionCodeListRepos: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeGetRepo:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeResolve:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeReadFile:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeDiff:      {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeCompare:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeLandedIn:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeLog:       {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeBlame:     {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// A CHANGE IS ITS REPOSITORY'S CONTENTS, read on the footing of the
+	// reads above: admitted for every principal, and judged by the grant on
+	// the change's repository on the data node that answers — a listing
+	// leaves out the changes of a repository the asker may not read, and a
+	// read of one such change is refused `not_permitted`.
+	ActionCodeListChanges: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeGetChange:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// A SEARCH IS A READ OF EVERY REPOSITORY IT COVERS, on the same footing:
+	// admitted for every principal, and judged per repository where it is
+	// answered — a repository the asker may not read is never searched, and
+	// one a repo: filter names is refused `not_permitted`.
+	ActionCodeSearch: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// AND THE CODE WRITE TOOLS, on code.git's own footing: the gate admits
+	// every principal and the repository decides — an engine write by the
+	// grant's ref rule and the protections, a lifecycle request by the one
+	// lifecycle rule — on the node that decides it, from its own chart. Not
+	// human-only, since committing is a seat's work; and no proof, as a push
+	// asks none: who may move which ref is the grant's question, which a
+	// table row keyed on the verb cannot answer before the repository is
+	// read.
+	ActionCodeCommitFiles:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeRevert:        {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeCherryPick:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeCreateBranch:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeDeleteBranch:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeCreateRepo:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeUpdateRepo:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeDeleteRepo:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeRestoreRepo:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeProtectBranch: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND THE CHANGE WRITES, on the same footing: a change's lifecycle is
+	// decided by the repository's committer from its own chart — who may push
+	// the branch an open proposes, who owns or maintains a change it steers —
+	// and a seat opens and steers its own changes, so neither human-only nor
+	// asking a proof, as a push asks none.
+	ActionCodeOpenChange:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeUpdateChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeCloseChange:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND ITS CONVERSATION, decided by the change's writer from its own chart
+	// — who may review the repository, who wrote the change, who raised a
+	// finding — on the same footing: a seat reviews, so neither human-only nor
+	// asking a proof.
+	ActionCodeRequestReview:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeReviewChange:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeCommentOnChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeResolveFinding:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND ITS SUGGESTIONS APPLIED, on code.git's footing as every engine write.
+	ActionCodeApplySuggestions: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND ITS REBASE, on the same footing.
+	ActionCodeRebaseChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND ITS MERGE AND ITS DEQUEUE, decided per repository by its
+	// committer — who may merge into the target is the gate's merge_by, an
+	// override is a person's alone — so neither human-only nor asking a
+	// proof here: a seat merges a change its gate lets it merge.
+	ActionCodeMergeChange:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeDequeueChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND ITS REVERT, a branch the caller may create and the change its push
+	// opens, on the footing of every engine write.
+	ActionCodeRevertChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND A COMMIT'S CHECKS: their failures read, and an attempt run again,
+	// each decided per repository in the tool and by the checks writer from
+	// its chart, on the same footing — a seat reads what failed and reruns
+	// what its infrastructure ended. A REPORT is a person's own CI's, and so
+	// human-only: a seat runs no CI of its own, and a report it could send
+	// would be a check result nobody ran (M5-D24); for the same reason no
+	// assistant carries one, since it ran no CI either (the human-only list,
+	// [assistantNever]).
+	ActionCodeGetCheckFailures: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeRerunChecks:      {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeReportCheck: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// A PURGE OF A REPOSITORY'S UNREACHABLE OBJECTS IS A PERSON'S, and a
+	// fresh proof of who they are: it drops history no ref reaches, which
+	// nothing brings back — the purge of a leaked secret is its use — so
+	// never an agent's, whose say-so would have a model erase what the
+	// company's code held, and a step-up as every purge is
+	// ([ActionWorkPurge]). EVERYBODY at the gate, since who maintains the
+	// repository is its grant, which the tool judges once it is read.
+	ActionCodePurgeUnreachable: {class: ClassEverybody, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	// AN IMPORT IS A PERSON'S (U49 a), on the footing of every create: it
+	// has the code host DIAL ANOTHER HOST for the company — once, or for
+	// good as a pull mirror — which a model's say-so would point at any URL
+	// a page it read named, so never an agent's; and the deciding data node
+	// refuses a seat's create carrying an import or a mirror again, whatever
+	// its grant. EVERYBODY at the gate and no step-up: every person
+	// maintains every repository (ADR-0088) and may create a project for any
+	// owner the chart holds, and an import, like a create, takes nothing
+	// away — a mistaken one is deleted as any repository is.
+	ActionCodeImportRepo: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
+	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
+	// ([ActionAuditRead]): the answer names every person, credential and
+	// seat that read a unit's code and how much, which is an audit of the
+	// people as much as of the code — and NEVER AN AGENT'S, a seat asking who
+	// read a repository being a model watching the people it works for.
+	// NOT THE OWNING UNIT'S LEADS beside admin, though they read the
+	// repository itself: a lead's view of which colleagues read their unit's
+	// code is an audit of those colleagues, which the company gives with the
+	// admin permission and not with a place on the chart.
+	ActionCodeRepoReaders: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyAny, assist: AssistRead},
+	// AND A PERSON'S CODE MARKS ARE THEIR OWN, as their Worklet marks are
+	// ([ActionInboxMark]): marking somebody's mail read is a gesture nobody
+	// asked a lead to make. HUMAN-ONLY, since a seat has no inbox to mark —
+	// it is woken, never shown a list — and NO APP: every person reads every
+	// repository (ADR-0088), so the code half of an inbox is every person's,
+	// where Worklet's half takes the worklet app.
+	ActionCodeMarkInbox: {class: ClassOwnRecord, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
+
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/worklet's own tag rule has always said: adding a label
 	// is open to everybody who uses Worklet, and renaming or archiving
@@ -946,6 +1295,12 @@ var rules = map[Action]rule{
 		assist: AssistApprove},
 	ActionInboxMark: {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny,
 		assist: AssistApprove},
+	// THE COMPOSED INBOX IS NO APP'S: its halves are each read under their
+	// own permission — Worklet's notices with the worklet app, the code
+	// host's held to each repository's grant — so a person who uses no
+	// Worklet opens it and reads the changes they are asked to review. Whose
+	// it is stays the lead relation, as `work_inbox`'s is.
+	ActionInbox: {class: ClassOwnOrLead, recency: iam.RecencyAny, assist: AssistRead},
 	ActionPinsSet: {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 
@@ -1235,6 +1590,22 @@ var rules = map[Action]rule{
 		presence: PresenceRequired, assist: AssistApprove},
 	ActionFleetOperate: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
 	ActionFleetRead:    {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
+	// THE FLEET'S HEALTH IS ADMIN'S, as the `fleet` question it reads beside
+	// is, and A SEAT'S ONLY BY ITS ROLE'S GRANT: an agent whose role carries
+	// `health_tools` reads both, and every other agent is refused before the
+	// class is read ([rule.seatGrant]). Reads, so no proof — and tools,
+	// which no step-up reaches. The assistant reads them for an
+	// administrator as it reads the `fleet` question.
+	ActionFleetHealth: {class: ClassAdmin, seatGrant: SeatGrantHealth, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeStatus: {class: ClassAdmin, seatGrant: SeatGrantHealth, recency: iam.RecencyAny,
+		assist: AssistRead},
+	// AND READ FOR ANYBODY OF THE COMPANY WHO MAY ACT: a granted seat tells a
+	// colleague or a person what the deployment's health is, and tells nobody
+	// the company does not know, nor anybody who may not act in it now
+	// ([ActionFleetHealthRead]). Everybody's, as the overview is: the seat's
+	// grant decides what is read, and this row only whom it is read for.
+	ActionFleetHealthRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	// A MODEL'S CHECKS AND ITS RETRY are admin's with no step-up: neither
 	// writes the company or a credential, and the person reaching for them
 	// is the one watching a model refuse right now. The assistant proposes
@@ -1568,6 +1939,16 @@ func SeatOnlyOf(a Action) (bool, bool) {
 	return r.seatOnly, ok
 }
 
+// SeatGrantOf reports the role grant that decides an agent seat on a verb —
+// see [rule.seatGrant] — empty where its class decides every principal, and
+// whether the table knows the verb at all.
+//
+// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+func SeatGrantOf(a Action) (SeatGrant, bool) {
+	r, ok := rules[a]
+	return r.seatGrant, ok
+}
+
 // MinRoleOf reports the least artifact role a verb's row admits (see
 // [rule.minRole]), empty for a row that is not [ClassShared], and whether the
 // table knows the verb at all.
@@ -1657,6 +2038,8 @@ const (
 	tellReady    = "Only an open artifact reports that it has finished drawing."
 	tellApproval = "A call an agent waits on is approved by a person, so this stays with " +
 		"you: answer it from the Inbox or Settings › MCP & tools."
+	tellCheck = "A check result is reported by the CI that ran the check, with its own token: " +
+		"Ask Crewlet runs no CI."
 )
 
 // assistantNever is THE HUMAN-ONLY LIST: every verb the Dashboard Assistant
@@ -1679,7 +2062,10 @@ const (
 //     a transcript and a stored proposal;
 //   - the assistant's own decisions, so it can never approve itself;
 //   - a gesture whose effect a grant would falsify or hide: a model spend
-//     outside the turn's own meter, and a render only an open page reports;
+//     outside the turn's own meter, a render only an open page reports, and
+//     a check result only the CI that ran the check reports (its row records
+//     the person whose CI sent it, and a grant is never that CI, whoever
+//     approved it);
 //   - a person's approval of an agent's call: a tool at Needs approval holds
 //     each call so that a person decides it, and an assistant answering it
 //     would be a model approving a model;
@@ -1714,6 +2100,8 @@ var assistantNever = map[Action]neverEntry{
 	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
 		"so its report would falsify the service objective", tellReady},
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
+	ActionCodeReportCheck: {"a check's result is reported by the CI that ran it, and an assistant runs " +
+		"no CI, so its report would be a result nobody ran", tellCheck},
 	ActionToolsApprove: {"a tool at Needs approval holds each call for a person's decision, " +
 		"and the assistant deciding it would be a model approving a model's call", tellApproval},
 }

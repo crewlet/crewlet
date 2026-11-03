@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -16,28 +17,36 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
+// relayInboxSource is the inbox source the cases' movements name: the
+// tracker's, whose applier announces them.
+var relayInboxSource = worklet.Domain{}.Name()
+
 // heardLive is what one node's sockets were handed, per domain: every inbox
 // movement, every chat effect and every artifact and datastore movement, and
-// how many times each domain was told to read again — for the artifact
-// domains, how many resets they were handed, which is how a gap reaches them.
+// how many times each domain was told to read again — per inbox source, and
+// for the artifact domains how many resets they were handed, which is how a
+// gap reaches them.
 // Its working-indicator half raises nothing ([quietPoster]): the relay never
 // touches it.
 type heardLive struct {
 	quietPoster
 	mu         sync.Mutex
-	moved      []worklet.InboxMovement
+	moved      []inbox.Movement
 	chat       []chatlet.Applied
 	artifacts  []artifactsdomain.Moved
 	data       []artifactdata.Moved
-	inboxGaps  int
+	inboxGaps  map[string]int
 	chatGaps   int
 	artifactRs int
 	dataResets int
@@ -47,18 +56,20 @@ type heardLive struct {
 	socketless bool
 }
 
-func newHeardLive() *heardLive { return &heardLive{ping: make(chan struct{}, 256)} }
+func newHeardLive() *heardLive {
+	return &heardLive{inboxGaps: map[string]int{}, ping: make(chan struct{}, 256)}
+}
 
-func (h *heardLive) deliver(moved []worklet.InboxMovement) {
+func (h *heardLive) deliver(moved []inbox.Movement) {
 	h.mu.Lock()
 	h.moved = append(h.moved, moved...)
 	h.mu.Unlock()
 	h.ping <- struct{}{}
 }
 
-func (h *heardLive) gap() {
+func (h *heardLive) gap(source string) {
 	h.mu.Lock()
-	h.inboxGaps++
+	h.inboxGaps[source]++
 	h.mu.Unlock()
 	h.ping <- struct{}{}
 }
@@ -120,27 +131,34 @@ func (quietPoster) ClearStatus(context.Context, string, string, string) bool { r
 
 // heard is one snapshot of what a node's sockets were handed.
 type heard struct {
-	moved                  []worklet.InboxMovement
+	moved                  []inbox.Movement
 	chat                   []chatlet.Applied
 	artifacts              []artifactsdomain.Moved
 	data                   []artifactdata.Moved
-	inboxGaps, chatGaps    int
+	inboxGaps              map[string]int
+	chatGaps               int
 	artifactRs, dataResets int
 }
 
-// rereadEverywhere reports whether every domain was told to read again n times.
+// rereadEverywhere reports whether every domain — each inbox source among
+// them — was told to read again n times.
 func (h heard) rereadEverywhere(n int) bool {
-	return h.inboxGaps == n && h.chatGaps == n && h.artifactRs == n && h.dataResets == n
+	for _, source := range inboxSources() {
+		if h.inboxGaps[source] != n {
+			return false
+		}
+	}
+	return h.chatGaps == n && h.artifactRs == n && h.dataResets == n
 }
 
 func (h *heardLive) snapshot() heard {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return heard{moved: append([]worklet.InboxMovement(nil), h.moved...),
+	return heard{moved: append([]inbox.Movement(nil), h.moved...),
 		chat:      append([]chatlet.Applied(nil), h.chat...),
 		artifacts: append([]artifactsdomain.Moved(nil), h.artifacts...),
 		data:      append([]artifactdata.Moved(nil), h.data...),
-		inboxGaps: h.inboxGaps, chatGaps: h.chatGaps,
+		inboxGaps: maps.Clone(h.inboxGaps), chatGaps: h.chatGaps,
 		artifactRs: h.artifactRs, dataResets: h.dataResets}
 }
 
@@ -157,7 +175,7 @@ func (h *heardLive) waitFor(t *testing.T, what string, cond func(heard) bool) {
 		case <-deadline:
 			got := h.snapshot()
 			t.Fatalf("%s never happened: heard %v, chat %v, %d artifact and %d "+
-				"datastore movements, %d inbox and %d chat gaps, %d artifact and %d "+
+				"datastore movements, inbox gaps %v and %d chat gaps, %d artifact and %d "+
 				"datastore resets", what, handles(got.moved), messages(got.chat),
 				len(got.artifacts), len(got.data), got.inboxGaps, got.chatGaps,
 				got.artifactRs, got.dataResets)
@@ -166,7 +184,7 @@ func (h *heardLive) waitFor(t *testing.T, what string, cond func(heard) bool) {
 }
 
 // handles is every movement's handle, in the order heard.
-func handles(moved []worklet.InboxMovement) []string {
+func handles(moved []inbox.Movement) []string {
 	out := make([]string, 0, len(moved))
 	for _, m := range moved {
 		out = append(out, m.Handle)
@@ -217,10 +235,10 @@ func written(doc string) []artifactdata.Moved {
 }
 
 // relayRing is the fleet keyring every relay node of a case signs under.
-var relayRing = statelog.OneKey("k1", "the live relay cases' fleet key material")
+var relayRing = recordseal.OneKey("k1", "the live relay cases' fleet key material")
 
 // relayWireFor is one node's relay envelopes over ring.
-func relayWireFor(t *testing.T, ring statelog.Keyring) *relayWire {
+func relayWireFor(t *testing.T, ring recordseal.Keyring) *relayWire {
 	t.Helper()
 	wire, err := newRelayWire(ring)
 	if err != nil {
@@ -230,14 +248,37 @@ func relayWireFor(t *testing.T, ring statelog.Keyring) *relayWire {
 }
 
 // relayNode is one data node's relay over a shared in-memory broker, with its
-// copy's verdict a switch the case holds, and the stops of its artifact
-// listeners for a case about a node that has none.
+// copies' verdict two switches the case holds — every domain's copy out of
+// service (faulted), or only the domains named (wrong) — and the stops of its
+// artifact listeners for a case about a node that has none.
 type relayNode struct {
 	relay         *liveRelay
 	engine        *Engine
 	heard         *heardLive
 	faulted       atomic.Bool
+	wrong         atomic.Pointer[[]string]
 	stopArtifacts func()
+}
+
+// outOfService is n's copies' verdict as the case holds it, in the order the
+// domains are asked about, as [localEstate.outOfService] answers.
+func (n *relayNode) outOfService(_ context.Context, domains ...string) []string {
+	if n.faulted.Load() {
+		return slices.Clone(domains)
+	}
+	wrong := n.wrong.Load()
+	if wrong == nil {
+		return nil
+	}
+	return slices.DeleteFunc(slices.Clone(domains), func(d string) bool {
+		return !slices.Contains(*wrong, d)
+	})
+}
+
+// relaying reports whether n's sockets hear any domain from a peer now.
+func (n *relayNode) relaying() bool {
+	relayed := n.relay.relayed.Load()
+	return relayed != nil && len(*relayed) > 0
 }
 
 func newRelayNode(t *testing.T, broker *memory.Broker, self string,
@@ -257,7 +298,7 @@ func newRelayNode(t *testing.T, broker *memory.Broker, self string,
 	n.stopArtifacts = func() { stopMoved(); stopData() }
 	n.relay = newLiveRelay(self, q, relayWireFor(t, relayRing),
 		func(context.Context) ([]string, error) { return fleet, nil },
-		func(context.Context) bool { return n.faulted.Load() },
+		liveDomains(), n.outOfService,
 		n.engine.liveListening, n.engine.deliverLive, n.engine.liveGap)
 	n.engine.liveRelay.Store(n.relay)
 	stop, err := n.relay.serve(t.Context())
@@ -315,13 +356,14 @@ func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 
 	// b's own appliers — halted, wrong, or simply not the ones being heard
 	// — are withheld; a's are relayed.
-	b.engine.inboxMoved([]worklet.InboxMovement{{Handle: "from-b-own-applier", UnreadDelta: 1}})
+	b.engine.inboxMoved([]inbox.Movement{{Source: relayInboxSource,
+		Handle: "from-b-own-applier", UnreadDelta: 1}})
 	b.engine.chatApplied(posted("m-from-b-own-applier"))
 	b.engine.artifactsMoved(versioned("from-b-own-applier"))
 	b.engine.artifactDataMoved(written("from-b-own-applier"))
 	stored := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
-	a.engine.inboxMoved([]worklet.InboxMovement{{Handle: "ana", UnreadDelta: 1,
-		Subject: "t-1", Reason: worklet.ReasonAssignee, At: stored}})
+	a.engine.inboxMoved([]inbox.Movement{{Source: relayInboxSource, Handle: "ana",
+		UnreadDelta: 1, Subject: "t-1", Reason: string(worklet.ReasonAssignee), At: stored}})
 	a.engine.chatApplied(posted("m-1"))
 	a.engine.artifactsMoved(versioned("plan"))
 	a.engine.artifactDataMoved(written("row-1"))
@@ -335,7 +377,7 @@ func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 	}
 	// EVERY FIELD CROSSES, the broker's instant among them: b times its push
 	// from the instant a's record was stored, as a's own push is.
-	if got.moved[0].Subject != "t-1" || got.moved[0].Reason != worklet.ReasonAssignee ||
+	if got.moved[0].Subject != "t-1" || got.moved[0].Reason != string(worklet.ReasonAssignee) ||
 		!got.moved[0].At.Equal(stored) {
 		t.Errorf("the relayed movement lost its fields: %+v", got.moved[0])
 	}
@@ -367,11 +409,12 @@ func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 	// BACK IN SERVICE: b's sockets hear b's own appliers again, after a
 	// re-read in every domain covering whatever the switch skipped.
 	b.faulted.Store(false)
-	a.engine.inboxMoved([]worklet.InboxMovement{{Handle: "bo", UnreadDelta: 1}})
+	a.engine.inboxMoved([]inbox.Movement{{Source: relayInboxSource, Handle: "bo",
+		UnreadDelta: 1}})
 	b.heard.waitFor(t, "b switching back to its own appliers", func(h heard) bool {
 		return h.rereadEverywhere(2)
 	})
-	if b.relay.relaying.Load() {
+	if b.relaying() {
 		t.Fatal("b is still relaying a peer's batches with its own copy back in service")
 	}
 	b.engine.chatApplied(posted("m-from-b-own-applier"))
@@ -405,13 +448,13 @@ func TestAFollowerMovesToAnotherServerWhenItsServerStopsServing(t *testing.T) {
 	b.faulted.Store(true)
 	b.follow(t)
 	b.heard.waitFor(t, "b following its first server",
-		func(h heard) bool { return h.inboxGaps == 1 })
+		func(h heard) bool { return h.inboxGaps[relayInboxSource] == 1 })
 
 	// a — the first in order — goes out of service; whatever it would say
 	// now is not to be trusted, and c's appliers are.
 	a.faulted.Store(true)
 	a.engine.chatApplied(posted("m-from-a"))
-	b.heard.waitFor(t, "b moving to c", func(h heard) bool { return h.inboxGaps == 2 })
+	b.heard.waitFor(t, "b moving to c", func(h heard) bool { return h.inboxGaps[relayInboxSource] == 2 })
 	c.engine.chatApplied(posted("m-from-c"))
 	b.heard.waitFor(t, "c's post reaching b", func(h heard) bool {
 		for _, m := range messages(h.chat) {
@@ -442,11 +485,20 @@ func TestAFollowerMovesToAnotherServerWhenItsServerStopsServing(t *testing.T) {
 func TestAServerSaysWhatAFollowerCannotPlaceItselfIn(t *testing.T) {
 	t.Parallel()
 	var faulted atomic.Bool
-	r := newLiveRelay("a", nil, nil, nil,
-		func(context.Context) bool { return faulted.Load() }, nil, nil, nil)
+	r := newLiveRelay("a", nil, nil, nil, liveDomains(),
+		func(_ context.Context, domains ...string) []string {
+			if faulted.Load() {
+				return domains
+			}
+			return nil
+		}, nil, nil, nil)
 	ctx := t.Context()
 
 	first, _ := r.answerNow(ctx, relayAsk{})
+	// AN ASK HELD OPEN throughout, so every batch is one a follower may
+	// still ask for ([liveRelay.record]) however long the encoding takes.
+	release := holdOpen(r)
+	defer release()
 	// A RING BOUNDED BY WHAT IT HOLDS: enough of the largest batches the
 	// chat domain makes to fill it more than twice over.
 	big := make([]chatlet.Applied, 0, 64)
@@ -475,7 +527,7 @@ func TestAServerSaysWhatAFollowerCannotPlaceItselfIn(t *testing.T) {
 	// ONE BATCH NO ANSWER COULD CARRY is a gap for every follower behind
 	// it, never a hole between the batches either side.
 	head := got.Head
-	r.record(liveBatch{Inbox: []worklet.InboxMovement{{Handle: "ana"}}})
+	r.record(liveBatch{Inbox: []inbox.Movement{{Source: relayInboxSource, Handle: "ana"}}})
 	huge := make([]chatlet.Applied, 0, 8)
 	for len(huge) == 0 || sizeOf(t, liveBatch{Chat: huge}) <= liveRelayRingBytes {
 		a := posted("m")[0]
@@ -483,7 +535,7 @@ func TestAServerSaysWhatAFollowerCannotPlaceItselfIn(t *testing.T) {
 		huge = append(huge, a)
 	}
 	r.record(liveBatch{Chat: huge})
-	r.record(liveBatch{Inbox: []worklet.InboxMovement{{Handle: "bo"}}})
+	r.record(liveBatch{Inbox: []inbox.Movement{{Source: relayInboxSource, Handle: "bo"}}})
 	got, _ = r.answerNow(ctx, relayAsk{Epoch: first.Epoch, After: head + 1})
 	if !got.Gap || len(got.Batches) != 0 {
 		t.Errorf("a follower behind a batch too large to keep was answered %d batches "+
@@ -496,15 +548,177 @@ func TestAServerSaysWhatAFollowerCannotPlaceItselfIn(t *testing.T) {
 	}
 
 	faulted.Store(true)
-	if got, _ = r.answerNow(ctx, relayAsk{Epoch: first.Epoch, After: got.Head}); !got.Unserved {
+	if got, _ = r.answerNow(ctx, relayAsk{Epoch: first.Epoch, After: got.Head,
+		Domains: []string{relayInboxSource}}); !got.Unserved {
 		t.Fatalf("a server whose copy is out of service answered %+v, want unserved", got)
 	}
 	faulted.Store(false)
-	got, _ = r.answerNow(ctx, relayAsk{Epoch: first.Epoch, After: got.Head})
+	got, _ = r.answerNow(ctx, relayAsk{Epoch: first.Epoch, After: got.Head,
+		Domains: []string{relayInboxSource}})
 	if got.Epoch == first.Epoch {
 		t.Errorf("a server back in service kept its epoch %q, so a follower would "+
 			"read on as though its own appliers had announced everything meanwhile",
 			got.Epoch)
+	}
+}
+
+// holdOpen counts one ask as held open on r until release — what a follower's
+// ask waiting for a batch is ([liveRelay.answer]).
+func holdOpen(r *liveRelay) (release func()) {
+	r.mu.Lock()
+	r.waiting++
+	r.mu.Unlock()
+	return func() {
+		r.mu.Lock()
+		r.waiting--
+		r.mu.Unlock()
+	}
+}
+
+// A SERVER KEEPS ONLY WHAT A FOLLOWER CAN STILL ASK FOR.
+//
+// A follower new to a server is answered where it stands and nothing before
+// it, so no follower is ever served a batch recorded before the last answer it
+// took: a server that kept its ring whatever anybody asked would hold its whole
+// bound on every data node, for followers that do not exist while every copy
+// serves. So a batch recorded with nobody answered within [liveRelayHold] and
+// no ask held open is numbered and not kept, and a follower that comes back
+// after the hold ran out is answered a gap — never the batches either side of
+// the ones it missed; a batch recorded within the hold, or while an ask is
+// held open, is kept and answered.
+//
+// Mutation: keep every batch whatever anybody asked, and the first ring is not
+// empty; drop the held-open count, and the batch recorded past the hold is not
+// kept for the waiting ask; stamp no hold on an answer, and the follower that
+// asked within it is answered a gap.
+func TestARelayServerKeepsOnlyWhatAFollowerCanStillAskFor(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := newLiveRelay("a", nil, nil, nil, liveDomains(),
+		func(context.Context, ...string) []string { return nil }, nil, nil, nil)
+
+	r.record(liveBatch{Chat: posted("m-nobody-asked-for")})
+	if len(r.ring) != 0 || r.held != 0 {
+		t.Fatalf("a server nobody has asked kept %d batches (%d bytes)", len(r.ring), r.held)
+	}
+
+	first, _ := r.answerNow(ctx, relayAsk{})
+	r.record(liveBatch{Chat: posted("m-1")})
+	got, _ := r.answerNow(ctx, relayAsk{Epoch: first.Epoch, After: first.Head})
+	if got.Gap || len(got.Batches) != 1 {
+		t.Fatalf("a follower asking within the hold was answered %d batches (gap %v), "+
+			"want the one recorded since its last answer", len(got.Batches), got.Gap)
+	}
+
+	// THE HOLD RUNS OUT: nothing recorded now is kept, unless an ask is
+	// held open for it.
+	r.mu.Lock()
+	r.heldUntil = time.Time{}
+	r.mu.Unlock()
+	r.record(liveBatch{Chat: posted("m-past-the-hold")})
+	if late, _ := r.answerNow(ctx, relayAsk{Epoch: first.Epoch, After: got.Head}); !late.Gap ||
+		len(late.Batches) != 0 {
+		t.Errorf("a follower back after the hold ran out was answered %d batches (gap %v), "+
+			"want a gap", len(late.Batches), late.Gap)
+	}
+	r.mu.Lock()
+	r.heldUntil = time.Time{}
+	head := r.seq
+	r.mu.Unlock()
+	release := holdOpen(r)
+	r.record(liveBatch{Chat: posted("m-while-held-open")})
+	release()
+	if held, _ := r.answerNow(ctx, relayAsk{Epoch: first.Epoch, After: head}); held.Gap ||
+		len(held.Batches) != 1 {
+		t.Errorf("an ask held open was answered %d batches (gap %v), want the one that "+
+			"woke it", len(held.Batches), held.Gap)
+	}
+}
+
+// A BATCH NOBODY CAN ASK FOR IS NEVER COPIED.
+//
+// Every data node records every committed batch of every announcing domain,
+// and in the normal state — no copy out of service anywhere — nobody follows
+// any of them, so what a batch costs there is what the relay costs the whole
+// fleet: it is numbered, and nothing is encoded or allocated.
+//
+// NOT PARALLEL, because an allocation count is the whole process's, and over
+// a hundred runs, which testing.AllocsPerRun divides and rounds down.
+//
+// Mutation: encode a batch whether or not anybody may ask for it, or replace
+// the wake-up channel with nobody waiting on it, and a run allocates.
+func TestABatchNobodyCanAskForIsNeverCopied(t *testing.T) {
+	r := newLiveRelay("a", nil, nil, nil, liveDomains(),
+		func(context.Context, ...string) []string { return nil }, nil, nil, nil)
+	batch := liveBatch{Inbox: []inbox.Movement{{Source: relayInboxSource, Handle: "ana",
+		UnreadDelta: 1, Subject: "t-1", Reason: string(worklet.ReasonAssignee)}}}
+	if allocs := testing.AllocsPerRun(100, func() { r.record(batch) }); allocs != 0 {
+		t.Errorf("recording a batch nobody follows allocated %v times, want none", allocs)
+	}
+	if len(r.ring) != 0 || r.held != 0 {
+		t.Errorf("a server nobody follows holds %d batches (%d bytes)", len(r.ring), r.held)
+	}
+}
+
+// ONE DOMAIN'S WRONG COPY IS RELAYED ALONE.
+//
+// A fault is one log's (ADR-0079): a node whose chat copy is out of service
+// still has a sound tracker copy, whose applier's movements are complete. So
+// its sockets hear chat from a peer — and its own chat applier is withheld —
+// while its inbox movements are its own tracker applier's, unrelayed; only
+// chat's screens re-read at the switch; and a server whose own chat copy is
+// out of service answers a follower relaying chat unserved, while it still
+// answers one that relays only the tracker.
+//
+// Mutation: switch every domain on any one's fault, and b's own inbox
+// movement is withheld and a's relayed; gap every domain at a switch, and the
+// inbox is re-read; answer a follower whatever its domains, and the server
+// with a wrong chat copy serves it.
+func TestOneDomainsWrongCopyIsRelayedAlone(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	fleet := []string{"a", "b"}
+	a := newRelayNode(t, broker, "a", fleet)
+	b := newRelayNode(t, broker, "b", fleet)
+	chat := []string{chatlet.Domain{}.Name()}
+	b.wrong.Store(&chat)
+	b.follow(t)
+	b.heard.waitFor(t, "b switching chat to a's applier", func(h heard) bool {
+		return h.chatGaps == 1
+	})
+
+	b.engine.chatApplied(posted("m-from-b-own-applier"))
+	b.engine.inboxMoved([]inbox.Movement{{Source: relayInboxSource, Handle: "from-b-own-applier",
+		UnreadDelta: 1}})
+	a.engine.inboxMoved([]inbox.Movement{{Source: relayInboxSource, Handle: "from-a",
+		UnreadDelta: 1}})
+	a.engine.chatApplied(posted("m-from-a"))
+	b.heard.waitFor(t, "a's post reaching b", func(h heard) bool {
+		return slices.Contains(messages(h.chat), "m-from-a")
+	})
+	got := b.heard.snapshot()
+	if m := messages(got.chat); !slices.Equal(m, []string{"m-from-a"}) {
+		t.Errorf("b's chat heard %v, want a's post alone", m)
+	}
+	if h := handles(got.moved); !slices.Equal(h, []string{"from-b-own-applier"}) {
+		t.Errorf("b's inbox heard %v, want its own sound tracker applier's movement "+
+			"alone", h)
+	}
+	if got.inboxGaps[relayInboxSource] != 0 || got.artifactRs != 0 || got.dataResets != 0 {
+		t.Errorf("a switch of chat re-read the inbox %v times and reset %d artifact and "+
+			"%d datastore rooms, want chat's screens alone", got.inboxGaps,
+			got.artifactRs, got.dataResets)
+	}
+
+	a.wrong.Store(&chat)
+	if ans, _ := a.relay.answerNow(t.Context(), relayAsk{Domains: chat}); !ans.Unserved {
+		t.Errorf("a server whose chat copy is out of service answered a follower "+
+			"relaying chat %+v, want unserved", ans)
+	}
+	if ans, _ := a.relay.answerNow(t.Context(),
+		relayAsk{Domains: []string{relayInboxSource}}); ans.Unserved {
+		t.Errorf("a server whose chat copy alone is out of service refused a follower "+
+			"relaying the tracker: %+v", ans)
 	}
 }
 
@@ -568,11 +782,11 @@ func TestANodeNobodyListensOnRelaysNothing(t *testing.T) {
 	e.heard.waitFor(t, "e, whose only listener hears the artifacts, relaying",
 		func(h heard) bool { return h.artifactRs == 1 })
 	time.Sleep(3 * servingRecheck)
-	if b.relay.relaying.Load() {
+	if b.relaying() {
 		t.Fatal("a node with nothing listening for what its appliers announce is " +
 			"relaying a peer's")
 	}
-	if d.relay.relaying.Load() {
+	if d.relaying() {
 		t.Fatal("a node whose only attachment is a chat hub serving no socket is " +
 			"relaying a peer's batches to nobody")
 	}
@@ -608,9 +822,9 @@ func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 			return raw
 		},
 		"sealed under a key the fleet does not hold": forgedSeal(
-			statelog.OneKey("k-forger", "material nobody in the fleet holds")),
+			recordseal.OneKey("k-forger", "material nobody in the fleet holds")),
 		"sealed under the fleet's key id with other material": forgedSeal(
-			statelog.OneKey("k1", "material that is not the fleet's")),
+			recordseal.OneKey("k1", "material that is not the fleet's")),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -629,9 +843,9 @@ func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 			if err := forger.Start(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			reader := relayWireFor(t, statelog.OneKey("k-forger", "material nobody in the fleet holds"))
+			reader := relayWireFor(t, recordseal.OneKey("k-forger", "material nobody in the fleet holds"))
 			var forged atomic.Int32
-			stop, err := forger.Serve(t.Context(), liveRelaySubject("a"),
+			stop, err := forger.Serve(t.Context(), liveRelaySubject("a"), queue.ConcurrentAnswers,
 				func(_ context.Context, raw []byte) ([]byte, error) {
 					claimed := reader.Admit(raw, signedask.NewGuard(), time.Now()).Request
 					batch, err := json.Marshal(relayedBatch{Seq: claimed.After + 1,
@@ -680,7 +894,7 @@ func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 
 // forgedSeal seals an answer the way a party holding ring would — one that is
 // not the fleet's.
-func forgedSeal(ring statelog.Keyring) func(t *testing.T, a relayAnswer) []byte {
+func forgedSeal(ring recordseal.Keyring) func(t *testing.T, a relayAnswer) []byte {
 	return func(t *testing.T, a relayAnswer) []byte {
 		wire, err := newRelayWire(ring)
 		if err != nil {
@@ -714,8 +928,8 @@ func TestARelayServerAnswersOnlyAnAskTheFleetSigned(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	wire := relayWireFor(t, relayRing)
-	r := newLiveRelay("a", nil, wire, nil,
-		func(context.Context) bool { return false }, nil, nil, nil)
+	r := newLiveRelay("a", nil, wire, nil, liveDomains(),
+		func(context.Context, ...string) []string { return nil }, nil, nil, nil)
 	first, _ := r.answerNow(ctx, relayAsk{})
 	r.record(liveBatch{Chat: posted("m-1")})
 	now := time.Now()
@@ -731,7 +945,7 @@ func TestARelayServerAnswersOnlyAnAskTheFleetSigned(t *testing.T) {
 		t.Errorf("an ask the fleet did not sign was answered %+v, want unserved, "+
 			"bound to nothing and carrying nothing", got)
 	}
-	unheld, err := relayWireFor(t, statelog.OneKey("k2", "a key this server does not hold")).
+	unheld, err := relayWireFor(t, recordseal.OneKey("k2", "a key this server does not hold")).
 		SealRequest(ask)
 	if err != nil {
 		t.Fatal(err)
@@ -764,7 +978,7 @@ func TestARelayServerAnswersOnlyAnAskTheFleetSigned(t *testing.T) {
 		t.Errorf("an ask past its deadline was answered %+v, want unserved and nothing", got)
 	}
 
-	if _, err := newLiveRelay("a", nil, nil, nil, nil, nil, nil, nil).serve(ctx); err == nil {
+	if _, err := newLiveRelay("a", nil, nil, nil, nil, nil, nil, nil, nil).serve(ctx); err == nil {
 		t.Error("a relay with no envelopes served its subject, answering unsigned")
 	}
 }

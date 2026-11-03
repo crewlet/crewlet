@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // THE APPLIER IS HANDED THE BODY AND THE DEFERRED TABLE KEEPS THE FRAME.
@@ -32,12 +34,12 @@ func TestTheApplierIsHandedTheBodyAndTheTableTheFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ring := OneKey("k1", "material-one")
-	signer, err := NewSigner("probe", ring)
+	ring := recordseal.OneKey("k1", "material-one")
+	signer, err := recordseal.NewSigner("probe", ring)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	verifier, err := NewVerifier("probe", ring)
+	verifier, err := recordseal.NewVerifier("probe", ring)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -81,8 +83,8 @@ func TestTheApplierIsHandedTheBodyAndTheTableTheFrame(t *testing.T) {
 			"read it, and it cannot be if the frame was dropped",
 			got[0].framed, framed)
 	}
-	if got[0].verdict != Verified {
-		t.Errorf("verdict = %q, want %q", got[0].verdict, Verified)
+	if got[0].verdict != recordseal.Verified {
+		t.Errorf("verdict = %q, want %q", got[0].verdict, recordseal.Verified)
 	}
 }
 
@@ -106,8 +108,8 @@ func (frameProbeDomain) FeedGroup() string          { return "" }
 func (frameProbeDomain) Tables() map[string]TableClass {
 	return map[string]TableClass{"probe_rows": Replicated}
 }
-func (frameProbeDomain) DeferredTable() string { return "probe_log_deferred" }
-func (frameProbeDomain) ScopeIndex() string    { return "probe_deferred_scope" }
-func (frameProbeDomain) OpsTable() string      { return "probe_ops" }
-func (frameProbeDomain) ReadinessInput() bool  { return true }
-func (frameProbeDomain) ClaimsIdentity() bool  { return true }
+func (frameProbeDomain) DeferredTable() string    { return "probe_log_deferred" }
+func (frameProbeDomain) ScopeIndex() string       { return "probe_deferred_scope" }
+func (frameProbeDomain) OpsTable() string         { return "probe_ops" }
+func (frameProbeDomain) GatesSeatAdmission() bool { return true }
+func (frameProbeDomain) ClaimsIdentity() bool     { return true }

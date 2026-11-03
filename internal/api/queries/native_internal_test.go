@@ -11,7 +11,7 @@ import (
 // A FRESHNESS REFUSAL ON ANY DOMAIN'S QUESTION NAMES ITS PARAMETER AND NO
 // DOMAIN.
 //
-// [freshness] serves every native question — the board's, the knowledge
+// [Freshness] serves every native question — the board's, the knowledge
 // base's, the inbox's — so its refusal is the one a person asking a wiki
 // question reads. It read through the tracker's grammar and said "worklet:",
 // naming a domain the caller never asked about. It is a bad request, and the
@@ -27,7 +27,7 @@ func TestAFreshnessRefusalOnAnyQuestionNamesNoDomain(t *testing.T) {
 		{"min_position": "4711"},
 		{"read_level": "linearizable", "max_lag_seq": "10"},
 	} {
-		_, err := freshness(FromMap(bag))
+		_, err := Freshness(FromMap(bag))
 		if !errors.Is(err, ErrBadParams) {
 			t.Errorf("%v answered %v, want a bad request", bag, err)
 			continue

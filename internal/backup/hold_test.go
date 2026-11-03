@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE COPY'S OWN POSITION IS IN THE MANIFEST, read from the file rather than
@@ -132,6 +135,77 @@ func TestTheBackupPinsTheLogWhileItCopiesAndReleasesIt(t *testing.T) {
 	}
 }
 
+// THE COPY HOLDS EVERY COMMIT THAT RETURNED BEFORE IT BEGAN, the position the
+// hold pinned included.
+//
+// The applier commits throughout a backup, and the hold is taken at the
+// position the node stood at just before the copies — so a replicated copy
+// older than that position would leave every record between the two pinned by
+// nothing, for the trim to take before a restore replays them. Here the
+// applier's commit lands while the hold is being put: after the read the hold
+// took its position from, before either estate is copied, and on the pinned
+// writer's own connection, which no copy draws. The connection the copy does
+// draw last read before that commit, and a copy that took its connection's
+// last view instead of its own holds the position the hold pinned and nothing
+// after it.
+func TestTheCopyHoldsEveryCommitThatReturnedBeforeItBegan(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	seedCursor(t, db, "CREWLET_TRACKER_LOG", 1, 41)
+	w, err := storetest.ReplicatedDB(t, db.Replicated()).Writer(t.Context())
+	if err != nil {
+		t.Fatalf("pin the applier's writer: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	fleet := memory.NewFleet()
+	held := &committingHolds{HoldRegister: fleet, commit: func(ctx context.Context) error {
+		return w.Tx(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `UPDATE statelog_cursor SET seq = 42
+				WHERE stream = 'CREWLET_TRACKER_LOG'`)
+			return err
+		})
+	}}
+
+	manifest, err := build(t, backup.Options{
+		Store: db, Estate: backup.HoldsReplicated, NodeID: "node-0", Holds: held, Backups: fleet,
+		Now: func() time.Time { return clock },
+	}).Take(t.Context(), filepath.Join(t.TempDir(), "b"))
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	if held.err != nil {
+		t.Fatalf("the applier's commit during the hold: %v", held.err)
+	}
+	if at := held.pinned["CREWLET_TRACKER_LOG"]; at.Seq != 41 {
+		t.Fatalf("the hold pinned %+v, want the 41 the node stood at before the commit", at)
+	}
+	if at := manifest.Domains["CREWLET_TRACKER_LOG"]; at.Seq != 42 {
+		t.Fatalf("the copy holds %+v, want the 42 whose commit returned before the copy "+
+			"began — the copy took the view its connection last read", at)
+	}
+}
+
+// committingHolds is a register whose first put commits the applier's next
+// write before it answers, which is where a backup's copy has not begun yet.
+type committingHolds struct {
+	coord.HoldRegister
+	commit func(context.Context) error
+	once   sync.Once
+	pinned map[string]coord.Position
+	err    error
+}
+
+func (c *committingHolds) PutHold(ctx context.Context, h coord.TrimHold) error {
+	if err := c.HoldRegister.PutHold(ctx, h); err != nil {
+		return err
+	}
+	c.once.Do(func() {
+		c.pinned = h.Streams
+		c.err = c.commit(ctx)
+	})
+	return nil
+}
+
 // A REGISTER THAT REFUSES THE PIN REFUSES THE BACKUP.
 //
 // Carrying on without one would produce an artefact whose own gap may be
@@ -152,6 +226,91 @@ func TestABackupThatCannotPinTheLogIsRefused(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, backup.ManifestName)); err == nil {
 		t.Fatal("a manifest was written, so a reader cannot tell this from a " +
 			"complete backup")
+	}
+}
+
+// A BACKUP IS REFUSED WHERE A DATABASE'S OWN VOLUME HAS NO ROOM FOR THE LOG ITS
+// COPY HOLDS BACK — before it pins the log or copies a byte.
+//
+// A copy holds its file's write-ahead log for its whole run, so the log grows
+// by what the node writes meanwhile, on the volume the node commits to, and a
+// node whose volume fills stops committing for the rest of the copy. Here the
+// replicated estate's last copy was held while its applier wrote beside it, so
+// its handle measured what a copy of it holds back. The backup then finds the
+// estate's volume a byte short of that and is refused, naming the file and the
+// log, with no hold put and nothing in the directory; and with exactly that
+// room it runs, and pins the log as every backup does.
+func TestABackupIsRefusedWhereTheLogItsCopyHoldsBackHasNoRoom(t *testing.T) {
+	t.Parallel()
+	hold := storetest.NewCopyHold()
+	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "store.db"),
+		store.Options{WrapDriver: hold.Wrap}, 1)
+	t.Cleanup(func() { _ = db.Close() })
+	seedCursor(t, db, "CREWLET_TRACKER_LOG", 1, 41)
+	replicated := storetest.ReplicatedDB(t, estate)
+	ctx := t.Context()
+	if err := estate.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`CREATE TABLE crewlet_copy_held (id INTEGER PRIMARY KEY, pad BLOB NOT NULL)`)
+		return err
+	}); err != nil {
+		t.Fatalf("create the table written beside the copy: %v", err)
+	}
+	storetest.HoldCopy(t, replicated, hold, func() {
+		for i := range 64 {
+			if err := estate.Tx(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `INSERT INTO crewlet_copy_held (id, pad)
+					VALUES (?, zeroblob(4096))`, i)
+				return err
+			}); err != nil {
+				t.Fatalf("write row %d beside the copy: %v", i, err)
+			}
+		}
+	})
+	info, err := os.Stat(replicated.Path())
+	if err != nil {
+		t.Fatalf("measure the replicated estate: %v", err)
+	}
+	holds := replicated.CopyHoldsBack(info.Size())
+	if holds <= 0 {
+		t.Fatalf("the estate measured a copy holding back %d after one held its log "+
+			"under 64 commits", holds)
+	}
+	fleet := memory.NewFleet()
+	held := &watchedHolds{HoldRegister: fleet}
+	s := build(t, backup.Options{
+		Store: db, Estate: backup.HoldsReplicated, NodeID: "node-0", Holds: held, Backups: fleet,
+		Now: func() time.Time { return clock },
+	})
+	live := filepath.Dir(replicated.Path())
+	backup.SetVolumeFree(s, func(dir string) (int64, error) {
+		if dir == live {
+			return holds - 1, nil
+		}
+		return 1 << 40, nil
+	})
+	dir := filepath.Join(t.TempDir(), "b")
+	_, err = s.Take(ctx, dir)
+	if err == nil || !strings.Contains(err.Error(), replicated.Path()) ||
+		!strings.Contains(err.Error(), "write-ahead log") {
+		t.Fatalf("a backup whose estate's volume is a byte short of the log its copy holds "+
+			"back answered %v, want a refusal naming the estate and its log", err)
+	}
+	if len(held.put) != 0 {
+		t.Errorf("a backup refused for room pinned the log %d time(s) first", len(held.put))
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Errorf("a backup refused for room left %d entries in its directory (%v)",
+			len(entries), err)
+	}
+
+	// AND EXACTLY THAT ROOM IS ROOM.
+	backup.SetVolumeFree(s, func(string) (int64, error) { return holds, nil })
+	if _, err := s.Take(ctx, filepath.Join(t.TempDir(), "b2")); err != nil {
+		t.Fatalf("a backup with room for the log its copy holds back was refused: %v", err)
+	}
+	if len(held.put) != 1 {
+		t.Errorf("the backup that ran pinned the log %d time(s), want 1", len(held.put))
 	}
 }
 
@@ -176,14 +335,19 @@ func TestATrimmedLogRefusesTheManifest(t *testing.T) {
 	// everything between was trimmed while the copy ran.
 	seedCursor(t, db, "CREWLET_TRACKER_LOG", 1, 10)
 	nc := embeddedNATS(t)
-	seedStream(t, nc, "CREWLET_TRACKER_LOG", "crewlet.tracker.log.>", 60)
+	// RECORDS OF THE TRACKER'S OWN FORMAT — barriers, which write no row:
+	// a backup reads the log past its copy for the files it names, and
+	// bytes no build reads would refuse it for that rather than for the
+	// hole this case is about.
+	trackerLog(t, nc)
+	appendBarriers(t, nc, 60)
 	trimTo(t, nc, "CREWLET_TRACKER_LOG", 40)
 
 	dir := filepath.Join(t.TempDir(), "b")
 	_, err := service(t, db, nc).Take(t.Context(), dir)
-	if err == nil {
-		t.Fatal("a backup whose store copy names a position the captured log " +
-			"can no longer reach reported success")
+	if !errors.Is(err, backup.ErrLogGap) {
+		t.Fatalf("a backup whose store copy names a position the captured log "+
+			"can no longer reach answered %v; want ErrLogGap", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, backup.ManifestName)); statErr == nil {
 		t.Fatal("a manifest was written over the hole")
@@ -295,15 +459,26 @@ func trimTo(t *testing.T, nc *nats.Conn, name string, seq uint64) {
 	}
 }
 
+// seedCursor writes a checkpoint naming no stream instance — the zero instant,
+// which a reader of the copy takes as a claim about nothing.
 func seedCursor(t *testing.T, db *store.DB, stream string, generation uint32, seq uint64) {
+	t.Helper()
+	seedCursorCreated(t, db, stream, generation, seq, time.Time{})
+}
+
+// seedCursorCreated writes a checkpoint keyed to the instance of the stream
+// created at created.
+func seedCursorCreated(t *testing.T, db *store.DB, stream string, generation uint32, seq uint64,
+	created time.Time) {
 	t.Helper()
 	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at, applied_version)
-			VALUES (?, ?, ?, 0, 0, 0)
+			VALUES (?, ?, ?, ?, 0, 0)
 			ON CONFLICT (stream) DO UPDATE SET generation = excluded.generation,
-			                                   seq = excluded.seq`,
-			stream, int64(generation), int64(seq))
+			                                   seq = excluded.seq,
+			                                   stream_created_at = excluded.stream_created_at`,
+			stream, int64(generation), int64(seq), store.EncodeTime(created))
 		return err
 	}); err != nil {
 		t.Fatalf("seed the cursor: %v", err)

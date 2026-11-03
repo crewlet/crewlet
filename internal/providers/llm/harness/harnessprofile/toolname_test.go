@@ -13,7 +13,7 @@ import (
 // Mutation: add 9 to toolNameRoom's longest prefix, or count a namespace
 // without its separator, and this is red; drop Muse Code's name_prefix back
 // into its host_prefix and the limit reads 45.
-func TestTheToolNameLimitFollowsTheLongestCLIPrefix(t *testing.T) {
+func TestTheToolNameLimitFollowsTheLongestHarnessPrefix(t *testing.T) {
 	t.Parallel()
 	longest, by := 0, ""
 	for _, name := range BuiltinNames() {
@@ -56,7 +56,7 @@ func TestTheToolNameLimitFollowsTheLongestCLIPrefix(t *testing.T) {
 // no model ever sees.
 //
 // Mutation: put Muse Code's `tool:` back into its host_prefix, and this is red.
-func TestEveryCLISpellsTheEnginesToolsAsItsModelReadsThem(t *testing.T) {
+func TestEveryHarnessSpellsTheEnginesToolsAsItsModelReadsThem(t *testing.T) {
 	t.Parallel()
 	for _, name := range BuiltinNames() {
 		p, _ := Builtin(name)

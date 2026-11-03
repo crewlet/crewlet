@@ -23,9 +23,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // present is the fleet's roster: the nodes named are present.
@@ -54,7 +54,7 @@ func fleetOf(t *testing.T, a, b evals.RigOptions) (*assistanttest.Rig, *assistan
 	if err != nil {
 		t.Fatal(err)
 	}
-	ring := statelog.OneKey("k1", "fleet-material")
+	ring := recordseal.OneKey("k1", "fleet-material")
 	half := func(node string) *live.Fleet {
 		q := broker.Client()
 		if err := q.Start(t.Context()); err != nil {

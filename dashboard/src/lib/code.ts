@@ -1,0 +1,584 @@
+/**
+ * The code host's values, as the Code workspace says them.
+ *
+ * Every value here arrives as the engine spells it — a repository's name, an
+ * object id, a ref, a command's result — and these are the one place each is
+ * turned into what a reader reads, so a repository's grid and its pushes
+ * cannot say one thing two ways.
+ */
+
+import {
+  CHANGE_NEEDS,
+  CHANGE_STATES,
+  CHANGE_WINDOWS,
+  CODE_PHRASES,
+  COMMAND_OUTCOMES,
+  FINDING_CATEGORIES,
+  FINDING_SEVERITIES,
+  PRECONDITION_KINDS,
+  REPO_NAME,
+  REPO_NAME_MAX_BYTES,
+  REPO_STATUSES,
+} from "~/contract/code.ts";
+import type {
+  CodeChangeState,
+  CodePrecondition,
+  CodePushCommand,
+  CodePushCounts,
+  CodeReadiness,
+  CodeRepoStatus,
+} from "~/protocol/index.ts";
+
+/** The engine's repository grammar, compiled once. */
+const REPO_NAME_PATTERN = new RegExp(REPO_NAME);
+
+/**
+ * Whether a string is a name a repository can have — the engine's own
+ * grammar (`contract/code.ts`): its shape, a project's or a seat's scratch
+ * repository's, and its length, so an address naming anything else is said in
+ * place rather than asked about. The length is counted in code units, which
+ * for a name the shape admits — lowercase ASCII alone — are its bytes.
+ */
+export function isRepoName(name: string): boolean {
+  return name.length <= REPO_NAME_MAX_BYTES && REPO_NAME_PATTERN.test(name);
+}
+
+/**
+ * Whether a string opens a name a repository can have: a name whole, or the
+ * opening of one, which a "0" completes, since a digit may end either label
+ * of a name and follow its hyphen or its dot. What a repositories listing
+ * takes as its `prefix`, and the engine refuses any other
+ * (`internal/code.validRepoPrefix`, the same test), so a picker says in place
+ * what no name could begin with rather than asking.
+ */
+export function isRepoPrefix(prefix: string): boolean {
+  return isRepoName(prefix) || isRepoName(`${prefix}0`);
+}
+
+/**
+ * How many digits of an object id a reader is shown: SEVEN, git's own default
+ * abbreviation (`core.abbrev`) and the fewest an abbreviated id the engine
+ * takes back may have (`code.MinAbbrevDigits`), so what is printed is what a
+ * person copies into git or into a tool. The whole id is the title beside it.
+ */
+export const SHORT_OID_DIGITS = 7;
+
+/** An object id as a row prints it: see [SHORT_OID_DIGITS]. */
+export function shortOID(oid: string): string {
+  return oid.slice(0, SHORT_OID_DIGITS);
+}
+
+/**
+ * Git's null id: the old side of a ref's creation, the new side of its
+ * deletion. Forty digits, the engine's `gitref.ZeroOID`: its repositories are
+ * object-format sha1 (`gitref.OIDHexLen`).
+ */
+const ZERO_OID = "0".repeat(40);
+
+/** A ref as a reader names it: a branch by its name, a tag as a tag, anything else whole. */
+export function refName(ref: string): { name: string; kind: "branch" | "tag" | "ref" } {
+  if (ref.startsWith("refs/heads/"))
+    return { name: ref.slice("refs/heads/".length), kind: "branch" };
+  if (ref.startsWith("refs/tags/")) return { name: ref.slice("refs/tags/".length), kind: "tag" };
+  return { name: ref, kind: "ref" };
+}
+
+/**
+ * What one command of a push did, in a word: what became of the ref — made,
+ * moved, moved by force, removed — or that it was asked for the value it had,
+ * or refused. ONE WORD PER OUTCOME (`contract/code.ts`'s `COMMAND_OUTCOMES`),
+ * the order the engine decides them in: a refusal is a refusal whatever it
+ * asked, and an unchanged ref moved nowhere.
+ */
+export function commandWord(c: CodePushCommand): string {
+  if (c.result === "ng") return "refused";
+  if (c.result === "noop") return "unchanged";
+  if (c.result !== "ok") return c.result;
+  if (c.old === ZERO_OID) return "created";
+  if (c.new === ZERO_OID) return "deleted";
+  return c.forced ? "forced" : "moved";
+}
+
+/**
+ * The order a push's counts are said in: the REFUSALS FIRST, as a push read in
+ * brief lists its refused commands first — what did not happen is what a
+ * reader acts on — then the rest in the engine's order.
+ */
+const COUNT_ORDER: readonly string[] = [
+  "refused",
+  ...COMMAND_OUTCOMES.filter((outcome) => outcome !== "refused"),
+];
+
+/** One outcome's count, as a summary says it. */
+export interface OutcomeCount {
+  outcome: string;
+  count: number;
+}
+
+/**
+ * The commands a push read in brief left out (`omitted`): how many, and each
+ * outcome's count in the order a summary says them — an outcome a newer
+ * engine counts by, which this build has no word for, after the rest by its
+ * own key, never dropped from the sum.
+ */
+export function omittedOf(counts: CodePushCounts | undefined): {
+  total: number;
+  outcomes: OutcomeCount[];
+} {
+  if (!counts) return { total: 0, outcomes: [] };
+  const keys = [
+    ...COUNT_ORDER.filter((outcome) => outcome in counts),
+    ...Object.keys(counts).filter((outcome) => !COUNT_ORDER.includes(outcome)),
+  ];
+  const outcomes = keys
+    .map((outcome) => ({ outcome, count: counts[outcome] ?? 0 }))
+    .filter((c) => Number.isSafeInteger(c.count) && c.count > 0);
+  return { total: outcomes.reduce((n, c) => n + c.count, 0), outcomes };
+}
+
+/** A state the engine knows (`contract/code.ts`). */
+type KnownRepoStatus = (typeof REPO_STATUSES)[number];
+
+/**
+ * Each state in words: what a row's mark says and what the listing's filter
+ * offers. Keyed on the contract's set, so a state the engine grows is a type
+ * error here until it has its words.
+ */
+const REPO_STATUS_WORDS: Readonly<Record<KnownRepoStatus, string>> = {
+  importing: "Importing",
+  active: "Active",
+  archived: "Archived",
+  deleted: "Deleted",
+  purging: "Being purged",
+};
+
+function knownStatus(status: CodeRepoStatus): status is KnownRepoStatus {
+  return (REPO_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * A repository's state as its row marks it, or "" for an active one: the
+ * state a repository is in when nothing needs saying. A state a newer engine
+ * names is shown as it is, never as active.
+ */
+export function repoStatusWord(status: CodeRepoStatus): string {
+  if (status === "active") return "";
+  return knownStatus(status) ? REPO_STATUS_WORDS[status] : status;
+}
+
+/**
+ * The listing's states a reader picks from, as the `status` the engine takes:
+ * no value first, which is the engine's own default — the repositories in use
+ * — and then every state on its own, in the engine's order.
+ */
+export const REPO_STATUS_FILTERS: readonly { value: string; label: string }[] = [
+  { value: "", label: "Active, archived and importing" },
+  ...REPO_STATUSES.map((status) => ({ value: status, label: REPO_STATUS_WORDS[status] })),
+];
+
+/**
+ * A change's reference as a person writes it — its repository's name, `!`,
+ * its number on that repository: `web!42` (`code.ChangeRef`).
+ */
+export function changeRef(repo: string, number: number): string {
+  return `${repo}!${number}`;
+}
+
+/** A change's number: a whole number from 1, as a repository numbers them. */
+const CHANGE_NUMBER = /^[1-9][0-9]{0,15}$/;
+
+/**
+ * A change named by its reference (`web!42`), or null for anything that is
+ * not one — a name no repository can have, or a number a repository never
+ * gives. The repository's grammar is the engine's ([isRepoName]), so a
+ * reference that parses here is one the engine can be asked about.
+ */
+export function parseChangeRef(text: string): { repo: string; number: number } | null {
+  const cut = text.indexOf("!");
+  if (cut <= 0) return null;
+  const repo = text.slice(0, cut);
+  const digits = text.slice(cut + 1);
+  if (!isRepoName(repo) || !CHANGE_NUMBER.test(digits)) return null;
+  const number = Number(digits);
+  return Number.isSafeInteger(number) ? { repo, number } : null;
+}
+
+/** A state of a change this build knows (`contract/code.ts`). */
+type KnownChangeState = (typeof CHANGE_STATES)[number];
+
+/**
+ * Each state of a change in words: what a row's mark says and what the
+ * listing's filter offers. Keyed on the contract's set, so a state the engine
+ * grows is a type error here until it has its words.
+ */
+const CHANGE_STATE_WORDS: Readonly<Record<KnownChangeState, string>> = {
+  draft: "Draft",
+  open: "Open",
+  closed: "Closed",
+  merged: "Merged",
+};
+
+function knownChangeState(state: CodeChangeState): state is KnownChangeState {
+  return (CHANGE_STATES as readonly string[]).includes(state);
+}
+
+/** A change's state in a word — one a newer engine names, as it is. */
+export function changeStateWord(state: CodeChangeState): string {
+  return knownChangeState(state) ? CHANGE_STATE_WORDS[state] : state;
+}
+
+/** A state a change still moves from: draft or open (`code.ChangeState.Live`). */
+export function changeLive(state: CodeChangeState): boolean {
+  return state === "draft" || state === "open";
+}
+
+/**
+ * The value of the listing's state filter that names no state: every change,
+ * whatever its state — which the engine lists only where a repository, a work
+ * item, a reviewer or a need narrows the walk, since it keeps no index of
+ * every change the company holds (`code.ReadQuery.State`).
+ */
+export const EVERY_STATE = "all";
+
+/**
+ * The listing's states a reader picks from, as the `state` the engine takes —
+ * the live states first, in the engine's order — and, last, [EVERY_STATE].
+ */
+export const CHANGE_STATE_FILTERS: readonly { value: string; label: string }[] = [
+  ...CHANGE_STATES.map((state) => ({ value: state, label: CHANGE_STATE_WORDS[state] })),
+  { value: EVERY_STATE, label: "Every state" },
+];
+
+/** A need a listing of changes asks about (`contract/code.ts`). */
+export type ChangeNeed = (typeof CHANGE_NEEDS)[number];
+
+/**
+ * What each need lists, in words — keyed on the contract's set, so a need the
+ * engine grows is a type error here until it has its words.
+ */
+const CHANGE_NEED_WORDS: Readonly<Record<ChangeNeed, string>> = {
+  review: "Waiting on a review",
+  fix: "Waiting on a fix",
+  me: "Waiting on me",
+  person: "Waiting on a person",
+};
+
+/**
+ * The listing's needs a reader picks from: none first — the listing narrowed
+ * by nothing it waits on — then ME, the question a reader opens Code with,
+ * then the rest in the engine's order.
+ */
+export const CHANGE_NEED_FILTERS: readonly { value: string; label: string }[] = [
+  { value: "", label: "Waiting on anybody" },
+  { value: "me", label: CHANGE_NEED_WORDS.me },
+  ...CHANGE_NEEDS.filter((need) => need !== "me").map((need) => ({
+    value: need,
+    label: CHANGE_NEED_WORDS[need],
+  })),
+];
+
+/** A window a listing of changes narrows to (`contract/code.ts`). */
+export type ChangeWindow = (typeof CHANGE_WINDOWS)[number];
+
+/**
+ * What each window lists, in words — keyed on the contract's set, so a window
+ * the engine grows is a type error here until it has its words.
+ */
+const CHANGE_WINDOW_WORDS: Readonly<Record<ChangeWindow, string>> = {
+  "24h": "Moved in the last day",
+  "7d": "Moved in the last week",
+  "30d": "Moved in the last month",
+};
+
+/**
+ * The listing's windows a reader picks from: none first — the listing
+ * narrowed by no instant — then the engine's, shortest first.
+ */
+export const CHANGE_WINDOW_FILTERS: readonly { value: string; label: string }[] = [
+  { value: "", label: "Any time" },
+  ...CHANGE_WINDOWS.map((window) => ({ value: window, label: CHANGE_WINDOW_WORDS[window] })),
+];
+
+/** Whether a string is a window the engine lists by. */
+export function isChangeWindow(value: string): value is ChangeWindow {
+  return (CHANGE_WINDOWS as readonly string[]).includes(value);
+}
+
+/** Whether a string is a need the engine lists by. */
+export function isChangeNeed(value: string): value is ChangeNeed {
+  return (CHANGE_NEEDS as readonly string[]).includes(value);
+}
+
+/** A precondition kind this build knows (`contract/code.ts`). */
+type KnownPreconditionKind = (typeof PRECONDITION_KINDS)[number];
+
+/**
+ * Each precondition of a merge, named as a checklist names it: what the change
+ * must be, never what is wrong with it — the engine's sentence beside it says
+ * that. Keyed on the contract's set.
+ */
+const PRECONDITION_WORDS: Readonly<Record<KnownPreconditionKind, string>> = {
+  draft: "Open for review",
+  facts: "Measured against its target",
+  approval: "Approved",
+  human_approval: "Approved by a person",
+  owners_approval: "Approved for every path owner",
+  blocker: "No standing blocker",
+  check: "Checks passed",
+  mergeable: "Merges cleanly",
+  merge_authority: "Merged by someone who may",
+  queue: "Landed by its queue",
+};
+
+/** A precondition in words — one a newer engine judges, by its kind. */
+export function preconditionWord(kind: string): string {
+  return (PRECONDITION_KINDS as readonly string[]).includes(kind)
+    ? PRECONDITION_WORDS[kind as KnownPreconditionKind]
+    : kind.replace(/_/g, " ");
+}
+
+/**
+ * The precondition a readiness's first sentence is about — its first unmet
+ * one, else its first still being computed — or null for a ready change: what
+ * the listing's Meter is titled by and a reader acts on next.
+ */
+export function firstUnready(readiness: CodeReadiness): CodePrecondition | null {
+  return (
+    readiness.preconditions.find((p) => p.state === "unmet") ??
+    readiness.preconditions.find((p) => p.state === "computing") ??
+    null
+  );
+}
+
+/** A change's own page: `#/code/repos/{name}/changes/{n}`, which `web!42` is short for. */
+export function changePath(repo: string, number: number): string[] {
+  return ["code", "repos", repo, "changes", String(number)];
+}
+
+/** A weight a finding can carry, as the contract names them. */
+type KnownSeverity = (typeof FINDING_SEVERITIES)[number];
+
+/** Each weight in words, keyed on the contract's set. */
+const SEVERITY_WORDS: Readonly<Record<KnownSeverity, string>> = {
+  blocker: "Blocker",
+  major: "Major",
+  minor: "Minor",
+  nit: "Nit",
+};
+
+/** A finding's weight in a word — one a newer engine names, as it is. */
+export function severityWord(severity: string): string {
+  return (FINDING_SEVERITIES as readonly string[]).includes(severity)
+    ? SEVERITY_WORDS[severity as KnownSeverity]
+    : severity;
+}
+
+/** What a finding can be about, as the contract names them. */
+type KnownCategory = (typeof FINDING_CATEGORIES)[number];
+
+/** Each subject in words, keyed on the contract's set. */
+const CATEGORY_WORDS: Readonly<Record<KnownCategory, string>> = {
+  correctness: "Correctness",
+  security: "Security",
+  performance: "Performance",
+  tests: "Tests",
+  design: "Design",
+  style: "Style",
+  docs: "Docs",
+};
+
+/** A finding's subject in a word — one a newer engine names, as it is. */
+export function categoryWord(category: string): string {
+  return (FINDING_CATEGORIES as readonly string[]).includes(category)
+    ? CATEGORY_WORDS[category as KnownCategory]
+    : category;
+}
+
+/** The weights a finding composer offers, heaviest first, in the engine's order. */
+export const SEVERITY_CHOICES: readonly { value: string; label: string }[] = FINDING_SEVERITIES.map(
+  (s) => ({ value: s, label: SEVERITY_WORDS[s] }),
+);
+
+/** The subjects a finding composer offers, in the engine's order. */
+export const CATEGORY_CHOICES: readonly { value: string; label: string }[] = FINDING_CATEGORIES.map(
+  (c) => ({ value: c, label: CATEGORY_WORDS[c] }),
+);
+
+/**
+ * A finding's state in words: open, answered by an author (resolved, won't
+ * fix, disputed — each still standing where it is a blocker, S40), or cleared
+ * (dismissed, superseded by its raiser's later review).
+ */
+export function findingStateWord(state: string): string {
+  switch (state) {
+    case "open":
+      return "Open";
+    case "resolved":
+      return "Resolved";
+    case "wont_fix":
+      return "Won’t fix";
+    case "disputed":
+      return "Disputed";
+    case "dismissed":
+      return "Dismissed";
+    case "superseded":
+      return "Superseded";
+  }
+  return state;
+}
+
+/** A review's verdict, said of a review as its timeline row says it. */
+export function verdictWord(verdict: string): string {
+  switch (verdict) {
+    case "approve":
+      return "approved";
+    case "request_changes":
+      return "asked for changes";
+    case "comment":
+      return "commented";
+  }
+  return verdict;
+}
+
+/**
+ * Why a recipient heard about a change, in one of `CODE_PHRASES`' voices — a
+ * reason a newer engine records, as its own words.
+ */
+export function codeReasonPhrase(reason: string, voice: "short" | "about" | "why"): string {
+  return CODE_PHRASES[reason]?.[voice] ?? reason.replace(/_/g, " ");
+}
+
+/** A repository's own page: `#/code/repos/{name}`. */
+export function repoPath(repo: string): string[] {
+  return ["code", "repos", repo];
+}
+
+/** A commit's own page, by its whole id: `#/code/repos/{name}/commits/{sha}`. */
+export function commitPath(repo: string, sha: string): string[] {
+  return ["code", "repos", repo, "commits", sha];
+}
+
+/**
+ * Git's id of the tree with nothing in it, which git knows without holding
+ * it: what a root commit's change is measured from, so its diff is every file
+ * it holds (the engine's own `emptyTreeID`, internal/code/host/build.go).
+ */
+export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/** The last segment of a path from a repository's root: what a listing names an entry by. */
+export function baseName(path: string): string {
+  const cut = path.lastIndexOf("/");
+  return cut < 0 ? path : path.slice(cut + 1);
+}
+
+/**
+ * Every directory a path passes through from the root, each with the path
+ * that names it: the trail a file is reached back up by.
+ */
+export function pathSteps(path: string): { name: string; path: string }[] {
+  const parts = path.split("/").filter(Boolean);
+  return parts.map((name, i) => ({ name, path: parts.slice(0, i + 1).join("/") }));
+}
+
+/** A run of a file's lines an address picks: its first line and its last, from 1. */
+export interface LineRun {
+  start: number;
+  end: number;
+}
+
+/** A line's number: a whole number from 1. */
+const LINE_NUMBER = /^[1-9][0-9]{0,8}$/;
+
+/**
+ * The lines an address picks (`lines=`): one line, `12`, or a run, `12-20`,
+ * either way round — or null for anything else, which picks nothing rather
+ * than a line nobody named.
+ */
+export function parseLines(value: string): LineRun | null {
+  const [first = "", last = first, ...rest] = value.split("-");
+  if (rest.length > 0 || !LINE_NUMBER.test(first) || !LINE_NUMBER.test(last)) return null;
+  const a = Number(first);
+  const b = Number(last);
+  return { start: Math.min(a, b), end: Math.max(a, b) };
+}
+
+/** A run of lines as an address writes it: `12`, or `12-20`. */
+export function linesValue(run: LineRun): string {
+  return run.start === run.end ? String(run.start) : `${run.start}-${run.end}`;
+}
+
+/**
+ * How many lines above a picked line a file opened AT it begins: the picked
+ * line is scrolled to the middle of the screen, and half of a tall screen is
+ * under fifty lines of 13 px code, so what leads up to the line is on screen
+ * without a press for earlier lines — and a read that begins fifty lines
+ * sooner costs the engine nothing it would not stream past anyway (git cannot
+ * seek inside a file).
+ */
+export const PICK_CONTEXT = 50;
+
+/**
+ * The line a file's lines (or its blame) are FIRST asked from, decided before
+ * any read of them: PICK_CONTEXT lines before the line the address picks, or
+ * line 1 where it picks none — or, where the file's lines are known (`total`),
+ * one it does not have, a stale link, which opens the file where it is.
+ *
+ * Decided before the first read rather than after it, because every read of a
+ * file is a whole `git cat-file blob` stream (the engine counts the file's
+ * lines whatever the range), and every blame a history walk over the lines it
+ * names: a read from line 1 that only told the dashboard where to read next
+ * would be one more of each, and nothing would draw it. So a line inside the
+ * first page opens fifty lines above it too (at line 1 where that is nearer),
+ * with the lines before a press away.
+ */
+export function openingLine(picked: LineRun | null, total = Number.POSITIVE_INFINITY): number {
+  if (!picked || picked.start > total) return 1;
+  return Math.max(1, picked.start - PICK_CONTEXT);
+}
+
+/**
+ * How many lines of a FILE one press of "Load earlier lines" reads back: as
+ * many as one answer page of ordinary source holds — `code.MaxGitAnswerBytes`
+ * (56 KiB) at under forty bytes a line — so a press draws one page, as a press
+ * of "Load more lines" does forward. Any narrower is dearer, not cheaper: a
+ * step costs the engine one whole-file stream whatever its width (git cannot
+ * seek inside a blob, and the read counts the file's lines to its end), and
+ * the step's pages after its first are cut from that one stream's memo. A
+ * blame's step is its own, CODE_MAX_BLAME_LINES: the most one blame names.
+ */
+export const EARLIER_FILE_LINES = 1500;
+
+/**
+ * Where a file's lines (or its blame) should begin for the line an address
+ * picks to be drawn, or null where they need not move: no line is picked, it
+ * is drawn already (`drawn` is the first and last line on screen), or the
+ * file has no such line (`total`, its lines) — a stale link, which opens the
+ * file where it is rather than nowhere.
+ *
+ * A pick only a press could make is always drawn, so the lines move only for
+ * an ADDRESS that names a line not on screen: a link from a search hit, ⌘K,
+ * a Permalink, or the history. They begin PICK_CONTEXT lines before it — at
+ * the line itself where they already begin there and it is still not drawn,
+ * which only lines longer than a page can do, so the answer never repeats
+ * the place it was asked from.
+ */
+export function lineToOpenAt(
+  picked: LineRun | null,
+  from: number,
+  drawn: LineRun | null,
+  total: number,
+): number | null {
+  if (!picked || picked.start > total) return null;
+  if (drawn && picked.start >= drawn.start && picked.start <= drawn.end) return null;
+  const at = Math.max(1, picked.start - PICK_CONTEXT);
+  if (at !== from) return at;
+  return picked.start !== from ? picked.start : null;
+}
+
+/**
+ * Whether a revision is named by a WHOLE object id: the one spelling no later
+ * push can move, which the engine answers immutably and a Permalink names.
+ */
+export function isWholeOID(rev: string): boolean {
+  return /^[0-9a-f]{40}$/.test(rev) && rev !== ZERO_OID;
+}

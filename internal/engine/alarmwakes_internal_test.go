@@ -1,0 +1,420 @@
+package engine
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/alarmwake"
+	"github.com/crewlet/crewlet/internal/authz/orgchart"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sourcetree"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/tools"
+)
+
+// AN ALARM WAKES EXACTLY THE SEATS THE HEALTH TOOLS ADMIT. The parser every
+// node's inbound edge runs for the source `alarms` is built from the epoch's
+// chart, and the seats it routes a transition to are the seats the authority
+// table admits to the health tools — the granted one woken, the ungranted one
+// neither woken nor offered them — on a node running no native half at all,
+// since a transition is routed by the chart alone.
+//
+// Mutation: build the parser from every agent seat, or from none, or only
+// where a native half runs, and the case is red.
+func TestAnAlarmWakesExactlyTheSeatsTheHealthToolsAdmit(t *testing.T) {
+	t.Parallel()
+	c, err := NewCompany(parseCompany(t, healthToolsCompany))
+	if err != nil {
+		t.Fatalf("NewCompany: %v", err)
+	}
+	parsers, prompts := (&Engine{}).nativeParsers(c)
+	var parser notify.Parser
+	for i, p := range parsers {
+		if p.Source() == alarmwake.Source {
+			parser = p
+			if prompts[i].Source() != alarmwake.Source {
+				t.Errorf("the alarms' parser is paired with the %s prompt", prompts[i].Source())
+			}
+		}
+	}
+	if parser == nil {
+		t.Fatalf("a node running no native half routes %d sources and not %s", len(parsers),
+			alarmwake.Source)
+	}
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	w, err := alarmwake.Encode(statelog.AlarmTransition{
+		ID:   statelog.TransitionID("node-a", statelog.KindApplyLag, "", "", statelog.TransitionFired, at),
+		Node: "node-a", Kind: statelog.KindApplyLag, Change: statelog.TransitionFired, Since: at, At: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routed, err := parser.Parse(t.Context(), w, notify.NewRegistry(c.Org, nil))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var woken []string
+	for _, r := range routed {
+		woken = append(woken, r.To.Handle)
+	}
+
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, builtin.Deps{
+		Authorize: builtin.Decide(orgchart.Of(c.Org)),
+		Health: builtin.HealthDeps{Leases: coordmem.New(), Requesters: turnRequesters{engine: &Engine{}},
+			Chart: orgchart.Of(c.Org)},
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	var admitted []string
+	for _, handle := range []string{"sre", "dev"} {
+		if !slices.Contains(c.withheldFrom(t.Context(), handle, reg), builtin.FleetHealthTool) {
+			admitted = append(admitted, handle)
+		}
+	}
+	if !slices.Equal(woken, admitted) || !slices.Equal(woken, []string{"sre"}) {
+		t.Errorf("an alarm wakes %v and the health tools admit %v, want both exactly sre",
+			woken, admitted)
+	}
+}
+
+// AN ALARM'S WAKE IS NOBODY'S ERRAND. A transition reaches a granted seat
+// through the real path — the delivery the outbox publishes, the alarms' own
+// parser and prompt, the notification service's wake — and the turn it wakes
+// names no requester and no sender: the engine's own notice, as its repair on
+// a work item is. So the requester ceiling every code read is decided under
+// (builtin.ceilingOf) bounds nothing in it, and the seat reads on its own
+// grant — never as a turn a stranger woke, which reads no code at all, the
+// code_status the wake's prompt sends it to beside fleet_health among it.
+//
+// Mutation: give the alarms' inbound a sender — the node that raised the
+// alarm, say, which no seat or person maps to — and the wake reads as a
+// stranger's: red.
+func TestAnAlarmsWakeIsNobodysErrand(t *testing.T) {
+	t.Parallel()
+	c, err := NewCompany(parseCompany(t, healthToolsCompany))
+	if err != nil {
+		t.Fatalf("NewCompany: %v", err)
+	}
+	parsers, _ := (&Engine{}).nativeParsers(c)
+	var parser notify.Parser
+	for _, p := range parsers {
+		if p.Source() == alarmwake.Source {
+			parser = p
+		}
+	}
+	if parser == nil {
+		t.Fatalf("the epoch routes no %s", alarmwake.Source)
+	}
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	w, err := alarmwake.Encode(statelog.AlarmTransition{
+		ID:   statelog.TransitionID("node-a", statelog.KindApplyLag, "", "", statelog.TransitionFired, at),
+		Node: "node-a", Kind: statelog.KindApplyLag, Change: statelog.TransitionFired,
+		Detail: "this node is 4m12s behind the log", Since: at, At: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := notify.NewRegistry(c.Org, nil)
+	e := &Engine{}
+	e.notify.registry = reg
+	evs := []*events.Event{noticeOf(t, reg, parser, alarmwake.Prompt{}, w.BodyRaw, "sre")}
+
+	interactions := e.interactionsOf(evs, "sre")
+	if len(interactions) == 0 {
+		t.Fatalf("the wake carries no interaction, so this case proves nothing")
+	}
+	if got := requesterOf(evs, interactions, "sre"); got != "" {
+		t.Errorf("the alarm's wake is acting for %q, want nobody", got)
+	}
+	if got := sendersSpoken(interactions); len(got) != 0 {
+		t.Errorf("the alarm's wake names the senders %+v, want none: a sender nobody maps to is a "+
+			"stranger, and a turn a stranger woke reads no code", got)
+	}
+	if got := sendersOf(reg, evs); len(got) != 0 {
+		t.Errorf("the alarm's wake profiles %+v as a counterparty, want nobody", got)
+	}
+}
+
+// refusingBroker refuses its first refuse publishes, then takes every one.
+type refusingBroker struct {
+	mu       sync.Mutex
+	refuse   int
+	attempts int
+	got      []*events.Event
+	topics   []string
+}
+
+func (b *refusingBroker) Publish(_ context.Context, topic string, ev *events.Event) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.attempts++
+	if b.refuse > 0 {
+		b.refuse--
+		return errors.New("the broker is electing a leader")
+	}
+	b.got = append(b.got, ev)
+	b.topics = append(b.topics, topic)
+	return nil
+}
+
+func (b *refusingBroker) taken() ([]*events.Event, []string, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.got), slices.Clone(b.topics), b.attempts
+}
+
+// byChange is every series of name in rec, summed by its change attribute.
+func byChange(rec *metrics.Recorder, name string) map[string]uint64 {
+	out := map[string]uint64{}
+	for _, s := range rec.Read() {
+		if s.Name == name {
+			out[s.Attrs["change"]] += s.Total
+		}
+	}
+	return out
+}
+
+// AN ALARM TRANSITION IS PUBLISHED UNTIL THE BROKER TAKES IT.
+//
+// What a node's tracker hands on — here a fire and its clear, from a real
+// tracker — is published as the inbound delivery the alarm wakes are derived
+// from: on the inbound topic, under source `alarms`, read back by alarmwake as
+// the very transition the tracker made. A broker that refuses is retried until
+// it takes the delivery, and each transition is taken ONCE and in the order it
+// was made, so the clear never reaches a seat before its fire. The publishes
+// the broker took are counted by change.
+//
+// Mutation: drop a transition on its first refused publish, or move on past
+// it, and a case is red.
+func TestAnAlarmTransitionIsPublishedUntilTheBrokerTakesIt(t *testing.T) {
+	t.Parallel()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	broker := &refusingBroker{refuse: 3}
+	o := newAlarmOutbox(broker, rec)
+	o.retry = func(int) time.Duration { return time.Millisecond }
+
+	clock := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+	tracker.OnTransition("node-a", o.Add)
+	lag := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 4m12s behind the log"}
+	for _, alarms := range [][]statelog.Alarm{nil, {lag}, nil} {
+		tracker.Observe(t.Context(), alarms)
+		clock = clock.Add(statelog.AlarmInterval)
+	}
+	if got := o.pendingCount(); got != 2 {
+		t.Fatalf("the premise: the tracker queued %d transitions, want a fire and its clear", got)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		o.run(ctx)
+	}()
+	waitUntil(t, 10*time.Second, "both transitions to be published", func() bool {
+		got, _, _ := broker.taken()
+		return len(got) == 2
+	})
+	cancel()
+	<-stopped
+
+	got, published, attempts := broker.taken()
+	if attempts != 5 {
+		t.Errorf("the broker was asked %d times, want 5: three refusals, then each transition once",
+			attempts)
+	}
+	var changes []statelog.TransitionChange
+	for i, ev := range got {
+		if published[i] != topics.NotificationsInbound || ev.Source != alarmwake.Source {
+			t.Errorf("transition %d went to %s as %q, want %s as %q", i, published[i], ev.Source,
+				topics.NotificationsInbound, alarmwake.Source)
+		}
+		w, ok := events.DataAs[*types.RawWebhook](ev)
+		if !ok || w == nil {
+			t.Fatalf("transition %d is not an inbound delivery: %+v", i, ev)
+		}
+		tr, err := alarmwake.Decode(*w)
+		if err != nil {
+			t.Fatalf("transition %d does not decode: %v", i, err)
+		}
+		if tr.Node != "node-a" || tr.Kind != statelog.KindApplyLag || tr.ID == "" {
+			t.Errorf("transition %d reads %+v, want node-a's apply_lag with its id", i, tr)
+		}
+		changes = append(changes, tr.Change)
+	}
+	if want := []statelog.TransitionChange{statelog.TransitionFired, statelog.TransitionCleared}; !slices.Equal(changes, want) {
+		t.Errorf("the broker took %v, want %v: each once, in the order the tracker made them",
+			changes, want)
+	}
+	if n := byChange(rec, metrics.AlarmTransitions); n["fired"] != 1 || n["cleared"] != 1 {
+		t.Errorf("the published transitions are counted %v, want one fired and one cleared", n)
+	}
+	if o.pendingCount() != 0 {
+		t.Errorf("%d transitions are still queued after the broker took them all", o.pendingCount())
+	}
+}
+
+// A FULL ALARM OUTBOX DROPS ITS OLDEST, counted, and never the transition in
+// flight: the broker may already hold that one, and counting it lost would
+// say a seat was not told when it was.
+//
+// Mutation: drop the newest instead, or the head while it is in flight, and
+// the case is red.
+func TestAFullAlarmOutboxDropsItsOldestFirst(t *testing.T) {
+	t.Parallel()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	o := newAlarmOutbox(&refusingBroker{}, rec)
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	transition := func(i int) statelog.AlarmTransition {
+		since := at.Add(time.Duration(i) * time.Second)
+		return statelog.AlarmTransition{
+			ID:   statelog.TransitionID("node-a", statelog.KindApplyLag, "", "", statelog.TransitionFired, since),
+			Node: "node-a", Kind: statelog.KindApplyLag, Change: statelog.TransitionFired,
+			Since: since, At: since,
+		}
+	}
+	o.Add(transition(0))
+	if head, ok := o.head(); !ok || head.ID != transition(0).ID {
+		t.Fatalf("the premise: the head in flight is %+v", head)
+	}
+	for i := 1; i <= alarmOutboxCap+1; i++ {
+		o.Add(transition(i))
+	}
+	o.mu.Lock()
+	pending := slices.Clone(o.pending)
+	o.mu.Unlock()
+	if len(pending) != alarmOutboxCap {
+		t.Fatalf("the outbox holds %d transitions, want its bound, %d", len(pending), alarmOutboxCap)
+	}
+	if pending[0].ID != transition(0).ID {
+		t.Errorf("the transition in flight was dropped")
+	}
+	if pending[1].ID != transition(3).ID || pending[len(pending)-1].ID != transition(alarmOutboxCap+1).ID {
+		t.Errorf("the outbox kept %s .. %s after the head, want the oldest two behind it dropped "+
+			"and the newest kept", pending[1].ID, pending[len(pending)-1].ID)
+	}
+	var dropped uint64
+	for _, s := range rec.Read() {
+		if s.Name == metrics.AlarmTransitionsDropped {
+			dropped += s.Total
+		}
+	}
+	if dropped != 2 {
+		t.Errorf("the outbox counted %d dropped transitions, want 2", dropped)
+	}
+}
+
+// THE ALARM OUTBOX HOLDS SIX FLAPS OF THE WHOLE TABLE — its bound's own
+// derivation ([alarmOutboxCap]), computed from the table and the register
+// rather than restated beside it: every instance the table can raise on a
+// data node — one per node-wide kind, and one a log per per-log kind on every
+// log a data node runs — fired and cleared six times over fits in the bound.
+// A kind added to the table moves the count, as the compaction alarm did when
+// it landed beside the outbox, and so does a log added to the register; this
+// fails once the count moves past what the bound promises, which then has to
+// be raised or its promise restated.
+//
+// Mutation: halve alarmOutboxCap, and the case is red.
+func TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable(t *testing.T) {
+	t.Parallel()
+	const flaps = 6
+	logs := len(registeredDomains())
+	perLog := len(statelog.PerLogKinds())
+	nodeWide := len(statelog.Kinds()) - perLog
+	if logs == 0 || perLog == 0 || nodeWide <= 0 {
+		t.Fatalf("the premise: a data node runs %d logs, and the table has %d node-wide and %d per-log kinds",
+			logs, nodeWide, perLog)
+	}
+	instances := nodeWide + perLog*logs
+	if need := flaps * 2 * instances; need > alarmOutboxCap {
+		t.Errorf("%d fires and clears of every instance on a data node of %d logs — %d node-wide kinds "+
+			"and %d per log, %d instances — are %d transitions, past the outbox's %d: raise the bound "+
+			"or restate what it holds", flaps, logs, nodeWide, perLog, instances, need, alarmOutboxCap)
+	}
+}
+
+// EVERY TEXT THAT STATES THE ALARM OUTBOX'S BOUND STATES alarmOutboxCap: the
+// dropped-transitions metric's own description (and the metrics reference
+// generated from it) and the concept page's paragraph on the outbox each name
+// the figure an operator reads a drop against, and nothing else ties them to
+// the constant — the bound has moved once already (1024 to 2048, when the code
+// log joined the register), and a figure left behind tells an operator the
+// outbox holds what it does not. So each is read where it states the bound and
+// held to the constant.
+//
+// Mutation: move alarmOutboxCap, or the figure in any of the three texts, and
+// the case is red.
+func TestEveryTextNamingTheAlarmOutboxBoundNamesTheConstant(t *testing.T) {
+	t.Parallel()
+	want := "holds " + strconv.Itoa(alarmOutboxCap) + " "
+	shows := ""
+	for _, in := range metrics.Catalogue() {
+		if in.Name == metrics.AlarmTransitionsDropped {
+			shows = in.Shows
+		}
+	}
+	if !strings.Contains(shows, want) {
+		t.Errorf("the catalogue's %s says %q, which does not name the outbox's bound as %q",
+			metrics.AlarmTransitionsDropped, shows, want)
+	}
+	for _, doc := range []struct {
+		path   string
+		marker string // what begins the line that states the bound
+	}{
+		{"docs/reference/metrics.md", "| `" + metrics.AlarmTransitionsDropped + "` |"},
+		{"docs/concepts/event-system.md", "- **The outbox is bounded.**"},
+	} {
+		line := theLineBeginning(t, doc.path, doc.marker)
+		if !strings.Contains(line, want) {
+			t.Errorf("%s states the outbox's bound as %q, which does not name it as %q", doc.path, line, want)
+		}
+	}
+}
+
+// theLineBeginning is the one line of the repository's file at rel that begins
+// with marker; the test fails where none does or several do.
+func theLineBeginning(t *testing.T, rel, marker string) string {
+	t.Helper()
+	f, err := os.Open(filepath.Join(sourcetree.Root(t), filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var found []string
+	lines := bufio.NewScanner(f)
+	lines.Buffer(make([]byte, 0, 64<<10), 4<<20)
+	for lines.Scan() {
+		if strings.HasPrefix(lines.Text(), marker) {
+			found = append(found, lines.Text())
+		}
+	}
+	if err := lines.Err(); err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("%s has %d lines beginning %q, want exactly one", rel, len(found), marker)
+	}
+	return found[0]
+}

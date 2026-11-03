@@ -27,7 +27,7 @@ import (
 // Mutations: leave the pause watch's stop call out and the run is never ended;
 // announce the stop as a loss and an `executor_failed` is on the turn; close
 // no turn and its last turn_completed is still the park.
-func TestAStopEndsTheRunningCodingRunAndClosesItsTurnAsStopped(t *testing.T) {
+func TestAStopEndsTheRunningExecutorAndClosesItsTurnAsStopped(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
 	// NOTHING WRITES THIS FILE: the run holds until something ends it.

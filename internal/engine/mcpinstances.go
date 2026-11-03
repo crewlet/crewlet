@@ -331,7 +331,7 @@ func (e *Engine) startMCPInstances(ctx context.Context) {
 	if e.backends == nil || e.backends.Queue == nil {
 		return
 	}
-	stop, err := e.backends.Queue.Serve(ctx, topics.ObserveMCPInstances, e.answerMCPInstances)
+	stop, err := e.backends.Queue.Serve(ctx, topics.ObserveMCPInstances, queue.ConcurrentAnswers, e.answerMCPInstances)
 	if err != nil {
 		log.WarnContext(ctx, "mcp_instance_answerer_not_registered", "error", err,
 			"detail", "a server's page reads this node's instances as not answering until "+

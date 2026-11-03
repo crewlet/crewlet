@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -208,9 +209,8 @@ func (e *Engine) armHeldParks(ctx context.Context) error {
 		return nil
 	}
 	answerer := e.heldParks()
-	stop, err := e.backends.Queue.Serve(ctx, topics.HeldPark, func(_ context.Context, raw []byte) ([]byte, error) {
-		return answerer.answer(raw)
-	})
+	stop, err := e.backends.Queue.Serve(ctx, topics.HeldPark, queue.ConcurrentAnswers,
+		func(_ context.Context, raw []byte) ([]byte, error) { return answerer.answer(raw) })
 	if err != nil {
 		return fmt.Errorf("engine: answer whether a park holds a seat's inbox: %w", err)
 	}

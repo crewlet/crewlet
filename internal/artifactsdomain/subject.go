@@ -82,8 +82,16 @@ const (
 	KindGeneration ObjectKind = "generation"
 
 	// KindBarrier is the read index's payload-free append, on ONE subject
-	// for the whole domain. The only kind that writes no row on any node.
+	// for the whole domain. One of the two kinds that write no row of this
+	// domain's on any node; the other is [KindTrimmed].
 	KindBarrier ObjectKind = "barrier"
+
+	// KindTrimmed is the trim's record that removes the arbitration anchors
+	// below what the log no longer holds — [statelog.TrimmedKind], ADR-0080
+	// — on one subject per floor, which the subject's id names. The
+	// framework removes the anchors in the transaction that applies it; this
+	// domain writes nothing for it, and has the case that says so.
+	KindTrimmed ObjectKind = statelog.TrimmedKind
 
 	// KindFolder is the company's folder tree, ONE subject with no id:
 	// every folder's create, rename, move and removal.
@@ -100,7 +108,7 @@ const (
 // under the literal like any kind this build does not know.
 const KindComment ObjectKind = "comment"
 
-// ObjectKinds are the nine, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the ten, and THE ORDER IS LOAD-BEARING.
 //
 // The framework's conformance suite publishes the FIRST THREE a domain
 // declares, twice each, in order, so the declaration decides what the suite
@@ -114,7 +122,7 @@ const KindComment ObjectKind = "comment"
 // their records ([versionedFields] stamps each kind at its version).
 var ObjectKinds = []ObjectKind{
 	KindArtifact, KindAsset, KindReader, KindSource, KindEviction, KindGeneration,
-	KindBarrier, KindFolder, KindBrand,
+	KindBarrier, KindTrimmed, KindFolder, KindBrand,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -123,12 +131,15 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation, and so whether the framework keeps an anchor for it.
 //
-// EIGHT OF NINE DO. The barrier shares one subject across the whole domain, so
+// EIGHT OF TEN DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
-// other one. A reader's `opened` and `read_elevated` are additive writes on an
-// arbitrated kind: they carry no expectation of their own, and they move the
-// anchor a pin is arbitrated against, which costs a pin at most one round.
-func (k ObjectKind) Arbitrated() bool { return k != KindBarrier }
+// other one. A trimmed record REMOVES anchors, and identical ones are each
+// meant to land, so an expectation would refuse every one after the first and
+// an anchor of its own would be the one row it exists not to leave behind. A
+// reader's `opened` and `read_elevated` are additive writes on an arbitrated
+// kind: they carry no expectation of their own, and they move the anchor a pin
+// is arbitrated against, which costs a pin at most one round.
+func (k ObjectKind) Arbitrated() bool { return k != KindBarrier && k != KindTrimmed }
 
 // InstallsGate reports a kind whose unknown version must STOP the applier
 // rather than be filed for later. A purge is this log's other gate, and it is
@@ -221,6 +232,13 @@ func GenerationSubject(gen uint32) Subject {
 
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
+
+// TrimmedSubject names the trimmed record whose floor is floor, in the
+// framework's ONE spelling of it ([statelog.TrimmedSubject]): the framework
+// reads the floor back from the id.
+func TrimmedSubject(floor statelog.Position) Subject {
+	return Subject{Kind: KindTrimmed, ID: statelog.TrimmedSubject(floor).ID}
+}
 
 // FolderSubject is the company's folder tree: one subject for every folder.
 func FolderSubject() Subject { return Subject{Kind: KindFolder} }

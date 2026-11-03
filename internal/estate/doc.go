@@ -12,30 +12,36 @@
 // copy of the tracker's, the knowledge base's, chat's or the identity
 // directory's rows. Its seats still read and write the first three, constantly
 // — every board, every task, every page and every room a tool touches — and ask
-// the fourth whose record a login names and who holds each human seat; and the
-// engine records on the executor log what each of its seats' boxes did, which
-// the seat's next launch reads back. So something has to answer them. EVERY
-// DATA NODE HOLDS THE WHOLE ESTATE and SERVES it over the broker ([Serve]),
-// and every node's tools are handed facades of one [Router], which answers
-// in-process where this node's copy serves and asks another data node
-// otherwise. The engine's record of its runs goes through the same router
-// ([ExecutorWrites]), and so do the operator's surfaces — the API's tracker,
-// knowledge-base and chat routes and the operator's own MCP — for the reason a
-// data node's own seats do: read straight off the node's copy, a node whose
-// copy was out of service answered its operator from the very copy it had
-// stopped serving its seats from.
+// the fourth whose record a login names and who holds each human seat, and a
+// node that serves requests asks it what a presented machine token is checked
+// against; and the engine records on the executor log what each of its seats'
+// boxes did, which the seat's next launch reads back. So something has to
+// answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE and SERVES it over the
+// broker ([Serve]), and every node's tools are handed facades of one
+// [Router], which answers in-process where this node's copy serves and asks
+// another data node otherwise. The engine's record of its runs goes through
+// the same router ([ExecutorWrites]), and so do the operator's surfaces — the
+// API's tracker, knowledge-base, chat and usage reads and the operator's own
+// MCP — for the reason a data node's own seats do: read straight off the
+// node's copy, a node whose copy of a domain was out of service answered its
+// operator from the very copy it had stopped serving its seats from.
 //
-// # One subject per serving node, never a scatter
+// # One node per request, never a scatter
 //
-// The request goes to exactly one node — `crewlet.estate.<node>` — over the
-// queue's ephemeral request/reply verbs. A scatter would run a write on every
+// The request goes to exactly one node — `crewlet.estate.<node>`, or for a
+// push's proposal that node's proposal subject (below) — over the queue's
+// ephemeral request/reply verbs. A scatter would run a write on every
 // data node, and a queue group would let the BROKER pick which node answers,
 // which leaves the router unable to say which node it asked when the answer
 // does not come: a failover that retries a write on "whoever answers next" is
 // only safe where the write itself says so. So the router picks the node —
-// this node first where its copy serves, then the node that answered last,
-// then a rendezvous order, with a node that went silent last — and the
-// failover rule is stated per operation (see [opClass]).
+// this node first where its copy serves, then the node that answered the
+// operation's domain last, then the order [internal/rendezvous] gives this
+// node's own id, with a node whose copy of that domain said it is out of
+// service after the rest and a node that went silent last; a push alone is
+// asked in its repository's order instead, and a read of a repository's git
+// objects in its order over the git nodes (below) — and the failover rule is
+// stated per operation (see [opClass]).
 //
 // # What makes a retry safe, per operation
 //
@@ -56,22 +62,132 @@
 // the one a tool turns into "read the page before writing again". A CHAT write
 // is the page write's case exactly, keyed by its actor's operation key
 // ([chatlet.Actor.OpKey]); the erase and the prune take their caller's whole
-// operation id instead, and are repeated under it as a tracker purge is.
+// operation id instead, and are repeated under it as a tracker purge is. A
+// PUSH carries its push id, a UUIDv7 the receiving node minted once, which the
+// committer's decide collapses onto the push's row — so it moves on as a
+// tracker write does.
 //
 // An EXECUTOR write is a tracker write's case: the operation id on its call is
 // the one the executor log derives for that execution, so a repeat under it
 // is the same operation, and an unanswered or unvouched one moves on under it.
 //
-// A node that answers "I did not run it" — its copy is out of service, it runs
-// no native backend, its copy lags its logs, it could not reach the caller's
+// # A push is asked of its repository's committer
+//
+// Every other operation is asked of THIS node first and then of the node that
+// answered last: any data node's copy answers it equally, and the sticky node
+// is the one most likely to hold this node's writes. A push is different. Its
+// decide is a compare-and-set on the repository's ONE subject, and every node
+// that decides pushes to one repository contends on it: two committers each
+// holding part of a burst lose rounds to each other, and every round one
+// loses costs it a re-decide and a re-append of its WHOLE batch, where one
+// committer holding the whole burst loses none and commits it in a few
+// records (the code domain's group commit). So `code.propose` is asked of the
+// repository's COMMITTER — the first node in [rendezvous.Order] of the
+// repository's id over every live data node, which every node computes alike
+// from the same set — and of that repository's own runner-up when it runs
+// nothing. No sticky node: the key decides, not the last answerer. A committer
+// that dies hands each of its repositories to that repository's runner-up,
+// spread across the survivors. Two nodes with different views of the fleet
+// both commit SAFELY — the subject's compare-and-set lets one record land per
+// round and push ids collapse duplicates — only less efficiently, until their
+// views agree.
+//
+// A COMPACTION'S PROPOSAL (`code.compact`) is asked of the same committer in
+// the same order, keyed by the same repository: it waits in the repository's
+// one queue beside the pushes and is decided there as a record of its own, so
+// everything that moves a repository's packs meets on one node, and an
+// unanswered one is asked of the runner-up under its own compaction id, which
+// the domain's ledger collapses as it does a push id. An EXPUNGE RECORD'S
+// PROPOSAL (`code.expunge`) — a person's purge request, or the begin or the
+// commit a repository's maintainer built — is asked the same way, under the
+// record's own operation id, and so is a WRITE OF A CHANGE'S LIFECYCLE
+// (`code.change`) — an open, an edit, a draft's state, a retarget, a close or
+// a reopen — under its asker's operation id, from which an open's change id
+// is derived, so no retry opens a second change; and so is a WRITE OF A
+// TARGET'S MERGE QUEUE (`code.queue`) — an enqueue, decided by the change's
+// merge gate, or a dequeue — under its asker's operation id, from which an
+// enqueue's entry id is derived, so no retry queues a change twice; and so is
+// a change's MERGE (`code.merge`) — one record its merge gate decides from one
+// snapshot, which merges the change and moves its target (ADR-0096) — under
+// its builder's operation id, from which the merge's push id is derived, so
+// no retry lands a branch twice. A WRITE
+// OF A CHANGE'S CONVERSATION (`code.conversation`) — an ask for review, a
+// comment or a thread's resolution — is keyed by the same repository and
+// asked of the same node, whose change writer publishes it on the change's
+// own subject rather than in the committer's queue, under its asker's
+// operation id, from which a comment's id is derived.
+//
+// These are the operations keyed on the DATA nodes (a read of a repository's
+// git objects is keyed on the git nodes: below); [op.keyedBy] is the
+// declaration, and the walk is the ordinary one in every other respect — the
+// floors, the verdict of the operation's own domain, the lagging last resort,
+// and the class rule for a node that may have run it. A data node asks its
+// own copy at its place in the key's order, in-process, never ahead of the
+// node the key prefers; and a committer that refuses before it appends anything — stopping,
+// a node in a maintenance mode, a refusal about this node — ran nothing, so
+// the runner-up is asked with the same push id, and the refusing node is asked
+// LAST for pushes for the next [suspectFor]: a keyed order has no sticky node
+// to move the next push off it, and what made it refuse outlasts one request.
+// A committer answers INSIDE THE
+// ATTEMPT that asked it, whose end the request carries: it starts a push's
+// batch only while a whole batch and its answer still fit before that end, and
+// answers it busy, undecided, the moment they do not — so an asker never hands
+// a push to the runner-up while the first committer is still deciding it.
+//
+// And a data node answers proposals, a push's and a compaction's, on a LANE OF
+// THEIR OWN — its own subject, `crewlet.estate.<node>.proposals`, and its own
+// answer slots — because a proposal WAITS: queued behind its repository's
+// earlier pushes, then for its batch, it holds the slot it was answered
+// through for as long as its asker's attempt, and a registration's requests
+// wait behind every answer holding one of its slots. On the one registration
+// every other operation is answered through, sixty-four queued pushes held
+// every slot the node had: it answered no read, no other write and no git
+// fetch's resolve until a batch ended, its readers marked it suspect for every
+// domain, and an election that stalled the code log spread that across every
+// committer with pushes in flight. The lane is as wide as one repository's
+// committer holds (its queue and the batch ahead of it), so a burst meets the
+// committer's own bounds — busy at once — never the lane's. A lane answers only the operations declared on it
+// ([op.answeredOn]) and says so to any other, so the separation does not
+// depend on every asker keeping it.
+//
+// A node that answers "I did not run it" — its copy of the operation's domain
+// is out of service, it runs no native backend, that copy lags its log, the
+// node is behind the company's configuration, it could not reach the caller's
 // floor in time, or it could not verify the request — did not execute
-// anything, so every class moves on from it. When no data node runs the
-// operation, it is refused as [ErrUnserved], naming who was asked and what
-// each said — never an empty answer, which would say the company has none of
-// what was asked for. A WRITE that some node never answered is the exception:
-// that node may have run it, so the walk ends in [ErrOutcomeUnknown] and the
-// same operation id is the retry, since "nobody ran it" is the claim a caller
-// acts on by writing again.
+// anything, so every class moves on from it. So does a READ a copy refuses for
+// a reason about ITSELF ([statelog.ReadRefusal.Elsewhere]): its applier did
+// not reach the barrier a linearizable read appended (`behind`), it stalled,
+// it cannot decode a record, it is evicted or below the floor, it lost its
+// broker or its quorum — another
+// node's copy may serve the read at once, so the next one is asked and the
+// refusal is the answer only where nobody does better. Returned as the answer,
+// a git fetch through a data node whose applier fell a second behind was told
+// 503 while two peers could serve it. `log_full`, `broker_refused`,
+// `broker_stalled` and `maintenance` hold for every node alike — every node
+// appends its barrier to the one stream, through its one member where it has
+// one, and every node of a fleet in a capacity window is in one — and are
+// answered from the first node that gives them.
+//
+// A WALK PAYS FOR A READ ONCE, whatever its length: a refusal says what the
+// read had paid for ([statelog.Refused.Spent]) — the read index its barrier
+// established, the position it waited its whole bound for, a log its barrier
+// ran out on — and every node asked after it is handed that ([request.Spent],
+// [statelog.WithSpent]): it waits for the read index rather than append a
+// barrier of its own, waits for no position already waited out (a floor
+// included, which a node behind it answers [unservedBehind] for), and appends
+// no second barrier to a log whose barrier ran its whole budget — a log
+// without a quorum, or, where one member stores it, that member's stalled
+// write ([statelog.Spent.Unconfirmed]). Asked afresh, every node of a
+// fleet one burst put behind together appended a barrier to the log they were
+// all behind on and waited a whole read budget for it, so one final `behind`
+// cost a barrier and two seconds per data node.
+//
+// When no data node runs the operation, it is refused as [ErrUnserved],
+// naming who was asked and what each said — never an empty answer, which would
+// say the company has none of what was asked for. A WRITE that some node never
+// answered is the exception: that node may have run it, so the walk ends in
+// [ErrOutcomeUnknown] and the same operation id is the retry, since "nobody ran
+// it" is the claim a caller acts on by writing again.
 //
 // # Who originates a write: a surface, or the engine
 //
@@ -81,7 +197,11 @@
 // somebody's behalf, so a refusal of it is somebody's to read: the person's
 // write surface classes it and names the object it was about, and every domain
 // a surface writes is declared to those surfaces, read off this router's own
-// table ([SurfaceWriteDomains]). The executor log's writes are the ENGINE's:
+// table ([SurfaceWriteDomains]). The code host's own work is a surface's write
+// too — a compaction, a mirror's sync, a check's result, a merge the queue
+// builds — because it carries out what somebody asked of a repository, and
+// its refusals are that repository's, which the person's surface classes as it
+// does a push's. The executor log's writes are the ENGINE's:
 // its record of what its own runs did — a turn's first read of its
 // conversation, a harness's session captured, a turn ended, a session aged out,
 // a removed seat's taken away — which nobody asks for and no surface may make
@@ -93,16 +213,30 @@
 // Crewlet, the binary) names that facade or the domain's writer. The log's
 // reads are ordinary reads, which a surface may hold ([ExecutorReads]).
 //
-// # A copy that is WRONG is out of service; one that LAGS is a worse node
+// # A domain's copy that is WRONG is out of service; one that LAGS is a worse node
 //
-// A copy that is wrong — an applier halted, the node evicted, its rows below
-// the log — answers nothing ([LocalBackends.For] false): a peer asking is told
-// `out_of_service`, and the node's own seats are answered by the other data
-// nodes. The seats were never the problem, the copy was, so the node keeps
-// them.
+// A domain's copy that is wrong — its applier halted, the node evicted from
+// its log, its rows below that log — answers none of that domain's operations
+// ([LocalBackends.For] false for it): a peer asking for one is told
+// `out_of_service`, and the node's own seats' calls on that domain are
+// answered by the other data nodes. Every other domain's copy keeps answering
+// here, because an operation's routing is on its OWN domain: the rows it
+// answers from are that domain's. The reads that cross into a second domain's
+// rows say so. An OPERATION that reads another domain's rows declares it
+// ([op.alsoReads]) — a page's backlinks, which name the tasks linking to it —
+// and runs only where every copy it reads serves. A search's semantic half,
+// over the vectors, is best effort and never routes: the search is answered
+// from the copy of its own domain, and a participant whose VECTORS copy is
+// out of service asks that verdict itself, in the scanner, and answers
+// without the half, saying so ([search.Copies]). And the seats were never the
+// problem, the copy was, so the node keeps them. This is ADR-0079, which
+// refines ADR-0025's amendment to one domain at a time; the copy a SEAT is
+// served by — what admission asks of — is every domain that gates seat
+// admission at once ([SeatCopy]).
 //
-// Whether a copy answers requests ([Backend.Answers]) is a different question:
-// its distance from its logs, not its correctness. The floors and the read's
+// Whether a copy answers requests ([Backend.Answers]) is a different question,
+// asked of the operation's own domain too: its distance from its log, not its
+// correctness. The floors and the read's
 // own level hold an answer to what the caller must see, and a write is decided
 // from the authority's own snapshot and arbitrated by the broker. So a copy
 // that lags is passed over only for one that does not, and asked again — told
@@ -110,6 +244,171 @@
 // whose copy does not lag has run nothing. A single data node a burst put past
 // the snapshot slack would otherwise refuse its own seats until it caught up,
 // and a fleet the same burst put behind together would refuse everybody's.
+//
+// # A node behind the company's configuration is a worse node too
+//
+// A data node the control plane has CONFIRMED behind the epoch the fleet
+// activated — shed or stuck, never on lag alone, which every rollout produces
+// ([Backend.Current]) — gives up its seats, its schedules and its inbound work,
+// and goes on serving the estate: its copy is sound. What it supplies from its
+// own epoch (below) is not: the chart a tracker write resolves a people field
+// and a lead by, the unit a read renders, a search's scope, the limits a push
+// is decided under are the configuration the fleet replaced. Each is a VALUE
+// whose stale reading every reader already meets when a revision changes one,
+// so the node is a worse node to ask, as a lagging copy is — passed over for
+// every data node that is neither, and asked again, told to answer anyway,
+// when none of them runs the operation ([worse]). It is the WORSE of the two:
+// a copy that only lags answers held to the caller's floors and under the
+// current configuration, so the last resort asks every such copy first and
+// the nodes behind the configuration after them, each in the order the walk
+// reached it ([Router.lastResort]) — an order of the REASONS, the same on the
+// request that learns a node is behind as on every one after. Asked in the
+// order the walk met the refusals, the request that learned a committer was
+// behind sent it the push while every later one sent the lagging runner-up
+// its pushes, two nodes committing one repository in every window.
+//
+// Refused instead, a fleet whose only data node failed an apply — a
+// stateless node beside one data node applies what the data node could not —
+// would answer none of its tracker, pages or usage operations. It covers
+// EVERY operation rather than the ones that read the chart, because a list of
+// which operation reads which seam is a second list to keep in step with the
+// decides, and one left off it would serve a stale chart first.
+//
+// It answers in a reason of its own, `behind_config` ([unservedBehindConfig]),
+// because unlike a lag it LASTS — until the node's apply succeeds, and for a
+// stuck node until a person acts — so the asker REMEMBERS it for thirty
+// seconds ([Router.markBehindConfig]) and meanwhile does not ask the node at
+// all: it comes to it only as the last resort, told at once to answer anyway,
+// and a keyed operation asks the repository's runner-up instead. So each
+// asker pays one refusal per data node behind the configuration every thirty
+// seconds — the one that tells it, or tells it again once the window ends —
+// and nothing else: an operation a current data node runs never reaches the
+// node behind, and one only the node behind can run is one ask. Forgotten
+// between requests, as a lag is, every operation of every asker paid one
+// refusal per data node behind for as long as they stayed behind — on a
+// stateless node beside one stuck data node every estate call was two
+// requests — and every push to a repository such a node commits for sent it
+// the whole proposal before the runner-up was asked.
+//
+// A GRANT judged from the chart is different — answered anyway by the last
+// resort, it would be decided by the revision that may have revoked it — so
+// an operation that judges one DECLARES it ([op.judgesGrant]: a code read or
+// a ref resolve a seat asks, whose grant on a repository is the chart's, a
+// seat's write of a change, which its grant decides whether it may make, and a
+// write of a change's conversation the chart judges — a seat's, or an ask of
+// reviewers by anybody, each reviewer judged by the chart), and
+// a node behind the configuration refuses it even asked last, `behind_config`
+// saying it decides no grant: the soft arm sends the walk to every current
+// data node first, the last resort asks this node again, it refuses again,
+// and the walk ends unserved. That is the HARD ARM, and the bound on the
+// window a stale grant is judged in is the control plane's confirmation —
+// about a minute. TestEveryOperationThatJudgesAGrantIsDeclared holds every
+// operation whose arguments carry an asker to the declaration, and the
+// engine's TestEveryEpochSeamAServingDecideReadsIsClassified holds every seam
+// a serving decide reads to a class, so no grant reaches a decide unseen.
+// Admission's ping is held back by neither preference, nor by an asker's
+// memory of the second ([op.ungated]): it asks the copy's own seat admission
+// and routes no later operation.
+//
+// # A repository's git work is asked of its home git node
+//
+// An operation on a repository's git OBJECTS — a read by object id of a tree,
+// a file, a diff, a MERGE PREVIEW of two commits ([opCodeMergePreview], a read
+// too), and an ENGINE WRITE, a seat's or a person's commit built beside a copy
+// of them and landed as a push (ADR-0092) — is answered by a node with the
+// `git` role from its own cache, never by a data node's copy.
+// That is ADR-0089, amending ADR-0025: the router's walk has a second
+// placement beside the data nodes, every live git node ([RouterOptions.Git]),
+// keyed by repository ([op.keyedOnGit]), and such an operation names the git
+// half rather than a domain's copy ([GitCopy]), so no copy verdict, no
+// dispatch floor and no lag gate holds it back — its floor travels in its
+// arguments and is the git node's cache's sync level. It is asked in
+// rendezvous.Order(repository, every live git node) — the repository's HOME
+// first, its runner-up next, the keyed order's demotions and no sticky node,
+// this node at its place where its git half is built ([LocalGit], resolved per
+// request, since the code host is built at boot or at the first apply that
+// hosts code) — on lanes of their own, the reads' and the writes'
+// ([laneGitReads], [laneGitWrites]), which a git node registers from boot. The
+// home is a preference, never ownership: no lease, no epoch. A git node that
+// cannot answer inside its budget — its copy still syncing, its share full, or
+// every engine write its writes' lane holds already held, the next answered at
+// once ([gitWritesHeld]) — answers `behind`, its reason beside it
+// ([reply.Unready]), and is not demoted, so its askers come back once it is
+// warm; and ONE node a walk FILLS
+// a copy at a time: the walk stamps its effective home's attempt
+// (code.GitQuery.Home, code.EngineWrite.Home), and every other git node holding
+// no copy answers at once that it holds none, so a repository nobody holds
+// costs the fleet one download rather than one a git node. The fill moves to
+// the next node of the walk only past one bringing no copy up for the
+// operation — behind its configuration for a seat, failing on its own, no code
+// host — so a home that will not serve a read for a reason that lasts never
+// leaves its repository unreadable ([Router.routeGit]); a home at its share
+// keeps it, since the share is the node's and not the repository's. Every git
+// request is a signed estate request like any other, and every attempt — a
+// peer's, or this node's own git half in process — is held to its git attempt
+// and SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before the attempt ends
+// (code.AnswerBy), so a busy git node is heard saying so rather than taken for
+// a gone one, and an operation is answered alike whichever node asked it
+// ([GitReadAttempt], [GitWriteAttempt]).
+//
+// AN ENGINE WRITE IS ONE PUSH WHICHEVER GIT NODE BUILDS IT ([opCodeGitWrite]):
+// its push id is derived from its caller's operation (code.WritePushID), and
+// its commit is a pure function of that operation and its parent, so the walk
+// asks it again of the next git node after one that ran nothing or went
+// silent, as an idempotent write — the next node builds the same push, and is
+// answered from its row where the silent one landed it — and two nodes that
+// both took themselves for its home build one push, which the repository's
+// committer lands once. Its attempt on one git node is the sum of every wait
+// its stages make at their whole budgets ([GitWriteAttempt], 82 s), which the
+// git node fits the write into — answering busy, before its upload, a write
+// whose proposal would no longer fit — so the attempt is the router's own
+// whatever deadline its caller gives ([Router.budgetFor]): a turn's minutes
+// waited out on a wedged home would leave its runner-up never asked.
+//
+// [Router.Home] names that home itself — the node a repository's reads and
+// engine writes are asked of, and the one its maintenance falls to on a fleet
+// of alike nodes: the first node of the same rendezvous order with NO demotion
+// — one function builds both, so on a quiet fleet a repository's reads, its
+// engine writes and its own git work meet on one git node — and UNKNOWN,
+// never a guess, where who serves git cannot be read. [Router.HomeOf] answers
+// which of many repositories this node is the home of off ONE reading of who
+// serves git, three-valued as Home is — the set, or unknown for every one —
+// for a caller that judges many at once: the backstop pass of the home's
+// change work (internal/code/home), over every repository its workers list,
+// which asked a repository at a time would read the presence view again for
+// each. A home that went quiet is still the home; work two nodes of a split
+// presence view both do is work its repository's writers take once.
+//
+// [Router.Maintainer] names the git node a repository's MAINTENANCE — the
+// compaction of its packs, the publication of its layers — is placed on, which
+// is the home unless the home cannot hold the work: the first node of the same
+// order, still with no demotion, whose ADVERTISED background budget (each git
+// node's maintenance budget, which its presence row carries on every beat
+// beside its status, so a beat whose status was dropped still says it) holds
+// the work's charge, and the home where none does. ONE LISTING answers the
+// whole question ([GitPlacement.Listing]: the git nodes and what each says,
+// read together), so a node is weighed by the listing that names it, and a
+// node that listing does not carry — this one included, wherever its own git
+// half is built — is GONE, never a node not saying. So on a fleet of alike
+// nodes the maintainer is the home and nothing moves, and on one with a single
+// large git node every repository only it can hold is maintained there.
+// NOTHING MOVES PAST THE HOME ON MISSING INFORMATION: a node
+// whose row carries no figure is NOT SAYING, never a node with nothing to
+// give, and is passed over where it is a runner-up — kept in its place, a
+// small runner-up not saying would take a large node's repositories, each
+// starting with a cold sync of its whole history only for its own admission to
+// refuse the work — and keeps the repositories it is home to, as a quiet home
+// keeps them, since the home holds their copies. [Router.MaintainerOf]
+// answers which of many repositories, each by its own charge, this node
+// maintains, off ONE listing for them all — three-valued: the set, or the
+// listing's error for every one, on which a node does none of a maintainer's
+// work — for a caller that judges many at once: internal/code/compact's two
+// loops, the compaction of a repository's packs and the publication of its
+// layers, whose passes over their listings read the presence view again for
+// every repository they asked about one at a time. Both ask by one charge,
+// the largest of their steps', so both writers of a repository's packs run
+// on one node (ADR-0091), and a maintainer two nodes both believe in is one the
+// committer takes once, as a home's work is.
 //
 // # Which data nodes to ask is answered from memory
 //
@@ -120,9 +419,12 @@
 // node, from a WATCHED view of the presence leases that lists once per
 // heartbeat and answers UNKNOWN rather than an empty or stale fleet once its
 // last listing is older than a lease survives; a node it named that went silent
-// is reported ([Placement.Unanswered]) so it drops out at once. An unknown
-// placement fails the request with the placement's own reason: "give a node the
-// data role" is the wrong remedy for a fleet whose coordination blinked.
+// is reported ([Placement.Unanswered]) so it drops out at once — silent through
+// a wait of the router's own, because a caller that hung up or gave a request
+// less than an attempt has said nothing about the node it was asking
+// ([Router.ask]). An unknown placement fails the request with the placement's
+// own reason: "give a node the data role" is the wrong remedy for a fleet whose
+// coordination blinked.
 //
 // # Read-your-writes: ONE floor table per node, consulted for local reads too
 //
@@ -135,19 +437,26 @@
 // node answers — this node's own copy included — waits for its applier to
 // reach it, bounded by [statelog.ReadBudget], and says it is behind rather
 // than answer from before a write this node has already been told landed. A
+// node answering ANOTHER node says so while that node is still listening:
+// every wait it makes before it answers — this one, a read's barrier and the
+// position it established, a write's own record — ends code.ReplyMargin short
+// of the asker's deadline ([statelog.WithReplyMargin]), because a `behind`
+// sent after the asker stopped waiting is heard as a node that is gone. A
 // data node's own copy is held to its floors like any other because its seats
 // may have written through another data node while its copy was out of
 // service. Floors on another DOMAIN's log are never waited for, though the
-// estate carries every domain's log: no operation reads another domain's
-// rows, so that applier's lag is not one the operation should wait out
-// ([ready]).
+// estate carries every domain's log: no operation reads another domain's rows
+// AT A POSITION — the reads that cross into one, a search's semantic half and
+// a page's backlinks, are of indexes no log position describes — so that
+// applier's lag is not one the operation should wait out ([ready]).
 //
 // The tracker's and the knowledge base's searches carry no floor at all: they
 // read an index each node's own walk maintains behind its applier, which no log
-// position describes. CHAT'S SEARCH DOES, on the chat log, because the rooms it
-// may search are read from membership rows a seat's own join may just have
-// written — through whichever data node took it — and a search that missed
-// them would answer "nobody said that" about a room the seat is in. Its index
+// position describes; they still name the domain whose rows that index is over,
+// so a node whose copy of it is out of service runs none of them. CHAT'S SEARCH
+// DOES, on the chat log, because the rooms it may search are read from
+// membership rows a seat's own join may just have written — through whichever
+// data node took it — and a search that missed them would answer "nobody said that" about a room the seat is in. Its index
 // carries none, as the others' do not, and says on its answer when it has not
 // caught up ([ChatSearchAnswer.Building]).
 //
@@ -160,17 +469,17 @@
 // VIEWER IT NAMES, whose private rooms and direct conversations are what that
 // seat may see — so an unsigned read was any private room read as anybody. So
 // every request and every reply is framed and signed under the fleet keyring,
-// by the state log's own [statelog.Signer] under domains of the estate's own,
-// and read with its verdicts ([Envelopes]) — the rule internal/signedask keeps
-// for every channel a node carries a request out on, this one among them: a
-// request that does not verify is never dispatched, the actor a write runs as
-// and the viewer a read answers for are the ones inside the signed body, and a
-// key a node does not hold is "did not run" — the router moves on to a node
-// that holds it. A request carries an id and a deadline under the signature,
-// so a data node refuses a replay of one; a reply names the request it
-// answers, so an asker believes no answer to somebody else's question. A reply
-// it cannot believe is no answer — never "did not run" — so a once-write met
-// with one is [ErrOutcomeUnknown].
+// by the frame every state-log record carries ([recordseal.Signer]) under
+// domains of the estate's own, and read with its verdicts ([Envelopes]) — the
+// rule internal/signedask keeps for every channel a node carries a request out
+// on, this one among them: a request that does not verify is never dispatched,
+// the actor a write runs as and the viewer a read answers for are the ones
+// inside the signed body, and a key a node does not hold is "did not run" —
+// the router moves on to a node that holds it. A request carries an id and a
+// deadline under the signature, so a data node refuses a replay of one; a reply
+// names the request it answers, so an asker believes no answer to somebody
+// else's question. A reply it cannot believe is no answer — never "did not
+// run" — so a once-write met with one is [ErrOutcomeUnknown].
 //
 // # What does not cross the wire, and who supplies it
 //
@@ -179,7 +488,9 @@
 // org a knowledge search is scoped by — is supplied by the SERVING node from
 // its own current epoch ([ServerSeams]). Every node reads the same activation,
 // so the two differ only for the instant an apply is landing, which is the same
-// window every surface already has. The gate in wire_test.go walks every type
+// window every surface already has — and on a node confirmed behind the
+// company's configuration, which is asked last for that reason (above). The
+// gate in wire_test.go walks every type
 // an operation carries and fails on any field that would silently not arrive,
 // unless it is named, with its reason, in [carriedByServer].
 //
@@ -191,6 +502,21 @@
 // a binding crosses NARROWED ([Binding]): the row's credential verifiers and
 // grants never reach the broker, since the asker decides nothing on either.
 //
+// A MACHINE TOKEN'S ROW CROSSES NARROWED TOO, and narrowed differently
+// ([TokenFacts]), because there the asker decides on nearly all of it: the
+// grants the mint carried and the owner's current ones are what the token acts
+// with, and the expiry, the revocation, the epochs and the applied position
+// are what end it or make its absence three-valued — so those cross whole.
+// The VERIFIER is the one value withheld, and the presented SECRET never
+// leaves the asker: what is asked is the token's id, a nonce drawn for that
+// question alone and the keyring entry to answer under, and what crosses in
+// the verifier's place is a MAC over it and the nonce under a key both nodes
+// derive from the fleet keyring. The asker MACs the verifier the presented
+// token implies the same way and takes it as the row's verifier only where the
+// two agree, so credential.CheckToken decides there exactly what it decides on
+// a data node, over a row neither the broker nor anybody on it can test a
+// guess against — and an answer MAC'd for one question verifies under no
+// other's nonce.
 // CHAT'S VIEWER IS THE MIDDLE CASE. The asking node decides who the viewer is —
 // the seat its caller acts as — and whether that caller may use chat at all;
 // the SERVING node decides which rooms that viewer may read, because membership

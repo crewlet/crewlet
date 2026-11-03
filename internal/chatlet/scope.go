@@ -261,12 +261,13 @@ func subjectPath(s Subject) string {
 		return ScopeTerm{Kind: TermChannel, ID: s.ID}.Path()
 	case KindChannelName:
 		return ScopeTerm{Kind: TermName, ID: s.ID}.Path()
-	case KindBarrier:
-		// THE FRAMEWORK'S OWN SCOPE, so a barrier never intersects any
-		// read's closure. A barrier writes no row anywhere, so a scope
-		// that intersected anything would make every linearizable read
-		// wait behind every other.
-		return statelog.BarrierScope
+	case KindBarrier, KindTrimmed:
+		// THE FRAMEWORK'S OWN SCOPE, so neither framework record ever
+		// intersects any read's closure. Neither writes a row of this
+		// domain's anywhere, so a scope that intersected anything would
+		// make every linearizable read wait behind a record that changed
+		// none of its rows.
+		return statelog.FrameworkScope
 	default:
 		// A GATE IS ABOUT THE WHOLE DOMAIN — it licenses or drops
 		// records on every subject — and so is a generation. A KIND

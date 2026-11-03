@@ -7,24 +7,32 @@
  * back — and coming back is a stronger signal than any cadence can be.
  */
 
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
+import { eventually, settled } from "~/test/settle.ts";
 
 vi.mock("./store-hooks.ts", () => ({
   useClient: vi.fn(),
   useConnection: vi.fn(),
 }));
 
-/** visible drives the tab between hidden and visible, as a browser does. */
+/**
+ * visible drives the tab between hidden and visible, as a browser does —
+ * INSIDE `act`, so everything the event causes (a refetch, the render it
+ * schedules, the effect that asks) has happened when it returns, and a case
+ * that asserts nothing was asked asserts it of a hook that has finished.
+ */
 function visible(is: boolean) {
   Object.defineProperty(document, "visibilityState", {
     configurable: true,
     get: () => (is ? "visible" : "hidden"),
   });
-  document.dispatchEvent(new Event("visibilitychange"));
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
 }
 
 /** asked counts the queries one render made, and answers them all. */
@@ -53,11 +61,11 @@ afterEach(() => {
 test("a query that watches focus re-asks when the tab comes back", async () => {
   const query = asked();
   renderHook(() => useQuery("integrations", undefined, { refetchOnFocus: true }));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(1));
 
   visible(false);
   visible(true);
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(2));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(2));
 });
 
 // AND A HIDDEN TAB DOES NOT.
@@ -67,10 +75,10 @@ test("a query that watches focus re-asks when the tab comes back", async () => {
 test("going away does not ask", async () => {
   const query = asked();
   renderHook(() => useQuery("integrations", undefined, { refetchOnFocus: true }));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(1));
 
   visible(false);
-  await new Promise((r) => setTimeout(r, 10));
+  await settled(() => query.mock.calls.length);
   expect(query).toHaveBeenCalledTimes(1);
 });
 
@@ -81,11 +89,11 @@ test("going away does not ask", async () => {
 test("focus is opt-in", async () => {
   const query = asked();
   renderHook(() => useQuery("integrations"));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(1));
 
   visible(false);
   visible(true);
-  await new Promise((r) => setTimeout(r, 10));
+  await settled(() => query.mock.calls.length);
   expect(query).toHaveBeenCalledTimes(1);
 });
 
@@ -100,7 +108,7 @@ test("a question that takes a floor names this tab's, and a caller's own freshne
   expect(withFloor("page", JSON.stringify({ id: "p1" }))).toEqual({
     id: "p1",
     read_level: "session",
-    min_position: "CREWLET_PAGES_LOG@1:77",
+    min_position: ["CREWLET_PAGES_LOG@1:77"],
   });
   // A question with no floor to take is sent as it was asked.
   expect(withFloor("viewer", "{}")).toEqual({});
@@ -117,14 +125,13 @@ test("a write from this tab asks the questions it moved again, and no others", a
   const query = asked();
   renderHook(() => useQuery("work_items", {}));
   renderHook(() => useQuery("pages", {}));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(2));
-  session.written("tracker", "CREWLET_TRACKER_LOG@1:5", []);
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(3));
-  await new Promise((r) => setTimeout(r, 10));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(2));
+  act(() => session.written("tracker", "CREWLET_TRACKER_LOG@1:5", []));
+  await settled(() => query.mock.calls.length);
   expect(query).toHaveBeenCalledTimes(3);
   expect(query.mock.calls[2]).toEqual([
     "work_items",
-    { read_level: "session", min_position: "CREWLET_TRACKER_LOG@1:5" },
+    { read_level: "session", min_position: ["CREWLET_TRACKER_LOG@1:5"] },
   ]);
 });
 
@@ -162,6 +169,6 @@ test("a question answered null is not loading", async () => {
   vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   const { result } = renderHook(() => useQuery("config"));
   expect(result.current.loading).toBe(true);
-  await vi.waitFor(() => expect(result.current.loading).toBe(false));
+  await eventually(() => expect(result.current.loading).toBe(false));
   expect(result.current.data).toBeNull();
 });

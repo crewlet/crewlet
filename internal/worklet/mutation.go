@@ -141,12 +141,16 @@ const (
 
 	// OpBarrier is the read index's append, which writes nothing anywhere.
 	OpBarrier OpKind = "barrier"
+
+	// OpTrimmed is the trim's record that removes the anchors below a
+	// floor (ADR-0080), which writes nothing of this domain's anywhere.
+	OpTrimmed OpKind = "trimmed"
 )
 
-// OpKinds are the nine, in the order they are documented.
+// OpKinds are the ten, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPatch, OpTombstone, OpRestore, OpPurge,
-	OpTurn, OpGeneration, OpEviction, OpBarrier,
+	OpTurn, OpGeneration, OpEviction, OpBarrier, OpTrimmed,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -482,12 +486,14 @@ func subjectPath(s Subject, container string) string {
 		return ScopeTerm{Kind: TermFamily, ID: string(KindCatalogue)}.Path()
 	case KindPerson:
 		return ScopeTerm{Kind: TermFamily, ID: string(KindPerson)}.Path()
-	case KindBarrier:
+	case KindBarrier, KindTrimmed:
 		// THE ONE-BYTE SENTINEL OF THE FRAMEWORK'S OWN SCOPE, so a
-		// barrier never intersects any read's closure. A barrier
-		// writes no row anywhere, so a scope that intersected anything
-		// would make every linearizable read wait behind every other.
-		return statelog.BarrierScope
+		// framework record never intersects any read's closure. Neither
+		// writes a row of this domain's anywhere, so a scope that
+		// intersected anything would make every read of it wait behind
+		// a record that changed none of its rows — for a barrier, every
+		// linearizable read behind every other.
+		return statelog.FrameworkScope
 	case KindGeneration, KindEviction:
 		// A GATE IS ABOUT THE WHOLE DOMAIN. It licenses or drops
 		// records on every subject, so anything narrower would be a
@@ -730,21 +736,22 @@ func (e RecordEnvelope) InstallsGate() bool {
 }
 
 // readByEveryBuild reports a record every build there will ever be must read:
-// a gate ([RecordEnvelope.InstallsGate]), the read index's barrier, and a
-// reanchor's generation.
+// a gate ([RecordEnvelope.InstallsGate]), the read index's barrier, the trim's
+// trimmed record, and a reanchor's generation.
 //
 // Each is pinned at a version every build reads for its own reason, and all
-// three reasons are what an older node does with a record it cannot read. A
+// four reasons are what an older node does with a record it cannot read. A
 // gate it cannot defer — a deferred gate would license every record above it,
 // with no inverse that repairs it — so it halts there and leaves service; a
 // barrier it retained is one more deferral row for every linearizable read; a
-// generation it retained is a transition it never makes. So none of them may
+// trimmed record it retained keeps every anchor it names; a generation it
+// retained is a transition it never makes. So none of them may
 // carry a versioned field, and [MutationRecord.Encode] refuses one that does —
 // a field such a record needs is a field that belongs somewhere else. The one
 // exception is a gate's own APPLY changing ([statelog.VersionedField.Gate]),
 // where halting an older node is the only answer that is not a divergence.
 func (e RecordEnvelope) readByEveryBuild() bool {
-	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpGeneration
+	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed || e.Op == OpGeneration
 }
 
 // MutationRecord is one committed mutation: the envelope plus everything a
@@ -1209,10 +1216,22 @@ type Snapshot struct {
 	ProjectLead     string `json:"project_lead,omitempty"`
 	RoutingUnitLead string `json:"routing_unit_lead,omitempty"`
 
-	// Unblocked names every dependent this change cleared, with its
-	// assignee. Stamped from the task's own dependents when it enters a
-	// finished group — a WAKE, not a safeguard: nothing was refused,
-	// somebody was told.
+	// Unblocked names the dependent a late relations commit tells is now
+	// workable, with its assignee. [Writer.TellUnblocked] — the unblocked
+	// repair — is the one writer that fills it, on the DEPENDENT's own
+	// subject, and its record names nobody else. A close fills nothing
+	// here; the repair is how the tasks it held up hear.
+	//
+	// NOBODY ELSE, because the notice takes its place in the precedence
+	// like any other reason ([Candidates]), and a record reaches one handle
+	// once — one notice row per record and recipient, one wake id per
+	// record and handle — with the row and the prompt naming the record's
+	// own task. On a record that also routed the assignee under an earlier
+	// reason, or one about another task, they would hear that reason, or
+	// about the wrong task, while the applier still stamped the dependent
+	// told, so the repair would never tell them again.
+	//
+	// A WAKE, not a safeguard: nothing was refused, somebody was told.
 	Unblocked []TaskParty `json:"unblocked,omitempty"`
 
 	// Dependents names every dependent this change added or removed, for
@@ -1599,6 +1618,47 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 			Op:      OpBarrier,
 			Scope:   ScopeSet{Subject: true},
 			Gen:     env.Gen,
+		},
+	}.Encode()
+}
+
+// EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
+// ADR-0080) as a record this domain's applier decodes.
+//
+// The framework owns WHEN one is appended, what it removes and the floor its
+// subject names; the domain owns what a record on its log looks like — the
+// barrier's split, met here.
+//
+// THE WRITER TRAVELS, unlike a barrier's: a trimmed record removes rows, so the
+// eviction gate must be able to drop an evicted node's. NO OP ID, asserted
+// rather than assumed — one becomes a message id and a ledger row nothing
+// resolves. And the floor is CHECKED here, at the write, rather than in
+// [Subject.Validate], which runs on the READ path too: a refusal there would
+// turn one malformed record into an applier that stops on every node, where
+// the framework's apply faults on it instead.
+func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.TrimmedKind || env.Subject.Kind != statelog.TrimmedKind {
+		return nil, fmt.Errorf("worklet: a %q envelope on %q is not a trimmed record",
+			env.Kind, env.Subject)
+	}
+	if env.OpID != "" {
+		return nil, fmt.Errorf("worklet: a trimmed record carries no op id and this " +
+			"one has one — an op id becomes a message id and a ledger row nothing " +
+			"resolves")
+	}
+	floor, err := statelog.TrimmedFloor(Domain{}.Stream().Name, env.Subject)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: %w", err)
+	}
+	return MutationRecord{
+		RecordEnvelope: RecordEnvelope{
+			// PINNED, for the barrier's reason: see [baseRecordVersion].
+			V:       baseRecordVersion,
+			Subject: TrimmedSubject(floor),
+			Op:      OpTrimmed,
+			Scope:   ScopeSet{Subject: true},
+			Gen:     env.Gen,
+			Writer:  env.Writer,
 		},
 	}.Encode()
 }

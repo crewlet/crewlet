@@ -117,8 +117,8 @@ func TestANodeHoldingNoDataReadsTheThreadThroughTheRouter(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "agent-1", Queue: started(), Placement: oneDataNode{},
-		Session: estate.NewSession(), Envelopes: envelopes,
+		Self: "agent-1", Queue: started(), Placement: oneDataNode{}, Git: noGitNodes{},
+		Session: estate.NewSession(), Timing: estate.Production(), Envelopes: envelopes,
 		Now: func() time.Time { return time.Unix(1_700_000_000, 0) },
 	})
 	if err != nil {

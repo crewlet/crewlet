@@ -55,6 +55,100 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 	}
 }
 
+// A TOOL THE SEAT IS WITHHELD IS ON NONE OF ITS SURFACES.
+//
+// The registry is the epoch's, so a tool only some seats may call — the health
+// tools, which a role's grant opens — is registered for every seat, and the
+// engine names what this seat's surfaces must leave out (Config.Withheld).
+// Every surface is built from the seat's snapshot, so a withheld tool is not
+// offered, not listed to discover and not reachable by activation on the
+// executor's, the reviewer's or the onboarding pass's (the last two built from
+// the seat's snapshot as it is), while every other tool stays.
+//
+// Mutation: build any of them from the registry whole and the withheld tool is
+// one activation away there.
+func TestAWithheldToolIsOnNoSurface(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	for _, name := range []string{"fleet_health", "code_status", "lookup_colleague"} {
+		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := New(Config{
+		Registry: reg,
+		Models:   &phase.Registry{},
+		Launcher: stubLauncher{},
+		Sessions: testHost(t),
+		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme"}, Role: &org.Role{Name: "Dev"}},
+		Withheld: []string{"code_status", "fleet_health"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, snapshot := range map[string]tools.Snapshot{
+		"the reviewer's and the onboarding pass's": r.seatSnapshot(),
+		"the executor's": r.executorUniverse(r.seatSnapshot()),
+	} {
+		for _, withheld := range []string{"fleet_health", "code_status"} {
+			if _, held := snapshot.Lookup(withheld); held {
+				t.Errorf("%s snapshot holds %s, one activation away", name, withheld)
+			}
+			if strings.Contains(snapshot.Discoverable(nil), withheld) {
+				t.Errorf("%s catalogue lists %s", name, withheld)
+			}
+		}
+		if _, held := snapshot.Lookup("lookup_colleague"); !held {
+			t.Errorf("%s snapshot lost lookup_colleague, which nothing withholds", name)
+		}
+	}
+	if got := executorActive(r.executorUniverse(r.seatSnapshot()), nil); slices.Contains(got, "fleet_health") {
+		t.Errorf("the executor is offered %v, the withheld tool among them", got)
+	}
+}
+
+// THE DISCOVERY PAIR REACHES A SURFACE PROVEN READ-ONLY, AS IT WAS BUILT.
+// The pair never passes through the registry: it carries only the hints
+// [DiscoveryTools] gives it, and only if the phase surface adds it as built.
+// Listing reads the phase's own universe and activating changes only which of
+// its tools the phase is offered, never anything done as the seat, so a
+// reader of the hints — a worker's guard, the phase's known reads — that met
+// the pair unannotated would take a read for a write it could not classify.
+// The executor holds no pair (every tool its seat holds is on its surface from
+// its launch), so the surface read here is the onboarding pass's, the phase
+// that discovers.
+//
+// Mutation: rewrap the pair in surfaceWith as a bare builtin entry, or drop
+// the hints from DiscoveryTools — both tools read unproven — red.
+func TestTheDiscoveryPairIsProvenReadOnlyOnTheSurface(t *testing.T) {
+	t.Parallel()
+	r, err := New(Config{
+		Registry: tools.NewRegistry(),
+		Models:   &phase.Registry{},
+		Launcher: stubLauncher{},
+		Sessions: testHost(t),
+		Seat: prompts.Seat{Org: &org.Organization{Name: "Acme"},
+			Role: &org.Role{Name: "Engineer"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	surface, err := r.surfaceWith(context.Background(), r.ownMeter(), phase.Onboarding, 0,
+		r.seatSnapshot(), nil, nil)
+	if err != nil {
+		t.Fatalf("surfaceWith: %v", err)
+	}
+	for _, name := range toolname.Discovery() {
+		if !slices.Contains(surface.Active(), name) {
+			t.Errorf("%s is not on the onboarding surface", name)
+			continue
+		}
+		if hints := surface.AnnotationsOf(name); !mcp.ReadOnlyProven(hints) {
+			t.Errorf("%s reaches the surface as %+v, not proven read-only", name, hints)
+		}
+	}
+}
+
 // stubTool is a name on the surface and nothing else — what is under test is
 // which names survive the filter, not what any of them do.
 type stubTool string

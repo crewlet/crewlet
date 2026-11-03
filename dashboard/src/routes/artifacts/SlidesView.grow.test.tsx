@@ -5,6 +5,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -61,6 +62,7 @@ afterEach(() => {
 const mount = () =>
   render(
     <Router>
+      <AppAnnouncer />
       <LayerHost>
         <ToastProvider>
           <WithKindBar>

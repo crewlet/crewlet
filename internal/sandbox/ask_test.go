@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
@@ -92,7 +93,7 @@ func TestAnAskIsHeldToItsBoundsAndNoTighter(t *testing.T) {
 	atBounds := Ask{
 		Question: question, Context: strings.Repeat("c", MaxAskContextBytes),
 		Decision: choosing(question), To: strings.Repeat("t", MaxAskToBytes),
-		Branch: "wip/" + strings.Repeat("b", MaxBranchBytes-len("wip/")),
+		Branch: "wip/" + strings.Repeat("b", gitref.MaxBranchBytes-len("wip/")),
 	}
 	if err := atBounds.Validate(); err != nil {
 		t.Fatalf("an ask at every bound was refused: %v", err)
@@ -117,6 +118,13 @@ func TestAnAskIsHeldToItsBoundsAndNoTighter(t *testing.T) {
 		if err := (Ask{Question: "which?", To: AskToRequester, Branch: branch}).Validate(); err == nil {
 			t.Errorf("branch %q, which git refuses, was accepted", branch)
 		}
+	}
+	// AND ONE THAT IS NOT UTF-8, which git takes and the engine's grammar
+	// does not ([gitref.ValidBranch]): the row it rides is JSON, whose
+	// encoder writes U+FFFD in place of the byte — another branch's name,
+	// one nobody pushed.
+	if err := (Ask{Question: "which?", To: AskToRequester, Branch: "wip/\xff"}).Validate(); err == nil {
+		t.Error("a branch that is not UTF-8 was accepted")
 	}
 }
 

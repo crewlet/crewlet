@@ -68,6 +68,37 @@ const (
 	// SourceBrandVoice is the adopted brand's voice: how the company
 	// writes, read by an agent before it writes an artifact.
 	SourceBrandVoice Source = "brand_voice"
+
+	// SourceRepoFile is a file's lines in one of the company's git
+	// repositories, read at a commit — a blamed line's among them — and
+	// SourceRepoPatch one file's patch between two commits. Neither names a
+	// writer: a read by object id knows the bytes and not whose they are,
+	// and a repository routinely holds commits its importers and
+	// contributors authored outside the company, so both are read at
+	// [TrustExternal].
+	SourceRepoFile  Source = "repo_file"
+	SourceRepoPatch Source = "repo_patch"
+
+	// SourceRepoCommit is a commit's message in one of those repositories —
+	// the subject a history or a blame names each commit by — read at
+	// [TrustExternal] and naming no writer for SourceRepoFile's reason: the
+	// author a commit states is text its pusher wrote, no principal the
+	// read can name, and an import carries commits authored anywhere.
+	SourceRepoCommit Source = "repo_commit"
+
+	// SourceChangeDescription is a change's description — what its owner,
+	// or whoever edited it since, says it does — SourceChangeReview what a
+	// review of it says, its summary and each finding's body and
+	// suggestion, and SourceChangeComment a comment on it. Unlike a
+	// repository's own text, each NAMES ITS WRITER: a change's rows record
+	// the principal that opened it, reviewed it and commented on it — a seat
+	// of the company, or a person by the human seat they hold — so each is
+	// read at the trust that writer earns from the reader ([TrustFor]), and
+	// a description a later edit may have rewritten by somebody its row
+	// does not name at [TrustForPartial].
+	SourceChangeDescription Source = "change_description"
+	SourceChangeReview      Source = "change_review"
+	SourceChangeComment     Source = "change_comment"
 	// SourceAPIAnswer is an API answer the Dashboard Assistant read as the
 	// person it acts for: a route's own JSON, carrying whatever text its
 	// records hold, which colleagues and vendors wrote.
@@ -118,6 +149,13 @@ const (
 	// reached nobody through either, and a reader auditing a transcript has
 	// to tell it from both. Every door labels it by one rule ([Executor]).
 	SourceExecutor Source = "executor"
+	// SourceCheckLog is what a check of a commit said — its summary, the
+	// tail of its output, the failures its reports named and pages of its
+	// kept log: text the commit's code and its tests printed, or a person's
+	// CI sent, which names nobody a reader could weigh as a colleague, so it
+	// is read at [TrustExternal] naming no writer, as a repository's own
+	// text is.
+	SourceCheckLog Source = "check_log"
 
 	// SourceTurnEnding is how an earlier turn of a conversation ended, as the
 	// engine recorded it on the executor log and tells the conversation's
@@ -135,6 +173,8 @@ var Sources = []Source{
 	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
 	SourceArtifactRow, SourceChangeNote, SourceAlert, SourceNotification,
 	SourceA2AMessage, SourceExecutor, SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
+	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
+	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
 	SourceTurnEnding,
 }
 
@@ -804,6 +844,25 @@ type Label struct {
 	Source  Source   `json:"source"`
 	Trust   Trust    `json:"trust"`
 	Authors []Author `json:"authors,omitempty"`
+}
+
+// Repository is the label of text read out of one of the company's git
+// repositories (src is [SourceRepoFile], [SourceRepoPatch] or
+// [SourceRepoCommit]), or printed by a check of one of its commits
+// ([SourceCheckLog]: what the commit's code and tests wrote, or a person's CI
+// sent): THE ONE RULE for a repository's bytes and what running them printed,
+// which every door they reach a model through takes.
+//
+// EXTERNAL, naming nobody, and never [TrustForHosted], although the engine
+// hosts the repository: the hosted rule vouches for whoever wrote a record
+// because every write to such a surface is authenticated as somebody in the
+// company, and a repository's bytes are not such a record. A read by object id
+// knows the bytes and not whose they are, the author a commit states is text
+// its pusher wrote, and an import or a contributor's branch carries commits
+// authored anywhere. Read by the hosted rule, a file nobody named would be a
+// colleague's.
+func Repository(src Source) Label {
+	return Label{Source: src, Trust: TrustExternal}
 }
 
 // Executor is the label of what a seat's executor puts to a person (its

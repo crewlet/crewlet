@@ -25,6 +25,7 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
@@ -173,9 +174,7 @@ function mountBoard({
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 /** The card for a key, as the anchor the reader focuses. */

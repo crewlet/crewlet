@@ -42,8 +42,18 @@ import (
 //
 // DEFINED HERE, by the caller, and one method wide. The identity reader
 // answers it in one snapshot; AN ERROR IS THE UNKNOWN ARM, always.
+//
+// IT IS HANDED THE PRESENTED TOKEN, not its id, because the rows may be
+// another node's: a node holding no identity rows asks a data node for them,
+// and what crosses back carries no verifier — only a MAC over it, which the
+// presented secret is checked against where it was presented (the engine,
+// through internal/estate's TokenFacts), so the row [credential.CheckToken]
+// reads holds the verifier only where it is the presented token's. A surface
+// that holds the token's NAME and never its secret — a view ticket's
+// ([Lineages]) — hands it by its id alone, and is answered with no verifier,
+// which [credential.CheckHeld] never reads.
 type TokenDirectory interface {
-	MachineToken(ctx context.Context, id string) (credential.TokenRow, error)
+	MachineToken(ctx context.Context, presented credential.Token) (credential.TokenRow, error)
 }
 
 // Tokens is the guard's machine-token arm.
@@ -138,7 +148,8 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 
 	ctx := r.Context()
 	now := g.machine.now()
-	row, err := g.machine.directory.MachineToken(ctx, presented.ID)
+	// THE TOKEN WHOLE, its secret included — see [TokenDirectory].
+	row, err := g.machine.directory.MachineToken(ctx, presented)
 	if err != nil {
 		log.Log(ctx, UnreadLevel(ctx), "api_token_unavailable",
 			"credential", presented.ID, "error", err)

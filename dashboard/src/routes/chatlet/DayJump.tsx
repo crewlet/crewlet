@@ -25,6 +25,7 @@ import {
 } from "@crewlethq/ui";
 import { CalendarGlyph, ChevronLeftGlyph, ChevronRightGlyph } from "@crewlethq/icons/glyphs";
 import { civilAt, civilKey } from "~/lib/format.ts";
+import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 
 import { daysBefore, daysBetween } from "./days.ts";
 
@@ -127,11 +128,7 @@ export function DayJump({
   );
 }
 
-const MONTH_TITLE = new Intl.DateTimeFormat("en-US", {
-  month: "long",
-  year: "numeric",
-  timeZone: "UTC",
-});
+const MONTH_TITLE: DateShape = Object.freeze({ month: "long", year: "numeric" });
 
 /** A calendar for one day: picking it jumps there. Days after today are not offered. */
 function JumpToDate({
@@ -178,7 +175,9 @@ function JumpToDate({
             onClick={() => turn(-1)}
           />
           <span className="chat-jump-date-month" aria-live="polite">
-            {MONTH_TITLE.format(new Date(Date.UTC(view.year, view.month, 1)))}
+            {dateTimeFormat("en-US", "UTC", MONTH_TITLE).format(
+              new Date(Date.UTC(view.year, view.month, 1)),
+            )}
           </span>
           <IconButton
             label="Next month"

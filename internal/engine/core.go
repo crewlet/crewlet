@@ -79,9 +79,14 @@ import (
 // chart and this node's own Tier A tokens are applied to the answer here, on
 // the asking side, as they are to its own rows on a data node. Its party
 // registry reads the directory on the periodic net alone ([DirectoryRefresh]),
-// since there is no applier here to signal it. And it needs no more: the
-// sign-in surface and the request guard run only where the `ingress` role does,
-// which Tier A requires `data` beside, so every session this deployment
+// since there is no applier here to signal it. A request presenting a token
+// puts it two more questions — the row a machine token is checked against,
+// and the seat a Tier A token's login binds — and the engine answers both on
+// such a node through the same router ([Engine.MachineToken],
+// [Engine.BoundSeat]), the verdict formed here by the tables a data node forms
+// it with, and neither a verifier nor a secret crossing for it. The sign-in
+// surface needs more than either and is served only where the `ingress` role
+// is, which Tier A requires `data` beside, so every session this deployment
 // validates is validated against rows the validating node holds — 503 and
 // never 401 on a node that is behind, and no cache in front of either.
 
@@ -398,8 +403,8 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 			"stream failed to come up")
 	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB:        sl.estate().Reader(),
-		Committed: running.runner.Committed,
+		DB:      sl.estate().Reader(),
+		Reached: running.runner.Reached,
 		// AND THE LAG, which is what makes the session table's
 		// `stalled` row reachable at all: a node past the stall grace
 		// answers 503 to every arm, and with no lag to read it
@@ -409,7 +414,7 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// has not applied yet takes: a sign-in answers before its
 		// session's start applies, and the request guard waits for the
 		// position the bearer states rather than refusing it.
-		Await: running.runner.WaitCommitted,
+		Await: running.runner.WaitReached,
 	})
 	if err != nil {
 		return fmt.Errorf("engine: iam reader: %w", err)
@@ -601,7 +606,7 @@ func (e *Engine) NodeGate() *NodeGate {
 // to do. Two halves, asked in this order:
 //
 //   - THIS NODE'S OWN LOGS, on a data node: every domain whose health gates
-//     admission ([statelog.Domain.ReadinessInput]) established STRICTLY,
+//     admission ([statelog.Domain.GatesSeatAdmission]) established STRICTLY,
 //     because this is admission rather than a read — a node merely inside the
 //     trim floor still serves rows that are behind, and a seat attaching to
 //     one acts on them. The core's logs and not the native half's, because the
@@ -612,14 +617,16 @@ func (e *Engine) NodeGate() *NodeGate {
 //     estate's router ([estate.Router.Serves]): this node's own where its copy
 //     serves, and otherwise the first data node that answers, which admits
 //     only once its own copy is established — the same gate, one hop away. A
-//     node whose own copy is WRONG serves nothing ([localEstate.For]), so it
-//     is answered on a sound data node's word, like a node holding no data;
-//     every half the company runs natively — the tracker, the knowledge base
-//     and chat — must be served there, since a seat's tools reach each of
-//     them, and a company whose only native half is chat gates on chat alone
-//     rather than admitting every seat unconditionally. And the router's view
-//     must have listed the fleet at least once: a node that must ask a data
-//     node is refused by the router itself when its view cannot name one.
+//     node whose copy of a domain that gates seats is WRONG serves no seat
+//     copy ([estate.SeatCopy], [localEstate.For]), so it is answered on a
+//     sound data node's word, like a node holding no data, while a wrong copy
+//     of any other domain withholds nothing (ADR-0079); every half the company
+//     runs natively — the tracker, the knowledge base and chat — must be
+//     served there, since a seat's tools reach each of them, and a company
+//     whose only native half is chat gates on chat alone rather than admitting
+//     every seat unconditionally. And the router's view must have listed the
+//     fleet at least once: a node that must ask a data node is refused by the
+//     router itself when its view cannot name one.
 //
 // A node running no native half — no company yet, or one on Jira, Confluence
 // and a vendor's chat — has nothing for the second half to ask, and an engine
@@ -637,8 +644,8 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 			return false
 		}
 	}
-	runs, ok := e.nativeHalves()
-	if !ok || !runs.any() || e.router == nil {
+	run := e.nativeHalves()
+	if !run.any() || e.router == nil {
 		return true
 	}
 	if e.dataView != nil && e.dataView.ListedAt().IsZero() {
@@ -647,8 +654,8 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 		return false
 	}
 	served, err := e.router.Serves(ctx)
-	if err != nil || (runs.tracker && !served.Tracker) || (runs.wiki && !served.Pages) ||
-		(runs.chat && !served.Chat) {
+	if err != nil || (run.tracker && !served.Tracker) || (run.wiki && !served.Pages) ||
+		(run.chat && !served.Chat) {
 		detail := "no copy of the estate admits a seat yet"
 		if err != nil {
 			detail = err.Error()
@@ -671,13 +678,14 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 // checkpoint on another stream, a frozen checkpoint, a record held past the
 // deferral grace — because a seat left running on one answered its own tools
 // out of a copy the fleet had abandoned. The router makes that the copy's
-// problem and not the seats': a wrong copy goes out of service
-// ([localEstate.For]), so every call this node's seats make is answered by a
-// data node whose copy is sound, exactly as a node holding no data is
-// answered. Moving the seats instead cost each of them its processes and its
-// memory to be served by the very same peers — and on a single node it stopped
-// the company, which is still what happens: an estate no data node serves
-// refuses its calls, saying so.
+// problem and not the seats': a domain's wrong copy goes out of service for
+// that domain's operations ([localEstate.For], ADR-0079), so every call this
+// node's seats make on that domain is answered by a data node whose copy is
+// sound, exactly as a node holding no data is answered. Moving the seats
+// instead cost each of them its processes and its memory to be served by the
+// very same peers — and on a single node it stopped the company, which is
+// still what happens: an estate no data node serves refuses its calls, saying
+// so.
 //
 // A LAG WAS NEVER ONE OF THEM, and it is not now: being behind is the admission
 // gate's business ([Engine.StateLogHydrated]), and when this read "has this
@@ -689,9 +697,12 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 //
 // A node that answers from its OWN copy needs nothing else to route its seats'
 // calls — the router asks this node first and asks nobody where it answers —
-// so every data node whose copy is sound keeps its seats whatever its view of
-// the fleet says. Any other node routes by the watched presence view, and a
-// view that answers unknown ([coord.LeaseView.Leases]) and last listed longer
+// so every data node whose seat copy is sound ([estate.SeatCopy]) keeps its
+// seats whatever its view of the fleet says. Only a domain that gates seats
+// makes the node's seats depend on its view: a wrong copy of any other domain
+// costs that domain's calls a peer, never the seats. Any other node routes by
+// the watched presence view, and a view that answers unknown
+// ([coord.LeaseView.Leases]) and last listed longer
 // ago than [statelog.FloorCacheStale] — the age past which nothing may decide
 // from a cached coordination fact, so no node sheds sooner than any other
 // decider stops trusting the same view — is a node that can no longer say
@@ -712,8 +723,7 @@ func (e *Engine) SeatsServiceable(ctx context.Context) (bool, string) {
 
 // serviceable is [Engine.SeatsServiceable] at now.
 func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) {
-	runs, ok := e.nativeHalves()
-	if !ok || !runs.any() {
+	if run := e.nativeHalves(); !run.any() {
 		return true, ""
 	}
 	if e.local != nil && e.local.servesUnasked(ctx) {
@@ -775,16 +785,21 @@ func (e *Engine) StateLogStatus(ctx context.Context) []ReplicationStatus {
 	return c.log.Status(ctx)
 }
 
-// WaitCommitted blocks until this node's applier for the log a position names
-// has consumed through it. It returns at once where this node has nothing to
-// wait on: a zero position, a node that applies no log (one holding no data,
-// whose reads are a data node's), or a log this node does not run.
+// WaitReached blocks until this node's applier for the log a position names has
+// reached it: committed every record through it that writes a row, and decoded
+// every barrier ([statelog.Runner.WaitReached]). It returns at once where this
+// node has nothing to wait on: a zero position, a node that applies no log (one
+// holding no data, whose reads are a data node's), or a log this node does not
+// run.
 //
 // THE READ-YOUR-WRITES PRIMITIVE ON THE LOG, and it takes a POSITION rather
 // than a revision because that is what a write answers with: a bucket write
 // returns a revision on one family, and a log write returns a place on a
 // stream that only compares against the same stream and the same generation.
-func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error {
+// A read answers with one too — the position its rows are current through,
+// which may be a barrier — and a caller that carries it waits for no barrier's
+// commit.
+func (e *Engine) WaitReached(ctx context.Context, at statelog.Position) error {
 	c := e.core.Load()
 	if c == nil || c.log == nil || at.Seq == 0 {
 		return nil
@@ -797,7 +812,7 @@ func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error 
 	if running == nil {
 		return nil
 	}
-	return running.runner.WaitCommitted(ctx, at)
+	return running.runner.WaitReached(ctx, at)
 }
 
 // stateLogOf is the core runtime's state log, or [errNoCoreRuntime].
@@ -817,9 +832,10 @@ func (e *Engine) stateLogOf() (*stateLog, error) {
 // ONE ANSWER FOR BOTH KINDS OF NODE, because the callers are the same tools:
 // whose record a login names ([Engine.HolderRecord]) is asked by a seat's
 // tools on whichever node runs the seat, and a data-less seats node runs
-// seats. What the caller then applies — the chart, this node's own Tier A
-// tokens, how far the answering rows could vouch — is the caller's, on this
-// node, whichever rows answered.
+// seats; and the seat a Tier A token's login binds ([Engine.BoundSeat]) is
+// asked by the request guard on whichever node it runs. What the caller then
+// applies — the chart, this node's own Tier A tokens, how far the answering
+// rows could vouch — is the caller's, on this node, whichever rows answered.
 func (e *Engine) identityDirectory() (bindingDirectory, bool) {
 	if c := e.core.Load(); c != nil && c.iamReader != nil {
 		return c.iamReader, true

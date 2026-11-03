@@ -61,7 +61,10 @@ all at an external cluster with `stream.type: nats` and `stream.url` — one
 whose servers all set `max_payload: 8MB`, since an event or a node's answer to
 another may be that large (a company's files cross in messages of 128 KiB,
 which any server carries); a
-server at nats-server's 1 MiB default is refused at connect, by name. It is
+server at nats-server's 1 MiB default is refused at connect, by name, and so
+is one that authenticates nobody, since every node must present a credential
+it checks ([An external NATS
+server](deployment.md#an-external-nats-server)). It is
 the same client code either way; embedded versus external is a connection
 choice, not a second backend — and it really is either/or: `stream.cluster`
 configures the embedded server's own membership, so writing one against
@@ -157,7 +160,13 @@ whose seat has moved. A `container` or
 box under the runtime's name for the engine host, which on Linux needs the
 API to listen beyond loopback.
 
-**One keyring and one `api.external_url` on every node that serves the API.**
+**One keyring on every node.** Every node holds the same `secrets.keys`: its
+records are signed under it, the company document it fetches is sealed under
+it, and an embedded fleet's broker admits a route or a leaf link only on a key
+derived from it — a node on another keyring is refused by every member it dials
+([The broker: members and leaves](#the-broker-members-and-leaves)).
+
+**And one `api.external_url` on every node that serves the API.**
 A browser behind a load balancer signs in on whichever node it reaches and
 presents that cookie to every other. Each node verifies it under the fleet
 keyring and resolves it against its own copy of the identity directory — a
@@ -260,6 +269,16 @@ both ways out: a data node on a leaf, a broker member that holds no data, and
 whole estate as a member of the broker, and a node without data reaches the
 estate through one.
 
+**The broker admits only the fleet's own nodes.** A member's route port and
+leaf listener admit only a route or a leaf link presenting a key derived from
+`secrets.keys` — every key of the node's keyring accepted, the active one
+presented — so a node on another keyring is refused, counted in
+`crewlet.broker.peer.refusals` and named by key in the members'
+`broker_peer_refused` lines; a leaf a member turns away fails its boot naming
+the key it presented. The keyring's rotation runbook moves the broker with no
+step of its own. Nothing is encrypted: keep the fleet's ports on a private
+network ([The fleet's broker admits only its own nodes](deployment.md#the-fleets-broker-admits-only-its-own-nodes)).
+
 **A capacity seal counts every broker.** Changing a log's byte ceiling
 restarts the fleet into a maintenance mode, and the seal that proves no queued
 request survived is established from every data node and every broker member
@@ -321,28 +340,29 @@ offers the same removal, by node id or by peer id.
 
 ## Node roles
 
-Every process declares what it is willing to do. The default is all four
-— that is the single-node deployment, and no existing config changes.
+Every process declares what it is willing to do. The default is all five
+— that is the single-node deployment.
 
 ```yaml
 # Tier A, per node
 node:
   id: "${CREWLET_NODE_ID}"
-  roles: [data, ingress, seats, workers]   # the default; omit the key
+  roles: [data, git, ingress, seats, workers]   # the default; omit the key
 ```
 
 | Role | What it does |
 |---|---|
-| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, chat, the vectors, the identity directory, the usage days, the artifacts, their datastores and Ask Crewlet's conversations) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
+| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, chat, the vectors, the identity directory, the usage days, the artifacts, their datastores, Ask Crewlet's conversations, the seats' executor sessions and the code host's repositories) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
+| `git` | Serves the company's git repositories, where the company sets [`code.native`](../concepts/code-host.md): a disposable [cache](../concepts/code-host.md#the-cache-on-a-git-node) of them on this node's disk, sized by its Tier A [`git` block](../concepts/configuration.md#git), and git itself run for their clones, fetches and pushes. Needs `ingress`, whose listener its routes are served on — and so, in this release, `data` too. Does nothing for a company that hosts no code |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints, and the tool bridge (`/mcp/{token}`) every seat's executor reaches its tools through from its box, which relays each call to the node holding the run's seat — served where the node is given `CREWLET_MCP_BRIDGE_URL`, or, for its own `direct` boxes alone, where it runs `seats` too (see [What a fleet needs](#what-a-fleet-needs)). A node without it serves the network only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Answers its own seats' executor runs' tool calls — relayed to it over the broker by whichever `ingress` node a box's call reached, or, for a `direct` box, taken on its own listener on loopback, which a node without `ingress` serves on `api.port` to its own host alone — because a bridged session lives in the process holding the seat |
-| `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 Roles decide what a node serves and which duties it holds, and of them only
-`data` decides **which state logs it applies**: a data node applies all ten —
-the tracker, the vectors, the knowledge base, the identity directory, the
+`data` decides **which state logs it applies**: a data node applies all eleven
+— the tracker, the vectors, the knowledge base, the identity directory, the
 usage history, the artifacts, their datastores, Ask Crewlet's
-conversations, chat and the seats' executor sessions — whatever its other
+conversations, chat, the seats' executor sessions and the code host — whatever its other
 roles and whether or not a
 company has been published yet, and a node without `data` applies none. So
 every data node holds a copy of your people, the verifiers of their
@@ -361,6 +381,24 @@ runs judged gone. Nothing raises. So the engine checks the
 shape against live node presence and logs `fleet_role_unmanned` when a
 role has nobody doing it, and `fleet_role_manned` when it comes back.
 
+`git` is the one role a company may not need: a company that does not set
+`code.native` hosts nothing for it to serve, so it is reported unmanned only
+where the company hosts code, and a role that stops being needed while nobody
+held it — code turned off — is logged once as `fleet_role_unneeded`, never as
+a git node coming back.
+
+**Which nodes to give `git`.** Every ingress node a load balancer sends `/git/`
+to. A node that **lists** its roles serves git only if the list names it — a
+fleet that wrote `[data, ingress, …]` before it hosted code serves none until
+it does — while a node that declares no roles has every role, so a fleet that
+never wrote `node.roles` gives every node a cache, and each one syncs each
+repository it is asked for. That is correct, and costs a cold sync of every
+repository on every node; route `/git/<name>` by repository (a balancer hashing
+the path to a node, with the next one in line when it is down) to keep each
+repository warm on one or two nodes instead — see
+[Deployment](deployment.md#the-code-host) and
+[Scaling Out](../concepts/scaling.md#git-nodes).
+
 A node that does not run seats is also excluded from the denominator its
 peers divide seats by. Counting an ingress-only node would shrink every
 other node's share and strand the difference.
@@ -378,9 +416,10 @@ What it can run is `seats` alone. `ingress` and `workers` read and write a
 node's own copy of the estate directly — the API's retention report, capacity,
 reanchor, eviction and backup surfaces, the scheduler, the trim — so Tier A
 refuses either without `data`, naming the field and why. (The API's tracker,
-knowledge-base and chat routes and the operator's MCP do not: they go through the same router a seat's
-tools do, so a data node whose copy is out of service answers its operator from
-a peer's copy, as it answers its seats.) Its seats use exactly the tools a data
+knowledge-base and chat routes and the operator's MCP do not: they go through
+the same router a seat's tools do, so a data node whose copy of the tracker,
+the knowledge base or chat is out of service answers its operator from a
+peer's copy, as it answers its seats.) Its seats use exactly the tools a data
 node's seats do, and each of those tools asks a data node over the broker:
 
 - **Reads and writes** go to a data node — any data node, since every one
@@ -425,8 +464,9 @@ node's seats do, and each of those tools asks a data node over the broker:
   queues nothing, so a stateless leaf is not asked
   ([who has to acknowledge](retention.md#who-has-to-acknowledge)).
 
-Seat admission on a stateless node asks a data node whether its copy is level
-with its logs, so a stateless node claims no seat until one is. While no data
+Seat admission on a stateless node asks a data node whether its copies of the
+tracker, the knowledge base and chat are level with their logs, so a stateless
+node claims no seat until one is. While no data
 node answers, its seats' tracker, knowledge and chat tools fail saying so, and
 `fleet_role_unmanned` names `data` if no live node holds it.
 
@@ -500,7 +540,8 @@ node: {id: "${CREWLET_NODE_ID}"}          # all roles, on each
 # it): a box off its node's host dials it, and the ingress nodes run no
 # seats, so they serve the bridge only with the variable set. A seats
 # node's own direct boxes dial its api.port on loopback instead.
-node: {id: "${CREWLET_NODE_ID}", roles: [data, ingress]}
+# The ingress nodes serve git too, where the company hosts code.
+node: {id: "${CREWLET_NODE_ID}", roles: [data, git, ingress]}
 node: {id: "${CREWLET_NODE_ID}", roles: [data, seats, workers]}
 ```
 
@@ -791,7 +832,9 @@ snapshot again before you start restoring, rebuilding or adding nodes.
 
 ## Watching a fleet
 
-- **`fleet_role_unmanned`** — a job nobody is doing. Fix the roles.
+- **`fleet_role_unmanned`** — a job nobody is doing. Fix the roles. For
+  `git`, said only where the company sets `code.native`; `fleet_role_unneeded`
+  is the role no longer being needed.
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector,
   start a node that matches, or clear what made the only matching node
   withdraw (`seats_shed_unserviceable` on that node).
@@ -804,6 +847,19 @@ snapshot again before you start restoring, rebuilding or adding nodes.
 - **`history_partial`** — history reads are coming back without a node: it
   did not answer inside the fleet read budget. Every such answer names the
   node in its `coverage`.
+- **`clock_skew`** — a clock has left the fleet's by more than an hour. The
+  fleet's clock is the median of every data node's, which each node reads off
+  the position register on its heartbeat, so read the alarm across the nodes:
+  their rows on `GET /fleet` (`alarms`), and each node's detail on its
+  `alarm_raised` line. A node whose detail names **this node's clock** is the
+  machine whose clock moved: run NTP there. When every node raises it naming
+  **the clock of the broker member leading the position register**, that
+  member's clock moved and it is the one to fix: on an embedded broker one of
+  the data nodes — the one whose detail names its own clock as well — and on an
+  external NATS cluster the server leading `KV_crewlet_statelog_positions`.
+  With two data nodes neither clock outvotes the other, so both are named once
+  they stand more than two hours apart. What rests on the clocks is in
+  [Every machine's clock](deployment.md#every-machines-clock).
 - **`offline_revision_not_published`** — at warn, from the node that logs
   it: a `crewlet config import`, `activate` or `rekey` made there while it
   was stopped, built on a revision the fleet has since moved on from. It is
@@ -829,6 +885,16 @@ snapshot again before you start restoring, rebuilding or adding nodes.
   started — one row per server, counting the
   instances that started and failed, with one failure's reason. See
   [What a node says about itself](../concepts/coordination.md#what-a-node-says-about-itself).
+- **What is firing on each node** rides the same heartbeat: every
+  [alarm](../reference/alarms.md) the node's own table has up, by its kind
+  and with when the node raised it, the longest-standing first. `GET /fleet`
+  lists them on each node's row (`alarms`), so one read says what is wrong
+  anywhere in the fleet, where `/health` counts only the alarms of the node
+  that answered it. A node that evaluated its table and found nothing lists
+  none (`[]`); a node with no table to evaluate, which is any node without
+  `data`, or one whose first evaluation has not run yet, carries no `alarms`
+  at all, which reads as not saying rather than as healthy. Read the measurement
+  and the remedy on that node's own `alarm_raised` line.
 
 A node whose reported config epoch lags the fleet's is not an error on its
 own — every rollout produces lag. See
@@ -839,11 +905,92 @@ its `config_serving_revision_id` names, and
 [Reading a stuck node](../concepts/control-plane.md#reading-a-stuck-node)
 tells the revision's fault from the node's.
 
+### The health tools
+
+Two read-only tools put the same view in front of an assistant or an agent:
+
+| Tool | What it answers |
+|---|---|
+| `fleet_health` | Every live node as its own heartbeat states it — its roles, how its broker takes part, the turns it is running, whether it is draining, the config posture it concluded, the seats it holds — and every alarm its own table has firing, by kind and since, the longest-standing first. A node with no table it evaluated says `alarms_evaluated: false`, never an empty list. Nodes by id, a page at a time (`limit` 1 to 100, 25 by default; `next` back as `cursor`), a page cut whole-row wherever it would outgrow one tool answer. With `firing`, only the nodes whose own table has an alarm firing, and a count of the nodes that cannot say (`unevaluated`) in place of their rows; with `node`, that one node. |
+| `code_status` | The git nodes, each as it states itself: its cache's bytes against its budget, the repositories it holds a copy of, the copies it evicted and repaired over the last hour and day, and the fleet's hottest repositories — each node's own count of what it served of one and its copy there, the hottest twenty of the hour and of the day. With `repo`, one repository on every git node instead. Git nodes by id, a page at a time, as `fleet_health` pages (`limit` 1 to 100, 25 by default; `next` back as `cursor`), a page cut whole-row wherever it would outgrow one tool answer; the hot list rides the first page alone, and with `node` the answer is that one git node, with its own hot list. A page asks only its own git nodes, read off the presence leases first, and waits only for them: the fleet's first page alone asks every git node, for the hot list, so walking the fleet costs one answer from each git node a page plus that first page, and a git node that does not answer holds up only the pages that list it. A page's `coverage` names each of its git nodes that did not answer inside the fleet read budget, and its `complete` says whether every node it lists answered — on the fleet's first page, whether every git node did, since its hot list is drawn from all of them. A fleet whose presence cannot be read is refused `unavailable`, as `fleet_health` refuses it. Offered where the company hosts code. |
+
+**They set no thresholds of their own.** What is wrong is the
+[alarm table's](../reference/alarms.md) to say: `fleet_health` reports each
+node's alarms exactly as the node raised them, beside the facts its heartbeat
+states, and judges nothing else — a node running many turns or draining with
+nothing firing is reported with nothing firing. `code_status` reports what
+the nodes counted, and a cache past its budget is two numbers, never a flag.
+
+**Who may read them.** A person holding `admin` reads both through their
+own assistant, as they read `GET /fleet`. An agent seat reads them only where
+its role carries the grant, in the company document:
+
+```yaml
+roles:
+  - name: SRE
+    handle: sre
+    health_tools: true   # fleet_health and code_status, an administrator's reads
+```
+
+Every seat's registry holds the two tools, and a seat whose role does not
+carry the grant is never offered them: the authority table refuses it before
+anything is named, and the same decision is what leaves them off its
+surfaces, so a seat is offered them exactly where a call would be admitted.
+Setting or clearing `health_tools` takes `admin`, even inside a team a person
+leads — a lead who could give a seat of theirs the administrator's view would
+read it through that seat's trail. The grant opens the deployment's view and
+never a repository: `code_status` holds a seat to its own
+[repository grant](../concepts/code-host.md), so its answer leaves out every
+repository the seat may not read and says how many of those were hotter than
+the list's cut (`withheld`), and a repository named with `repo` that the seat
+may not read is refused, as the code tools refuse it. Each repository is a
+read of the code host's rows, so the list is judged hottest first and only as
+far as its cut: a seat's call reads the twenty of each window it is answered
+and the hotter ones it may not read, however many git nodes the fleet has —
+on the first page, which alone carries the list, so a later page reads none —
+and the first read that fails answers the call `unavailable` at once.
+
+**Who they are read for.** In a turn somebody woke, a granted seat reads the
+deployment for them, and both tools hold it to the company: a colleague seat
+or a person of the company is answered the seat's whole view — they need not
+hold `admin` themselves, the view being the seat's grant — while a turn woken
+by somebody the company does not know (a chat sender no seat or person maps
+to), or by a person who may not act in the company now, is answered nothing,
+so a seat that watches the deployment never relays it outside the company.
+`fleet_health` decides whoever woke the turn on `fleet.health.read`, which
+everybody of the company who may act holds, and `code_status` on the code
+host's read verb; its repository reads are code reads besides, made for that
+somebody as every code read is
+([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)),
+so in a colleague seat's turn its answer also leaves out what the colleague
+may not read. An alarm's wake is nobody's errand, so in the turn it starts
+both tools read on the seat's own grant.
+
+**A granted seat is also woken by the alarms.** Each time an alarm fires or
+clears on a node — or a node's first evaluation since it started finds one
+firing — every agent seat whose role carries `health_tools` is notified once,
+with the alarm, the node, what was measured and the table's remedy, and is
+sent to `fleet_health` with `firing: true` before it acts: the notification is
+one change on one node, and only the nodes' heartbeats say what is firing now
+— an answer that stays small however many nodes the fleet has. One alarm is one
+conversation wherever it stands, so the copies of it pending when a seat's turn
+starts are one turn: with `notification_coalesce_window_seconds` at its default
+`0`, one fleet-wide condition raised by every data node costs each granted seat
+two turns (the first copy's, then one for the copies that arrived during it),
+and a window of ten seconds, the alarm interval, makes that one. Nothing holds
+a transition back, so an alarm that fires and clears more slowly than a turn
+runs wakes every granted seat once per fire and once per clear, for as long as
+it flaps. Nobody is waiting on an answer, so a seat may look and do nothing.
+See [Alarm wakes](../concepts/event-system.md#alarm-wakes) for how
+a transition reaches the seats, and why a node that dies mid-alarm loses at
+most a notification, never the state `fleet_health` reads.
+
 ## How a node that fell behind catches up
 
 Worklet, Doclet's pages and embeddings, the identity
 directory, the artifacts and their datastores, Ask Crewlet's
-conversations, chat and the usage history are each derived on every data node
+conversations, chat, the usage history, the seats' executor sessions and the
+code host's repositories are each derived on every data node
 from an ordered log the fleet shares. A node replays each log from wherever its own
 rows say it stopped — which works only while the log still **holds** those
 records. It does not hold them for ever: once every data node has applied past

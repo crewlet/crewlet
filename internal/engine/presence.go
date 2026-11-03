@@ -7,8 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/presence"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE PRESENCE HUB'S ENGINE WIRING: one hub per node, on EVERY node, over the
@@ -21,7 +21,7 @@ import (
 // fleet on, built from the keyring every state-log record is signed under. It
 // fails only on a bootstrap [config.Bootstrap.Validate] would already have
 // refused.
-func newPresenceWire(ring statelog.Keyring) (*presence.Wire, error) {
+func newPresenceWire(ring recordseal.Keyring) (*presence.Wire, error) {
 	wire, err := signedask.NewOneWay[presence.Frame](presence.Channel, ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the presence channel's seal: %w", err)

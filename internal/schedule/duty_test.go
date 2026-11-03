@@ -195,6 +195,9 @@ func (f faultyBackend) ListOwned(context.Context, string) ([]coord.Lease, error)
 func (f faultyBackend) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
 	return nil, f.err
 }
+func (f faultyBackend) WatchLive(context.Context, coord.Class) (<-chan coord.LeaseWrite, error) {
+	return nil, f.err
+}
 func (f faultyBackend) PreferredResources(context.Context, coord.Class, string) (map[string]struct{}, error) {
 	return nil, f.err
 }

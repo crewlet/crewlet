@@ -383,6 +383,14 @@ export interface Navigator {
   section: (key: string, value: string) => void;
   /** A chip, a sort, a search box. Replaces — it is the same screen. */
   filter: (patch: Record<string, string | null>) => void;
+  /**
+   * A question the reader submitted — a search's phrase, with the filters
+   * typed beside it, sent by its button. Pushes, so Back walks a reader's
+   * searches rather than their keystrokes; a submission that changes nothing
+   * the address says pushes no entry, so a second press is not a step Back
+   * has to undo.
+   */
+  submit: (patch: Record<string, string | null>) => void;
   /** The same place said differently — a canonical form, a resolved default.
    *  Replaces, so Back does not land on the spelling the reader never chose. */
   replace: (path: readonly string[], query?: URLSearchParams | Record<string, string>) => void;
@@ -395,6 +403,16 @@ export function useNavigator(): Navigator {
   const nav = useContext(NavContext);
   if (!nav) throw new Error("useNavigator outside a Router");
   return nav;
+}
+
+/** `query` with `patch` laid over it: a null or empty value removes its key. */
+function patched(query: URLSearchParams, patch: Record<string, string | null>): URLSearchParams {
+  const out = new URLSearchParams(query);
+  for (const [k, v] of Object.entries(patch)) {
+    if (v == null || v === "") out.delete(k);
+    else out.set(k, v);
+  }
+  return out;
 }
 
 /** An href for an anchor, so a link is a real link — middle-clickable. */
@@ -452,12 +470,13 @@ export function Router({ children }: { children: ReactNode }) {
       },
       filter: (patch) => {
         const current = parseHash(location.hash);
-        const query = new URLSearchParams(current.query);
-        for (const [k, v] of Object.entries(patch)) {
-          if (v == null || v === "") query.delete(k);
-          else query.set(k, v);
-        }
-        go(buildHash(current.path, query), true);
+        go(buildHash(current.path, patched(current.query, patch)), true);
+      },
+      submit: (patch) => {
+        const current = parseHash(location.hash);
+        const query = patched(current.query, patch);
+        if (query.toString() === current.query.toString()) return;
+        go(buildHash(current.path, query), false);
       },
       back: () => history.back(),
     }),
@@ -542,4 +561,26 @@ export function useParam(
     [nav, key, fallback, kind],
   );
   return [value, set];
+}
+
+/**
+ * A draft of a value the address holds — a search box's phrase before it is
+ * submitted: edited freely, and seeded again whenever the address comes to
+ * say something else, so a box never shows one phrase over the answer to
+ * another.
+ *
+ * THE ADDRESS MOVES WITHOUT THE SCREEN REMOUNTING: Back across a pushed
+ * search, or ⌘K's "See every match" pushing a new phrase onto the screen
+ * already open. A draft seeded once, on mount, kept the old phrase there —
+ * and the next press of the button sent it. Seeded during render rather than
+ * in an effect, so the box is never drawn with the stale draft first.
+ */
+export function useDraft(value: string): [string, (next: string) => void] {
+  const [draft, setDraft] = useState(value);
+  const [from, setFrom] = useState(value);
+  if (from !== value) {
+    setFrom(value);
+    setDraft(value);
+  }
+  return [draft, setDraft];
 }

@@ -109,7 +109,7 @@ var trustDoors = map[string]trustDoor{
 		// and any answer carrying an executor's question (Executor); every
 		// other route's answer is knowledgeTrust's to decide.
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
-		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
 	"internal/assistant/catalog/reads.go:knowledgeTrust": {either, []string{
 		// Doclet's pages by the hosted rule and a connected knowledge base's
@@ -121,17 +121,27 @@ var trustDoors = map[string]trustDoor{
 		// read by the one rule for a harness's words (Executor).
 		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
 		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
-		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
+	}},
+	// A repository's bytes, which the engine hosts and nobody a read can
+	// name wrote: read by provenance.Repository through every door, and
+	// costed by the same label where a log's or a blame's pages are cut.
+	"internal/agent/builtin/fence.go:fenceRepository": {vendor, []string{
+		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
+	}},
+	"internal/code/query/page.go:init": {vendor, []string{
+		"internal/agent/builtin.TestAGitAnswerFitsOneToolAnswer",
+		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
 	}},
 	// AN EXECUTOR'S ASK, a harness's words, through every door it
 	// reaches a model by: answer_executor's receipt, and the answer of the
 	// assistant's write that sends it.
 	"internal/agent/builtin/answerexecutor.go:CallForTurn": {vendor, []string{
 		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
-		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
 	"internal/assistant/catalog/writes.go:answersRun": {vendor, []string{
-		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 		"internal/assistant.TestARunAnswersReceiptIsReadAtTheRunsTrust",
 	}},
 	"internal/assistant/prompt.go:pageFence": {hosted, []string{
@@ -171,9 +181,12 @@ var trustDoors = map[string]trustDoor{
 // knows its text is that: an adoption, and a page script's report.
 var (
 	hostedRule = []string{"TrustForHosted", "LabelForHosted"}
-	// The vendor rule's, and the one rule for a harness's words, which
-	// are a vendor's model's whoever's seat the run works for (Executor).
-	vendorRule   = []string{"TrustFor", "TrustForPartial", "LabelFor", "EnvelopeFor", "Executor"}
+	// The vendor rule's, the one rule for a harness's words, which
+	// are a vendor's model's whoever's seat the run works for (Executor),
+	// and the one rule for a repository's bytes, which nobody a read can name
+	// wrote (Repository).
+	vendorRule = []string{"TrustFor", "TrustForPartial", "LabelFor", "EnvelopeFor", "Executor",
+		"Repository"}
 	trustLevel   = []string{"TrustOwn", "TrustColleague", "TrustExternal"}
 	adoptedLevel = []string{"TrustCompany"}
 	pageLevel    = []string{"TrustPage"}

@@ -52,9 +52,9 @@ type DomainPosition struct {
 	//
 	// ZERO IS UNKNOWN, never "no stream": this build always publishes it — a
 	// runner is always keyed to a stream ([statelog.Runner.KeyedTo]), and a
-	// node whose broker reports no creation instant does not run the domain
-	// — so a zero is only the type's zero value, a row nothing can place on
-	// a stream, which a reader never counts as on its own.
+	// node whose log reports no creation instant does not run the domain —
+	// so a zero is only the type's zero value, a row nothing can place on a
+	// stream, which a reader never counts as on its own.
 	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
 
 	// CheckpointStoredAt is the broker's instant for the record at this
@@ -129,9 +129,33 @@ type DomainPosition struct {
 // trim asks "what has every data node applied", and it asks it about every
 // domain at once.
 type NodePositions struct {
-	NodeID        string    `json:"node_id"`
+	NodeID string `json:"node_id"`
+
+	// At is when the node said so, by ITS OWN clock: the writer stamps it,
+	// and where a writer left it zero the store's client fills it, in the
+	// writer's process and from the same clock.
 	At            time.Time `json:"at"`
 	EngineVersion string    `json:"engine_version,omitempty"`
+
+	// StoredAt is the instant the store took the row this one was read
+	// from, by the STORE's clock — on the KV backend the broker's, which
+	// stamps every entry with its stream leader's clock — filled by every
+	// [PositionRegister.Positions] and never written: a row put with one
+	// stores none, so no writer can say what the broker's clock read.
+	//
+	// WHAT IT IS FOR is the one comparison of machines' clocks the fleet can
+	// make without a read or a write of its own. At is the writer's clock at a
+	// write and StoredAt the store's at the same write, so every row read back
+	// says how far its writer's clock stands from the broker's — off by no
+	// more than the time between its stamp and the write — and, since one
+	// broker clock stores every row, a register's rows together say how far
+	// each node's clock stands from the others'. The engine's `clock_skew`
+	// alarm compares them against their median (internal/engine,
+	// clockskew.go).
+	//
+	// ZERO ON A ROW NOTHING READ BACK — one built in memory — which a reader
+	// takes as nothing measured.
+	StoredAt time.Time `json:"-"`
 
 	// Domains is this node's position on each log it runs, keyed by the
 	// log's domain name.
@@ -195,7 +219,8 @@ type PositionRegister interface {
 	// this process can have changed.
 	PutPositions(ctx context.Context, p NodePositions) error
 
-	// Positions reads every node's row.
+	// Positions reads every node's row, each with the instant the store took
+	// it ([NodePositions.StoredAt]).
 	//
 	// The whole register, because every caller wants it: the trim takes a
 	// minimum across nodes, the fleet view renders a row per node, and a
@@ -206,7 +231,7 @@ type PositionRegister interface {
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS EIGHTEEN KEY CLASSES, and every one needs the same
+// THE REGISTER HOLDS NINETEEN KEY CLASSES, and every one needs the same
 // retention, which is NONE.
 //
 // Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its
@@ -238,7 +263,10 @@ type PositionRegister interface {
 // eighteenth is [MCPAcceptedKey], the definition one MCP tool's level was
 // decided on, which an age would put back in front of a person for every tool
 // of a server that changed nothing; the maintenance sweep removes those of a
-// server nothing declares or lists (mcpaccepted.go).
+// server nothing declares or lists (mcpaccepted.go). The nineteenth is
+// [FeedMarkKey], how far a wake feed's fleet-wide group had acknowledged,
+// which an age would turn into a group never consumed and so a replay of its
+// log's whole retention (feedmarks.go).
 //
 // They share a bucket because they share that retention and because a bucket
 // is a stream with a replica count, a place in every sweep and a retention
@@ -254,7 +282,7 @@ type PositionRegister interface {
 // and pins the floor at zero for ever.
 //
 // The chat read state wants the same retention and is deliberately NOT a
-// ninth class: it is the busiest record the fleet writes, and as a class here
+// class here: it is the busiest record the fleet writes, and as one
 // every person's flush would be ordered through the one raft group, and every
 // chat screen's read answered by the one leader, that serve the trim's inputs
 // and the capacity window. [ChatReads] has a bucket of its own for that (see

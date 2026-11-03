@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Chat as a state-log DOMAIN: what a record is, and what the subject is for.
@@ -107,9 +108,16 @@ const (
 	// a kind that writes nothing must not be able to slip through the
 	// completeness walk by writing nothing.
 	KindBarrier ObjectKind = "barrier"
+
+	// KindTrimmed is the trim's record that removes the arbitration anchors
+	// below what the log no longer holds ([statelog.TrimmedKind], ADR-0080),
+	// on one subject per floor, which the subject's id names. The framework
+	// removes the anchors in the transaction that applies it; this domain
+	// writes no row for it, and has the case that says so.
+	KindTrimmed ObjectKind = statelog.TrimmedKind
 )
 
-// ObjectKinds are the six, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the seven, and THE ORDER IS LOAD-BEARING.
 //
 // [github.com/crewlet/crewlet/internal/statelog/statelogtest] publishes the
 // FIRST THREE a domain declares, twice each, in order — so the declaration
@@ -120,7 +128,7 @@ const (
 // replay, so putting the message before the name would certify a failure.
 var ObjectKinds = []ObjectKind{
 	KindChannelName, KindChannel, KindMessage, KindEviction, KindGeneration,
-	KindBarrier,
+	KindBarrier, KindTrimmed,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -129,7 +137,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation, and therefore whether an anchor row is written for it.
 //
-// TWO OF SIX, AND IT IS A CLOSED SET. A name claim and a room's own state are
+// TWO OF SEVEN, AND IT IS A CLOSED SET. A name claim and a room's own state are
 // the only objects two writers ever decide against each other over.
 //
 // EVERYTHING ELSE PAYS NOTHING FOR ARBITRATION IT DOES NOT USE. A message is
@@ -251,6 +259,13 @@ func GenerationSubject(gen uint32) Subject {
 
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
+
+// TrimmedSubject names the trimmed record whose floor is floor, in the
+// framework's ONE spelling of it ([statelog.TrimmedSubject]): the framework
+// reads the floor back from the id.
+func TrimmedSubject(floor statelog.Position) Subject {
+	return Subject{Kind: KindTrimmed, ID: statelog.TrimmedSubject(floor).ID}
+}
 
 // ChannelToken is the address a channel name is arbitrated on.
 //
@@ -402,6 +417,21 @@ func (s Subject) Validate() error {
 	if s.ID == "" && s.Kind != KindBarrier {
 		return fmt.Errorf("chatlet: a %s subject needs an id — only the barrier "+
 			"is a kind with exactly one object", s.Kind)
+	}
+	if s.Kind == KindTrimmed {
+		// THE FRAMEWORK'S ONE SPELLING carries a dot between the floor's
+		// generation and its sequence ([statelog.TrimmedSubject]), and it
+		// is the framework's to spell rather than this domain's. The kind
+		// is still recovered from the first segment alone
+		// ([topics.LogPath] keeps the id's dots), so the dot cannot make
+		// any part of the id read as the kind; [EncodeTrimmed] checks the
+		// floor at the write.
+		if strings.ContainsAny(s.ID, " \t\n*>") {
+			return fmt.Errorf("chatlet: trimmed subject id %q carries "+
+				"whitespace or a wildcard, which the broker would read as a "+
+				"subject pattern", s.ID)
+		}
+		return nil
 	}
 	if strings.ContainsAny(s.ID, ". \t\n*>") {
 		return fmt.Errorf("chatlet: subject id %q carries a separator, whitespace "+

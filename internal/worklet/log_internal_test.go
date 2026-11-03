@@ -12,7 +12,7 @@ import (
 // the parser's `tracker_merge_marker_without_target` — the two lines that say
 // a repair is NOT happening — went nowhere on every node. The tree-wide guard
 // in internal/logging refuses a discarding handler; what it cannot see is a
-// default that still writes but loses `component=tracker` (the process-wide
+// default that still writes but loses `component=worklet` (the process-wide
 // `slog.Default()`) or drops a level, and that is what this pins.
 func TestEveryWorkletLoggerGivenNoneIsThePackagesOwn(t *testing.T) {
 	t.Parallel()

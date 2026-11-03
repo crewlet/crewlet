@@ -157,7 +157,9 @@ func (e *Engine) migrateTo(ctx context.Context, final bool, objects config.Store
 			"and run this again with -final."
 		log.InfoContext(ctx, "objects_migration_copied", "to", report.To,
 			"copied", report.Pass.Copied, "present", report.Pass.Present,
-			"unreadable", report.Pass.Unreadable)
+			"unreadable", report.Pass.Unreadable, "derived_copied", report.Pass.Derived.Copied,
+			"derived_present", report.Pass.Derived.Present,
+			"derived_unreadable", report.Pass.Derived.Unreadable)
 		return report, nil
 	}
 	if !report.Pass.Done() {
@@ -181,15 +183,18 @@ func (e *Engine) migrateTo(ctx context.Context, final bool, objects config.Store
 		"once the fleet runs on the bucket."
 	log.InfoContext(ctx, "objects_migrated", "from", report.From, "to", report.To,
 		"copied", report.Pass.Copied, "present", report.Pass.Present,
-		"unreadable", report.Pass.Unreadable, "sealed", report.Sealed)
+		"unreadable", report.Pass.Unreadable, "derived_copied", report.Pass.Derived.Copied,
+		"derived_present", report.Pass.Derived.Present,
+		"derived_unreadable", report.Pass.Derived.Unreadable, "sealed", report.Sealed)
 	return report, nil
 }
 
 // migrationReferences is every declared table this node's estate holds, as a
 // migration walks them: only a data node running the native runtime holds
 // the rows that name objects, the tracker's files and the artifacts' versions
-// and assets alike ([objectEstatesFor]), so a migration copies every object
-// the collector keeps alive.
+// and assets alike ([objectEstatesFor]), so a migration reads every table the
+// collector reads, and copies from them what a store move owes the target —
+// every object a Required or a Derived row names ([objstore.PassMove]).
 func (e *Engine) migrationReferences() (collect.References, error) {
 	n := e.native.Load()
 	if n == nil {

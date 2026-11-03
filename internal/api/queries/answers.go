@@ -27,7 +27,6 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -81,11 +80,13 @@ type Sources struct {
 
 	// Usage is the replicated estate's usage domain: every data node's
 	// company days, for every NAMED spend window and its series (ADR-0020),
-	// and every schedule's fires. Not this node's event log, which answered
-	// for this node alone and only thirty days back. Nil leaves
-	// `token_series` and `schedule_runs` unregistered, a named `tokens`
-	// window empty and the schedules' recent runs an empty list.
-	Usage usage.Estate
+	// and every schedule's fires, read through the estate's router
+	// ([UsageReads]) so a node whose own copy is out of service answers from
+	// a peer's (ADR-0079). Not this node's event log, which answered for this
+	// node alone and only thirty days back. Nil leaves `token_series` and
+	// `schedule_runs` unregistered, a named `tokens` window empty and the
+	// schedules' recent runs an empty list.
+	Usage UsageReads
 
 	// Company reads the CURRENT company, for the questions answered from
 	// the company rather than from a store: the document this node applied
@@ -232,7 +233,8 @@ type Sources struct {
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 
-	// Objects is the fleet's record of the object store, for the fleet
+	// Objects is the collector's last report on the object store this node
+	// agreed with the fleet, read from the fleet's record, for the fleet
 	// view's file-storage card. Nil leaves the card out of the answer rather
 	// than reporting a fleet whose collector never ran.
 	Objects ObjectsReader
@@ -390,11 +392,14 @@ type Sources struct {
 	// an unreported surface as connecting rather than guessing either way.
 	Converges func(kind integration.Kind) bool
 
-	// Work and Pages are Worklet and Doclet, read through the estate
-	// router and resolved per question: a company whose tracker or wiki is
-	// a vendor's has each of that half's questions answered unknown, as an
-	// unregistered question is. Nil — a surface built without them —
-	// leaves their questions unregistered.
+	// Work and Pages are Worklet and Doclet, read through this node's
+	// estate router: a data node's copy of each state-log domain — this
+	// node's while it serves, another data node's while it does not
+	// (ADR-0025) — never a projection kept beside them. Nil — a surface
+	// built without them — leaves their questions unregistered. The sources
+	// `crewlet run` wires resolve their half per question (see native.go),
+	// so a half not up yet answers [ErrUnavailable] and one the company
+	// keeps on a vendor [ErrUnknown], as an unregistered question would.
 	//
 	// Consumer-defined interfaces rather than the concrete readers, like
 	// every other seam here — and the READ side only. Nothing on this
@@ -410,17 +415,21 @@ type Sources struct {
 	// and a screen needs to know which. Nil leaves `work_files`
 	// unregistered.
 	Files FileReader
-	// Backlinks is which pages and tasks link to a page — this node's
+	// Backlinks is which pages and tasks link to a page — a data node's
 	// lexical index, which derives the links from the bodies it reads
-	// ([search.Backlinks]). Nil leaves the `page` answer without
-	// `linked_from`, which is absent rather than empty: "nothing links
-	// here" is a claim only a node holding the index can make.
+	// ([search.Backlinks]), asked through the estate router of a data node
+	// whose copies of both the knowledge base and the tracker serve, since
+	// the links are named from both (ADR-0079). Nil leaves the `page`
+	// answer without `linked_from`, which is absent rather than empty:
+	// "nothing links here" is a claim only a data node holding the index,
+	// and serving the copies it is named from, can make.
 	Backlinks PageBacklinks
 
 	// WorkSearch is the ranked item search, and it is SEPARATE from
 	// [Sources.Work] because the two fail independently: the rows are the
-	// fleet's and the lexical index is this node's own, so a node still
-	// building one answers every board question and cannot rank a word.
+	// replicated estate's and the lexical index is each data node's own,
+	// so a data node still building one answers every board question and
+	// cannot rank a word.
 	// Nil leaves `work_search` unregistered, which is what a screen needs
 	// in order to offer the board's filters instead of an empty ranking.
 	WorkSearch WorkSearcher
@@ -585,6 +594,15 @@ type Sources struct {
 	// datastore's questions. Nil leaves them unregistered: a node built with
 	// no datastore.
 	ArtifactData *ArtifactDataSource
+
+	// Code is the code host's rows, asked for on EVERY question — the code
+	// reads come up with the native runtime, which a node that booted with
+	// no company meets at an apply, after this surface was wired — and
+	// answering, where this node serves none now, why, in this surface's
+	// vocabulary ([CodeSource]). Every node that serves the API holds one:
+	// internal/api fills it from the code surface its Options require, over
+	// whatever was set here. Nil leaves the code questions unregistered.
+	Code CodeSource
 }
 
 // clock reads the injected time, or the wall clock, in UTC either way. It is
@@ -626,7 +644,7 @@ func (s Sources) zone() *time.Location {
 // reporting them as a fault.
 //
 // Answers do not return it themselves. The registry classifies at one boundary
-// (see classifyFailure), so an answer that reads a store which can be
+// (see ClassifyFailure), so an answer that reads a store which can be
 // briefly unreachable cannot forget to.
 var ErrUnavailable = errors.New("queries: not available on this node")
 
@@ -831,8 +849,8 @@ func Register(r *Registry, s Sources) {
 		// ASKED ONLY WHILE SOMEBODY WATCHES: a trace polls it while a
 		// running executor's span is open, and nothing else does. There
 		// is no event and no row behind it — see [Sources.ExecutorTail].
-		// DECIDED ON THE RUN'S SEAT, as that seat's trail: what a coding
-		// agent prints is its transcript, as a phase record's prompt and
+		// DECIDED ON THE RUN'S SEAT, as that seat's trail: what a harness
+		// prints is its transcript, as a phase record's prompt and
 		// response are, so its lead reads it and an admin reads any.
 		r.Register("executor_tail", DecidedBy(authz.ActionSeatTrailRead), s.executorTail)
 	}
@@ -948,6 +966,13 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Work != nil || s.Sandbox != nil {
 		r.Register("decisions", Everybody(), s.decisions)
+	}
+	// ONE INBOX FROM EVERY NATIVE DOMAIN, registered wherever either half
+	// is wired: whose inbox is the composed question's own verb, own or
+	// lead WITH NO APP, and each half is read under its own permission —
+	// see [Sources.composedInbox].
+	if s.Work != nil || s.Code != nil {
+		r.Register("inbox", DecidedBy(authz.ActionInbox), s.composedInbox)
 	}
 	// WHAT A PERSON DECIDED LATELY, the other half of `decisions` and
 	// scoped as it is: the asks put to them and closed, by them or by
@@ -1075,6 +1100,11 @@ func Register(r *Registry, s Sources) {
 		// AN ARTIFACT'S DATA, decided per artifact by the datastore's one
 		// admission and shaped by each collection's read rule.
 		registerArtifactData(r, *s.ArtifactData, s.clock)
+	}
+	if s.Code != nil {
+		// THE CODE HOST'S ROWS, each decided per repository by the grant
+		// the serving node derives from its chart (code.go).
+		registerCode(r, s)
 	}
 }
 

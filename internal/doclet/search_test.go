@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -27,6 +29,14 @@ func searchCorpus(t *testing.T, docs map[string][2]string) *doclet.Searcher {
 // searchStore is [searchCorpus] with the store handed back, for a case that
 // takes it away from under the searcher.
 func searchStore(t *testing.T, docs map[string][2]string) (*doclet.Searcher, *store.DB) {
+	t.Helper()
+	return searchStoreReporting(t, docs, nil)
+}
+
+// searchStoreReporting is [searchStore] whose searcher reports every answer it
+// gives, with the query it answered, to report.
+func searchStoreReporting(t *testing.T, docs map[string][2]string,
+	report func(search.FanQuery, search.Answer, time.Duration)) (*doclet.Searcher, *store.DB) {
 	t.Helper()
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	estate := storetest.ReplicatedDB(t, db.Replicated())
@@ -53,8 +63,37 @@ func searchStore(t *testing.T, docs map[string][2]string) (*doclet.Searcher, *st
 		}
 	}
 	return doclet.NewSearcher(doclet.SearcherOptions{
-		Index: x, SkillsContainer: func() string { return "SKILLS" },
+		Index: x, SkillsContainer: func() string { return "SKILLS" }, Report: report,
 	}), db
+}
+
+// A TURN'S PREFETCH IS TIMED AS ONE. The searcher coordinates the scan, so its
+// report is where the scan's cost is recorded, and the budget it is held to
+// is the turn start's for a prefetch and the interactive target for everybody
+// else's search: the report is handed the query it answered, marked as the
+// knowledge query was.
+//
+// Mutation: drop Prefetch from the fan-out's query, and the prefetch is
+// reported as a deliberate search.
+func TestAPrefetchIsReportedAsOne(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var reported []bool
+	s, db := searchStoreReporting(t, map[string][2]string{"eng-00": {"ENG", "Deploy runbook"}},
+		func(q search.FanQuery, _ search.Answer, _ time.Duration) {
+			mu.Lock()
+			defer mu.Unlock()
+			reported = append(reported, q.Prefetch)
+		})
+	t.Cleanup(func() { _ = db.Close() })
+	s.Search(t.Context(), knowledge.Query{Text: "deploy", Limit: 5, Prefetch: true})
+	s.Search(t.Context(), knowledge.Query{Text: "deploy", Limit: 5})
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(reported, []bool{true, false}) {
+		t.Fatalf("the prefetch and the deliberate search were reported as prefetches %v, want [true false]",
+			reported)
+	}
 }
 
 // A TOOL-SKILL PAGE COSTS THE ANSWER THAT PAGE AND NEVER A PLACE: a search walks

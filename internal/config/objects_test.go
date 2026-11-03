@@ -55,6 +55,81 @@ func TestTheObjectsBlockIsValidated(t *testing.T) {
 	}
 }
 
+// AN S3 ENDPOINT NO REQUEST CAN REACH IS REFUSED, naming the field, and every
+// form the S3 client reaches is accepted. Refused: a port outside 1 to 65535,
+// which the URL parser lets through and no dial completes; an IPv6 zone
+// holding a `]`, a `%` or a space, which splits the address where the dialer
+// looks for its port or which the client cannot write back into a URL; and an
+// endpoint the client refuses at start — one it cannot parse, with no scheme
+// or another, no host, or a query. Each of the first two the node used to find
+// only 77 to 86 s into its boot.
+//
+// Accepted, each a form the client sends its request for: a host with its
+// scheme's own port, a port with leading zeros or none after its colon, an
+// upper-case scheme, a base path, an empty query, a host outside ASCII, an
+// IPv6 address in brackets with an interface's name or number as its zone,
+// and an empty host beside a port (`http://:9000`, this host, path-style).
+//
+// Mutation: drop the port's range, the zone's characters, the scheme or the
+// query, and a refused case is accepted; refuse a port of none or with leading
+// zeros, an empty query, or a zone of an interface's number, and an accepted
+// case is refused.
+func TestAnS3EndpointNoRequestCanReachIsRefused(t *testing.T) {
+	t.Parallel()
+	for endpoint, refused := range map[string]bool{
+		"https://minio.storage.example":           false,
+		"https://minio.storage.example:":          false,
+		"http://127.0.0.1:9000":                   false,
+		"http://127.0.0.1:09000":                  false,
+		"http://127.0.0.1:1":                      false,
+		"http://127.0.0.1:65535":                  false,
+		"HTTP://127.0.0.1:9000":                   false,
+		"http://127.0.0.1:9000/base":              false,
+		"http://127.0.0.1:9000?":                  false,
+		"https://bücher.example":                  false,
+		"https://[::1]:9000":                      false,
+		"https://[fe80::1%25eth0]:9000":           false,
+		"https://[fe80::1%25eth0.100]:9000":       false,
+		"https://[fe80::1%251]:9000":              false,
+		"http://:9000":                            false,
+		"http://127.0.0.1:0":                      true,
+		"http://127.0.0.1:65536":                  true,
+		"http://127.0.0.1:99999":                  true,
+		"http://127.0.0.1:99999999999999999999":   true,
+		"https://[fe80::1%25eth0]]:9000":          true,
+		"https://[fe80::1%25eth0]]/":              true,
+		"https://[fe80::1%25eth0%5D]:9000":        true,
+		"https://[fe80::1%25e%20th0]:9000":        true,
+		"https://[fe80::1%25%2525]:9000":          true,
+		"https://minio.storage.example:9000:9000": true,
+		"https://::1:9000":                        true,
+		"https://x[::1]:9000":                     true,
+		"minio.storage.example":                   true,
+		"minio.storage.example:9000":              true,
+		"//minio.storage.example":                 true,
+		"ftp://minio.storage.example":             true,
+		"http://":                                 true,
+		"http://127.0.0.1:9000/?tenant=nimbus":    true,
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			t.Parallel()
+			b := config.RunnableBootstrap()
+			b.Stream.StoreDir = t.TempDir()
+			b.Store.Objects = config.StoreObjects{Backend: config.ObjectBackendS3,
+				S3: config.ObjectsS3{Endpoint: endpoint, Region: "us-east-1", Bucket: "files"}}
+			err := b.Validate()
+			switch {
+			case !refused && err != nil:
+				t.Fatalf("a form the client reaches was refused: %v", err)
+			case refused && err == nil:
+				t.Fatal("accepted an endpoint no request can reach")
+			case refused && !strings.Contains(err.Error(), "store.objects.s3.endpoint"):
+				t.Errorf("refusal %q does not name store.objects.s3.endpoint", err)
+			}
+		})
+	}
+}
+
 // THE IDENTITY NAMES WHERE THE FILES ARE, and nothing else: two nodes reaching
 // one bucket with different keys are one store, and two buckets — or one
 // bucket under two prefixes — are two.

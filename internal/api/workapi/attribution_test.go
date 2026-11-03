@@ -22,7 +22,7 @@ import (
 // tokenRow is the one row the guard's machine-token arm reads.
 type tokenRow struct{ row credential.TokenRow }
 
-func (d tokenRow) MachineToken(context.Context, string) (credential.TokenRow, error) {
+func (d tokenRow) MachineToken(context.Context, credential.Token) (credential.TokenRow, error) {
 	return d.row, nil
 }
 

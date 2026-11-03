@@ -1,5 +1,6 @@
 // Package httpx is the one HTTP transport every outbound client in this
-// engine shares.
+// engine shares, and the one rule for which addresses a dial to a host
+// somebody else named may reach.
 //
 // It exists because leaving http.Client.Transport nil is not "the default
 // settings" — it is http.DefaultTransport, whose MaxIdleConnsPerHost is 2,
@@ -46,17 +47,60 @@
 //
 // A URL A REMOTE PARTY NAMED is the one request that does not ride [Client]:
 // it goes through [Guarded], the same transport cloned with a dialer that
-// connects to a public address ([Public]) and nothing else, and that judges
-// the address the socket opens rather than the name, so a resolver answering
-// twice cannot slip an internal address past it (ADR-0072). Who named the URL
-// decides which client sends it, not which package: a page an agent wrote, a
-// server's metadata and a redirect are remote parties; an address the
-// operator configured is not, and stays on [Client], because a private or
-// loopback address there is the deployment the operator chose. The rule of
-// which addresses the public internet routes lives here once, for the same
-// reason the transport does: the artifact CDN fetch and GitHub's reachability
-// check each carried a copy, and the two had already drifted apart, the second
-// admitting carrier-grade NAT and the documentation ranges.
+// connects to a public address and nothing else, and that judges the address
+// the socket opens rather than the name, so a resolver answering twice cannot
+// slip an internal address past it (ADR-0072). Who named the URL decides which
+// client sends it, not which package: a page an agent wrote, a server's
+// metadata and a redirect are remote parties; an address the operator
+// configured is not, and stays on [Client], because a private or loopback
+// address there is the deployment the operator chose.
+//
+// THE PUBLIC-ADDRESS RULE is here once for the ADR-0008 reason the transport
+// is: the artifact CDN fetch and GitHub's reachability check each carried a
+// copy, and the two had already drifted apart, the second admitting
+// carrier-grade NAT and the documentation ranges. Which addresses are on the
+// public internet is one rule, reached through three doors. [Guarded]'s
+// dialer takes a [Rule] from [NewRule] once a dial and asks it of each address
+// at the socket made for it, before the connect, so net.Dialer still resolves
+// the name and races its addresses. A dialer that hands an address to another
+// program to connect to (git, for an import or a mirror) takes it from
+// [ResolvePublic], which returns a host's addresses only when every one is
+// public. And a caller with an address and no dial asks [Public], the verdict
+// on a network that names no NAT64 prefix of its own.
+//
+// The rule holds IPv4 to the blocks IANA's special-purpose registry reserves,
+// and IPv6 to an ALLOWLIST: global unicast (2000::/3), less the blocks in it
+// that are not on the internet. A list of reserved IPv6 blocks cannot be
+// completed. IANA keeps reserving more of a space that is mostly unallocated,
+// and the forms that carry an IPv4 address (NAT64, 6to4, Teredo,
+// IPv4-compatible) are each a way to reach a private IPv4 address through an
+// IPv6 one, which such a list calls public until somebody writes the row. IPv4
+// has no unallocated remainder, so its registry is the complete answer there.
+//
+// An IPv6 address in a NAT64 prefix is judged by the IPv4 address it carries,
+// where a translator delivers it, and by nothing else: the well-known prefix
+// (64:ff9b::/96) on every network, and the network-specific ones the node's
+// own resolver names when asked for ipv4only.arpa (RFC 7050). A host's own DNS
+// records decide nothing, since every address they give is judged; which
+// prefixes the network translates through, only the network can say. Its
+// resolver's word is taken only where it cannot widen the rule into a network
+// that is not on the internet: a prefix it names counts inside the allowlist,
+// where judging an address by what it carries can only refuse more, or inside
+// 64:ff9b:1::/48, the block RFC 8215 reserves for a network's own translation
+// prefix, and is ignored anywhere else. So a DNS64 network translates through
+// 64:ff9b::/96, a prefix in 64:ff9b:1::/48 or one in its own global unicast
+// space, or a dialer reaches the host through a proxy its caller trusts
+// ([Guarded] dials a proxy the process is configured with as itself): through
+// a translator on a unique-local prefix, the rule reaches no host that has
+// only an IPv4 address.
+//
+// The resolver is asked only for an address whose verdict its answer can
+// change, an IPv6 one in those two places, at most once a dial or a resolve,
+// and the answer is kept no longer. An IPv4 address, one in the well-known
+// prefix and one the allowlist refuses elsewhere are judged without it, so a
+// failed lookup refuses only an address that needed it, and an IPv4 host
+// costs no lookup beyond its own. public.go holds the blocks and the reason
+// for each, nat64.go the discovery, and guard.go the dialer.
 package httpx
 
 import (
@@ -116,16 +160,24 @@ func Client(timeout time.Duration) *http.Client {
 // Customized is a client on a CLONE of [Transport] with opts applied — the one
 // way to build an outbound client whose transport differs from the shared one.
 //
-// IT EXISTS FOR A CLIENT WHOSE TLS OR DIALER GENUINELY DIFFERS, and for
-// nothing else: an S3 bucket behind a private certificate authority
-// (`AWS_CA_BUNDLE`) needs that bundle in the transport's root pool, and
-// [Guarded] needs a dialer that refuses every address that is not public.
-// Each is a property of a transport and cannot ride the shared one without
-// changing every other client's trust, or refusing the operator's own private
-// addresses. The clone keeps the proxy, HTTP/2 and pool settings the shared
-// transport has, and is a pool of its own: the cost [Transport]'s doc counts
-// against a per-client clone, paid only where the transport genuinely
-// differs.
+// IT EXISTS FOR A CLIENT WHOSE TLS, PROTOCOL OR DIALER GENUINELY DIFFERS, and
+// for nothing else: the S3 bucket's, which speaks HTTP/1.1 alone so a socket
+// is one request's to watch for a write the bucket stopped taking, and which
+// adds an operator's private certificate authority (`AWS_CA_BUNDLE`) to its
+// roots where one is set; and [Guarded]'s, whose dialer refuses every address
+// that is not public. Each is a property of a transport and cannot ride the
+// shared one without changing every other client's protocol or trust, or
+// refusing the operator's own private addresses. The clone keeps the proxy
+// and pool settings the shared transport has, and is a pool of its own — the
+// cost [Transport]'s doc counts against a per-client clone, paid only where
+// the transport genuinely differs.
+//
+// WHERE THE PROCESS'S DEFAULT TRANSPORT IS NOT ONE THIS CAN CLONE — a test
+// harness or an instrumented build, never the engine's own run — the client
+// is the shared one, opts unapplied, as [Transport] answers the default
+// itself there: the caller's difference is then not in force, which the
+// bucket's client documents for its own, and which [Guarded] answers by
+// refusing every request ([ErrUnguarded]) rather than dialling unguarded.
 func Customized(timeout time.Duration, opts ...func(*http.Transport)) *http.Client {
 	base, ok := Transport().(*http.Transport)
 	if !ok {

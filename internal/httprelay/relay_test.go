@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,13 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // --- fixture ---------------------------------------------------------------
 
-var ring = statelog.OneKey("k", "relay-test-key")
+var ring = recordseal.OneKey("k", "relay-test-key")
 
 // node is one process of a two-node fleet: its relay, served on the fleet's
 // broker, and the entry route a client calls it on.
@@ -51,8 +52,8 @@ type muteable struct {
 	answered *atomic.Int64
 }
 
-func (m muteable) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
-	return m.Fabric.Serve(ctx, subject, func(ctx context.Context, raw []byte) ([]byte, error) {
+func (m muteable) Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error) {
+	return m.Fabric.Serve(ctx, subject, answers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		defer m.answered.Add(1)
 		return h(ctx, raw)
 	})
@@ -67,8 +68,9 @@ func (m muteable) Ask(ctx context.Context, subject string, request []byte, want 
 }
 
 // fleet starts two nodes over one broker. The holder answers with h; the
-// entry forwards every request it gets to the holder's incarnation.
-func fleet(t *testing.T, h http.Handler, tune func(*clocks)) (entry, holder *node) {
+// entry forwards every request it gets to the holder's incarnation. tune, when
+// set, is handed each relay before it serves: its clocks, or its time.
+func fleet(t *testing.T, h http.Handler, tune func(*Relay)) (entry, holder *node) {
 	t.Helper()
 	broker := memory.NewBroker()
 	start := func(id string, handler http.Handler) *node {
@@ -92,7 +94,7 @@ func fleet(t *testing.T, h http.Handler, tune func(*clocks)) (entry, holder *nod
 			t.Fatalf("New: %v", err)
 		}
 		if tune != nil {
-			tune(&rl.clock)
+			tune(rl)
 		}
 		stop, err := rl.Serve(t.Context())
 		if err != nil {
@@ -120,9 +122,139 @@ func fleet(t *testing.T, h http.Handler, tune func(*clocks)) (entry, holder *nod
 	return entry, holder
 }
 
-func fast(c *clocks) {
-	c.heartbeat, c.idle, c.openWait, c.pushWait = 50*time.Millisecond, 300*time.Millisecond,
-		200*time.Millisecond, 200*time.Millisecond
+func fast(rl *Relay) {
+	rl.clock.heartbeat, rl.clock.idle, rl.clock.openWait, rl.clock.pushWait = 50*time.Millisecond,
+		300*time.Millisecond, 200*time.Millisecond, 200*time.Millisecond
+}
+
+// manualTime is a relay's time that moves only when a case moves it
+// ([manualTime.Advance]): every relay of a fleet on one, so a case about what
+// happens within a bound decides when the bound passes, and the runner's
+// scheduler decides nothing. A timer fires as its time is reached, never late,
+// and a reset or stopped timer delivers nothing it was due before, as a
+// [time.Timer] does.
+type manualTime struct {
+	mu  sync.Mutex
+	now time.Time
+	// armed is every timer still to fire.
+	armed map[*manualTimer]struct{}
+}
+
+type manualTimer struct {
+	time *manualTime
+	c    chan time.Time
+	// at is when it fires, and d what it was last set to.
+	at time.Time
+	d  time.Duration
+	// fire, when set, is what it does in place of a send: a WithTimeout's
+	// cancel.
+	fire func()
+}
+
+func newManualTime() *manualTime {
+	return &manualTime{now: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC), armed: map[*manualTimer]struct{}{}}
+}
+
+func (m *manualTime) Now() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.now
+}
+
+func (m *manualTime) NewTimer(d time.Duration) relayTimer {
+	t := &manualTimer{time: m, c: make(chan time.Time, 1)}
+	t.Reset(d)
+	return t
+}
+
+func (m *manualTime) WithTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	t := &manualTimer{time: m, fire: cancel}
+	t.Reset(d)
+	return ctx, func() {
+		t.Stop()
+		cancel()
+	}
+}
+
+func (t *manualTimer) C() <-chan time.Time { return t.c }
+
+func (t *manualTimer) Reset(d time.Duration) {
+	m := t.time
+	m.mu.Lock()
+	t.drainLocked()
+	t.at, t.d = m.now.Add(d), d
+	m.armed[t] = struct{}{}
+	fire := m.dueLocked()
+	m.mu.Unlock()
+	for _, f := range fire {
+		f()
+	}
+}
+
+func (t *manualTimer) Stop() {
+	m := t.time
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.armed, t)
+	t.drainLocked()
+}
+
+func (t *manualTimer) drainLocked() {
+	if t.c == nil {
+		return
+	}
+	select {
+	case <-t.c:
+	default:
+	}
+}
+
+// Advance moves the time on by d, firing every timer it reaches.
+func (m *manualTime) Advance(d time.Duration) {
+	m.mu.Lock()
+	m.now = m.now.Add(d)
+	fire := m.dueLocked()
+	m.mu.Unlock()
+	for _, f := range fire {
+		f()
+	}
+}
+
+// dueLocked disarms every timer the time has reached: a channel's is sent here,
+// under the lock a Reset and a Stop drain it under, so neither ever leaves one
+// due before it; a cancel is answered for the caller to run once it has let
+// the lock go.
+func (m *manualTime) dueLocked() []func() {
+	var fire []func()
+	for t := range m.armed {
+		if t.at.After(m.now) {
+			continue
+		}
+		delete(m.armed, t)
+		if t.fire != nil {
+			fire = append(fire, t.fire)
+			continue
+		}
+		select {
+		case t.c <- m.now:
+		default:
+		}
+	}
+	return fire
+}
+
+// set is how many timers of d are armed.
+func (m *manualTime) set(d time.Duration) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for t := range m.armed {
+		if t.d == d {
+			n++
+		}
+	}
+	return n
 }
 
 // --- what a client sees ----------------------------------------------------
@@ -330,7 +462,7 @@ func TestAnOpenTheFleetDidNotSignRunsNothing(t *testing.T) {
 	t.Parallel()
 	var ran atomic.Bool
 	_, holder := fleet(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { ran.Store(true) }), nil)
-	other, err := signedask.New[openRequest, openReply]("testrelay.open", statelog.OneKey("k", "another-fleet"))
+	other, err := signedask.New[openRequest, openReply]("testrelay.open", recordseal.OneKey("k", "another-fleet"))
 	if err != nil {
 		t.Fatalf("signedask.New: %v", err)
 	}
@@ -457,10 +589,22 @@ func TestAClientThatHangsUpBeforeItsOpenIsAnsweredRunsNothing(t *testing.T) {
 // AN IDLE STREAM IS KEPT ALIVE BY ITS HEARTBEATS: a stream with nothing to say
 // for several idle bounds is still open, because the holder's empty frames are
 // what the entry counts as the holder being there.
+//
+// ON A TIME THE CASE MOVES ([manualTime]), a heartbeat at a time, each once the
+// holder waits for its next beat with no frame in flight: every beat is pushed
+// and acknowledged before the idle bound can pass, whatever the runner's load.
+// On the wall clock, which this replaced, the case raced the scheduler: a holder
+// kept off its goroutine for the idle bound less a beat cut the stream — one
+// stall of 350 ms did, every time — and a loaded race runner lost it once.
+//
+// Mutations: reset the entry's idle bound only on a frame that carries
+// something (inbound.pump), or push no empty frame (Relay.push) — the bound
+// passes, the stream is cut, red.
 func TestAnIdleStreamOutlivesItsIdleBound(t *testing.T) {
 	t.Parallel()
+	clock := newManualTime()
 	release := make(chan struct{})
-	entry, _ := fleet(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	entry, holder := fleet(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		http.NewResponseController(w).Flush()
 		select {
@@ -468,17 +612,41 @@ func TestAnIdleStreamOutlivesItsIdleBound(t *testing.T) {
 			fmt.Fprint(w, "late")
 		case <-r.Context().Done():
 		}
-	}), fast)
+	}), func(rl *Relay) {
+		fast(rl)
+		rl.time = clock
+	})
 	res, err := httpxtest.Pool(t).Get(entry.entry.URL + "/stream")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	defer res.Body.Close()
-	time.Sleep(4 * entry.relay.clock.idle)
+	// open is whether the holder still answers the stream: once either side
+	// gives it up nothing moves the time on, and the read below says how it
+	// ended.
+	open := func() bool {
+		holder.relay.mu.Lock()
+		defer holder.relay.mu.Unlock()
+		return len(holder.relay.served) == 1
+	}
+	c := entry.relay.clock
+	moved := time.Duration(0)
+	for ; moved <= 4*c.idle && open(); moved += c.heartbeat {
+		// PARKED: the holder's beat armed, and no round trip's — a hang
+		// guard on the wall clock, never a measurement.
+		deadline := time.Now().Add(30 * time.Second)
+		for open() && (clock.set(c.heartbeat) != 1 || clock.set(c.pushWait) != 0 || clock.set(c.openWait) != 0) {
+			if time.Now().After(deadline) {
+				t.Fatalf("after %s the holder never waited for its next heartbeat with nothing in flight", moved)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		clock.Advance(c.heartbeat)
+	}
 	close(release)
 	got, err := io.ReadAll(res.Body)
 	if err != nil || string(got) != "late" {
-		t.Errorf("after %s idle the stream read %q, %v; want it still open", 4*entry.relay.clock.idle, got, err)
+		t.Errorf("after %s idle the stream read %q, %v; want it still open", moved, got, err)
 	}
 }
 
@@ -587,7 +755,7 @@ func TestAHandlerWaitsOnceAFramesWorthIsUnsent(t *testing.T) {
 		t.Fatalf("a write past a frame's worth returned (%d bytes) with nothing sent", n)
 	case <-time.After(100 * time.Millisecond):
 	}
-	f, ok := w.next(t.Context(), time.Minute, true)
+	f, ok := w.next(t.Context(), wallTime{}, time.Minute, true)
 	if !ok || len(f.Body) != MaxBody || f.Status != http.StatusOK {
 		t.Fatalf("next = %d bytes, status %d, %v; want a full frame", len(f.Body), f.Status, ok)
 	}

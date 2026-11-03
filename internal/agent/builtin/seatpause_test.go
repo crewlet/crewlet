@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
@@ -76,6 +77,11 @@ func (c leadPairs) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 // MemberOf answers that nobody sits in any unit: no case here shares an
 // artifact with a team.
 func (leadPairs) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+// SeatGranted answers that no role carries a grant: no seat gesture names one.
+func (leadPairs) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
 	return false, nil
 }
 
