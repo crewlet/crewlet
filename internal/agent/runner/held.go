@@ -21,7 +21,9 @@ type HeldCall struct {
 	// ([mcp.Definition.Digest]).
 	Tool, Server, Digest string
 
-	// Args are the call's arguments, opened from their seal: what runs.
+	// Args are the call's arguments, opened from their seal: what runs. Left
+	// sealed, and nil, for a call an earlier attempt marked
+	// ([HeldCommit.Marked]), which nothing runs again.
 	Args map[string]any
 
 	// Choice is the person's answer: [sandbox.HeldOnce],
@@ -45,6 +47,17 @@ type HeldCall struct {
 // ([sandbox.PendingStore.MarkHeldCall]). The engine supplies it, sealing and
 // opening the result under the fleet keyring.
 type HeldCommit interface {
+	// Marked is how an earlier attempt at the same answer left the call, as
+	// the claim that carries the run on read its row, and false where no
+	// attempt had marked it ([sandbox.HeldCall.Calling]): Made says whether
+	// that attempt recorded what the call returned (Result).
+	//
+	// THE CLAIM'S OWN READ, which needs no other: nothing clears a mark but
+	// the next job's opening, which ends the claim, so a call the claim read
+	// as marked stays marked for as long as the claim holds the row. A call
+	// it read as unmarked is the one [HeldCommit.Begin] marks, and Begin's
+	// answer is the store's word on whether its mark was the first.
+	Marked(ctx context.Context) (HeldPrior, bool)
 	// Begin marks the call as being made. First is true where this mark is
 	// the first, and the caller makes the call; false where some earlier
 	// attempt at the same answer marked it, and Made says whether that
@@ -60,11 +73,23 @@ type HeldCommit interface {
 	Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error
 }
 
-// HeldPrior is how a held call stood when [HeldCommit.Begin] marked it.
+// HeldPrior is how a held call stood: as [HeldCommit.Begin] found it when it
+// marked it, or as the claim read it ([HeldCommit.Marked]), where First is
+// never set.
 type HeldPrior struct {
 	First  bool
 	Made   bool
 	Result sandbox.HeldResult
+}
+
+// outcome is what became of a call some earlier attempt at the same answer
+// marked, as the run is told it: the result that attempt recorded, or, where
+// it recorded none, that the call may or may not have taken effect.
+func (p HeldPrior) outcome() heldOutcome {
+	if p.Made {
+		return heldOutcome{kind: heldMade, result: p.Result}
+	}
+	return heldOutcome{kind: heldUnknown}
 }
 
 // digested is a tool that names its definition, as an MCP server's tool does
@@ -101,6 +126,17 @@ const (
 // recorded one, tells the run the call may or may not have taken effect. It is
 // never made twice, which a person who allowed it once is owed.
 //
+// A LATER ATTEMPT ANSWERS FROM THE MARK FIRST ([HeldCommit.Marked]), before it
+// asks anything below of the call. Those checks ask whether a call nobody has
+// made may be made now, of a surface every attempt rebuilds from the live
+// tools and skills, and an attempt that made the call can still be refused
+// after it — at the launch, by the floor of the session it continues or by
+// every member sitting out — and its answer attempted again hours on. Asked
+// first, a skill made required in between, or a tool blocked or changed,
+// told the run that the call it had made was not made: its result was lost,
+// the run asked the person again, and their second approval made the call
+// twice.
+//
 // # The call the person approved, or none
 //
 // The tool is resolved against the surface the run carries on with, never what
@@ -131,37 +167,20 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) error
 		held.outcome = heldOutcome{kind: heldDenied}
 		return nil
 	}
-	if held.Unopened != "" {
-		held.outcome = heldOutcome{kind: heldNotMade, why: held.Unopened}
+	if prior, marked := held.Commit.Marked(ctx); marked {
+		held.outcome = prior.outcome()
 		return nil
 	}
-	entry, known := surface.Universe().Lookup(held.Tool)
-	if !known {
-		held.outcome = heldOutcome{kind: heldNotMade, why: "the tool is no longer filed for this " +
-			"agent (it was blocked, or its server removed or turned off, since the call was held)"}
-		return nil
-	}
-	if tool, ok := entry.Tool.(digested); !ok || tool.Digest() != held.Digest {
-		held.outcome = heldOutcome{kind: heldNotMade, why: "the tool's definition changed since " +
-			"the call was held, so it is not the tool the person approved; call it again to ask " +
-			"about the tool as it is now"}
-		return nil
-	}
-	if refused := surface.GuardRefusal(held.Tool); refused != "" {
-		held.outcome = heldOutcome{kind: heldNotMade, why: "the seat's skill guard holds the tool back. " +
-			strings.TrimSuffix(strings.TrimSpace(refused), ".") + "; calling it again asks the person afresh"}
+	if why := held.notMade(surface); why != "" {
+		held.outcome = heldOutcome{kind: heldNotMade, why: why}
 		return nil
 	}
 	prior, err := held.Commit.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("runner: marking the held call to %s as made: %w", held.Tool, err)
 	}
-	switch {
-	case prior.Made:
-		held.outcome = heldOutcome{kind: heldMade, result: prior.Result}
-		return nil
-	case !prior.First:
-		held.outcome = heldOutcome{kind: heldUnknown}
+	if !prior.First {
+		held.outcome = prior.outcome()
 		return nil
 	}
 	res, err := surface.RunApproved(ctx, held.Tool, held.Args)
@@ -185,6 +204,30 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) error
 	}
 	held.outcome = heldOutcome{kind: heldMade, result: result}
 	return nil
+}
+
+// notMade is why h is not to be made through surface, "" where it may be: its
+// arguments did not open, its tool is no longer filed or not the definition the
+// person approved, or the surface's guard would refuse it. Asked only of a call
+// no attempt has marked ([makeHeld]).
+func (h *HeldCall) notMade(surface *tools.Surface) string {
+	if h.Unopened != "" {
+		return h.Unopened
+	}
+	entry, known := surface.Universe().Lookup(h.Tool)
+	if !known {
+		return "the tool is no longer filed for this agent (it was blocked, or its server removed " +
+			"or turned off, since the call was held)"
+	}
+	if tool, ok := entry.Tool.(digested); !ok || tool.Digest() != h.Digest {
+		return "the tool's definition changed since the call was held, so it is not the tool the " +
+			"person approved; call it again to ask about the tool as it is now"
+	}
+	if refused := surface.GuardRefusal(h.Tool); refused != "" {
+		return "the seat's skill guard holds the tool back. " +
+			strings.TrimSuffix(strings.TrimSpace(refused), ".") + "; calling it again asks the person afresh"
+	}
+	return ""
 }
 
 // what is what the person answered, as the run is told it, under fence token

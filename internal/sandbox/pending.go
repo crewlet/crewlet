@@ -2062,7 +2062,10 @@ type PendingStore interface {
 	// claim answers [ErrHeldCallUnclaimed]. NOTHING CLEARS THE MARK but the
 	// next job's opening: a claim given back ([PendingStore.ReleaseClaim])
 	// or revived ([PendingStore.ReviveAnswer]) keeps it, so every later
-	// attempt at the same answer finds it.
+	// attempt at the same answer finds it — on the row its own claim returns
+	// ([PendingStore.ClaimForResume]), with the result once one is recorded,
+	// which the attempt answers the call from before it asks whether the
+	// call may be made at all ([HeldResume.Call]).
 	MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error)
 
 	// RecordHeldResult records what the held call a resume marked came to

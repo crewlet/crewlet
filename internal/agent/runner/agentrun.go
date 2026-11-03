@@ -560,7 +560,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// the call's result, and so used up the approval. A guard that refuses it
 	// all the same — a skill made required while the call waited, or one the
 	// rebuild cannot hold for want of the box's word — is asked before the call
-	// is marked, which leaves the approval unused ([makeHeld]).
+	// is marked, which leaves the approval unused ([makeHeld]). And only of a
+	// call no attempt has marked: one an earlier attempt at the answer made, and
+	// whose relaunch was refused after it, is answered from its mark, since the
+	// guard decides whether a call nobody made may be made now, never whether
+	// one was.
 	if asked, ok := carry.(*Asked); ok && asked.Held != nil {
 		if heldErr := makeHeld(ctx, surface, asked.Held); heldErr != nil {
 			r.steerReturn(ctx, Launched{}, fresh)
