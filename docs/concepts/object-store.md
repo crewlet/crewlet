@@ -352,7 +352,13 @@ store:
 
 Each object is one S3 object, `<prefix>files/<key>`. Any S3-compatible store
 works — Amazon S3, Cloudflare R2, MinIO, Ceph's gateway, GCS through its
-interoperability endpoint. The bucket keeps whatever copies its provider
+interoperability endpoint. The `endpoint` is an `http` or `https` URL: a host
+name, an IPv4 address or an IPv6 one in brackets, whose zone is an
+interface's name or number (`https://[fe80::1%25eth0]:9000`), and at most one
+port, 1 to 65535. `crewlet validate` and every node's start refuse any other
+— one with no host or a query, a port of 0 or past 65535, a zone holding a
+`]`, a `%` or a space — naming what is wrong, because no request could reach
+a bucket there. The bucket keeps whatever copies its provider
 promises, and its size is the provider's problem rather than any node's disk —
 up to the point the provider has no room left, when a write is refused as full
 (below).

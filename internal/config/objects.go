@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
+	"net/url"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -67,8 +70,9 @@ func (b ObjectBackend) Valid() bool { return slices.Contains(ObjectBackends, b) 
 type ObjectsS3 struct {
 	// Endpoint is the S3 API's base URL; empty is Amazon's own for the
 	// region. R2, MinIO, GCS's interoperability endpoint and Ceph's gateway
-	// each name theirs here.
-	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty" desc:"The S3 API's base URL; empty is Amazon S3's own for the region."`
+	// each name theirs here. One no request can reach is refused naming
+	// what is wrong with it ([checkS3Endpoint]).
+	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty" desc:"The S3 API's base URL: http or https, a host, and a port of 1..65535 if it has one; empty is Amazon S3's own for the region."`
 	// Region is the bucket's region — required by the signature even where
 	// the provider ignores it (R2 takes auto, MinIO us-east-1).
 	Region string `yaml:"region,omitempty" json:"region,omitempty" desc:"The bucket's region; required (R2: auto, MinIO: us-east-1)."`
@@ -130,6 +134,7 @@ func (o StoreObjects) validate(path Path) error {
 				"access_key_id and secret_access_key are given together, or neither "+
 					"to take the environment's or the instance's credentials")
 		}
+		p.wrap(checkS3Endpoint(at(s3, "endpoint"), o.S3.Endpoint))
 	case o.S3 != (ObjectsS3{}):
 		p.add(s3, ErrConflict,
 			"names a bucket, and store.objects.backend is %q; set backend: s3 to use it",
@@ -143,6 +148,77 @@ func (o StoreObjects) validate(path Path) error {
 	}
 	bytesInRange(&p, path, "nats_max_bytes", o.NatsMaxBytes,
 		NatsObjectsMaxBytesFloor, NatsObjectsMaxBytesCeiling)
+	return p.err()
+}
+
+// checkS3Endpoint refuses an endpoint no request to the bucket can be sent to,
+// naming what is wrong with it. Empty is Amazon S3's own endpoint for the
+// region, and passes.
+//
+// ONLY WHAT CAN NEVER WORK, each because no attempt reaches a bucket:
+//
+//   - one that is not an http or https URL with a host and no query: the S3
+//     client refuses at start an endpoint it cannot parse, one with no scheme
+//     or another, and one with a query, and one with no host at all sends a
+//     path-style request nowhere ("no Host in request URL") and a
+//     virtual-hosted one to the name `<bucket>.`;
+//   - a port outside 1 to 65535: the URL parser takes any digits, the dialer
+//     refuses 65536 and past as an invalid port on every attempt, and no
+//     listener ever holds port 0;
+//   - an IPv6 zone holding a `]`, a `%` or a space: a `]` splits the address
+//     where the dialer looks for its port ("missing port in address"), and the
+//     client refuses a zone it cannot write back into a URL, or dials one no
+//     interface carries.
+//
+// Before this a node found each at its boot's check of the bucket, after the
+// minute the client asks a failing request again for and the check's own
+// clean-up: 77 to 86 s to refuse an address it could never reach. The client
+// now gives such a dial up at its first attempt as well (s3obj's
+// unreachableByConstruction), for an address this cannot see: a proxy's.
+//
+// EVERY FORM THE CLIENT REACHES PASSES: a host with its scheme's own port
+// (`https://minio.example`), a port with leading zeros or none after its
+// colon, an upper-case scheme, a base path, a host outside ASCII, an IPv6
+// address in brackets with an interface's name or number as its zone, and an
+// empty host beside a port (`http://:9000`, this host, path-style).
+func checkS3Endpoint(path Path, raw string) error {
+	var p problems
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil:
+		if parse, ok := errors.AsType[*url.Error](err); ok {
+			err = parse.Err
+		}
+		p.add(path, ErrShape, "%q is not a URL the S3 client can parse (%v): write the S3 API's "+
+			"base URL, e.g. https://minio.example:9000", raw, err)
+	case u.Scheme != "http" && u.Scheme != "https":
+		hint := "https://" + raw
+		if u.Host != "" {
+			hint = "https://" + u.Host + u.EscapedPath()
+		}
+		p.add(path, ErrShape, "%q is not an http or https URL, which the S3 client refuses: "+
+			"write %s", raw, hint)
+	case u.Host == "":
+		p.add(path, ErrShape, "%q names no host, so no request reaches a bucket: write the S3 "+
+			"API's host, e.g. %s://minio.example:9000", raw, u.Scheme)
+	case u.RawQuery != "":
+		p.add(path, ErrShape, "%q has a query, which the S3 client refuses in an endpoint: "+
+			"remove it", raw)
+	default:
+		p.wrap(checkPort(path, raw, u.Port()))
+		host := u.Hostname()
+		if i := strings.IndexByte(host, '%'); i >= 0 {
+			if zone := host[i+1:]; strings.ContainsAny(zone, "]%") ||
+				strings.IndexFunc(zone, unicode.IsSpace) >= 0 {
+				p.add(path, ErrShape, "%q has the IPv6 zone %q, which no dial can use: name the "+
+					"interface as it is, by its name or its number, e.g. https://[fe80::1%%25eth0]:9000",
+					raw, zone)
+			}
+		}
+	}
 	return p.err()
 }
 
