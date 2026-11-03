@@ -443,7 +443,13 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # budget_exhausted, stopped for a phase a person
                            # ended, canceled, sandbox_<class>
                            # for an executor whose box could not
-                           # be started, or error
+                           # be started, or error. The execute record
+                           # that collected a run lists the calls its
+                           # run's record kept, and says the rest:
+                           # `calls_elided`, and `elided_calls` by tool
+                           # ({name, calls, failed}) — a long run's
+                           # dropped middle, counted in its round's
+                           # tool_calls
 executor_collected         # one LAUNCH of an executor's run, as its
                            # collection read it off the box — published once
                            # per launch, a person's stop and a lost host's

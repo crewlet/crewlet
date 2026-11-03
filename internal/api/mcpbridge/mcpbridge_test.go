@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -727,23 +728,80 @@ func TestEveryBridgedCallIsRecordedWhereAResumeCanReadIt(t *testing.T) {
 // a later segment seeds that log from keeps a call's arguments only in part
 // past its share of the run's row — so the record carries the digest the
 // admission counted, taken here before anything is cut: the canonical form's,
-// whatever spelling the model sent. A call never admitted carries none.
+// whatever spelling the model sent. The call is sent in a spelling the surface
+// rewrites — a null its schema does not declare, which the canonical form
+// drops — so the canonical digest and the digest of what was sent differ, and
+// a record of the one is not a record of the other.
 //
-// Mutation: record no digest, or one of the arguments as sent, and the cut or
-// differently spelt call is seeded as another.
+// Mutation: record no digest, or one of the arguments as sent, and the
+// differently spelt call is seeded as another: a repeat spelt "Draft" after
+// "draft", counted as a different call, writes twice.
 func TestARecordedCallCarriesTheIdentityItWasAdmittedUnder(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	sess := dial(t, f.open(t))
 
-	callTool(t, sess, "post_message", map[string]any{"text": "two"})
+	sent := map[string]any{"text": "two", "id": nil}
+	callTool(t, sess, "post_message", sent)
 	rows := f.ledger.rows()
 	if len(rows) != 1 {
 		t.Fatalf("%d rows, want 1: %+v", len(rows), rows)
 	}
-	want := turnctx.ArgsDigest(f.surface.ArgsOf("post_message", map[string]any{"text": "two"}).Map())
+	want := turnctx.ArgsDigest(f.surface.ArgsOf("post_message", sent).Map())
+	asSent := turnctx.ArgsDigest(sent)
+	if want == asSent {
+		t.Fatal("the spelling sent is canonical already, so the case tells the two digests apart nowhere")
+	}
 	if rows[0].Digest == "" || rows[0].Digest != want {
-		t.Errorf("the recorded call carries identity %q, want the admission's %q", rows[0].Digest, want)
+		t.Errorf("the recorded call carries identity %q, want the admission's %q (the arguments as sent "+
+			"digest to %q)", rows[0].Digest, want, asSent)
+	}
+}
+
+// workingTool is a call whose own work makes calls of the run's, as a
+// `delegate`'s workers do: on a fork of the call's own log, absorbed back.
+type workingTool struct{}
+
+func (workingTool) Name() string               { return "delegate" }
+func (workingTool) Description() string        { return "runs workers" }
+func (workingTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (workingTool) Call(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{Output: "no turn"}, nil
+}
+
+func (workingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[string]any) (tools.Result, error) {
+	worker := turn.CallLog().Fork()
+	worker.Record("leave_channel", toolargs.Of(nil, map[string]any{"channel": "R"}))
+	turn.CallLog().Absorb(worker)
+	return tools.Result{Output: "the workers are done"}, nil
+}
+
+// WHAT A CALL'S OWN WORK RECORDED RIDES ITS RECORD. A bridged `delegate` runs
+// its workers on forks of the run's call log, which takes their calls in as the
+// call returns; no call of the run's record is a worker's, so the record of the
+// `delegate` carries their identities, and a later segment seeded from it counts
+// a worker's call between two of the run's own as the run did.
+//
+// Mutation: record the call without what its work added, and a resumed run's
+// log is short of the worker's calls.
+func TestWhatACallsOwnWorkRecordedRidesItsRecord(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	reg := tools.NewRegistry()
+	if err := reg.Register(workingTool{}, tools.OriginBuiltin); err != nil {
+		t.Fatal(err)
+	}
+	turn := seatTurn()
+	turn.Calls = turnctx.NewCallLog()
+	f.surface = tools.NewSurface("execute", reg.Snapshot(), []string{"delegate"}).ForTurn(turn)
+	f.session.Surface = f.surface
+	sess := dial(t, f.open(t))
+
+	callTool(t, sess, "delegate", map[string]any{})
+	rows := f.ledger.rows()
+	want := toolloop.Called{Tool: "leave_channel", Digest: turnctx.ArgsDigest(map[string]any{"channel": "R"})}
+	if len(rows) != 1 || len(rows[0].Absorbed) != 1 || rows[0].Absorbed[0] != want {
+		t.Fatalf("the delegate's record is %+v, want it carrying the worker's call %+v", rows, want)
 	}
 }
 

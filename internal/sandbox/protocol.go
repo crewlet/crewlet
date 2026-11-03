@@ -107,11 +107,14 @@
 // store is one broker message, so every field the row carries has a share of
 // [RowBytes], in the bytes its encoder writes, and the shares close — the
 // bridged call log's ([BridgeLogBytes]), each call held to its own and the
-// calls its count bound drops kept as identities ([ElidedCall]); the parked
-// state's ([ExecuteStateBytes]), which its park condenses to fit and the store
-// refuses past it; and the rest's, with room stated for what a later build
-// adds. Every call carries the identity its run's call log admitted it under
-// ([BridgeCall.Digest]), so neither a cut argument nor a dropped call moves an
+// calls it counts without listing kept as identities ([ElidedCall]); the
+// parked state's ([ExecuteStateBytes]), which its park condenses to fit and the
+// store refuses past it; and the rest's, every field held by the write that
+// puts it there — a person's reply, a held call's sealed arguments and a box's
+// word on its session included — with room stated for what a later build adds.
+// Every call carries the identity its run's call log admitted it under
+// ([BridgeCall.Digest]), but for one whose arguments are withheld
+// ([BridgeCall.Withheld]), so neither a cut argument nor a dropped call moves an
 // operation id a resumed segment derives. See rowbytes.go.
 //
 // AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING

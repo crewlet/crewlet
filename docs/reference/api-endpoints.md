@@ -11269,14 +11269,18 @@ the size in bytes of the whole arguments and the whole output, and absent where
 the record keeps the call whole: decide "partly kept" by them, never by
 reading a marker. `digest` is the call's identity, the SHA-256 of its whole
 arguments as the run counts its calls, absent on a call no tool admitted (one
-refused after the run's tools closed, or whose arguments did not parse).
-`bridge_calls_elided` counts the calls dropped from the middle of a long run's
-log, and `bridge_elided_calls` says what they were: one entry per tool and
-argument digest, `{name, digest, calls, failed}`, sent to whom the run's body
-is sent and always an array beside `bridge_calls`. An entry with no `digest`
-counts calls to its tool whose arguments' identity was not kept, and one with
-no `name` calls whose tool was not kept either; an elision an older engine made
-has a count and no entries.
+refused after the run's tools closed, or whose arguments did not parse) and on
+a `held` or `approved` call, whose arguments ride the record sealed and are
+never digested in the clear.
+`bridge_calls_elided` counts the calls of the round the log does not list —
+dropped from the middle of a long run's log, or a call whose own record
+reached the run only with a later one — and `bridge_elided_calls` says what
+they were: one entry per tool and argument digest, `{name, digest, calls,
+failed}`, sent to whom the run's body is sent and always an array beside
+`bridge_calls`. An entry with no `digest` counts calls to its tool whose
+arguments' identity was not kept, and one with no `name` calls whose tool was
+not kept either — which is also how calls an older engine dropped, keeping a
+count and no entries, are served.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed

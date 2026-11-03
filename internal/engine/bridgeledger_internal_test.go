@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"sync"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -155,10 +157,19 @@ func TestWhatARowKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 		got[0].Args["path"] != "a.go" {
 		t.Errorf("the resumed turn reads %+v", got)
 	}
-	tally := elidedCalls([]sandbox.ElidedCall{{Name: "read_file", Digest: "d2", Calls: 7, Failed: 1}})
+	tally := identitiesOf([]sandbox.ElidedCall{{Name: "read_file", Digest: "d2", Calls: 7, Failed: 1}})
 	if len(tally) != 1 || tally[0].Name != "read_file" || tally[0].Digest != "d2" || tally[0].Calls != 7 ||
 		tally[0].Failed != 1 {
 		t.Errorf("the dropped calls read %+v", tally)
+	}
+	// A CALL WHOSE ARGUMENTS ARE WITHHELD reads as one, so a resumed segment
+	// counts it as a call of its tool whose arguments are not known, never as
+	// the tool called with none.
+	for _, call := range bridgedCalls([]sandbox.BridgeCall{{Name: "close_issue", Held: true, Failed: true},
+		{Name: "close_issue", Approved: true}}) {
+		if !call.Withheld || call.Digest != "" || len(call.Args) != 0 {
+			t.Errorf("a held or approved call reads %+v, want it withheld", call.Call)
+		}
 	}
 }
 
@@ -226,5 +237,85 @@ func TestARecordedSubmissionTellsTheRunsWaiterToLookNow(t *testing.T) {
 				t.Errorf("told %+v; want nobody", got)
 			}
 		})
+	}
+}
+
+// flakyStore is a pending store whose appends fail while fail says so, and
+// records every append it was asked for, landed or not.
+type flakyStore struct {
+	sandbox.PendingStore
+	mu     sync.Mutex
+	fail   func(attempt int, a sandbox.BridgeAppend) bool
+	asked  []sandbox.BridgeAppend
+	landed []sandbox.BridgeAppend
+}
+
+func (s *flakyStore) AppendBridgeCall(_ context.Context, _ string, a sandbox.BridgeAppend) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asked = append(s.asked, a)
+	if s.fail(len(s.asked), a) {
+		return false, errors.New("the coordination store is electing a leader")
+	}
+	s.landed = append(s.landed, a)
+	return true, nil
+}
+
+// A BRIDGED CALL'S RECORD THAT DID NOT LAND IS TRIED AGAIN, AND THEN OWED. The
+// call has run and its answer goes back to the box whatever the row says, but a
+// call missing from the row is one a resumed segment's call log never counts —
+// and a later call asking for something else then derives its operation id.
+// So a failed append is tried again before the answer goes back, which rides a
+// store's blip; and a call whose every attempt failed is owed by identity, its
+// own work's calls with it, and carried to the row by the session's next
+// append, counted there as a call of the round the row does not list.
+//
+// Mutation: append once and give up, and a blip loses the call; drop a call
+// whose attempts all failed, and the next append carries nothing of it.
+func TestABridgedCallsRecordThatDidNotLandIsTriedAgainAndThenOwed(t *testing.T) {
+	t.Parallel()
+	blip := &flakyStore{fail: func(attempt int, _ sandbox.BridgeAppend) bool { return attempt == 1 }}
+	l := newBridgeLedger(blip, nil)
+	l.bind("launch-1")
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "post_message"},
+		Seq: 1, Digest: "d1"}); err != nil {
+		t.Fatalf("an append the store refused once = %v; want it landed on its retry", err)
+	}
+	if len(blip.landed) != 1 || blip.landed[0].Call.Digest != "d1" {
+		t.Fatalf("the store took %+v, want the call once", blip.landed)
+	}
+
+	down := &flakyStore{fail: func(_ int, a sandbox.BridgeAppend) bool { return a.Call.Seq == 1 }}
+	l = newBridgeLedger(down, nil)
+	l.bind("launch-1")
+	worker := []toolloop.Called{{Tool: "leave_channel", Digest: "w1"}}
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "delegate", Failed: true},
+		Seq: 1, Digest: "d1", Absorbed: worker}); err == nil {
+		t.Fatal("an append the store refused every time answered no error")
+	}
+	if len(down.asked) != appendAttempts {
+		t.Errorf("the append was tried %d times, want %d", len(down.asked), appendAttempts)
+	}
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"},
+		Seq: 2, Digest: "d2"}); err != nil {
+		t.Fatalf("the next append: %v", err)
+	}
+	if len(down.landed) != 1 {
+		t.Fatalf("the store took %d appends, want the second call's", len(down.landed))
+	}
+	carried := down.landed[0]
+	wantOwed := []sandbox.ElidedCall{{Name: "delegate", Digest: "d1", Calls: 1, Failed: 1}}
+	wantAbsorbed := []sandbox.ElidedCall{{Name: "leave_channel", Digest: "w1", Calls: 1}}
+	if !reflect.DeepEqual(carried.Unrecorded, wantOwed) || !reflect.DeepEqual(carried.Absorbed, wantAbsorbed) {
+		t.Errorf("the next append carried %+v owed and %+v absorbed, want %+v and %+v", carried.Unrecorded,
+			carried.Absorbed, wantOwed, wantAbsorbed)
+	}
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"},
+		Seq: 3, Digest: "d3"}); err != nil {
+		t.Fatalf("a third append: %v", err)
+	}
+	if again := down.landed[1]; len(again.Unrecorded) != 0 || len(again.Absorbed) != 0 {
+		t.Errorf("the append after the one that carried the owed call carried %+v and %+v again",
+			again.Unrecorded, again.Absorbed)
 	}
 }

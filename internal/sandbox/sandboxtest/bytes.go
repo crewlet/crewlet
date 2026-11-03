@@ -1,13 +1,17 @@
 package sandboxtest
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -32,6 +36,12 @@ var bytesCases = []struct {
 	{"ANewRoundFoldsTheDroppedCallsIntoTheTurnsEarlierCalls", testANewRoundFoldsTheDroppedCallsIntoTheTurnsEarlierCalls},
 	{"AParkedStatePastItsShareIsRefused", testAParkedStatePastItsShareIsRefused},
 	{"ARunsTitleIsHeldToItsShare", testARunsTitleIsHeldToItsShare},
+	{"AnAppendCarriesWhatItsSessionOwedAndLandsOnce", testAnAppendCarriesWhatItsSessionOwedAndLandsOnce},
+	{"AWithheldCallIsKeptWithoutItsIdentity", testAWithheldCallIsKeptWithoutItsIdentity},
+	{"AnAnswerPastItsShareIsRefused", testAnAnswerPastItsShareIsRefused},
+	{"AHeldCallPastItsShareIsRefused", testAHeldCallPastItsShareIsRefused},
+	{"ANotePastItsBoundIsRefused", testANotePastItsBoundIsRefused},
+	{"AQuestionIsPutToTheNearestOfItsAudience", testAQuestionIsPutToTheNearestOfItsAudience},
 }
 
 // bytesRawCases are the cases that read the raw record.
@@ -41,6 +51,8 @@ var bytesRawCases = []struct {
 }{
 	{"ABridgedCallCarryingAMegabyteIsKeptWithinItsShare", testABridgedCallCarryingAMegabyteIsKeptWithinItsShare},
 	{"TwoHundredFullAnswersLeaveTheRowWithinItsBudget", testTwoHundredFullAnswersLeaveTheRowWithinItsBudget},
+	{"ATallyAnotherRoundLeftIsNoneOfThisRounds", testATallyAnotherRoundLeftIsNoneOfThisRounds},
+	{"ACaptureStampPastItsBoundsIsRefused", testACaptureStampPastItsBoundsIsRefused},
 }
 
 // commitArgs is a code_commit_files call's arguments as the engine records
@@ -137,7 +149,8 @@ func logBytes(t *testing.T, record []byte) int {
 		t.Fatal(err)
 	}
 	n := 0
-	for _, key := range []string{"bridge_calls", "bridge_calls_elided", "bridge_elided_calls"} {
+	for _, key := range []string{"bridge_calls", "bridge_calls_elided", "bridge_elided_calls",
+		"bridge_absorbed_calls", "bridge_tally_round"} {
 		if value, ok := fields[key]; ok {
 			n += len(`,"":`) + len(key) + len(value)
 		}
@@ -420,4 +433,331 @@ func testARunsTitleIsHeldToItsShare(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("relaunch: %v", err)
 	}
 	check("a relaunch")
+}
+
+// AN APPEND CARRIES WHAT ITS SESSION OWED, AND LANDS ONCE. A bridged call whose
+// own append never landed is owed by its session, by identity, and the next
+// append carries it: the row counts it as a call of the round it does not list,
+// beside the dropped middle, so a resumed call log seeds it and a reader of
+// whether the turn replied reads it. The calls a call's own work made — a
+// delegated worker's — ride the same append into a tally of their own, which
+// no reader of the round's deliveries counts. And an append whose answer was
+// lost, asked again, is answered recorded and changes nothing: the call and
+// what it carried are on the row once.
+//
+// Mutation: drop the owed identities, or the absorbed ones, and a resumed run
+// counts fewer calls than its process did; append a repeat again, and both
+// tallies double.
+func testAnAppendCarriesWhatItsSessionOwedAndLandsOnce(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bytes-owed")
+	launch := mustLaunched(t, s, r)
+	a := sandbox.BridgeAppend{Launch: launch,
+		Call: sandbox.BridgeCall{Name: "delegate", Digest: digestOf(3), Seq: 3, StartedAt: base},
+		Unrecorded: []sandbox.ElidedCall{{Name: "comment_on_work_item", Digest: digestOf(1), Calls: 1},
+			{Name: "read_file", Digest: digestOf(2), Calls: 1, Failed: 1}},
+		Absorbed: []sandbox.ElidedCall{{Name: "leave_channel", Digest: digestOf(9), Calls: 1}},
+	}
+	for attempt := range 2 {
+		if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, a); err != nil || !recorded {
+			t.Fatalf("append, attempt %d = %v, %v; want it recorded", attempt+1, recorded, err)
+		}
+	}
+	got := mustGet(t, s, r.TurnID)
+	if len(got.BridgeCalls) != 1 || got.BridgeCallsElided != 2 {
+		t.Fatalf("the row lists %d calls and counts %d it does not list, want the one and the two owed",
+			len(got.BridgeCalls), got.BridgeCallsElided)
+	}
+	elided := got.Elided()
+	if len(elided) != 2 || elided[0].Name != "comment_on_work_item" || elided[1].Failed != 1 || !got.ElisionKnown() {
+		t.Errorf("the owed calls read %+v (known %v), want both by identity and outcome", elided,
+			got.ElisionKnown())
+	}
+	absorbed := got.Absorbed()
+	if len(absorbed) != 1 || absorbed[0].Name != "leave_channel" || absorbed[0].Calls != 1 {
+		t.Errorf("the delegate's own work reads %+v, want the worker's one call", absorbed)
+	}
+	// ANOTHER CALL AT THE SAME PLACE IS NOT THE SAME CALL: a session opened
+	// again on the job numbers its calls after the row's, and a call the
+	// closed session still had in flight can land at a place it reuses.
+	other := sandbox.BridgeAppend{Launch: launch,
+		Call: sandbox.BridgeCall{Name: "read_file", Digest: digestOf(4), Seq: 3, StartedAt: base.Add(time.Second)}}
+	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, other); err != nil || !recorded {
+		t.Fatalf("another call at the same place = %v, %v; want it recorded", recorded, err)
+	}
+	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 2 {
+		t.Errorf("the row lists %d calls, want both calls made at the one place", len(got.BridgeCalls))
+	}
+}
+
+// A WITHHELD CALL IS KEPT WITHOUT ITS IDENTITY. A call held for a person's
+// approval, and the call they approved, carry their arguments sealed on the
+// held call (ADR-0077): a digest of them in the clear on the call's record
+// would confirm a guess at what the seal hides. So the row keeps neither,
+// whichever writer hands them — the bridge's append of the held call, the
+// resume's record of the approved one — and a resumed call log counts each as a
+// call of its tool whose arguments are not known.
+//
+// Mutation: keep a withheld call's digest, and the row holds it in the clear.
+func testAWithheldCallIsKeptWithoutItsIdentity(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bytes-withheld")
+	launch := mustLaunched(t, s, r)
+	if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{Launch: launch,
+		Call: sandbox.BridgeCall{Name: "tr_close_issue", Held: true, Failed: true, Args: `{"id":"7"}`,
+			Digest: digestOf(7), Seq: 1}}); err != nil {
+		t.Fatalf("append the held call: %v", err)
+	}
+	held := mustGet(t, s, r.TurnID).BridgeCalls[0]
+	if held.Digest != "" || held.Args != "" || !held.Held {
+		t.Errorf("the held call is kept as %+v, want it held, with neither its arguments nor their digest", held)
+	}
+}
+
+// replyBatch is a chat reply of n messages of size bytes of markup each, as the
+// answer it would be recorded as: each delivery the event it is, and the words
+// sealed (standing in for the coordinator's seal, as large as the words are).
+func replyBatch(n, size int) sandbox.RecordedAnswer {
+	a := sandbox.RecordedAnswer{Via: types.AnswerViaChat, RecordedAt: base}
+	var words strings.Builder
+	for range n {
+		body := strings.Repeat("<", size)
+		ev := events.New(types.ExternalNotification{Body: body}, events.TraceContext{})
+		raw, err := json.Marshal(ev)
+		if err != nil {
+			panic(err)
+		}
+		a.EventIDs = append(a.EventIDs, ev.ID.String())
+		a.Events = append(a.Events, raw)
+		words.WriteString(body)
+	}
+	a.Sealed = sealOf(words.String())
+	return a
+}
+
+// AN ANSWER PAST ITS SHARE IS REFUSED, BEFORE ANYTHING IS WRITTEN. A reply is
+// recorded on the run's row as its answer — its words sealed, and every
+// delivery it was made of as the event it is — and a batch of long messages in
+// markup, whose every byte the row's encoder escapes six-fold, weighs
+// megabytes there: twice over with the copies a decline would owe. So the
+// store holds a recorded answer to its share (sandbox's MaxAnswerBytes) and
+// refuses one past it by name, leaving the run waiting on its question, and
+// the reply goes its way as the ordinary message it is. A reply within its
+// share is recorded.
+//
+// Mutation: keep the events whole whatever they weigh, and twenty messages
+// of 32 KiB of markup are recorded as the run's answer, megabytes of it.
+func testAnAnswerPastItsShareIsRefused(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bytes-answer")
+	launch := mustLaunched(t, s, r)
+	park(t, s, r.TurnID)
+	_, ok, err := s.RecordAnswer(ctx, r.TurnID, launch, replyBatch(20, 32<<10), sandbox.Fence{})
+	if !errors.Is(err, sandbox.ErrAnswerTooLarge) || ok {
+		t.Fatalf("a reply of twenty 32 KiB messages of markup = %v, %v; want ErrAnswerTooLarge", ok, err)
+	}
+	if got := mustGet(t, s, r.TurnID); got.Answer != nil || got.Status != sandbox.StatusAwaiting {
+		t.Fatalf("the refused answer left the run %s holding %v; want it awaiting, holding none",
+			got.Status, got.Answer != nil)
+	}
+	if _, ok, err := s.RecordAnswer(ctx, r.TurnID, launch, replyBatch(3, 2<<10), sandbox.Fence{}); err != nil || !ok {
+		t.Errorf("a reply of three short messages = %v, %v; want it recorded", ok, err)
+	}
+}
+
+// A HELD CALL PAST ITS SHARE IS REFUSED, BEFORE ANYTHING IS WRITTEN. A call held
+// for a person's approval never reaches its server, so nothing but the run's
+// row bounds what it carries, and its arguments ride the row sealed. The store
+// holds them to their share (sandbox's MaxHeldArgsBytes) and refuses a call
+// past it by name — the holder refuses such a call to the run first, naming its
+// size — and records a call within it.
+//
+// Mutation: record the held call whatever it carries, and a megabyte file
+// rides the row three and a half times over.
+func testAHeldCallPastItsShareIsRefused(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bytes-held")
+	launch := mustLaunched(t, s, r)
+	big := heldAsk(t, r.TurnID, launch)
+	sealed, err := heldSeal(t).SealArguments(r.TurnID, *big.Held,
+		map[string]any{"path": "index.html", "content": strings.Repeat("<p>", 1<<20/3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	big.Held.Arguments = sealed
+	if outcome, err := s.RecordAsk(ctx, r.TurnID, launch, big); !errors.Is(err, sandbox.ErrHeldCallTooLarge) {
+		t.Fatalf("a held call carrying a megabyte of markup = %v, %v; want ErrHeldCallTooLarge", outcome, err)
+	}
+	if got := mustGet(t, s, r.TurnID); got.HeldCall != nil || got.Question != "" {
+		t.Fatalf("the refused call left a question on the run: %+v", got.HeldCall)
+	}
+	if outcome, err := s.RecordAsk(ctx, r.TurnID, launch, heldAsk(t, r.TurnID, launch)); err != nil ||
+		outcome != sandbox.AskRecorded {
+		t.Errorf("a held call within its share = %v, %v; want it recorded", outcome, err)
+	}
+}
+
+// A NOTE PAST ITS BOUND IS REFUSED, BEFORE ANYTHING IS WRITTEN. A person's note
+// is sealed by the engine and kept on the run's row once read, ten to a turn;
+// the store holds each seal to its bound (sandbox's MaxNoteSealedBytes), which
+// the engine's own longest note fits, so the row's arithmetic is the store's.
+//
+// Mutation: file a note whatever its seal weighs, and ten of them grow the row
+// without a bound.
+func testANotePastItsBoundIsRefused(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bytes-note")
+	mustLaunched(t, s, r)
+	_, _, err := s.FileNote(ctx, r.TurnID, sandbox.NoteFiling{MaxWaiting: 10, MaxNotes: 10,
+		Note: sandbox.RunNote{ID: "n1", Sealed: bytes.Repeat([]byte("a"), sandbox.MaxNoteSealedBytes+1)}})
+	if !errors.Is(err, sandbox.ErrNoteTooLarge) {
+		t.Fatalf("a note sealed past its bound = %v; want ErrNoteTooLarge", err)
+	}
+	if got := mustGet(t, s, r.TurnID); len(got.Steer.Notes) != 0 {
+		t.Fatalf("the refused note is on the record: %+v", got.Steer.Notes)
+	}
+	if filed, _, err := s.FileNote(ctx, r.TurnID, sandbox.NoteFiling{MaxWaiting: 10, MaxNotes: 10,
+		Note: sandbox.RunNote{ID: "n2", Sealed: bytes.Repeat([]byte("a"), sandbox.MaxNoteSealedBytes)}}); err != nil ||
+		filed != sandbox.NoteAccepted {
+		t.Errorf("a note at its bound = %v, %v; want it filed", filed, err)
+	}
+}
+
+// A QUESTION IS PUT TO THE NEAREST OF ITS AUDIENCE. A `team` audience is every
+// person in the asking seat's unit, which nothing else bounds, and the row
+// carries the seats a question is put to; the park holds them to their bound
+// (sandbox's MaxAudienceHandles) and keeps the first, which the resolution
+// names nearest first.
+//
+// Mutation: park the question on every seat it resolved to, and a unit of
+// thousands rides the row.
+func testAQuestionIsPutToTheNearestOfItsAudience(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bytes-audience")
+	mustLaunched(t, s, r)
+	Ask(t, s, r.TurnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToTeam})
+	handles := make([]string, sandbox.MaxAudienceHandles+44)
+	for i := range handles {
+		handles[i] = fmt.Sprintf("person-%04d", i)
+	}
+	if err := s.MarkAwaiting(ctx, r.TurnID, sandbox.Clarification{Answerers: sandbox.Audience{Handles: handles},
+		AskedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	got := mustGet(t, s, r.TurnID).AudienceHandles
+	if len(got) != sandbox.MaxAudienceHandles || got[0] != handles[0] ||
+		got[len(got)-1] != handles[sandbox.MaxAudienceHandles-1] {
+		t.Errorf("the question is put to %d seats, %v first; want the nearest %d", len(got), got[:1],
+			sandbox.MaxAudienceHandles)
+	}
+}
+
+// A TALLY ANOTHER ROUND LEFT IS NONE OF THIS ROUND'S. An older build, which
+// knows neither tally, opens a new round by clearing the round's calls and
+// their count, and carries the tallies on as keys it does not know — where
+// they named the earlier round's calls as this one's: a reply this round never
+// made, and identities its log never held. And an older build that drops calls
+// from the middle counts them and keeps no identity. Read by this build, a
+// tally is the round's only where it was kept under the round's first call;
+// and calls counted and not accounted for read as calls whose tool is not
+// known — counted against every later call, and a record no reader of whether
+// the turn replied can read whole. The next append of this build starts the
+// round's tally over, from what it reads.
+//
+// Mutation: read the tallies off the row as they stand, and the earlier
+// round's reply answers this one, and its identities are seeded into it.
+func testATallyAnotherRoundLeftIsNoneOfThisRounds(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	ctx := t.Context()
+	r := run("t-bytes-stale")
+	launch := mustLaunched(t, s, r)
+	for i := range sandbox.MaxBridgeCalls + 2 {
+		name := "read_file"
+		if i == sandbox.MaxBridgeCalls/2 {
+			name = "post_message"
+		}
+		if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{Launch: launch,
+			Call:     sandbox.BridgeCall{Name: name, Digest: digestOf(i), Seq: i + 1},
+			Absorbed: []sandbox.ElidedCall{{Name: "leave_channel", Digest: digestOf(i), Calls: 1}}}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	// AN OLDER BUILD OPENS THE NEXT ROUND: its calls and their count go,
+	// and the keys it does not know stay as they were.
+	rewrite(t, runs, r.TurnID, func(row map[string]json.RawMessage) {
+		row["bridge_calls"] = json.RawMessage(`[{"name":"read_file","seq":1,"at":"2031-01-01T00:00:00Z"}]`)
+		delete(row, "bridge_calls_elided")
+	})
+	got := mustGet(t, s, r.TurnID)
+	if len(got.Elided()) != 0 || len(got.Absorbed()) != 0 || !got.ElisionKnown() {
+		t.Errorf("the next round reads %+v dropped and %+v absorbed (known %v), want none of the last round's",
+			got.Elided(), got.Absorbed(), got.ElisionKnown())
+	}
+	// AND DROPS THREE CALLS OF ITS OWN, keeping no identity of them.
+	rewrite(t, runs, r.TurnID, func(row map[string]json.RawMessage) {
+		row["bridge_calls_elided"] = json.RawMessage(`3`)
+	})
+	got = mustGet(t, s, r.TurnID)
+	if e := got.Elided(); len(e) != 1 || e[0].Name != "" || e[0].Calls != 3 || got.ElisionKnown() {
+		t.Errorf("three calls dropped with no identity read %+v (known %v), want three calls of no known tool",
+			e, got.ElisionKnown())
+	}
+	if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{Launch: launch,
+		Call: sandbox.BridgeCall{Name: "read_file", Digest: digestOf(500), Seq: 500}}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	got = mustGet(t, s, r.TurnID)
+	if e := got.ElidedCalls; len(e) != 1 || e[0].Name != "" || e[0].Calls != 3 || len(got.AbsorbedCalls) != 0 {
+		t.Errorf("this build's next append keeps %+v dropped and %+v absorbed, want the round's own: three "+
+			"calls of no known tool, nothing absorbed", e, got.AbsorbedCalls)
+	}
+}
+
+// rewrite changes turnID's raw record as a build that does not know some of its
+// keys would write it, through the store the record is held in.
+func rewrite(t *testing.T, runs coord.SandboxRuns, turnID string, change func(map[string]json.RawMessage)) {
+	t.Helper()
+	_, _, err := runs.MutateSandboxRun(t.Context(), turnID, func(record coord.Record) (coord.SandboxRunChange, error) {
+		var row map[string]json.RawMessage
+		if err := json.Unmarshal(record.Value, &row); err != nil {
+			return coord.SandboxRunChange{}, err
+		}
+		change(row)
+		raw, err := json.Marshal(row)
+		if err != nil {
+			return coord.SandboxRunChange{}, err
+		}
+		return coord.SandboxRunChange{Put: raw}, nil
+	})
+	if err != nil {
+		t.Fatalf("rewrite the raw record of %s: %v", turnID, err)
+	}
+}
+
+// A CAPTURE STAMP PAST ITS BOUNDS IS REFUSED, BEFORE ANYTHING IS WRITTEN. What a
+// box says of its session — the release of the harness that wrote it, read off
+// a file the run's own agent can write — reaches the row on the capture's
+// stamp, twice once it lands (the place, and the turn's kept capture). The
+// store holds every such field to the bound the executor log holds it to and
+// refuses a stamp past one by name, leaving the record as it was; a stamp
+// within them is taken.
+//
+// Mutation: stamp the capture whatever it carries, and a release of a megabyte
+// of digits is on the row.
+func testACaptureStampPastItsBoundsIsRefused(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	ctx := t.Context()
+	r := run("t-bytes-capture")
+	launch := mustLaunched(t, s, r)
+	before := raw(t, runs, r.TurnID)
+	stamp := sandbox.SessionCapture{LaunchSeq: 1, CaptureSeq: 1, Launch: launch, State: sandbox.CaptureBegun,
+		At: base, Harness: "claude-code", HarnessVersion: strings.Repeat("9", 1<<20) + ".0.0", SessionID: "s-1"}
+	if took, err := s.StampCapture(ctx, r.TurnID, stamp); !errors.Is(err, sandbox.ErrCaptureUnbounded) || took {
+		t.Fatalf("a stamp naming a megabyte release = %v, %v; want ErrCaptureUnbounded", took, err)
+	}
+	if after := raw(t, runs, r.TurnID); !bytes.Equal(after, before) {
+		t.Fatalf("the refused stamp changed the record: %d bytes to %d", len(before), len(after))
+	}
+	stamp.HarnessVersion = "2.1.310"
+	if took, err := s.StampCapture(ctx, r.TurnID, stamp); err != nil || !took {
+		t.Errorf("a stamp within its bounds = %v, %v; want it taken", took, err)
+	}
 }

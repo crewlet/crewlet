@@ -965,6 +965,16 @@ type AgentPhaseCompleted struct {
 	// Zero on a record that lists them all.
 	DeliveredRefs       []string `json:"delivered_refs,omitempty"`
 	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
+	// CallsElided is how many calls a collected executor's run made over its
+	// bridge that its run's record did not keep — a long run's dropped
+	// middle, and a call whose own record never landed until a later one
+	// carried it — and ElidedCalls those calls by tool, with how many of each
+	// failed. ToolExecutions lists only the calls the record kept, and this
+	// record outlives the run's: once the run's row is gone, what it dropped
+	// is said here or nowhere. Counted in its round's tool_calls. Absent on
+	// every other phase, and on a run whose record kept every call.
+	CallsElided int           `json:"calls_elided,omitempty"`
+	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
 	// Failed is true when the phase died instead of finishing.
 	//
 	// A phase that raises used to publish NOTHING: the only durable record was
@@ -990,6 +1000,21 @@ type AgentPhaseCompleted struct {
 	// store tags a channel id for A2A events alone, so no query could ask
 	// for one thread's phases.
 	ConversationKey string `json:"conversation_key"`
+}
+
+// ElidedCalls is one tool's calls a collected executor's record did not keep
+// ([AgentPhaseCompleted.ElidedCalls]): how many, and how many of them failed.
+// Name is empty for calls whose tool the record did not keep either — a long
+// run whose dropped middle outgrew what its record keeps of it, or a record an
+// older engine kept, which counted its drops and named none.
+//
+// BY TOOL, never by what each call asked for: the record is a person's
+// account of the run, and the identities the engine keeps of each call are its
+// own business, for counting a later call's repeats.
+type ElidedCalls struct {
+	Name   string `json:"name,omitempty"`
+	Calls  int    `json:"calls"`
+	Failed int    `json:"failed,omitempty"`
 }
 
 // EventType is the "agent_phase_completed" wire type.

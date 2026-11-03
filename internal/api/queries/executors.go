@@ -590,9 +590,11 @@ func runRow(run sandbox.PendingRun, opened runOpened) map[string]any {
 		// AND WHAT THOSE WERE, by tool and argument digest with how many
 		// calls had each and how many failed: the count bound costs the board
 		// the calls themselves, never which tools the run called how often.
-		// Always an array beside `bridge_calls`, empty where nothing was cut
-		// or an older build cut it without keeping this.
-		"bridge_elided_calls": nonNil(run.ElidedCalls),
+		// Always an array beside `bridge_calls`, empty where nothing was cut.
+		// READ AS THE ROUND'S ([sandbox.PendingRun.Elided]): calls an older
+		// build cut without keeping this are one entry naming no tool, and a
+		// tally another round left is none.
+		"bridge_elided_calls": nonNil(run.Elided()),
 		// THE THREE IDENTIFIERS a person needs to find this run in
 		// somebody else's system: the harness's own session, the
 		// command the engine launched, and the chain of asks that led

@@ -7,8 +7,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -43,8 +45,10 @@ import (
 // runner's to state: the run's record has one, and it is not this layer's.
 //
 // AND WITH ITS IDENTITY AND WHAT THE ROW KEPT OF IT: the digest the call was
-// admitted under, which a resumed segment seeds its call log by, and the size
-// of the whole arguments and output where the row kept less
+// admitted under, which a resumed segment seeds its call log by — or that its
+// arguments are withheld, a call held for a person's approval and the one they
+// approved, which it seeds as a call of its tool whose arguments are not known
+// — and the size of the whole arguments and output where the row kept less
 // ([sandbox.BridgeCall.ArgsBytes]), which the collection's replay decides by.
 // The arguments are the row's, a left-out value's marker included: a reader
 // that shows them shows a left-out payload as left out.
@@ -58,6 +62,9 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 				Result: call.Output,
 				Failed: call.Failed,
 				Digest: call.Digest,
+				// WITHHELD, the arguments and their digest with them: the
+				// row keeps neither of a held call or an approved one.
+				Withheld: call.Withheld(),
 			},
 			Seq:         call.Seq,
 			StartedAt:   call.StartedAt,
@@ -73,10 +80,13 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 	return out
 }
 
-// elidedCalls is what a run's row dropped from the middle of its calls, by
-// identity ([sandbox.PendingRun.ElidedCalls]), in the shape the turn's record
-// carries it ([ledger.Elided]).
-func elidedCalls(ids []sandbox.ElidedCall) []ledger.Elided {
+// identitiesOf is a tally a run's row keeps of calls it does not list, by
+// identity — the round's calls it dropped ([sandbox.PendingRun.Elided]), or
+// the ones its call log absorbed from a bridged call's own work
+// ([sandbox.PendingRun.Absorbed]) — in the shape the turn's record carries it
+// ([ledger.Elided]). Handed the row's tally as the round's, through those two
+// readers, never off the fields.
+func identitiesOf(ids []sandbox.ElidedCall) []ledger.Elided {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -99,6 +109,18 @@ func decodeBridgeArgs(raw string) map[string]any {
 
 // bridgeLedger appends a bridged run's calls to its pending-run row, and with
 // each one what the run's bridged calls have cost the engine so far.
+//
+// AN APPEND THAT DOES NOT LAND IS TRIED AGAIN, and then OWED. The call has run
+// and its effect has happened, so it is never failed back to the box; but a
+// call missing from the row is one a resumed segment's call log never counts,
+// and a later call that asks for something else derives that call's operation
+// id. So the append is tried [appendAttempts] times before the call's answer
+// goes back — the box cannot end its run on a call it has no answer to, so a
+// store's blip never costs the record its last calls — and a call that still
+// did not land is owed by identity: the session's next append carries it,
+// counted on the row as a call of the round it does not list
+// ([sandbox.BridgeAppend.Unrecorded]). Only an outage from the call to its
+// job's end leaves it off every record, and the log says so for each.
 //
 // ONE PER SESSION, so one per job, and BOUND TO THAT JOB BEFORE ITS BOX EXISTS
 // ([bridgeLedger.bind], handed to [sandbox.LaunchRequest.Opened]): every append
@@ -123,7 +145,26 @@ type bridgeLedger struct {
 	// launch is the job this session's calls are recorded under, as the
 	// store opened it.
 	launch string
+	// owed are this session's calls whose append never landed, by
+	// identity, and owedAbsorbed what their own work added to the run's
+	// call log: carried by the next append that lands.
+	owed         []sandbox.ElidedCall
+	owedAbsorbed []sandbox.ElidedCall
 }
+
+// The retry of one bridged call's append ([bridgeLedger]): THREE ATTEMPTS,
+// spaced 250 ms and then 500 ms, held to a second at the most between two.
+// One compare-and-swap of one row, which a healthy coordination store answers
+// in milliseconds; what a retry rides over is a stream's leader stepping down
+// mid-write, whose re-election the broker answers within about a second. Every
+// second spent here is a second the box waits for its call's answer, and a
+// store out for longer is an outage the session's later appends ride over
+// instead, carrying the call as owed.
+const (
+	appendAttempts     = 3
+	appendRetryBase    = 250 * time.Millisecond
+	appendRetryCeiling = time.Second
+)
 
 var _ mcpbridge.Ledger = (*bridgeLedger)(nil)
 
@@ -176,7 +217,15 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 				"is recorded under none; the launch binds a session before its box exists")
 		return nil
 	}
-	recorded, err := l.store.AppendBridgeCall(ctx, runID, sandbox.BridgeAppend{
+	// WHAT THE SESSION STILL OWES THE ROW, taken now so no other append of
+	// it carries the same calls, and handed back below if this one does not
+	// land either.
+	l.mu.Lock()
+	owed, owedAbsorbed := l.owed, l.owedAbsorbed
+	l.owed, l.owedAbsorbed = nil, nil
+	l.mu.Unlock()
+	absorbed := append(identitiesCalled(call.Absorbed), owedAbsorbed...)
+	a := sandbox.BridgeAppend{
 		Launch: launch,
 		Call: sandbox.BridgeCall{
 			Name: call.Name,
@@ -205,9 +254,26 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			// what a later segment's call log counts the call by.
 			Digest: call.Digest,
 		},
-		Spent: l.spent(),
-	})
+		// AND WHAT THE ROW HAS NOT HEARD OF: the session's earlier calls
+		// that never landed, and what this call's own work and theirs added
+		// to the run's call log.
+		Unrecorded: owed,
+		Absorbed:   absorbed,
+		Spent:      l.spent(),
+	}
+	recorded, err := l.appendRetrying(ctx, runID, a)
 	if err != nil {
+		// OWED, by identity: the next append of the session carries it.
+		l.mu.Lock()
+		l.owed = append(append(l.owed, owed...), owedIdentity(a.Call))
+		l.owedAbsorbed = append(l.owedAbsorbed, absorbed...)
+		pending := l.owed
+		l.mu.Unlock()
+		log.WarnContext(ctx, "bridge_call_owed", "run_id", runID, "launch_id", launch,
+			"tool", call.Name, "owed", len(pending), "error", err.Error(),
+			"detail", "the call ran and its answer goes back to the box, but the run's row did not "+
+				"take it; the session's next append carries it to the row by identity, and a job "+
+				"that makes none leaves it off its record")
 		return err
 	}
 	if !recorded {
@@ -309,6 +375,53 @@ func boxStarted(ledger *bridgeLedger, runID string, continuing func() bool,
 		}
 		ledger.started(ctx, runID, start)
 	}
+}
+
+// appendRetrying appends a, tried again on an error — see [bridgeLedger] — and
+// answers the last attempt. Asked again, an append whose earlier answer was
+// lost after it landed is answered recorded and lands nothing twice
+// ([sandbox.PendingStore.AppendBridgeCall]).
+func (l *bridgeLedger) appendRetrying(ctx context.Context, runID string, a sandbox.BridgeAppend) (bool, error) {
+	for attempt := 1; ; attempt++ {
+		recorded, err := l.store.AppendBridgeCall(ctx, runID, a)
+		if err == nil || attempt >= appendAttempts || ctx.Err() != nil {
+			return recorded, err
+		}
+		timer := time.NewTimer(backoff.Doubling(attempt, appendRetryBase, appendRetryCeiling))
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return recorded, err
+		}
+	}
+}
+
+// owedIdentity is a call whose append did not land, as the row counts it once
+// a later append carries it: its tool, its identity — none where its
+// arguments are withheld ([sandbox.BridgeCall.Withheld]) — and its outcome.
+func owedIdentity(call sandbox.BridgeCall) sandbox.ElidedCall {
+	owed := sandbox.ElidedCall{Name: call.Name, Digest: call.Digest, Calls: 1}
+	if call.Withheld() {
+		owed.Digest = ""
+	}
+	if call.Failed {
+		owed.Failed = 1
+	}
+	return owed
+}
+
+// identitiesCalled is the calls a bridged call's own work added to the run's
+// call log ([mcpbridge.Call.Absorbed]), as the row tallies them.
+func identitiesCalled(called []toolloop.Called) []sandbox.ElidedCall {
+	if len(called) == 0 {
+		return nil
+	}
+	out := make([]sandbox.ElidedCall, 0, len(called))
+	for _, c := range called {
+		out = append(out, sandbox.ElidedCall{Name: c.Tool, Digest: c.Digest, Calls: 1})
+	}
+	return out
 }
 
 // spent is the meter's running total in the shape a run's row carries, and

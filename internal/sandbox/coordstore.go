@@ -315,7 +315,8 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		switch {
 		case !run.Continues:
 			existing.PriorCalls, existing.PriorCallsElided = foldPriorCalls(*existing)
-			existing.BridgeCalls, existing.BridgeCallsElided, existing.ElidedCalls = nil, 0, nil
+			existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
+			existing.ElidedCalls, existing.AbsorbedCalls, existing.TallyRound = nil, nil, time.Time{}
 			existing.AnsweredThrough = 0
 		case continuesAnswer:
 			existing.AnsweredThrough = existing.LastBridgeSeq()
@@ -370,6 +371,10 @@ func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture Se
 		return false, fmt.Errorf("sandbox: a capture of run %s is placed at (%d, %d) in state %q, and "+
 			"every capture is placed from (1, 1) in one of %s", turnID, capture.LaunchSeq,
 			capture.CaptureSeq, capture.State, words.Or(CaptureStates))
+	}
+	// HELD TO ITS BOUNDS before it reaches the row: see [SessionCapture.Bounded].
+	if err := capture.Bounded(); err != nil {
+		return false, fmt.Errorf("sandbox: a capture of run %s: %w", turnID, err)
 	}
 	// SET ON EVERY ASK OF decide, which runs again on a lost race: the last
 	// one is the row the answer is about — where the last attempt found one
@@ -454,7 +459,7 @@ func foldPriorCalls(run PendingRun) ([]string, bool) {
 			add(call.Name)
 		}
 	}
-	for _, e := range run.ElidedCalls {
+	for _, e := range run.Elided() {
 		if e.Calls > e.Failed {
 			add(e.Name)
 		}
@@ -592,7 +597,10 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 	}
 	_, _, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		run.Status = StatusAwaiting
-		run.AudienceHandles = append([]string(nil), q.Answerers.Handles...)
+		// THE NEAREST FIRST, held to [MaxAudienceHandles]: the resolution
+		// names them in that order, and a unit's every person is not.
+		run.AudienceHandles = slices.Clone(q.Answerers.Handles[:min(len(q.Answerers.Handles),
+			MaxAudienceHandles)])
 		run.AudienceFallback = q.Answerers.Fallback
 		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens
 		run.ParkedCacheReadTokens, run.ParkedCacheWriteTokens = q.CacheReadTokens, q.CacheWriteTokens
@@ -628,6 +636,11 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 	}
 	if answer.RecordedAt.IsZero() {
 		answer.RecordedAt = s.clock()
+	}
+	// HELD TO ITS SHARE OF THE ROW, as written and as its decline would owe
+	// it, before anything is written: see [MaxAnswerBytes].
+	if err := answerFits(turnID, answer); err != nil {
+		return PendingRun{}, false, err
 	}
 	ownedBy := int64(0)
 	recorded, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
@@ -772,9 +785,11 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 		run.HeldCall = &held
 		call := made.Call
 		call.Name, call.Approved, call.At = held.Tool, true, now
-		call.Args, call.Output, call.Held = "", "", false
+		// ITS ARGUMENTS AND THEIR DIGEST WITHHELD, as the held call's were
+		// ([BridgeCall.Withheld]): they ride the row sealed beside it.
+		call.Args, call.Output, call.Held, call.Digest = "", "", false, ""
 		call.Seq = run.LastBridgeSeq() + 1
-		run.appendCall(call)
+		run.appendCall(call, nil, nil)
 		return true
 	})
 	switch {
@@ -1181,19 +1196,40 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 	if call.At.IsZero() {
 		call.At = s.clock()
 	}
+	// SET ON EVERY ASK OF decide, which runs again on a lost race: whether the
+	// row as the last attempt read it holds this call already.
+	held := false
 	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		if a.Launch != run.LaunchID {
+			held = false
+			return false
+		}
+		// AN APPEND ASKED AGAIN — one that landed and whose answer was lost,
+		// which its session tries again — is answered recorded, writing
+		// nothing: the call, and the identities it carried, are on the row
+		// once. The same call is the same place ([BridgeCall.Seq]) and the
+		// same instant the bridge handed it to the surface, under the same
+		// name and identity, as the row keeps them: a place alone could be
+		// another call's, numbered by a session opened again on the job while
+		// one of the closed session's calls was still in flight, and an
+		// instant alone is not set on a call nothing ran.
+		kept := keptCall(call, MaxBridgeArgsBytes)
+		if held = call.Seq > 0 && slices.ContainsFunc(run.BridgeCalls, func(c BridgeCall) bool {
+			return c.Seq == kept.Seq && c.StartedAt.Equal(kept.StartedAt) && c.Name == kept.Name &&
+				c.Digest == kept.Digest
+		}); held {
 			return false
 		}
 		// HELD TO THE LOG'S SHARE OF THE ROW, the call within its own and the
-		// middle dropped by identity ([PendingRun.appendCall]).
-		run.appendCall(call)
+		// middle dropped by identity, with the identities the append carries
+		// ([PendingRun.appendCall]).
+		run.appendCall(call, a.Unrecorded, a.Absorbed)
 		// Onto THIS job's record: the append names the job the row holds,
 		// or it was dropped above.
 		run.Launch.Bridged = run.Launch.Bridged.Newest(a.Spent)
 		return true
 	})
-	return won, err
+	return won || (err == nil && held), err
 }
 
 // RecordAsk records the question a running job asked. See the contract on
@@ -1207,6 +1243,13 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 	}
 	if err := ask.Validate(); err != nil {
 		return "", fmt.Errorf("sandbox: recording the question run %s asked: %w", turnID, err)
+	}
+	if ask.Held != nil {
+		// HELD TO ITS SHARE OF THE ROW before anything is written: see
+		// [MaxHeldArgsBytes].
+		if err := HeldArgsFit(ask.Held.Arguments); err != nil {
+			return "", fmt.Errorf("sandbox: recording the call run %s held: %w", turnID, err)
+		}
 	}
 	ask = ask.Redacted()
 	// WHY NOT, as the decision that last ran saw it. Never "recorded": only

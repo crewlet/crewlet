@@ -451,3 +451,35 @@ func askedOf(req ResumeRequest) AskedRun {
 	}
 	return *req.Asked
 }
+
+// A REPLY PAST WHAT THE ROW CARRIES AS AN ANSWER GOES ITS WAY AS A MESSAGE. A
+// reply is recorded on the run's row as its answer, sealed and with every
+// delivery it was made of, and a batch of long messages in markup weighs
+// megabytes there — once more as the copies a decline would owe. The store
+// refuses such an answer by name (MaxAnswerBytes) before anything is written,
+// and the coordinator hands the reply on as the ordinary message it is: every
+// word of it reaches the seat, the run waits on its question, and nothing
+// retries a record no attempt could land.
+//
+// Mutation: defer the reply as a record that may have landed, and it is held
+// back from the seat and tried again, refused every time.
+func TestAReplyPastWhatTheRowCarriesAsAnAnswerGoesItsWayAsAMessage(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	asked := rig.get("t1").AskedAt
+	text := strings.Repeat("<li>a & b</li>", MaxAnswerBytes/14)
+	disposition, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+		chatReply(answerOnTheDM, text, replyAt(text, asked.Add(time.Minute))))
+	if err != nil || disposition != AnswerNotMine {
+		t.Fatalf("a reply past a recorded answer's share = %q, %v; want %q, the ordinary message it is",
+			disposition, err, AnswerNotMine)
+	}
+	if got := rig.get("t1"); got.Answer != nil || got.Status != StatusAwaiting {
+		t.Fatalf("the run is %s holding an answer %v; want it waiting on its question", got.Status,
+			got.Answer != nil)
+	}
+	if n := len(rig.resumer.calls()); n != 0 {
+		t.Fatalf("%d resumes ran on a reply that was never the run's answer", n)
+	}
+}

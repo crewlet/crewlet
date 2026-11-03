@@ -306,17 +306,33 @@ func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 	if elided.Delivered || !elided.DeliveryUnknown {
 		t.Fatalf("a record whose calls were elided ended %+v, want whether it replied not known", elided)
 	}
+	// THE ROUND'S TALLY, kept under the round its first recorded call began.
+	began := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	round := []sandbox.BridgeCall{{Name: "read_file", Seq: 1, At: began}}
 	tallied := e.runEnding(company, sandbox.PendingRun{AgentHandle: "swe", Reply: reply, BridgeCallsElided: 4,
+		BridgeCalls: round, TallyRound: began,
 		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 3},
 			{Name: "vendor_post", Digest: "b", Calls: 1}}, Stop: stop}, colleagueAnswer{})
 	if !tallied.Delivered || tallied.DeliveryUnknown {
 		t.Fatalf("a record whose dropped calls hold the reply ended %+v, want its reply delivered", tallied)
 	}
 	reads := e.runEnding(company, sandbox.PendingRun{AgentHandle: "swe", Reply: reply, BridgeCallsElided: 4,
+		BridgeCalls: round, TallyRound: began,
 		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 4}}, Stop: stop},
 		colleagueAnswer{})
 	if reads.Delivered || reads.DeliveryUnknown {
 		t.Fatalf("a record whose dropped calls are all reads ended %+v, want it known not to have replied", reads)
+	}
+	// A TALLY ANOTHER ROUND LEFT IS NONE OF THIS ONE'S: an older build that
+	// opened a new round cleared its calls and carried the tally on, and the
+	// reply it names is the earlier round's — so the dropped calls it counts
+	// for this round are not known, never a reply this round made.
+	stale := e.runEnding(company, sandbox.PendingRun{AgentHandle: "swe", Reply: reply, BridgeCallsElided: 4,
+		BridgeCalls: []sandbox.BridgeCall{{Name: "read_file", Seq: 1, At: began.Add(time.Hour)}},
+		TallyRound:  began, ElidedCalls: []sandbox.ElidedCall{{Name: "vendor_post", Digest: "b", Calls: 4}},
+		Stop: stop}, colleagueAnswer{})
+	if stale.Delivered || !stale.DeliveryUnknown {
+		t.Fatalf("a record holding another round's tally ended %+v, want whether it replied not known", stale)
 	}
 }
 
@@ -402,18 +418,21 @@ func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
 	if prior, err := commit.Begin(ctx); err != nil || !prior.First {
 		t.Fatalf("Begin = %+v, %v, want this mark the first", prior, err)
 	}
-	digest := strings.Repeat("d", 64)
 	if err := commit.Record(ctx, sandbox.HeldResult{Output: "posted"}, toolloop.ToolResult{Output: "posted",
-		Origin: tools.Origin("vendor"), Server: "vendor", Source: tools.Origin("vendor")}, digest); err != nil {
+		Origin: tools.Origin("vendor"), Server: "vendor", Source: tools.Origin("vendor")}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	// THE CALL'S IDENTITY RIDES ITS RECORD in place of the arguments it never
-	// holds, so a later segment's call log counts the approved call as the
-	// one the surface made.
-	if row, _, err := store.Get(ctx, "run-1"); err != nil || len(row.BridgeCalls) == 0 ||
-		row.BridgeCalls[len(row.BridgeCalls)-1].Digest != digest {
-		t.Fatalf("the approved call's record = %+v (%v), want it carrying the identity it was made under",
-			row.BridgeCalls, err)
+	// NEITHER ITS ARGUMENTS NOR THEIR DIGEST RIDE ITS RECORD: they are sealed
+	// on the held call, and a digest in the clear would confirm a guess at
+	// them. The record says the call's identity is withheld, which a later
+	// segment's call log counts as a call of its tool whose arguments are not
+	// known.
+	if row, _, err := store.Get(ctx, "run-1"); err != nil || len(row.BridgeCalls) == 0 {
+		t.Fatalf("the approved call's record = %+v (%v)", row.BridgeCalls, err)
+	} else if made := row.BridgeCalls[len(row.BridgeCalls)-1]; made.Digest != "" || made.Args != "" ||
+		!made.Approved || !made.Withheld() {
+		t.Fatalf("the approved call is recorded as %+v, want it approved with its arguments and their "+
+			"digest withheld", made)
 	}
 	// THE JOB THAT CARRIES THE WORK ON opens, the held call cleared with the
 	// question it was.

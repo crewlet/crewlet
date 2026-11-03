@@ -325,12 +325,20 @@ type Resume struct {
 	// launched, so its surface is fresh and has executed nothing.
 	Bridged []BridgedCall
 
-	// Elided is what the row dropped from the middle of a long run's calls,
-	// by identity (sandbox.PendingRun.ElidedCalls): calls of the round all
-	// the same, which the turn's call log is seeded with beside Bridged
-	// ([seedCalls]), the delivery checks count, and the round's record
+	// Elided is the round's calls the row does not list, by identity
+	// (sandbox.PendingRun.Elided): a long run's dropped middle, and a call
+	// whose own append never landed until a later one carried it. Calls of
+	// the round all the same, which the turn's call log is seeded with beside
+	// Bridged ([seedCalls]), the delivery checks count, and the round's record
 	// carries on ([turn.Work.Elided]).
 	Elided []ledger.Elided
+
+	// Absorbed is the calls the run's call log took in from the round's own
+	// calls' work — a delegated worker's under a bridged `delegate` — by
+	// identity (sandbox.PendingRun.Absorbed): seeded into the turn's call log
+	// beside the round's calls ([seedCalls]) and carried on by the round's
+	// record ([turn.Work.Absorbed]), and read by nothing else.
+	Absorbed []ledger.Elided
 
 	// Answered is the place ([BridgedCall.Seq]) of the last call the round
 	// made before a person's answer carried it on, and zero where no answer
@@ -766,6 +774,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		Decision: payload.Outcome, Rescued: !submitted,
 		Run:       w.run,
 		RunSteers: w.res.RunSteers,
+		RunElided: w.res.RunElided,
 		// EVERYTHING IT HELD, and no catalogue beside it: an executor holds
 		// every tool it can reach from its launch, so nothing was left for
 		// it to discover. Its MCP servers that run in its box are not on the
@@ -1555,6 +1564,12 @@ type phaseResult struct {
 	// its notes at its rounds, which its Result records; an executor's
 	// reads are on its record instead ([Runner.resumeAgentRun]).
 	RunSteers []types.PhaseSteer
+
+	// RunElided is the calls a collected executor's run made that its
+	// record did not keep, by identity ([Resume.Elided]): said on the
+	// phase's record by tool, since the calls it lists are only the kept
+	// ones ([types.AgentPhaseCompleted.ElidedCalls]).
+	RunElided []ledger.Elided
 }
 
 // surfaceWith builds a phase surface, registering the phase's submission tool

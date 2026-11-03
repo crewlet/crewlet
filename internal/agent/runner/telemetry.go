@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
@@ -949,6 +951,10 @@ type phaseRecord struct {
 	// see [phaseResult.RunSteers].
 	RunSteers []types.PhaseSteer
 
+	// RunElided is the calls a collected executor's record did not keep —
+	// see [phaseResult.RunElided].
+	RunElided []ledger.Elided
+
 	// Failed and Err describe a phase that died instead of finishing. The
 	// rest of the record is then PARTIAL rather than absent: a phase that
 	// raises used to publish nothing at all, leaving a dashboard showing an
@@ -1216,6 +1222,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
 		ev.DeliveredRefsElided = rec.Run.RefsElided
 		ev.LaunchID = rec.Run.LaunchID
+		// AND WHAT ITS RECORD DID NOT KEEP of its calls, by tool: the
+		// executions above are the kept ones, and this record outlives the
+		// run's own.
+		ev.CallsElided, ev.ElidedCalls = elidedByTool(rec.RunElided)
 	}
 	if rec.Err != nil {
 		// The 2000-character cut this used to carry landed on exactly the
@@ -1229,6 +1239,45 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.ErrorKind = ErrorKind(rec.Err)
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
+}
+
+// elidedByTool is a collected run's calls its record did not keep, as its phase
+// record states them ([types.AgentPhaseCompleted.ElidedCalls]): how many, and
+// by tool how many and how many of those failed, the tools in name order and
+// the calls whose tool was not kept last.
+func elidedByTool(elided []ledger.Elided) (int, []types.ElidedCalls) {
+	byName := map[string]*types.ElidedCalls{}
+	total := 0
+	for _, e := range elided {
+		if e.Calls <= 0 {
+			continue
+		}
+		total += e.Calls
+		tally, ok := byName[e.Name]
+		if !ok {
+			tally = &types.ElidedCalls{Name: e.Name}
+			byName[e.Name] = tally
+		}
+		tally.Calls += e.Calls
+		tally.Failed += min(e.Failed, e.Calls)
+	}
+	if total == 0 {
+		return 0, nil
+	}
+	out := make([]types.ElidedCalls, 0, len(byName))
+	for _, tally := range byName {
+		out = append(out, *tally)
+	}
+	unnamedLast := func(e types.ElidedCalls) int {
+		if e.Name == "" {
+			return 1
+		}
+		return 0
+	}
+	slices.SortFunc(out, func(a, b types.ElidedCalls) int {
+		return cmp.Or(cmp.Compare(unnamedLast(a), unnamedLast(b)), cmp.Compare(a.Name, b.Name))
+	})
+	return total, out
 }
 
 // SandboxKindPrefix opens the error kind of a failure a coding sandbox's

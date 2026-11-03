@@ -63,6 +63,12 @@ type Work struct {
 	// call log counts them, and the reviewer is told how many there were.
 	Elided []ledger.Elided
 
+	// Absorbed is the calls the run's call log took in from the round's own
+	// calls' work — a delegated worker's — by identity: no call of the
+	// round, so no delivery check reads them, and the round closes with them
+	// ([ledger.Iteration.Absorbed]) so a later segment's call log counts them.
+	Absorbed []ledger.Elided
+
 	// Inherited is how many of Calls, at the front, an EARLIER ATTEMPT
 	// made. A resumed executor's record is its run's calls over the bridge,
 	// made before the segment that collects it, because the delivery check
@@ -671,6 +677,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			Intent:    work.Summary,
 			Calls:     work.Calls,
 			Elided:    work.Elided,
+			Absorbed:  work.Absorbed,
 			// Only the reads actually CALLED, not the whole surface's
 			// annotation set. Rendering is a membership test either way,
 			// so the block reads the same — but the row is persisted

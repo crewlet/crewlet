@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -122,7 +123,21 @@ var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
 // releaseOf is the release a harness's `--version` printed, "2.1.310", or "" where
 // it printed none this code can read.
-func releaseOf(printed string) string { return releasePattern.FindString(printed) }
+//
+// ONE PAST THE BOUND THE EXECUTOR LOG HOLDS A RELEASE TO IS NONE
+// (executordomain.HarnessVersionMaxBytes): the record is a file the run's own
+// agent can write, read up to a box's whole file, and a release of megabytes of
+// digits is no harness's — stamped on the run's row it was carried twice, at
+// the capture's place and as the turn's kept one, and left the row taking no
+// later write that adds a byte. A capture with no release is one whose release
+// is not known, which every reader of it already takes.
+func releaseOf(printed string) string {
+	release := releasePattern.FindString(printed)
+	if len(release) > executordomain.HarnessVersionMaxBytes {
+		return ""
+	}
+	return release
+}
 
 // captured describes the session archive the box's last run packed
 // ([Paths.SessionCapture]), for the session rec names, or nil where there is

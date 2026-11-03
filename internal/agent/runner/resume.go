@@ -123,11 +123,25 @@ func submitted(calls []ledger.Call) bool {
 	})
 }
 
+// roundCalls is the open round's calls as its run's row holds them: the calls
+// it lists ([BridgedCall]), in the order the bridge admitted them, and the
+// identities of the calls it counts without listing — the round's own that it
+// dropped or never heard from until a later call carried them (elided), and
+// the ones its calls' own work made in the run's call log (absorbed).
+type roundCalls struct {
+	bridged  []BridgedCall
+	elided   []ledger.Elided
+	absorbed []ledger.Elided
+}
+
 // seedCalls records into a resumed run's log every call the turn made before
 // this segment: the rounds that closed and whatever its executor run called
-// over the bridge — the calls their records kept (bridged, and each closed
-// round's), and the ones those records dropped from a long run's middle, by
-// identity (elided, and each closed round's [ledger.Iteration.Elided]).
+// over the bridge — the calls their records kept (the round's, and each closed
+// round's [ledger.Iteration.Calls]), the ones those records count without
+// listing, by identity (the round's elided, and each closed round's
+// [ledger.Iteration.Elided]), and the calls those calls' own work made, by
+// identity (the round's absorbed, and each closed round's
+// [ledger.Iteration.Absorbed]).
 //
 // THE RUN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED. A collection,
 // a continuation after a person's answer and a reopen are the same turn in a
@@ -139,39 +153,44 @@ func submitted(calls []ledger.Call) bool {
 // BY IDENTITY: the digest each call was admitted under ([ledger.Call.Digest]),
 // which its record carries whatever it kept of its arguments — a run's row
 // keeps a value past its share as a marker, and a parked turn's closed rounds
-// are condensed the same way — and a dropped call's identity seeded as many
+// are condensed the same way — and a tallied call's identity seeded as many
 // times as it was made. Seeded from the arguments a record kept, a cut call
 // counted as another call, and a dropped one as none: a later call that asked
 // for something else derived an earlier call's operation id and was answered
-// `applied` without landing. A dropped identity the record could not keep —
-// its arguments' digest, or its tool too — is seeded as a call matching no
-// other ([turnctx.SeededCall.Unknown], [turnctx.CallLog.SeedUnknown]): an
-// over-count, the safe direction.
+// `applied` without landing. An identity the record could not keep — a
+// tallied call's digest, or its tool too — or keeps withheld — a call held
+// for a person's approval and the one they approved
+// ([ledger.Call.Withheld]), whose arguments ride sealed — is seeded as a call
+// matching no other ([turnctx.SeededCall.Unknown],
+// [turnctx.CallLog.SeedUnknown]): an over-count, the safe direction.
 //
-// A CALL WITH NO DIGEST — one a build before it recorded, whose arguments it
-// kept whole — is seeded by its canonical arguments, made through the surface
-// the segment serves ([tools.Surface.ArgsOf]), so the seeding and every call
-// made after it read one universe by construction, the tools the surface adds
-// (submit_work, the discovery pair) included. The records hold the model's own
-// spelling, which they keep: the closed rounds and the bridge's log of the
-// run's calls are what the model sent, and a count read against them as
-// written took a repeat spelt "Draft" after "draft" for another call and wrote
-// it twice. A tool the surface does not hold (one removed since the run was
-// launched) is seeded by its arguments as sent, and logged at debug so the
-// fallback is visible: no call made now can reach it to be counted anyway.
-func seedCalls(calls *turnctx.CallLog, surface *tools.Surface, history []ledger.Iteration,
-	bridged []ledger.Call, elided []ledger.Elided) {
-
-	groups := [][]ledger.Call{bridged}
-	tallies := [][]ledger.Elided{elided}
+// A CALL WITH NO DIGEST, AND NONE WITHHELD — one a build before it recorded,
+// whose arguments it kept whole — is seeded by its canonical arguments, made
+// through the surface the segment serves ([tools.Surface.ArgsOf]), so the
+// seeding and every call made after it read one universe by construction, the
+// tools the surface adds (submit_work, the discovery pair) included. The
+// records hold the model's own spelling, which they keep: the closed rounds
+// and the bridge's log of the run's calls are what the model sent, and a count
+// read against them as written took a repeat spelt "Draft" after "draft" for
+// another call and wrote it twice. A tool the surface does not hold (one
+// removed since the run was launched) is seeded by its arguments as sent, and
+// logged at debug so the fallback is visible: no call made now can reach it
+// to be counted anyway.
+func seedCalls(calls *turnctx.CallLog, surface *tools.Surface, history []ledger.Iteration, round roundCalls) {
+	groups := [][]ledger.Call{bridgedLedger(round.bridged)}
+	tallies := [][]ledger.Elided{round.elided, round.absorbed}
 	for _, iteration := range history {
 		groups = append(groups, iteration.Calls)
-		tallies = append(tallies, iteration.Elided)
+		tallies = append(tallies, iteration.Elided, iteration.Absorbed)
 	}
 	universe := surface.Universe()
 	for _, group := range groups {
 		for _, call := range group {
-			if call.Digest != "" {
+			switch {
+			case call.Withheld:
+				calls.Seed(turnctx.SeededCall{Tool: call.Name, Unknown: true})
+				continue
+			case call.Digest != "":
 				calls.Seed(turnctx.SeededCall{Tool: call.Name, Digest: call.Digest})
 				continue
 			}

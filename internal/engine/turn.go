@@ -1592,7 +1592,9 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 	if w := res.LastWork; w != nil {
 		// The LAST round's, which is the one the reply came out of. The
 		// earlier rounds are the turn's own business and end with it.
-		in.Intent, in.Calls = w.Summary, w.Calls
+		// AND THE CALLS ITS RECORD DID NOT KEEP, said under the ones it
+		// did: a long run's middle, where the reply may well have been.
+		in.Intent, in.Calls, in.Elided = w.Summary, w.Calls, w.Elided
 		if w.Outcome == turn.OutcomeBlocked {
 			// See [ledger.Session.BlockedOn]: the ledger cannot name this
 			// outcome itself, because turn imports ledger. The evidence is

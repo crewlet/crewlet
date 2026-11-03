@@ -330,3 +330,32 @@ func TestWithCallsDerivesATurn(t *testing.T) {
 		t.Fatal("the derived turn lost the run it belongs to")
 	}
 }
+
+// A FORK'S OWN CALLS ARE THE ONES MADE ON IT. A call admitted on a fork may do
+// work of its own that the run's log takes in once it returns — a `delegate`'s
+// workers — and a record that keeps the call keeps that work beside it, which
+// is the fork's own calls and never the run's calls it was forked with; a fork
+// nothing was made on, and a nil log, have none.
+//
+// Mutation: hand back the whole fork, and the record counts the run's earlier
+// calls a second time; hand back nothing, and a worker's call is on no record.
+func TestAForksOwnCallsAreTheOnesMadeOnIt(t *testing.T) {
+	t.Parallel()
+	run := turnctx.NewCallLog()
+	run.Record("join_channel", toolargs.Of(nil, map[string]any{"channel": "R"}))
+	admitted := run.Admit("delegate", toolargs.Of(nil, map[string]any{"task": "tidy"}))
+	worker := admitted.Fork()
+	worker.Record("leave_channel", toolargs.Of(nil, map[string]any{"channel": "R"}))
+	admitted.Absorb(worker)
+	want := []turnctx.Called{{Tool: "leave_channel", Digest: turnctx.ArgsDigest(map[string]any{"channel": "R"})}}
+	if got := admitted.Own(); !slices.Equal(got, want) {
+		t.Errorf("the admitted call's own calls are %+v, want its worker's %+v", got, want)
+	}
+	if got := run.Fork().Own(); got != nil {
+		t.Errorf("a fork nothing was made on hands back %+v, want none", got)
+	}
+	var none *turnctx.CallLog
+	if got := none.Own(); got != nil {
+		t.Errorf("a nil log hands back %+v", got)
+	}
+}

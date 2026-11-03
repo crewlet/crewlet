@@ -121,7 +121,7 @@ func TestAResumePastADroppedCallAndACutOneDerivesTheIdsOfARunThatNeverParked(t *
 		calls := turnctx.NewCallLog()
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 			buildOpts{calls: calls, register: register})
-		if _, err := r.ReopenAgentRun(context.Background(), state, bridged, dropped, runner.Bridged{},
+		if _, err := r.ReopenAgentRun(context.Background(), state, bridged, dropped, nil, runner.Bridged{},
 			false); err != nil {
 			t.Fatalf("ReopenAgentRun: %v", err)
 		}
@@ -137,11 +137,114 @@ func TestAResumePastADroppedCallAndACutOneDerivesTheIdsOfARunThatNeverParked(t *
 		closed.Round = 2
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 			buildOpts{calls: calls, register: register})
-		if _, err := r.ReopenAgentRun(context.Background(), closed, nil, nil, runner.Bridged{}, false); err != nil {
+		if _, err := r.ReopenAgentRun(context.Background(), closed, nil, nil, nil, runner.Bridged{},
+			false); err != nil {
 			t.Fatalf("ReopenAgentRun: %v", err)
 		}
 		check(t, calls)
 	})
+}
+
+// reopenedLog is the call log a run reopened on its row's record seeds:
+// bridged, its calls the row lists; elided and absorbed, the identities it
+// counts without listing; closed, the turn's closed rounds.
+func reopenedLog(t *testing.T, bridged []runner.BridgedCall, elided, absorbed []ledger.Elided,
+	closed []ledger.Iteration) *turnctx.CallLog {
+
+	t.Helper()
+	calls := turnctx.NewCallLog()
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{calls: calls, register: func(t *testing.T, reg *tools.Registry) {
+			if err := reg.RegisterWith(&statusWriter{}, tools.OriginBuiltin,
+				tools.Annotations{ReadOnly: mcp.No}); err != nil {
+				t.Fatal(err)
+			}
+		}})
+	state := execstate.State{Version: execstate.Version, Round: len(closed) + 1,
+		ActiveTools: []string{"set_status"}, Iterations: closed}
+	if _, err := r.ReopenAgentRun(context.Background(), state, bridged, elided, absorbed, runner.Bridged{},
+		false); err != nil {
+		t.Fatalf("ReopenAgentRun: %v", err)
+	}
+	return calls
+}
+
+// A TALLY'S UNNAMED COUNT IS SEEDED AGAINST EVERY LATER CALL, and a named
+// identity BY ITS DIGEST. A long run's record that folded its dropped middle
+// past what its tally holds keeps a count with no tool — or an older build
+// dropped calls and kept nothing of them, which reads the same — and each of
+// those calls asked for something a later call may not: so each counts
+// against every later call, of every tool, as one that asked for something
+// else. While a dropped call's identity is kept, it is THAT call: a later call
+// repeating it with nothing different between is its retry, as the run's own
+// process would count it.
+//
+// Mutation: skip an entry that names no tool, and a later call counts none of
+// those calls; seed every tallied call as one of its tool with no identity,
+// and a dropped repeat of the later call counts as another call.
+func TestATallysCountsAreSeededAsTheCallsTheyWere(t *testing.T) {
+	t.Parallel()
+	unnamed := reopenedLog(t, nil, []ledger.Elided{{Calls: 2}}, nil, nil)
+	if got := unnamed.Ordinal("set_status", published); got != 2 {
+		t.Errorf("two dropped calls whose tool is not known count %d against a later call, want 2", got)
+	}
+	repeat := reopenedLog(t, nil,
+		[]ledger.Elided{{Name: "set_status", Digest: turnctx.ArgsDigest(published), Calls: 1}}, nil, nil)
+	if got := repeat.Ordinal("set_status", published); got != 0 {
+		t.Errorf("a dropped call repeated with nothing between counts %d, want 0: it is the same call", got)
+	}
+	if got := repeat.Ordinal("set_status", noted); got != 1 {
+		t.Errorf("a dropped call counts %d against a later call that asks for something else, want 1", got)
+	}
+}
+
+// A WORKER'S CALLS ARE SEEDED FROM THE ROUND'S RECORD (#477). A bridged
+// `delegate` runs its workers on forks of the run's call log, and the log
+// absorbs their calls once the wave is done — so a later call of the run counts
+// a worker's call between two of its own. No call of the round's record is a
+// worker's, so the record keeps them as identities beside it, the open round's
+// and each closed round's, and a resumed segment counts them as the run did:
+// a set_status the worker made between two of the run's own makes the second
+// a different operation, never the first one's retry.
+//
+// Mutation: leave the absorbed identities out of the seed — the open round's
+// or a closed round's — and the repeat counts 0: the first call's operation,
+// answered `applied` without landing.
+func TestAWorkersCallsAreSeededFromTheRoundsRecord(t *testing.T) {
+	t.Parallel()
+	first := rowCall(t, 1, noted)
+	worker := []ledger.Elided{{Name: "set_status", Digest: turnctx.ArgsDigest(published), Calls: 1}}
+	open := reopenedLog(t, []runner.BridgedCall{first}, nil, worker, nil)
+	if got := open.Ordinal("set_status", noted); got != 1 {
+		t.Errorf("the open round's worker call counts %d against the run's repeat, want 1", got)
+	}
+	closed := reopenedLog(t, nil, nil, nil, []ledger.Iteration{{Iteration: 1,
+		Calls: []ledger.Call{first.Call}, Absorbed: worker}})
+	if got := closed.Ordinal("set_status", noted); got != 1 {
+		t.Errorf("a closed round's worker call counts %d against the run's repeat, want 1", got)
+	}
+}
+
+// A CALL WHOSE ARGUMENTS ARE WITHHELD IS SEEDED AS ONE NO LATER CALL REPEATS. A
+// call held for a person's approval, and the one they approved, keep neither
+// their arguments nor a digest of them on any record — the arguments ride the
+// row sealed — so a resumed segment cannot know what they asked for, and
+// counts each as a call of its tool that asked for something else: an
+// over-count, the safe direction. Seeded by the arguments the record holds,
+// which are none, the call read as the tool called with no arguments.
+//
+// Mutation: seed a withheld call by what its record holds, and a later call
+// with no arguments counts it as the same call.
+func TestACallWhoseArgumentsAreWithheldIsSeededAsOneNoLaterCallRepeats(t *testing.T) {
+	t.Parallel()
+	withheld := []runner.BridgedCall{
+		{Call: ledger.Call{Name: "set_status", Result: "asked a person", Failed: true, Withheld: true}, Seq: 1},
+		{Call: ledger.Call{Name: "set_status", Withheld: true}, Seq: 2},
+	}
+	log := reopenedLog(t, withheld, nil, nil, nil)
+	if got := log.Ordinal("set_status", map[string]any{}); got != 2 {
+		t.Errorf("a held call and its approval count %d against a later call with no arguments, want 2", got)
+	}
 }
 
 // submissionOf is submit_work's arguments with a summary of n bytes: a round
@@ -193,7 +296,7 @@ func TestALiveSubmissionPastWhatTheRowKeepsIsRefused(t *testing.T) {
 	t.Parallel()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{})
 	reopened, err := r.ReopenAgentRun(context.Background(), execstate.State{Version: execstate.Version, Round: 1},
-		nil, nil, runner.Bridged{}, false)
+		nil, nil, nil, runner.Bridged{}, false)
 	if err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}

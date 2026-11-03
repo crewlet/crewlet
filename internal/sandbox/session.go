@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -338,6 +339,59 @@ type SessionCapture struct {
 	// Extra is every key of the capture this build does not know, kept
 	// verbatim and written back by every write of the record (wirekeys.go).
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// ErrCaptureUnbounded is a capture stamp carrying a field past the bound the
+// row holds it to ([SessionCapture.Bounded]), refused by
+// [PendingStore.StampCapture] before anything is written.
+var ErrCaptureUnbounded = errors.New("sandbox: a capture stamp carries a field past its bound")
+
+// Bounded reports why c is past what a run's row carries of a capture, nil
+// where it is within it: each text a box describes its session by — the
+// harness, the release that wrote it, its session id — the paths the box
+// names, and why a capture did not land, each within the bound the executor
+// log holds the same field to (internal/executordomain), and the open places
+// within [maxOpenPlaces].
+//
+// WHAT A BOX SAYS OF ITS SESSION IS THE BOX'S OWN DOING: a file its run's own
+// agent can write, read up to the size a box's file read takes. Nothing else
+// bounds it before the row, and the log's own check runs only after the stamp
+// has landed — on a row that, with a release of megabytes on it twice over
+// (the place and the kept capture), took no later write that adds a byte: no
+// bridged call, no owed end, no stop's ending, and so never its delete.
+// Refused here, the row is never asked to carry it; the reader that parses the
+// box's record (internal/sandbox/executor) reads such a release as none.
+func (c SessionCapture) Bounded() error {
+	for _, f := range []struct {
+		field, value string
+		max          int
+	}{
+		{"launch_id", c.Launch, executordomain.TurnIDMaxBytes},
+		{"reason", c.Reason, executordomain.UnkeptReasonMaxBytes},
+		{"harness", c.Harness, executordomain.HarnessMaxBytes},
+		{"harness_version", c.HarnessVersion, executordomain.HarnessVersionMaxBytes},
+		{"session_id", c.SessionID, executordomain.SessionIDMaxBytes},
+		{"home", c.Home, executordomain.PathMaxBytes},
+		{"workspace", c.Workspace, executordomain.PathMaxBytes},
+	} {
+		if len(f.value) > f.max {
+			return fmt.Errorf("sandbox: its %s is %d bytes, past the %d it may be: %w", f.field,
+				len(f.value), f.max, ErrCaptureUnbounded)
+		}
+	}
+	if len(c.BridgeOpen) > maxOpenPlaces {
+		return fmt.Errorf("sandbox: it names %d open places, past the %d it may: %w", len(c.BridgeOpen),
+			maxOpenPlaces, ErrCaptureUnbounded)
+	}
+	return nil
+}
+
+// stampReason is why a capture came out as it did, as its stamp carries it:
+// redacted, and held to the bound the executor log holds the same words to
+// ([SessionCapture.Bounded]) — an error's text is the engine's and has no
+// bound of its own.
+func stampReason(why string) string {
+	return textcut.Within(redact.Secrets(why), executordomain.UnkeptReasonMaxBytes)
 }
 
 // newerThan reports whether c's place is after o's.
@@ -1159,7 +1213,7 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 
 	last := current.LastBridgeSeq()
 	stamp := SessionCapture{LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current),
-		Launch: run.LaunchID, State: CaptureRefused, Reason: redact.Secrets(why), Final: at.final,
+		Launch: run.LaunchID, State: CaptureRefused, Reason: stampReason(why), Final: at.final,
 		Interrupted: at.cutOff, BridgeSeq: last, BridgeOpen: openPlaces(current, last),
 		NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC()}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
@@ -1177,7 +1231,7 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run PendingRun, stamp SessionCapture,
 	state CaptureState, why string) *SessionKept {
 
-	stamp.State, stamp.Reason = state, redact.Secrets(why)
+	stamp.State, stamp.Reason = state, stampReason(why)
 	c.stampSettled(ctx, by, run.TurnID, stamp)
 	switch state {
 	case CaptureLanded:
@@ -1241,7 +1295,7 @@ func (c *Coordinator) abandonPlace(ctx context.Context, by time.Time, run Pendin
 
 	refused := stamp
 	refused.State = CaptureRefused
-	refused.Reason = redact.Secrets(fmt.Sprintf("the take's time ran out before the store answered the "+
+	refused.Reason = stampReason(fmt.Sprintf("the take's time ran out before the store answered the "+
 		"reservation of its place on the run's row, so nothing was taken under it: %v", cause))
 	took, _, err := c.askStamp(ctx, by, run.TurnID, refused)
 	if took {
@@ -1434,6 +1488,7 @@ func (c *Coordinator) settleCapture(ctx context.Context, run PendingRun, last Se
 	} else {
 		last.State, last.Reason = c.recordCapture(ctx, run.AgentHandle, run.TurnID, run.ConversationKey,
 			run.WorkKey, last)
+		last.Reason = stampReason(last.Reason)
 	}
 	c.stampSettled(ctx, time.Time{}, run.TurnID, last)
 	return last

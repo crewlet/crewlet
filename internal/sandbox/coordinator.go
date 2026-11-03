@@ -1582,7 +1582,10 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 				"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", readErr.Error())
 		case found && latest.LaunchID == run.LaunchID:
 			run.BridgeCalls, run.BridgeCallsElided = latest.BridgeCalls, latest.BridgeCallsElided
-			run.ElidedCalls = latest.ElidedCalls
+			// AND THE TALLIES WITH THE ROUND THEY ARE KEPT FOR, as one:
+			// a tally read against another read's calls names no round.
+			run.ElidedCalls, run.AbsorbedCalls = latest.ElidedCalls, latest.AbsorbedCalls
+			run.TallyRound = latest.TallyRound
 		}
 		// AND NO QUESTION, whatever it asked on its way: a run that is being
 		// stopped is not one a person's answer could continue
@@ -2327,6 +2330,10 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 //   - The seat's runs could not be read: whichever answer THIS NODE'S OWN
 //     COUNT supports — see [Coordinator.answerLookupFailed]. No awaiting run
 //     on the seat: [AnswerNotMine]. An awaiting run: [AnswerDeferred].
+//   - The reply is past what the run's row carries as an answer
+//     ([ErrAnswerTooLarge], [MaxAnswerBytes]): [AnswerNotMine]. Nothing was
+//     written, so nothing is owed it but the ordinary message it is, which
+//     keeps every word of it; the run waits on its question.
 //   - The answer could not be recorded: [AnswerDeferred]. The write MAY have
 //     landed, so this is the ambiguous case, resolved towards the run — the
 //     delivery comes back and, if the record did land, is recognised as the
@@ -2390,6 +2397,18 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 			return AnswerNotMine, nil
 		}
 		recorded, won, err := c.recordAnswer(ctx, run, reply)
+		if errors.Is(err, ErrAnswerTooLarge) {
+			// NO ANSWER THE ROW CAN CARRY ([MaxAnswerBytes]), and so not the
+			// run's: nothing was written, and the reply goes its way as the
+			// ordinary message it is — every word of it reaches the seat,
+			// which a cut answer or a reply dropped at the broker would not.
+			// The run waits on its question.
+			log.WarnContext(ctx, "sandbox_answer_too_large", "turn_id", run.TurnID, "agent", handle,
+				"conversation", reply.Conv.Identity, "error", err.Error(),
+				"detail", "a reply past what a run's row carries as its answer is handled as the "+
+					"ordinary message it is, and the run waits on its question")
+			return AnswerNotMine, nil
+		}
 		if errors.Is(err, ErrSeatNotHeld) {
 			// THE SEAT'S HOLDER'S TO RECORD: nothing was written, and the
 			// delivery goes back to reach the holder — uncounted, because
@@ -2679,6 +2698,20 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			return AnswerNotMine, nil
 		}
 		recorded, won, err := c.record(ctx, run, words, answer)
+		if errors.Is(err, ErrAnswerTooLarge) {
+			// NO ANSWER THE ROW CAN CARRY ([MaxAnswerBytes]), refused before
+			// anything was written, which no attempt changes: let go of,
+			// as an answer a run could not be resumed with is, the person
+			// to answer again. `answer_executor` holds an answer far under
+			// the share before it delivers one (MaxRunAnswerBytes), so this
+			// is an answer that never came through it.
+			log.ErrorContext(ctx, "sandbox_answer_too_large",
+				"turn_id", given.TurnID, "launch_id", given.LaunchID, "answered_by", given.AnsweredBy,
+				"error", err.Error(), "detail", "an answer by turn past what a run's row carries "+
+					"is let go of unrecorded, and the run waits on its question")
+			answered(run, types.AnswerDeclined)
+			return AnswerNotMine, nil
+		}
 		if err != nil {
 			// THE RECORD MAY HAVE LANDED — the chat route's ambiguous case,
 			// resolved the same way: towards the run. If it did land, the

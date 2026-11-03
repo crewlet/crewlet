@@ -627,8 +627,10 @@ type BridgeCall struct {
 	// by, so neither a cut argument nor a call dropped from the middle
 	// ([PendingRun.ElidedCalls]) moves an operation id it derives. Empty for a
 	// call nothing admitted (one refused after the run's tools closed, or
-	// whose arguments did not parse) and for one a build before it recorded,
-	// whose arguments are whole and are seeded from instead.
+	// whose arguments did not parse), for one a build before it recorded,
+	// whose arguments are whole and are seeded from instead, and for one
+	// whose arguments are withheld ([BridgeCall.Withheld]), which is counted
+	// as a call of its tool whose arguments are not known.
 	Digest string `json:"digest,omitempty"`
 
 	// At is when the row recorded the call, on the store's clock — what the
@@ -705,6 +707,22 @@ type BridgeAppend struct {
 
 	Call BridgeCall
 
+	// Unrecorded are earlier calls of the job whose own append never landed,
+	// by identity: what the session still owed the row when this call was
+	// made. The row counts them as calls of the round it does not list
+	// ([PendingRun.ElidedCalls], [PendingRun.BridgeCallsElided]), so a
+	// resumed call log seeds them and a reader of whether the turn replied
+	// reads them, where they would otherwise be calls the run made and its
+	// record never heard of.
+	Unrecorded []ElidedCall
+
+	// Absorbed are the calls the run's call log took in from this call's own
+	// work — a delegated worker's calls under a `delegate` — and from the
+	// unrecorded calls', by identity, Failed unset ([PendingRun.AbsorbedCalls]):
+	// calls the row lists nowhere, which a resumed call log must count all
+	// the same.
+	Absorbed []ElidedCall
+
 	// Spent is the session's running total: what every bridged call it has
 	// served so far cost the engine.
 	Spent EngineSpend
@@ -745,6 +763,17 @@ func EndsRun(tool string) bool { return tool == SubmitWorkTool || tool == AskAnd
 // [EndsRun]'s two tools, or a call to a tool at Needs approval the bridge
 // held ([BridgeCall.Held]), which parks the run as an ask does.
 func (c BridgeCall) Ends() bool { return EndsRun(c.Name) || c.Held }
+
+// Withheld reports whether the call's arguments are withheld from the row, and
+// with them its identity: a call held for a person's approval
+// ([BridgeCall.Held]) and the call they approved ([BridgeCall.Approved]),
+// whose arguments ride the row sealed on the held call (ADR-0077). Neither its
+// arguments nor their digest are ever on the call in the clear — a digest of
+// them beside the tool's name would confirm a guess at what the seal hides —
+// so a resumed call log counts it as a call of its tool whose arguments are
+// not known: an over-count of that tool, which no operation id reads, since no
+// builtin is ever held and only a builtin derives one.
+func (c BridgeCall) Withheld() bool { return c.Held || c.Approved }
 
 // PendingRun is one detached job's durable state, keyed by its kick-off turn.
 //
@@ -1172,7 +1201,8 @@ type PendingRun struct {
 	// Empty until the run parks on a question, and cleared with the
 	// question when a new job opens on the row ([PendingStore.BeginLaunch]).
 	// A key a NEWER build adds beside these survives this build's
-	// compare-and-swap through [PendingRun.Extra].
+	// compare-and-swap through [PendingRun.Extra]. Held to
+	// [MaxAudienceHandles], the nearest first, by the park that writes them.
 	AudienceHandles  []string `json:"audience_handles,omitempty"`
 	AudienceFallback bool     `json:"audience_fallback,omitempty"`
 
@@ -1246,25 +1276,59 @@ type PendingRun struct {
 	// yet.
 	BridgeCalls []BridgeCall `json:"bridge_calls,omitempty"`
 
-	// BridgeCallsElided counts the calls dropped from the middle of that
-	// list, so a reader can tell a short run from a long one whose middle
-	// was cut. Reported rather than hidden, because a log that silently
-	// skips is a log that lies about what the run did.
+	// BridgeCallsElided counts the calls of the round that list does not
+	// hold — the ones dropped from its middle, and any whose own append
+	// never landed ([BridgeAppend.Unrecorded]) — so a reader can tell a short
+	// run from a long one whose middle was cut. Reported rather than hidden,
+	// because a log that silently skips is a log that lies about what the
+	// run did.
 	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
 
-	// ElidedCalls is WHAT those dropped calls were, by identity — each
-	// tool and argument digest with how many calls had it and how many of
-	// them failed ([ElidedCall]) — held to [MaxElidedIdentityBytes]. What a
-	// resumed segment seeds its call log with beside the kept calls, so a
-	// call made after the drop derives the operation id the run's own
-	// process would have; and what a reader of whether the turn replied
-	// counts a dropped reply by ([PendingRun.ElisionKnown]).
+	// ElidedCalls is WHAT those calls were, by identity — each tool and
+	// argument digest with how many calls had it and how many of them failed
+	// ([ElidedCall]) — held to [MaxElidedIdentityBytes]. What a resumed
+	// segment seeds its call log with beside the kept calls, so a call made
+	// after the drop derives the operation id the run's own process would
+	// have; and what a reader of whether the turn replied counts a dropped
+	// reply by ([PendingRun.ElisionKnown]).
+	//
+	// READ THROUGH [PendingRun.Elided], never off this field: it is the
+	// round's only while [PendingRun.TallyRound] says so, and a count the
+	// identities do not account for — calls an older build dropped — is read
+	// there as calls whose tool is not known.
 	//
 	// KEPT AND CLEARED WITH THE LIST: by every relaunch that carries the
 	// round on, folded into [PendingRun.PriorCalls] by one that starts a new
-	// round. A row an older build elided holds a count and no identities,
-	// which every reader takes for an incomplete record.
+	// round.
 	ElidedCalls []ElidedCall `json:"bridge_elided_calls,omitempty"`
+
+	// AbsorbedCalls is the calls the run's call log took in from its bridged
+	// calls' OWN WORK, by identity ([ElidedCall], Failed unset) — a delegated
+	// worker's calls under a bridged `delegate`, which the run's log absorbs
+	// once the worker's wave is done (internal/agent/turnctx's CallLog) and
+	// which no call on this row is. Held to [MaxAbsorbedIdentityBytes].
+	//
+	// WHAT A RESUMED SEGMENT SEEDS ITS CALL LOG WITH beside the round's own
+	// calls, and nothing else reads: a later call made after a worker's
+	// differing one must count it, or it derives an earlier call's operation
+	// id — a join the worker's leave came between, answered `applied` without
+	// landing — and a worker's call is no call of the round's, so no reader
+	// of whether the turn replied counts it. Read through
+	// [PendingRun.Absorbed], kept and cleared with the list.
+	AbsorbedCalls []ElidedCall `json:"bridge_absorbed_calls,omitempty"`
+
+	// TallyRound is the round the two tallies above were kept for, named by
+	// when its first call was recorded ([BridgeCall.At] of the first of
+	// BridgeCalls, which the count bound never drops): set by every write
+	// that keeps a tally, and cleared with them.
+	//
+	// WHY THE TALLIES NEED IT: a relaunch that starts a new round clears the
+	// round's calls, and an older build, which knows neither tally, cleared
+	// the calls and carried the tallies on in [PendingRun.Extra] — where they
+	// named the previous round's calls as this one's, a delivery the round
+	// never made and identities its log never held. A tally whose round is
+	// not the first call's is another round's, and is read as none.
+	TallyRound time.Time `json:"bridge_tally_round,omitzero"`
 
 	// AnsweredThrough is the place ([BridgeCall.Seq]) of the last call the
 	// round made before a person's answer carried it on, and zero for a
@@ -1686,6 +1750,12 @@ type PendingStore interface {
 	// taken after the stop is decided and before the box is reclaimed, and
 	// what it came to is a fact about the turn whoever holds the row. A row
 	// that is gone takes nothing and is no error.
+	//
+	// A STAMP PAST ITS BOUNDS IS REFUSED, before anything is written, with
+	// [ErrCaptureUnbounded] ([SessionCapture.Bounded]): what a box says of
+	// its session is the box's own doing, which nothing else holds to the
+	// row's share, and a stamp the row could not carry would leave it taking
+	// no later write that adds a byte.
 	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
 
 	// OweEnd records on the row the end its turn owes the executor log
@@ -1782,7 +1852,9 @@ type PendingStore interface {
 
 	// MarkAwaiting parks a run on a question, freeing the seat. A
 	// question with no [Clarification.AskedAt] is refused: it is the anchor
-	// every answer is measured against ([PendingRun.AskedAt]).
+	// every answer is measured against ([PendingRun.AskedAt]). The seats it
+	// is put to are held to [MaxAudienceHandles], the first of them kept:
+	// the resolution names the nearest first.
 	MarkAwaiting(ctx context.Context, turnID string, q Clarification) error
 
 	// ClaimOwnership takes the run for a node, reporting whether it won.
@@ -1992,7 +2064,21 @@ type PendingStore interface {
 	// values left out and its output cut, each said, past what the row keeps
 	// — and a call dropped from the middle by the count bound is kept as an
 	// identity ([PendingRun.ElidedCalls]). The caller hands the call whole,
-	// its digest taken first ([BridgeCall.Digest]).
+	// its digest taken first ([BridgeCall.Digest]); a call whose arguments
+	// are withheld is kept with neither ([BridgeCall.Withheld]), whatever the
+	// caller handed.
+	//
+	// AND WITH THE IDENTITIES THE APPEND CARRIES, in the same write: earlier
+	// calls of the job whose own append never landed, counted as calls the
+	// row does not list ([BridgeAppend.Unrecorded]), and the calls the run's
+	// call log took in from the call's own work ([BridgeAppend.Absorbed]).
+	//
+	// ONCE, HOWEVER OFTEN IT IS ASKED: an append whose call the row already
+	// holds under the job — its place ([BridgeCall.Seq]), the instant the
+	// bridge handed it over, its name and its identity — is answered
+	// recorded and writes nothing, so a session that tries an append again
+	// after its answer was lost never records the call, or what it carried,
+	// twice.
 	//
 	// Reports whether the call was recorded. FALSE IS NOT AN ERROR: it is a
 	// run whose row is gone, or a job that is over — the ordinary shape of a
@@ -2015,7 +2101,11 @@ type PendingStore interface {
 	// because one answer resumes it; the first stands.
 	//
 	// The ask must be valid ([Ask.Validate]); one that is not is an error,
-	// because the tool that writes it has already refused it to the run.
+	// because the tool that writes it has already refused it to the run. A
+	// held call whose sealed arguments are past their share of the row is an
+	// error too, [ErrHeldCallTooLarge] ([HeldArgsFit]), before anything is
+	// written: the holder refuses such a call to the run first, naming its
+	// size, and this holds every other writer to the same share.
 	RecordAsk(ctx context.Context, turnID, launch string, ask Ask) (AskOutcome, error)
 
 	// ListActive returns every run that still owns engine-side state.
@@ -2068,6 +2158,12 @@ type PendingStore interface {
 	// ([RecordedAnswer.Sealed]) is an error, never a record. The store keeps
 	// the seal as the bytes it was handed and opens nothing: sealing and
 	// opening are the coordinator's ([AnswerSeal]).
+	//
+	// AN ANSWER PAST ITS SHARE OF THE ROW ([MaxAnswerBytes]) is refused with
+	// [ErrAnswerTooLarge] before anything is written — as the row would hold
+	// it, or as the copies letting it go would owe the seat, which a decline
+	// cannot refuse to write. The reply is then not the run's answer, and
+	// goes its way as the ordinary message it is.
 	RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer, fence Fence,
 	) (PendingRun, bool, error)
 
@@ -2222,7 +2318,8 @@ type PendingStore interface {
 	//
 	// NO FENCE, as [PendingStore.AppendBridgeCall] takes none: a note is an
 	// append to the turn, never an ownership decision. The note must carry
-	// its id and its seal; the store opens nothing.
+	// its id and its seal, a seal within [MaxNoteSealedBytes]
+	// ([ErrNoteTooLarge]); the store opens nothing.
 	FileNote(ctx context.Context, turnID string, filing NoteFiling) (NoteFiled, PendingRun, error)
 
 	// TakeNotes records the notes a take names read, where its Read says,

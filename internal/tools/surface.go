@@ -405,6 +405,11 @@ func (s *Surface) DigestOf(name string, raw map[string]any) string {
 //
 // The admitted call runs with the arguments admitted here, in their canonical
 // form; the call it is handed is read for nothing but its name.
+//
+// AND WHAT THE CALL'S OWN WORK RECORDED rides its result
+// ([toolloop.ToolResult.Absorbed]), the calls the run's log absorbs from it
+// as it returns, for a caller that records the call where a later segment's
+// log is seeded from.
 func (s *Surface) Admit(name string, raw map[string]any) toolloop.Admitted {
 	args := s.ArgsOf(name, raw)
 	calls := s.turn.CallLog().Admit(name, args)
@@ -414,7 +419,11 @@ func (s *Surface) Admit(name string, raw map[string]any) toolloop.Admitted {
 			turn = s.turn.WithCalls(calls)
 			defer s.turn.CallLog().Absorb(calls)
 		}
-		return s.execute(ctx, name, args, turn, true, false)
+		res, err := s.execute(ctx, name, args, turn, true, false)
+		for _, own := range calls.Own() {
+			res.Absorbed = append(res.Absorbed, toolloop.Called{Tool: own.Tool, Digest: own.Digest})
+		}
+		return res, err
 	}
 }
 

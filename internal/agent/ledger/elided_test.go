@@ -98,3 +98,34 @@ func TestAClosedRoundCarriesItsIdentitiesAcrossAPark(t *testing.T) {
 		t.Errorf("a call with no identity wrote one: %s", raw)
 	}
 }
+
+// A THREAD'S HISTORY SAYS WHAT ITS TURN'S RECORD DID NOT KEEP. The entry a
+// seat's next turn on the thread reads lists the last round's calls, and a long
+// run's record keeps only their head and tail: a reply filed from its dropped
+// middle as "You replied" would sit above a call list with no call that made
+// it, read as everything the round did. So the entry says under the calls how
+// many more there were, by tool — and an entry whose record kept none of its
+// calls says only that.
+//
+// Mutation: leave the dropped calls out of the entry, and a long run's history
+// reads as the calls its record happened to keep.
+func TestAThreadsHistorySaysWhatItsTurnsRecordDidNotKeep(t *testing.T) {
+	t.Parallel()
+	dropped := []Elided{{Name: "comment_on_work_item", Digest: "a", Calls: 1},
+		{Name: "read_file", Digest: "b", Calls: 59}}
+	entry := BuildSession(SessionInput{TurnID: "t1", Reply: "posted the fix", Delivered: true,
+		Calls: []Call{{Name: "read_file", Args: map[string]any{"path": "a.go"}}}, Elided: dropped})
+	for _, want := range []string{"read_file(", "+60 further call(s)", "comment_on_work_item ×1",
+		"read_file ×59"} {
+		if !strings.Contains(entry.Calls, want) {
+			t.Errorf("the entry's calls %q do not say %q", entry.Calls, want)
+		}
+	}
+	if rendered := renderSession(entry); !strings.Contains(rendered, "+60 further call(s)") {
+		t.Errorf("the rendered entry does not say what its record dropped:\n%s", rendered)
+	}
+	none := BuildSession(SessionInput{TurnID: "t2", Elided: dropped})
+	if strings.Contains(none.Calls, noCalls) || !strings.Contains(none.Calls, "+60 further call(s)") {
+		t.Errorf("an entry whose record kept no call reads %q, want only what it dropped", none.Calls)
+	}
+}

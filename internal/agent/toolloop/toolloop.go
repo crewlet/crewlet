@@ -293,6 +293,28 @@ type ToolResult struct {
 	// refused calls is filed under. On a call a tool answered they are one
 	// value.
 	Source string
+
+	// Absorbed is the calls the run's call log took in from this call's
+	// OWN WORK once it returned — a `delegate`'s workers, each counting its
+	// calls on a fork of the call's own (internal/agent/turnctx's
+	// CallLog.Own) — set by a surface that admitted the call
+	// ([Surface.Admit]). This loop never reads it, since its run's log holds
+	// them already: it is for a caller that records the call where a LATER
+	// segment's log is seeded from — a bridged run's row — and has to record
+	// them with it, or that segment counts fewer calls than the run made.
+	Absorbed []Called
+}
+
+// Called is one call as a run's call log counts it: its tool, and the digest
+// of what it asked for — a call [ToolResult.Absorbed] hands on.
+//
+// THIS PACKAGE'S OWN TYPE, not the call log's: the loop is the Dashboard
+// Assistant's too, which reaches nothing of a seat's turn
+// (internal/assistant's import gate), so it names a call by the two strings a
+// call log counts it by rather than by the turn context's type.
+type Called struct {
+	Tool   string
+	Digest string
 }
 
 // Refusal is the call's class, read out of [ToolResult.Cause] by

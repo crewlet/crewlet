@@ -76,13 +76,24 @@ import (
 // keep a long run's middle only as a tally of identities. Each call it keeps
 // carries the digest its run admitted it under ([SeededCall.Digest]), and each
 // it dropped is a count of that digest, so neither moves a count; one whose
-// identity the record could not keep at all is seeded as a call matching no
-// other ([SeededCall.Unknown], [CallLog.SeedUnknown]). Seeding can therefore
-// only over-count (a call that failed before deriving an id is recorded
-// anyway, and so is a call whose identity is unknown), and over-counting is
-// safe for the reason above. An under-count — a call the run made that the
-// seed leaves out — is the hazard this log exists to close, and is never one
-// a record's bound may cost.
+// identity the record could not keep at all, or keeps withheld — a call held
+// for a person's approval, whose arguments ride sealed — is seeded as a call
+// matching no other ([SeededCall.Unknown], [CallLog.SeedUnknown]). Seeding can
+// therefore only over-count (a call that failed before deriving an id is
+// recorded anyway, and so is a call whose identity is unknown), and
+// over-counting is safe for the reason above.
+//
+// WHAT A RESUME SEEDS, then, is everything the run's log held that its record
+// keeps an identity of: the calls a bridged run's row lists, the ones it
+// counts without listing (a long run's dropped middle, and a call whose own
+// append never landed but a later call of its job carried), the calls the log
+// absorbed from a bridged call's own work (a delegated worker's, [Called],
+// [CallLog.Own]), and the same three for every closed round. An under-count —
+// a call the run made that the seed leaves out — is the hazard this log
+// exists to close. One remains, and it is not a record's bound: a call whose
+// append never landed and that no later call of its job carried — a store
+// out of reach from the call to the job's end, which the bridge logs — is a
+// call no record of the run holds, and no seed can count it.
 //
 // A DELEGATED WORKER forks the log ([Fork]) and its calls are absorbed back
 // ([Absorb]) once its wave is done. Workers write under the parent's unit of
@@ -116,6 +127,14 @@ type CallLog struct {
 type callEntry struct {
 	tool   string
 	digest string
+}
+
+// Called is one call as a run's log counts it: its tool, and the digest of
+// what it asked for ([ArgsDigest]). What [CallLog.Own] hands a caller that
+// records a call's own work where a later segment's log is seeded from.
+type Called struct {
+	Tool   string
+	Digest string
 }
 
 // NewCallLog is an empty log, for a run that has called nothing yet.
@@ -158,9 +177,10 @@ type SeededCall struct {
 	Args toolargs.Args
 
 	// Unknown is a call to Tool whose identity the record could not keep —
-	// a long run's elided middle past what its tally holds — recorded as
-	// asking for something no later call asks for: an over-count of Tool,
-	// the safe direction ([CallLog]).
+	// a long run's elided middle past what its tally holds, or a call whose
+	// arguments the record withholds — recorded as asking for something no
+	// later call asks for: an over-count of Tool, the safe direction
+	// ([CallLog]).
 	Unknown bool
 }
 
@@ -286,6 +306,34 @@ func (l *CallLog) Admit(tool string, args toolargs.Args) *CallLog {
 		base: len(l.entries)}
 	l.entries = append(l.entries, callEntry{tool: tool, digest: digest})
 	return fork
+}
+
+// Own is the calls made on this log itself, past the ones it was forked with,
+// in the order they were recorded — on a fork, what [CallLog.Absorb] hands back
+// to the log it was forked from — and nil where there are none, or on a nil
+// log.
+//
+// FOR A CALLER THAT RECORDS A CALL WHERE A LATER SEGMENT IS SEEDED FROM. A call
+// admitted on a fork ([CallLog.Admit]) may do work of its own that the run's
+// log takes in once it returns — a `delegate`, whose workers each count their
+// calls on a fork of its fork, absorbed back wave by wave — and a record that
+// keeps the call and not that work leaves a later segment's log short of
+// calls the run's own process counted: a join after a worker's leave, taken
+// for the first join's retry.
+func (l *CallLog) Own() []Called {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.entries) <= l.base {
+		return nil
+	}
+	own := make([]Called, 0, len(l.entries)-l.base)
+	for _, entry := range l.entries[l.base:] {
+		own = append(own, Called{Tool: entry.tool, Digest: entry.digest})
+	}
+	return own
 }
 
 // Absorb records the calls made on a fork, once the worker that made them is

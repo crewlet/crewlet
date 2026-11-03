@@ -958,10 +958,12 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		first["read"].(map[string]any)["carrier"] = json.RawMessage(seeded["a note's read"])
 		row["bridge_calls"].([]any)[0].(map[string]any)["trace"] = json.RawMessage(seeded["a bridged call"])
 		// A DROPPED CALL'S IDENTITY as a later build writes one: the row's
-		// count says one call was dropped, and its tally names it.
+		// count says one call was dropped, and its tally names it, kept
+		// under the round its first recorded call began.
 		row["bridge_calls_elided"] = 1
 		row["bridge_elided_calls"] = []any{map[string]any{"name": "read_page", "digest": "d1", "calls": 1,
 			"trace": json.RawMessage(seeded["a dropped call"])}}
+		row["bridge_tally_round"] = row["bridge_calls"].([]any)[0].(map[string]any)["at"]
 		row["launch_record"].(map[string]any)["trace"] = json.RawMessage(seeded["the job's record"])
 		raw, err := json.Marshal(row)
 		return coord.SandboxRunChange{Put: raw}, err

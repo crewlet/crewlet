@@ -40,11 +40,19 @@ import (
 //     fits a round's text to a few thousand characters anyway
 //     (ledger.RenderedArtifactLimit), and the opening it is fitted from is
 //     what is kept.
+//  4. The DIGESTS in a closed round's tallies — the calls its run's record
+//     dropped ([ledger.Iteration.Elided]) and the ones its calls' own work made
+//     ([ledger.Iteration.Absorbed]) — each tool's calls folded into one count of
+//     calls to it whose arguments are not known: an over-count of that tool for
+//     a resumed segment's call log, the safe direction, and nothing a delivery
+//     check reads, which is names and outcomes. A round's tallies are bounded on
+//     its run's row, but a turn's rounds are not, so many long ones can carry
+//     more of them than the state has room for.
 //
 // Every call keeps its name, its identity ([ledger.Call.Digest]) and its
-// outcome, and every round its intent, its review and the identities of the
-// calls its run's record dropped — which is everything a resumed segment
-// derives an operation id or judges a delivery from.
+// outcome, and every round its intent, its review and the tools and outcomes
+// of the calls its run's record dropped — which is everything a resumed
+// segment derives an operation id or judges a delivery from.
 //
 // PAST THAT THE STATE IS REFUSED ([ErrTooLarge]). What is left is the turn's own
 // context — what it was asked, its trigger's words, its turn-start blocks — which
@@ -64,10 +72,12 @@ type Condensed struct {
 	LeftOut int
 	// Texts is how many rounds' produced texts were cut to their opening.
 	Texts int
+	// Identities is how many closed rounds' tallies were folded by tool.
+	Identities int
 }
 
 // Any reports whether anything was given up.
-func (c Condensed) Any() bool { return c.Results+c.LeftOut+c.Texts > 0 }
+func (c Condensed) Any() bool { return c.Results+c.LeftOut+c.Texts+c.Identities > 0 }
 
 // turnRecord is the record a condensed payload says it is not kept on.
 const turnRecord kept.Record = "the turn's record"
@@ -124,8 +134,38 @@ func EncodeWithin(s State, budget int) (json.RawMessage, Condensed, error) {
 			return blob, c, err
 		}
 	}
+	for i := range s.Iterations {
+		elided, folded := byTool(s.Iterations[i].Elided)
+		absorbed, foldedToo := byTool(s.Iterations[i].Absorbed)
+		if folded || foldedToo {
+			s.Iterations[i].Elided, s.Iterations[i].Absorbed = elided, absorbed
+			c.Identities++
+		}
+	}
+	if blob, err = Encode(s); err != nil || len(blob) <= budget {
+		return blob, c, err
+	}
 	return nil, c, fmt.Errorf("%w: %d bytes with every closed round condensed, and its share is %d",
 		ErrTooLarge, len(blob), budget)
+}
+
+// byTool is a tally with each tool's calls folded into one count of calls to it
+// whose arguments are not known — the calls and the failures kept — and whether
+// that changed it. The entries keep the order of each tool's first.
+func byTool(tally []ledger.Elided) ([]ledger.Elided, bool) {
+	var out []ledger.Elided
+	changed := false
+	for _, e := range tally {
+		changed = changed || e.Digest != ""
+		if i := slices.IndexFunc(out, func(o ledger.Elided) bool { return o.Name == e.Name }); i >= 0 {
+			out[i].Calls += e.Calls
+			out[i].Failed += e.Failed
+			changed = true
+			continue
+		}
+		out = append(out, ledger.Elided{Name: e.Name, Calls: e.Calls, Failed: e.Failed})
+	}
+	return out, changed
 }
 
 // condenseCalls holds every closed round's calls to tier bytes of arguments,

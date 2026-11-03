@@ -2,10 +2,12 @@ package runner
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/events"
@@ -159,4 +161,47 @@ func TestAWorkerRecordCarriesItsPromptOutlinesOnlyWhenTheyTile(t *testing.T) {
 		return
 	}
 	t.Fatal("no subagent phase was published")
+}
+
+// A COLLECTED RUN'S RECORD SAYS WHAT ITS RUN'S RECORD DID NOT KEEP. The
+// execute phase's record lists the calls the run's row kept — a long run's
+// head and tail — and outlives the row: once the run is gone, that record is
+// the turn's account of what its executor did. So the dropped calls are counted
+// in its round's calls and said by tool, how many and how many failed, the
+// calls whose tool was not kept either last.
+//
+// Mutation: leave the dropped calls off the record, or out of the round's
+// count, and a long run reads as the two hundred calls its row kept.
+func TestACollectedRunsRecordSaysWhatItsRunsRecordDidNotKeep(t *testing.T) {
+	t.Parallel()
+	pub := &collector{}
+	var mu sync.Mutex
+	e := emitter{pub: pub, turn: Turn{RunID: "tn-1", AgentID: "agent-1"}, role: "Dev", tally: &Spend{}, mu: &mu}
+	at := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	dropped := []ledger.Elided{
+		{Name: "read_file", Digest: "a", Calls: 40},
+		{Name: "read_file", Digest: "b", Calls: 19, Failed: 2},
+		{Name: "comment_on_work_item", Digest: "c", Calls: 1},
+		{Calls: 3},
+	}
+	res := agentRunResult("done", []BridgedCall{{Call: ledger.Call{Name: "read_file"}, Seq: 1}}, dropped,
+		RunRecord{Harness: "claude-code", SandboxID: "box-1"}, at, at.Add(time.Hour))
+	e.completed(context.Background(), phaseRecord{Phase: "execute", Iteration: 1, Result: res.Result,
+		Run: RunRecord{Harness: "claude-code", SandboxID: "box-1"}, RunElided: res.RunElided})
+	if len(pub.events) != 1 {
+		t.Fatalf("published %d records, want the execute phase's", len(pub.events))
+	}
+	done, ok := pub.events[0].Data.(*types.AgentPhaseCompleted)
+	if !ok {
+		t.Fatalf("published %T", pub.events[0].Data)
+	}
+	want := []types.ElidedCalls{{Name: "comment_on_work_item", Calls: 1}, {Name: "read_file", Calls: 59, Failed: 2},
+		{Calls: 3}}
+	if done.CallsElided != 63 || !slices.Equal(done.ElidedCalls, want) {
+		t.Errorf("the record says %d calls were dropped, %+v; want 63, %+v", done.CallsElided,
+			done.ElidedCalls, want)
+	}
+	if len(done.Rounds) != 1 || done.Rounds[0].ToolCalls != 64 {
+		t.Errorf("the round counts %+v calls, want the one kept and the 63 dropped", done.Rounds)
+	}
 }

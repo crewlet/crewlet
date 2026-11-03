@@ -491,7 +491,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 ) (turn.Work, turn.Surface, error) {
 	began := time.Now()
 	logged := bridgedLedger(bridgedCalls)
-	elided := r.cfg.Resume.Elided
+	elided, absorbed := r.cfg.Resume.Elided, r.cfg.Resume.Absorbed
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 	var surface *tools.Surface
 	// A SUBMISSION CITES THE CARRIED RUN'S CALLS TOO: the relaunched run is
@@ -513,7 +513,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// the launch: the relaunched run's bridged calls are admitted against
 	// this log from its first one.
 	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history,
-		bridgedCalls, elided)
+		roundCalls{bridged: bridgedCalls, elided: elided, absorbed: absorbed})
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -532,7 +532,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			StartedAt: began.UTC(), Caps: caps,
 			Failed: true, Err: refusedErr,
 		})
-		return turn.Work{Calls: logged, Elided: elided}, describe(surface), refusedErr
+		return turn.Work{Calls: logged, Elided: elided, Absorbed: absorbed}, describe(surface), refusedErr
 	}
 
 	// THE NOTES WAITING SINCE THE RUN ASKED, which either brief carries:
@@ -572,7 +572,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if asked, ok := carry.(*Asked); ok && asked.Held != nil {
 		if heldErr := makeHeld(ctx, surface, asked.Held); heldErr != nil {
 			r.steerReturn(ctx, Launched{}, fresh)
-			return turn.Work{Calls: logged, Inherited: len(logged), Elided: elided}, describe(surface),
+			return turn.Work{Calls: logged, Inherited: len(logged), Elided: elided, Absorbed: absorbed},
+				describe(surface),
 				fmt.Errorf("runner: %s: %s: %w", phase.Execute, carry.what(), heldErr)
 		}
 	}
@@ -646,7 +647,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			Failed: !turn.Stopped(err), Err: err,
 		})
 		// The asking run's calls, an earlier attempt's: see below.
-		return turn.Work{Calls: logged, Inherited: len(logged), Elided: elided}, describe(surface), err
+		return turn.Work{Calls: logged, Inherited: len(logged), Elided: elided, Absorbed: absorbed},
+			describe(surface), err
 	}
 	r.steerBriefed(ctx, state.Round, launched.LaunchID, fresh)
 	launchedAt := state.LaunchedAt
@@ -659,8 +661,9 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// they happened and stay on the round's record, as an EARLIER ATTEMPT's
 	// ([turn.Work.Inherited]) — the job before made them, and a retry of this
 	// continuation relaunches the run rather than making them again.
-	return turn.Work{Calls: logged, Inherited: len(logged), Elided: elided, Suspended: true},
-		describe(surface), nil
+	return turn.Work{
+		Calls: logged, Inherited: len(logged), Elided: elided, Absorbed: absorbed, Suspended: true,
+	}, describe(surface), nil
 }
 
 // recordAgentSuspension captures what the run's collection needs.
@@ -719,9 +722,10 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // unlocked refused again.
 //
 // AND ITS PLACE IN THE RUN. The turn's call log is seeded with its closed
-// rounds and every call the run has made over the bridge — the row's calls and
-// the identities of those it dropped from its middle (elided) — by identity,
-// in that same rebuild ([seedCalls]), so a call made from here counts its
+// rounds and every call the run has made over the bridge — the row's calls, the
+// identities of those it does not list (elided) and of those its calls' own
+// work made (absorbed) — by identity, in that same rebuild ([seedCalls]), so a
+// call made from here counts its
 // repeats from the whole run and derives the operation id the run's own
 // process would have; a submission cites those calls as well as the ones made
 // from here; and the meter starts from what the row says the run's bridged
@@ -741,7 +745,7 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // another process: the collection replays submit_work from the run's durable
 // log ([Runner.resumeAgentRun]).
 func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
-	bridged []BridgedCall, elided []ledger.Elided, spent Bridged, continued bool,
+	bridged []BridgedCall, elided, absorbed []ledger.Elided, spent Bridged, continued bool,
 ) (ReopenedRun, error) {
 	history := state.Iterations
 	called := append(bridgedLedger(inAdmissionOrder(bridged)), ledger.Called(elided)...)
@@ -758,7 +762,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 
 	meter := NewBridgedSpendFrom(spent)
 	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), held, snapshot, submit, history,
-		inAdmissionOrder(bridged), elided)
+		roundCalls{bridged: inAdmissionOrder(bridged), elided: elided, absorbed: absorbed})
 	if err != nil {
 		return ReopenedRun{}, err
 	}
@@ -805,11 +809,11 @@ type ReopenedRun struct {
 // read off its calls ([Runner.observeLoads]): those numbered past the calls the
 // round held when the job opened ([execstate.State.BridgeFrom]), never an
 // earlier job's of the round, whose session the run's may not be. AND ITS
-// PLACE IN THE TURN: the closed rounds in history, the round's calls in
-// bridged, in the order the bridge admitted them, and the identities of the
-// ones its row dropped in elided, seeded into the call log through the
-// rebuilt surface ([seedCalls]), so a count read from here sees every call
-// made before it.
+// PLACE IN THE TURN: the closed rounds in history, and the round's calls as its
+// row holds them (round): the calls it lists, in the order the bridge admitted
+// them, and the identities of the ones it does not list and of the ones their
+// own work made, seeded into the call log through the rebuilt surface
+// ([seedCalls]), so a count read from here sees every call made before it.
 //
 // ONE REBUILD FOR ALL THREE, because they drifted apart when each made its
 // own: the collection rebuilt the launch's record alone, on the reasoning that
@@ -819,16 +823,15 @@ type ReopenedRun struct {
 // calls through the collection's surface: a rebuild that replays half of what
 // the run did is the drift this rule exists to stop.
 func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.State,
-	snapshot tools.Snapshot, submit tools.Callable, history []ledger.Iteration, bridged []BridgedCall,
-	elided []ledger.Elided,
+	snapshot tools.Snapshot, submit tools.Callable, history []ledger.Iteration, round roundCalls,
 ) (*tools.Surface, error) {
 	surface, err := r.surfaceWith(ctx, m, phase.Execute, state.Round, snapshot, submit,
 		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return nil, err
 	}
-	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, bridgedLedger(bridged), elided)
-	r.observeLoads(surface, ownCalls(bridged, state.BridgeFrom, 0, nil))
+	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, round)
+	r.observeLoads(surface, ownCalls(round.bridged, state.BridgeFrom, 0, nil))
 	// AND THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, so a call the
 	// rebuilt guard refuses names the skill as the run's harness lists it.
 	r.handedAs(state.NativeSkills)
@@ -910,7 +913,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	began := time.Now()
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 	logged := bridgedLedger(bridged)
-	elided := r.cfg.Resume.Elided
+	elided, absorbed := r.cfg.Resume.Elided, r.cfg.Resume.Absorbed
 
 	// THE REPLAY'S DECODER IS NOT HELD TO WHAT THE ROW KEEPS WHOLE
 	// ([keptWhole]): the submission is already made, and one a build before
@@ -927,7 +930,8 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// included, which the round's record states as what the run held and
 	// what it could still have discovered ([Runner.finishWork]); and the
 	// turn's call log, which starts from what the turn already called.
-	built, err := r.rebuiltSurface(ctx, r.ownMeter(), state, snapshot, submit, history, bridged, elided)
+	built, err := r.rebuiltSurface(ctx, r.ownMeter(), state, snapshot, submit, history,
+		roundCalls{bridged: bridged, elided: elided, absorbed: absorbed})
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -936,7 +940,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	replaySubmission(ctx, submit, sinceAnswer(bridged, r.cfg.Resume.Answered))
 
 	run := r.cfg.Resume.Run
-	res := agentRunResult(answer, bridged, run, state.LaunchedAt, began)
+	res := agentRunResult(answer, bridged, elided, run, state.LaunchedAt, began)
 	// THE NOTES THE ROUND'S RUN READ, off the record every read is written
 	// on: in its briefs, and at the boundaries of its harness's own loop — the
 	// reads of this round's jobs, at the run's one round, each with where it
@@ -963,8 +967,10 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	work.Inherited = len(logged)
 	// AND THE CALLS THE ROW DID NOT KEEP, by identity: the round's all the
 	// same, for the delivery checks, the closed round's record and the
-	// reviewer, who is told how many there were.
-	work.Elided = elided
+	// reviewer, who is told how many there were — and the ones the round's
+	// own calls' work made, which the closed round's record carries for the
+	// next segment's call log and nothing else reads.
+	work.Elided, work.Absorbed = elided, absorbed
 	return work, described, nil
 }
 
@@ -1007,7 +1013,12 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 // THE MEMBER THAT RAN IT is the record's entry and model: the launch picked it
 // from the seat's executor chain, so the chain's head is not an answer, and a
 // record naming nobody files the run's spend under no provider.
-func agentRunResult(answer string, bridged []BridgedCall, run RunRecord,
+//
+// AND THE CALLS ITS RECORD DID NOT KEEP (elided): counted in its round's calls,
+// and said by tool beside the ones it lists ([phaseResult.RunElided]) — a long
+// run's record keeps their head and tail, and the phase's record, which
+// outlives the run's, would otherwise read the kept ones as all it did.
+func agentRunResult(answer string, bridged []BridgedCall, elided []ledger.Elided, run RunRecord,
 	launchedAt, answered time.Time,
 ) phaseResult {
 	res := toolloop.Result{
@@ -1018,7 +1029,7 @@ func agentRunResult(answer string, bridged []BridgedCall, run RunRecord,
 		res.Rounds = []toolloop.Round{{
 			Round: runRound, StartedAt: launchedAt.UTC(),
 			Duration: max(answered.Sub(launchedAt), 0),
-			Model:    run.Model, ToolCalls: len(bridged),
+			Model:    run.Model, ToolCalls: len(bridged) + ledger.Count(elided),
 		}}
 	}
 	for _, call := range bridged {
@@ -1038,7 +1049,7 @@ func agentRunResult(answer string, bridged []BridgedCall, run RunRecord,
 		res.Narration = []toolloop.Narration{{Round: runRound, Content: answer}}
 	}
 	return phaseResult{Text: answer, Rounds: runRound, Result: res,
-		Caps: roundCaps{max: runRound, ceiling: runRound}}
+		Caps: roundCaps{max: runRound, ceiling: runRound}, RunElided: elided}
 }
 
 // runReads is the notes the jobs of a collected round read, in the order read,

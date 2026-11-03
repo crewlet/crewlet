@@ -470,6 +470,7 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 		},
 		BridgeCallsElided: 4,
 		ElidedCalls:       []sandbox.ElidedCall{{Name: "read_file", Digest: "d2", Calls: 4}},
+		TallyRound:        called,
 	})
 	row := askRuns(t, store)[0]
 	switch {

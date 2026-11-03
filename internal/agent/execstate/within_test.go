@@ -126,3 +126,60 @@ func TestAStateWhoseOwnContextIsPastItsShareIsRefused(t *testing.T) {
 		t.Errorf("EncodeWithin = %v, want ErrTooLarge", err)
 	}
 }
+
+// A STATE WHOSE CLOSED ROUNDS' TALLIES OUTGROW ITS SHARE FOLDS THEM BY TOOL. A
+// round's tallies — the calls its record dropped and the ones its calls' own
+// work made — are bounded on its run's row, a turn's rounds are not, and a turn
+// of many long rounds carries more identities than the state has room for, past
+// everything else it can give up. Folded by tool, each keeps every call and
+// every failure under its tool's name — which a delivery check reads, and a
+// resumed call log counts as calls whose arguments are not known, an
+// over-count — rather than the park being refused.
+//
+// Mutation: refuse the state past its payloads, and a turn of many long rounds
+// can no longer park at all; fold a tally into one count with no tool, and a
+// reply among its calls is no longer a delivery.
+func TestAStateWhoseClosedRoundsTalliesOutgrowItsShareFoldsThemByTool(t *testing.T) {
+	t.Parallel()
+	state := parked()
+	tally := func(round int) []ledger.Elided {
+		out := make([]ledger.Elided, 0, 500)
+		for k := range 500 {
+			out = append(out, ledger.Elided{Name: fmt.Sprintf("tool_%d", k%5), Digest: fmt.Sprintf("%064x", round*1000+k),
+				Calls: 2, Failed: k % 2})
+		}
+		return out
+	}
+	state.Iterations = nil
+	for i := range 40 {
+		state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1, Elided: tally(i),
+			Absorbed: tally(i + 100)})
+	}
+	raw, _ := execstate.Encode(state)
+	if len(raw) <= budget {
+		t.Fatalf("the case's state weighs %d, within its share: it needs one past it", len(raw))
+	}
+	blob, condensed, err := execstate.EncodeWithin(state, budget)
+	if err != nil || len(blob) > budget || condensed.Identities != 40 {
+		t.Fatalf("EncodeWithin = %d bytes, %+v, %v; want it within %d, every round's tallies folded",
+			len(blob), condensed, err, budget)
+	}
+	got, _, err := execstate.Decode(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range got.Iterations {
+		calls, failed := 0, 0
+		for _, e := range it.Elided {
+			if e.Name == "" || e.Digest != "" {
+				t.Fatalf("round %d keeps %+v, want each tool's calls under its name, no digest", it.Iteration, e)
+			}
+			calls += e.Calls
+			failed += e.Failed
+		}
+		if calls != 1000 || failed != 250 || len(it.Elided) != 5 {
+			t.Errorf("round %d keeps %d calls (%d failed) in %d entries, want 1000 (250) in 5", it.Iteration,
+				calls, failed, len(it.Elided))
+		}
+	}
+}

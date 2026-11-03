@@ -770,3 +770,31 @@ func TestARunsRecordIsASteerSource(t *testing.T) {
 		}
 	})
 }
+
+// A NOTE AT ITS WORST FITS WHAT A RUN'S ROW KEEPS OF ONE. A person's note is
+// sealed by this engine and filed on the run's row, which holds a note's seal to
+// a bound of its own (sandbox.MaxNoteSealedBytes) so the row's arithmetic
+// closes; the steer tool holds a note to its characters (steer.MaxNoteRunes),
+// so the most a note can seal to — every character one the row's encoder
+// escapes six-fold, the longest handle, the longest turn id — must fit that
+// bound, or the store would refuse a note the tool accepted.
+//
+// Mutation: raise steer.MaxNoteRunes past what the row's bound holds, or seal
+// more of a note than its words and who sent it, and this goes red.
+func TestANoteAtItsWorstFitsWhatARunsRowKeepsOfOne(t *testing.T) {
+	t.Parallel()
+	runs, _ := steersOver(t, statelog.OneKey("k-1", "the fleet key material"), nil)
+	note, err := runs.seal(strings.Repeat("t", 64), steer.Note{
+		ID: "0190f3a8-0000-7000-8000-000000000001", Text: strings.Repeat("<", steer.MaxNoteRunes),
+		By: strings.Repeat("a", iam.MaxLogin), ByKind: iam.ActorKind(strings.Repeat("k", 32)),
+		OperatorID: strings.Repeat("o", 64), At: time.Date(2026, 11, 3, 23, 59, 59, 999_999_999, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(note.Sealed) > sandbox.MaxNoteSealedBytes {
+		t.Errorf("a note at its worst seals to %d bytes, past the %d a run's row keeps of one",
+			len(note.Sealed), sandbox.MaxNoteSealedBytes)
+	}
+	t.Logf("a note at its worst seals to %d bytes of the %d", len(note.Sealed), sandbox.MaxNoteSealedBytes)
+}

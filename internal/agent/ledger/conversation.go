@@ -112,12 +112,20 @@ type Session struct {
 // SessionInput is what the engine has in hand at turn end. BuildSession
 // applies every budget once, here, so no later reader has to know them.
 type SessionInput struct {
-	TurnID        string
-	At            string
-	Trigger       string
-	Intent        string
-	Calls         []Call
-	Reads         []string
+	TurnID  string
+	At      string
+	Trigger string
+	Intent  string
+	Calls   []Call
+	Reads   []string
+
+	// Elided is the calls the round made that its record did not keep, by
+	// identity ([Elided]): said under the calls ([FormatElided]), so the
+	// entry a later turn on the thread reads never passes a long run's
+	// kept head and tail off as everything it did — nor a reply it filed
+	// from the dropped middle as one with no call that made it.
+	Elided []Elided
+
 	Skip          []string
 	Reply         string
 	Decision      string
@@ -143,6 +151,20 @@ func SessionPieces(in SessionInput) []Piece {
 	return CallPieces(in.Calls, Format(in.Skip, in.Reads))
 }
 
+// sessionCalls is the entry's call list: the calls the round's record kept,
+// and under them the line saying what it did not ([FormatElided]).
+func sessionCalls(in SessionInput) string {
+	calls := FormatCalls(in.Calls, sessionFormat(in))
+	elided := FormatElided(in.Elided, in.Skip)
+	switch {
+	case elided == "":
+		return calls
+	case calls == noCalls:
+		return elided
+	}
+	return calls + "\n" + elided
+}
+
 // BuildSession assembles one entry.
 //
 // VERBATIM, apart from the tool PAYLOADS the caller fitted. Every field here
@@ -157,7 +179,7 @@ func BuildSession(in SessionInput) Session {
 		At:            in.At,
 		Trigger:       in.Trigger,
 		Intent:        in.Intent,
-		Calls:         FormatCalls(in.Calls, sessionFormat(in)),
+		Calls:         sessionCalls(in),
 		Decision:      in.Decision,
 		CompletedWork: in.CompletedWork,
 		BlockedOn:     in.BlockedOn,

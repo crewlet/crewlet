@@ -333,8 +333,8 @@ func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colle
 // the run's own record of the turn's bridged calls says — [turn.Answered], the
 // rule a turn's loop answers it by, over every round's calls: the earlier
 // launches' ([sandbox.PendingRun.PriorCalls]) and the current one's, the calls
-// its row kept and the identities of the ones it dropped from their middle
-// ([sandbox.PendingRun.ElidedCalls]) — for an ending no frame of the turn
+// its row kept and the identities of the ones it does not list
+// ([sandbox.PendingRun.Elided]) — for an ending no frame of the turn
 // reaches: a loss, a stop. KNOWN is false where the record is incomplete —
 // calls not accounted for by name, on a row an older build elided or past
 // what its tally of identities holds ([sandbox.PendingRun.ElisionKnown]) — and
@@ -345,14 +345,15 @@ func (e *Engine) runDelivered(c *Company, run sandbox.PendingRun) (reply turn.Re
 	if !reply.Valid() {
 		return reply, false, true
 	}
-	calls := make([]ledger.Call, 0, len(run.PriorCalls)+len(run.BridgeCalls)+len(run.ElidedCalls))
+	dropped := run.Elided()
+	calls := make([]ledger.Call, 0, len(run.PriorCalls)+len(run.BridgeCalls)+len(dropped))
 	for _, name := range run.PriorCalls {
 		calls = append(calls, ledger.Call{Name: name})
 	}
 	for _, call := range run.BridgeCalls {
 		calls = append(calls, ledger.Call{Name: call.Name, Failed: call.Failed})
 	}
-	calls = append(calls, ledger.Called(elidedCalls(run.ElidedCalls))...)
+	calls = append(calls, ledger.Called(identitiesOf(dropped))...)
 	delivered = turn.Answered(calls, deliverySurface(e.seatRegistry(c, run.AgentHandle)), reply)
 	incomplete := run.PriorCallsElided || !run.ElisionKnown()
 	return reply, delivered, delivered || !incomplete

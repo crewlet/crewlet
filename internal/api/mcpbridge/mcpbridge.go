@@ -422,7 +422,19 @@ type Call struct {
 	// (made after the run's tools closed, or whose arguments did not parse).
 	// The record of the call carries it so a later segment seeds the log by
 	// the identity it counted, whatever that record keeps of the arguments.
+	//
+	// AND EMPTY FOR A HELD CALL, whose arguments are not logged (Args): a
+	// digest of them in the clear beside the tool's name would confirm a
+	// guess at what their seal hides (ADR-0077). The record counts such a
+	// call as one of its tool whose arguments are not known.
 	Digest string
+
+	// Absorbed is the calls the run's call log took in from the call's OWN
+	// WORK — a `delegate`'s workers — by identity
+	// ([toolloop.ToolResult.Absorbed]): recorded with the call, because no
+	// call of the run's record is one of them and a later segment's log must
+	// count them all the same.
+	Absorbed []toolloop.Called
 }
 
 // Bridge holds the live sessions and the signer that admits them.
@@ -559,6 +571,13 @@ func New(opts Options) (*Bridge, error) {
 	// route's credential, and the one session whose call's Host is judged
 	// — one held to this host's loopback — is judged in the routing in
 	// front of this handler ([loopbackRefusal]). See the package doc.
+	//
+	// A REQUEST'S BODY IS HELD TO WHAT THE RELAY CARRIES ([httprelay.MaxBody]):
+	// a call that lands on a node other than its seat's holder is relayed
+	// there whole, and one past that is refused before it is sent, so a
+	// larger body would be a call served on one node and refused on another.
+	// Stated here rather than left to the SDK's own default, which happens
+	// to be the same figure today and answers to nothing of the engine's.
 	b.streamable = mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		sub, ok := b.parse(r.PathValue("token"))
 		if !ok {
@@ -576,7 +595,7 @@ func New(opts Options) (*Bridge, error) {
 			return nil
 		}
 		return ep.server.MCP()
-	}, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true})
+	}, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true, MaxRequestBodyBytes: httprelay.MaxBody})
 	return b, nil
 }
 
@@ -1680,15 +1699,18 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	if res.Held {
 		// A HELD CALL'S ARGUMENTS ARE NOT LOGGED: they ride the run's row
 		// sealed beside its question (ADR-0077), and the call log is
-		// read in the clear by everybody who reads the seat's trail.
-		recorded = nil
+		// read in the clear by everybody who reads the seat's trail. NOR
+		// THEIR DIGEST, which would let anyone reading the record confirm
+		// a guess at them: the record counts the call as one of its tool
+		// whose arguments are not known.
+		recorded, digest = nil, ""
 	}
 	o.record(Call{
 		Call: tools.Call{Name: in.Name, Args: recorded, Output: res.Output, Failed: res.Failed,
 			Cause: res.Cause},
 		Seq: seq, StartedAt: started.UTC(), Duration: took,
 		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
-		Digest: digest,
+		Digest: digest, Absorbed: res.Absorbed,
 	})
 	return toolsession.Result{Output: res.Output, Failed: res.Failed}
 }
@@ -1789,12 +1811,16 @@ var errNoSeat = errors.New("mcpbridge: this run's tool surface is bound to no " 
 
 // record appends one finished call to the durable ledger.
 //
-// BEST EFFORT, and the reason is that the alternative is worse. The tool has
-// already run and its effect has already happened, so failing the call would
-// tell a harness to retry work that is done — the duplicate-post failure
-// the whole delivery machinery exists to prevent. A lost ledger row costs the
-// reviewer one line of evidence after a restart; a duplicated side effect
-// costs somebody two identical messages.
+// NEVER FAILED BACK TO THE BOX, and the reason is that the alternative is
+// worse. The tool has already run and its effect has already happened, so
+// failing the call would tell a harness to retry work that is done — the
+// duplicate-post failure the whole delivery machinery exists to prevent. The
+// ledger does what it can before the answer goes back — the engine's tries the
+// append again, and owes a call it still could not record to the session's
+// next append, by identity — and an error it reports here is logged: a call no
+// record holds costs the reviewer a line of evidence and a resumed segment's
+// call log a count, where a duplicated side effect costs somebody two
+// identical messages.
 //
 // Under the run's context rather than the request's, so a box that hangs up
 // does not take the row with it.

@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -34,41 +36,55 @@ import (
 // estimated from what was sent, so no six-fold multiplier is spent on text that
 // does not escape. [RowBytes] is split three ways, and the split closes:
 //
-//	the bridged call log ............ BridgeLogBytes      3,407,872  (3.25 MiB)
+//	the bridged call log ............ BridgeLogBytes      3,473,408  (3.3125 MiB)
 //	the parked turn's state ......... ExecuteStateBytes   2,097,152  (2 MiB)
 //	everything else, and the room
-//	  a later build adds fields in .. RestBytes           2,879,488  (2.75 MiB)
+//	  a later build adds fields in .. RestBytes           2,813,952  (2.68 MiB)
 //	                                                      ---------
 //	                                  RowBytes            8,384,512
 //
 // THE BRIDGED CALL LOG is held by construction: [MaxBridgeCalls] calls, one of
 // them (the newest successful submission, which the collection replays) at most
-// [MaxSubmissionCallBytes] and every other at most [MaxBridgeCallBytes], plus
-// the identities of the calls its count bound dropped
-// ([MaxElidedIdentityBytes]). 199 × 16,384 + 73,728 + 65,536 for the
-// identities + 259 for the keys and commas is 3,399,939, inside the share.
+// [MaxSubmissionCallBytes] and every other at most [MaxBridgeCallBytes]; the
+// identities of the calls the row does not list ([MaxElidedIdentityBytes]) and
+// of the calls the run's call log took in from a bridged call's own work
+// ([MaxAbsorbedIdentityBytes]); and the round the two belong to. 199 × 16,384 +
+// 73,728 + 2 × 65,536 + 320 for the keys, commas and the round is 3,465,536,
+// inside the share.
 //
 // THE PARKED STATE is held by the park, which is the one writer of it: past
 // [ExecuteStateBytes] the closed rounds' payloads are condensed, and a state
 // still past it is refused ([ErrStateTooLarge]) — see
-// internal/agent/execstate's EncodeWithin.
+// internal/agent/execstate's EncodeWithin. A field the turn's frozen context
+// gains is added inside this share, which the closed rounds give way to.
 //
 // THE REST is every other field, each at the bound its own writer holds it to
-// (TestTheWholeRowFitsItsBudget builds every one of them at that bound, escaped
-// at its worst): the identity, status and time fields; the title a launch
-// keeps ([MaxRunTitleBytes], twice) and a colleague's question; the ask and
-// its decision; the branch, the handed secrets and the notes; the owed end and
-// the captures; the earlier rounds' tool names ([MaxPriorCalls]); and
-// [ExtraRowBytes] of room for the keys a LATER BUILD ADDS AT THE TOP OF THE
-// ROW, which is where the next field goes. What that leaves is what three
-// fields bounded by their SOURCE rather than by this engine can take: a
-// recorded answer, the copies of one owed back to the seat, and a held call's
-// sealed arguments — a person's reply and a tool's arguments, which a message
-// surface and an MCP server bound. The test measures it at 1.7 MiB with every
-// other field at its worst, which holds an answer of a whole inbox batch of the
-// engine's own messages (chatlet.MaxBody, worklet.MaxCommentBody: 32 KiB a
-// message, twenty to a batch); a vendor's message and an MCP tool's arguments
-// are the vendor's and the server's to bound.
+// (TestTheWholeRowFitsItsBudget builds every one of them at that bound, through
+// the code that writes it, escaped at its worst), and the shares stated here:
+//
+//	a recorded answer ............... MaxAnswerBytes        524,288  (512 KiB)
+//	the copies one owes back ........ MaxAnswerBytes        524,288  (512 KiB)
+//	a held call's sealed arguments .. MaxHeldArgsBytes      262,144  (256 KiB)
+//	what a later build adds ......... ExtraRowBytes         262,144  (256 KiB)
+//	every other field, measured ..... 1,028,166  (with 212,901 to spare)
+//
+// — the identity, status and time fields; the title a launch keeps
+// ([MaxRunTitleBytes], twice) and a colleague's question; the ask and its
+// decision, and the seats it is put to ([MaxAudienceHandles]); a held call's
+// sealed result; the branch, the handed secrets and the notes
+// ([MaxNoteSealedBytes]); the job's own
+// record; the owed end and the captures; and the earlier rounds' tool names
+// ([MaxPriorCalls]). Every one of them is bounded by THIS ENGINE: a person's
+// reply, a tool's arguments and a box's account of its session are each held
+// to their share by the write that puts them on the row, which refuses one
+// past it by name ([ErrAnswerTooLarge], [ErrHeldCallTooLarge],
+// [ErrCaptureUnbounded]) rather than leave it to the broker.
+//
+// [ExtraRowBytes] is the room for the keys a LATER BUILD ADDS outside the
+// bridged log — at the top of the row and in its sections (the job's own
+// record, [LaunchRecord], first among them) — which is where the next such
+// field goes; one added to a call, or to an identity, comes out of the log's
+// own share instead.
 const (
 	// RowBytes is what one run's row may weigh as the coordination store
 	// holds it: the broker's payload bound less the room its headers take
@@ -77,8 +93,9 @@ const (
 	RowBytes = queue.MaxPayloadBytes - 4<<10
 
 	// BridgeLogBytes is the bridged call log's share: `bridge_calls`,
-	// `bridge_calls_elided` and `bridge_elided_calls` together.
-	BridgeLogBytes = 3<<20 + 1<<18
+	// `bridge_calls_elided`, `bridge_elided_calls`, `bridge_absorbed_calls`
+	// and `bridge_tally_round` together.
+	BridgeLogBytes = 3<<20 + 1<<18 + 1<<16
 
 	// ExecuteStateBytes is the parked turn's share: the `execute_state` value
 	// alone, which the park condenses to fit and refuses past it.
@@ -89,11 +106,66 @@ const (
 	RestBytes = RowBytes - BridgeLogBytes - ExecuteStateBytes
 
 	// ExtraRowBytes is the room, inside RestBytes, for keys a later build
-	// adds at the top of the row ([PendingRun.Extra]) and that this build
-	// carries without reading: STATED HERE, so the next field a build adds is
-	// added inside it, and the build that adds it moves its own figure out of
-	// this one rather than out of a share somebody else's arithmetic needs.
+	// adds outside the bridged log, at the top of the row
+	// ([PendingRun.Extra]) or in one of its sections ([LaunchRecord.Extra],
+	// [HeldCall.Extra], [SessionCapture.Extra], [RunSteer.Extra] and its
+	// notes'), and that this build carries without reading: STATED HERE, so
+	// the next field a build
+	// adds is added inside it, and the build that adds it moves its own
+	// figure out of this one rather than out of a share somebody else's
+	// arithmetic needs.
 	ExtraRowBytes = 256 << 10
+
+	// MaxAnswerBytes bounds a recorded answer as the row holds it — its seal
+	// and the deliveries it was made of ([RecordedAnswer]) — and, apart, the
+	// copies letting go of it owes the seat ([PendingRun.HandBack]): the two
+	// can be on the row at once, a new answer recorded while an earlier
+	// decline's copies are still being published.
+	//
+	// HALF A MEBIBYTE is a person's reply many times over: a batch of chat
+	// messages at a few KiB each, sealed and carried as the deliveries they
+	// are, weighs tens of KiB. What it does not hold is a batch of pages,
+	// which a reply that will be the run's next prompt — read again by its
+	// harness at every step after — has no business being. A reply past it
+	// is not recorded as the answer ([ErrAnswerTooLarge]) and goes its way as
+	// the ordinary message it is, so nothing of it is lost; an answer by
+	// turn is held far under it at its source (internal/agent/builtin's
+	// MaxRunAnswerBytes).
+	MaxAnswerBytes = 512 << 10
+
+	// MaxHeldArgsBytes bounds a held call's arguments as the row holds them
+	// once sealed ([HeldCall.Arguments]): AEAD-sealed and written as one
+	// string, so a byte of the arguments costs a third more, and a byte the
+	// JSON encoder escapes six times that.
+	//
+	// A QUARTER OF A MEBIBYTE, about 190 KiB of arguments in plain text: a
+	// call a person reads before they approve it — a message, an issue, a
+	// file of ordinary size — and nothing like a commit of a megabyte, which
+	// a person is not shown to approve line by line. A call past it is
+	// refused before it is held, its size named, so the run splits or
+	// shortens it ([ErrHeldCallTooLarge]); held, it never reached its server,
+	// so nothing but this bounds it.
+	MaxHeldArgsBytes = 256 << 10
+
+	// MaxNoteSealedBytes bounds one person's note as its seal holds it
+	// ([RunNote.Sealed], raw: the row writes it as base64, a third more),
+	// held by [PendingStore.FileNote]. SIXTEEN KIB: a note is at most two
+	// thousand characters (internal/agent/steer's MaxNoteRunes), six bytes
+	// each at their most escaped, sealed with who sent it and the frame
+	// around it — about 12.5 KiB, which the engine's own test holds a note
+	// at its worst to — and a turn takes at most ten of them
+	// (steer.MaxTurnNotes), each kept on the row once read.
+	MaxNoteSealedBytes = 16 << 10
+
+	// MaxAudienceHandles bounds the seats a parked question is put to
+	// ([PendingRun.AudienceHandles]). TWO HUNDRED AND FIFTY-SIX: a `team`
+	// audience is every person in the asking seat's unit, which nothing else
+	// bounds, and a question put to more people than that is put to nobody in
+	// particular. The resolution names the nearest first — the requester,
+	// the manager, a unit's lead before its members — so the seats past it
+	// are the ones furthest from the question, and they still see it on the
+	// board; it is just not listed as theirs.
+	MaxAudienceHandles = 256
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -155,13 +227,21 @@ const (
 	// raised to [MaxSubmissionArgsBytes].
 	MaxSubmissionCallBytes = MaxBridgeCallBytes - MaxBridgeArgsBytes + MaxSubmissionArgsBytes
 
-	// MaxElidedIdentityBytes bounds the identities of the calls the log's
-	// count bound dropped ([PendingRun.ElidedCalls]), as the row holds them,
-	// key included. SIXTY-FOUR KIB is about 450 distinct identities at a
-	// typical tool name's length, exact; past it identities fold by tool and
-	// then into one count ([ElidedCall]), which costs a resumed call log an
+	// MaxElidedIdentityBytes bounds the identities of the calls the row does
+	// not list ([PendingRun.ElidedCalls]) — the log's dropped middle, and a
+	// call whose own append never landed — as the row holds them, key
+	// included. SIXTY-FOUR KIB is about 450 distinct identities at a typical
+	// tool name's length, exact; past it identities fold by tool and then
+	// into one count ([ElidedCall]), which costs a resumed call log an
 	// over-count and never an under-count.
 	MaxElidedIdentityBytes = 64 << 10
+
+	// MaxAbsorbedIdentityBytes bounds the identities of the calls the run's
+	// call log took in from its bridged calls' own work
+	// ([PendingRun.AbsorbedCalls]) — a delegated worker's — as the row holds
+	// them, key included: the figure [MaxElidedIdentityBytes] is, for the
+	// same tally and the same folds.
+	MaxAbsorbedIdentityBytes = 64 << 10
 
 	// MaxRunTitleBytes bounds each copy of what a person reads a run by that
 	// its row keeps — its task description, its label — and the question of
@@ -189,6 +269,27 @@ const rowRecord kept.Record = "the run's record"
 // the broker: a row that big would refuse every write after it.
 var ErrStateTooLarge = errors.New("sandbox: the parked turn's state is past its share of the run's row")
 
+// ErrAnswerTooLarge is a reply past its share of the row ([MaxAnswerBytes]) as
+// the answer it would be recorded as — its seal and its deliveries — or as the
+// copies letting it go would owe the seat: refused by
+// [PendingStore.RecordAnswer] before anything is written. Nothing of the reply
+// is lost by it: a chat reply goes its way as the ordinary message it is
+// ([Coordinator.TryResumeFromAnswer]), and the run waits on its question.
+var ErrAnswerTooLarge = errors.New("sandbox: the reply is past a recorded answer's share of the run's row")
+
+// ErrNoteTooLarge is a note whose seal is past its bound on the row
+// ([MaxNoteSealedBytes]), refused by [PendingStore.FileNote] before anything is
+// written: the engine bounds a note's words before it seals them, so one past
+// it was sealed by nothing of this engine's.
+var ErrNoteTooLarge = errors.New("sandbox: a note's seal is past its bound on the run's row")
+
+// ErrHeldCallTooLarge is a held call whose sealed arguments are past their
+// share of the row ([MaxHeldArgsBytes]), refused by [PendingStore.RecordAsk]
+// before anything is written, as the call is refused before it is held
+// (internal/agent/builtin's CallHold): the run is told the size, and splits or
+// shortens the call.
+var ErrHeldCallTooLarge = errors.New("sandbox: a held call's sealed arguments are past their share of the run's row")
+
 // keptCall is call as the row keeps it, its arguments held to argsBudget and
 // every other field to its bound ([MaxBridgeCallBytes]): a name past
 // [MaxBridgeCallNameBytes] cut, arguments past their budget kept with their
@@ -196,12 +297,22 @@ var ErrStateTooLarge = errors.New("sandbox: the parked turn's state is past its 
 // opening — each said in the text, and the whole's size recorded beside it
 // ([BridgeCall.ArgsBytes], [BridgeCall.OutputBytes]).
 //
+// AND A CALL HELD FOR A PERSON'S APPROVAL, OR THE ONE THEY APPROVED, KEEPS
+// NEITHER ITS ARGUMENTS NOR THEIR DIGEST: the arguments ride the row sealed on
+// the held call (ADR-0077), and a digest of them in the clear beside the tool's
+// name would let anybody who reads the row — or a backup of the store — confirm
+// a guess at what the seal hides ([BridgeCall.Withheld]). Whoever hands such a
+// call to the row leaves both out; the row holds every writer to it.
+//
 // IDEMPOTENT, so a call kept once is kept again unchanged, and a call an older
 // build recorded whole is kept within its bounds the next time this build
 // writes the row. A size already recorded is the whole's and is never replaced
 // by the size of what was already kept.
 func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 	call.Name = textcut.Within(call.Name, MaxBridgeCallNameBytes)
+	if call.Withheld() {
+		call.Args, call.ArgsBytes, call.Digest = "", 0, ""
+	}
 	if args, whole := rowRecord.Args(call.Args, argsBudget); whole > 0 {
 		call.Args = args
 		if call.ArgsBytes == 0 {
@@ -221,10 +332,20 @@ func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 // a `submit_work` the surface did not refuse.
 func submitted(call BridgeCall) bool { return call.Name == SubmitWorkTool && !call.Failed }
 
-// appendCall adds one finished call to run's log and holds the log to its
-// bounds: the count ([MaxBridgeCalls], the middle dropped and its identities
-// kept), and the bytes, every call at its own share — which is the whole of
-// the log's arithmetic ([BridgeLogBytes]).
+// appendCall adds one finished call to run's log, with the identities its
+// append carries — unrecorded, earlier calls of the job whose own append never
+// landed, which the row counts as calls it does not list; absorbed, the calls
+// the run's call log took in from the call's own work — and holds the log to
+// its bounds: the count ([MaxBridgeCalls], the middle dropped and its
+// identities kept), and the bytes, every call at its own share and each tally
+// at its own — which is the whole of the log's arithmetic ([BridgeLogBytes]).
+//
+// THE TALLIES ARE THE ROUND'S, and are taken as this round's before anything is
+// added to them ([PendingRun.Elided], [PendingRun.Absorbed]): a tally an older
+// build left from an earlier round starts again, and calls an older build
+// dropped with no identity are counted as calls whose tool is not known. So
+// the row this write leaves always holds tallies that account for every call
+// its count says it does not list.
 //
 // EVERY CALL IS KEPT AGAIN ON EVERY APPEND, not only the one appended: the
 // newest successful submission's larger share passes to a newer one, and the
@@ -232,11 +353,30 @@ func submitted(call BridgeCall) bool { return call.Name == SubmitWorkTool && !ca
 // recorded whole, in a fleet mid-upgrade, is held to its share here rather
 // than carried at whatever size it came. Keeping a call already kept changes
 // nothing ([keptCall]).
-func (r *PendingRun) appendCall(next BridgeCall) {
-	var dropped []BridgeCall
-	r.BridgeCalls, r.BridgeCallsElided, dropped = appendBounded(r.BridgeCalls, r.BridgeCallsElided, next)
-	for _, call := range dropped {
-		r.ElidedCalls = elide(r.ElidedCalls, call)
+func (r *PendingRun) appendCall(next BridgeCall, unrecorded, absorbed []ElidedCall) {
+	dropped, taken := r.Elided(), r.Absorbed()
+	var elided []BridgeCall
+	r.BridgeCalls, r.BridgeCallsElided, elided = appendBounded(r.BridgeCalls, r.BridgeCallsElided, next)
+	for _, call := range elided {
+		dropped = fold(dropped, identity(call), elidedTally)
+	}
+	for _, e := range unrecorded {
+		if e.Calls <= 0 {
+			continue
+		}
+		dropped = fold(dropped, ElidedCall{Name: e.Name, Digest: e.Digest, Calls: e.Calls,
+			Failed: min(e.Failed, e.Calls)}, elidedTally)
+		r.BridgeCallsElided += e.Calls
+	}
+	for _, e := range absorbed {
+		if e.Calls <= 0 {
+			continue
+		}
+		taken = fold(taken, ElidedCall{Name: e.Name, Digest: e.Digest, Calls: e.Calls}, absorbedTally)
+	}
+	r.ElidedCalls, r.AbsorbedCalls, r.TallyRound = dropped, taken, time.Time{}
+	if len(dropped) > 0 || len(taken) > 0 {
+		r.TallyRound = r.BridgeCalls[0].At
 	}
 	newest := -1
 	for i, call := range r.BridgeCalls {
@@ -253,23 +393,48 @@ func (r *PendingRun) appendCall(next BridgeCall) {
 	}
 }
 
-// ElidedCall is one identity among the calls a run's log dropped from its
-// middle ([PendingRun.ElidedCalls]): how many of them called Name with the
-// arguments whose digest is Digest ([BridgeCall.Digest]), and how many of those
-// failed.
+// identity is one call as a tally counts it: its tool, the digest it was
+// admitted under — none for a call whose arguments are withheld, so its tally
+// keeps no digest of them either — and whether it failed.
+func identity(call BridgeCall) ElidedCall {
+	e := ElidedCall{Name: call.Name, Digest: call.Digest, Calls: 1}
+	if call.Withheld() {
+		e.Digest = ""
+	}
+	if call.Failed {
+		e.Failed = 1
+	}
+	return e
+}
+
+// ElidedCall is one identity in a tally of calls a run's row does not list as
+// calls: how many of them called Name with the arguments whose digest is
+// Digest ([BridgeCall.Digest]), and how many of those failed. Two tallies are
+// kept of them, each the round's ([PendingRun.TallyRound]):
+//
+//   - [PendingRun.ElidedCalls], calls of the round the row does not list —
+//     the log's dropped middle, and a call whose own append never landed —
+//     which every reader of the round reads as calls it made;
+//   - [PendingRun.AbsorbedCalls], calls the run's call log took in from a
+//     bridged call's own work — a delegated worker's — which a resumed call
+//     log counts and no reader of the round's deliveries reads, since the
+//     round did not make them. Failed is never set on one.
 //
 // THE COUNT BOUND COSTS EVIDENCE, NEVER AN OPERATION ID. A resumed call log
 // seeds a call for every one counted here, so a later call counts its repeats
 // (internal/agent/turnctx's CallLog) exactly as the run's own process would
 // have, and a delivery reader counts a dropped reply as the reply it was.
 //
-// HELD TO [MaxElidedIdentityBytes], and past it an identity is FOLDED, in two
-// steps that each keep the count and give up a detail: into its tool's entry
-// with no digest — calls to Name whose arguments are not known, which a seed
-// counts against every later call to Name — and past that into the one entry
-// with no name — calls whose tool is not known either, which a seed counts
-// against every later call and a delivery reader cannot attribute. Both are
-// over-counts; neither is ever an under-count.
+// HELD TO ITS TALLY'S BOUND ([MaxElidedIdentityBytes],
+// [MaxAbsorbedIdentityBytes]), and past it an identity is FOLDED, in two steps
+// that each keep the count and give up a detail: into its tool's entry with no
+// digest — calls to Name whose arguments are not known, which a seed counts
+// against every later call to Name — and past that into the one entry with no
+// name — calls whose tool is not known either, which a seed counts against
+// every later call and a delivery reader cannot attribute. Both are
+// over-counts; neither is ever an under-count. An entry with a name and no
+// digest is also how a call whose arguments are withheld is counted
+// ([BridgeCall.Withheld]).
 //
 // A SECTION WITH AN EXTRA OF ITS OWN (wirekeys.go), so a key a later build adds
 // to an identity survives this build's writes. An identity this build folds
@@ -286,25 +451,29 @@ type ElidedCall struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// elidedKey is what `bridge_elided_calls` costs on the row beyond its entries:
-// its key, its brackets and the comma before it.
-const elidedKey = len(`,"bridge_elided_calls":[]`)
+// tallyKind is one of the row's two tallies of identities: what it costs on the
+// row beyond its entries (key: its key, its brackets and the comma before it)
+// and the bound it is held to, as the row holds it.
+type tallyKind struct{ key, bound int }
 
-// elide folds one call the log dropped into its identities, held to
-// [MaxElidedIdentityBytes] — see [ElidedCall].
-func elide(ids []ElidedCall, call BridgeCall) []ElidedCall {
-	failed := 0
-	if call.Failed {
-		failed = 1
-	}
-	ids = tally(ids, ElidedCall{Name: call.Name, Digest: call.Digest, Calls: 1, Failed: failed})
+// The row's two tallies — see [ElidedCall].
+var (
+	elidedTally   = tallyKind{key: len(`,"bridge_elided_calls":[]`), bound: MaxElidedIdentityBytes}
+	absorbedTally = tallyKind{key: len(`,"bridge_absorbed_calls":[]`), bound: MaxAbsorbedIdentityBytes}
+)
+
+// fold counts e into ids, held to its kind's bound as the row holds the tally —
+// see [ElidedCall].
+func fold(ids []ElidedCall, e ElidedCall, kind tallyKind) []ElidedCall {
+	key, bound := kind.key, kind.bound
+	ids = tally(ids, e)
 	// WHAT THE TALLY WEIGHS: its entries, a comma between each two, and its
 	// key — kept as the folds below change it rather than measured again.
 	sum := 0
 	for _, e := range ids {
 		sum += entryBytes(e)
 	}
-	weight := func() int { return elidedKey + sum + max(len(ids)-1, 0) }
+	weight := func() int { return key + sum + max(len(ids)-1, 0) }
 	// PAST THE BOUND: identities fold into their tool's entry, the largest
 	// first, until the tally fits; then tools into the one unnamed entry.
 	// Each fold only shrinks the tally: an entry goes, and what it counted
@@ -317,7 +486,7 @@ func elide(ids []ElidedCall, call BridgeCall) []ElidedCall {
 			return ElidedCall{Calls: e.Calls, Failed: e.Failed}, e.Name != ""
 		},
 	} {
-		if weight() <= MaxElidedIdentityBytes {
+		if weight() <= bound {
 			return ids
 		}
 		type weighed struct {
@@ -330,7 +499,7 @@ func elide(ids []ElidedCall, call BridgeCall) []ElidedCall {
 		}
 		slices.SortStableFunc(order, func(a, b weighed) int { return cmp.Compare(b.cost, a.cost) })
 		for _, w := range order {
-			if weight() <= MaxElidedIdentityBytes {
+			if weight() <= bound {
 				return ids
 			}
 			folded, foldable := step(w.e)
@@ -369,9 +538,9 @@ func tally(ids []ElidedCall, e ElidedCall) []ElidedCall {
 	return slices.Insert(ids, at, e)
 }
 
-// elidedBytes is what ids weigh on the row, key included.
-func elidedBytes(ids []ElidedCall) int {
-	n := elidedKey
+// tallyBytes is what ids weigh on the row as a tally of kind.
+func tallyBytes(ids []ElidedCall, kind tallyKind) int {
+	n := kind.key
 	for i, e := range ids {
 		if i > 0 {
 			n++
@@ -399,18 +568,56 @@ func elidedCount(ids []ElidedCall) int {
 	return n
 }
 
-// ElisionKnown reports whether every call the log dropped from its middle is
-// accounted for by name and outcome ([PendingRun.ElidedCalls]): each counted
-// in an identity that names its tool. False on a row an older build elided
-// (it kept a count and no identities), and where the tally folded calls into
-// its unnamed entry and any of those succeeded — a call whose tool is not
-// known may have been the reply, so a reader of whether the turn replied
-// cannot say it was not.
-func (r PendingRun) ElisionKnown() bool {
-	if elidedCount(r.ElidedCalls) != r.BridgeCallsElided {
-		return false
+// talliesHeld reports whether the two tallies the row holds are its current
+// round's: kept under the round its first recorded call began
+// ([PendingRun.TallyRound]), or empty. A new round's relaunch clears them with
+// the round's calls; one an older build made, knowing neither, cleared the
+// calls and left the tallies, which name another round's calls.
+func (r PendingRun) talliesHeld() bool {
+	if len(r.ElidedCalls) == 0 && len(r.AbsorbedCalls) == 0 {
+		return true
 	}
-	for _, e := range r.ElidedCalls {
+	return len(r.BridgeCalls) > 0 && r.TallyRound.Equal(r.BridgeCalls[0].At)
+}
+
+// Elided is every call of this round its row does not list, by identity: the
+// tally kept of them where it is this round's ([PendingRun.ElidedCalls]), and
+// one count with no tool for every call the row says it does not list and no
+// identity accounts for — dropped by an older build, which kept a count and no
+// identities — whose outcomes are not known either. What every reader of the
+// round's calls reads them by, the seed and the delivery checks alike: the
+// count is an over-count of every later call where it is seeded, and a record
+// a delivery reader cannot read whole ([PendingRun.ElisionKnown]).
+func (r PendingRun) Elided() []ElidedCall {
+	var ids []ElidedCall
+	if r.talliesHeld() {
+		ids = slices.Clone(r.ElidedCalls)
+	}
+	if short := r.BridgeCallsElided - elidedCount(ids); short > 0 {
+		ids = tally(ids, ElidedCall{Calls: short})
+	}
+	return ids
+}
+
+// Absorbed is the calls the run's call log took in from this round's bridged
+// calls' own work, by identity ([PendingRun.AbsorbedCalls]), or none where the
+// tally is another round's.
+func (r PendingRun) Absorbed() []ElidedCall {
+	if !r.talliesHeld() {
+		return nil
+	}
+	return slices.Clone(r.AbsorbedCalls)
+}
+
+// ElisionKnown reports whether every call of this round its row does not list
+// is accounted for by name and outcome ([PendingRun.Elided]): each counted in
+// an identity that names its tool. False on a row an older build elided (it
+// kept a count and no identities), and where the tally folded calls into its
+// unnamed entry and any of those succeeded — a call whose tool is not known
+// may have been the reply, so a reader of whether the turn replied cannot say
+// it was not.
+func (r PendingRun) ElisionKnown() bool {
+	for _, e := range r.Elided() {
 		if e.Name == "" && e.Calls > e.Failed {
 			return false
 		}
@@ -423,4 +630,37 @@ func (r PendingRun) ElisionKnown() bool {
 func keptTitle(s string) string {
 	title, _ := rowRecord.Text(s, MaxRunTitleBytes)
 	return title
+}
+
+// answerFits reports why answer is past its share of the row
+// ([MaxAnswerBytes]), nil where it is within it: as the row holds it, and as
+// the copies letting it go of would owe the seat ([handBackOf]), which the
+// share bounds as well, since a decline cannot refuse to hand a reply back.
+func answerFits(turnID string, answer RecordedAnswer) error {
+	raw, err := json.Marshal(answer)
+	if err != nil {
+		return fmt.Errorf("sandbox: encoding the answer to run %s: %w", turnID, err)
+	}
+	copies, err := json.Marshal(handBackOf(answer))
+	if err != nil {
+		return fmt.Errorf("sandbox: encoding what letting go of the answer to run %s would owe: %w",
+			turnID, err)
+	}
+	if n := max(len(raw), len(copies)); n > MaxAnswerBytes {
+		return fmt.Errorf("sandbox: the answer to run %s weighs %s on its row, and an answer may weigh "+
+			"%s: %w", turnID, kept.Size(n), kept.Size(MaxAnswerBytes), ErrAnswerTooLarge)
+	}
+	return nil
+}
+
+// HeldArgsFit reports why held call arguments sealed as sealed are past their
+// share of the row ([MaxHeldArgsBytes]), nil where they are within it: what the
+// holder asks before it records the question, and the store again as it writes
+// it.
+func HeldArgsFit(sealed string) error {
+	if n := kept.Quoted(sealed); n > MaxHeldArgsBytes {
+		return fmt.Errorf("sandbox: the call's arguments weigh %s once sealed, and a held call's may "+
+			"weigh %s: %w", kept.Size(n), kept.Size(MaxHeldArgsBytes), ErrHeldCallTooLarge)
+	}
+	return nil
 }

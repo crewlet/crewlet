@@ -43,6 +43,14 @@ type Call struct {
 	// seeds its call log from the arguments it holds would take the call for
 	// another, and derive another operation's id. Seeded by this, it cannot.
 	Digest string `json:"Digest,omitempty"`
+
+	// Withheld is a call whose arguments, and with them their digest, every
+	// record withholds: a call held for a person's approval and the one they
+	// approved, whose arguments ride the run's row sealed (ADR-0077). Args
+	// and Digest are both empty on it, and a later segment's call log counts
+	// it as a call of its tool whose arguments are not known — never as the
+	// tool called with none, which it was not.
+	Withheld bool `json:"Withheld,omitempty"`
 }
 
 // FormatOptions controls how a run of calls renders.
@@ -144,10 +152,13 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 		lines = append(lines, "- (+"+itoa(dropped)+" further read call(s) omitted)")
 	}
 	if len(lines) == 0 {
-		return "(none)"
+		return noCalls
 	}
 	return strings.Join(lines, "\n")
 }
+
+// noCalls is what [FormatCalls] renders for a run of calls that shows none.
+const noCalls = "(none)"
 
 // readsIn counts the read calls a render would show without a cap.
 func readsIn(calls []Call, opts FormatOptions) int {
@@ -194,6 +205,13 @@ type Iteration struct {
 	// them as calls of the turn ([Called]) — where the calls themselves are
 	// gone.
 	Elided []Elided `json:"elided_calls,omitempty"`
+
+	// Absorbed is the calls the run's call log took in from the round's own
+	// calls' work — a delegated worker's under a `delegate` — by identity
+	// ([Elided], Failed unset): carried with the round so a later segment's
+	// call log seeds them, and read by nothing else, since the round did not
+	// make them — no delivery check counts a worker's call as the turn's.
+	Absorbed []Elided `json:"absorbed_calls,omitempty"`
 
 	// Reads are the names among the calls above that MCP annotations
 	// positively mark read-only. Carried per-record rather than looked up

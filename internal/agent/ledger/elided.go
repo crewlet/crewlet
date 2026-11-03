@@ -24,8 +24,12 @@ import (
 // over-count of every tool). Both are the safe direction, and both are a
 // record that grew past what its tally holds.
 //
+// THE SAME SHAPE COUNTS THE CALLS A ROUND'S OWN CALLS MADE — a delegated
+// worker's, which the run's call log absorbed ([Iteration.Absorbed]) — with
+// Failed unset: identities a later segment seeds, which no delivery check reads.
+//
 // JSON TAGS ARE A WIRE FORMAT: a closed round carries these across a park
-// ([Iteration.Elided]).
+// ([Iteration.Elided], [Iteration.Absorbed]).
 type Elided struct {
 	Name   string `json:"name,omitempty"`
 	Digest string `json:"digest,omitempty"`
@@ -63,10 +67,20 @@ func Called(elided []Elided) []Call {
 	return out
 }
 
+// Count is how many calls a tally counts.
+func Count(elided []Elided) int {
+	n := 0
+	for _, e := range elided {
+		n += max(e.Calls, 0)
+	}
+	return n
+}
+
 // FormatElided is the line that says what a record did not keep of a run's
 // calls, or "" for none: how many, and by tool how many and how many of those
-// failed — the evidence a count bound costs, said rather than hidden, because
-// a log that silently skips is a log that lies about what the run did.
+// failed — the evidence a count bound costs, or a store that did not take a
+// call's record, said rather than hidden, because a log that silently skips is
+// a log that lies about what the run did.
 //
 // skip are the names that never render ([FormatOptions.Skip]); they are still
 // counted in the total, since the run did make them.
@@ -112,8 +126,7 @@ func FormatElided(elided []Elided, skip []string) string {
 	if unnamed > 0 {
 		parts = append(parts, itoa(unnamed)+" to tools the record did not keep either")
 	}
-	line := "- (+" + itoa(total) + " further call(s) from the middle of the run, which its record " +
-		"did not keep"
+	line := "- (+" + itoa(total) + " further call(s) the run made, which its record did not keep"
 	if len(parts) > 0 {
 		line += ": " + strings.Join(parts, ", ")
 	}
