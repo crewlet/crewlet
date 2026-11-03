@@ -11,6 +11,7 @@
 
 import type {
   AccessAnswer,
+  AccessBoxFile,
   AccessBoxLine,
   AccessDesired,
   AccessLaneKey,
@@ -406,9 +407,14 @@ export function boxLines(saved: AccessSeatLane): AccessBoxLine[] {
 export function boxSettings(saved: AccessSeatLane): string | null {
   const names = [
     ...(saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name),
-    ...(saved.box?.files ?? []).filter((f) => f.by === "crewlet").map((f) => f.path),
+    ...crewletFiles(saved).map((f) => f.path),
   ];
   return names.length > 0 ? andList(names) : null;
+}
+
+/** The files Crewlet writes into a seat's box itself, as the engine sends them. */
+function crewletFiles(saved: AccessSeatLane): AccessBoxFile[] {
+  return (saved.box?.files ?? []).filter((f) => f.by === "crewlet");
 }
 
 /**

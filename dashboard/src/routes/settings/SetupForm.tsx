@@ -223,13 +223,6 @@ export function helpLines(text: string): ReactNode {
 }
 
 /**
- * How tall a minted value's public view draws before it scrolls: about
- * sixteen lines of a setup script, so the fields under it stay on screen.
- * Copy takes the whole block whatever is visible.
- */
-const PUBLIC_VIEW_HEIGHT = 320;
-
-/**
  * Whether a requirement is a row on the form at all.
  *
  * A HIDDEN field is written without being asked for, and a MINTABLE
@@ -1286,7 +1279,6 @@ export function SetupForm({
               code={shown.text}
               language={shown.language}
               wrap={false}
-              maxHeight={PUBLIC_VIEW_HEIGHT}
             />
           </FormField>
         ) : editable(section, r) ? (

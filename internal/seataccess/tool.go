@@ -161,8 +161,8 @@ func boxLinesOf(cat Catalog, lane Lane, handle string) []BoxLine {
 
 // BoxOf is the seat with handle's box as lane needs it: the lines a person
 // adds ([BoxLines]), then the settings the engine supplies while the seat's
-// lane is on, sorted, and the files it writes, by path. Nil where there is
-// none of them.
+// lane is on with the variables naming its files' paths ([BoxFile.PathEnv]),
+// by name, and the files it writes, by path. Nil where there is none of them.
 func BoxOf(c *config.Company, kind integration.Kind, lane Lane, handle string) *Box {
 	vendor, ok := Lookup(kind)
 	if !ok {
@@ -175,12 +175,21 @@ func BoxOf(c *config.Company, kind integration.Kind, lane Lane, handle string) *
 func boxOf(c *config.Company, vendor Vendor, lane Lane, handle string) *Box {
 	lines := boxLinesOf(vendor.Catalog(), lane, handle)
 	set := vendorDefaults(c, roleOf(c, handle), vendor)
-	for _, name := range slices.Sorted(maps.Keys(set.Env)) {
-		lines = append(lines, BoxLine{Name: name, Value: set.Env[name], By: ByCrewlet})
-	}
+	supplied := maps.Clone(set.Env)
 	var files []BoxFileLine
 	for _, f := range set.Files {
 		files = append(files, BoxFileLine{Path: f.Path, Value: f.Ref, Rewritten: f.Rewritten, By: ByCrewlet})
+		if _, setting := set.Env[f.PathEnv]; f.PathEnv != "" && !setting {
+			// THE PATH AS EVERY BOX READS IT, from its home: the launch joins
+			// it onto the box's own, and a setting of the same name wins.
+			if supplied == nil {
+				supplied = map[string]string{}
+			}
+			supplied[f.PathEnv] = "~/" + f.Path
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(supplied)) {
+		lines = append(lines, BoxLine{Name: name, Value: supplied[name], By: ByCrewlet})
 	}
 	slices.SortFunc(files, func(a, b BoxFileLine) int { return strings.Compare(a.Path, b.Path) })
 	if len(lines) == 0 && len(files) == 0 {

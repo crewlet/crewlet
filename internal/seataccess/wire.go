@@ -67,7 +67,8 @@ type BoxFileLine struct {
 
 // BoxLine is one variable in a seat's box: Name set to Value. A person's line
 // holds the seat's sealed name as a whole reference (`${EXPO_TOKEN_QA}`); the
-// engine's holds a non-secret setting as configured, a literal or a reference.
+// engine's holds a non-secret setting as configured, a literal or a reference,
+// or one of its files' paths from the box's home (`~/.config/crewlet/token`).
 type BoxLine struct {
 	Name  string    `json:"name"`
 	Value string    `json:"value"`

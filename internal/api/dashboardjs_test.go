@@ -1800,6 +1800,9 @@ const (
 	// lane naming its issued token's period took the merged tree from 5486.1
 	// KiB (5,617,793 bytes) to 5486.9 KiB (5,618,603 bytes, +810 bytes), all
 	// of it the integrations model chunk. It stays at 5487 KiB.
+	// Reading a box file's type where the details list it, and the public
+	// view taking the shell's ceiling, took it to 5,618,606 bytes (+3). It
+	// stays at 5487 KiB.
 	treeBudget = 5<<20 + 367<<10
 )
 

@@ -520,9 +520,11 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 	// record, so waiting for a revision or a seal would wait for nothing. An
 	// issue the vendor did not answer passes by itself, and one it refused
 	// waits on a person's step ([seatIssuer.refusal]), which the retry
-	// notices once it is taken. And a token that WAS issued is renewed
-	// before it runs short ([Engine.armRenewal]).
-	if token.refused() {
+	// notices once it is taken. A token the integration is still settling is
+	// retried the same way while its server reads waiting, since it clears
+	// with nobody acting ([seatToken.settling]). And a token that WAS issued
+	// is renewed before it runs short ([Engine.armRenewal]).
+	if token.refused() || token.settling() {
 		retry = true
 	}
 	e.armRenewal(s, token)
