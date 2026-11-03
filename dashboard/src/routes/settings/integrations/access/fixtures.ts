@@ -11,7 +11,7 @@
  */
 
 import type { AccessAnswer, AccessOptions, AccessSeat, AccessSeatLane } from "~/contract/access.ts";
-import { lanesOf, type Lane } from "./logic.ts";
+import { lanesOf, type HandoffStep, type Lane } from "./logic.ts";
 
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
@@ -72,8 +72,12 @@ const EXPO_OPTIONS: AccessOptions = {
   live: false,
   rotatable: true,
   levels: [
-    { id: "viewer", name: "Viewer" },
-    { id: "runner", name: "Runner" },
+    { id: "viewer", name: "Viewer", note: "View all projects" },
+    {
+      id: "runner",
+      name: "Runner",
+      note: "View all projects and perform low-risk actions on them",
+    },
     { id: "developer", name: "Developer" },
     { id: "release_manager", name: "Release Manager" },
   ],
@@ -347,4 +351,64 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
       }),
     ],
   };
+}
+
+const EXPO_TOKENS_PAGE = "https://expo.dev/accounts/gophrase/settings/access-tokens";
+const PM_ROBOT = "crewlet-gophrase-pm";
+
+/** The engine's sentence for each wait the Set up sheet opens on, for PM's robot at Runner. */
+const EXPO_WAITS: Record<HandoffStep, string> = {
+  create: `Add a robot named ${PM_ROBOT} with the Runner role at Expo`,
+  mint: `Create a new access token for robot ${PM_ROBOT}, then paste it here`,
+  rerole:
+    "This robot is a Developer on gophrase, and you chose Runner. Change its role with Edit robot at Expo, or choose Developer here",
+};
+
+/**
+ * Expo with PM turned on at Runner and waiting on a person for its robot at
+ * one step, QA as in [expoAnswer]. `named: false` leaves the robot's name off
+ * the wait, as an engine that sends none would.
+ */
+export function expoWaitingAnswer(
+  step: HandoffStep = "create",
+  { renew = step !== "create", named = true }: { renew?: boolean; named?: boolean } = {},
+): AccessAnswer {
+  const answer = expoAnswer();
+  const robot = step === "create" ? {} : { account: PM_ROBOT, account_id: "robot-pm" };
+  answer.seats[0] = seat("pm", "PM", {
+    expo: {
+      desired: { enabled: true, level: "runner" },
+      observed:
+        step === "create"
+          ? { exists: false, enabled: false }
+          : {
+              exists: step === "rerole",
+              enabled: step === "rerole",
+              ...robot,
+              ...(step === "rerole" ? { level: "developer" } : {}),
+              ...(renew
+                ? {
+                    credential: { variable: "EXPO_TOKEN_PM", minted_at: ago(DAY) },
+                    credential_gone: step === "mint",
+                  }
+                : {}),
+            },
+      sync: {
+        at: ago(MIN),
+        outcome: "waiting",
+        steps: [],
+        error: {
+          step,
+          said: EXPO_WAITS[step],
+          remedy: "",
+          actor: "you",
+          action_url: EXPO_TOKENS_PAGE,
+          ...(named ? { account: PM_ROBOT } : {}),
+        },
+      },
+      plan: [],
+      tool: "off",
+    },
+  });
+  return answer;
 }

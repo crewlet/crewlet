@@ -20,6 +20,7 @@ import {
   confluenceAnswer,
   datadogAnswer,
   expoAnswer,
+  expoWaitingAnswer,
   githubAnswer,
   jiraAnswer,
   mattermostAnswer,
@@ -34,11 +35,14 @@ const calls = vi.hoisted(() => ({
   save: [] as unknown[],
   act: [] as unknown[],
   install: [] as unknown[],
+  credential: [] as unknown[],
   stepUp: false,
   /** A save refused as stale, once. */
   stale: false,
   /** The revision the engine's plan is drawn from: the document as it stands now. */
   planRevision: "rev-7",
+  /** The plans the engine answers, where a case names its own. */
+  plans: null as unknown[] | null,
 }));
 
 vi.mock("./api.ts", async (actual) => {
@@ -53,7 +57,7 @@ vi.mock("./api.ts", async (actual) => {
           kind,
           revision: calls.planRevision,
           ...(calls.stepUp ? { step_up: true } : {}),
-          plans: [
+          plans: calls.plans ?? [
             {
               handle: "qa",
               lane: "datadog",
@@ -89,6 +93,13 @@ vi.mock("./api.ts", async (actual) => {
         calls.install.push({ kind, handle, lane });
         return { url: "https://slack.com/oauth/v2/authorize?state=one-use" };
       }),
+      credential: vi.fn(async (kind: string, handle: string, lane: string, value: string) => {
+        calls.credential.push({ kind, handle, lane, value });
+        return {
+          detail: "Works. Robot crewlet-gophrase-pm, Runner on gophrase. Sealed as EXPO_TOKEN_PM.",
+          access: { ...expoAnswer(), revision: "rev-8" },
+        };
+      }),
       act: vi.fn(
         async (kind: string, handle: string, lane: string, action: string, revision?: string) => {
           calls.act.push({ kind, handle, lane, action, ...(revision ? { revision } : {}) });
@@ -104,9 +115,11 @@ beforeEach(() => {
   calls.save = [];
   calls.act = [];
   calls.install = [];
+  calls.credential = [];
   calls.stepUp = false;
   calls.stale = false;
   calls.planRevision = "rev-7";
+  calls.plans = null;
 });
 afterEach(cleanup);
 
@@ -333,25 +346,27 @@ test("an Expo agent with no tool is told to set EXPO_TOKEN in its sandbox env", 
   expect(advice.textContent).not.toMatch(/tool server/);
 });
 
-// AN EXPO ROBOT IS DELETED, NOT DISABLED: nothing is left at Expo to turn
-// back on, so the review says a new robot is created instead.
-test("turning an Expo seat off says the token and the robot are deleted", async () => {
+// AN EXPO ROBOT IS DELETED BY A PERSON: Crewlet drops the agent's token at
+// once, and the review says the robot is the person's to delete at Expo.
+test("turning an Expo seat off says the token goes at once and the robot is yours to delete", async () => {
   draw(expoAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Expo" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   expect(
     await screen.findByText(
-      /Crewlet deletes the robot's access token, so it stops working at once/,
+      /Crewlet deletes the agent's sealed token at once.*you delete its robot at Expo/,
     ),
   ).toBeTruthy();
 });
 
-test("rotating an Expo token says a new one is created before the old one is deleted", async () => {
+test("rotating an Expo token says a person pastes a new one for the same robot", async () => {
   draw(expoAnswer());
   details("QA", "Expo");
   fireEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
   const dialog = screen.getByRole("alertdialog", { name: "Rotate QA's Expo credential?" });
-  expect(within(dialog).getByText(/creates a new access token for the robot/)).toBeTruthy();
+  expect(
+    within(dialog).getByText(/create a new token for the same robot at Expo and paste it here/),
+  ).toBeTruthy();
   fireEvent.click(within(dialog).getByRole("button", { name: "Rotate credential" }));
   await waitFor(() =>
     expect(calls.act).toEqual([{ kind: "expo", handle: "qa", lane: "expo", action: "rotate" }]),
@@ -802,4 +817,112 @@ test("the table is the kit's: a named table of real rows, with column headers an
     expect(headers.some((h) => h.includes(label))).toBe(true);
   for (const name of ["PM", "QA", "SRE"])
     expect(screen.getByRole("button", { name: `Show ${name}'s Datadog details` })).toBeTruthy();
+});
+
+// AN EXPO AGENT WAITS ON A PERSON FOR ITS ROBOT: the row says Needs you, and
+// its one control opens the Set up sheet, which holds Expo's page and the
+// paste, so the row offers no "Done, check again" a paste would make pointless.
+// Mutation: drop the lane's handoff words and the row falls back to Open Expo.
+test("an Expo agent waiting on its robot reads Needs you, with Set up opening the sheet", () => {
+  draw(expoWaitingAnswer());
+  expect(screen.getByText("Needs you")).toBeTruthy();
+  expect(screen.getByText("Waiting on a person")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Done, check again" })).toBeNull();
+  expect(screen.queryByRole("link", { name: /Open Expo/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Set up" }));
+  expect(screen.getByRole("dialog", { name: "Set up PM on Expo" })).toBeTruthy();
+});
+
+// THE PASTE GOES TO THE ENGINE FOR THAT SEAT, and the tab draws the answer it
+// returns, which is the seat in sync. Mutation: adopt nothing and the row
+// still reads Needs you behind the sheet.
+test("a pasted token is checked for its seat and the tab draws the engine's answer", async () => {
+  const { onAnswer } = draw(expoWaitingAnswer("mint"));
+  fireEvent.click(screen.getByRole("button", { name: "Paste a new token" }));
+  const sheet = screen.getByRole("dialog", { name: "New token for PM" });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Continue" }));
+  fireEvent.change(within(sheet).getByLabelText("Token"), {
+    target: { value: "robot-token-for-tests" },
+  });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Check and save" }));
+  await waitFor(() =>
+    expect(calls.credential).toEqual([
+      { kind: "expo", handle: "pm", lane: "expo", value: "robot-token-for-tests" },
+    ]),
+  );
+  await waitFor(() => expect(onAnswer).toHaveBeenCalled());
+  const adopted = onAnswer.mock.calls[0]![0] as AccessAnswer;
+  expect(adopted.revision).toBe("rev-8");
+  expect(adopted.kind).toBe("expo");
+  expect(within(sheet).getByText(/^Works\. Robot crewlet-gophrase-pm/)).toBeTruthy();
+});
+
+test("a role changed at Expo is fixed from the row's Fix the role", () => {
+  draw(expoWaitingAnswer("rerole"));
+  fireEvent.click(screen.getByRole("button", { name: "Fix the role" }));
+  expect(screen.getByRole("dialog", { name: "PM's role on Expo" })).toBeTruthy();
+});
+
+// DELETING THE ROBOT AT EXPO IS THE PERSON'S, and nothing is pasted for it:
+// the row names the step, links to Expo and checks again when it is done.
+test("an Expo robot to delete at Expo is a plain wait with Open Expo, not the sheet", () => {
+  const answer = expoWaitingAnswer("mint");
+  const pm = answer.seats[0]!.lanes.expo!;
+  pm.sync!.error = {
+    ...pm.sync!.error!,
+    step: "remove",
+    said: "Delete robot crewlet-gophrase-pm at Expo",
+  };
+  draw(answer);
+  expect(screen.getByText("Delete robot crewlet-gophrase-pm at Expo.")).toBeTruthy();
+  expect(screen.getByRole("link", { name: /Open Expo/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Done, check again" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Set up|Paste/ })).toBeNull();
+});
+
+// EXPO'S TURN-ON IS MOSTLY A PERSON'S, and the review says so step by step:
+// two steps marked with a person, Crewlet's check last, and the footer saying
+// what the marks mean. Mutation: drop the person mark and the steps read as Crewlet's.
+test("turning an Expo agent on reviews the robot and the token as a person's steps", async () => {
+  calls.plans = [
+    {
+      handle: "pm",
+      lane: "expo",
+      steps: [
+        {
+          op: "create",
+          verb: "create",
+          by: "you",
+          text: "Add a robot named `crewlet-gophrase-pm` with the Viewer role at Expo",
+          action_url: "https://expo.dev/accounts/gophrase/settings/access-tokens",
+        },
+        {
+          op: "create",
+          verb: "mint",
+          by: "you",
+          text: "Create an access token for it, then paste it here",
+        },
+        {
+          op: "create",
+          verb: "mint",
+          by: "crewlet",
+          text: "Check the token and seal it as EXPO_TOKEN_PM",
+        },
+      ],
+    },
+  ];
+  draw(expoAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Expo" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const dialog = await screen.findByRole("dialog", { name: "Review changes to Expo" });
+  const steps = await within(dialog).findAllByRole("listitem");
+  expect(steps.map((li) => li.textContent)).toEqual([
+    "A person: Add a robot named crewlet-gophrase-pm with the Viewer role at Expo",
+    "A person: Create an access token for it, then paste it here",
+    "Crewlet: Check the token and seal it as EXPO_TOKEN_PM",
+  ]);
+  expect(within(steps[2]!).getByText("EXPO_TOKEN_PM").tagName).toBe("CODE");
+  expect(
+    within(dialog).getByText("Steps marked with a person need somebody at Expo."),
+  ).toBeTruthy();
 });

@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
   AccessAnswer,
+  AccessCredentialAnswer,
   AccessDraftRequest,
   AccessInstallLink,
   AccessPlanAnswer,
@@ -65,6 +66,16 @@ export const accessApi = {
       {},
       revision === undefined ? undefined : ifMatch(revision),
     )) as AccessAnswer,
+  /**
+   * A credential a person made at the vendor for a seat (Expo's robot token),
+   * for the engine to check and seal. A refusal says why beside the field; the
+   * value is never echoed.
+   */
+  credential: async (kind: string, handle: string, lane: string, value: string) =>
+    (await rest.post(
+      `/setup/integrations/${pathSegment(kind)}/access/seats/${pathSegment(handle)}/${pathSegment(lane)}/credential`,
+      { value },
+    )) as AccessCredentialAnswer,
   /** A fresh, single-use link to install a seat's app at the vendor (Slack's approval). */
   install: async (kind: string, handle: string, lane: string) =>
     (await rest.post(

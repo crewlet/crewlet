@@ -55,10 +55,12 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import "~/styles/access.css";
 import { accessApi, refusalWords, type AccessDraft } from "./api.ts";
 import { PermissionsDialog, RemoveDialog, ReviewDialog, RotateDialog } from "./Dialogs.tsx";
+import { HandoffSheet } from "./HandoffSheet.tsx";
 import {
   accessWords,
   availableActions,
   emptyScopeHint,
+  handoffOf,
   joinLevels,
   lanesOf,
   levelIds,
@@ -81,6 +83,7 @@ import {
   statusOf,
   syncValue,
   toolWords,
+  type Handoff,
   type Lane,
   type SeatAction,
   type Status,
@@ -171,6 +174,13 @@ export function AgentsAccess({
   const [removing, setRemoving] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [editing, setEditing] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [rotating, setRotating] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
+  // THE HANDOFF IS HELD AS IT WAS OPENED, so the sheet keeps its robot and
+  // role while the answer behind it moves on to In sync.
+  const [handing, setHanding] = useState<{
+    seat: AccessSeat;
+    lane: Lane;
+    handoff: Handoff;
+  } | null>(null);
   const [said, setSaid] = useState("");
   // WHAT EACH SEAT'S LANE HAS IN FLIGHT, so its own buttons say so and the
   // rest of the table stays usable.
@@ -569,6 +579,7 @@ export function AgentsAccess({
                 link: links[row.key],
                 onAct: (a) => void act(row.seat, row.lane, a),
                 onInstall: () => void install(row.seat, row.lane),
+                onHandoff: (handoff) => setHanding({ seat: row.seat, lane: row.lane, handoff }),
                 onRemove: () => setRemoving({ seat: row.seat, lane: row.lane }),
               });
           const hint = emptyScopeHint(row.lane, row.want) ?? productOnlyNote(row.lane, row.want);
@@ -648,6 +659,26 @@ export function AgentsAccess({
           }}
         />
       )}
+      {handing && (
+        <HandoffSheet
+          seat={handing.seat}
+          lane={handing.lane}
+          handoff={handing.handoff}
+          onClose={() => setHanding(null)}
+          onPaste={async (token) => {
+            const { detail, access } = await accessApi.credential(
+              kind,
+              handing.seat.handle,
+              handing.lane.key,
+              token,
+            );
+            adopt(access);
+            return detail;
+          }}
+          onCheck={() => void act(handing.seat, handing.lane, "done")}
+          refusal={refusalWords}
+        />
+      )}
       {rotating && (
         <RotateDialog
           seat={rotating.seat}
@@ -686,6 +717,7 @@ function laneMessage({
   onAct,
   onInstall,
   onRemove,
+  onHandoff,
 }: {
   lane: Lane;
   seat: AccessSeat;
@@ -702,6 +734,8 @@ function laneMessage({
   onAct: (action: "retry" | "keep" | "restore" | "done") => void;
   onInstall: () => void;
   onRemove: () => void;
+  /** Opens the Set up sheet, where only a person can make the seat's account at the vendor. */
+  onHandoff: (handoff: Handoff) => void;
 }): ReactNode {
   if (syncing && saved.plan.length > 0) return null;
   const busy = held !== undefined;
@@ -840,6 +874,14 @@ function laneMessage({
     const todo = error?.said || waiting?.text;
     if (!todo) return null;
     const install = laneWords(lane.key).install;
+    // A HANDOFF IS ONE BUTTON THAT OPENS ITS SHEET, which holds the vendor's
+    // page, the account to make and the paste; nothing to check again here.
+    const handoff = busy ? undefined : handoffOf(lane, saved);
+    const control = handoff ? (
+      <HandoffButton handoff={handoff} onOpen={() => onHandoff(handoff)} />
+    ) : (
+      step
+    );
     const where = at(error?.action_url ?? waiting?.action_url);
     body = (
       <Callout
@@ -847,7 +889,7 @@ function laneMessage({
         title="Waiting on a person"
         action={
           <span className="agent-access-actions">
-            {step ??
+            {control ??
               where ??
               (link ? (
                 <ButtonLink size="small" variant="secondary" href={link} external>
@@ -864,7 +906,7 @@ function laneMessage({
                   {install}
                 </Button>
               ) : null)}
-            {!busy && !step && press("done", "Done, check again", true)}
+            {!busy && !control && press("done", "Done, check again", true)}
           </span>
         }
       >
@@ -874,6 +916,21 @@ function laneMessage({
     );
   }
   return body;
+}
+
+/** What the Set up sheet opens on, as the button that opens it. */
+function handoffLabel(handoff: Handoff): string {
+  if (handoff.step === "create") return "Set up";
+  if (handoff.step === "rerole") return "Fix the role";
+  return handoff.renew ? "Paste a new token" : "Paste its token";
+}
+
+function HandoffButton({ handoff, onOpen }: { handoff: Handoff; onOpen: () => void }) {
+  return (
+    <Button size="small" variant="primary" onClick={onOpen}>
+      {handoffLabel(handoff)}
+    </Button>
+  );
 }
 
 const ACTION_WORDS: Record<SeatAction, string> = {
