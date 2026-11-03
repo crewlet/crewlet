@@ -20,3 +20,10 @@ import "time"
 // slow, and a run's done marker waits on its script: a process that ignored
 // SIGTERM would otherwise hold the run open for ever.
 const JobStopGrace = 5 * time.Second
+
+// JobKillWait is the most [Sandbox.KillJob] waits for a job to be gone: SIGTERM
+// and [JobStopGrace] for every process of it to go, then SIGKILL and
+// [JobStopGrace] more for the kernel to take them — the shape a direct box's
+// teardown has always had (Close) — beside the command that carries it into a
+// container or a VM.
+const JobKillWait = 2 * JobStopGrace

@@ -51,6 +51,14 @@ type FakeSandbox struct {
 	// ExecFunc, when set, answers Exec instead of the default success.
 	ExecFunc func(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
 
+	// EndJobFunc, when set, answers EndJob instead of the default success,
+	// and KillJobFunc KillJob: a box whose job's script was not there to ask,
+	// one that could not be reached, a kill that ended the job. Every call is
+	// recorded either way ([FakeSandbox.JobCalls]).
+	EndJobFunc  func(ctx context.Context, commandID string, script int) error
+	KillJobFunc func(ctx context.Context, commandID string) error
+	jobCalls    []string
+
 	// ReadErr, when set, is consulted by every read with the file's path,
 	// and a non-nil answer is that read's error — standing in for a box
 	// whose file could not be read back (a transport failure, not a size).
@@ -125,6 +133,43 @@ func (s *FakeSandbox) StartBackground(ctx context.Context, cmd string, opts Exec
 // test scripts liveness with ExecFunc ([remoteJob]).
 func (s *FakeSandbox) Job(ctx context.Context, commandID string) (JobState, error) {
 	return remoteJob(ctx, s, commandID)
+}
+
+// EndJob records the end request — "end <commandID> <script>" — and answers
+// EndJobFunc's verdict, or success. A pid below 2 is refused unsent, as every
+// real box refuses one.
+func (s *FakeSandbox) EndJob(ctx context.Context, commandID string, script int) error {
+	if script < 2 {
+		return fmt.Errorf("%w: pid %d is no process an end request is sent to", ErrNotJobProcess, script)
+	}
+	s.mu.Lock()
+	s.jobCalls = append(s.jobCalls, fmt.Sprintf("end %s %d", commandID, script))
+	end := s.EndJobFunc
+	s.mu.Unlock()
+	if end != nil {
+		return end(ctx, commandID, script)
+	}
+	return nil
+}
+
+// KillJob records the kill — "kill <commandID>" — and answers KillJobFunc's
+// verdict, or success.
+func (s *FakeSandbox) KillJob(ctx context.Context, commandID string) error {
+	s.mu.Lock()
+	s.jobCalls = append(s.jobCalls, "kill "+commandID)
+	kill := s.KillJobFunc
+	s.mu.Unlock()
+	if kill != nil {
+		return kill(ctx, commandID)
+	}
+	return nil
+}
+
+// JobCalls is every end request and kill made of the box's job, in order.
+func (s *FakeSandbox) JobCalls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.jobCalls)
 }
 
 // WriteFile stores the content in memory, where [FakeSandbox.Put] and

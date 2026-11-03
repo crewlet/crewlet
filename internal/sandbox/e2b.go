@@ -334,6 +334,30 @@ func (s *E2BSandbox) Job(ctx context.Context, commandID string) (JobState, error
 	return remoteJob(ctx, s, commandID)
 }
 
+// EndJob implements [Sandbox]: script is a pid inside the VM, signalled there
+// as the box's user ([endByKill]).
+func (s *E2BSandbox) EndJob(ctx context.Context, _ string, script int) error {
+	return endByKill(ctx, s, script)
+}
+
+// KillJob implements [Sandbox]: EVERY PROCESS OF THE BOX'S USER, `kill -1` as
+// `user` ([killScript]). envd starts a job with no process group of its own —
+// in envd's, which no signal may reach — so the job's tree has no group to
+// address; envd runs as root, out of the user's reach, and spared with it; and
+// the box is the run's alone and reclaimed right after, so a template's own
+// service running as the user goes a few seconds early.
+//
+// ITS EXIT IS NO VERDICT. The shell envd runs for the script may itself be one
+// of the user's processes it ends, and envd then answers the call with that
+// signal while the script goes on to its end; what the kill left running is the
+// job's poll to say.
+func (s *E2BSandbox) KillJob(ctx context.Context, _ string) error {
+	if _, err := s.Exec(ctx, killScript("-1"), ExecOptions{Cwd: DefaultHome}); err != nil {
+		return fmt.Errorf("e2b: ending the job in box %s: %w", s.id, err)
+	}
+	return nil
+}
+
 // WriteFile implements [Sandbox]: the file is REPLACED whole, never uploaded
 // over in place, which is how envd writes an upload ([envdClient.writeFile]).
 func (s *E2BSandbox) WriteFile(ctx context.Context, path string, content []byte) error {

@@ -234,6 +234,14 @@ func (l boxLayout) runFile() string { return filepath.Join(l.records(), runRecor
 // envFile is the container runtime's --env-file. See containerBox.envArgs.
 func (l boxLayout) envFile() string { return filepath.Join(l.records(), envRecord) }
 
+// groupFile records a container box's job's process group IN ITS CONTAINER, as
+// the exec that started it read it off the kernel ([containerBox.StartBackground]):
+// `<group> <handle>`, so [containerBox.KillJob] can end every process of the
+// job it names and nothing else. Only the exec knows the group: the handle is
+// the job's first process, which leads none. A record of the engine's, out of
+// the job's reach, since what is signalled through it is read back from it.
+func (l boxLayout) groupFile() string { return filepath.Join(l.records(), groupRecord) }
+
 // witnessFile records the engine process that last saw the box's job running,
 // which is how a job its engine's restart killed is told from one that ended
 // ([jobEnd]).
@@ -248,6 +256,7 @@ const (
 	runRecord         = "run.json"
 	envRecord         = "env"
 	witnessRecord     = "witness"
+	groupRecord       = "job.group"
 )
 
 // seededCredential is one login file a box was seeded with, as the box's
@@ -787,6 +796,77 @@ func writeRecord(l boxLayout, name string, blob []byte) error {
 	}
 	defer func() { _ = records.Close() }()
 	return replaceIn(records, name, blob)
+}
+
+// removeRecord removes the engine's record called name about a box, through the
+// box's records ([boxLayout.openRecords]); one that is not there is nothing.
+func removeRecord(l boxLayout, name string) error {
+	records, err := l.openRecords()
+	if absent(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = records.Close() }()
+	if err := records.Remove(name); err != nil && !absent(err) {
+		return err
+	}
+	return nil
+}
+
+// containerJobGroup is the process group, in its container, that a container box
+// recorded for the job pid names as that job started ([boxLayout.groupFile]),
+// false where it recorded none for it: a job an older build started, which
+// recorded nothing; a runtime whose exec did not lead a session of its own
+// ([containerBox.StartBackground] records no group then); a record of another
+// job's; or one that cannot be read, which is said.
+func containerJobGroup(l boxLayout, pid int) (int, bool) {
+	raw, err := readRecord(l, groupRecord)
+	if absent(err) {
+		return 0, false
+	}
+	if err != nil {
+		localLog.Warn("local_sandbox_job_group_unreadable", "sandbox_id", l.id, "path", l.groupFile(),
+			"error", err.Error(), "detail", "the job's process group in its container could not be read, "+
+				"so its first process alone is signalled to end it")
+		return 0, false
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) != 2 {
+		return 0, false
+	}
+	group, groupErr := strconv.Atoi(fields[0])
+	job, jobErr := strconv.Atoi(fields[1])
+	if groupErr != nil || jobErr != nil || group < 2 || job != pid {
+		return 0, false
+	}
+	return group, true
+}
+
+// killJobGroup ends a direct box's job group the way its teardown always has, and
+// leaves the box and its files ([Sandbox.KillJob]): SIGCONT first — a stopped
+// process never runs again to handle SIGTERM — then SIGTERM, up to
+// [JobStopGrace] for the group to go, SIGKILL, and up to [JobStopGrace] more
+// for the kernel to take it ([JobKillWait]).
+//
+// Each signal re-reads the job's identity ([signalJob]) rather than reusing one
+// reading: the group may end between two of them, and its pid is then free to
+// be reissued to a stranger before the next.
+func killJobGroup(ctx context.Context, l boxLayout) {
+	if signalJob(l, "continue", procgroup.Continue) {
+		signalJob(l, "terminate", procgroup.Terminate)
+		awaitJobExit(ctx, l)
+		// Whether or not it went: SIGKILL reaches nothing on a group that
+		// is already gone, and the alternative is a tree left running
+		// because the grace expired.
+		if signalJob(l, "kill", procgroup.Kill) {
+			// Waited for again: a teardown's removal of the box races the
+			// dying wrapper's last writes exactly as Kill's does, and a read
+			// after a kill reads what the wrapper last wrote.
+			awaitJobExit(ctx, l)
+		}
+	}
 }
 
 // jobGroup is the box's recorded job group when that group is still the job,
