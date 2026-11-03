@@ -3,6 +3,7 @@ package executordomain
 import (
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -59,12 +60,14 @@ func TestACaptureOfAnObjectPastRecordWithinIsRefused(t *testing.T) {
 }
 
 // A CAPTURE THE ROWS CANNOT TAKE IS REFUSED BEFORE ANYTHING IS PUBLISHED: one
-// not newer than the row's ordinals, one of an ended turn, and one the seat's
-// budget cannot hold even with every ended session released — each with the
-// sentinel its caller acts on.
+// not newer than the row's ordinals, one of an ended turn — refused by its
+// tombstone, which every end writes beside its row ([turnEnded]) — and one the
+// seat's budget cannot hold even with every ended session released, each with
+// the sentinel its caller acts on.
 //
-// Mutation: drop any one arm of decideCapture and its capture is published to
-// be dropped by every applier, its object left for the collector.
+// Mutation: drop decideCapture's ordinals, tombstone or budget arm and its
+// capture is published to be dropped by every applier, its object left for the
+// collector.
 func TestACaptureTheRowsCannotTakeIsRefusedAtTheDecide(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -111,21 +114,31 @@ func TestEveryRecordIsPublishedUnderAnOperationDerivedPerExecution(t *testing.T)
 	t.Parallel()
 	first, rerun := newTurn(), newTurn()
 	at := monday
-	one := CaptureOpID(at, "ana", first, "launch-1", 1)
+	one, began := CaptureOpID(at, "ana", first, "launch-1", 1), BeginOpID(at, "ana", first)
 	if CaptureOpID(at, "ana", first, "launch-1", 1) != one {
 		t.Error("a retried capture derived another operation")
+	}
+	if BeginOpID(at, "ana", first) != began {
+		t.Error("a retried begin derived another operation")
 	}
 	for name, other := range map[string]string{
 		"the launch's next capture": CaptureOpID(at, "ana", first, "launch-1", 2),
 		"the next launch":           CaptureOpID(at, "ana", first, "launch-2", 1),
 		"a re-run of the work":      CaptureOpID(at, "ana", rerun, "launch-1", 1),
 		"the turn's end":            EndOpID(at, "ana", first),
+		"the turn's begin":          began,
 	} {
 		if other == one {
 			t.Errorf("%s shares the capture's operation %s", name, one)
 		}
 	}
-	for _, id := range []string{one, EndOpID(at, "ana", first), SeatDeleteOpID(at, "ana")} {
+	if began == EndOpID(at, "ana", first) {
+		t.Error("a turn's begin and its end share one operation")
+	}
+	if BeginOpID(at, "ana", rerun) == began {
+		t.Error("a re-run's begin shares the first run's operation")
+	}
+	for _, id := range []string{one, EndOpID(at, "ana", first), began, SeatDeleteOpID(at, "ana")} {
 		if err := statelog.CheckCallerOpID(id); err != nil {
 			t.Errorf("derived operation %q is not one a call accepts: %v", id, err)
 		}
@@ -216,5 +229,123 @@ func TestACallAndATurnAreRefusedWhenNoRecordCouldNameThem(t *testing.T) {
 	long := strings.Repeat("k", ConversationKeyMaxBytes+1)
 	if err := checkTurn("ana", newTurn(), long, ""); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a conversation key past its bound: %v, want ErrInvalid", err)
+	}
+}
+
+// decideBeginOf runs a begin's decide over e's rows: whether the turn's first
+// read stands already, and what the decide refused.
+func (e *estate) decideBeginOf(n NewBegin) (bool, error) {
+	e.t.Helper()
+	var (
+		begun   bool
+		decided error
+	)
+	if err := e.db.Read(e.t.Context(), func(tx *sql.Tx) error {
+		_, begun, decided = decideBegin(e.t.Context(), tx, n)
+		return nil
+	}); err != nil {
+		e.t.Fatalf("read the snapshot: %v", err)
+	}
+	return begun, decided
+}
+
+// A BEGIN THE ROWS CANNOT TAKE IS REFUSED BEFORE ANYTHING IS PUBLISHED, and one
+// the turn's first read already stands for publishes nothing: an ended turn's
+// begin is refused ended — whether its row is still there or a later turn's end
+// absorbed it, the turn's tombstone outliving its row — one naming another
+// conversation or unit of work than the turn's row is invalid, a turn whose row
+// holds a read is begun already, and a turn with no row is decided.
+//
+// Mutation: drop any arm of decideBegin and its begin is published to be
+// dropped by every applier — or, the first read's, published at all; test the
+// row's end in place of the tombstone and the absorbed turn's begin is
+// decided as a turn with no row yet.
+func TestABeginTheRowsCannotTakeIsRefusedAtTheDecide(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	ended, keyed, begun, absorbed, absorber := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
+	e.capture(capturing("ana", "chat:room", ended, 1, 1, 100, budget))
+	e.end(ending("ana", "chat:room", ended, "", Ending{Outcome: OutcomeCompleted}))
+	work := capturing("ana", "chat:room", keyed, 1, 1, 100, budget)
+	work.WorkKey = "work-1"
+	e.capture(work)
+	h := e.head("ana", "chat:room")
+	e.begin(beginning(h, "ana", "chat:room", begun, ""))
+	// A TURN WHOSE ROW A LATER TURN'S END ABSORBED: its tombstone alone stays.
+	e.capture(capturing("ana", "chat:other", absorbed, 1, 1, 100, budget))
+	e.end(ending("ana", "chat:other", absorbed, "", Ending{Outcome: OutcomeCompleted}))
+	handed := e.head("ana", "chat:other")
+	e.capture(launching(handed, capturing("ana", "chat:other", absorber, 1, 1, 100, budget)))
+	e.end(ending("ana", "chat:other", absorber, "", Ending{Outcome: OutcomeCompleted}))
+	if _, found := e.session("ana", absorbed); found {
+		t.Fatal("the premise: the absorbed turn's row is still there")
+	}
+	if _, tombed := e.tombed("ana", absorbed); !tombed {
+		t.Fatal("the premise: the absorbed turn's tombstone went with its row")
+	}
+	of := func(turn, conversation, work string) NewBegin {
+		return NewBegin{Handle: "ana", Turn: turn, ConversationKey: conversation, WorkKey: work,
+			ReadThrough: h.Position, Absorbs: h.Absorbs(), BaseTurn: h.Session.Turn,
+			BaseObject: h.Session.Object}
+	}
+	for name, tc := range map[string]struct {
+		begin NewBegin
+		want  error
+		begun bool
+	}{
+		"an ended turn":                      {of(ended, "chat:room", ""), ErrTurnEnded, false},
+		"an ended turn whose row was taken":  {of(absorbed, "chat:other", ""), ErrTurnEnded, false},
+		"another conversation":               {of(keyed, "chat:elsewhere", ""), ErrInvalid, false},
+		"another unit of work":               {of(keyed, "chat:room", "work-2"), ErrInvalid, false},
+		"a turn whose first read stands":     {of(begun, "chat:room", ""), nil, true},
+		"a turn with no row yet":             {of(newTurn(), "chat:room", ""), nil, false},
+		"a captured turn's own unit of work": {of(keyed, "chat:room", "work-1"), nil, false},
+	} {
+		got, err := e.decideBeginOf(tc.begin)
+		if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) || got != tc.begun {
+			t.Errorf("%s: decided begun %v (%v), want begun %v (%v)", name, got, err, tc.begun, tc.want)
+		}
+	}
+}
+
+// A BEGIN NO READ HANDS OUT IS REFUSED BY ITS WRITER, naming the field, before
+// any snapshot is read: a turn id that is no run id, no conversation, no read —
+// a position of this very log, short only its sequence, which still packs to
+// a number past zero — a read of another log, a base the read did not hand
+// out (the turn itself among them, which no read hands out to itself), a
+// base's session with no base turn, and a base turn with no session.
+//
+// Mutation: drop any arm of NewBegin.validate and its begin is published to be
+// dropped by every applier.
+func TestABeginNoReadHandsOutIsRefusedByItsWriter(t *testing.T) {
+	t.Parallel()
+	turn, base := newTurn(), newTurn()
+	at := statelog.Position{Stream: Domain{}.Stream().Name, Generation: 1, Seq: 9}
+	good := NewBegin{Handle: "ana", Turn: turn, ConversationKey: "chat:room", ReadThrough: at,
+		Absorbs: []string{base}, BaseTurn: base, BaseObject: objstore.Object{Key: objstore.KeyAt(monday),
+			Hash: objstore.HashOf([]byte(base)), Size: 100}}
+	if err := good.validate(); err != nil {
+		t.Fatalf("a begin as a read hands one out was refused: %v", err)
+	}
+	if unread := (statelog.Position{Stream: at.Stream, Generation: at.Generation}); unread.Packed() <= 0 {
+		t.Fatalf("the premise: a position of this log with no sequence packs to %d, so the "+
+			"absorbed turns' own check would refuse it", unread.Packed())
+	}
+	for name, spoil := range map[string]func(*NewBegin){
+		"a turn id that is no run id":  func(n *NewBegin) { n.Turn = "turn-7" },
+		"no conversation":              func(n *NewBegin) { n.ConversationKey = "" },
+		"no read":                      func(n *NewBegin) { n.ReadThrough.Seq = 0 },
+		"a read of another log":        func(n *NewBegin) { n.ReadThrough.Stream = "CREWLET_MUTATION_LOG" },
+		"the turn as its own base":     func(n *NewBegin) { n.BaseTurn = n.Turn },
+		"a base the read did not hand": func(n *NewBegin) { n.Absorbs = nil },
+		"a session with no base turn":  func(n *NewBegin) { n.BaseTurn = "" },
+		"a base turn with no session":  func(n *NewBegin) { n.BaseObject = objstore.Object{} },
+	} {
+		n := good
+		n.Absorbs = slices.Clone(good.Absorbs)
+		spoil(&n)
+		if err := n.validate(); !errors.Is(err, ErrInvalid) {
+			t.Errorf("a begin with %s: %v, want ErrInvalid", name, err)
+		}
 	}
 }
