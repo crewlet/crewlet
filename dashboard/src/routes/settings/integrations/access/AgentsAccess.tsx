@@ -33,6 +33,7 @@ import {
   Spinner,
   Switch,
   Tag,
+  TagsInput,
   VisuallyHidden,
   type DataTableColumn,
   type DataTableRowTone,
@@ -190,7 +191,7 @@ export function AgentsAccess({
 
   const lanes = lanesOf(data);
   const seats = only ? data.seats.filter((s) => s.handle === only) : data.seats;
-  const scoped = lanes.some((l) => l.scope !== undefined);
+  const scoped = lanes.some((l) => l.scoped);
   // A HELD TAB says why on each control; a read-only one draws no control at all.
   // A HOLD stops everything; a read-only document stops only what writes it.
   const locked = held !== undefined || readOnly !== undefined || data.syncing;
@@ -409,7 +410,7 @@ export function AgentsAccess({
       },
     },
     scope: {
-      label: laneWords(lanes.find((l) => l.scope !== undefined)?.key ?? "").scope?.noun ?? "Scope",
+      label: laneWords(lanes.find((l) => l.scoped)?.key ?? "").scope?.noun ?? "Scope",
       sortable: false,
       render: ({ seat, lane, want }) => {
         const off = !want.enabled;
@@ -418,6 +419,18 @@ export function AgentsAccess({
           <>
             {!scopeApplies(lane, want) || !words.scope ? null : readOnly ? (
               <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>
+            ) : lane.scope_open ? (
+              // AN OPEN CONNECTION LISTS NOT ALL IT REACHES (a GitHub
+              // installation on every repository), so an entry may be typed.
+              <TagsInput
+                aria-label={`${seat.name}'s ${lane.name} ${words.scope.noun.toLowerCase()}`}
+                value={want.scope ?? []}
+                options={(lane.scope ?? []).map((o) => ({ value: o }))}
+                allowCustom
+                disabled={off || locked || seat.departed}
+                placeholder={words.scope.empty}
+                onChange={(next) => change(seat, lane, { scope: next })}
+              />
             ) : lane.scope ? (
               <Select
                 size="sm"

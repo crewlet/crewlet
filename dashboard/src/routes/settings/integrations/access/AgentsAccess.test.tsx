@@ -21,6 +21,7 @@ import {
   datadogAnswer,
   expoAnswer,
   githubAnswer,
+  gitlabAnswer,
   jiraAnswer,
   mattermostAnswer,
   offLane,
@@ -802,4 +803,39 @@ test("the table is the kit's: a named table of real rows, with column headers an
     expect(headers.some((h) => h.includes(label))).toBe(true);
   for (const name of ["PM", "QA", "SRE"])
     expect(screen.getByRole("button", { name: `Show ${name}'s Datadog details` })).toBeTruthy();
+});
+
+// AN OPEN CONNECTION LISTS NOT ALL IT REACHES (a GitHub installation on every
+// repository, a GitLab group with no project list), so its picker takes a
+// typed entry. The tab once keyed its scope on the list alone and never read
+// scope_open, so neither drew a picker. Mutation: drop the open branch and
+// both go red.
+test.each([
+  {
+    vendor: "GitHub",
+    answer: () => {
+      const data = githubAnswer();
+      data.options[0] = { ...data.options[0]!, scope: undefined, scope_open: true };
+      return data;
+    },
+    field: "QA's GitHub repositories",
+    typed: "gophrase/web",
+    sent: { qa: { github: { scope: ["gophrase/backend", "gophrase/web"] } } },
+  },
+  {
+    vendor: "GitLab",
+    answer: gitlabAnswer,
+    field: "Dev's GitLab projects",
+    typed: "gophrase/infra",
+    sent: { dev: { gitlab: { scope: ["gophrase/backend", "gophrase/infra"] } } },
+  },
+])("an open $vendor connection takes a typed entry", async ({ answer, field, typed, sent }) => {
+  draw(answer());
+  const input = screen.getByRole("combobox", { name: field });
+  fireEvent.change(input, { target: { value: typed } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(screen.getByText("Not saved")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(calls.plan).toHaveLength(1));
+  expect(calls.plan[0]).toMatchObject({ seats: sent });
 });
