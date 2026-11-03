@@ -62,3 +62,44 @@ func TestARunnerThatCannotResumeRefusesToPretend(t *testing.T) {
 		t.Fatal("a harness with no way to continue a session started a run it was asked to continue one for")
 	}
 }
+
+// AN OPENCODE RUN'S START NAMES BOTH SESSIONS ITS SCRIPT MAY START: the one it
+// continues, and — for a run that continues one — the session minted for its
+// script to start in that one's place where its box neither holds nor imports
+// it, which is the session its fall back runs under. What a relaunch carrying
+// the job's round on in its box reads which session that box holds from
+// ([sandbox.PendingRun.SessionRan]) is these and the box's word, so a start
+// that named another than the one its script falls back to would have the
+// round continued in a session the box never ran. A run that continues none
+// names no second session.
+//
+// Mutation: name the continued session as the one the script starts of its
+// own, or none, and this goes red.
+func TestAnOpenCodeRunsStartNamesBothSessionsItsScriptMayStart(t *testing.T) {
+	t.Parallel()
+	const session = "ses_0123456789abcdef0123456789abcdef"
+	runner := executor.NewOpenCode()
+	b := box(t, runner)
+	handle, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "carry on",
+		FreshBrief: "the task, from the top", Resume: session})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	fresh := handle.FreshSessionID
+	if handle.SessionID != session || !strings.HasPrefix(fresh, "ses_") || fresh == session {
+		t.Fatalf("the continuing run's start named %q and %q, want %s and a session of its own",
+			handle.SessionID, fresh, session)
+	}
+	if script := lastBackground(t, b); !strings.Contains(script, fresh) {
+		t.Fatalf("the run's script never starts %s, the session its start named for its fall back:\n%s",
+			fresh, script)
+	}
+	own, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "begin"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !strings.HasPrefix(own.SessionID, "ses_") || own.FreshSessionID != "" {
+		t.Fatalf("a run that continues nothing named %q and %q, want one session of its own", own.SessionID,
+			own.FreshSessionID)
+	}
+}

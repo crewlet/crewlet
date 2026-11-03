@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // closeIssue is an MCP-shaped tool at Needs approval that counts its calls and
@@ -31,13 +32,32 @@ func (c *closeIssue) Call(_ context.Context, args map[string]any) (tools.Result,
 }
 
 // ledgerCommit is a [HeldCommit] over one row's mark, as the store keeps it:
-// marked once, the result recorded once, with what the surface answered.
+// marked once, the result recorded once, with what the surface answered. Each
+// attempt's claim reads the row as it stands when the attempt asks.
 type ledgerCommit struct {
 	marked   bool
 	result   *sandbox.HeldResult
 	answered toolloop.ToolResult
 	refuse   error
 	recorded int
+	// unseen is a mark the attempt's claim did not read: [ledgerCommit.Marked]
+	// answers the call unmarked, and [ledgerCommit.Begin] finds it marked.
+	unseen bool
+}
+
+// prior is how the row holds the call once some attempt marked it.
+func (l *ledgerCommit) prior() HeldPrior {
+	if l.result != nil {
+		return HeldPrior{Made: true, Result: *l.result}
+	}
+	return HeldPrior{}
+}
+
+func (l *ledgerCommit) Marked(context.Context) (HeldPrior, bool) {
+	if !l.marked || l.unseen {
+		return HeldPrior{}, false
+	}
+	return l.prior(), true
 }
 
 func (l *ledgerCommit) Begin(context.Context) (HeldPrior, error) {
@@ -48,10 +68,7 @@ func (l *ledgerCommit) Begin(context.Context) (HeldPrior, error) {
 		l.marked = true
 		return HeldPrior{First: true}, nil
 	}
-	if l.result != nil {
-		return HeldPrior{Made: true, Result: *l.result}, nil
-	}
-	return HeldPrior{}, nil
+	return l.prior(), nil
 }
 
 func (l *ledgerCommit) Record(_ context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error {
@@ -86,9 +103,14 @@ func heldSurface(t *testing.T, tool *closeIssue) *tools.Surface {
 // ([HeldCommit.Record]), and every reader of whether the turn replied reads it
 // there.
 //
+// AND THE MARK IS WHAT DECIDES IT, not the claim's read of the row: a mark the
+// attempt's claim did not see, which the store's answer to the mark reports as
+// not the first, is answered from as any other.
+//
 // Mutation: make the call before [HeldCommit.Begin] marks it, or on a mark that
-// is not the first, and the second attempt calls the tool twice; hand the record
-// anything but the surface's own answer, and the call is recorded as nobody's.
+// is not the first, and the mark the claim missed has the tool called twice;
+// hand the record anything but the surface's own answer, and the call is
+// recorded as nobody's.
 func TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -140,6 +162,22 @@ func TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny(t *testing.T) {
 			len(tool.calls))
 	}
 
+	for told, missed := range map[string]*ledgerCommit{
+		"closed #7":                        {marked: true, unseen: true, result: &sandbox.HeldResult{Output: "closed #7"}},
+		"may or may not have taken effect": {marked: true, unseen: true},
+	} {
+		late := &HeldCall{Tool: "tr_close_issue", Server: "tracker", Digest: "sha256:d1",
+			Args: map[string]any{"id": "7"}, Choice: sandbox.HeldOnce, Commit: missed}
+		if err := makeHeld(ctx, surface, late); err != nil {
+			t.Fatal(err)
+		}
+		if got := (Asked{Held: late}).Continuation(provenance.NewBoundary()); len(tool.calls) != 1 ||
+			!strings.Contains(got, told) {
+			t.Fatalf("a mark the claim missed left %d calls and told the run %q, want the call not made "+
+				"again and %q said", len(tool.calls), got, told)
+		}
+	}
+
 	denied := held(sandbox.HeldDeny)
 	denied.Commit = &ledgerCommit{}
 	if err := makeHeld(ctx, surface, denied); err != nil {
@@ -187,6 +225,87 @@ func TestAHeldCallIsMadeOnlyAsItWasApproved(t *testing.T) {
 	if err := makeHeld(ctx, surface, refused); err == nil || len(tool.calls) != 0 {
 		t.Fatalf("a mark that could not be written = %v with %d calls, want an error and no call",
 			err, len(tool.calls))
+	}
+}
+
+// holdsBack is a skill guard that holds tool back, as a required skill the
+// session has not loaded holds back every tool it covers.
+type holdsBack struct{ tool string }
+
+func (g holdsBack) Check(tool, _ string) string {
+	if tool == g.tool {
+		return "load the tool skill `tracker-rules` before calling `" + tool + "`."
+	}
+	return ""
+}
+
+func (holdsBack) Observe(string, toolargs.Args) {}
+
+// A CALL AN EARLIER ATTEMPT MARKED IS ANSWERED FROM ITS MARK, WHATEVER CHANGED
+// SINCE. An attempt at an answer can make the call and be refused after it, at
+// the launch (the floor of the session it continues, every member sitting
+// out), and the answer is attempted again later, through a surface rebuilt
+// from the live tools and skills: a skill made required in between, the tool
+// blocked or its definition changed, or arguments this node cannot open. None
+// of that is asked of a call already marked. The later attempt hands the run
+// the result the first recorded, or, where the first stopped before it
+// recorded one, says the call may or may not have taken effect. It never says
+// the call was not made, which sends the run to ask the person again for a
+// call that was made, and it never makes it again.
+//
+// Mutation: ask the arguments' seal, the tool's lookup, its digest or the guard
+// before the mark answers, and the case that changed it tells the run the call
+// was not made.
+func TestACallAnEarlierAttemptMarkedIsAnsweredFromItsMark(t *testing.T) {
+	t.Parallel()
+	for name, since := range map[string]func(t *testing.T, tool *closeIssue, held *HeldCall) *tools.Surface{
+		"a skill now holds the tool back": func(t *testing.T, tool *closeIssue, _ *HeldCall) *tools.Surface {
+			return heldSurface(t, tool).WithGuard(holdsBack{tool: "tr_close_issue"})
+		},
+		"its definition changed": func(t *testing.T, _ *closeIssue, _ *HeldCall) *tools.Surface {
+			return heldSurface(t, &closeIssue{digest: "sha256:d2"})
+		},
+		"it is no longer filed": func(*testing.T, *closeIssue, *HeldCall) *tools.Surface {
+			return tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)
+		},
+		"its arguments do not open here": func(t *testing.T, tool *closeIssue, held *HeldCall) *tools.Surface {
+			held.Unopened = "its arguments could not be opened"
+			return heldSurface(t, tool)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			tool := &closeIssue{digest: "sha256:d1"}
+			attempt := func(commit *ledgerCommit) *HeldCall {
+				return &HeldCall{Tool: "tr_close_issue", Server: "tracker", Digest: "sha256:d1",
+					Args: map[string]any{"id": "7"}, Choice: sandbox.HeldOnce, Commit: commit}
+			}
+			// THE FIRST ATTEMPT MAKES THE CALL, as nothing has changed yet, and
+			// records what it returned.
+			recorded := &ledgerCommit{}
+			if err := makeHeld(ctx, heldSurface(t, tool), attempt(recorded)); err != nil {
+				t.Fatal(err)
+			}
+			for told, commit := range map[string]*ledgerCommit{
+				"closed #7": recorded,
+				// A FIRST ATTEMPT STOPPED once it marked the call, before it
+				// recorded anything.
+				"may or may not have taken effect": {marked: true},
+			} {
+				again := attempt(commit)
+				if err := makeHeld(ctx, since(t, tool, again), again); err != nil {
+					t.Fatal(err)
+				}
+				got := Asked{Held: again}.Continuation(provenance.NewBoundary())
+				if !strings.Contains(got, told) || strings.Contains(got, "was not made") {
+					t.Errorf("a later attempt tells the run %q, want %q, as the mark holds it", got, told)
+				}
+			}
+			if len(tool.calls) != 1 {
+				t.Fatalf("the call was made %d time(s) over every attempt, want once", len(tool.calls))
+			}
+		})
 	}
 }
 

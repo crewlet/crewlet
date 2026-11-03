@@ -50,6 +50,16 @@ import (
 // relaunch costs every other seat on that node its work in progress too.
 const MaxRoundLosses = 2
 
+// KeptAfterLoss reports whether a round whose job was lost for the losses-th
+// time — counting that loss — is carried on from the turn's kept session of the
+// job lost: on its first loss only. A round lost again is a run that may take
+// its host down from the state it holds, so its relaunch starts a session of
+// its own rather than replay that state toward the round's limit. The one rule
+// the runner's relaunch keeps to (internal/agent/runner's Lost) and every
+// reader of whether a relaunch would continue a session reads
+// ([ReadContinuityOf]).
+func KeptAfterLoss(losses int) bool { return losses <= 1 }
+
 // LossCause is what a lost job was lost to — see [JobLoss].
 type LossCause string
 

@@ -639,6 +639,14 @@ type Engine struct {
 	// launcher ([agentLauncher.launch]).
 	abandonedLaunches sync.Map
 
+	// resumedSegments are the turns a resumed segment of which is running on
+	// this node, by run id, each with the company the segment was admitted
+	// under ([resumeInput.Company]): the revision a relaunch it makes runs on,
+	// which a reader of whether a relaunch would continue the turn's session is
+	// answered from ([Engine.relaunchCompany]). Set by [Engine.resumeTurn] for
+	// as long as it runs.
+	resumedSegments sync.Map
+
 	// envelopes sign every estate request this node sends and every reply
 	// it answers a peer with, and verify both directions — one value for
 	// the router and the server alike; see [estateEnvelopes].
@@ -1005,6 +1013,10 @@ type Engine struct {
 	executorTails *sandbox.TailReader
 	sandboxFeeds  *sandbox.LiveFeeds
 	stopTailServe queue.Unsubscribe
+
+	// stopRelaunchServe withdraws this node as an answerer of what a relaunch
+	// of a seat it holds would be launched on. See relaunchtarget.go.
+	stopRelaunchServe queue.Unsubscribe
 
 	// boxReads asks a box's host to read it back and answers for the boxes
 	// on this node's host; stopBoxReadServe and stopNudgeListen withdraw this
@@ -2127,6 +2139,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armExecutorTails(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve executors' live output: %w", err)
 	}
+	// AND WHAT A RELAUNCH OF THE TURNS OF THE SEATS IT HOLDS WOULD BE
+	// LAUNCHED ON, which its own bench decides — see relaunchtarget.go.
+	if err = e.armRelaunchTargets(ctx); err != nil {
+		return nil, err
+	}
 	// AND THE BOXES ON ITS HOST, which no other node can reach — see
 	// sandboxhost.go.
 	if err = e.armSandboxHost(ctx); err != nil {
@@ -2953,6 +2970,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And a run's live output, read from boxes this node is about to stop
 	// driving — and a read of a box on its host, asked by a peer.
 	e.stopExecutorTails(ctx)
+	// And what a relaunch of a seat it holds would be launched on, which it
+	// is about to stop holding.
+	e.stopRelaunchTargets(ctx)
 	e.stopSandboxHost(ctx)
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.

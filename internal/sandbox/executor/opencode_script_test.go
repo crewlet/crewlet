@@ -115,6 +115,10 @@ auth)
 serve)
   printf '%s|%s' "${OPENCODE_PASSWORD:-}" "${OPENCODE_SERVER_PASSWORD:-}" > "$d/serve-env"
   printf '%s' "${OPENCODE_CONFIG_CONTENT-}" > "$d/serve-config"
+  if [ -n "${FAKE_VALUES:-}" ]; then
+    cat "$FAKE_VALUES/v1" > "$d/served-value" 2> /dev/null
+    if [ -e "$FAKE_VALUES-fresh" ]; then echo yes; else echo no; fi > "$d/served-beside-other"
+  fi
   echo $$ > "$d/serve.pid"
   [ "${FAKE_SERVE:-}" != silent ] || exec sleep 60
   if [ "${FAKE_SERVE:-}" = password-first ]; then
@@ -221,6 +225,17 @@ type scriptOpts struct {
 	// the session ([executor.Paths.SessionDigests]), as a box that packed
 	// or restored that export keeps it.
 	ownsCarried bool
+	// freshBrief, where set, is the brief a session of the run's own is
+	// handed, written where [executor.Paths.FreshBrief] names it as a run's
+	// start would have written it ([sandbox.RunRequest.FreshBrief]).
+	freshBrief string
+	// values and freshValues, where set, are the run's first configuration
+	// value under the continued session's bridge token and under a session
+	// of its own's, written where [executor.Paths.OpenCodeValues] and
+	// [executor.Paths.OpenCodeValuesFresh] name them as WriteConfig would have
+	// ([sandbox.RunRequest.FreshWiring]); the fake's server records which it
+	// started on, and whether the other was still in the box.
+	values, freshValues string
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -319,6 +334,25 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			keepDigest(t, paths, session.ID, packed)
 		}
 	}
+	if o.freshBrief != "" {
+		if err := os.WriteFile(paths.FreshBrief(), []byte(o.freshBrief), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var env []string
+	for dir, value := range map[string]string{paths.OpenCodeValues(): o.values,
+		paths.OpenCodeValuesFresh(): o.freshValues} {
+		if value == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "v1"), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env = []string{"FAKE_VALUES=" + paths.OpenCodeValues()}
+	}
 	command := executor.OpenCode{}.Command(o.req, session, paths, "")
 	if o.times != nil {
 		command = executor.OpenCodeCommandTimed(o.req, session, paths, *o.times)
@@ -333,9 +367,9 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	args := append(append([]string{}, argv[1:]...), "-c", script)
 	j.cmd = exec.Command(argv[0], args...) //nolint:gosec // the script under test
 	j.cmd.Dir = dir
-	j.cmd.Env = append([]string{
+	j.cmd.Env = append(append([]string{
 		"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + home, "FAKE_DIR=" + dir,
-	}, o.env...)
+	}, env...), o.env...)
 	j.cmd.Stdin = strings.NewReader(`fix "the" flake`)
 	j.cmd.Stdout, j.cmd.Stderr = &j.stdout, &j.stderr
 	j.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

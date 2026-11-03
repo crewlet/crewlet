@@ -162,6 +162,27 @@ func (g *Guard) Restore(keys []string) {
 	}
 }
 
+// Replace re-arms a guard with exactly keys: the skills the session a launch
+// decided its run takes up holds, none for a session of the run's own. A
+// relaunch builds its surface before its launch knows which session that will
+// be — whether the box it gets can take the turn's session up at all — so its
+// guard is armed once the launch has decided, before the run makes a call;
+// a guard that kept what an earlier session loaded would let the run call a
+// covered tool whose skill its model has never read.
+func (g *Guard) Replace(keys []string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.loaded = map[string]bool{}
+	for _, key := range keys {
+		if key != "" {
+			g.loaded[key] = true
+		}
+	}
+}
+
 // HandedAs records that the session's harness was handed skills as its own —
 // listed, by key, under the name its model loads each by — so a refusal names
 // the skill as that harness lists it and its own tool as the loader

@@ -145,7 +145,7 @@ func (k executorKeep) MintedAt(ctx context.Context, turnID, workKey string, work
 // Seal streams archive sealed under the fleet keyring into dst, under an
 // object key minted now ([Engine.ExecutorSessions]).
 func (k executorKeep) Seal(handle, turn string, archive io.Reader, dst io.Writer) (executordomain.SealedSpool, error) {
-	store, err := k.sessionStore()
+	store, err := k.engine.executorSessionStore()
 	if err != nil {
 		return executordomain.SealedSpool{}, err
 	}
@@ -156,17 +156,19 @@ func (k executorKeep) Seal(handle, turn string, archive io.Reader, dst io.Writer
 func (k executorKeep) Upload(ctx context.Context, spool executordomain.SealedSpool,
 	sealed io.Reader) (executordomain.SealedObject, error) {
 
-	store, err := k.sessionStore()
+	store, err := k.engine.executorSessionStore()
 	if err != nil {
 		return executordomain.SealedObject{}, err
 	}
 	return store.Upload(ctx, spool, sealed)
 }
 
-// sessionStore is the store a session's sealed bytes stream into, or why this
-// node has none.
-func (k executorKeep) sessionStore() (*executordomain.SessionStore, error) {
-	store, err := k.engine.ExecutorSessions()
+// executorSessionStore is the store a session's sealed bytes stream into and
+// are fetched back from, or why this node has none: the ENGINE'S, one store
+// whether a launch keeps a session ([executorKeep]) or a relaunch continues one
+// ([executorRestore]).
+func (e *Engine) executorSessionStore() (*executordomain.SessionStore, error) {
+	store, err := e.ExecutorSessions()
 	if err == nil && store == nil {
 		err = errors.New("this node has no object store to keep a session in")
 	}

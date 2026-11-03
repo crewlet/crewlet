@@ -1274,16 +1274,23 @@ on another node, days later; see
 **The run keeps its harness's session; a call on this host keeps none.** A call
 here runs with session persistence off, and its seat's volatile paths are
 deleted between generations ([Isolation](#isolation-the-part-that-actually-matters)).
-An executor's run keeps its harness's own session in its box — the conversation a
-person's answer carries on, which a run can also pack when it ends and
-restore in another box — so the runner pins where it is kept rather than
+An executor's run keeps its harness's own session in its box — the conversation
+a relaunch of its turn continues where it can, in that box or restored into
+another
+([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)),
+and which the engine keeps out of the box once the run is collected — so the
+runner pins where it is kept rather than
 leaving it to the profile: Claude Code's `CLAUDE_CONFIG_DIR` is the **box
 home's** `.claude`, never a seat's home on this host (which `config_env` names
 here, and which never reaches a box), and its project directory is one name
 whatever the box's working directory. What a call here switches off for the
 same reason stays off there: auto memory (`CLAUDE_CODE_DISABLE_AUTO_MEMORY`,
 here an `isolation_env`, in a box pinned by the run's wrapper), so no notes the
-harness wrote for itself ride a session into a later run unseen. See [A Claude
+harness wrote for itself ride a session into a later run unseen. And a box pins
+one thing a call here does not need: the context Claude Code compacts its
+conversation at (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), since a run that continues a
+session sends the session's whole context on every request, each charged to the
+seat ([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)). See [A Claude
 Code run's session](code-sandbox.md#a-claude-code-runs-session) and [An
 OpenCode run's session](code-sandbox.md#an-opencode-runs-session).
 
@@ -1292,7 +1299,7 @@ seat's system prompt — its identity, policies, roster and memory — goes on t
 in-box harness's **append channel**, after the harness's own system prompt, which
 stays whole: that prompt is the harness the executor runs to use, its shell,
 its editor and how it works through a task. The brief — the prompt the harness
-runs — carries the turn's task, with its earlier rounds where a reviewer sent it back. The seat's prompt opens with
+runs — carries the turn's task, with its earlier rounds where a reviewer sent it back, or, for a relaunch that continues the turn's session, what that session lacks. The seat's prompt opens with
 one constant note, the [harness note](#the-harness-note) a call on this host
 sends where the harness's own prompt stays in force, less the sentence that tells a
 model on this host to act through the `crewlet` server's tools and never the

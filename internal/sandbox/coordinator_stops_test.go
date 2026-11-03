@@ -217,6 +217,21 @@ var coordinatorEntries = map[string][]entryDrive{
 			}
 		},
 	}},
+	"ContinuedCapture": {{
+		// IT ENDS NOTHING: it reads the run's record — waiting a moment for
+		// the capture of the job a relaunch follows to be kept — and the
+		// turn's row on the executor log, and answers which kept session the
+		// relaunch continues, writing nothing. Asked with a restore to read,
+		// so the drive reaches the run's record rather than answering that
+		// this node continues nothing.
+		name:    "a relaunch asking which kept session it continues",
+		arrange: func(_ *testing.T, rig *coordRig) { rig.coordinator.restore = &keptRestore{} },
+		call: func(t *testing.T, rig *coordRig) {
+			if _, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", fakeRestorer{}); why != "" {
+				t.Logf("ContinuedCapture: %s", why)
+			}
+		},
+	}},
 	"FailRun": {{
 		name: "a suspension that never reached the row",
 		call: func(t *testing.T, rig *coordRig) {
@@ -1033,6 +1048,22 @@ func (s *refusingStore) MarkPulled(ctx context.Context, turnID, launch string) (
 		return false, errRefusedCall
 	}
 	return s.inner.MarkPulled(ctx, turnID, launch)
+}
+
+func (s *refusingStore) MarkSessionStart(ctx context.Context, turnID, launch string, start SessionStart) (bool, error) {
+	if s.called("MarkSessionStart") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkSessionStart(ctx, turnID, launch, start)
+}
+
+func (s *refusingStore) MarkResumeBegun(ctx context.Context, turnID, launch string, fence Fence,
+	carry ResumeCarry) (bool, error) {
+
+	if s.called("MarkResumeBegun") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkResumeBegun(ctx, turnID, launch, fence, carry)
 }
 
 func (s *refusingStore) WatchNotes(ctx context.Context, turnID string) (<-chan NotesView, error) {

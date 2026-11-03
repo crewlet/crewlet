@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -359,22 +358,31 @@ func TestANewRoundFoldsItsTurnsEarlierCallsIntoTheRow(t *testing.T) {
 	}
 }
 
-// A CAPTURE'S PLACE ONLY GROWS ON THE ROW. A newer capture takes the row, the
-// same one moves on only to its outcome, nothing older or backwards lands, and
-// a capture that landed is the turn's kept one wherever it is newer than that
-// — an unresolved capture answered after a newer one began included.
+// A CAPTURE'S PLACE ONLY GROWS ON THE ROW, AND IS ITS TAKE'S. A newer capture
+// takes the row, the same one moves on only to its outcome and only by the
+// take that reserved it — the instant it stamped the place at — nothing older
+// or backwards lands, and a capture that landed is the turn's kept one
+// wherever it is newer than that — an unresolved capture answered after a newer
+// one began included. A take's own stamp asked again, the store's answer to
+// the first lost, is answered taken: the place is its own.
 //
-// Mutation: let an equal place take any state, or keep only the newest
-// attempt, and a late `begun` takes a landed capture back, or the answered
-// older capture is never kept.
+// Mutation: let an equal place take any state, or any take's stamp, keep only
+// the newest attempt, or answer a stamp the row holds already as not taken, and
+// a late `begun` takes a landed capture back, another read's refusal settles a
+// place it never held, the answered older capture is never kept, or a take
+// reads its own reservation as another read's.
 func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	ctx := t.Context()
-	stamp := func(launch, seq int64, state CaptureState) bool {
+	// TWO TAKES OF THE ONE JOB, each stamping at an instant of its own, as a
+	// stop's read and a collection's at once do.
+	first := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	second := first.Add(time.Second)
+	stamp := func(launch, seq int64, state CaptureState, at time.Time) bool {
 		took, err := rig.pending.StampCapture(ctx, "t1", SessionCapture{LaunchSeq: launch, CaptureSeq: seq,
-			State: state, Launch: "job", Object: "o"})
+			State: state, Launch: "job", Object: "o", At: at})
 		if err != nil {
 			t.Fatalf("StampCapture: %v", err)
 		}
@@ -383,21 +391,24 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 	for _, step := range []struct {
 		launch, seq int64
 		state       CaptureState
+		at          time.Time
 		take        bool
 	}{
-		{1, 1, CaptureBegun, true},
-		{1, 1, CaptureBegun, false},
-		{1, 1, CaptureUnresolved, true},
-		{1, 2, CaptureBegun, true},
-		{1, 1, CaptureLanded, true}, // the older answer lands as the kept one
-		{1, 1, CaptureRefused, false},
-		{1, 2, CaptureRefused, true},
-		{1, 2, CaptureLanded, false},
-		{2, 1, CaptureLanded, true},
+		{1, 1, CaptureBegun, first, true},
+		{1, 1, CaptureBegun, first, true},      // its own reservation, asked again
+		{1, 1, CaptureBegun, second, false},    // another read's, of the same place
+		{1, 1, CaptureRefused, second, false},  // and that read's refusal of a place it never held
+		{1, 1, CaptureUnresolved, first, true}, // the take's own outcome
+		{1, 2, CaptureBegun, second, true},
+		{1, 1, CaptureLanded, first, true}, // the older answer lands as the kept one
+		{1, 1, CaptureRefused, first, false},
+		{1, 2, CaptureRefused, second, true},
+		{1, 2, CaptureLanded, second, false},
+		{2, 1, CaptureLanded, first, true},
 	} {
-		if got := stamp(step.launch, step.seq, step.state); got != step.take {
-			t.Fatalf("stamping (%d, %d) %s was taken %v, want %v", step.launch, step.seq, step.state,
-				got, step.take)
+		if got := stamp(step.launch, step.seq, step.state, step.at); got != step.take {
+			t.Fatalf("stamping (%d, %d) %s at %s was taken %v, want %v", step.launch, step.seq, step.state,
+				step.at.Format(time.TimeOnly), got, step.take)
 		}
 	}
 	run := rig.get("t1")
@@ -406,52 +417,6 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 	}
 	if run.Kept == nil || run.Kept.LaunchSeq != 2 || run.Kept.CaptureSeq != 1 {
 		t.Errorf("the kept capture is %+v, want (2, 1)", run.Kept)
-	}
-}
-
-// unansweredStamps is a run store whose stamps of a capture are never
-// answered, as a coordination store in an outage: each waits out its caller's
-// context.
-type unansweredStamps struct {
-	PendingStore
-	asked atomic.Int32
-}
-
-func (s *unansweredStamps) StampCapture(ctx context.Context, _ string, _ SessionCapture) (bool, error) {
-	s.asked.Add(1)
-	<-ctx.Done()
-	return false, ctx.Err()
-}
-
-// A TAKE RESERVES ITS PLACE WITHIN ITS OWN TIME, however long the store keeps
-// silent: a reservation answered past the take's deadline reserves a place for
-// a take that can no longer spool, and leaves the stamp of what came of it
-// none of the room it is kept before the read's by ([Coordinator.takeContext]),
-// so the capture would stand begun with nothing left to say how it came out.
-//
-// Mutation: bound the reservation by the read's by rather than the take's own
-// deadline, and the take waits out a stamp's own grace, thirty seconds, past a
-// deadline two seconds off.
-func TestATakeReservesItsPlaceWithinItsOwnTime(t *testing.T) {
-	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	silent := &unansweredStamps{PendingStore: rig.coordinator.pending}
-	rig.coordinator.pending = silent
-	// A READ WITH A DEADLINE, whose take ends two seconds from now and whose by
-	// is a pause's grace after that.
-	read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
-	defer cancel()
-	began := time.Now()
-	spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
-		readCapture(BoxReadCollect, Result{}, false))
-	if took := time.Since(began); took > 20*time.Second {
-		t.Errorf("the take asked a silent store to reserve its place for %s, past its own deadline "+
-			"two seconds off", took)
-	}
-	if spooled != nil || silent.asked.Load() == 0 {
-		t.Errorf("the take spooled %+v after %d reservations, want none spooled, the place asked for",
-			spooled, silent.asked.Load())
 	}
 }
 

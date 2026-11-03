@@ -219,6 +219,10 @@ function sessionRow(over: Record<string, unknown> = {}) {
     ask_excerpt: "Fix the flaky provisioner test.",
     kept: true,
     object_bytes: 41234,
+    continuable: false,
+    not_continuable:
+      "the turn has ended, and no later turn continues its session yet, since a session is " +
+      "continued only by a relaunch of the turn that kept it",
     ...over,
   };
 }

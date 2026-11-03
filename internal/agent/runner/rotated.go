@@ -15,9 +15,10 @@ import "github.com/crewlet/crewlet/internal/provenance"
 // credential. Judged as the round's outcome, that refusal would fail the turn
 // for a reason the round no longer has. So the resumed turn relaunches its
 // executor for the same round, on the entry that ran it, which now hands the
-// new credential to every launch: in the job's box, continuing its own harness
-// session where the launch can, so the work in its working tree and its
-// conversation carry on.
+// new credential to every launch, continuing the job's harness session where
+// the launch can — the turn's kept capture of it, in whatever box the launch
+// gets (continued.go), or the copy the job's own box holds — so its
+// conversation carries on, and its working tree too where the box is the job's.
 //
 // ONCE. The relaunched job is recorded as a follow-up for this reason, and a
 // follow-up refused again is an ordinary refusal (the engine decides; see
@@ -29,7 +30,8 @@ import "github.com/crewlet/crewlet/internal/provenance"
 // is collected from those calls.
 type Rotated struct {
 	// SessionID is the refused job's harness session, which the relaunch
-	// continues where it runs in that job's box.
+	// continues in place where it runs in that job's box and the turn kept no
+	// capture of it to restore (continued.go).
 	SessionID string
 
 	// BoxKept is whether that job's box is still there.
@@ -37,7 +39,7 @@ type Rotated struct {
 }
 
 // RotatedContinuation is what the refused job's own session is told when it is
-// continued in its box.
+// continued, in its box or restored into another.
 const RotatedContinuation = "Your previous segment ended because the model's sign-in was " +
 	"replaced while it ran; continue from where you are."
 
@@ -63,6 +65,8 @@ func (r Rotated) Reseed() string {
 func (r *Rotated) session() string                         { return r.SessionID }
 func (r *Rotated) continuation(provenance.Boundary) string { return RotatedContinuation }
 func (r *Rotated) reseed(provenance.Boundary) string       { return r.Reseed() }
+func (r *Rotated) keeps() bool                             { return true }
+func (r *Rotated) branch() string                          { return "" }
 func (r *Rotated) refusal() error                          { return nil }
 func (r *Rotated) what() string {
 	return "carrying on the round a replaced sign-in cut off"

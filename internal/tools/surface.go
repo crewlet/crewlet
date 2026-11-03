@@ -339,9 +339,34 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 // THE TOOL IS RESOLVED NOW, against this surface's universe, never against
 // what it was when the call was held: a tool blocked since is filed nowhere
 // and answers not found, and the caller holds the definition to the one the
-// person read ([mcp.Definition.Digest]) before it calls this.
+// person read ([mcp.Definition.Digest]) — and the call to the surface's guard
+// ([Surface.GuardRefusal]) — before it calls this.
 func (s *Surface) RunApproved(ctx context.Context, name string, raw map[string]any) (toolloop.ToolResult, error) {
 	return s.execute(ctx, name, s.ArgsOf(name, raw), s.turn, false, true)
+}
+
+// GuardRefusal is why the surface's guard would refuse a call to name made now
+// — a required skill covering the tool that the session has not loaded — and
+// "" where it would admit one, where the surface does not resolve the name, or
+// where nothing guards the surface.
+//
+// FOR A CALLER THAT MUST KNOW BEFORE IT COMMITS TO THE CALL: one making a call
+// a person approved ([Surface.RunApproved]) marks it made on its run's row
+// before it makes it, so that it is made at most once, and a refusal met only
+// once the call runs would be recorded as the call's result — the approval used
+// up on a call that never ran. Asked here first, the call is not made and the
+// mark is never written; [Surface.RunApproved] asks the same guard again as the
+// call runs.
+func (s *Surface) GuardRefusal(name string) string {
+	if s.guard == nil {
+		return ""
+	}
+	e, known := s.universe.Lookup(name)
+	if !known {
+		return ""
+	}
+	server, _ := e.FromMCP()
+	return s.guard.Check(name, server)
 }
 
 // ArgsOf is a call's arguments in the canonical form, made ONCE, at the
