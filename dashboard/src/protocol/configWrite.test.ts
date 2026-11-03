@@ -502,6 +502,7 @@ describe("one reading of a /config refusal", () => {
           { kind: "unit", id: "platform", side: "after", place: "platform", why: "self" },
           { kind: "unit", id: "tooling", why: "key", value: "project" },
           { kind: "seat", id: "sre", why: "grant", value: "health_tools" },
+          { kind: "seat", id: "sre", why: "widens", value: "mcp_limits.linear.tools.delete_issue" },
           { kind: "setting", id: "mission" },
           {
             kind: "seat",
@@ -545,6 +546,12 @@ describe("one reading of a /config refusal", () => {
         "sre",
         undefined,
         "@sre: health_tools gives the seat what only Admin access reads, so setting or clearing it takes Admin access.",
+      ],
+      [
+        "refused",
+        "sre",
+        undefined,
+        "@sre: mcp_limits.linear.tools.delete_issue would lift or loosen a limit on an MCP server, which a lead may only narrow, so changing it takes Admin access.",
       ],
       ["refused", undefined, undefined, "The company's mission setting takes Admin access."],
       [

@@ -363,6 +363,13 @@ export function refusedSentence(entry: Record<string, unknown>): string {
     // the administrator's to decide, set or cleared.
     case "grant":
       return `${subject}: ${value} gives the seat what only Admin access reads, so setting or clearing it ${grant}.`;
+    // AN MCP LIMIT THE WRITE WOULD LIFT OR LOOSEN for the seat, by editing a
+    // block or moving the seat out from under one: a lead may narrow what a
+    // server lets their team do, never widen it, so `value` is the limit as
+    // the seat is held to it today and the default sentence ("outside the
+    // units you lead") would be false of a seat in the lead's own team.
+    case "widens":
+      return `${subject}: ${value} would lift or loosen a limit on an MCP server, which a lead may only narrow, so changing it ${grant}.`;
     case "self":
       return `${subject}'s own lead and place decide who may change it, so changing them ${grant}.`;
     // A REFERENCE AT THE ROOT names a root seat or nothing at all: the engine
