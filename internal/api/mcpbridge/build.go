@@ -24,6 +24,10 @@ const KeyDomain = "crewlet.mcp.v1"
 // of the company document, so it is Tier A environment rather than Tier B
 // config. An engine behind a load balancer, in a private network, or on a
 // laptop all answer this differently with the same company running.
+//
+// ONE GRAMMAR WITH THE RECEIVER'S, too: the engine reads it through
+// sandbox.ParseBoxURL, which refuses the boot on a value that is set and that
+// no box could dial, and hands [Build] what that returns.
 const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 
 // Build is THE construction path, called by the engine.
@@ -40,6 +44,17 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 // than given a per-process key: there is no node without one, so reaching
 // here with one is a mistake to name, not a posture to degrade into.
 //
+// base is [BaseURLVar] as the caller PARSED it — an absolute http or https URL
+// with a host, its trailing '/' trimmed — never the raw variable. Every
+// endpoint this bridge mints for a box off this host is base plus a path,
+// handed to a CLI inside a box that never reports back, so a base no client
+// can dial fails every tool call of every executor run there, each rescued as
+// incomplete with no sign of why; that is refused at boot, by the engine,
+// before anything opens. The parse is the caller's rather than this package's
+// because its grammar is the one every URL a box dials shares
+// (sandbox.ParseBoxURL), and the API's bridge has no other reason to depend on
+// the sandbox runtime.
+//
 // hostURL is where a box on this node's own host reaches it — the node's own
 // listener on loopback ([Options.HostURL]), derived by whoever bound that
 // listener on a node that runs seats, "" anywhere else.
@@ -52,11 +67,7 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 // without the other builds a bridge that reaches the boxes it can: the host
 // URL alone serves the `direct` cell of this node, and the variable alone
 // every cell.
-func Build(env func(string) string, material runtoken.Material, hostURL string) (*Bridge, error) {
-	base := ""
-	if env != nil {
-		base = strings.TrimSpace(env(BaseURLVar))
-	}
+func Build(base string, material runtoken.Material, hostURL string) (*Bridge, error) {
 	hostURL = strings.TrimSpace(hostURL)
 	if base == "" && hostURL == "" {
 		return nil, nil

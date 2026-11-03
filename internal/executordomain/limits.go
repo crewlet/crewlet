@@ -1,33 +1,16 @@
 package executordomain
 
-import (
-	"strings"
-	"time"
-
-	"github.com/crewlet/crewlet/internal/secrets"
-)
+import "time"
 
 // THE BOUNDS ON WHAT IS STORED. They are this package's because the writer is
-// where a value is refused (or, for prose, cut) before it is published, and the
-// pieces that capture and restore sessions read them from here rather than
-// stating their own: a bound written twice is one the two sides disagree about,
-// and the side that lost would be a record the log refuses `record_too_large`
-// after the turn already ended.
+// where a value is refused (or, for prose, cut) before it is published, and
+// whatever else reads one reads it from here rather than stating its own: a
+// bound written twice is one the two sides disagree about, and the side that
+// lost would be a record the log refuses `record_too_large` after the turn
+// already ended. The bounds the sandbox stops at too — a session's archive and
+// its sealed object, and an ending's fields — are internal/executorkeep's, the
+// leaf both read (its package doc says why).
 const (
-	// SessionMaxBytes bounds one captured session's ARCHIVE, before it is
-	// sealed: a harness's transcript and its sidecars, packed.
-	//
-	// THIRTY-TWO MEBIBYTES. A Claude Code or OpenCode session of a day's
-	// work compresses to one or two mebibytes, and the long ones that read
-	// whole files into their context reach the low tens; past thirty-two a
-	// transcript is a context the harness could not resume within its own
-	// window anyway. The bound is also what one capture or restore costs a
-	// node while it streams (one chunk, [secrets.StreamChunkBytes]) and the
-	// object store at rest ([SealedMaxBytes]), and it is pinned against
-	// objstore.RecordWithin at the objstore.MiBPace floor in
-	// internal/objstore/references.
-	SessionMaxBytes = 32 << 20
-
 	// ConversationKeyMaxBytes bounds a conversation's key: a surface's own
 	// identity for a thread, an issue or a channel (a GitHub issue's
 	// `owner/repo#n` is under two hundred bytes, a chat thread's two ids
@@ -43,14 +26,11 @@ const (
 	// bytes, and the bound refuses anything that is plainly not one.
 	TurnIDMaxBytes = 64
 
-	// HarnessMaxBytes and HarnessVersionMaxBytes bound the harness's name and its
-	// version as the box reported it.
-	HarnessMaxBytes        = 32
-	HarnessVersionMaxBytes = 64
-
-	// SessionIDMaxBytes bounds the harness's own session id: Claude Code's is a
-	// UUID, OpenCode's a `ses_` prefix and twenty-six characters.
-	SessionIDMaxBytes = 128
+	// HarnessMaxBytes bounds the harness's name as the box reported it. Its
+	// version's bound and the session id's are internal/executorkeep's
+	// (HarnessVersionMaxBytes, SessionIDMaxBytes), because the sandbox holds
+	// what a box names to them before a launch's record carries it.
+	HarnessMaxBytes = 32
 
 	// PathMaxBytes bounds the writer box's home and workspace paths, which a
 	// resumed launch maps onto its own box. The engine lays a box out under
@@ -61,36 +41,6 @@ const (
 	// AskExcerptMaxBytes bounds what the turn was asked, as a list and a
 	// search show it: the first kibibyte, cut on a rune boundary.
 	AskExcerptMaxBytes = 1024
-
-	// CompletedWorkMaxBytes and BlockedOnMaxBytes bound the reviewer's
-	// account of what landed and the executor's evidence of what stopped a
-	// blocked round: a paragraph each, four kibibytes, cut on a rune
-	// boundary. They are model-written prose the next turn reads as the
-	// ending of this one, so the cut is marked rather than silent.
-	CompletedWorkMaxBytes = 4 << 10
-	BlockedOnMaxBytes     = 4 << 10
-
-	// StopReasonMaxBytes and FailureMaxBytes bound a stop's reason (a
-	// person's sentence or two) and the engine's guard or loss account (one
-	// of its own sentences).
-	StopReasonMaxBytes = 1 << 10
-	FailureMaxBytes    = 1 << 10
-
-	// UnkeptReasonMaxBytes bounds why the turn's newest capture was not kept
-	// ([Unkept]): the engine's sentence, quoting the refusal it met, as a
-	// failure's account does.
-	UnkeptReasonMaxBytes = 1 << 10
-
-	// WordMaxBytes bounds the ending's engine words: the reviewer's
-	// decision, the surface a reply was delivered to and the engine's own
-	// answer outcome. Each is a short identifier the engine chooses, so one
-	// longer than this is refused rather than cut.
-	WordMaxBytes = 32
-
-	// ActorMaxBytes bounds who stopped a turn: a seat's handle, a person's
-	// login or a machine's `kind:name`, each at most iam.MaxLogin, with
-	// room for the kind.
-	ActorMaxBytes = 128
 
 	// MaxEndings is how many endings [Reader.Head] returns beside the head,
 	// the newest of them, with a count of the rest: the account a next turn
@@ -137,10 +87,3 @@ const (
 // from capturing, or a base from going, where waiting for the retention would
 // be the whole conversation retention.
 const LostAfter = 24 * time.Hour
-
-// SealedMaxBytes is the largest object a session is stored as: an archive of
-// [SessionMaxBytes] sealed under a keyring key of the longest id a sealed
-// stream can name. Every object is uploaded under this limit, and it is what
-// the object store's pacing is held to.
-var SealedMaxBytes = secrets.SealedStreamSize(SessionMaxBytes,
-	strings.Repeat("k", secrets.MaxStreamKeyIDBytes))

@@ -54,10 +54,104 @@ import (
 
 // FileObjectReferences is the table whose rows keep a conversation's files'
 // objects alive: the declaration internal/objstore/references collects.
+//
+// REQUIRED (ADR-0081): a kept file is an image a person attached or a file a
+// run delivered to them, bytes nothing builds again, so its objects are
+// audited and every backup carries them until a purge or an erasure removes
+// the row. The declaration therefore names the log a restore replays and how
+// one record of it names the table's rows (ADR-0082).
 var FileObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "assistant_files",
 	Key: "object", Hash: "hash", Size: "object_size",
-	Owner: []string{"conversation_id", "id"},
+	Owner:    []string{"conversation_id", "id"},
+	Standing: objstore.Required,
+	Log:      Domain{}.Stream().Name,
+	Deferred: Domain{}.DeferredTable(),
+	Records:  fileRecordReferences,
+}
+
+// fileRecordReferences answers the assistant_files row one record of the
+// assistant's log writes, and the object it names once the record applies:
+// [objstore.ReferenceTable.Records] for [FileObjectReferences].
+//
+// A RECORD THIS BUILD READS is answered by the applier's own decoder: only a
+// file kept on a conversation ([OpFileStored]) writes the table, through
+// [applyFile], so every other record answers none. The file is answered
+// whether or not this node's applier would admit it (the conversation's bound
+// on files is decided again at the apply): a backup reads a superset of what a
+// restore's rows name, never a subset. A purge or an erasure REMOVES rows the
+// record does not list, so it answers none, and a backup carrying an object
+// such a record later removed carries one object more than a restore names,
+// which the collector deletes, never one fewer.
+//
+// A RECORD THIS BUILD CANNOT READ is answered from what EVERY build reads of
+// it ([mayWriteFiles]): one that may write a file row is
+// [objstore.ErrRecordUnreadable].
+//
+// THE ROW IS SPELLED AS [FileObjectReferences] LISTS ITS OWNER, the
+// conversation and then the file, through [objstore.JoinOwner], as the walk of
+// the table spells it; the declaration itself is not read here, which would be
+// an initialisation cycle.
+func fileRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
+	env, err := DecodeEnvelope(payload)
+	if err != nil {
+		return nil, fmt.Errorf("assistantdomain: a record no build reads: %w", err)
+	}
+	if env.V > RecordVersion || !env.Subject.Kind.Valid() || !env.Op.Valid() {
+		if !mayWriteFiles(env) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%w: the record on %s is version %d (this build reads %d) "+
+			"of a kind or op this build may not know, and the scope its writer stated "+
+			"reaches a conversation", objstore.ErrRecordUnreadable, env.Subject, env.V,
+			RecordVersion)
+	}
+	if env.Subject.Kind != KindConversation || env.Op != OpFileStored {
+		return nil, nil
+	}
+	rec, err := Decode(payload)
+	if err != nil {
+		return nil, err
+	}
+	p, err := decodePayload[FileRecorded](rec)
+	if err != nil {
+		return nil, err
+	}
+	if !present(env.Subject.ID) || !present(p.File) || !present(p.Object) {
+		// THE APPLY WRITES NO ROW for a file or an object it cannot name.
+		return nil, nil
+	}
+	o := objstore.Object{Size: p.ObjectSize}
+	if o.Key, err = objstore.ParseKey(p.Object); err != nil {
+		return nil, fmt.Errorf("assistantdomain: the file record on %s: %w", env.Subject, err)
+	}
+	if o.Hash, err = objstore.ParseHash(p.Hash); err != nil {
+		return nil, fmt.Errorf("assistantdomain: the file record on %s: %w", env.Subject, err)
+	}
+	return []objstore.RecordReference{{
+		NamedBy: objstore.JoinOwner(env.Subject.ID, p.File), Object: o, Names: true,
+	}}, nil
+}
+
+// mayWriteFiles reports whether a record this build cannot read may write an
+// assistant_files row, from what every build reads of it: its kind and the
+// scope its WRITER stated as the complete set of objects its apply may write.
+//
+// AN UNKNOWN KIND MAY: this build cannot place what a kind it has never heard
+// of names. A KNOWN KIND may when any path of its scope reaches a
+// conversation, the domain or a path this build cannot interpret, and may not
+// when every path is the framework's own: a file row lives under its
+// conversation, so only the barrier and the trimmed record name none.
+func mayWriteFiles(env RecordEnvelope) bool {
+	if !env.Subject.Kind.Valid() {
+		return true
+	}
+	for _, p := range env.Scope.Resolve(env.Subject).Paths {
+		if p != statelog.FrameworkScope {
+			return true
+		}
+	}
+	return false
 }
 
 // NewFile is one file to keep: its bytes, the type sniffed from them, and the
@@ -404,7 +498,7 @@ func (s ObjectEstate) Read(ctx context.Context, at statelog.Position, fn func(*s
 		return false, errNoReader
 	}
 	served, err := s.Reader.log.Read(ctx, statelog.Query{
-		Level: statelog.ReadStale, Scope: DomainScope(), Set: true, MinPosition: at,
+		Level: statelog.ReadStale, Scope: DomainScope(), Set: true, Floors: statelog.FloorAt(statelog.ReadStale, at).Floors,
 	}, fn)
 	if err != nil {
 		return false, err

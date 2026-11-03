@@ -696,7 +696,7 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 // # How long it holds the node
 //
 // The training runs inside the duty's tick ([Embedder.Tick]), with the lease
-// renewed every [EmbedInterval] by a goroutine the training does not starve —
+// renewed four times a lease by a goroutine the training does not starve —
 // it leaves the other half of the cores — and exempt from the tick's budget,
 // which measures progress and which arithmetic that cannot wedge would only
 // ever have cut off unfinished ([Budget]). At the ≈ 545 000 sources a node

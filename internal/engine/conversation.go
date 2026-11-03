@@ -155,7 +155,7 @@ func (e *Engine) readConversation(ctx context.Context, company *Company, req Req
 		return &conversationRead{why: fmt.Sprintf("the turn's conversation could not be read: %v", err)}
 	}
 	endings, told := conversationEndings(head, req.Handle, notify.Scheduled(req.ConversationKey), boundary)
-	return &conversationRead{endings: endings, told: told, base: sandbox.NewConversationBase(head, told)}
+	return &conversationRead{endings: endings, told: told, base: sandbox.NewConversationBase(head.Kept(), told)}
 }
 
 // keepsSessions reports whether c keeps executor sessions, the switch that also

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -100,8 +101,8 @@ func (u *unknownWriter) WritePins(_ context.Context, opID, _ string,
 	return u.answer(opID)
 }
 
-func (u *unknownWriter) MarkInbox(_ context.Context, opID, _ string,
-	_ worklet.InboxGesture, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
+func (u *unknownWriter) MarkInbox(_ context.Context, opID, _ string, _ statelog.Position,
+	_ inbox.Gesture[worklet.Reason], _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 

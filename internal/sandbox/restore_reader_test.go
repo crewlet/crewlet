@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -17,7 +18,7 @@ func endedHead(now time.Time) executordomain.Session {
 		Harness: "claude-code", SessionID: "s-head", ArchiveFormat: FakeArchiveFormat,
 		Object: objstore.Object{Key: objstore.KeyAt(now), Size: 1}, LaunchSeq: 1, CaptureSeq: 1,
 		CapturedAt: now, EndedAt: now.Add(time.Minute),
-		Ending: &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}
+		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}
 }
 
 // WHAT A READER IS TOLD OF AN ENDED TURN'S SESSION IS THE NEXT TURN'S OWN
@@ -85,7 +86,7 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 			decided: true, why: "(launch 2, capture 1) was not kept: refused: past the seat's budget",
 			row: func(s *executordomain.Session) {
 				s.Object = objstore.Object{}
-				s.Ending.Unkept = &executordomain.Unkept{LaunchSeq: 2, CaptureSeq: 1,
+				s.Ending.Unkept = &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
 					Reason: "refused: past the seat's budget"}
 			}},
 		"a session the seat's budget released": {head: "t-head", target: restores, by: ContinuedByNextTurn,
@@ -94,7 +95,7 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 				// AN UNKEPT CAPTURE NO NEWER THAN THE ONE THE ROW KEPT, as a
 				// capture of the very attempt that landed after all leaves
 				// it: the end released nothing, and the budget did.
-				s.Ending.Unkept = &executordomain.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: "unanswered"}
+				s.Ending.Unkept = &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: "unanswered"}
 			}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -103,7 +104,7 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 			if tc.row != nil {
 				tc.row(&row)
 			}
-			got := ReadContinuityOf(row, tc.head, nil, tc.target, ContinuedByNextTurn, now)
+			got := ReadContinuityOf(row.Kept(), tc.head, nil, tc.target, ContinuedByNextTurn, now)
 			switch {
 			case got.By != tc.by:
 				t.Fatalf("ReadContinuityOf = %+v, want it about %q", got, tc.by)
@@ -114,11 +115,11 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 			case !tc.continues && (got.In != "" || !strings.Contains(got.Why, tc.why)):
 				t.Fatalf("ReadContinuityOf = %+v, want it saying %q", got, tc.why)
 			}
-			ask, asks := TargetAsk(row, tc.head, nil)
+			ask, asks := TargetAsk(row.Kept(), tc.head, nil)
 			switch {
 			case asks != tc.asks:
 				t.Fatalf("TargetAsk asks %v (%+v), want %v", asks, ask, tc.asks)
-			case asks && ask != (RelaunchAsk{Archive: ArchiveOf(row)}):
+			case asks && ask != (RelaunchAsk{Archive: ArchiveOf(row.Kept())}):
 				t.Fatalf("the head asks %+v, want no turn and its own archive", ask)
 			}
 		})
@@ -130,7 +131,7 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 // job was lost with its box before anything of it was kept.
 func begunTurn(now time.Time) (executordomain.Session, PendingRun) {
 	base := endedHead(now)
-	frozen := baseSessionOf(base)
+	frozen := baseSessionOf(base.Kept())
 	row := executordomain.Session{Handle: "swe", Turn: "t-begun", ConversationKey: "chat:room",
 		BaseTurn: "t-head"}
 	return row, PendingRun{TurnID: "t-begun", AgentHandle: "swe", Status: StatusRunning, LaunchSeq: 1,
@@ -192,7 +193,7 @@ func TestARelaunchOfATurnThatKeptNothingIsSaidToContinueItsBase(t *testing.T) {
 			if tc.run != nil {
 				tc.run(&run)
 			}
-			got := ReadContinuityOf(row, "t-head", &run, tc.target, ContinuedByNextTurn, now)
+			got := ReadContinuityOf(row.Kept(), "t-head", &run, tc.target, ContinuedByNextTurn, now)
 			switch {
 			case got.By != ContinuedByRelaunch || !got.Decided || got.Continues:
 				t.Fatalf("ReadContinuityOf = %+v, want a relaunch decided not to continue the row's own", got)
@@ -203,7 +204,7 @@ func TestARelaunchOfATurnThatKeptNothingIsSaidToContinueItsBase(t *testing.T) {
 	}
 
 	row, run := begunTurn(now)
-	ask, asks := TargetAsk(row, "t-head", &run)
+	ask, asks := TargetAsk(row.Kept(), "t-head", &run)
 	if !asks || ask != (RelaunchAsk{Turn: "t-begun", Archive: run.Base.Session.archive()}) {
 		t.Errorf("a turn that has kept nothing asks %+v (%v), want its own turn and its base's archive", ask, asks)
 	}
@@ -229,16 +230,16 @@ func TestALiveTurnWhoseRunIsOverOrEndingIsTheNextTurnsUndecided(t *testing.T) {
 		Ending: &RecordedEnding{ID: "ending-1"}}
 	target := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
 	for name, run := range map[string]*PendingRun{"its run over": nil, "its ending decided": stopping} {
-		got := ReadContinuityOf(row, "", run, target, ContinuedByNextTurn, now)
+		got := ReadContinuityOf(row.Kept(), "", run, target, ContinuedByNextTurn, now)
 		if got.By != ContinuedByNextTurn || got.Decided || !strings.Contains(got.Why, "not on the executor log") {
 			t.Errorf("%s: ReadContinuityOf = %+v, want the next turn's, undecided until its end lands", name, got)
 		}
-		if ask, asks := TargetAsk(row, "", run); asks {
+		if ask, asks := TargetAsk(row.Kept(), "", run); asks {
 			t.Errorf("%s: a turn no launch of which is decided by a member asks %+v", name, ask)
 		}
 		keyless := row
 		keyless.ConversationKey = ""
-		if got := ReadContinuityOf(keyless, "", run, target, ContinuedByNextTurn, now); got.By != "" ||
+		if got := ReadContinuityOf(keyless.Kept(), "", run, target, ContinuedByNextTurn, now); got.By != "" ||
 			!got.Decided || !strings.Contains(got.Why, "served no conversation") {
 			t.Errorf("%s: a turn of no conversation reads %+v, want decided, continued by no launch", name, got)
 		}
@@ -264,11 +265,11 @@ func TestAScheduleRowIsToldItsNextFire(t *testing.T) {
 	fire := endedHead(now)
 	fire.ConversationKey = "schedule/role/a-1/health-check"
 
-	head := ReadContinuityOf(fire, "t-head", nil, restores, ContinuedByNextFire, now)
+	head := ReadContinuityOf(fire.Kept(), "t-head", nil, restores, ContinuedByNextFire, now)
 	if head.By != ContinuedByNextFire || !head.Decided || !head.Continues || head.In != ContinuesInAnyBox {
 		t.Errorf("the schedule's newest session reads %+v, want its next fire's, continued in any box", head)
 	}
-	older := ReadContinuityOf(fire, "t-newer", nil, restores, ContinuedByNextFire, now)
+	older := ReadContinuityOf(fire.Kept(), "t-newer", nil, restores, ContinuedByNextFire, now)
 	if older.By != ContinuedByNextFire || !older.Decided || older.Continues ||
 		!strings.Contains(older.Why, "the schedule's next fire is handed fire t-newer's session, the newest "+
 			"in the schedule's line") {
@@ -276,19 +277,19 @@ func TestAScheduleRowIsToldItsNextFire(t *testing.T) {
 	}
 	ending := fire
 	ending.Ending, ending.EndedAt = nil, time.Time{}
-	over := ReadContinuityOf(ending, "", nil, restores, ContinuedByNextFire, now)
+	over := ReadContinuityOf(ending.Kept(), "", nil, restores, ContinuedByNextFire, now)
 	if over.By != ContinuedByNextFire || over.Decided ||
 		!strings.Contains(over.Why, "once it is, the schedule's next fire continues the session") {
 		t.Errorf("a fire whose run is over reads %+v, want its next fire's, undecided until its end lands", over)
 	}
 	begun, run := begunTurn(now)
 	begun.ConversationKey = fire.ConversationKey
-	relaunch := ReadContinuityOf(begun, "t-head", &run, restores, ContinuedByNextFire, now)
+	relaunch := ReadContinuityOf(begun.Kept(), "t-head", &run, restores, ContinuedByNextFire, now)
 	if relaunch.By != ContinuedByRelaunch ||
 		!strings.Contains(relaunch.Why, "continues fire t-head's session instead") {
 		t.Errorf("a fire that kept nothing reads %+v, want its relaunch continuing the last fire's session", relaunch)
 	}
-	if got := ReadContinuityOf(fire, "t-head", nil, restores, "later", now); got.By != ContinuedByNextTurn {
+	if got := ReadContinuityOf(fire.Kept(), "t-head", nil, restores, "later", now); got.By != ContinuedByNextTurn {
 		t.Errorf("a launch this build does not name reads %+v, want the next turn's", got)
 	}
 }

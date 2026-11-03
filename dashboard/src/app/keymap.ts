@@ -40,7 +40,15 @@
 
 import { isApplePlatform, keyGlyph } from "@crewlethq/ui";
 import { useKeyChords, type Chord, type Sequence } from "~/lib/keys.ts";
-import { WORKSPACES, type Service } from "./nav.ts";
+import {
+  WORKSPACES,
+  serviceShown,
+  workspaceRow,
+  workspaceShown,
+  type ServicesRun,
+  type Service,
+  type Workspace,
+} from "./nav.ts";
 
 /** Where a row is live. See the file's doc. */
 export type KeyScope =
@@ -134,6 +142,23 @@ export interface KeyRow {
    * legend leaves it out and the frame binds nothing to it.
    */
   service?: Service;
+  /**
+   * The workspace a `g` jump goes to. Such a row is a key exactly where that
+   * workspace is a row (`nav.ts`'s `workspaceShown`), which no single service
+   * can say: My work is offered where the tracker OR the code host runs, so
+   * its jump names no service and would otherwise be listed everywhere.
+   */
+  workspace?: Workspace;
+}
+
+/**
+ * Whether a key is one for a company running `runs`: a `g` jump where its
+ * workspace is a row, as the frame binds it (`Shell.tsx`), and any other row
+ * where the service it reads runs. What the legend lists.
+ */
+export function keyShown(row: KeyRow, runs: ServicesRun): boolean {
+  const ws = row.workspace ? workspaceRow(row.workspace) : undefined;
+  return ws ? workspaceShown(ws, runs) : serviceShown(row, runs);
 }
 
 /**
@@ -169,11 +194,11 @@ const FRAME: KeyRow[] = [
     presses: [{ after: "g", key: ws.chord }],
     does: `Go to ${ws.label}`,
     by: "dashboard",
-    ...(ws.service ? { service: ws.service } : {}),
+    workspace: ws.key,
   })),
-  // THE ONE `g` SEQUENCE THAT IS NOT A WORKSPACE: a running turn is an object,
-  // and reaching it was a workspace, a card, a profile and a tab away. Not a
-  // `go.` row, which is the family derived from `nav.ts`.
+  // TWO `g` SEQUENCES ARE NOT WORKSPACES, so neither is a `go.` row, the
+  // family derived from `nav.ts`. The first is a running turn: an object, and
+  // reaching it was a workspace, a card, a profile and a tab away.
   {
     id: "running",
     scope: "frame",
@@ -181,8 +206,8 @@ const FRAME: KeyRow[] = [
     does: "Watch running turns",
     by: "dashboard",
   },
-  // AND THE SCOPE OF WORKLET: the switcher under Worklet's trail, or centred over
-  // any other page, where nothing moves until a project is chosen.
+  // THE SECOND IS THE SCOPE OF WORKLET: the switcher under Worklet's trail, or
+  // centred over any other page, where nothing moves until a project is chosen.
   {
     id: "project",
     scope: "frame",

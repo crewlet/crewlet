@@ -54,7 +54,7 @@ type OpenCodeTimes struct {
 // for the cases about a wait running out, a sync coming round or a stop that
 // must not wait, at lengths a test can tell apart.
 func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, times OpenCodeTimes) string {
-	return "sh -c " + shellQuote(openCodeScript(req, session, paths, openCodeTimes{
+	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeTimes{
 		listen: cmp.Or(times.Listen, openCodeListenWait), mcp: cmp.Or(times.MCP, openCodeMCPWait),
 		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, sandbox.JobStopGrace),
 	}))
@@ -66,7 +66,7 @@ func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, 
 // out.
 func ClaudeCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, configPath string,
 	stop time.Duration) string {
-	return "sh -c " + shellQuote(claudeScript(req, session, paths, configPath, stop))
+	return "sh -c " + sandbox.ShellQuote(claudeScript(req, session, paths, configPath, stop))
 }
 
 // ClaudeProjectDir is the project directory every Claude Code run in a box
@@ -125,3 +125,20 @@ func ReadTranscriptWithin(ctx context.Context, harness string, format int,
 // slots reads hold now: what a case reads to see a slot taken before an
 // archive opens and given back only once it is closed.
 func TranscriptReadsHeld() int { return len(transcriptReads) }
+
+// The Crewlet trailers' keys, for the cases that read a commit's trailers.
+const (
+	SeatTrailer     = seatTrailer
+	RunTrailer      = runTrailer
+	WorkItemTrailer = workItemTrailer
+)
+
+// AttributionHook is the hook a run asking for a is handed, byte for byte, or
+// the refusal its start would answer.
+func AttributionHook(a sandbox.CommitAttribution) ([]byte, error) {
+	trailers, err := attributionTrailers(a)
+	if err != nil {
+		return nil, err
+	}
+	return attributionHook(trailers), nil
+}

@@ -274,9 +274,9 @@ func TestAScopeAWriterCouldNotHaveMeantIsRefused(t *testing.T) {
 func TestABarrierScopeIntersectsNothing(t *testing.T) {
 	t.Parallel()
 	barrier := chatlet.ScopeSet{Subject: true}.Resolve(chatlet.BarrierSubject())
-	if got := onePath(t, barrier); got != statelog.BarrierScope {
+	if got := onePath(t, barrier); got != statelog.FrameworkScope {
 		t.Fatalf("a barrier resolved to %q, want the framework's own %q",
-			got, statelog.BarrierScope)
+			got, statelog.FrameworkScope)
 	}
 	for _, other := range []chatlet.Subject{
 		chatlet.ChannelSubject(uuid.NewString()),

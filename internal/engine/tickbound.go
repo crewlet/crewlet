@@ -51,10 +51,11 @@ var errTickOverran = errors.New("engine: the tick went its budget without progre
 // # What it is not
 //
 // It is not a second lease. The tick's other bound is the duty's lease,
-// renewed while the tick runs and cutting it off the moment a renewal does not
-// confirm it ([embedDuty.keepClaimed]) — progress and exemptions touch this
-// clock and nothing else, so neither keeps a tick running on a node that no
-// longer holds the duty.
+// renewed while the tick runs and cutting it off once a renewal says another
+// node holds the duty, or none has confirmed it for as long as the lease is
+// sure to last ([dutyRenewal.keep]) — progress and exemptions touch this clock
+// and nothing else, so neither keeps a tick running on a node that no longer
+// holds the duty.
 type tickBound struct {
 	budget time.Duration
 	cancel context.CancelCauseFunc

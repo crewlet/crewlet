@@ -77,7 +77,7 @@ func (b *browser) acted(n *node, tool string, args map[string]any) actAnswer {
 		// so nothing to wait for.
 		return answer
 	}
-	if err := n.engine.WaitCommitted(b.t.Context(), positionOf(b.t, answer)); err != nil {
+	if err := n.engine.WaitReached(b.t.Context(), positionOf(b.t, answer)); err != nil {
 		b.t.Fatalf("waiting for a write at %s: %v", *answer.Position, err)
 	}
 	return answer

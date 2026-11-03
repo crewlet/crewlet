@@ -1,13 +1,15 @@
 // Package flock is the one exclusive cross-process lock this engine takes on a
 // file: the node database's ([github.com/crewlet/crewlet/internal/store]), the
 // embedded broker's stream directory
-// ([github.com/crewlet/crewlet/internal/queue/jetstream]) and a harness's
-// shared login ([github.com/crewlet/crewlet/internal/hostbox]).
+// ([github.com/crewlet/crewlet/internal/queue/jetstream]), a harness's
+// shared login ([github.com/crewlet/crewlet/internal/hostbox]) and a git node's
+// cache directory ([github.com/crewlet/crewlet/internal/code/cache]), whose
+// boot empties directories only the process that filled them may be using.
 //
 // # One implementation, because the subtleties are not obvious
 //
-// Each of those once carried its own copy of the syscall, and each copy had to
-// rediscover the same three things on its own:
+// Each of those once carried its own copy of the syscall (ADR-0008), and each
+// copy had to rediscover the same three things on its own:
 //
 //   - flock, never fcntl. An fcntl lock is dropped when ANY descriptor for the
 //     file is closed in the process, so an unrelated open and close of the lock
@@ -49,6 +51,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -90,7 +93,9 @@ const (
 // Lock is one held lock. Release it; the kernel also does when the process
 // ends.
 type Lock struct {
-	file *os.File
+	// file is the locked descriptor, swapped to nil by the first Release so
+	// a second one — from another goroutine too — finds nothing to drop.
+	file atomic.Pointer[os.File]
 }
 
 // Try takes an exclusive lock on the file at path without waiting, creating
@@ -119,21 +124,28 @@ func Try(path string) (*Lock, error) {
 		return nil, &HeldError{Path: path, Holder: holder}
 	}
 	stamp(file)
-	return &Lock{file: file}, nil
+	lock := &Lock{}
+	lock.file.Store(file)
+	return lock, nil
 }
 
-// Release frees the lock. Safe on nil, and safe to call twice.
+// Release frees the lock. Safe on nil, safe to call twice, and safe from two
+// goroutines at once, so every caller can defer it without tracking whether
+// it already ran.
 //
 // UNLOCK BEFORE CLOSE even though closing releases it: on a descriptor this
 // process duplicated (a fork, a test harness), closing one copy is not the
 // release of the lock. And the file stays where it is — see the package doc.
 func (l *Lock) Release() {
-	if l == nil || l.file == nil {
+	if l == nil {
 		return
 	}
-	_ = unlock(l.file)
-	_ = l.file.Close()
-	l.file = nil
+	file := l.file.Swap(nil)
+	if file == nil {
+		return
+	}
+	_ = unlock(file)
+	_ = file.Close()
 }
 
 // stamp records who holds the lock, best effort.

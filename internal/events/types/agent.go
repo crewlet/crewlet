@@ -286,8 +286,8 @@ type PhaseSteer struct {
 	Boundary SteerBoundary `json:"boundary"`
 }
 
-// AgentTurnStarted opens a turn — or one SEGMENT of it, when a parked coding
-// run is resumed — before its context is assembled and before its first phase.
+// AgentTurnStarted opens a turn — or one SEGMENT of it, when a parked executor
+// is resumed — before its context is assembled and before its first phase.
 //
 // THE ONE EVENT THAT SAYS A TURN EXISTS WHILE IT IS STILL GATHERING CONTEXT.
 // Every other turn event is published from inside a phase or after the last
@@ -398,8 +398,8 @@ type AgentTurnCompleted struct {
 	// turn is on nothing, never null.
 	WorkItem      *WorkItem     `json:"work_item,omitempty"`
 	WorkItemBasis WorkItemBasis `json:"work_item_basis,omitempty"`
-	// Suspended marks a SEGMENT that ended by parking on a detached coding
-	// run rather than a turn that ended. The same turn id completes again
+	// Suspended marks a SEGMENT that ended by parking on a detached executor
+	// rather than a turn that ended. The same turn id completes again
 	// when the run is collected and the loop resumes, so a reader that
 	// took this record for the turn's end would list a parked turn as
 	// finished, with its first segment's duration.
@@ -965,10 +965,28 @@ type AgentPhaseCompleted struct {
 	// DeliveredRefs lists: refs are read from the whole report with no count
 	// to them — its `Delivered:` lines, or its pull-request URLs where it
 	// named none — and the record lists them up to a bound, deduplicated,
-	// counting the rest here rather than dropping them unsaid.
+	// counting the rest here rather than dropping them unsaid. A ref that is
+	// not valid UTF-8 is counted here too and never listed: this record is
+	// JSON, which would replace its bytes and list another ref in its place.
 	// Zero on a record that lists them all.
 	DeliveredRefs       []string `json:"delivered_refs,omitempty"`
 	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
+	// PushedRefs are the refs the collected run moved on the engine's own
+	// code host, as its push record says — the code host's rows written
+	// under the run's launch, read when the launch was collected, one entry
+	// per ref with the old value of its first push and the new value of its
+	// last — on the execute record that collected the run, as DeliveredRefs
+	// are, and on the launch's own [ExecutorCollected] record. The engine's
+	// account where DeliveredRefs are the run's own: a box writes its report
+	// as it likes, and nothing in the box writes these. PushedRefsElided is
+	// how many more the record names than are listed, held with the run's
+	// own refs to one bound; PushedRefsUnread is why the record could not be
+	// read, which makes an empty PushedRefs unknown rather than "nothing
+	// pushed". All three absent on a run given no repository it could push
+	// to.
+	PushedRefs       []PushedRefRecord `json:"pushed_refs,omitempty"`
+	PushedRefsElided int               `json:"pushed_refs_elided,omitempty"`
+	PushedRefsUnread string            `json:"pushed_refs_unread,omitempty"`
 	// Failed is true when the phase died instead of finishing.
 	//
 	// A phase that raises used to publish NOTHING: the only durable record was
@@ -998,6 +1016,23 @@ type AgentPhaseCompleted struct {
 
 // EventType is the "agent_phase_completed" wire type.
 func (AgentPhaseCompleted) EventType() string { return "agent_phase_completed" }
+
+// PushedRefRecord is one ref an executor moved on the engine's own code host,
+// as [AgentPhaseCompleted.PushedRefs] and [ExecutorCollected.PushedRefs] list
+// it: the repository by the name the run was given it under, the ref, the old
+// value of the run's first push of it and the new value of its last — the
+// zero object id where the run created it or deleted it — how many of the
+// run's pushes moved it, and the live change it heads once the run is
+// collected (web!42), absent for none. The envelope evolves additive-only: a
+// reader that predates Change reads the ref without it.
+type PushedRefRecord struct {
+	Repo   string `json:"repo"`
+	Ref    string `json:"ref"`
+	Old    string `json:"old"`
+	New    string `json:"new"`
+	Pushes int    `json:"pushes"`
+	Change string `json:"change,omitempty"`
+}
 
 // Role is the seat the phase ran for — including for a judge or auxiliary
 // phase, which is nested work done on that seat's behalf.

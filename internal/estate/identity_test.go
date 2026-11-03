@@ -7,10 +7,12 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -21,10 +23,17 @@ import (
 var identityStream = floorStreams[identityDomain]
 
 // directory is a data node's identity directory: one person holding one seat,
-// one seat a removed person left, and a lag and a deferral to vouch with.
+// one seat a removed person left, one machine token, and a lag and a deferral
+// to vouch with.
 type directory struct {
 	err   error
 	vouch iamdomain.Vouch
+
+	// token is the row held under [machineID], or nil for [liveToken]'s.
+	token *credential.TokenRow
+
+	// tokenReads, where set, counts the machine-token rows read.
+	tokenReads *atomic.Int64
 }
 
 // verifier is the secret-shaped value the row holds, which no answer may carry.
@@ -56,6 +65,76 @@ func (d directory) SeatHolders(context.Context) ([]iamdomain.SeatHolder, error) 
 	}, nil
 }
 
+// SeatHolder is the one seat's entry of [directory.SeatHolders], and nobody for
+// a seat it does not list.
+func (d directory) SeatHolder(ctx context.Context, seat string) (iamdomain.SeatHolder, bool, error) {
+	holders, err := d.SeatHolders(ctx)
+	if err != nil {
+		return iamdomain.SeatHolder{}, false, err
+	}
+	for _, h := range holders {
+		if h.Seat == seat {
+			return h, true, nil
+		}
+	}
+	return iamdomain.SeatHolder{}, false, nil
+}
+
+// MachineToken is the row held under id: [machineID]'s token, or the absent
+// row — this node's applied position and vouch, and nothing found — for any
+// other id, as the directory answers one.
+func (d directory) MachineToken(_ context.Context, id string) (credential.TokenRow, error) {
+	if d.tokenReads != nil {
+		d.tokenReads.Add(1)
+	}
+	if d.err != nil {
+		return credential.TokenRow{}, d.err
+	}
+	if id != machineID {
+		return credential.TokenRow{Applied: tokenApplied, Lag: d.vouch.Lag,
+			Deferred: d.vouch.Deferred}, nil
+	}
+	if d.token != nil {
+		return *d.token, nil
+	}
+	return liveToken(), nil
+}
+
+// machineID is the one machine token the directory holds, minted at
+// [tokenMinted] with the secret [machineSecret]; tokenApplied is how far the
+// serving node has applied the identity log, past the mint.
+const (
+	machineID     = "018f3a9c-0000-7000-8000-0000000000f1"
+	tokenMinted   = 40
+	tokenApplied  = 50
+	machineSecret = "5d2c0f3a9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a392817061f2e"
+)
+
+// tokenNow is the instant a case checks a token at.
+var tokenNow = time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
+
+// presentedToken is the machine token as its holder presents it.
+func presentedToken() credential.Token {
+	return credential.Token{ID: machineID, Position: tokenMinted, Secret: machineSecret}
+}
+
+// liveToken is the row a good token is checked against: found, a token, the
+// verifier its secret implies, live for a day, and its owner active.
+func liveToken() credential.TokenRow {
+	return credential.TokenRow{
+		Applied: tokenApplied, Found: true, IsToken: true,
+		Verifier:  credential.TokenVerifier(machineID, machineSecret),
+		ExpiresAt: tokenNow.Add(24 * time.Hour),
+		Grants:    []iam.Grant{iam.GrantWorklet},
+		Epoch:     2,
+		Owner: credential.TokenOwner{
+			Found: true, ID: "018f3a9c-0000-7000-8000-00000000a11c", Kind: iam.KindPerson,
+			Stage: iam.StageActive, Login: "sarah.chen", Grants: []iam.Grant{iam.GrantWorklet},
+			Epoch: 2,
+		},
+	}
+}
+
 // A LOGIN'S BINDING CROSSES, AND ITS CREDENTIALS DO NOT: a node holding no data
 // resolves whose record a login names from the row a data node answers, with
 // how far that node could vouch for it — and nothing of the row's verifiers or
@@ -82,7 +161,7 @@ func TestABindingCrossesWithoutItsCredentials(t *testing.T) {
 		now: time.Now, seen: signedask.NewGuard()}
 	req, sealed := signed(t, fleetEnvelopes, request{Op: opIdentityBinding.spec.name,
 		Args: json.RawMessage(`{"Login":"jane.doe"}`)})
-	rep, why, err := fleetEnvelopes.openReply(srv.answer(t.Context(), sealed), req.ID)
+	rep, why, err := fleetEnvelopes.openReply(srv.answer(t.Context(), laneShared, sealed), req.ID)
 	if err != nil || why != "" || rep.Err != nil || rep.Unserved != "" {
 		t.Fatalf("the binding was answered (%+v, %q, %v)", rep, why, err)
 	}
@@ -115,6 +194,42 @@ func TestSeatHoldersCrossWhole(t *testing.T) {
 	want, _ := directory{}.SeatHolders(t.Context())
 	if !reflect.DeepEqual(holders, want) {
 		t.Fatalf("seat holders = %+v, want %+v", holders, want)
+	}
+}
+
+// ONE SEAT'S HOLDER CROSSES AS ITS OWN QUESTION — the seat named on the wire
+// and the three answers kept apart: a holder at their stage, a removal's
+// tombstone, and nobody. A turn composes the person it acts for from it on
+// every tool call, so it asks the serving node about that seat alone, and an
+// unreadable directory is UNKNOWN rather than a seat nobody holds, which the
+// turn would read as one the chart alone speaks for.
+func TestASeatHolderCrossesAsOneSeatsAnswer(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	f.nodes["data-a"].set(func(n *fakeNode) { n.directory = directory{} })
+	for _, tc := range []struct {
+		seat string
+		want iamdomain.SeatHolder
+		held bool
+	}{
+		{"jane", iamdomain.SeatHolder{Seat: "jane", Person: "p-1", Stage: iam.StageSuspended}, true},
+		{"sam", iamdomain.SeatHolder{Seat: "sam", Person: "p-2", Removed: true}, true},
+		{"nobody", iamdomain.SeatHolder{}, false},
+	} {
+		holder, held, err := f.client.Identity().SeatHolder(t.Context(), tc.seat)
+		if err != nil || held != tc.held || holder != tc.want {
+			t.Errorf("seat %s's holder = (%+v, %v, %v), want (%+v, %v)", tc.seat,
+				holder, held, err, tc.want, tc.held)
+		}
+	}
+
+	f.nodes["data-a"].set(func(n *fakeNode) {
+		n.directory = directory{err: store.ErrNoEstate}
+	})
+	if holder, held, err := f.client.Identity().SeatHolder(t.Context(), "jane"); !errors.Is(err,
+		store.ErrNoEstate) || held || holder != (iamdomain.SeatHolder{}) {
+		t.Fatalf("an unreadable directory's holder = (%+v, %v, %v), want its error",
+			holder, held, err)
 	}
 }
 
@@ -165,11 +280,11 @@ func TestADirectoryReadIsFlooredOnTheIdentityLog(t *testing.T) {
 			waited, identity)
 	}
 
-	// AND A NODE BEHIND IT SAYS SO rather than answer from before it —
-	// asked for longer than the node's floor wait, so it says so before the
-	// asker stops listening.
+	// AND A NODE BEHIND IT SAYS SO rather than answer from before it — its
+	// floor wait ends a reply's margin inside its asker's attempt
+	// (statelog.WithReplyMargin), so it says so while the asker is still
+	// listening.
 	node.set(func(n *fakeNode) { n.behindOn = identityStream })
-	f.client.readBudget = statelog.ReadBudget + time.Second
 	_, _, err := f.client.Identity().BindingByLogin(t.Context(), "jane.doe")
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "has not applied") {

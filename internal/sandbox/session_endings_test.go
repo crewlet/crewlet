@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -35,7 +35,7 @@ func TestARetiredSeatsRunIsFinishedWithItsTurnsEnd(t *testing.T) {
 		t.Fatalf("the retired seat's run is still recorded (found %v, %v)", found, err)
 	}
 	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].n.Ending.Outcome != executordomain.OutcomeLost {
+	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeLost {
 		t.Fatalf("recorded %+v, want the retired run's turn ended as lost", ends)
 	}
 }
@@ -66,8 +66,8 @@ func TestARelaunchAbandonedUnderItsFrameLeavesTheTurnsEndToIt(t *testing.T) {
 		}
 		current, found, err := rig.pending.Get(ctx, r.TurnID)
 		kept = err == nil && found && current.Ending != nil
-		owed, _ = rig.coordinator.OweEnd(ctx, r.TurnID, executordomain.Ending{
-			Outcome: executordomain.OutcomeFailed, Failure: "the resumed turn's relaunch failed"})
+		owed, _ = rig.coordinator.OweEnd(ctx, r.TurnID, executorkeep.Ending{
+			Outcome: executorkeep.OutcomeFailed, Failure: "the resumed turn's relaunch failed"})
 	}
 	rig.resumer.failWith(fmt.Errorf("%w (its relaunch failed): the harness would not start", ErrResumeAbandoned))
 	payload, ev := rig.completion("t1")
@@ -82,10 +82,10 @@ func TestARelaunchAbandonedUnderItsFrameLeavesTheTurnsEndToIt(t *testing.T) {
 		t.Fatalf("the frame found its run's record kept: %v, and owed its end on it: %v; want both", kept, owed)
 	}
 	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].n.Ending.Outcome != executordomain.OutcomeFailed {
+	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeFailed {
 		t.Fatalf("recorded %+v, want the frame's account of the turn", ends)
 	}
-	if u := ends[0].n.Ending.Unkept; u == nil || u.LaunchSeq != 1 || !strings.Contains(u.Reason, "reservation is spent") {
+	if u := ends[0].Ending.Unkept; u == nil || u.LaunchSeq != 1 || !strings.Contains(u.Reason, "reservation is spent") {
 		t.Fatalf("the end names %+v unkept, want the launch whose capture the store refused", u)
 	}
 	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
@@ -106,9 +106,9 @@ func TestATurnsEndIsDecidedOnceEvenAfterItIsRecorded(t *testing.T) {
 	rig, writes, _ := keepingRig(t)
 	var closes atomic.Int32
 	closeStopped := rig.coordinator.closeStopped
-	rig.coordinator.closeStopped = func(ctx context.Context, run PendingRun) (executordomain.Ending, error) {
+	rig.coordinator.closeStopped = func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error) {
 		closes.Add(1)
-		return closeStopped(ctx, run)
+		return closeStopped(ctx, run, calls)
 	}
 	rig.launchKept(t, "t1")
 	rig.runner.Finish(Result{Text: "halfway through"})
@@ -151,12 +151,12 @@ func TestTwoAttemptsAtOneEndingOnANodeFinishItOnce(t *testing.T) {
 	rig.runner.Finish(Result{Text: "halfway through"})
 	entered, release := make(chan struct{}), make(chan struct{})
 	var closes atomic.Int32
-	rig.coordinator.closeStopped = func(context.Context, PendingRun) (executordomain.Ending, error) {
+	rig.coordinator.closeStopped = func(context.Context, PendingRun, RunCalls) (executorkeep.Ending, error) {
 		if closes.Add(1) == 1 {
 			close(entered)
 			<-release
 		}
-		return executordomain.Ending{Outcome: executordomain.OutcomeStopped}, nil
+		return executorkeep.Ending{Outcome: executorkeep.OutcomeStopped}, nil
 	}
 	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
 		t.Fatalf("StopSeat: %v", err)
@@ -234,8 +234,8 @@ func loggingRig(t *testing.T) (*coordRig, *sessionWrites) {
 	rig.coordinator.captureTick = time.Millisecond
 	rig.coordinator.spoolDir = t.TempDir()
 	// THE ENGINE'S ACCOUNT OF A LOSS, as production wires TurnLost.
-	rig.coordinator.turnLost = func(context.Context, PendingRun) executordomain.Ending {
-		return executordomain.Ending{Outcome: executordomain.OutcomeLost}
+	rig.coordinator.turnLost = func(context.Context, PendingRun, RunCalls) executorkeep.Ending {
+		return executorkeep.Ending{Outcome: executorkeep.OutcomeLost}
 	}
 	return rig, writes
 }
@@ -245,8 +245,8 @@ func loggingRig(t *testing.T) (*coordRig, *sessionWrites) {
 func owesItsEnd(t *testing.T, rig *coordRig, then func()) {
 	t.Helper()
 	rig.resumer.during = func(ctx context.Context, run PendingRun) {
-		if owed, err := rig.coordinator.OweEnd(ctx, run.TurnID, executordomain.Ending{
-			Outcome: executordomain.OutcomeCompleted, Decision: "done"}); err != nil || !owed {
+		if owed, err := rig.coordinator.OweEnd(ctx, run.TurnID, executorkeep.Ending{
+			Outcome: executorkeep.OutcomeCompleted, Decision: "done"}); err != nil || !owed {
 			t.Errorf("the resumed turn's OweEnd = %v, %v", owed, err)
 		}
 		if then != nil {
@@ -325,7 +325,7 @@ func TestARecountReadBeforeAnEndingsDeleteNeverOutlivesIt(t *testing.T) {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	rig.finished("t1")
-	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].n.Ending.Decision != "done" {
+	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].Ending.Decision != "done" {
 		t.Fatalf("recorded %+v, want the resumed turn's one end", ends)
 	}
 	if held, _ := rig.coordinator.SeatRuns("swe"); held || holds.holding("swe") {
@@ -487,7 +487,7 @@ func TestASeatTakenBackBesideAnEndingStillBeingFinishedHoldsItsMail(t *testing.T
 		rig.fireRetries()
 	}
 	rig.finished("t1")
-	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].n.Ending.Decision != "done" {
+	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].Ending.Decision != "done" {
 		t.Fatalf("recorded %+v, want the resumed turn's one end", ends)
 	}
 	if holds.holding("swe") || rig.coordinator.owes("t1") {

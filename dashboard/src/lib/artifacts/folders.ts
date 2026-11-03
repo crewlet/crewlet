@@ -35,6 +35,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { ARTIFACT_FOLDER_NAME_MAX_BYTES } from "~/contract/artifacts.ts";
 import type { ArtifactFolderItem, ArtifactFolderVisibility } from "~/protocol/index.ts";
 import { utf8Bytes } from "../format.ts";
+import { collator } from "../formatters.ts";
 import { useQuery } from "../useQuery.ts";
 
 /**
@@ -112,6 +113,11 @@ export function indexFolders(folders: readonly ArtifactFolderItem[]): FolderInde
     if (list) list.push(folder);
     else kids.set(parent, [folder]);
   }
+  // ONE COLLATOR FOR EVERY SORT OF THE INDEX, taken before them: asked for in
+  // the comparator, the cache derived its key again on every comparison of
+  // every sort, which was most of what a sort cost.
+  const order = collator(undefined, NAME_ORDER);
+  const byName = (a: ArtifactFolderItem, b: ArtifactFolderItem) => order.compare(a.name, b.name);
   for (const list of kids.values()) list.sort(byName);
 
   const trail = (id: string): ArtifactFolderItem[] => {
@@ -168,10 +174,11 @@ export function indexFolders(folders: readonly ArtifactFolderItem[]): FolderInde
   };
 }
 
-/** Siblings A to Z, as the engine orders them, by the reader's own collation. */
-function byName(a: ArtifactFolderItem, b: ArtifactFolderItem): number {
-  return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
-}
+/**
+ * How siblings are ordered — A to Z, as the engine orders them, by the
+ * reader's own collation, case apart and numbers by value.
+ */
+const NAME_ORDER: Intl.CollatorOptions = Object.freeze({ sensitivity: "base", numeric: true });
 
 /**
  * A listing's `folder_path` (`Marketing/Q4/`) in words (`Marketing › Q4`), or

@@ -16,9 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // auditLog records every audit record a surface publishes, with the topic it
@@ -72,7 +72,7 @@ func nowhereChart() *org.Organization { return nil }
 // a key no node of any case holds.
 var nowhereWire = func() *signedask.Channel[steer.Request, steer.Reply] {
 	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
-		statelog.OneKey("k1", "the operator cases' empty fleet key material"))
+		recordseal.OneKey("k1", "the operator cases' empty fleet key material"))
 	if err != nil {
 		panic(err)
 	}
@@ -143,6 +143,12 @@ func (leadsNobody) LeadsContainer(context.Context, string, string) (bool, error)
 func (leadsNobody) LeadsAnyone(context.Context, string) (bool, error) { return false, nil }
 
 func (leadsNobody) MemberOf(context.Context, string, string) (bool, error) { return false, nil }
+
+// SeatGranted answers that no role carries a grant, as nobody leads anybody:
+// a row whose verb names a grant is decided as refused here, never unknown.
+func (leadsNobody) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
+}
 
 // newSurface builds a surface, filling an unset audit with a log nobody reads,
 // an unset decision with the authority table over no chart — what every

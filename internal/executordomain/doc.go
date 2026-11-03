@@ -21,11 +21,15 @@
 // domain's first migration says: an object a day old that the last row stops
 // naming is gone within the hour, which is why a session a live turn still
 // means to continue is held by a row rather than trusted to linger (see "A
-// turn's first read holds its base"). Not a volume per node (a box on another
-// node, or on e2b, could not reach it, and the collector, the audit and the
-// backup could not see it), not the memory changelog (a compacted subject per
-// seat cannot carry a conversation's ordering rules), and not the coordination
-// store (a value of mebibytes in a bucket every lease shares).
+// turn's first read holds its base"). The rows are a REQUIRED reference
+// ([SessionObjectReferences]): the collector's audit reports a session whose
+// object is gone, and every backup carries the sessions the rows name, reading
+// this log past its store copy through the applier's own decoder for the
+// captures a restore replays. Not a volume per node (a box on another node, or
+// on e2b, could not reach it, and the collector, the audit and the backup could
+// not see it), not the memory changelog (a compacted subject per seat cannot
+// carry a conversation's ordering rules), and not the coordination store (a
+// value of mebibytes in a bucket every lease shares).
 //
 // # One row per turn, never per conversation
 //
@@ -66,7 +70,7 @@
 //     then is refused. Because a release may reach any conversation of the
 //     seat, a capture's scope is the SEAT.
 //   - `end` stamps the turn ended with the engine's account of how it ended
-//     ([Ending]) and tombstones it. With no row (nothing was captured) it
+//     ([executorkeep.Ending]) and tombstones it. With no row (nothing was captured) it
 //     writes an ended row naming no object, so the next turn is still told how
 //     this one ended. With a row that LANDED A CAPTURE it ABSORBS exactly the
 //     ended turns its first launch's read handed out ([Head.Absorbs], which
@@ -76,7 +80,7 @@
 //     read, and absorbs and dedupes nothing, as a turn with no row does not.
 //     Neither takes a row a live turn holds. The end is authoritative for the
 //     turn's work key where its captures carried none. And where the turn's
-//     newest capture was NOT KEPT ([Ending.Unkept]: refused, or never
+//     newest capture was NOT KEPT ([executorkeep.Ending.Unkept]: refused, or never
 //     answered) and the row names an older one, the row's object goes: that
 //     session does not hold what the turn did after it, so the row names no
 //     session of the turn rather than one older than its last, and its end
@@ -203,9 +207,11 @@
 // is provisional until it reads to the end ([SessionStore.Open]). An object
 // that is missing, corrupt or sealed under a key the keyring no longer holds
 // is [ErrUnreadable], which a restorer reads as no session. Every bound is
-// this package's ([SessionMaxBytes], [CompletedWorkMaxBytes] and the rest),
-// and the largest record they admit is held under the domain's declaration
-// ([MaxRecordBytes]).
+// this package's, but for the ones the sandbox that takes a session stops at
+// too — a session's archive and its sealed object, and an ending's fields —
+// which are internal/executorkeep's, the leaf both read because the sandbox
+// links no state log; and the largest record they admit is held under the
+// domain's declaration ([MaxRecordBytes]).
 //
 // # How long a row lives
 //

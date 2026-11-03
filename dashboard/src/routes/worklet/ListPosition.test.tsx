@@ -7,7 +7,7 @@
  * the task in the whole answer.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { ListPosition } from "./ListPosition.tsx";
@@ -15,6 +15,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 afterEach(() => {
   cleanup();
@@ -42,9 +43,7 @@ function mount(hash: string, around: unknown) {
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 const LIST = encodeURIComponent("container=project:ENG&group_by=status&closed_since=sow");

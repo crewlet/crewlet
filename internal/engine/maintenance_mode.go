@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -60,8 +61,9 @@ import (
 // renewing it.
 //
 // It withholds the two things that write the company's records: SEATS, which
-// the seat host never claims here ([Engine.seatsAdmitted]), and this node's own
-// WRITERS, which no surface is handed ([Engine.writeSide]). And everything that
+// the seat host never claims here ([Engine.seatsAdmitted]), and WRITERS — this
+// node's own, and the router's to a data node on a node that holds no data —
+// which no surface is handed ([Engine.writers]). And everything that
 // would append to a log on its own: the duties and schedulers the constructor's
 // gate never starts, the object store's collector, which pins the estate
 // with a barrier ([Engine.startNativeCollector]), and every barrier a read
@@ -537,32 +539,49 @@ func (e *Engine) seatsAdmitted(ctx context.Context) bool {
 }
 
 // writeSides are this node's own write authorities over the estate, one per
-// domain a surface writes: Worklet's writer, Doclet's store and Chatlet's store.
-// A nil one is a domain this node does not write.
+// domain a surface writes: Worklet's writer, Doclet's store and Chatlet's
+// store, and the code host's — the committer deciding the pushes this node is
+// asked to commit, changes the writes of changes' conversations it is asked
+// beside them, checks the writes of repositories' checks, marks a person's
+// code notices' marks, and code the lifecycle store the repositories'
+// reconcile and retention write through. A nil one is a domain this node does
+// not write.
 type writeSides struct {
-	tracker *worklet.Writer
-	pages   *doclet.Store
-	chat    *chatlet.Store
+	tracker   *worklet.Writer
+	pages     *doclet.Store
+	chat      *chatlet.Store
+	committer *code.Committer
+	changes   *code.ChangeWriter
+	checks    *code.ChecksWriter
+	marks     *code.Marks
+	code      *code.Store
 }
 
 // writeSide is this node's own write authorities, each nil where the runtime
 // does not run that domain natively, and all of them nil in a mode that does
 // not publish.
 //
-// ONE GATE FOR EVERY SURFACE THAT WRITES THE COMPANY'S RECORDS through this
-// node: a seat's tools, the operator's MCP, the purge route, the chart's, the
-// containers' and the unit rooms' applies, the chat prune, and the estate
-// server writing for a stateless node. Each is handed its writer from here, so
-// a maintenance-mode node hands out none — for [New]'s reason for gating its
-// publishers in one place: a check per surface is a list somebody maintains,
-// and the surface it forgets is a publish during the window the mode exists to
-// rule out, into a log whose usage a resize is being decided against.
+// ONE GATE FOR EVERY WRITE THIS NODE'S OWN COPY MAKES — a seat's tools, the
+// operator's MCP, the purge route, the chart's, the containers' and the unit
+// rooms' applies, the chat prune, the code host's committer deciding a push
+// for whichever node received it, and the estate server writing for a peer —
+// and, through [Engine.writers], for whether a seat's tools, the operator's
+// MCP and the write routes are handed the router's writer at all. Each is
+// handed its writer from here, so a maintenance-mode node hands out none — for
+// [New]'s reason for gating its publishers in one place: a check per surface
+// is a list somebody maintains, and the surface it forgets is a publish during
+// the window the mode exists to rule out, into a log whose usage a resize is
+// being decided against. A committer handed to the estate server here and not
+// there would be exactly that surface: a peer's push decided and appended on a
+// node whose operator restarted it to append nothing.
 func (e *Engine) writeSide() writeSides {
 	n := e.native.Load()
 	if n == nil || !e.mode.Publishes() {
 		return writeSides{}
 	}
-	return writeSides{tracker: n.writer, pages: n.pages, chat: n.chat}
+	return writeSides{tracker: n.writer, pages: n.pages, chat: n.chat,
+		committer: n.committer, changes: n.changeWriter, checks: n.checksWriter,
+		marks: n.marks, code: n.codeStore}
 }
 
 // Mode is what this node started for.

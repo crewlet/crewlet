@@ -117,10 +117,12 @@ api:
 
 secrets:                  # REQUIRED. Every record on every state log — the
                           #   tracker's, the knowledge base's — is signed
-                          #   under this keyring, because the broker has no
-                          #   auth of its own and a record is whatever the
-                          #   next node applies. `crewlet secrets keygen`
-                          #   mints one and prints the export line
+                          #   under this keyring, because a record is
+                          #   whatever the next node applies and the broker
+                          #   vouches for a connection, never a record; a
+                          #   fleet's broker admits only keys derived from
+                          #   it. `crewlet secrets keygen` mints one and
+                          #   prints the export line
   active_key_id: "2026-01"
   keys:
     - id: "2026-01"
@@ -439,7 +441,7 @@ crewlet run crewlet.yaml -company company.yaml
 in the node's store or anywhere in its fleet, and once one exists it is
 ignored — with a warning that says so, naming the file and the two ways to
 apply it. So a restart never reverts a change you made live, however stale the
-file on disk is.
+file on disk is, and neither does adding a node with this same command.
 
 When you do want the file to win, that is a different flag:
 `crewlet run -import-company company.yaml` makes it the company over
@@ -447,7 +449,9 @@ whatever the fleet is running. And to change a **running** fleet with no
 restart at all, use `crewlet config import company.yaml` — it goes through the
 node's API and every node converges on it.
 
-A running node never goes back to the file: it runs what its fleet activated.
+A running node never goes back to the file: it runs what its fleet activated,
+and once a company exists it also *starts* on that one, so nothing it builds at
+boot comes from a file it is about to ignore.
 
 **Or two steps** — import once, then run:
 
@@ -701,14 +705,15 @@ client at `/operator/mcp` with your API token:
 ```
 
 It gets the same tracker, knowledge-base and chat tools a seat holds (eighteen
-over the tracker, five over the pages and nine in the chat) and twenty-four
+over the tracker, five over the pages and nine in the chat) and twenty-six
 more that no seat is given: the saved views, the catalogue write, a person's own
 queue, inbox and pins, the trash, the board drag, the chat's furniture — making
 a room, opening a conversation, a room's settings and membership, editing and
 taking back a message, and how far you have read — and the gestures a person
 makes about the company rather than its work — pausing and resuming a seat,
-steering a running turn, answering an executor's question and answering a
-question from the company's knowledge.
+steering a running turn, answering an executor's question, answering a
+question from the company's knowledge and, where the company hosts its code,
+reading who read a unit's repository and marking your own code notices.
 Each is decided by the same authority table a seat's calls are, and knowledge
 search sits beside them. On the deployment's token its writes carry the token's
 own login, `token:founder`, with author kind `operator` — never an agent's — so
@@ -760,7 +765,14 @@ answer `503 no_active_revision` until the first revision arrives. That
 revision brings up everything the company needs, Worklet, Doclet and Chatlet
 included, with their projects, spaces and rooms, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
-`providers.sandbox` — under the same API, with nothing restarted:
+`providers.sandbox` — and the API that was already serving answers the board's
+and the pages' questions, takes and serves a project's files, and offers the
+tracker's and the knowledge base's tools to the dashboard's buttons and to
+your own assistant over [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
+from that revision on, with nothing restarted — an assistant already
+connected that listens for tool changes (the 2026-07-28 MCP protocol's
+`subscriptions/listen` stream) is told at once and lists again, and one on an
+earlier protocol sees them at its next listing:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
@@ -819,7 +831,8 @@ stream:
   store_dir: "./acme-data/stream"
   leaf:
     host: 127.0.0.1
-    port: 7422                      # where the agents node joins
+    port: 7422                      # where the agents node joins, admitted
+                                    #   on a key derived from secrets.keys
 coordination:
   type: embedded-kv                 # leases the agents node can see
 ```
@@ -843,7 +856,9 @@ coordination:
   type: embedded-kv
 secrets:                  # the same keyring as crewlet.yaml — REQUIRED on
                           #   every node: this one decrypts the company
-                          #   document and the secret store itself
+                          #   document and the secret store itself, and
+                          #   its leaf link is admitted by a key derived
+                          #   from it
   active_key_id: "2026-01"
   keys:
     - id: "2026-01"
@@ -918,7 +933,8 @@ schedules: the engine runs its own tracker, wiki and chat, so a task you file
 or assign in Worklet, a page in Doclet and a post in a Chatlet room each wake
 the seats they reach. External surfaces put the company to work where your
 people already are, and add what those three do not: a code host for its
-code, and a chat that reaches you when you are not looking. Pick yours in
+code — which the engine can also be ([Hosting Code](../guides/code.md)) — and
+a chat that reaches you when you are not looking. Pick yours in
 **[Choosing your stack](choosing-your-stack.md)** (LLM, tracker + knowledge
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
@@ -1016,6 +1032,12 @@ each), then wire them in:
   them on it from its card in **Company › Org chart**, every person holds a
   seat of their own. See [Putting a person in the
   seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat)
+- Or host the repositories in the engine itself — add
+  `code: {native: true, repos: [...]}` to the company file and push to
+  `<the API's address>/git/<name>.git` with a token of your own (`crewlet iam
+  token -login` mints one) as git's password. [Hosting Code](../guides/code.md)
+  walks through it, and it runs beside a GitLab or GitHub connection rather
+  than in place of one
 - Fill in the [founder seat](../concepts/humans-in-the-org.md#the-founder-seat)
   you already have at the root — add the `contact` identities for each
   surface you connect (`mattermost_user_id`, `atlassian_account_id`,

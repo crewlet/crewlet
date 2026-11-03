@@ -165,9 +165,16 @@ func TestThePagesStateTheVolumeArithmeticTheEngineSizesBy(t *testing.T) {
 
 	for page, want := range map[string][]string{
 		"docs/guides/deployment.md": {
+			// THE COUNT WHERE THE PAGE FIRST SAYS IT: both sides of a merge
+			// said "ten" here, each meaning a different tenth log, so the
+			// sentence auto-merged naming eleven under the word ten.
+			fmt.Sprintf("The engine keeps %s ordered logs on the stream", count),
 			shareWords + " of the free space",
 			fmt.Sprintf("less than about %d GiB free", withBucket),
-			fmt.Sprintf("the %s ask for %s, %s of %d", count, fullAsk, shareWords, withBucket),
+			// THE SUM AND ITS ADDENDS, which the page gives in place of the
+			// share of the threshold: the threshold and the share are each
+			// held on their own above and below.
+			fmt.Sprintf("the %s ask for %s:", count, fullAsk),
 			fmt.Sprintf("%s of the free space, so from about %d GiB", s3Words, inS3),
 		},
 		"docs/guides/retention.md": {
@@ -221,6 +228,13 @@ func gibWords(t *testing.T, bytes int64) string {
 		return fmt.Sprintf("%d GiB", bytes/gib)
 	case bytes%(gib/2) == 0:
 		return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(gib))
+	case (6*bytes+6)%gib < 12:
+		// A WHOLE NUMBER OF SIXTHS, to the byte an ask of two thirds of a
+		// clamp is floored to: the code log asks for two thirds of the
+		// mutation log's, and the half-gibibyte logs beside it add halves to
+		// that third, so a sum ends in a sixth, which the pages write as the
+		// vulgar fraction [gibText] spells (229⅙).
+		return gibText(bytes) + " GiB"
 	}
 	t.Fatalf("%d bytes is no whole or half GiB; teach gibWords and the pages "+
 		"the figure the arithmetic now leaves", bytes)
@@ -251,11 +265,16 @@ func createdWords(t *testing.T, bytes int64) string {
 // pages say it.
 func fractionWords(t *testing.T, share float64) string {
 	t.Helper()
+	// FIVE EIGHTHS OF WHAT THE BROKER LEAVES, the logs' share since the code
+	// log joined them ([StreamBudgetShare]): of three quarters less the
+	// bucket's quarter that is 45/128 of the free space, and of three
+	// quarters 15/32, which the pages give as a percentage, since nobody
+	// reads a hundred-and-twenty-eighth.
 	switch share {
-	case 0.375:
-		return "three eighths"
-	case 0.28125:
-		return "nine thirty-seconds"
+	case 0.3515625:
+		return "about 35 %"
+	case 0.46875:
+		return "about 47 %"
 	}
 	t.Fatalf("the logs are sized into %v of the free space, which the pages "+
 		"have no words for; say it there and here", share)
@@ -266,7 +285,7 @@ func fractionWords(t *testing.T, share float64) string {
 func numberWord(t *testing.T, n int) string {
 	t.Helper()
 	words := []string{"zero", "one", "two", "three", "four", "five", "six",
-		"seven", "eight", "nine", "ten"}
+		"seven", "eight", "nine", "ten", "eleven", "twelve"}
 	if n < 0 || n >= len(words) {
 		t.Fatalf("%d state logs: numberWord cannot say it", n)
 	}

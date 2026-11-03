@@ -32,6 +32,7 @@ import {
   plural,
   readerDay,
 } from "./format.ts";
+import { dateTimeFormat, type DateShape } from "./formatters.ts";
 // MARKDOWN AS TEXT, from the pure half of the markdown files, never the
 // renderer: `plainText` walks the grammar the renderer walks, and a private
 // stripper here instead would be a second copy of its rules, which is the drift
@@ -3026,14 +3027,16 @@ export function shiftMonth(month: string, by: number): string {
  * the value is a UTC midnight standing for a date, not an instant: spelled in
  * any zone west of Greenwich it would name the day before.
  */
-function civilLabel(at: number, opts: Intl.DateTimeFormatOptions): string {
-  return new Date(at).toLocaleDateString(undefined, { ...opts, timeZone: "UTC" });
+function civilLabel(at: number, opts: DateShape): string {
+  return dateTimeFormat(undefined, "UTC", opts).format(at);
 }
 
 export function monthLabel(month: string): string {
   const [y, m] = month.split("-").map(Number);
-  return civilLabel(Date.UTC(y ?? 1970, (m ?? 1) - 1, 1), { month: "long", year: "numeric" });
+  return civilLabel(Date.UTC(y ?? 1970, (m ?? 1) - 1, 1), MONTH_YEAR);
 }
+
+const MONTH_YEAR: DateShape = Object.freeze({ month: "long", year: "numeric" });
 
 /**
  * One cell's full date, for a reader the colour never reaches.
@@ -3051,13 +3054,15 @@ export function monthLabel(month: string): string {
  * would name a different day from the numeral beside it.
  */
 export function dayLabel(key: string): string {
-  return civilLabel(civilAt(key) ?? 0, {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  return civilLabel(civilAt(key) ?? 0, FULL_DAY);
 }
+
+const FULL_DAY: DateShape = Object.freeze({
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
 
 /** Monday first, because the engine's own relative week tokens start there. */
 export const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -3168,19 +3173,20 @@ export function unfinished(counts: WorkTaskCounts): number {
  * locale.
  *
  * A DAY, NOT AN INSTANT — the engine stores the target as the calendar date on
- * the company's clock — so it is built with `new Date(y, m - 1, d)` for
- * [dayLabel]'s reason: read through [fmtDate] as UTC midnight, it renders as the
- * 17th anywhere west of Greenwich.
+ * the company's clock — so it is a civil date ([civilLabel]): the UTC midnight
+ * that starts it, spelled in UTC, which no reader's zone moves. Read through
+ * [fmtDate] as an instant it renders as the 17th anywhere west of Greenwich;
+ * built as the runtime's local midnight and spelled with no zone, it was the
+ * 18th only while the zone the date was built in was still the one it was
+ * spelled in.
  */
 export function targetLabel(day: string): string {
   const [y, m, d] = day.split("-").map(Number);
   if (!y || !m || !d) return day;
-  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+  return civilLabel(Date.UTC(y, m - 1, d), TARGET_DAY);
 }
+
+const TARGET_DAY: DateShape = Object.freeze({ day: "numeric", month: "short", year: "numeric" });
 
 /**
  * What a decision says beside its question, as the texts a reader reads with

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -16,7 +17,7 @@ import (
 // # Why it exists
 //
 // Every record on a state log is a signed FRAME (ADR-0031), and the applier
-// opens it with [Verifier.Open] before any domain decodes a byte. A reader
+// opens it with [recordseal.Verifier.Open] before any domain decodes a byte. A reader
 // that reads the log by position — whether a node was evicted, which node
 // opened a generation, which records past a restore these rows do not hold —
 // hands what it read to [Domain.Envelope] too, and handed the frame the
@@ -37,7 +38,7 @@ import (
 // reader without the key has.
 type VerifiedLog struct {
 	Log      LogReader
-	Verifier *Verifier
+	Verifier *recordseal.Verifier
 }
 
 // VerifiedReader is a [LogReader] whose At answers each record's BODY — what
@@ -73,7 +74,7 @@ var ErrRecordTampered = errors.New("statelog: the record is not signed by this f
 func (v VerifiedLog) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
 	if v.Log == nil || v.Verifier == nil {
 		return "", nil, time.Time{}, false, fmt.Errorf("statelog: a verified log "+
-			"needs both a log and a verifier: %w", ErrUnsigned)
+			"needs both a log and a verifier: %w", recordseal.ErrUnsigned)
 	}
 	subject, framed, storedAt, ok, err := v.Log.At(ctx, seq)
 	if err != nil || !ok {
@@ -81,9 +82,9 @@ func (v VerifiedLog) At(ctx context.Context, seq uint64) (string, []byte, time.T
 	}
 	body, verdict := v.Verifier.Open(framed)
 	switch verdict {
-	case Verified:
+	case recordseal.Verified:
 		return subject, body, storedAt, true, nil
-	case KeyUnknown:
+	case recordseal.KeyUnknown:
 		return subject, nil, storedAt, true, fmt.Errorf("%w (sequence %d; this node "+
 			"holds %s)", ErrRecordUnverified, seq, words.And(v.Verifier.KeyIDs()))
 	}

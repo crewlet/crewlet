@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -76,9 +77,17 @@ var StatusCategories = []string{"todo", "in_progress", "done", "blocked"}
 // optionIDPattern is an option's stable id; colorPattern a design-token hue
 // name, never a literal colour.
 var (
-	optionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	colorPattern    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
-	datePattern     = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	// Compiled at first use, not at init: the code host's push hook is this
+	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	optionIDPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	})
+	// Compiled at first use, not at init: the code host's push hook is this
+	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	colorPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	})
+	datePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 )
 
 // valueError is a value its column refuses, naming the column and what it

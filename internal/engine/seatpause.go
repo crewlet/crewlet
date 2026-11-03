@@ -51,7 +51,11 @@ import (
 //     closed, its spend charged, and the turn parked on it closed as stopped.
 //     That is not the fence, which leaves a run alone when its seat merely
 //     moves (see runstop.go). Runs parked on a person's question stay parked
-//     behind the pause.
+//     behind the pause. And whatever of a run's is still in flight, its
+//     calls are refused while the stop stands: its box's pushes by the code
+//     host (host.Runs.Stopped, through stoppedBy), and every bridged call by
+//     its bridge session's fence (mcpbridge.Session.Fence, the seat's fence,
+//     which the stop closes through stopFor).
 //
 // # Keyed on the seat's ID
 //
@@ -523,7 +527,7 @@ func (e *Engine) clearRemovedSeatPauses(ctx context.Context, next *Company) {
 	if next == nil || next.Org == nil || e.backends == nil || e.backends.Fleet == nil {
 		return
 	}
-	if _, err := e.fleetCompany(ctx, next); err != nil {
+	if err := e.fleetCompany(ctx, next); err != nil {
 		log.DebugContext(ctx, "seat_pauses_not_swept", "reason", err.Error(),
 			"detail", "a removed seat's pause is cleared by the company the fleet "+
 				"is pointed at; this one is not it yet")

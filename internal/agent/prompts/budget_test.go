@@ -41,8 +41,8 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 //
 // The budget covers the identity scaffold, the turn contract (act with tool
 // calls, finish the arc and discover what is missing, stay reachable) and
-// EVERY section a tool on the surface turns on: the escalation guidance and
-// the workers list. Measured with
+// EVERY section a tool on the surface turns on: the escalation guidance, the
+// workers list and the code guidance. Measured with
 // all of them rendered, because that is the seat the budget is for: a lead on
 // the default work tracker holds `comment_on_work_item` and so carries the
 // escalation section on every turn, and a budget measured on a seat without
@@ -63,9 +63,34 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // own run now, and a section about handing code work to a box is a section
 // about a box the run is already in.
 //
-// Measured at ~733, so this leaves ~8%: enough that a sentence can be added,
-// tight enough that a section cannot. The plain contract alone — no tracker,
-// no workers — measures ~486 of it.
+// Measured at ~733 before the code guidance, which left ~8%: enough that a
+// sentence can be added, tight enough that a section cannot. The plain
+// contract alone — no tracker, no workers, no code — measures ~486 of it.
+//
+// 795 -> 930 for two sections, deliberately: the guidance on reading the
+// company's code (`code_history`, ~83 — what a file says, what changed, who
+// last changed a line, how its history went, whether a commit reached a
+// branch, and a change read with `code_get_change`) and on changing it
+// (`code_writes`, ~72, cut to the one choice no tool's description can
+// carry). Each renders only for a seat of a company that hosts code (and
+// serves its writes), so the room is charged to those seats' prompts alone;
+// together they take the prompt to ~888, ~4% under the budget — the next
+// sentence needs a decision here, as a section did.
+//
+// 930 -> 985 for a section, deliberately: `code_merging` says a merge that
+// is not ready, or is queued for its checks, is not waited on — the turn ends
+// and a `ready_to_merge` or `merged` wake brings the seat back — which took the
+// prompt from ~888 to ~944 (~56, its heading with it): a seat that polls a
+// merge spends a round on every poll, which no tool's answer reaches a seat
+// early enough to stop. ~944 with it, so ~4% is left, as before it.
+//
+// 985 -> 1030 for a section, deliberately: `code_search` says where something
+// is defined, used or mentioned is found with one search across every
+// repository the seat reads — search before reading whole trees — which took
+// the prompt from ~944 to ~989 (~45, its heading with it): a seat that walks
+// trees file by file with code_read to find where something lives spends a
+// round and its context on every file that does not hold it, which no tool's
+// description reaches a seat early enough to stop. ~4% is left, as before it.
 //
 // IT BOUNDS THE PROSE, NOT THE ROSTER. The reference lead has one direct
 // report, so what this number holds down is the contract text — the part that
@@ -76,7 +101,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t)).Text
-	withinBudget(t, "executor", p, 795)
+	withinBudget(t, "executor", p, 1030)
 }
 
 // THE REFERENCE RENDERS EVERY GATED SECTION. A budget measured on an input
@@ -87,7 +112,8 @@ func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t))
-	for _, key := range []string{"escalation", "workers"} {
+	for _, key := range []string{"escalation", "workers", KeyCodeHistory, KeyCodeSearch, KeyCodeWrites,
+		KeyCodeMerging} {
 		if _, ok := slice(p, key); !ok {
 			t.Errorf("the reference executor renders no %q section, so the budgets "+
 				"below are measured on a smaller prompt than production's", key)
@@ -148,13 +174,14 @@ func sectionText(sections ...[]string) string {
 // executor lists none, and its harness defers a server's tools itself. The
 // names are the ones production's surface carries: `comment_on_work_item`
 // and `create_work_item` from the default work tracker, `delegate` for a
-// seat with workers, and `submit_work`, which every executor adds.
+// seat with workers, the code tools for a seat of a company that hosts code
+// (`code.native`), and `submit_work`, which every executor adds.
 func referenceExecutor(t *testing.T) ExecutorInput {
 	t.Helper()
 	return ExecutorInput{
-		AvailableTools: []string{
+		AvailableTools: append([]string{
 			escalationTool, "create_work_item", "delegate", "submit_work",
-		},
+		}, slices.Concat(CodeHistoryTools(), CodeSearchTools(), CodeWriteTools(), CodeMergeTools())...),
 		Workers: referenceWorkers(),
 	}
 }
@@ -212,6 +239,24 @@ func referenceWorkers() string {
 // deliberately tighter than the ~8% the prose budgets carry, because the next
 // thing that wants room here should take it out of the allowance rather than
 // out of the budget.
+//
+// 2385 -> 2525 for the code guidance (~91 tokens) and the code writes
+// guidance (~71), the one exception that rule has met, and why: each section
+// is rendered only for a seat of a company hosting code (and serving its
+// writes), while the allowance is every lead's in every company — taken out
+// of it, the room would be charged to leads whose prompt never carries the
+// sections. Measured merged with main's prompts at ~2,476 with both — the
+// turn's own prose ~1,396, the allowance spending ~987 and the human
+// colleagues note ~93 — so ~2% headroom, with nothing taken from the
+// allowance.
+//
+// 2525 -> 2585 for the code merging guidance (~56 tokens), the same exception
+// once more: rendered only for a seat holding `code_merge_change`. ~2,532 with
+// it, ~2% headroom, as before it.
+//
+// 2585 -> 2625 for the code search guidance (~45 tokens), the same exception
+// once more: rendered only for a seat holding `code_search`. ~2,577 with it,
+// ~2% headroom again.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
@@ -236,7 +281,7 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 // wholeTurnBudget is the budget TestTheWholeTurnStaysUnderBudget holds the
 // turn to, and the size its control has to exceed: one number, so the control
 // cannot go on proving the allowance against a budget the assertion left.
-const wholeTurnBudget = 2385
+const wholeTurnBudget = 2625
 
 // THE LADDER, and it is an order rather than a set: a lead reads profiles,
 // then names, then one line telling it where the rest of its team went.

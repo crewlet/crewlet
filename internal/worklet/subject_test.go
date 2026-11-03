@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -17,8 +18,8 @@ import (
 // is delivered fine, wakes nobody and writes nothing.
 func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 	t.Parallel()
-	if len(worklet.ObjectKinds) != 14 {
-		t.Fatalf("%d kinds are enumerated; the log carries fourteen",
+	if len(worklet.ObjectKinds) != 15 {
+		t.Fatalf("%d kinds are enumerated; the log carries fifteen",
 			len(worklet.ObjectKinds))
 	}
 	seen := map[worklet.ObjectKind]bool{}
@@ -36,13 +37,16 @@ func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 	}
 }
 
-// TWO KINDS ARE NOT ARBITRATED, AND THEY ARE THE TWO THAT MUST NOT BE.
+// THREE KINDS ARE NOT ARBITRATED, AND THEY ARE THE THREE THAT MUST NOT BE.
 //
 // A turn is additive — it records spend that happened and races nobody. A
 // barrier shares ONE subject across the whole company, so an expectation there
 // would serialise every linearizable read behind every other and write an
 // anchor row per read into the transaction holding this store's only writer.
-func TestOnlyTheTurnAndTheBarrierAreUnarbitrated(t *testing.T) {
+// And the trim's trimmed record removes anchors: identical ones are each meant
+// to land, and an anchor of its own is the row it exists not to leave
+// (ADR-0080).
+func TestOnlyTheTurnTheBarrierAndTheTrimmedRecordAreUnarbitrated(t *testing.T) {
 	t.Parallel()
 	var unarbitrated []worklet.ObjectKind
 	for _, k := range worklet.ObjectKinds {
@@ -50,11 +54,12 @@ func TestOnlyTheTurnAndTheBarrierAreUnarbitrated(t *testing.T) {
 			unarbitrated = append(unarbitrated, k)
 		}
 	}
-	if len(unarbitrated) != 2 ||
+	if len(unarbitrated) != 3 ||
 		!contains(unarbitrated, worklet.KindTurn) ||
-		!contains(unarbitrated, worklet.KindBarrier) {
-		t.Fatalf("the unarbitrated kinds are %v, want exactly the turn and the "+
-			"barrier", unarbitrated)
+		!contains(unarbitrated, worklet.KindBarrier) ||
+		!contains(unarbitrated, worklet.KindTrimmed) {
+		t.Fatalf("the unarbitrated kinds are %v, want exactly the turn, the "+
+			"barrier and the trimmed record", unarbitrated)
 	}
 }
 
@@ -114,6 +119,8 @@ func TestEverySubjectRoundTripsThroughTheWire(t *testing.T) {
 		"a turn":       worklet.TurnSubject("t-1"),
 		"the barrier":  worklet.BarrierSubject(),
 		"a file":       worklet.FileSubject("ENG", "reports/q3 plan*v2.md"),
+		"a trimmed record": worklet.TrimmedSubject(statelog.Position{
+			Stream: topics.TrackerLogStream, Generation: 3, Seq: 9_000}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -204,4 +211,37 @@ func contains(kinds []worklet.ObjectKind, want worklet.ObjectKind) bool {
 		}
 	}
 	return false
+}
+
+// A TASK ID IS THE CANONICAL UUID, WHICH NO KEY SPELLS: the code tools list a
+// work item's changes by a name IsTaskID takes as the item's identity with no
+// read of the tracker, so a key it took, in either case, would be listed as an
+// id no change carries and answer nothing, and so would a spelling no task's
+// row holds (the comparison is byte for byte), where a resolution refuses it
+// and says why.
+//
+// Mutation: IsTaskID accepting whatever uuid.Parse accepts → the uppercase,
+// braced, urn and undashed spellings, red.
+func TestATaskIDIsTheCanonicalUUIDNoKeySpells(t *testing.T) {
+	t.Parallel()
+	const id = "3f1c2a9e-7b4d-5e60-8a1f-0c9d2e7b4a51"
+	for name, c := range map[string]struct {
+		s    string
+		want bool
+	}{
+		"a minted id":              {id, true},
+		"a key":                    {"ENG-42", false},
+		"a key in lower case":      {"eng-42", false},
+		"the longest key":          {"ABCDEFGHIJ-9223372036854775807", false},
+		"an id in upper case":      {strings.ToUpper(id), false},
+		"an id in braces":          {"{" + id + "}", false},
+		"an id as a urn":           {"urn:uuid:" + id, false},
+		"an id without its dashes": {strings.ReplaceAll(id, "-", ""), false},
+		"an id with a space":       {" " + id, false},
+		"nothing":                  {"", false},
+	} {
+		if got := worklet.IsTaskID(c.s); got != c.want {
+			t.Errorf("%s: IsTaskID(%q) = %v, want %v", name, c.s, got, c.want)
+		}
+	}
 }

@@ -19,10 +19,11 @@ import (
 // An engine phase's calls sit on a surface in memory, and the turn writes them
 // when it ends. An executor's run cannot: its calls are made by its harness,
 // a process outside the engine, over the bridge, minutes or hours apart, and
-// the run can outlive the node that started it. So each one is appended to the run's own row in
-// the coordination store, which is the same row the resume reads — and without
-// it a restart mid-run leaves the reviewer judging a turn whose entire tool log
-// is gone, which the delivery check reads as a turn that acted on nothing.
+// the run can outlive the node that started it. So each one is appended to the
+// run's own log in the coordination store, kept beside its row
+// ([sandbox.BridgeLog]), which is what the resume reads — and without it a
+// restart mid-run leaves the reviewer judging a turn whose entire tool log is
+// gone, which the delivery check reads as a turn that acted on nothing.
 
 // bridgedCalls turns a run's durable bridged-call log into the shape the
 // resumed phase reads.
@@ -73,8 +74,9 @@ func decodeBridgeArgs(raw string) map[string]any {
 	return tools.ReadArgs(raw)
 }
 
-// bridgeLedger appends a bridged run's calls to its pending-run row, and with
-// each one what the run's bridged calls have cost the engine so far.
+// bridgeLedger appends a bridged run's calls to the log beside its pending-run
+// row, and with each one what the run's bridged calls have cost the engine so
+// far, which the row keeps.
 //
 // ONE PER SESSION, so one per job, and BOUND TO THAT JOB BEFORE ITS BOX EXISTS
 // ([bridgeLedger.bind], handed to [sandbox.LaunchRequest.Opened]): every append
@@ -91,8 +93,8 @@ type bridgeLedger struct {
 	spend bridgedMeter
 
 	// nudge tells whichever waiter drives the run that its work is in
-	// ([sandbox.NudgeSubmitted]), once a `submit_work` the run made is on
-	// its row. Nil tells nobody, and the run's next poll finds it.
+	// ([sandbox.NudgeSubmitted]), once a `submit_work` the run made is in
+	// its log. Nil tells nobody, and the run's next poll finds it.
 	nudge func(ctx context.Context, n sandbox.Nudge)
 
 	mu sync.Mutex
@@ -178,11 +180,12 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 		},
 		Spent: l.spent(),
 	})
-	if err != nil {
-		return err
-	}
 	if !recorded {
-		// The ordinary end of a job: its row is gone, or holds the next one.
+		if err != nil {
+			return err
+		}
+		// The ordinary end of a job: its log is gone, or takes the next
+		// one's calls.
 		log.DebugContext(ctx, "bridge_call_after_its_job", "run_id", runID,
 			"launch_id", launch, "tool", call.Name)
 		return nil
@@ -190,16 +193,18 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 	// THE RUN'S WORK IS IN, or its question is asked, and its harness is about
 	// to end its turn and exit: the waiter that drives it polls it now
 	// rather than at its next pass ([sandbox.Waiter.Nudge]). After the call
-	// is on the row, so the poll that finds the run done collects a log
+	// is in the log, so the poll that finds the run done collects a log
 	// that holds its submission, and a row that holds its question (the
 	// ask was recorded before its call returned), as does a call held for a
 	// person's approval, recorded as the job's question before its call
 	// returned. A call the gate refused is no end (the run goes on) and
-	// tells nobody.
+	// tells nobody. Told even where the call's spend could not be written to
+	// the row after it: the call is in, and the next call that lands carries
+	// the spend.
 	if l.nudge != nil && ((sandbox.EndsRun(call.Name) && !call.Failed) || call.Held) {
 		l.nudge(ctx, sandbox.Nudge{TurnID: runID, LaunchID: launch, Why: sandbox.NudgeSubmitted})
 	}
-	return nil
+	return err
 }
 
 // sessionStartRecordBudget bounds the write that records which session a job's

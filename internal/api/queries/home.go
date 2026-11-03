@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -44,7 +45,7 @@ func (s Sources) workFlow(ctx context.Context, p Params) (any, error) {
 		return nil, badParams("points", p.String("points"),
 			[]string{fmt.Sprintf("1 to %d", worklet.MaxFlowPoints)})
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +53,7 @@ func (s Sources) workFlow(ctx context.Context, p Params) (any, error) {
 		Project: strings.TrimSpace(p.String("project")),
 		Bucket:  bucket, Points: points,
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Floors: fresh.Floors,
 	}, s.clock(), s.zone())
 }
 
@@ -264,6 +265,18 @@ const feedSourceReads = 4
 // `kinds=page` would confirm to somebody without Doclet that the
 // company keeps pages, and an answer of the rows they may see is the one they
 // asked for.
+//
+// TWO LOGS, A FLOOR IN EACH. The work is the tracker's log and the pages the
+// knowledge base's, so a caller reading back a write names the floor of each
+// log it wrote (`min_position`, once per log) and each half waits on its own
+// ([statelog.Freshness.On]) — a page saved a moment ago is in the feed drawn
+// after the save, as a task completed is. The schedules' runs are the usage
+// domain's rows, which nobody writes from a screen and no floor names. A floor
+// on any other log is the request's mistake, refused naming it. And the answer
+// reports the WEAKEST level a half was read at ([statelog.Weakest]): a half
+// whose log the caller named no floor on is read `stale` under a `session`
+// ask, and an answer labelled by its other half would claim a freshness its
+// pages never had.
 func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	kept, err := s.feedKept()
 	if err != nil {
@@ -285,9 +298,12 @@ func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
+	}
+	if err = fresh.OnlyOn(topics.TrackerLogStream, topics.PagesLogStream); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	actor := strings.TrimSpace(p.String("actor"))
 
@@ -303,29 +319,22 @@ func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 		return nil
 	}
 	if work := trackerKinds(kinds); len(work) > 0 && cursor[feedSourceWork] != feedEnd {
+		workFresh := fresh.On(topics.TrackerLogStream)
 		if openErr := open(feedSourceWork, func(position string) (feedPageOf, error) {
-			page, done, lvl, readErr := s.feedWork(ctx, work, actor, position, limit, fresh)
+			page, done, lvl, readErr := s.feedWork(ctx, work, actor, position, limit, workFresh)
 			complete = complete && done
-			if level == "" {
-				level = lvl
-			}
+			level = statelog.Weakest(level, lvl)
 			return page, readErr
 		}); openErr != nil {
 			return nil, openErr
 		}
 	}
 	if slices.Contains(kinds, FeedPage) && cursor[feedSourcePages] != feedEnd {
-		// THE CALLER'S FLOOR NAMES THE TRACKER'S LOG — `company_feed` is a
-		// tracker session question (`SESSION_QUERIES.tracker`), and a
-		// position in one domain's log is no bound at all on another's —
-		// so the pages half is read at the surface's own default level.
-		pagesFresh := statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceDashboard)}
+		pagesFresh := fresh.On(topics.PagesLogStream)
 		if openErr := open(feedSourcePages, func(position string) (feedPageOf, error) {
 			page, done, lvl, readErr := s.feedPages(ctx, actor, position, limit, pagesFresh)
 			complete = complete && done
-			if level == "" {
-				level = lvl
-			}
+			level = statelog.Weakest(level, lvl)
 			return page, readErr
 		}); openErr != nil {
 			return nil, openErr
@@ -511,7 +520,7 @@ func (s Sources) feedWork(ctx context.Context, kinds []worklet.FeedKind, actor,
 	q := worklet.FeedQuery{
 		Kinds: kinds, Actor: actor, Limit: limit,
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Floors: fresh.Floors,
 	}
 	if position != "" {
 		before, err := worklet.ParseFeedCursor(position)
@@ -580,7 +589,7 @@ func (s Sources) feedSchedules(ctx context.Context, names scopeNames, actor,
 		}
 		q.BeforeAt, q.BeforeKey = when, key
 	}
-	runs, more, err := usage.ScheduleRuns(ctx, s.Usage, q)
+	runs, more, err := s.Usage.ScheduleRuns(ctx, q)
 	if err != nil {
 		return src, err
 	}
@@ -647,8 +656,8 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	}
 	answer := map[string]any{"handle": handle}
 	// THE TRACKER'S HALF ONLY WHERE IT IS KEPT HERE ([keptHere]): a company
-	// on Jira, or on no tracker, has no asks in the engine, and its coding
-	// runs parked on a question to a person are sandbox state that every
+	// on Jira, or on no tracker, has no asks in the engine, and its executors
+	// parked on a question to a person are sandbox state that every
 	// backend has. Read regardless, the absent half's refusal took the
 	// whole answer with it and those runs reached nobody.
 	work, err := keptHere(s.Work)
@@ -656,14 +665,14 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	if work {
-		fresh, err := freshness(p)
+		fresh, err := Freshness(p)
 		if err != nil {
 			return nil, err
 		}
 		asks, err := s.Work.Decisions(ctx, worklet.DecisionsQuery{
 			Handle: handle,
 			Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-			MinPosition: fresh.MinPosition,
+			Floors: fresh.Floors,
 		}, s.clock(), s.zone())
 		if err != nil {
 			return nil, err
@@ -695,8 +704,13 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 				continue
 			}
 			at := waitingSince(run)
+			r := reach(run)
+			calls, err := s.runCalls(ctx, run, r)
+			if err != nil {
+				return nil, err
+			}
 			items = append(items, DecisionItem{Kind: "run", At: at,
-				Run: serialiseRun(run, reach(run), s.opened(run))})
+				Run: serialiseRun(run, calls, r, s.opened(run))})
 			total++
 			older(at)
 		}
@@ -759,14 +773,14 @@ func (s Sources) answeredDecisions(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	if work {
-		fresh, freshErr := freshness(p)
+		fresh, freshErr := Freshness(p)
 		if freshErr != nil {
 			return nil, freshErr
 		}
 		got, readErr := s.Work.AnsweredAsks(ctx, worklet.DecisionsQuery{
 			Handle: handle,
 			Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-			MinPosition: fresh.MinPosition,
+			Floors: fresh.Floors,
 		}, s.clock(), s.zone())
 		if readErr != nil {
 			return nil, readErr

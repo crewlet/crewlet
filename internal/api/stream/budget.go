@@ -42,6 +42,13 @@ import (
 // on the node shares — and it queues rather than piling into the pool because
 // the bound is taken on the read loop's own goroutine (see readLoop), so a
 // store scan cannot stall the live feed.
+//
+// AND THE DASHBOARD READS ITS PAGES OF CODE AROUND IT: a repository listing,
+// a push history and, once a repository's pages land, its trees, files and
+// diffs are answers a reader asks for many of, so the Code workspace asks them
+// over REST rather than queue them here in front of the shell's own reads
+// (dashboard/src/lib/useCodeQuery.ts). A change to this bound is a change to
+// that reason.
 const MaxInFlightQueries = 4
 
 // MaxRoomsPerSocket bounds how many artifact rooms ONE SOCKET is in at once.

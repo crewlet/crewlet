@@ -312,12 +312,12 @@ var _ worklet.EvidenceLookup = evidenceLookup{}
 // reference in these tools takes.
 func (l evidenceLookup) Task(ctx context.Context, ref string) (worklet.CitedTask, error) {
 	if l.work.Reader == nil {
-		// A COMPANY WITHOUT CREWLET WORKS CANNOT CITE A WORK ITEM by
+		// A COMPANY WITHOUT WORKLET CANNOT CITE A WORK ITEM by
 		// kind, for the reason [evidenceLookup.PageID] gives a page: an
 		// executor of a company on another tracker asks with the same
 		// evidence a work item's decision takes.
 		return worklet.CitedTask{}, fmt.Errorf("%w: this company does not run "+
-			"Crewlet Works, so a `task` cannot be checked; cite it as a `url`",
+			"Worklet, so a `task` cannot be checked; cite it as a `url`",
 			worklet.ErrInvalid)
 	}
 	got, err := l.work.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)

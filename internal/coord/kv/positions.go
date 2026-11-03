@@ -42,6 +42,13 @@ func (f *FleetStore) PutPositions(ctx context.Context, p coord.NodePositions) er
 // these rows, so a row silently dropped raises that minimum — which is the
 // engine deleting records a node still needs, reported by nothing. "I could
 // not read node X" has to be louder than "there is no node X".
+//
+// EACH ROW CARRIES THE INSTANT THE BROKER STORED IT
+// ([coord.NodePositions.StoredAt]): the entry's own timestamp, which the
+// stream's leader stamps from its clock and the walk already holds, so the one
+// reading of a node's clock against its broker's the fleet has costs this
+// listing nothing more. Never the row's own At, which is the writer's clock
+// and is what the instant is compared against.
 func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, error) {
 	var out []coord.NodePositions
 	// THE BUCKET HOLDS ELEVEN KEY CLASSES (a node's positions, a trim hold,
@@ -55,7 +62,7 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 	// key nobody thinks of as a node. It is [FleetStore.eachPositionKey]'s
 	// single copy of that filter rather than a fifth hand-written one.
 	err := f.eachPositionKey(ctx, "node", "the log positions",
-		func(key string, value []byte) error {
+		func(key string, value []byte, stored time.Time) error {
 			var row coord.NodePositions
 			if err := json.Unmarshal(value, &row); err != nil {
 				return fmt.Errorf("coord: the positions row at %s does not "+
@@ -63,6 +70,7 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 					"skipped here raises that minimum and deletes records a node "+
 					"still needs: %w", key, err)
 			}
+			row.StoredAt = stored
 			out = append(out, row)
 			return nil
 		})
@@ -102,7 +110,7 @@ func (f *FleetStore) PutHold(ctx context.Context, h coord.TrimHold) error {
 func (f *FleetStore) Holds(ctx context.Context) ([]coord.TrimHold, error) {
 	var out []coord.TrimHold
 	err := f.eachPositionKey(ctx, "hold", "the trim holds",
-		func(key string, value []byte) error {
+		func(key string, value []byte, _ time.Time) error {
 			var hold coord.TrimHold
 			if err := json.Unmarshal(value, &hold); err != nil {
 				return fmt.Errorf("coord: the trim hold at %s does not "+
@@ -150,27 +158,73 @@ func (f *FleetStore) PutFloor(ctx context.Context, floor coord.TrimFloor) error 
 	return nil
 }
 
-// Floors reads every domain's published floor.
+// Floor reads one domain's published floor: ONE leader read of its key, the
+// package's one single-key read ([FleetStore.get]) — no key index, no
+// consumer, and so no proposal to the metadata group, which is what a listing
+// of the class would cost every caller and what [coord.FloorRegister.Floor]
+// gives the register no way to ask for.
 //
-// A DECODE FAILURE IS RAISED, for the reason both its neighbours give and for
-// a third one of its own: this row is what every surface reports a blocked
-// trim from, so a row silently dropped renders as a domain whose trim is
-// advancing — the one answer that stops anybody looking.
-func (f *FleetStore) Floors(ctx context.Context) ([]coord.TrimFloor, error) {
-	var out []coord.TrimFloor
-	err := f.eachPositionKey(ctx, "floor", "the trim floors",
-		func(key string, value []byte) error {
-			var floor coord.TrimFloor
-			if err := json.Unmarshal(value, &floor); err != nil {
-				return fmt.Errorf("coord: the trim floor at %s does not "+
-					"decode: this row is what every surface reads a blocked trim "+
-					"from, so one skipped here renders as a trim that is "+
-					"advancing: %w", key, err)
-			}
-			out = append(out, floor)
-			return nil
-		})
-	return out, err
+// A DECODE FAILURE IS RAISED, not read as no floor: this row is what every
+// surface reports a blocked trim from and what the write fence compares a
+// cursor against, so a row skipped here renders as a domain whose trim is
+// advancing — the one answer that stops anybody looking — and clears a write
+// the trim may have left below the log. So is a row naming another domain
+// than its key: it is no domain's floor this read can vouch for.
+//
+// EITHER REFUSAL IS THAT DOMAIN'S ALONE, and the remedy it names is the true
+// one: nothing in the engine rewrites the row, because the trim carries each
+// floor forward from the row it reads and never publishes over one it cannot
+// ([unreadableFloor]).
+func (f *FleetStore) Floor(ctx context.Context, domain string) (coord.TrimFloor, bool, error) {
+	key := coord.FloorKey(domain)
+	entry, err := f.get(ctx, f.positions, key)
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		return coord.TrimFloor{}, false, nil
+	case err != nil:
+		return coord.TrimFloor{}, false, unavailable("read the trim floor for "+domain, err)
+	}
+	var floor coord.TrimFloor
+	if err := json.Unmarshal(entry.Value(), &floor); err != nil {
+		return coord.TrimFloor{}, false, f.unreadableFloor(key, domain,
+			fmt.Sprintf("does not decode (%v)", err))
+	}
+	if floor.Domain != domain {
+		return coord.TrimFloor{}, false, f.unreadableFloor(key, domain,
+			fmt.Sprintf("names domain %q, not %q: it is filed under one log and "+
+				"speaks for another, so a cursor compared against it would be "+
+				"compared against the other log's sequences", floor.Domain, domain))
+	}
+	return floor, true, nil
+}
+
+// unreadableFloor is the refusal of a row at key that is no floor of domain's
+// this read can vouch for, and what it takes to clear it.
+//
+// WHAT THE OPERATOR MUST DO, BECAUSE NOTHING ELSE WILL. The engine files every
+// floor under its own domain's key and in a form it decodes, so such a row was
+// written by hand or by a fault. The trim does not rewrite it: a floor never
+// moves down within a generation, so each tick carries the published one
+// forward, and over a row it cannot read it has nothing to carry — publishing
+// anyway could set the floor below a purge already licensed. Removed, the key
+// reads as a trim that has never run, and the next tick publishes the floor
+// afresh from the log's own first sequence. The refusal stops that one
+// domain's trim, its reads and its writes at an expectation of zero, and no
+// other domain's.
+//
+// [coord.ErrFloorUnreadable], never [coord.ErrUnavailable]: the store
+// answered, and a refusal built on this one must send its reader to the row
+// rather than tell them it clears when coordination answers.
+func (f *FleetStore) unreadableFloor(key, domain, why string) error {
+	bucket := f.positions.Bucket()
+	return fmt.Errorf("%w: the trim floor at %s in %s %s — refused rather than "+
+		"read as no floor, and nothing in the engine rewrites it, since the trim "+
+		"carries a floor forward from the row it reads; %s's trim, its reads and "+
+		"its writes at an expectation of zero refuse until the key is removed "+
+		"(`nats kv purge %s %s` on an external NATS cluster; docs/guides/"+
+		"retention.md, \"An unreadable trim floor\"), and the next trim then "+
+		"publishes the floor afresh", coord.ErrFloorUnreadable, key, bucket, why, domain,
+		bucket, key)
 }
 
 // PutBackupPoint writes one node's newest backup, or the operator's newest
@@ -207,7 +261,7 @@ func (f *FleetStore) PutBackupPoint(ctx context.Context, p coord.BackupPoint) er
 func (f *FleetStore) BackupPoints(ctx context.Context) ([]coord.BackupPoint, error) {
 	var out []coord.BackupPoint
 	err := f.eachPositionKey(ctx, "backup", "the backup points",
-		func(key string, value []byte) error {
+		func(key string, value []byte, _ time.Time) error {
 			var point coord.BackupPoint
 			if err := json.Unmarshal(value, &point); err != nil {
 				return fmt.Errorf("coord: the backup point at %s does not "+
@@ -392,7 +446,7 @@ func (f *FleetStore) PutAdmission(ctx context.Context, a coord.Admission) error 
 func (f *FleetStore) Admissions(ctx context.Context) ([]coord.Admission, error) {
 	var out []coord.Admission
 	err := f.eachPositionKey(ctx, "admitted", "the admissions",
-		func(key string, value []byte) error {
+		func(key string, value []byte, _ time.Time) error {
 			var a coord.Admission
 			if err := json.Unmarshal(value, &a); err != nil {
 				return fmt.Errorf("coord: the admission at %s does not decode: a "+
@@ -465,7 +519,7 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context, stream string) (
 	var out []coord.MaintenanceAck
 	err := f.eachPositionPrefix(ctx, []string{"maintenance-ack", stream},
 		"the maintenance acknowledgements",
-		func(key string, value []byte) error {
+		func(key string, value []byte, _ time.Time) error {
 			var ack coord.MaintenanceAck
 			if err := json.Unmarshal(value, &ack); err != nil {
 				return fmt.Errorf("coord: the maintenance acknowledgement at %s "+
@@ -482,14 +536,22 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context, stream string) (
 	return out, err
 }
 
-// eachPositionKey walks one key class of the positions register.
+// eachPositionKey walks one key class of the positions register, handing fn
+// each key, its value and the instant the broker stored that value.
 //
 // ONE WALK for the classes added after the first three, because the filter is
 // the load-bearing half of sharing a bucket and six copies of it is six
 // chances for one to be written with the wrong prefix — a positions row
 // decoded as an admission is a publisher nobody can see.
+//
+// THE INSTANT IS THE ENTRY'S OWN (`Created`), stamped by the stream's leader
+// when it stored the value and carried by every entry the walk hands on —
+// the pass's deliveries and its certifying leader reads alike — exactly as a
+// lease's claim reads the broker's time back ([Store.claimedAt]). In UTC,
+// as every instant this store answers is. A class whose rows want no broker
+// time ignores it; the positions rows want it ([FleetStore.Positions]).
 func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
-	fn func(key string, value []byte) error) error {
+	fn func(key string, value []byte, stored time.Time) error) error {
 
 	return f.eachPositionPrefix(ctx, []string{class}, what, fn)
 }
@@ -499,7 +561,7 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 // whole class, and one log's acknowledgements, filed under the class and then
 // the log ([coord.MaintenanceAckKey]).
 func (f *FleetStore) eachPositionPrefix(ctx context.Context, prefix []string, what string,
-	fn func(key string, value []byte) error) error {
+	fn func(key string, value []byte, stored time.Time) error) error {
 
 	// THE CLASS IS A SUBJECT TOKEN, so the broker filters. A key here is
 	// coord.DocumentKey(class, id) — two segments, or three for an operator
@@ -507,10 +569,10 @@ func (f *FleetStore) eachPositionPrefix(ctx context.Context, prefix []string, wh
 	// ([coord.BackupPointKey]), joined by the separator, which is a dot
 	// because a key IS a subject token path — and the class segment escapes
 	// to itself, so `<class>.>` is a filter the broker can match whatever
-	// depth follows it. EIGHT classes share this register; reading all of them and
-	// discarding seven was the shape this replaced, and the state-log write
-	// fence takes this read, for the floors, on every write at an
-	// expectation of zero.
+	// depth follows it. EIGHT classes share this register, and reading all of
+	// them and discarding seven was the shape this replaced. The floors are
+	// the one class no longer listed at all: every reader names the domains it
+	// asks about, so [FleetStore.Floor] reads each by its key.
 	//
 	// `what` reaches the walk now rather than going nowhere: a store failure
 	// here used to say "read crewlet_positions" for all eight listings, which
@@ -528,7 +590,7 @@ func (f *FleetStore) eachPositionPrefix(ctx context.Context, prefix []string, wh
 				!slices.Equal(segments[:len(prefix)], prefix) {
 				return nil
 			}
-			return fn(kve.Key(), kve.Value())
+			return fn(kve.Key(), kve.Value(), kve.Created().UTC())
 		})
 }
 

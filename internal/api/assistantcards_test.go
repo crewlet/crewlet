@@ -444,6 +444,10 @@ func (r filledRuns) ListActive(ctx context.Context) ([]sandbox.PendingRun, error
 	return []sandbox.PendingRun{run}, err
 }
 
+func (filledRuns) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+	return filled[sandbox.BridgeLog](), nil
+}
+
 func (filledRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	run := filled[sandbox.PendingRun]()
 	// NO ENDING DECIDED: a run whose ending is decided waits on nobody, its

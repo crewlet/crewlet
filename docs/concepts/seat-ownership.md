@@ -120,31 +120,36 @@ That also gives the right answer during a database blip. The lease row is untouc
 ## A copy that is behind, and a copy that is wrong
 
 A data node answers its seats out of its own copy of the company's records —
-the tracker, the knowledge base and chat, applied from the shared logs into
-this node's database (see [Replication](../guides/replication.md)) — through the
-same router every node's seats use. The identity estate is applied the same
-way and is deliberately not among them: no turn reads it, so a node that
-cannot serve sign-ins is not a node that cannot run its agents. That copy can
-be in two quite different bad states, and the engine treats them as
-opposites.
+the tracker, the knowledge base, chat, the search vectors and the usage
+history, each applied from its own log into this node's database (see
+[Replication](../guides/replication.md)) — through the same router every node's
+seats use. The identity estate is applied the same way and is deliberately not
+among them: no turn reads it, so a node that cannot serve sign-ins is not a
+node that cannot run its agents. Each log's copy can be in two quite different
+bad states, and the engine treats them as opposites, one log at a time
+([ADR-0079](https://github.com/crewlet/crewlet/blob/main/adr/0079-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
 
 | | What it means | What the node does |
 |---|---|---|
-| **Behind** | Records are on the log that this node has not applied yet. It is catching up, and it will. | **Keeps every seat it holds**, and claims no new ones until it is level, and its share the moment it is. The sweep logs `seat_claims_withheld` at debug, and the fleet view counts how many of this node's replication loops are current |
-| **Wrong** | The copy cannot become current by applying more records | **Takes its copy out of service and keeps every seat.** Its seats' calls go to the other data nodes, exactly as a node holding no data is served, and other nodes asking it are told its copy is `out_of_service`. The node logs `estate_copy_not_served` when the copy goes out of service, and serves again once a reading finds the copy sound |
+| **Behind** | Records are on the log that this node has not applied yet. It is catching up, and it will. | **Keeps every seat it holds**, and claims no new ones until its copies of the tracker and the knowledge base are level — the logs a seat's tools read every turn; being behind on another log withholds nothing, and its share the moment it is. The sweep logs `seat_claims_withheld` at debug, and the fleet view counts how many of this node's replication loops are current |
+| **Wrong** | The copy cannot become current by applying more records | **Takes that log's copy out of service and keeps every seat.** Calls on that log's records go to the other data nodes, exactly as a node holding no data is served, its other logs' copies keep serving, and other nodes asking it for that log are told its copy is `out_of_service`. The node logs `estate_copy_not_served` naming the `domain` and the `reason` — the fault that holds: `evicted`, `below_floor`, `wrong_stream`, `stalled` or `deferred` — when a copy goes out of service, and serves it again once a reading finds the copy sound — and declines every fleet duty that decides from that log's rows |
 
-Six states are *wrong*, and each is a fact about the rows rather than about how
+Six states are *wrong*, each a fact about one log's rows rather than about how
 far along they are:
 
 - the applier has **stopped** at a record it cannot apply;
 - the node has been **evicted** from the fleet, so its peers drop everything it
   writes;
 - its rows are **below the log** — records it never applied have been
-  deleted, and the hole will never fill. A floor that has been *unreadable* for
-  four heartbeats counts here too: an unread floor is not a floor that is
-  satisfied. A node that is only below the published trim floor, while the log
-  still holds every record it lacks, is not here: it is replaying them, which
-  is *behind*;
+  deleted, and the hole will never fill. A node that is only below the
+  published trim floor, while the log still holds every record it lacks, is
+  not here: it is replaying them, which is *behind*. Nor is a floor nobody can
+  read: every read of that domain the node serves refuses once its floor has
+  gone unread for four heartbeats, until it can be read (the `floor_unknown`
+  [alarm](../reference/alarms.md), and
+  [An unreadable trim floor](../guides/retention.md#an-unreadable-trim-floor)),
+  and the copy keeps the verdict it last had, because an unread number is not
+  a fault;
 - its checkpoint names **a stream that is not this one**, which is a log
   deleted and rebuilt underneath it (`crewlet retention reanchor` is the
   repair) — or a history that log no longer continues from, because a peer
@@ -174,12 +179,14 @@ call is refused naming the estate nobody serves, which is the right trade
 for rows that are wrong — the alternative is agents acting on them.
 
 What a node does give its seats back for is not being able to **route** at
-all: its seats' calls need another data node — it holds no data, or its own
-copy is out of service — while its view of who serves the estate has been
-unreadable for longer than the 60-second bound every cached coordination fact
-is held to (`unserviceable`, `seats_shed_unserviceable`). A data node whose
-copy is sound answers from it without the view, and keeps its seats whatever
-the view says. The release is voluntary, like a rebalance: the
+all: its seats' calls need another data node — it holds no data, or its copy of
+the tracker or the knowledge base is out of service — while its view of who
+serves the estate has been unreadable for longer than the 60-second bound every
+cached coordination fact is held to (`unserviceable`,
+`seats_shed_unserviceable`). A data node whose copies of those two are sound
+answers from them without the view, and keeps its seats whatever the view says;
+a copy of any other log being out of service costs that log's calls a peer and
+never the seats. The release is voluntary, like a rebalance: the
 in-flight turn finishes, and the seat leaves when it goes idle. While it
 lasts the node is **withdrawn** from placement and says so on its presence
 row, so its peers divide the seats without it and take them up, and a seat
@@ -491,7 +498,7 @@ So the mailbox is **retired**: once the seat has been absent from the active rev
 
 A seat in the active revision with no record at all, a mailbox created by a node whose registration failed, is registered by the sweep so it can be retired if the seat is ever removed. A seat outside the active revision with no record, whose mailbox only the broker's listing still finds, is registered and stamped absent in the same tick.
 
-**Unknown is never absent.** The roster is the agent seats of the revision the fleet's activation pointer names, read on a node that has **applied that revision**. A pointer that cannot be read, a node still converging on the current epoch, a registry or a seat lease that cannot be read: each makes the tick stamp nothing and retire nothing, and the error is logged as the reason. A node that is behind must not be able to judge a seat absent that the fleet has just added — or made an agent's again.
+**Unknown is never absent.** The roster is the agent seats of the revision the fleet's activation pointer names, read on a node that has **applied that revision**. A pointer that cannot be read, a node still converging on the current epoch, a registry or a seat lease that cannot be read: each makes the tick stamp nothing and retire nothing, and the error is logged as the reason. A node that is behind must not be able to judge a seat absent that the fleet has just added back — or made an agent's again. Being behind is a fault only once the lag is [confirmed](control-plane.md#posture-what-a-lagging-node-does) — an apply of the epoch failed on this node, or it has been behind longer than propagation explains — so a tick that meets the seconds every activation spends being applied judges nothing quietly, logged `seat_mailboxes_not_judged` at debug as a fleet with nothing activated is, and only a confirmed lag fails the tick with the reason.
 
 **A removed human seat's chat read state goes the same way.** How far its person has read in each room, what they have muted and their do-not-disturb are one coordination record per **human** seat (the [`chat reads`](coordination.md#what-the-fleet-shares) bucket), kept under the seat rather than the person — so a person moved or removed leaves it to whoever holds the seat next, as the seat's inbox stays. The same duty judges those records against the human seats of the revision the fleet's pointer names, on a node that has applied it: the first sweep that finds a record's seat missing stamps it (`chat_read_state_absent`), a sweep that finds the seat back clears the stamp (`chat_read_state_returned`), and a record is forgotten once its stamp is **24 hours** old (`chat_read_state_forgotten`) — the mailbox's grace, so a seat restored inside it gets its mail and its rooms back together. Unknown is never absent here either, and the forget is a compare-and-set that checks the stamp, so a seat a peer's sweep has just found back keeps every cursor. A record under a handle that is no human seat is one nobody can reach, and is forgotten the same way.
 
@@ -515,12 +522,13 @@ Nothing can be scheduled out of that state either: the duty that stalled is the 
 - **It removes the actor.** A wedged node that later resumes acts on a seat it no longer owns, with its MCP children still spawned and its credentials still live — and a turn's outbound effects, a chat post or a work-item comment, are not something an epoch fence can reach.
 - **It lets the node come back.** A process that neither works nor dies goes on answering `/health`, so nothing restarts it: the seats it was handed are covered by peers, but its capacity stays lost until a person notices.
 
-So every node runs a **watchdog**: each duty stamps a beat as it turns, a separate goroutine compares, and it calls `os.Exit(75)` when the lag passes the **lease TTL**. Five things about it are deliberate:
+So every node runs a **watchdog**: each duty stamps a beat as it turns, a separate goroutine compares, and it calls `os.Exit(75)` when the lag passes the **lease TTL**. Six things about it are deliberate:
 
 - **The threshold is not a config knob of its own.** It is the same number the lease TTL is. Past it the node is provably not the owner, and letting the two drift is how a process gets to be simultaneously "not the owner" and "still holding the mail". So it *follows* the lease TTL — the one this deployment is running, whether that came from `coordination.lease_ttl_seconds` or was adopted from the bucket a peer created, not the shipped 45 seconds. A node leasing its seats for twenty seconds and watching to forty-five would hold mail it did not own for the difference; one leasing them for two minutes would be killed while it still provably did. That is also why the TTL has a [floor of 15 seconds](coordination.md#the-lease-ttl-bounds-seats-and-presence-only): a threshold of a few seconds is one a busy but healthy node crosses.
 - **The exit is the crudest possible one** — `os.Exit`, which runs no deferred function, rather than a panic, a signal, or a graceful shutdown. The duty that stalled is the one that would have to run the shutdown, so anything waiting on it hangs; trying is how a watchdog ends up wedged too. The notice — which duty stopped, how long it went without a beat, the lease TTL that blew and the exit code — goes straight to stderr rather than through the logger for the same reason: a configured handler may batch, format, or ship lines somewhere — a [log file](../guides/deployment.md#the-log-file) among them — which is more machinery than a wedged process has earned. **So this notice is not in `logging.file`**, only on stderr. That is exactly why [`logging.stderr: false`](../guides/deployment.md#turning-stderr-off) silences the ordinary log stream and not the stream itself — a node that handed its whole log to a file would otherwise lose the one line explaining its own death. A deployment that discards stderr at the shell or the unit instead (`2>/dev/null`, `StandardError=null`) does lose it, and its only remaining evidence is the orchestrator's exit code 75. Exit code **75** is distinct from any ordinary failure, and from the code a [broker that declares itself dead](#a-broker-that-declares-itself-dead) leaves with, so an orchestrator's restart log says what happened.
 - **It is disarmed for the whole of a normal shutdown.** Teardown is the one part of the process that legitimately blocks the loop — reaping MCP subprocesses, joining threads, tearing sandboxes down — and exiting through the middle of it would abandon the seat release that makes a drain graceful. A shutdown that hangs is a `SIGKILL` away; a shutdown that exits without releasing costs every peer a full TTL of dark seats.
 - **The beat cadence is scaled to the threshold, not set independently.** A beat slower than the threshold makes a perfectly healthy node shoot itself, so both the stamp interval and the poll interval are ceilings derived from it.
+- **A heartbeat pass stamps the beat as it asks each renew, not once it has asked them all.** A renew the coordination store leaves unanswered is held to its read's whole bound — five seconds, where nothing set a deadline — so a node that cannot reach its store spends that bound on every seat it renews, doing what an unreachable store asks of it: keeping each seat until its own lease's TTL, and then dropping it. Stamped only at the end of the pass, the beat read that as a wedge once the bounds summed past the TTL — ten seats at the default — and the watchdog ended a process that was turning. A renew that hangs still freezes the beat, which is the wedge the watchdog is for.
 - **A duty that is *gone* is not a duty that is *wedged*.** From the watcher the two are indistinguishable — the beat simply stops refreshing — and they are opposite situations. A wedged duty is still alive inside a live process: still sitting on a fetched batch, and still able to act on a seat it no longer owns. A duty that has finished took its work with it, so there is nothing left holding anything. The watchdog therefore stands down when nothing it watches is live any more, rather than exiting. Without that check, every engine abandoned rather than stopped arms a suicide timer that fires one TTL later on a perfectly healthy process — which is not hypothetical: it killed this repository's own test suite at 63%, exit 75, with zero test failures.
 
 Single node or fleet, it is armed the same way. With one node no peer is waiting on anything the wedged process still holds, but a wedged engine is a dead engine either way, and leaving is what lets a supervisor notice.
@@ -583,13 +591,43 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 | `retention` | The state-log **trim**: every 15 minutes it evaluates each domain's floor across every data node's position, the backups and the holds, purges what they all permit, and publishes what it concluded and which term is holding it (see [Retention](../guides/retention.md)) | Two nodes purging and publishing at once would publish two conclusions about one log, and how long a term has been holding is a property of a series of ticks that must be one node's |
 | `embeddings` | Computes the embedding of every page and task whose vector is missing or stale and publishes it to the vectors log, which every data node applies | Each node embedding the corpus would be one provider bill per node for one company — the cost the vectors log exists to pay once |
 | `chat-prune` | Chatlet's [message horizon](chatlet.md#retention): every hour, on a node that runs the revision the fleet's activation pointer names, it reads each room's oldest message against that revision's `chat.chatlet.message_retention_days` or the room's own — every room the company ever made, archived rooms and conversations included, a thousand rooms to a read, the horizon asked again before each read after the first so that a lap the fleet's pointer moves under ends there, and a tick that runs out of its hour continues from the room it stopped at rather than starting again at the first — and publishes a prune record carrying the cutoff to the chat log — at most an hour of a room's history per record, and up to 24 records a room per tick while a backlog drains — which every data node applies as the same range delete | The cutoff is the decision, so it has to be one node's: the rows are replicated content, and a node reading its own clock would delete a different set from every other, for good. Two holders would not diverge — a cutoff is compared with the broker's own instant on each message — but would publish every record twice on the company's busiest log |
-| `object-collector` | Runs the [object store's](object-store.md#collection-and-audit) two passes against the one store the fleet's files are in: hourly, deletes every object stored and keyed more than a day ago that no row names (and stops deleting when this node's estate is incomplete), and abandons uploads that never finished; daily, audits that every object a row names is in the store and whole, raising `objects_missing` when one is not. Records each pass in the coordination store | Two collectors are safe — a key is named only by the write that uploaded it, and deleting an object that is gone is not an error — but each would list the whole store and read every row naming an object, for one answer |
+| `object-collector` | Runs the [object store's](object-store.md#collection-and-audit) two passes against the one store the fleet's files are in: hourly, deletes every object stored and keyed more than a day ago that no row names (and stops deleting when this node's estate is incomplete), and abandons uploads that never finished; daily, audits that every object a live row names is in the store and whole, raising `objects_missing` when one is not. Records each pass in the coordination store | Two collectors are safe — a key is named only by the write that uploaded it, and deleting an object that is gone is not an error — but each would list the whole store and read every row naming an object, for one answer |
+| `code-retention` | Every 15 minutes, where the company [hosts code](code-host.md), removes the rows of the packs a compaction retired more than a day ago (so the collector can take their objects), then finishes every repository purge already begun and then purges the repositories deleted longer ago than `code.deleted_retention_days`, oldest first, in bounded steps paced to a third of each node's write lane; a purged name the current configuration declares again is created at once. Then it releases every renamed repository's old name whose month of redirecting has ended, and deletes every seat's scratch repository idle past `code.scratch.idle_days` that no live turn holds ([Repositories made by tools](code-host.md#repositories-made-by-tools)) | Each step is one record on the code log that every data node applies, so a second holder would pay every node's write lane twice and race the first's steps on each repository's one subject |
 | `trash-reaper` | Purges what has been in a trash past its term, thirty days: hourly, it lists each domain's trash from this node's copy (Doclet's pages first, then the artifacts, then Ask Crewlet's conversations, whose term is not thirty days but the `assistant.retention_days` of the revision the fleet's activation pointer names, and which also takes every conversation of a person the identity estate removed; a holder that does not run that very revision cannot know the term, and skips the conversations until it can; then the seats' executor sessions, whose term is that same revision's `turn_engine.conversation_session.retention_days`, read the same way, which never takes a turn whose run the fleet's run records still hold — every record there is a run nobody has finished, one this build cannot decode included — and which first ends as `lost` a turn that never ended, a day past its last record with no run of it live, and also forgets a removed seat's record of its removal past the term), oldest first, and purges each item through the domain's own purge record as the engine (`trash-reaper`, recorded on Doclet as an operator and on the artifacts log as the system; an artifact's dependent state, its datastore, goes first), at most 1,000 an item kind a pass, then records the pass in the coordination store. See [Knowledge System § The trash is emptied after thirty days](knowledge-system.md#the-trash-is-emptied-after-thirty-days) | Two reapers are safe: each purge is decided again in its own snapshot, so a page restored since it was listed is refused, and both derive the same operation id for one item in one hour, which the ledger collapses into one record. But each would publish every purge, for one answer |
 | `iam_sweep` | Turns the identity estate's retention horizons into positions and publishes a sweep record for every bucket that is due | The sweep is a record every data node applies, so one publisher is enough; N would publish N records for each due bucket |
 
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 
-A claim is not the only way a tick declines. The `integration-reconcile` loop asks a second question first — is this node's [config posture](control-plane.md) current? — and on `shed` or `stuck` it declines *without claiming*, so the lease lapses and a peer on the current revision takes it. That question is about this node's own configuration rather than about ownership, and it is asked only there: the loop is the one duty whose work reaches outside the deployment, so a stale document means accounts and webhooks converged to a revision the fleet has replaced.
+A duty whose one tick can outlast its lease — the embedding duty's index training, the object collector's audit of a large store, a code-retention pass over a long backlog of purges — **renews the lease while the tick runs**, four times a lease, and the tick is stopped the moment a renewal answers that another node holds the duty, or once none has confirmed it for the lease less one renewal, past which another node could hold it. A renewal the store does not answer — refused, or held on to while the coordination stream's leader moves — is neither: the last confirmation still keeps every other node out, and no renewal waits longer than one renewal interval for its answer, so the next is asked inside that window and one unanswered renewal costs the tick nothing; a tick stopped either way publishes or records nothing more.
+
+A duty that decides from a domain's rows — the trim (the evictions and the
+arbitration anchors in the rows of every log that claims identity: the
+tracker's, the knowledge base's, the identity estate's, the artifacts log's,
+the artifact datastore's, the Dashboard Assistant's, the chat's, the executor
+log's and the code log's), the embedding duty (the tracker's, the knowledge
+base's and the vectors' rows), the object collector (the tracker's, the code
+log's, the artifacts log's, the Dashboard Assistant's and the executor log's,
+whose rows name the objects it collects: a seat's sealed executor session among
+them) and the code-retention duty (the code log's, whose rows
+say which repositories are due a purge) — is declined by a node whose copy of
+any of them is out of service: it does not claim it, it gives the duty's lease back if it
+holds it, and a node whose copies serve takes the duty at its own next tick
+rather than once the lease lapses
+([ADR-0079](https://github.com/crewlet/crewlet/blob/main/adr/0079-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+Deciding from a wrong copy would act for the whole fleet on rows the node has
+stopped serving: withdraw the vectors of tasks its copy never applied, purge
+past a node its copy still counts as evicted, or hold the collector while every
+pass it ran was refused, or purge a repository its copy says was deleted when
+the fleet has restored it. The node logs `<duty>_declined` naming the domain —
+`embed_duty_declined`, `retention_duty_declined`,
+`object_collector_declined` or `code_retention_duty_declined` — once, `<duty>_given_back` when it gave back a
+lease it held (and `<duty>_not_given_back`, tried again a tick later, when the
+lease store did not answer), and `<duty>_resumed` when the copy is back in
+service. A training tick or a code-retention pass that is running when its
+copy goes out of service is cut off, as one that loses its lease is, and gives
+the duty back once it has returned.
+
+A claim is not the only way a tick declines. Two duties also ask about this node's own configuration rather than about ownership, and each asks it only for its own reason. The `integration-reconcile` loop asks whether this node's [config posture](control-plane.md) is current, and on `shed` or `stuck` it declines *without claiming*, so the lease lapses and a peer on the current revision takes it: the loop is the one duty whose work reaches outside the deployment, so a stale document means accounts and webhooks converged to a revision the fleet has replaced. The `code-retention` duty asks a stronger question — does this node serve the very revision the activation pointer names, with nothing activated counting as no — because a purge is an irreversible judgement against that revision's `code.deleted_retention_days` (see [Where the gate sits](control-plane.md#where-the-gate-sits)); a node that does not declines exactly as for a copy out of service, giving the duty back and logging `code_retention_duty_declined` with the `reason` and both epochs, and a pass running when it falls behind is cut off at its next renewal. That line is a warning only when the lag is confirmed, as the posture confirms it; a node merely applying an activation, or starting up before its reconciler has ticked, declines at debug and asks again a reconcile interval later rather than a tick.
 
 The `chat-prune` duty asks one first as well, and a narrower one: does this node run the very activation the fleet's pointer names? A prune deletes on every data node, by a horizon the company document states, and nothing restores what it deleted, so a node serving any other revision (because it refused the fleet's, booted on an offline import the fleet has not taken, or has not yet applied a revision activated a moment ago) declines without claiming and logs `chat_prune_declined`, naming the activation it serves and the fleet's epoch; a peer that runs the fleet's revision takes the duty once the lease lapses, and a horizon is enforced late rather than by a document the company has replaced.
 

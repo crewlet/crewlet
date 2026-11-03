@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -34,13 +36,13 @@ func TestTheChangeFeedOpensTheFrameBeforeADomainDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ring := statelog.OneKey("k1", "material-one")
-	signer, err := statelog.NewSigner("tracker", ring)
+	ring := recordseal.OneKey("k1", "material-one")
+	signer, err := recordseal.NewSigner("tracker", ring)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
 	framed := signer.Seal(body)
-	verifier, err := statelog.NewVerifier("tracker", ring)
+	verifier, err := recordseal.NewVerifier("tracker", ring)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -58,8 +60,8 @@ func TestTheChangeFeedOpensTheFrameBeforeADomainDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openRecord: %v", err)
 	}
-	if verdict != statelog.Verified {
-		t.Fatalf("verdict = %q, want %q", verdict, statelog.Verified)
+	if verdict != recordseal.Verified {
+		t.Fatalf("verdict = %q, want %q", verdict, recordseal.Verified)
 	}
 	if env.OpID != "op-1" || env.Gen != 3 {
 		t.Errorf("envelope = %+v, want the one that was signed", env)
@@ -78,22 +80,22 @@ func TestTheChangeFeedOpensTheFrameBeforeADomainDecodes(t *testing.T) {
 // unlike the applier it has no reason to hold its body.
 func TestAnUnverifiedRecordReachesNoDomainDecoder(t *testing.T) {
 	t.Parallel()
-	signer, err := statelog.NewSigner("tracker", statelog.OneKey("k2", "material-two"))
+	signer, err := recordseal.NewSigner("tracker", recordseal.OneKey("k2", "material-two"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
 	framed := signer.Seal([]byte(`{"v":1,"op_id":"op-1"}`))
-	verifier, err := statelog.NewVerifier("tracker", statelog.OneKey("k1", "material-one"))
+	verifier, err := recordseal.NewVerifier("tracker", recordseal.OneKey("k1", "material-one"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 
 	for name, tc := range map[string]struct {
 		payload []byte
-		want    statelog.Verdict
+		want    recordseal.Verdict
 	}{
-		"a key this node does not hold": {framed, statelog.KeyUnknown},
-		"bytes that are not a frame":    {[]byte(`{"v":1,"op_id":"op-1"}`), statelog.Tampered},
+		"a key this node does not hold": {framed, recordseal.KeyUnknown},
+		"bytes that are not a frame":    {[]byte(`{"v":1,"op_id":"op-1"}`), recordseal.Tampered},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -127,12 +129,12 @@ func TestAnUnverifiedRecordReachesNoDomainDecoder(t *testing.T) {
 // would make them one event.
 func TestAnUndecodableEnvelopeIsTheEnvelopesFailureNotTheFrames(t *testing.T) {
 	t.Parallel()
-	ring := statelog.OneKey("k1", "material-one")
-	signer, err := statelog.NewSigner("tracker", ring)
+	ring := recordseal.OneKey("k1", "material-one")
+	signer, err := recordseal.NewSigner("tracker", ring)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	verifier, err := statelog.NewVerifier("tracker", ring)
+	verifier, err := recordseal.NewVerifier("tracker", ring)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -140,10 +142,10 @@ func TestAnUndecodableEnvelopeIsTheEnvelopesFailureNotTheFrames(t *testing.T) {
 	if err == nil {
 		t.Fatal("a record this build cannot decode came back clean")
 	}
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		t.Errorf("verdict = %q, want %q — the frame opened, and a caller that read "+
 			"this as unverified would log a forged record where there is none",
-			verdict, statelog.Verified)
+			verdict, recordseal.Verified)
 	}
 }
 
@@ -240,6 +242,38 @@ func TestAFeedThatDisagreesWithItsDeclarationIsRefused(t *testing.T) {
 				t.Errorf("the refusal does not say which domain or why: %v", err)
 			}
 		})
+	}
+}
+
+// THE CODE FEED IS DECLARED WITH ITS TRANSLATOR: the code log declares
+// `crewlet-code-feed`, its trim waits on that consumer, and the register's
+// entry runs the code translator over the log under exactly that group, on the
+// code host's own source — the name every code write delivers to, so a wake
+// about a change is answered by a write to one. Pinned rather than left to the
+// register's sweep above, which would pass a log that declared no feed and ran
+// none just as well.
+//
+// Mutation: drop the entry's Feed → feedFor refuses the declaration nobody
+// runs; declare no group → it refuses the feed nobody declared.
+func TestTheCodeFeedIsDeclaredWithItsTranslator(t *testing.T) {
+	t.Parallel()
+	if group := (code.Domain{}).FeedGroup(); group != code.FeedGroup {
+		t.Fatalf("the code log declares the wake feed %q, want %q", group, code.FeedGroup)
+	}
+	translator, opener, err := (&Engine{}).feedFor(&runningLog{domain: code.Domain{}})
+	if err != nil || translator == nil || opener == nil {
+		t.Fatalf("feedFor(code) = (%v, %v, %v), want the code feed", translator, opener, err)
+	}
+	if _, ok := translator.(*code.Translator); !ok {
+		t.Errorf("the code log's feed translates with %T, want the code translator", translator)
+	}
+	if src := translator.Source(); src.Name != code.Source || src.Group != code.FeedGroup {
+		t.Errorf("the code feed runs as %+v, want source %q under %q", src, code.Source, code.FeedGroup)
+	}
+	group, ok := fleetGroupNamed(code.FeedGroup)
+	if !ok || !group.Data {
+		t.Errorf("the code feed's group is declared %+v (%v), want a group only a data node joins — "+
+			"the feed reads the log a data node applies", group, ok)
 	}
 }
 

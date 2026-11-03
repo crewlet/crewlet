@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/objectives"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // visibility is an objective meter that keeps the change-visibility stamps it
@@ -113,7 +114,7 @@ func TestAnInboxMovementIsTimedFromItsRecordsWhenSomebodyWatches(t *testing.T) {
 		Reason: "assignee", Stored: stored.Add(time.Second)})
 	svc.InboxChanged(stream.InboxChange{Handle: "lead", UnreadDelta: 2, Subject: "t-2",
 		Reason: "assignee", Stored: stored.Add(2 * time.Second)})
-	svc.InboxReread()
+	svc.InboxReread(worklet.Domain{}.Name())
 
 	if got, want := judge.seen(), []time.Time{stored.Add(2 * time.Second)}; !slices.Equal(got, want) {
 		t.Errorf("inbox pushes were timed from %v, want %v: the movement the lead's "+

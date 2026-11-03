@@ -167,6 +167,20 @@ export function useQuery<K extends QueryName>(
   const [asked, setAsked] = useState(0);
   const refetch = useCallback(() => setAsked((n) => n + 1), []);
 
+  // A RECONNECT ASKS AGAIN, COUNTED: the ask's effect re-runs on the count,
+  // which only a socket coming back moves. It re-ran on the flag
+  // `refetchOnReconnect && connected`, so a socket going AWAY asked too: a
+  // read that could only wait for the reconnect that asked again over it.
+  const [reconnects, setReconnects] = useState(0);
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    const was = wasConnected.current;
+    wasConnected.current = connected;
+    if (connected && !was && refetchOnReconnect) {
+      setReconnects((n) => n + 1);
+    }
+  }, [connected, refetchOnReconnect]);
+
   useEffect(() => {
     if (!enabled) {
       setState({ data: null, loading: false, error: null, refusal: null, sent: false });
@@ -219,11 +233,7 @@ export function useQuery<K extends QueryName>(
       generation.current++;
       clearTimeout(timer);
     };
-    // `connected` is a dependency only when the caller wants a reconnect to
-    // re-ask; including it unconditionally would re-run every query on every
-    // socket blip.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket, what, key, enabled, pollMs, asked, refetchOnReconnect && connected]);
+  }, [socket, what, key, enabled, pollMs, asked, reconnects]);
 
   // A WRITE FROM THIS TAB ASKS AGAIN — at the floor it raised, which
   // `withFloor` reads on the very next ask. The screen that pressed a button
@@ -285,8 +295,8 @@ export function useQuery<K extends QueryName>(
 const FRESHNESS_KEYS = ["read_level", "min_position", "max_lag_seq", "max_lag_seconds"];
 
 /**
- * A question's parameters, with this tab's read floor for its domain named
- * where it has one (`protocol/session.ts`).
+ * A question's parameters, with this tab's read floor named for each domain it
+ * reads where the tab has one (`protocol/session.ts`).
  *
  * EVERY ASK, NOT ONLY THE REFETCH A WRITE FIRES: a poll that came round a
  * second after the write, on a node that had not applied it yet, would

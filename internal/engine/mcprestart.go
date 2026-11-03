@@ -293,7 +293,7 @@ func (e *Engine) clearRemovedMCPRestarts(ctx context.Context, next *Company) {
 	if next == nil || next.Config == nil || e.backends == nil || e.backends.Fleet == nil {
 		return
 	}
-	if _, err := e.fleetCompany(ctx, next); err != nil {
+	if err := e.fleetCompany(ctx, next); err != nil {
 		log.DebugContext(ctx, "mcp_restarts_not_swept", "reason", err.Error(),
 			"detail", "a removed server's restart is cleared by the company the fleet is pointed "+
 				"at; this one is not it yet")

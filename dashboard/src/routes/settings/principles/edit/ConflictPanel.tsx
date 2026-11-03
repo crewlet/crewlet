@@ -13,7 +13,8 @@
  * person: two rewrites of one sentence have no merge that either author wrote.
  */
 
-import { Button, ConflictNote, DiffView, collapseDiff, diffLines } from "@crewlethq/ui";
+import { Button, ConflictNote } from "@crewlethq/ui";
+import { DiffView } from "~/components/DiffView.tsx";
 import {
   PART_TITLES,
   partName,
@@ -62,7 +63,8 @@ export function ConflictPanel({
       />
       <DiffView
         aria-label={`${PART_TITLES[part]}: what changed since you started`}
-        sections={collapseDiff(diffLines(asText(base), asText(theirs)))}
+        before={asText(base)}
+        after={asText(theirs)}
       />
     </div>
   );

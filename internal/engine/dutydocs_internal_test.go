@@ -26,17 +26,18 @@ import (
 // ends (a provisioning pass at one third-party app), which is mutual exclusion
 // rather than a duty, and the pages say so instead of listing it.
 var dutyNames = map[string][]string{
-	"schedule.DutyName":   {schedule.DutyName},
-	"waiterDutyName":      {waiterDutyName},
-	"maintenanceDutyName": {maintenanceDutyName},
-	"integrationDutyName": {integrationDutyName},
-	"learningDutyName":    {learningDutyName},
-	"retentionDutyName":   {retentionDutyName},
-	"trashreap.Name":      {trashreap.Name},
-	"embedDutyName":       {embedDutyName},
-	"objectCollectorDuty": {objectCollectorDuty},
-	"chatPruneDutyName":   {chatPruneDutyName},
-	"name":                identityDutyNames(),
+	"schedule.DutyName":     {schedule.DutyName},
+	"waiterDutyName":        {waiterDutyName},
+	"maintenanceDutyName":   {maintenanceDutyName},
+	"integrationDutyName":   {integrationDutyName},
+	"learningDutyName":      {learningDutyName},
+	"retentionDutyName":     {retentionDutyName},
+	"trashreap.Name":        {trashreap.Name},
+	"embedDutyName":         {embedDutyName},
+	"objectCollectorDuty":   {objectCollectorDuty},
+	"chatPruneDutyName":     {chatPruneDutyName},
+	"codeRetentionDutyName": {codeRetentionDutyName},
+	"name":                  identityDutyNames(),
 }
 
 // dutyPhrases is how the pages name each duty in prose, lower-cased: a list
@@ -44,17 +45,18 @@ var dutyNames = map[string][]string{
 // duty dutyNames lists with no phrase here fails below rather than going
 // unread.
 var dutyPhrases = map[string][]string{
-	schedule.DutyName:   {"scheduler"},
-	waiterDutyName:      {"sandbox waiter"},
-	maintenanceDutyName: {"maintenance sweep"},
-	integrationDutyName: {"integration reconcile"},
-	learningDutyName:    {"learning passes", "learning background passes", "skill clustering"},
-	retentionDutyName:   {"trim"},
-	trashreap.Name:      {"trash reaper"},
-	embedDutyName:       {"embedding"},
-	objectCollectorDuty: {"collector"},
-	chatPruneDutyName:   {"message horizon", "chat prune"},
-	identitySweepDuty:   {"identity sweep"},
+	schedule.DutyName:     {"scheduler"},
+	waiterDutyName:        {"sandbox waiter"},
+	maintenanceDutyName:   {"maintenance sweep"},
+	integrationDutyName:   {"integration reconcile"},
+	learningDutyName:      {"learning passes", "learning background passes", "skill clustering"},
+	retentionDutyName:     {"trim"},
+	trashreap.Name:        {"trash reaper"},
+	embedDutyName:         {"embedding"},
+	objectCollectorDuty:   {"collector"},
+	chatPruneDutyName:     {"message horizon", "chat prune"},
+	codeRetentionDutyName: {"code retention", "code-retention"},
+	identitySweepDuty:     {"identity sweep"},
 }
 
 // EVERY DUTY CLAIMED IS IN THE NAME TABLE, and every name in it is claimed.

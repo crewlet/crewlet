@@ -196,10 +196,13 @@ type Trigger struct {
 // thing a person holds: a message's id, a work item's key, a schedule's name.
 type TriggerOrigin struct {
 	// Kind is what ID names: [OriginChatMessage], [OriginWorkItem],
-	// [OriginSchedule] or [OriginColleagueAsk].
+	// [OriginSchedule], [OriginColleagueAsk], [OriginCodeChange] or
+	// [OriginAlarm].
 	Kind string `json:"kind"`
 	// ID is the object's own id in that kind: a chat message's id, a work
-	// item's key, a schedule's name, a colleague channel's id.
+	// item's key, a schedule's name, a colleague channel's id, a change as
+	// the Code screens name it (web!42), an alarm instance as the alarms
+	// page names it.
 	ID string `json:"id"`
 	// Reason is why the object reached this seat, in its source's own
 	// vocabulary (a chat routing reason, a tracker reason), and empty where
@@ -208,11 +211,19 @@ type TriggerOrigin struct {
 }
 
 // The kinds of object a turn can be started by.
+//
+// A code notice and an alarm wake a seat through the notification pipeline
+// as a chat message does, so each names its object too: the change the
+// notice is about, under the notice's reason, and the alarm instance, under
+// what it did (fired, cleared, found firing). Without them a turn a review
+// request or a firing alarm started could be found only by its delivery.
 const (
 	OriginChatMessage  = "chat_message"
 	OriginWorkItem     = "work_item"
 	OriginSchedule     = "schedule"
 	OriginColleagueAsk = "colleague_ask"
+	OriginCodeChange   = "code_change"
+	OriginAlarm        = "alarm"
 )
 
 // IsZero reports an origin that names nothing.

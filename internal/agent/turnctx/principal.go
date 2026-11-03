@@ -50,12 +50,28 @@ func Principal(t *Turn) iam.Principal {
 	if err != nil {
 		return iam.Principal{}
 	}
+	var o *org.Organization
+	if t != nil {
+		o = t.Org
+	}
+	return SeatPrincipal(o, seat)
+}
+
+// SeatPrincipal is who seat acts as in a company whose chart is o — the one
+// construction of a seat's principal, which [Principal] makes for a turn's
+// calls and the engine makes for what a turn is offered before any call, so
+// the principal a surface is decided for and the one each call is decided as
+// cannot differ. A nil seat is the zero principal, which holds nothing.
+func SeatPrincipal(o *org.Organization, seat *org.Role) iam.Principal {
+	if seat == nil {
+		return iam.Principal{}
+	}
 	return iam.Principal{
 		Kind:     iam.KindSeat,
 		Seat:     seat.Handle(),
 		Stage:    iam.StageActive,
 		Grants:   slices.Clone(iam.Apps),
-		Position: unitOf(t, seat),
+		Position: unitOf(o, seat),
 	}
 }
 
@@ -64,11 +80,11 @@ func Principal(t *Turn) iam.Principal {
 // CARRIED ON THE PRINCIPAL rather than looked up per decision, for
 // [iam.Principal.Position]'s own reason: a gate that re-walked the org chart
 // per request would read a tree that has moved since the turn began.
-func unitOf(t *Turn, seat *org.Role) string {
-	if t == nil || t.Org == nil {
+func unitOf(o *org.Organization, seat *org.Role) string {
+	if o == nil {
 		return ""
 	}
-	unit := t.Org.UnitFor(seat)
+	unit := o.UnitFor(seat)
 	if unit == nil {
 		return ""
 	}

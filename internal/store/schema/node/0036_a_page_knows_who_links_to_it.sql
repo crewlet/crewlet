@@ -5,7 +5,7 @@
 -- addressed by its id (`#/doclet/pages/<id>`, or `/doclet/pages/<id>`), and the
 -- bodies that carry one are already read, tokenised and written down by the
 -- lexical indexer — so the links are derived THERE, from exactly the text the
--- index holds, by the pure grammar `pages.Links` owns.
+-- index holds, by the pure grammar `doclet.Links` owns.
 --
 -- WHO HAS TO AGREE ON IT: this node alone. It is an index over rows that live
 -- in the OTHER estate, with the lifecycle of `kb_docs` beside it: derived,

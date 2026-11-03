@@ -10,7 +10,7 @@
  * sees.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { useEffect, useState, type ReactNode } from "react";
@@ -29,6 +29,7 @@ import { WIDGETS, canUse } from "./registry.tsx";
 import { NOTHING_TO_LIST, destinationOf, type WidgetDef } from "./kit.tsx";
 import { LeafView } from "./widgets.tsx";
 import type { ContribWidget } from "./model.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -117,7 +118,7 @@ const QUIET: Record<string, unknown> = {
     complete: true,
   },
   executors: { runs: [] },
-  work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
+  inbox: { handle: "jane", notices: [], primary_reasons: [] },
 };
 
 /**
@@ -207,9 +208,7 @@ function mount(
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 const leaf = (def: WidgetDef, params: Record<string, string>): ContribWidget => ({
@@ -394,7 +393,7 @@ const PARTIAL: Record<string, unknown> = {
   company_feed: { rows: [], complete: false },
   work_projects: { ...(QUIET.work_projects as object), complete: false },
   work_project: { ...PROJECT, complete: false },
-  work_inbox: { handle: "jane", notices: [], primary_reasons: [], complete: false },
+  inbox: { handle: "jane", notices: [], sources: [], unread: 0, primary: 0, complete: false },
   work_my_work: emptyDay("jane", { complete: false }),
   work_items: { items: [], total_hint: 0, total_capped: false, complete: false },
   work_saved_views: {
@@ -448,6 +447,7 @@ const NO_GAP: Record<string, string> = {
   "schedules.upcoming": "the schedules' answer carries no flag",
   "home.pinned": "the reader's own stars, kept in this browser; a pinned project says its own gap",
   "home.live": "who is working is the live push",
+  "home.code": "the code host's listings carry no flag: each is one estate copy's answer",
   "home.tokens": "a window's spend carries no flag",
   "home.figure":
     "its first choice is the agents working now, the live push; the tracker's figures are held in Kpis.test.tsx",
@@ -538,24 +538,42 @@ describe("what a widget counts over a page", () => {
 });
 
 describe("the Inbox widget", () => {
-  /** One unread primary notice, as the engine sends it. */
-  const notice = (n: number) => ({
-    record_id: `r-${n}`,
-    log_seq: n,
-    log_stream: "CREWLET_TRACKER_LOG",
-    log_generation: 1,
-    at: "2026-10-20T09:00:00Z",
-    reason: "assignee",
-    primary: true,
-    addressed: true,
-    kind: "assigned",
-    subject_id: `t-${n}`,
-    subject_key: `ENG-${n}`,
-    excerpt: "",
-    actor: "cto",
-    actor_kind: "agent",
-    read: false,
-  });
+  /** One unread primary notice, as the composed inbox carries Worklet's. */
+  const notice = (n: number) => {
+    const own = {
+      record_id: `r-${n}`,
+      log_seq: n,
+      log_stream: "CREWLET_TRACKER_LOG",
+      log_generation: 1,
+      at: "2026-10-20T09:00:00Z",
+      reason: "assignee",
+      primary: true,
+      addressed: true,
+      kind: "assigned",
+      subject_id: `t-${n}`,
+      subject_key: `ENG-${n}`,
+      excerpt: "",
+      actor: "cto",
+      actor_kind: "agent",
+      read: false,
+    };
+    return {
+      source: "tracker",
+      record_id: own.record_id,
+      position: { stream: own.log_stream, generation: own.log_generation, seq: own.log_seq },
+      at: own.at,
+      reason: own.reason,
+      primary: own.primary,
+      addressed: own.addressed,
+      kind: own.kind,
+      subject: { id: own.subject_id, key: own.subject_key },
+      excerpt: own.excerpt,
+      actor: own.actor,
+      actor_kind: own.actor_kind,
+      read: own.read,
+      extra: own,
+    };
+  };
 
   // THE CARD AND THE SIDEBAR SAY ONE COUNT: the card's page holds the few rows
   // it draws, and the sidebar's holds a page of fifty with a cursor past it.
@@ -566,14 +584,15 @@ describe("the Inbox widget", () => {
       return {
         handle: "jane",
         notices: all.slice(0, limit),
-        primary_reasons: ["assignee"],
+        sources: [{ name: "tracker", primary_reasons: ["assignee"] }],
+        unread: Math.min(limit, all.length),
         primary: Math.min(limit, all.length),
         next_cursor: limit < all.length ? "more" : "",
         complete: true,
       };
     };
     mount(<LeafView widget={leaf(WIDGETS.get("inbox.updates")!, {})} />, ADMIN, {
-      work_inbox: inbox,
+      inbox,
     });
     await settle();
     expect(screen.getByText("Inbox · 50+ unread")).toBeTruthy();

@@ -351,6 +351,49 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"artifact_data_schema":  "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_state":   "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_usage":   "decided_by:" + string(authz.ActionArtifactUsage),
+
+		// THE CODE HOST'S ROWS, each decided per repository by the grant the
+		// serving node derives from its chart (code.GrantOf, ADR-0088):
+		// a listing leaves out what the caller may not read, and a read of
+		// one such repository is refused.
+		"code_repos":  "decided_by:" + string(authz.ActionCodeRead),
+		"code_repo":   "decided_by:" + string(authz.ActionCodeRead),
+		"code_pushes": "decided_by:" + string(authz.ActionCodeRead),
+		// AND A CHANGE'S, decided per repository alike.
+		"code_changes":        "decided_by:" + string(authz.ActionCodeRead),
+		"code_change":         "decided_by:" + string(authz.ActionCodeRead),
+		"code_change_routing": "decided_by:" + string(authz.ActionCodeRead),
+		"code_reviews":        "decided_by:" + string(authz.ActionCodeRead),
+		// AND A REPOSITORY'S CONTENT, decided per repository alike — and
+		// again by the git node that answers a read by object id.
+		"code_refs":    "decided_by:" + string(authz.ActionCodeRead),
+		"code_tree":    "decided_by:" + string(authz.ActionCodeRead),
+		"code_blob":    "decided_by:" + string(authz.ActionCodeRead),
+		"code_log":     "decided_by:" + string(authz.ActionCodeRead),
+		"code_blame":   "decided_by:" + string(authz.ActionCodeRead),
+		"code_diff":    "decided_by:" + string(authz.ActionCodeRead),
+		"code_compare": "decided_by:" + string(authz.ActionCodeRead),
+		"code_commit":  "decided_by:" + string(authz.ActionCodeRead),
+		// AND ITS MERGE QUEUES AND ITS CHECKS, decided per repository alike:
+		// a listing across repositories keeps the rows of those the caller
+		// reads, and one attempt — and its log — is refused on one it does
+		// not.
+		"code_queue":     "decided_by:" + string(authz.ActionCodeRead),
+		"code_checks":    "decided_by:" + string(authz.ActionCodeRead),
+		"code_check":     "decided_by:" + string(authz.ActionCodeRead),
+		"code_check_log": "decided_by:" + string(authz.ActionCodeRead),
+		// AND A SEARCH OF THEIR LINES, decided per repository alike: an
+		// unfiltered search leaves out what the caller does not read, and a
+		// repo: naming one is refused — by every git node that answers it.
+		"code_search": "decided_by:" + string(authz.ActionCodeRead),
+		// AND WHO READ A UNIT'S REPOSITORY, decided by its own verb before
+		// anything is read: an admin's, since the answer names the people
+		// who read it, which no repository's grant gives.
+		"code_repo_readers": "decided_by:" + string(authz.ActionCodeRepoReaders),
+		// AND THE COMPOSED INBOX, whose own verb decides whose inbox — own
+		// or lead, no app — and whose halves are each read under their own
+		// permission inside it.
+		"inbox": "decided_by:" + string(authz.ActionInbox),
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, everySeam(t))
@@ -567,6 +610,46 @@ func TestARepeatedQueryKeyTakesTheFirst(t *testing.T) {
 	p := queries.FromQuery(url.Values{"role": {"First", "Second"}})
 	if got := p.String("role"); got != "First" {
 		t.Errorf("role = %q, want the first", got)
+	}
+}
+
+// A KEY THAT REPEATS BY DESIGN IS READ WHOLE, ON BOTH TRANSPORTS, AND ONLY IT.
+//
+// `min_position` names one floor per log an answer is read from, and a JSON
+// object expresses the repetition as an array — so a query string keeps every
+// value of it, where taking the first would serve the answer's other log from
+// before the write its floor named. Every other key keeps the first value,
+// the rule above: a scalar reader handed a list would read nothing.
+//
+// Mutation: drop the repeated-key arm from FromQuery and the REST floors are
+// the first alone.
+func TestAKeyThatRepeatsByDesignIsReadWholeOnBothTransports(t *testing.T) {
+	t.Parallel()
+	floors := []string{"CREWLET_TRACKER_LOG@1:5", "CREWLET_PAGES_LOG@1:9"}
+	fromREST := queries.FromQuery(url.Values{"min_position": floors, "role": {"First", "Second"}})
+	fromSocket := queries.FromMap(map[string]any{"min_position": []any{floors[0], floors[1]},
+		"role": "First"})
+	for name, p := range map[string]queries.Params{"rest": fromREST, "socket": fromSocket} {
+		if got, ok := p.List("min_position"); !ok || !slices.Equal(got, floors) {
+			t.Errorf("%s: min_position = %v (%v), want every floor %v", name, got, ok, floors)
+		}
+		if got := p.String("role"); got != "First" {
+			t.Errorf("%s: role = %q, want the first", name, got)
+		}
+	}
+	// ONE VALUE IS A LIST OF ONE, whichever transport carried it.
+	for name, p := range map[string]queries.Params{
+		"rest":   queries.FromQuery(url.Values{"min_position": {floors[0]}}),
+		"socket": queries.FromMap(map[string]any{"min_position": floors[0]}),
+	} {
+		if got, ok := p.List("min_position"); !ok || !slices.Equal(got, floors[:1]) {
+			t.Errorf("%s: one min_position = %v (%v), want %v", name, got, ok, floors[:1])
+		}
+	}
+	// AND A VALUE THAT IS NO LIST OF STRINGS IS SAID TO BE ONE, for the
+	// grammar to refuse by the key's name.
+	if _, ok := queries.FromMap(map[string]any{"min_position": []any{floors[0], 7.0}}).List("min_position"); ok {
+		t.Error("a list holding a number read as a list of positions")
 	}
 }
 

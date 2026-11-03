@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -77,7 +78,7 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 		Why: "the reader's own pick"}
 	holder := relaunchTargets{owner: "node-a:1",
 		local: func(_, turn string) sandbox.RelaunchTarget { return picks[turn] }}
-	stop, err := q.Serve(ctx, topics.HeldRelaunch, func(_ context.Context, raw []byte) ([]byte, error) {
+	stop, err := q.Serve(ctx, topics.HeldRelaunch, queue.ConcurrentAnswers, func(_ context.Context, raw []byte) ([]byte, error) {
 		return holder.answer(raw)
 	})
 	if err != nil {
@@ -126,7 +127,7 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 		t.Errorf("a holder with no member restores the session %v (%q), want its reason", ok, why)
 	}
 	row, run := parkedSession()
-	if decided := sandbox.ReadContinuityOf(row, "", &run, got[2], sandbox.ContinuedByNextTurn,
+	if decided := sandbox.ReadContinuityOf(row.Kept(), "", &run, got[2], sandbox.ContinuedByNextTurn,
 		time.Now()); decided.Decided ||
 		!strings.Contains(decided.Why, "sitting out") {
 		t.Errorf("a row decided on the holder's undecided pick reads %+v, want undecided", decided)

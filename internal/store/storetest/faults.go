@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
+	"sync"
 	"sync/atomic"
+	"testing"
 )
 
 // FailReadsAfter wraps a driver so that every result set fails after n rows.
@@ -251,7 +254,9 @@ type CommitFault struct {
 
 // Wrap is the [store.Options.WrapDriver] function for this fault.
 func (f *CommitFault) Wrap(d driver.Driver) driver.Driver {
-	return &commitFaultDriver{inner: d, fault: f}
+	return &txWrapDriver{inner: d, wrap: func(tx driver.Tx, _ driver.TxOptions) driver.Tx {
+		return &commitFaultTx{Tx: tx, fault: f}
+	}}
 }
 
 // Arm switches the fault on; Disarm switches it off. Armed separately for the
@@ -297,28 +302,32 @@ var errLostAck = errors.New("storetest: the commit's acknowledgement was lost")
 // fault the fixture produced by accident.
 var ErrLostAck = errLostAck
 
-type commitFaultDriver struct {
+// txWrapDriver is a driver whose every transaction is handed to wrap as it
+// begins, with the options it was begun under — the one place the commit
+// instruments ([CommitFault], [CommitHold]) reach a transaction, so the
+// connection's forwards below are written once.
+type txWrapDriver struct {
 	inner driver.Driver
-	fault *CommitFault
+	wrap  func(tx driver.Tx, opts driver.TxOptions) driver.Tx
 }
 
-func (d *commitFaultDriver) Open(name string) (driver.Conn, error) {
+func (d *txWrapDriver) Open(name string) (driver.Conn, error) {
 	conn, err := d.inner.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	return &commitFaultConn{Conn: conn, fault: d.fault}, nil
+	return &txWrapConn{Conn: conn, wrap: d.wrap}, nil
 }
 
-type commitFaultConn struct {
+type txWrapConn struct {
 	driver.Conn
-	fault *CommitFault
+	wrap func(tx driver.Tx, opts driver.TxOptions) driver.Tx
 }
 
 // The same four forwards faultConn makes, and for the same reason: an embedded
 // driver.Conn carries none of the optional interfaces, and hiding them moves
 // every query onto a different path than production takes.
-func (c *commitFaultConn) ExecContext(
+func (c *txWrapConn) ExecContext(
 	ctx context.Context, q string, args []driver.NamedValue,
 ) (driver.Result, error) {
 	ex, ok := c.Conn.(driver.ExecerContext)
@@ -328,7 +337,7 @@ func (c *commitFaultConn) ExecContext(
 	return ex.ExecContext(ctx, q, args)
 }
 
-func (c *commitFaultConn) QueryContext(
+func (c *txWrapConn) QueryContext(
 	ctx context.Context, q string, args []driver.NamedValue,
 ) (driver.Rows, error) {
 	qr, ok := c.Conn.(driver.QueryerContext)
@@ -338,7 +347,7 @@ func (c *commitFaultConn) QueryContext(
 	return qr.QueryContext(ctx, q, args)
 }
 
-func (c *commitFaultConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, error) {
+func (c *txWrapConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, error) {
 	pc, ok := c.Conn.(driver.ConnPrepareContext)
 	if !ok {
 		return c.Conn.Prepare(q)
@@ -352,7 +361,7 @@ func (c *commitFaultConn) PrepareContext(ctx context.Context, q string) (driver.
 // would be handed to the next caller and the case would measure the wrong
 // recovery — the same reason every other optional interface is forwarded
 // explicitly above.
-func (c *commitFaultConn) IsValid() bool {
+func (c *txWrapConn) IsValid() bool {
 	v, ok := c.Conn.(driver.Validator)
 	return !ok || v.IsValid()
 }
@@ -360,7 +369,7 @@ func (c *commitFaultConn) IsValid() bool {
 // RetireSwitch forwards the wrapped connection's retire switch, which the
 // store takes out at the draw. Hidden here, a connection whose
 // transaction did not end would be handed to the next caller.
-func (c *commitFaultConn) RetireSwitch() func() {
+func (c *txWrapConn) RetireSwitch() func() {
 	r, ok := c.Conn.(interface{ RetireSwitch() func() })
 	if !ok {
 		return func() {}
@@ -368,7 +377,7 @@ func (c *commitFaultConn) RetireSwitch() func() {
 	return r.RetireSwitch()
 }
 
-func (c *commitFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+func (c *txWrapConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	bt, ok := c.Conn.(driver.ConnBeginTx)
 	if !ok {
 		//nolint:staticcheck // SA1019: the fallback database/sql itself uses.
@@ -376,13 +385,13 @@ func (c *commitFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (d
 		if err != nil {
 			return nil, err
 		}
-		return &commitFaultTx{Tx: tx, fault: c.fault}, nil
+		return c.wrap(tx, opts), nil
 	}
 	tx, err := bt.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	return &commitFaultTx{Tx: tx, fault: c.fault}, nil
+	return c.wrap(tx, opts), nil
 }
 
 type commitFaultTx struct {
@@ -412,4 +421,202 @@ func (t *commitFaultTx) Commit() error {
 	default:
 		return t.Tx.Commit()
 	}
+}
+
+// HoldCommits wraps a driver so that, while it is armed ([CommitHold.Arm]),
+// every COMMIT of a write transaction waits until it is released: the
+// transaction's statements have run and its commit has not returned, which is
+// what a disk whose fsync has stalled looks like to everything waiting on that
+// commit.
+//
+// # Why a hold is its own instrument
+//
+// The two faults above end a commit at once, one way or the other. A HOLD keeps
+// it open for as long as the case says: it is how a case asks what the code
+// around a commit does WHILE the commit has not returned — what an apply loop
+// goes on doing, and what the callers waiting on it are told — which a stalling
+// disk produces for seconds at a time and which no other instrument can stage.
+//
+// A READ'S TRANSACTION IS NEVER HELD: [store.DB.Read] begins it read-only, and
+// what a read commits is nothing. Every write transaction on the handle it
+// wraps is — a node's own estate and the replicated one beside it share one
+// wrapper — so a case arms it at the moment the one write it is about is next.
+//
+// RELEASED AT CLEANUP whatever the case did, because a commit left held keeps
+// its connection, the file's write lock and every goroutine behind them past
+// the case's end.
+func HoldCommits(t testing.TB) *CommitHold {
+	h := &CommitHold{changed: make(chan struct{})}
+	t.Cleanup(h.Release)
+	return h
+}
+
+// CommitHold is an armable hold on write commits. See [HoldCommits].
+type CommitHold struct {
+	mu sync.Mutex
+
+	// release is closed to let go the commits held since the last Arm, and
+	// nil while the hold is off; fail is what a released commit reports in
+	// place of committing — nil commits it.
+	release chan struct{}
+	fail    error
+
+	// holding is how many commits wait at the hold now; begun and
+	// committed count the write transactions begun, and committed, since
+	// the last Arm.
+	holding   int
+	begun     int
+	committed int
+
+	// changed is closed and replaced on every change of a count, which is
+	// what the Await methods wait on.
+	changed chan struct{}
+}
+
+// Wrap is the [store.Options.WrapDriver] function for this hold.
+func (h *CommitHold) Wrap(d driver.Driver) driver.Driver {
+	return &txWrapDriver{inner: d, wrap: func(tx driver.Tx, opts driver.TxOptions) driver.Tx {
+		if opts.ReadOnly {
+			return tx
+		}
+		h.mu.Lock()
+		if h.release != nil {
+			h.begun++
+			h.changedLocked()
+		}
+		h.mu.Unlock()
+		return &heldTx{Tx: tx, hold: h}
+	}}
+}
+
+// Arm holds every write commit from now on, and starts the counts afresh.
+// Armed separately from Wrap for the reason the faults are: a hold in place at
+// the open would keep the migrations from ever committing.
+func (h *CommitHold) Arm() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.release != nil {
+		return
+	}
+	h.release, h.fail = make(chan struct{}), nil
+	h.begun, h.committed = 0, 0
+	h.changedLocked()
+}
+
+// Release lets every held commit commit, and holds no more until the next
+// Arm. Idempotent.
+func (h *CommitHold) Release() { h.let(nil) }
+
+// ReleaseFailing ends every held commit as one that never landed — rolled
+// back, reporting err — and holds no more until the next Arm: a crash between
+// a transaction's statements and its commit, with the process still running to
+// be asserted against.
+func (h *CommitHold) ReleaseFailing(err error) { h.let(err) }
+
+func (h *CommitHold) let(fail error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.release == nil {
+		return
+	}
+	h.fail = fail
+	close(h.release)
+	h.release = nil
+}
+
+// Begun is how many write transactions began since the last Arm.
+func (h *CommitHold) Begun() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.begun
+}
+
+// Committed is how many write transactions committed since the last Arm, at
+// once or once released.
+func (h *CommitHold) Committed() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.committed
+}
+
+// AwaitHeld blocks until n commits wait at the hold at once, or ctx ends.
+func (h *CommitHold) AwaitHeld(ctx context.Context, n int) error {
+	return h.await(ctx, func() bool { return h.holding >= n }, func() string {
+		return fmt.Sprintf("%d commit(s) held, want %d", h.holding, n)
+	})
+}
+
+// AwaitCommitted blocks until n write transactions have committed since the
+// last Arm, or ctx ends.
+func (h *CommitHold) AwaitCommitted(ctx context.Context, n int) error {
+	return h.await(ctx, func() bool { return h.committed >= n }, func() string {
+		return fmt.Sprintf("%d commit(s) since the hold was armed, want %d", h.committed, n)
+	})
+}
+
+// await waits on changed until reached holds, both read under the lock.
+func (h *CommitHold) await(ctx context.Context, reached func() bool, state func() string) error {
+	for {
+		h.mu.Lock()
+		if reached() {
+			h.mu.Unlock()
+			return nil
+		}
+		changed := h.changed
+		h.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return fmt.Errorf("storetest: %s: %w", state(), ctx.Err())
+		}
+	}
+}
+
+func (h *CommitHold) changedLocked() {
+	close(h.changed)
+	h.changed = make(chan struct{})
+}
+
+// heldTx is one write transaction under a [CommitHold].
+type heldTx struct {
+	driver.Tx
+	hold *CommitHold
+}
+
+// Commit waits while the hold is armed, then commits — or, released failing,
+// rolls back and reports the failure, so nothing is durable.
+func (t *heldTx) Commit() error {
+	h := t.hold
+	h.mu.Lock()
+	release := h.release
+	if release != nil {
+		h.holding++
+		h.changedLocked()
+	}
+	h.mu.Unlock()
+	if release != nil {
+		<-release
+		h.mu.Lock()
+		h.holding--
+		fail := h.fail
+		h.changedLocked()
+		h.mu.Unlock()
+		if fail != nil {
+			// ROLLED BACK rather than left open, for [commitFaultTx]'s
+			// reason: the fault is a commit that never landed, not a
+			// transaction left wedged on its connection.
+			_ = t.Tx.Rollback()
+			return fail
+		}
+	}
+	if err := t.Tx.Commit(); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	h.committed++
+	h.changedLocked()
+	h.mu.Unlock()
+	return nil
 }

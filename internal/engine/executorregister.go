@@ -36,8 +36,8 @@ import (
 
 // executorRegistrations is the executor domain's entry in the register: the
 // TENTH domain and the EIGHTH strict, identity-claiming one. Its declaration,
-// applier, write seams, barrier, read model, generation record, node gate and
-// Tier A ceiling (`stream.executor_log_max_bytes`, read through
+// applier, write seams, barrier, read model, trimmed record, generation
+// record, node gate and Tier A ceiling (`stream.executor_log_max_bytes`, read through
 // config.Stream.ExecutorMaxBytes).
 //
 // A BARRIER AND A READ MODEL, because a seat reads this log at `linearizable`:
@@ -67,6 +67,10 @@ func executorRegistrations() []registration {
 				Gates: executordomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 		},
 		Barrier: executordomain.EncodeBarrier,
+		// AND ITS TRIMMED RECORD, for every strict log's reason: its
+		// arbitration anchors are replicated rows, removed below the trim
+		// floor by a record every applier takes at one position (ADR-0080).
+		Trimmed: executordomain.EncodeTrimmed,
 		// ITS OWN READ MODEL, counted from what a turn's launches read at
 		// `linearizable` — see [executordomain.LinearizableReadsPerSeatDay],
 		// which is also the barrier term in the log's ceiling
@@ -104,8 +108,8 @@ func executorRegistrations() []registration {
 		// the assistant's reason: counted at its 512 MiB on every fresh node
 		// it would move the least a node boots in past the smallest data
 		// volume crewlet-operator admits; scaled, it reserves its 64 MiB
-		// floor there, inside the room the nine logs before it leave
-		// (TestTheExecutorLogFitsBesideTheNineAtTheOperatorsSmallestVolumes).
+		// floor there, inside the room the other logs leave
+		// (TestTheExecutorLogFitsBesideTheOtherLogsAtTheOperatorsSmallestVolumes).
 		Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 			bytes, derived := stream.ExecutorMaxBytes()
 			return domainCeiling{Bytes: bytes,
@@ -206,7 +210,7 @@ func (e *Engine) ExecutorSessions() (*executordomain.SessionStore, error) {
 // row was last touched, asked at every reaper pass: the
 // `turn_engine.conversation_session.retention_days` of the revision the fleet's
 // activation pointer names, read on a node that runs that very activation
-// ([Engine.fleetCompany]), or an error saying why this node cannot know it.
+// ([Engine.servedFleetRevision]), or an error saying why this node cannot know it.
 //
 // THE FLEET'S REVISION, NEVER THIS NODE'S OWN, for [Engine.assistantRetention]'s
 // reason: a retention delete is a record every data node applies, and a node
@@ -214,7 +218,7 @@ func (e *Engine) ExecutorSessions() (*executordomain.SessionStore, error) {
 // take, may read a term the company has since lengthened. An unknown term
 // deletes nothing of this source ([trashreap.Termed]).
 func (e *Engine) executorRetention(ctx context.Context) (time.Duration, error) {
-	company, err := e.fleetCompany(ctx, e.Company())
+	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -478,7 +482,7 @@ func (e *Engine) retireSeatSessions(ctx context.Context, seat uuid.UUID, handle 
 		return fmt.Errorf("engine: this node runs no executor log, so it cannot remove "+
 			"retired seat %s's sessions", seat)
 	}
-	company, err := e.fleetCompany(ctx, e.Company())
+	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
 		return fmt.Errorf("engine: retired seat %s's sessions are kept until this node "+
 			"applies the revision the fleet runs: %w", seat, err)

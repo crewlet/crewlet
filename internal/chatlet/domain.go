@@ -248,9 +248,11 @@ func (Domain) ScopeIndex() string { return "chat_log_deferred_scope" }
 // OpsTable is contract 3's first layer: what this node has already applied.
 func (Domain) OpsTable() string { return "chat_ops" }
 
-// ReadinessInput reports that this domain's health gates seat admission.
+// GatesSeatAdmission reports that a seat depends on this domain's copy: a
+// node admits a seat only once it is established, and a copy out of service
+// leaves the node's seats routed through its peers.
 //
-// TRUE, for the tracker's and the wiki's reason: a strict replay's stall is a
+// TRUE, for Worklet's and Doclet's reason: a strict replay's stall is a
 // FAULT rather than a coverage number. What a node behind on THIS log serves
 // is worse than incomplete — it is confidently wrong in both directions. A
 // seat woken by a message answers it against a thread whose last hour it
@@ -258,7 +260,7 @@ func (Domain) OpsTable() string { return "chat_ops" }
 // that has not applied a post has not minted the number every later post in
 // that room depends on. A node behind on a compacted domain answers less
 // completely and says so; there is no equivalent here.
-func (Domain) ReadinessInput() bool { return true }
+func (Domain) GatesSeatAdmission() bool { return true }
 
 // ClaimsIdentity reports that every node's Replicated tables must be
 // byte-identical.

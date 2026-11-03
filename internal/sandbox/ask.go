@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
@@ -129,10 +130,15 @@ func (a Ask) ownFaults() []error {
 	}
 	note(decision.CheckText("context", a.Context, MaxAskContextBytes, false))
 	note(decision.CheckText("to", a.To, MaxAskToBytes, true))
-	if a.Branch != "" && (len(a.Branch) > MaxBranchBytes || !ValidBranch(a.Branch)) {
+	// THE ENGINE'S ONE GRAMMAR OF A BRANCH (ADR-0008), whose length rule is
+	// the bound: one git refuses, one that is not UTF-8 (the row is JSON, so
+	// its bytes would be replaced and it would arrive as another branch's
+	// name), or one past [gitref.MaxBranchBytes], a ref no push to the
+	// engine's code host can create.
+	if a.Branch != "" && !gitref.ValidBranch(a.Branch) {
 		note(fieldRefusal("branch", fmt.Sprintf("is %q, which is not a branch name git "+
-			"accepts (or is past %d bytes): name the branch exactly as you pushed it, "+
-			"or leave it out", a.Branch, MaxBranchBytes)))
+			"accepts (or is not UTF-8, or is past %d bytes): name the branch exactly as you "+
+			"pushed it, or leave it out", a.Branch, gitref.MaxBranchBytes)))
 	}
 	if a.Held != nil {
 		found = append(found, a.Held.validate(a.Decision)...)

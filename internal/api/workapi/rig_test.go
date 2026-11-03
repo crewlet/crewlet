@@ -25,8 +25,10 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -62,6 +64,11 @@ func (c chart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 // MemberOf answers that nobody sits in any unit: no case here shares an
 // artifact with a team.
 func (c chart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, c.err
+}
+
+// SeatGranted answers that no role carries a grant: no work route names one.
+func (c chart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
 	return false, c.err
 }
 
@@ -335,8 +342,8 @@ func (b *bound) EditComment(_ context.Context, opID, _, _, commentID, body strin
 	return b.w.answer(opID)
 }
 
-func (b *bound) MarkInbox(_ context.Context, opID, handle string,
-	_ worklet.InboxGesture, authority worklet.PersonAuthority) (worklet.WriteResult, error) {
+func (b *bound) MarkInbox(_ context.Context, opID, handle string, _ statelog.Position,
+	_ inbox.Gesture[worklet.Reason], authority worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -539,7 +546,7 @@ func (r *rig) operator(c authz.Chart, halves func() (workapi.Halves, bool)) *ope
 	// a key no node holds and run records no turn has: no case here calls one.
 	fleet, queue := coordmemory.NewFleet(), queuememory.New()
 	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
-		statelog.OneKey("k1", "the work surface cases' seat-control key material"))
+		recordseal.OneKey("k1", "the work surface cases' seat-control key material"))
 	if err != nil {
 		r.t.Fatalf("the steer channel: %v", err)
 	}

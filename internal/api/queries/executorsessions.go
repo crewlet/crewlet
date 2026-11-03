@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -136,8 +137,8 @@ import (
 // is either, which costs one read more of the coordination store, the seat's
 // lease, naming that node ([RelaunchTargets]), on every page that asks, the
 // holder's own included. And A LIVE ROW IS DECIDED ON THE LOG AS A RELAUNCH
-// READS IT: read again at the relaunch's level ([sandbox.RelaunchRead]) where
-// the page was read below it and the row names another capture than the one
+// READS IT: read again at the relaunch's level ([executordomain.RelaunchRead])
+// where the page was read below it and the row names another capture than the one
 // its run's record keeps, or the record keeps none ([sandbox.RereadsRow]),
 // since a copy of the log behind the record would read a session a relaunch
 // continues as one the log no longer names — and nowhere else, since a read at
@@ -229,7 +230,7 @@ type SessionRow struct {
 	// the reviewer's decision, whether a reply reached anybody, who stopped
 	// it, what failed — its model- and person-written fields declared
 	// somebody's words on the type itself; null while the turn runs.
-	Ending *executordomain.Ending `json:"ending"`
+	Ending *executorkeep.Ending `json:"ending"`
 
 	// AskExcerpt is the opening of what the turn was asked, redacted.
 	AskExcerpt string `json:"ask_excerpt" untrusted:"fence"`
@@ -370,7 +371,7 @@ func (s Sources) executorSessions(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +544,7 @@ func (c rowContinuity) ask() (sandbox.RelaunchAsk, bool) {
 	if c.undecided != "" {
 		return sandbox.RelaunchAsk{}, false
 	}
-	return sandbox.TargetAsk(c.decideOn, c.head, c.run)
+	return sandbox.TargetAsk(c.decideOn.Kept(), c.head, c.run)
 }
 
 // decide is the row's `continued_by`, `continuable`, `continues_in` and
@@ -559,7 +560,7 @@ func (c rowContinuity) decide(target sandbox.RelaunchTarget,
 	if c.undecided != "" {
 		return sandbox.ContinuedByRelaunch, nil, "", c.undecided
 	}
-	decided := sandbox.ReadContinuityOf(c.decideOn, c.head, c.run, target,
+	decided := sandbox.ReadContinuityOf(c.decideOn.Kept(), c.head, c.run, target,
 		nextLaunch(c.decideOn.ConversationKey), now)
 	// REDACTED, as every text of this surface is: a reason can quote a
 	// harness's release as its box printed it, and why a turn's newest
@@ -588,7 +589,7 @@ func nextLaunch(conversationKey string) sandbox.ContinuedBy {
 // its turn is live and its record could not be read (unread) — the decision
 // would read a missing record as a run that is over — and otherwise decided on
 // the row as a relaunch reads it: read again at the relaunch's level
-// ([sandbox.RelaunchRead]) where the caller's read was below it and the
+// ([executordomain.RelaunchRead]) where the caller's read was below it and the
 // decision reaches a row that names another capture than the run's record
 // keeps ([sandbox.RereadsRow]), and row itself everywhere else, which decides
 // as that read would — undecided where the read again fails.
@@ -606,10 +607,10 @@ func (s Sources) relaunchRow(ctx context.Context, row executordomain.Session, he
 	case unread != nil && !row.Ended():
 		c.undecided = undecidedContinuity
 		return c
-	case fresh.Level == sandbox.RelaunchRead().Level || !sandbox.RereadsRow(row, run, now):
+	case fresh.Level == executordomain.RelaunchRead().Level || !sandbox.RereadsRow(row.Kept(), run, now):
 		return c
 	}
-	read, err := s.ExecutorSessions.Session(ctx, row.Handle, row.Turn, sandbox.RelaunchRead())
+	read, err := s.ExecutorSessions.Session(ctx, row.Handle, row.Turn, executordomain.RelaunchRead())
 	if err != nil {
 		log.WarnContext(ctx, "executor_session_row_unreadable", "handle", row.Handle, "turn_id", row.Turn,
 			"error", err, "detail", "whether a relaunch continues the session cannot be said now")
@@ -632,7 +633,7 @@ func (s Sources) executorSession(ctx context.Context, p Params) (any, error) {
 	if turn == "" {
 		return nil, badParams("turn_id", "", nil)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}

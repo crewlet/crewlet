@@ -6,7 +6,14 @@
 
 import { describe, expect, test } from "vitest";
 import { SESSION_QUERIES } from "../contract/domains.ts";
-import { domainOf, EVERY_QUESTION, isLater, parsePosition, SessionFloors } from "./session.ts";
+import {
+  domainsOf,
+  EVERY_QUESTION,
+  isLater,
+  parsePosition,
+  SessionFloors,
+  spellPosition,
+} from "./session.ts";
 
 describe("a position", () => {
   test("reads the engine's own spelling", () => {
@@ -15,6 +22,14 @@ describe("a position", () => {
       generation: 2,
       seq: 4711,
     });
+  });
+
+  // AND SPELLS ONE BACK AS IT READS ONE, so a floor taken from an answer's
+  // position is one the engine accepts.
+  test("spells a position the way it reads one", () => {
+    const at = { stream: "CREWLET_CODE_LOG", generation: 3, seq: 90 };
+    expect(spellPosition(at)).toBe("CREWLET_CODE_LOG@3:90");
+    expect(parsePosition(spellPosition(at))).toEqual(at);
   });
 
   test.each(["", "CREWLET_TRACKER_LOG", "@1:2", "L@1", "L@-1:2", "L@1:2x", "L @1:2"])(
@@ -65,11 +80,36 @@ describe("the floor", () => {
     expect(floors.freshness("work_items")).toBeNull();
     floors.written("tracker", "T@1:10", []);
     for (const kind of SESSION_QUERIES.tracker) {
-      expect(floors.freshness(kind)).toEqual({ read_level: "session", min_position: "T@1:10" });
+      expect(floors.freshness(kind)).toEqual({ read_level: "session", min_position: ["T@1:10"] });
     }
     expect(floors.freshness("page")).toBeNull();
     expect(floors.freshness("work_search")).toBeNull();
     expect(floors.freshness("viewer")).toBeNull();
+  });
+
+  // ONE FLOOR PER LOG A QUESTION READS. The company feed is the tracker's work
+  // and the knowledge base's pages; named only the tracker's floor, the pages
+  // half of a feed drawn after a page save would come from before it.
+  test("a question read from two logs names the floor of each the tab wrote, in its listed order", () => {
+    const floors = new SessionFloors();
+    expect(domainsOf("company_feed")).toEqual(["tracker", "pages"]);
+    expect(floors.freshness("company_feed")).toBeNull();
+    floors.written("pages", "P@1:5", []);
+    expect(floors.freshness("company_feed")).toEqual({
+      read_level: "session",
+      min_position: ["P@1:5"],
+    });
+    floors.written("tracker", "T@1:10", []);
+    expect(floors.freshness("company_feed")).toEqual({
+      read_level: "session",
+      min_position: ["T@1:10", "P@1:5"],
+    });
+    // A question of one of those logs still names its own floor alone.
+    expect(floors.freshness("work_items")).toEqual({
+      read_level: "session",
+      min_position: ["T@1:10"],
+    });
+    expect(floors.freshness("pages")).toEqual({ read_level: "session", min_position: ["P@1:5"] });
   });
 
   test("a write moves its domain's questions and the ones it names beside them", () => {
@@ -77,6 +117,10 @@ describe("the floor", () => {
     expect(SessionFloors.moves("pages", "tracker", [])).toBe(false);
     expect(SessionFloors.moves("work_search", "tracker", ["work_search"])).toBe(true);
     expect(SessionFloors.moves("work_search", null, ["work_search"])).toBe(true);
+    // A question read from two logs is moved by a write to either.
+    expect(SessionFloors.moves("company_feed", "tracker", [])).toBe(true);
+    expect(SessionFloors.moves("company_feed", "pages", [])).toBe(true);
+    expect(SessionFloors.moves("company_feed", null, [])).toBe(false);
   });
 
   // A WRITE WHOSE REACH NOBODY CAN NAME moves every question, the ones no
@@ -87,14 +131,19 @@ describe("the floor", () => {
     expect(SessionFloors.moves("brand", "tracker", [])).toBe(false);
   });
 
-  test("every listed question belongs to exactly one domain", () => {
-    const seen = new Map<string, string>();
+  test("every listed question is listed once under each domain whose log it reads", () => {
     for (const [domain, kinds] of Object.entries(SESSION_QUERIES)) {
+      expect(new Set(kinds).size, domain).toBe(kinds.length);
       for (const kind of kinds) {
-        expect(seen.get(kind), kind).toBeUndefined();
-        seen.set(kind, domain);
-        expect(domainOf(kind)).toBe(domain);
+        expect(domainsOf(kind), kind).toContain(domain);
       }
     }
+    for (const kind of new Set(Object.values(SESSION_QUERIES).flat())) {
+      const listed = Object.entries(SESSION_QUERIES)
+        .filter(([, kinds]) => (kinds as readonly string[]).includes(kind))
+        .map(([domain]) => domain);
+      expect(domainsOf(kind), kind).toEqual(listed);
+    }
+    expect(domainsOf("viewer")).toEqual([]);
   });
 });

@@ -253,6 +253,15 @@ var readConditions = map[ReadRefusal]conditionWords{
 		"fleet", TryAgainSoon},
 	RefuseNoQuorum: {"the fleet couldn't agree on the latest changes",
 		TryAgainSoon},
+	// A STALL OF THE ONE MEMBER that stores the log: its own write of the
+	// check did not complete in a barrier budget, which the answer's
+	// Retry-After waits out ([StalledRetryHint]). It clears when that write
+	// completes, so a person tries again in a moment, and is never sent to
+	// an administrator, which is the advice for a condition no wait clears.
+	// A stall that persists is the operator's to read in the refusal's
+	// detail, which the surface answering it logs.
+	RefuseBrokerStalled: {"the company's storage took too long to confirm " +
+		"a check this answer needs", TryAgainSoon},
 	RefuseLogFull: {"there's no room left to save this kind of change, so " +
 		answering + " can't confirm it has the latest ones", makeRoom},
 	RefuseBrokerRefused: {"the company's storage refused a check this answer " +

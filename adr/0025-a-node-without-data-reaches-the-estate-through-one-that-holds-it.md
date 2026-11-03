@@ -76,9 +76,13 @@ it, not how the estate is divided between the nodes that hold it.
 ## Amendment — every node routes
 
 The client a node without `data` ran is now a ROUTER that every node runs,
-and the decision above holds through it unchanged: one subject per serving
-node, the asker's choice of node, the failover rule stated per operation and
-the session floor on every request. Every data node holds the whole estate, so
+and the decision above holds through it unchanged: per-node subjects, the
+asker's choice of node, the failover rule stated per operation and the session
+floor on every request. (A serving node answers a push's proposal on a subject
+of its own beside the one every other operation is asked on, because a
+proposal waits for its batch and must not hold a slot the node's reads are
+answered through — still the node the asker chose, so the retry rule stays
+with the asker.) Every data node holds the whole estate, so
 the router asks for nothing but the operation; what the amendment adds is four
 consequences of routing on every node rather than on the nodes that hold none:
 
@@ -108,3 +112,19 @@ leases, a data node's reads waiting on its floors, and the request gate asking
 whether a copy lags rather than whether it is level this instant — and choosing
 a lagging copy last rather than never.
 `internal/estate` states the rules; the authority and the gate are unchanged.
+
+A copy goes out of service one DOMAIN at a time — ADR-0079.
+
+## Amendment — a repository's git work is asked of its home git node
+
+The router has a second placement beside the data nodes:
+[ADR-0089](0089-a-repositorys-git-work-is-asked-of-its-home-git-node.md). An
+operation on a repository's git OBJECTS — a read of its content by object id —
+is asked of the nodes with the `git` role rather than of the data nodes, in the
+repository's rendezvous order over them, its home first, and answered from the
+git node's own cache. It reads no domain's copy, so it takes no copy verdict,
+no dispatch floor and no lag gate: its floor travels in its arguments, as the
+cache's sync level. The decision above holds through it unchanged — a
+per-node subject (the git reads on a lane of their own beside the shared one
+and the proposals'), the asker's choice of node, the failover rule stated for
+the operation, and every request and reply signed.

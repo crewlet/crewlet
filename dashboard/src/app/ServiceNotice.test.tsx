@@ -72,7 +72,7 @@ function mount(
   );
 }
 
-const JIRA: OrgServices = { tracker: "jira", knowledge: "doclet", chat: "chatlet" };
+const JIRA: OrgServices = { tracker: "jira", knowledge: "doclet", chat: "chatlet", code: "native" };
 
 // THE SERVICES' PAGES ARE EVERY READER'S: a reader holding only Worklet who
 // followed a link to Worklet is told in place and offered the page about the
@@ -87,9 +87,12 @@ test("a reader without Admin is told in place and offered the service's own page
 });
 
 test("a hidden knowledge base offers Doclet's page", async () => {
-  mount("knowledge", ["doclet"], { tracker: "worklet", knowledge: "confluence", chat: "chatlet" }, [
-    "admin",
-  ]);
+  mount(
+    "knowledge",
+    ["doclet"],
+    { tracker: "worklet", knowledge: "confluence", chat: "chatlet", code: "native" },
+    ["admin"],
+  );
   const link = await screen.findByRole("link", { name: "See what is built into Crewlet" });
   expect(link.getAttribute("href")).toBe("#/company/integrations/doclet");
 });
@@ -98,11 +101,30 @@ test("a hidden knowledge base offers Doclet's page", async () => {
 // tracker to Doclet's line, as the link did before chat was a service,
 // and a company talking on Slack is shown Doclet.
 test("a chat run elsewhere offers Chatlet's page", async () => {
-  mount("chat", ["chatlet"], { tracker: "worklet", knowledge: "doclet", chat: "vendor" }, [
-    "admin",
-  ]);
+  mount(
+    "chat",
+    ["chatlet"],
+    { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "native" },
+    ["admin"],
+  );
   const link = await screen.findByRole("link", { name: "See what is built into Crewlet" });
   expect(link.getAttribute("href")).toBe("#/company/integrations/chat");
+});
+
+// THE CODE HOST HAS NO CARD UNDER INTEGRATIONS: it is set in the company
+// document, which the sentence names, and a link to a page about something
+// else would send the reader looking there. Mutation: give the code host a
+// card, and the link below is drawn.
+test("a company hosting no code is told so in place, and offered no card", async () => {
+  mount(
+    "code",
+    ["code", "pushes"],
+    { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "none" },
+    ["admin"],
+  );
+  expect(await screen.findByText("This company does not host its code here")).toBeTruthy();
+  expect(screen.getByText(/does not set code\.native/)).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "See what is built into Crewlet" })).toBeNull();
 });
 
 // WHAT THE READER ASKED FOR IS NAMED: a New design address says why design is
@@ -111,21 +133,34 @@ test("each hidden place says why it is not here", () => {
   expect(noticeText("tracker", ["artifacts", "new", "design"])).toMatch(
     /^A new design is made by an agent working a task/,
   );
-  expect(noticeText("tracker", ["me"])).toBe(
-    "My work is part of Worklet, which is not in use here.",
-  );
-  // A PLACE ONLY ONE SECTION OF WHICH READS WORKLET IS NAMED BY THAT SECTION,
-  // never by its workspace: Settings is not part of Worklet.
+  // A PLACE ONLY SOME SECTIONS OF WHICH READ WORKLET IS NAMED BY THE SECTION
+  // ITS ADDRESS SHOWS: My work at #/me is its Queue, and its Reviews tab is
+  // the code host's, so the workspace as a whole is not part of Worklet.
+  expect(noticeText("tracker", ["me"])).toBe("Queue is part of Worklet, which is not in use here.");
+  // Settings likewise is not part of Worklet, only its Expensive tasks.
   expect(noticeText("tracker", ["settings", "spend", "tasks"])).toBe(
     "Expensive tasks is part of Worklet, which is not in use here.",
   );
   expect(noticeText("knowledge", ["doclet"])).toMatch(/^Doclet is not in use here\..*Memory tab/);
-  expect(noticeTitle("tracker", { tracker: "none", knowledge: "doclet", chat: "chatlet" })).toBe(
-    "This company runs no work tracker",
-  );
   expect(
-    noticeTitle("knowledge", { tracker: "worklet", knowledge: "confluence", chat: "chatlet" }),
+    noticeTitle("tracker", {
+      tracker: "none",
+      knowledge: "doclet",
+      chat: "chatlet",
+      code: "native",
+    }),
+  ).toBe("This company runs no work tracker");
+  expect(
+    noticeTitle("knowledge", {
+      tracker: "worklet",
+      knowledge: "confluence",
+      chat: "chatlet",
+      code: "native",
+    }),
   ).toBe("Confluence holds this company's knowledge");
+  expect(
+    noticeTitle("code", { tracker: "jira", knowledge: "confluence", chat: "none", code: "none" }),
+  ).toBe("This company does not host its code here");
 });
 
 // CHATLET IS A CREWLET SERVICE LIKE THE OTHER TWO: an address under it, on a
@@ -134,7 +169,12 @@ test("each hidden place says why it is not here", () => {
 // Chatlet, and called a vendor's to anybody else. Mutation: drop the chat arm of
 // `noticeTitle` and every case here fails.
 test("an address under Chatlet names where the company talks instead", async () => {
-  const slack: OrgServices = { tracker: "worklet", knowledge: "doclet", chat: "vendor" };
+  const slack: OrgServices = {
+    tracker: "worklet",
+    knowledge: "doclet",
+    chat: "vendor",
+    code: "native",
+  };
   mount("chat", ["chatlet"], slack, ["chatlet"], ["slack"]);
   expect(await screen.findByText("This company talks on Slack")).toBeTruthy();
   expect(screen.getByText("Chatlet is not in use here.")).toBeTruthy();

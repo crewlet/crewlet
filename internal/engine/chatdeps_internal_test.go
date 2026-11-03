@@ -37,6 +37,9 @@ func TestChatDepsReachTheRoomsThroughTheRouter(t *testing.T) {
 	c := &Company{Config: &config.Company{}, Org: &org.Organization{}}
 
 	stateless, _ := statelessOver(t)
+	// PUBLISHING, as a node outside a maintenance mode is: a node in one
+	// hands out no chat writer, on every node ([Engine.writers]).
+	stateless.mode = statelog.ModeNormal
 	stateless.remote.Store(&remoteNative{chat: true})
 	for name, e := range map[string]*Engine{
 		"a data node running chat": roomsNode(t),

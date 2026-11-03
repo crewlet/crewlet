@@ -13,9 +13,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // keptRestore is the engine's part of continuing a kept session as a case plays
@@ -23,7 +22,7 @@ import (
 // every row it was asked for.
 type keptRestore struct {
 	mu       sync.Mutex
-	rows     map[string]executordomain.Session
+	rows     map[string]executorkeep.TurnRow
 	archives map[string][]byte
 	// unreadable fails every fetch as an object the store no longer holds.
 	unreadable bool
@@ -35,40 +34,42 @@ type keptRestore struct {
 	asked    []string
 }
 
-func (k *keptRestore) Session(_ context.Context, handle, turn string,
-	fresh statelog.Freshness) (executordomain.Session, error) {
+// errNoRow and errUnreadable stand for the executor log's answers of a row it
+// does not hold and an object the store no longer holds: a restore branches on
+// no error of the log's, every one of them a session not continued.
+var (
+	errNoRow      = errors.New("no such turn on the executor log")
+	errUnreadable = errors.New("the session's object is unreadable")
+)
 
+func (k *keptRestore) Session(_ context.Context, handle, turn string) (executorkeep.TurnRow, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.asked = append(k.asked, handle+"/"+turn)
-	// A CAPTURE ANOTHER NODE'S KEEP RECORDED is seen only at linearizable.
-	if fresh.Level != statelog.ReadLinearizable {
-		return executordomain.Session{}, errors.New("read below the level a kept capture is seen at")
-	}
 	row, ok := k.rows[turn]
 	if !ok || row.Handle != handle {
-		return executordomain.Session{}, executordomain.ErrNotFound
+		return executorkeep.TurnRow{}, errNoRow
 	}
 	return row, nil
 }
 
-func (k *keptRestore) Fetch(_ context.Context, row executordomain.Session, dst io.Writer) error {
+func (k *keptRestore) Fetch(_ context.Context, row executorkeep.TurnRow, dst io.Writer) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	body, ok := k.archives[row.Object.Key.String()]
 	if k.unreadable || !ok {
-		return executordomain.ErrUnreadable
+		return errUnreadable
 	}
 	_, err := dst.Write(body)
 	return err
 }
 
-func (k *keptRestore) OpenSpooled(_ executordomain.Session, sealed io.Reader) (io.Reader, error) {
+func (k *keptRestore) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.opened++
 	if k.opened == k.failOpen {
-		return nil, executordomain.ErrUnreadable
+		return nil, errUnreadable
 	}
 	return sealed, nil
 }
@@ -81,17 +82,16 @@ func (k *keptRestore) askedFor() []string {
 
 // keptRow is the executor log's row of turn t1 as a capture kept stamps it:
 // its session, its place and its object.
-func keptRow(t *testing.T, kept SessionCapture) executordomain.Session {
+func keptRow(t *testing.T, kept SessionCapture) executorkeep.TurnRow {
 	t.Helper()
 	key, err := objstore.ParseKey(kept.Object)
 	if err != nil {
 		t.Fatalf("the kept capture names no object: %v", err)
 	}
-	return executordomain.Session{Handle: "swe", Turn: "t1", ConversationKey: "chat:D1",
+	return executorkeep.TurnRow{Handle: "swe", Turn: "t1",
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1",
 		Object:        objstore.Object{Key: key, Hash: objstore.Hash(kept.ObjectHash), Size: kept.ObjectSize},
-		ArchiveFormat: FakeArchiveFormat, LaunchSeq: kept.LaunchSeq, CaptureSeq: kept.CaptureSeq,
-		Home: kept.Home}
+		ArchiveFormat: FakeArchiveFormat, LaunchSeq: kept.LaunchSeq, CaptureSeq: kept.CaptureSeq}
 }
 
 // keptTurn is a keeping rig whose turn t1 ran one job, collected with its
@@ -113,7 +113,7 @@ func keptTurn(t *testing.T) (*coordRig, *keptRestore, SessionCapture) {
 	if len(uploads) != 1 {
 		t.Fatalf("uploaded %d sessions, want the job's one", len(uploads))
 	}
-	restore := &keptRestore{rows: map[string]executordomain.Session{"t1": keptRow(t, *run.Kept)},
+	restore := &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, *run.Kept)},
 		archives: map[string][]byte{run.Kept.Object: uploads[0]}}
 	rig.coordinator.restore = restore
 	return rig, restore, *run.Kept
@@ -137,7 +137,7 @@ func launchRestoring(t *testing.T, rig *coordRig, restore SessionRestore, req La
 	c, err := NewCoordinator(CoordinatorOptions{
 		Answers: rigAnswers(),
 		Queue:   rig.queue, Pending: rig.pending, Manager: rig.manager,
-		Resume: &resumeSpy{}, Audience: &audienceSpy{},
+		Resume: &resumeSpy{}, Audience: &audienceSpy{}, Pushes: &pushSpy{},
 		Lease:    leased(rigLease),
 		Restore:  restore,
 		SpoolDir: rig.coordinator.spoolDirectory(),
@@ -335,7 +335,7 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 			if tc.logMoved {
 				row.CaptureSeq = 2
 			}
-			restore := &keptRestore{rows: map[string]executordomain.Session{"t1": row},
+			restore := &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": row},
 				archives: map[string][]byte{key.String(): []byte("the transcript")}, unreadable: tc.unreadable,
 				failOpen: tc.failOpen}
 			rig.coordinator.restore = restore
@@ -407,7 +407,7 @@ func TestARestoredSessionIsTheSeatsAndTheTurnsOwn(t *testing.T) {
 	sibling := keptRow(t, kept)
 	sibling.Turn, sibling.SessionID = "t2", "s-sibling"
 	sibling.Object.Key = objstore.KeyAt(time.Now())
-	sibling.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	sibling.Ended = true
 	restore.mu.Lock()
 	restore.rows["t2"] = sibling
 	restore.archives[sibling.Object.Key.String()] = []byte("the sibling's transcript")
@@ -494,10 +494,10 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	t.Parallel()
 	key := objstore.KeyAt(time.Now())
 	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, Object: key.String()}
-	live := executordomain.Session{Handle: "swe", Turn: "t1", Harness: "claude-code", SessionID: "s-1",
+	live := executorkeep.TurnRow{Handle: "swe", Turn: "t1", Harness: "claude-code", SessionID: "s-1",
 		ArchiveFormat: FakeArchiveFormat, Object: objstore.Object{Key: key, Size: 1}, LaunchSeq: 2, CaptureSeq: 1}
 	ended := live
-	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	ended.Ended = true
 	bare := live
 	bare.Object = objstore.Object{}
 	moved := live
@@ -512,7 +512,7 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	refused := kept
 	refused.CaptureSeq, refused.State, refused.Reason = 2, CaptureRefused, "past the seat's budget"
 	for name, tc := range map[string]struct {
-		row       executordomain.Session
+		row       executorkeep.TurnRow
 		run       *PendingRun
 		follows   int64
 		restorer  SessionRestorer
@@ -747,9 +747,11 @@ func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 // turn ended reads them there.
 //
 // Mutation: read a script-packed session as whole whatever its harness's exit,
-// and the capture is kept as one that ended cleanly; leave the stamp's cut-off
-// or context off the capture recordCapture records, and the log's row says the
-// session ended cleanly, with no context.
+// and the capture is kept as one that ended cleanly; leave the cut-off or the
+// context off the stamp recordCapture hands the log, and the capture asked of it
+// says the session ended cleanly, with no context. The engine's word of that
+// stamp onto the log's row is held by
+// TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives.
 func TestASessionItsHarnessDidNotExitCleanlyFromIsCutOff(t *testing.T) {
 	t.Parallel()
 	for name, cutOff := range map[string]bool{"killed": true, "exited cleanly": false} {
@@ -766,8 +768,8 @@ func TestASessionItsHarnessDidNotExitCleanlyFromIsCutOff(t *testing.T) {
 			if run.Kept == nil || run.Kept.Interrupted != cutOff {
 				t.Fatalf("the row keeps %+v, want a capture interrupted %v", run.Kept, cutOff)
 			}
-			if captures := writes.captured(); len(captures) != 1 || captures[0].n.Interrupted != cutOff ||
-				captures[0].n.ContextTokens != 61_000 {
+			if captures := writes.captured(); len(captures) != 1 || captures[0].Stamp.Interrupted != cutOff ||
+				captures[0].Stamp.ContextTokens != 61_000 {
 				t.Errorf("the log was asked to record %+v, want one capture interrupted %v of 61000 tokens",
 					captures, cutOff)
 			}
@@ -790,28 +792,28 @@ func TestASessionItsHarnessDidNotExitCleanlyFromIsCutOff(t *testing.T) {
 // bound rather than the highest, and a case goes red.
 func TestACaptureNamesTheCallsItsSessionHadNotBeenAnswered(t *testing.T) {
 	t.Parallel()
-	held := func(seqs ...int) PendingRun {
-		var run PendingRun
+	held := func(seqs ...int) BridgeLog {
+		var calls BridgeLog
 		for _, seq := range seqs {
-			run.BridgeCalls = append(run.BridgeCalls, BridgeCall{Name: "slack_post", Seq: seq})
+			calls.Calls = append(calls.Calls, BridgeCall{Name: "slack_post", Seq: seq})
 		}
-		return run
+		return calls
 	}
 	if got := openPlaces(held(1, 2, 4, 6), 6); !slices.Equal(got, []int{3, 5}) {
-		t.Errorf("a row holding 1, 2, 4 and 6 leaves %v open, want 3 and 5", got)
+		t.Errorf("a log holding 1, 2, 4 and 6 leaves %v open, want 3 and 5", got)
 	}
 	if got := openPlaces(held(1, 2, 3), 3); len(got) != 0 {
-		t.Errorf("a row holding every call leaves %v open, want none", got)
+		t.Errorf("a log holding every call leaves %v open, want none", got)
 	}
-	// A LONG ROUND WHOSE MIDDLE THE ROW'S BOUND DROPPED: the places open
+	// A LONG ROUND WHOSE MIDDLE THE LOG'S BOUND DROPPED: the places open
 	// beside the calls in flight are old, and the highest are kept.
-	run := held(1)
+	calls := held(1)
 	for seq := 500; seq <= 600; seq++ {
 		if seq != 597 {
-			run.BridgeCalls = append(run.BridgeCalls, BridgeCall{Name: "slack_post", Seq: seq})
+			calls.Calls = append(calls.Calls, BridgeCall{Name: "slack_post", Seq: seq})
 		}
 	}
-	got := openPlaces(run, 600)
+	got := openPlaces(calls, 600)
 	if len(got) != maxOpenPlaces || !slices.Contains(got, 597) || got[len(got)-1] != 597 {
 		t.Errorf("a long round leaves %d places open ending %v, want the %d highest, 597 among them",
 			len(got), got[max(len(got)-3, 0):], maxOpenPlaces)
@@ -883,12 +885,12 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
 	key := objstore.KeyAt(now)
 	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, Object: key.String(), At: now}
-	row := executordomain.Session{Handle: "swe", Turn: "t1", Harness: "claude-code", SessionID: "s-1",
+	row := executorkeep.TurnRow{Handle: "swe", Turn: "t1", Harness: "claude-code", SessionID: "s-1",
 		ArchiveFormat: FakeArchiveFormat, Object: objstore.Object{Key: key, Size: 1}, LaunchSeq: 2, CaptureSeq: 1}
 	parked := func() PendingRun {
 		return PendingRun{TurnID: "t1", Status: StatusAwaiting, SandboxID: "box-1", Placement: string(Direct),
 			LaunchNode: "node-a", Harness: "claude-code", SessionID: "s-1", LaunchSeq: 2, Capture: &kept,
-			Kept: &kept}
+			Kept: &kept, BoxSince: now.Add(-time.Hour)}
 	}
 	target := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
 	older := target
@@ -1030,15 +1032,15 @@ func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 	run := func() *PendingRun {
 		return &PendingRun{TurnID: "t1", Status: StatusAwaiting, LaunchSeq: 2, Capture: &kept, Kept: &kept}
 	}
-	naming := func(capture int64) executordomain.Session {
-		return executordomain.Session{Handle: "swe", Turn: "t1", LaunchSeq: 2, CaptureSeq: capture}
+	naming := func(capture int64) executorkeep.TurnRow {
+		return executorkeep.TurnRow{Handle: "swe", Turn: "t1", LaunchSeq: 2, CaptureSeq: capture}
 	}
 	ended := naming(1)
-	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	ended.Ended = true
 	working := run()
 	working.Status, working.LaunchSeq = StatusRunning, 3
 	for name, tc := range map[string]struct {
-		row   executordomain.Session
+		row   executorkeep.TurnRow
 		run   *PendingRun
 		again bool
 	}{
@@ -1130,7 +1132,7 @@ func TestACompanyThatKeepsNoSessionContinuesNoneItKeptBefore(t *testing.T) {
 	}
 	launcher, err := NewCoordinator(CoordinatorOptions{
 		Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
-		Resume: &resumeSpy{}, Audience: &audienceSpy{}, Lease: leased(rigLease),
+		Resume: &resumeSpy{}, Audience: &audienceSpy{}, Lease: leased(rigLease), Pushes: &pushSpy{},
 		Restore: restore, Keep: keep, SpoolDir: rig.coordinator.spoolDirectory(),
 	})
 	if err != nil {

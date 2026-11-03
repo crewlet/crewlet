@@ -5,11 +5,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
+	codecompact "github.com/crewlet/crewlet/internal/code/compact"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	codehome "github.com/crewlet/crewlet/internal/code/home"
+	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -29,6 +38,62 @@ func ControlOutcome(err error) queue.Result { return controlOutcome(err) }
 // Reflects reports whether e has built its reflect dispatcher, for a test
 // outside the package that drives an engine through its public surface.
 func Reflects(e *Engine) bool { return e.reflector.Load() != nil }
+
+// BoxGitURLOf is the code host's base e hands every box it gives repositories
+// (CREWLET_BOX_GIT_URL as its boot read it), for a case outside the package
+// that holds what a boot keeps of the variable.
+func BoxGitURLOf(e *Engine) string { return e.boxGitURL }
+
+// GitReadForTest is a read of a repository by object id through e's own estate
+// router — the repository's home git node first, this node at its place — for
+// a test outside the package that drives the git walk through a running engine.
+func GitReadForTest(ctx context.Context, e *Engine, q code.GitQuery) (code.GitAnswer, error) {
+	return e.router.Code().GitRead(ctx, q)
+}
+
+// GitWriteForTest is an engine write through e's own estate router — the
+// repository's home git node first, this node at its place — for a test
+// outside the package that drives the git write's walk through a running
+// engine.
+func GitWriteForTest(ctx context.Context, e *Engine, w code.EngineWrite) (code.EngineWriteResult, error) {
+	return e.router.Code().GitWrite(ctx, w)
+}
+
+// CodeReadingForTest is the code half of e's alarm reading now
+// ([Engine.codeReading]) — its committer's, its git cache's and its
+// compactor's, read the way every evaluation reads them — for a case outside
+// the package that judges what a running node's committer or compactor found,
+// apart from when the alarm table next evaluates it.
+func CodeReadingForTest(ctx context.Context, e *Engine) statelog.Reading {
+	var r statelog.Reading
+	e.codeReading(ctx, time.Now().UTC(), &r)
+	return r
+}
+
+// WithCommitterPublisher is opts with wrap standing between a data node's
+// committer and the code log's write authority it publishes through
+// ([code.CommitterOptions.Publisher]), for a case outside the package whose
+// subject is what a running node's committer raises — a repository's queue
+// filled behind a batch held at its publish, rather than by a burst raced
+// against batches a healthy committer lands in milliseconds.
+func WithCommitterPublisher(opts Options, wrap func(code.Publisher) code.Publisher) Options {
+	opts.committerPublisher = wrap
+	return opts
+}
+
+// CommitterOf is the committer e's runtime decides pushes with, nil where it
+// built none, for a case outside the package that proposes to it directly.
+func CommitterOf(e *Engine) *code.Committer {
+	if n := e.native.Load(); n != nil {
+		return n.committer
+	}
+	return nil
+}
+
+// ItemRanker is the ranker the tracker's item search is built with, so the
+// serving-seams audit outside the package reflects over the fields it reads
+// rather than over a description of them a new field would leave behind.
+type ItemRanker = itemRanker
 
 // LearningDutyName is the duty every background learning pass claims, so a
 // test outside the package reads the key the engine claims rather than a copy
@@ -94,6 +159,100 @@ func MCPStatus(e *Engine) []coord.MCPServerStatus { return e.mcpStatus(context.B
 func WithSweepEvery(opts Options, every time.Duration) Options {
 	opts.sweepEvery = every
 	return opts
+}
+
+// WithCacheDisk is opts with the code cache sized as though its volume had free
+// bytes free and an embedded broker storing its streams there could still
+// write broker bytes — one volume holding every tenant, as the single-volume
+// layout does — for a case outside the package whose subject is the budget a
+// disk derives, which the machine running it would otherwise decide.
+func WithCacheDisk(opts Options, free, broker int64) Options {
+	opts.cacheDisk = &cacheVolume{
+		free: func(string) (int64, error) { return free, nil },
+		same: func(string, string) bool { return true },
+		broker: func() (jetstream.VolumeClaim, bool, error) {
+			return jetstream.VolumeClaim{Dir: "stream", Limit: broker}, true, nil
+		},
+	}
+	return opts
+}
+
+// WithGitMemory is opts with the git pool sizing its lanes, and the code cache
+// budgeting its background work, from a node of memory bytes rather than from
+// the memory of the machine running the case ([gitproc.Options.Memory]), for a
+// case outside the package whose subject is what a node's memory leaves its
+// git cache.
+func WithGitMemory(opts Options, memory int64) Options {
+	opts.gitMemory = memory
+	return opts
+}
+
+// WithCompactorEstate is opts with wrap standing between a git node's
+// compactor and the router's code seam it lists and proposes through
+// ([codecompact.Options.Estate]), for a case outside the package whose subject
+// is what a running node's compactor raises — a repository shown at the pack
+// bound without two thousand packs pushed into it.
+func WithCompactorEstate(opts Options, wrap func(codecompact.Estate) codecompact.Estate) Options {
+	opts.compactorEstate = wrap
+	return opts
+}
+
+// WithHomeSeams is opts with wrap standing between a git node's home change
+// work and the router's code seam and the code host's chain builder it works
+// through ([codehome.Options.Estate], [codehome.Options.Chains]), for a case
+// outside the package whose subject is what a running node's queue worker
+// raises — a queue asked past its capacity, shown it without the changes, the
+// passed checks and the hour of rounds a real queue needs to fall behind.
+func WithHomeSeams(opts Options,
+	wrap func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)) Options {
+	opts.homeSeams = wrap
+	return opts
+}
+
+// WithMirrorSeams is opts with wrap standing between a git node's mirrors and
+// the options they are built with ([mirror.Options]), for a case outside the
+// package whose subject is the mirror alarm a running node raises — a push
+// mirror's every dial refused, on a clock the case moves past the mirror's
+// refresh rather than the half hour a real one takes.
+func WithMirrorSeams(opts Options, wrap func(mirror.Options) mirror.Options) Options {
+	opts.mirrorSeams = wrap
+	return opts
+}
+
+// TestGitTransfers is the transfer lane [PinGitLanes] gives a case's node:
+// [brokertest.GitTransfers], the one figure every node fixture's lane is.
+const TestGitTransfers = brokertest.GitTransfers
+
+// PinGitLanes sets b's git.max_transfers to [TestGitTransfers], for every
+// case booting a node that may build a code host beside a broker that derives
+// its own limit. The transfer lane sizes the request spools the cache's room is
+// taken out of (host.SpoolAllowance), and unset it follows the machine's cores
+// — four a core, as memory allows. Beside a broker on the same temporary
+// volume, which claims three quarters of its free space, a sixteen-core
+// machine's 4 GiB of spools left a node no room under 16 GiB free, and its node
+// refused to host code: a property of the machine running the suite, never of
+// the case. Pinned, the room is a quarter of the free space less 768 MiB — the
+// request spools' 256 MiB and the revision facts' patch spools' 512 MiB
+// (query.PatchSpoolAllowance) — which every volume a node boots on has.
+//
+// A node whose broker [brokertest.StoreIn] sized declares its cache with
+// [brokertest.CodeCacheIn] instead, which pins this lane and a budget: its
+// broker's declared limit claims a fixed sixteen gibibytes of the room, not a
+// share of the free space, and leaves nothing on a smaller disk.
+func PinGitLanes(b *config.Bootstrap) { b.Git.MaxTransfers = TestGitTransfers }
+
+// RequireNodeGit holds the git the suite runs to the node floor
+// ([gittest.RequireNode]) where a boot over b for company builds a code host —
+// the company hosts code and b's node has the git role, which is
+// [Engine.hostsGit] read off the two documents — so a machine below the floor
+// reads the contributor's sentence rather than the node's refusal, and a boot
+// that builds no pool asks nothing of the machine's git. A case whose company
+// hosts code only from a later activation calls [gittest.RequireNode] itself.
+func RequireNodeGit(t testing.TB, b *config.Bootstrap, company *config.Company) {
+	t.Helper()
+	if company.NeedsRole(placement.RoleGit) && b.Profile("").Roles.Has(placement.RoleGit) {
+		gittest.RequireNode(t)
+	}
 }
 
 // RelistFleetView asks this node's view of the fleet's presence leases for a

@@ -155,7 +155,9 @@ type StreamArtifact struct {
 	State  json.RawMessage `json:"state"`
 }
 
-// snapshotStreams captures every stream the broker holds under root.
+// snapshotStreams captures every stream the broker holds under root, the
+// stream named last — the object store's own bucket on `nats` — after every
+// other.
 //
 // EVERY STREAM, ENUMERATED RATHER THAN LISTED. The engine's own five are
 // known here, but a namespace stream is created on first publish to it
@@ -163,10 +165,20 @@ type StreamArtifact struct {
 // a configurable prefix — so a hardcoded list would silently omit whatever a
 // deployment actually has. What is backed up is what is there.
 //
+// THE OBJECT STREAM AFTER EVERY LOG, as a rule rather than an accident of
+// sorting (`CREWLET_` happens to sort before `OBJ_`). A restore replays each
+// log to the last sequence its snapshot captured, and an object is uploaded
+// before the record naming it is written, so every object a record of a log's
+// snapshot names was in the bucket before the object stream's snapshot began —
+// which is what lets the backup count an object the store holds after the
+// snapshots as one the object stream's snapshot carries ([objectPass.finish]).
+// Snapshotted first, the bucket would miss every file written while the logs'
+// snapshots ran.
+//
 // The snapshots land in a subdirectory of root, and each artifact's File is
 // relative to root rather than to that subdirectory, because that is the path
 // a restore reading the manifest has to join.
-func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root string) ([]StreamArtifact, error) {
+func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root, last string) ([]StreamArtifact, error) {
 	js, err := api.Client(nc)
 	if err != nil {
 		return nil, fmt.Errorf("backup: reach the JetStream API: %w", err)
@@ -174,6 +186,9 @@ func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root str
 	names, err := streamNames(ctx, js)
 	if err != nil {
 		return nil, err
+	}
+	if i := slices.Index(names, last); last != "" && i >= 0 {
+		names = append(slices.Delete(names, i, i+1), last)
 	}
 	if err := os.MkdirAll(filepath.Join(root, streamDirName), 0o700); err != nil {
 		return nil, fmt.Errorf("backup: create %s: %w", filepath.Join(root, streamDirName), err)
@@ -193,19 +208,27 @@ func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root str
 // streamNames lists every stream, sorted.
 //
 // Sorted so a manifest diffs cleanly between two backups of the same
-// deployment: the listing's own order is not stable, and an operator
-// comparing yesterday's manifest with today's should see what changed rather
-// than a reshuffle.
+// deployment, whatever order a listing comes back in: an operator comparing
+// yesterday's manifest with today's should see what changed rather than a
+// reshuffle.
+//
+// FROM THE METADATA LEADER, each page asked again while nobody answers it
+// ([jsapi.Meta.StreamNames]): only it answers, so a member that still
+// believes in a leader the group has just lost drops the request without a
+// word, and the client's lister held its one request for five seconds and
+// failed the backup over a reply nobody would send. And every stream that
+// exists throughout the listing is in it, so no stream is left out of a
+// backup because another was deleted while the listing ran.
 func streamNames(ctx context.Context, js jetstream.JetStream) ([]string, error) {
-	lister := js.StreamNames(ctx)
-	// A plain range over the lister's CHANNEL — it is not a map, and it
-	// closes when the listing is complete or has failed, which is why the
-	// error is read after the loop rather than inside it.
-	var names []string
-	for name := range lister.Name() {
-		names = append(names, name)
+	meta, err := jsapi.NewMeta(js)
+	if err != nil {
+		return nil, fmt.Errorf("backup: list streams: %w", err)
 	}
-	if err := lister.Err(); err != nil {
+	var names []string
+	if err := meta.StreamNames(ctx, func(name string) error {
+		names = append(names, name)
+		return nil
+	}); err != nil {
 		return nil, fmt.Errorf("backup: list streams: %w", err)
 	}
 	slices.Sort(names)

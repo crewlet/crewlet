@@ -112,7 +112,7 @@ func TestAPeerThatCannotReadTheRequestIsSimplyAbsent(t *testing.T) {
 
 	// A server that answers with something this build does not speak, which
 	// is what an older or newer peer looks like from here.
-	stop, err := peer.Serve(t.Context(), search.SliceSubject,
+	stop, err := peer.Serve(t.Context(), search.SliceSubject, queue.ConcurrentAnswers,
 		func(context.Context, []byte) ([]byte, error) {
 			return []byte(`{"version":99,"slice":{"node":"n2"}}`), nil
 		})

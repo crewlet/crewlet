@@ -226,9 +226,11 @@ type capturingServer struct {
 	handler queue.AnswerFunc
 }
 
-func (c *capturingServer) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
+func (c *capturingServer) Serve(ctx context.Context, subject string, answers int,
+	h queue.AnswerFunc) (queue.Unsubscribe, error) {
+
 	c.handler = h
-	return c.TailServer.Serve(ctx, subject, h)
+	return c.TailServer.Serve(ctx, subject, answers, h)
 }
 
 // A SILENT OWNER IS NAMED, NOT EMPTY.
@@ -1170,7 +1172,7 @@ func TestTheOwnerLogsATailFailureByWhatClearsIt(t *testing.T) {
 	// fault.
 	rig := newTailRig(t)
 	newer := rig.client(t)
-	stop, err := newer.Serve(t.Context(), topics.ObserveExecutorTail,
+	stop, err := newer.Serve(t.Context(), topics.ObserveExecutorTail, queue.ConcurrentAnswers,
 		func(context.Context, []byte) ([]byte, error) {
 			return json.Marshal(tailReply{Version: tailWireVersion, Owner: boxOwner,
 				Failed: "a_class_from_a_newer_build"})

@@ -11,7 +11,7 @@
  * better crumb than nothing, and a placeholder would be worse than either.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { WorkItem } from "./WorkItem.tsx";
@@ -22,6 +22,7 @@ import { FRAME_ANSWERS } from "~/test/viewer.ts";
 import { resetForTest } from "~/lib/recents.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -46,9 +47,7 @@ afterEach(() => {
 });
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 function mount(answers: Record<string, unknown>) {

@@ -44,12 +44,12 @@
 // waiting. The cost is a broker round trip per frame, which an event stream's
 // sparse, small events never notice.
 //
-// A SUBJECT PER EXCHANGE, because the queue answers at most
-// [queue.MaxConcurrentAnswers] requests of one registration at once and an
-// event stream lives for as long as its run. A stream's frames answered on one
-// registration per node would hold one of its slots for hours each, and the
-// sixty-fifth stream would wait behind them. The holder's node subject carries
-// only OPEN and CLOSE, which are answered at once.
+// A SUBJECT PER EXCHANGE, because a registration answers at most the bound it
+// is served with at once — [queue.ConcurrentAnswers], for work done now — and
+// an event stream lives for as long as its run. A stream's frames answered on
+// one registration per node would hold one of its slots for hours each, and
+// the sixty-fifth stream would wait behind them. The holder's node subject
+// carries only OPEN and CLOSE, which are answered at once.
 //
 // # Both sides know when the other has gone
 //

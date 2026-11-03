@@ -44,6 +44,7 @@ func chatRegistrations() []registration {
 				Gates: chatlet.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 		},
 		Barrier: chatlet.EncodeBarrier,
+		Trimmed: chatlet.EncodeTrimmed,
 		// ITS OWN READ MODEL, counted from what a chat turn reads at
 		// `linearizable` — see [chatlet.LinearizableReadsPerSeatDay],
 		// which is also the barrier term in the log's ceiling

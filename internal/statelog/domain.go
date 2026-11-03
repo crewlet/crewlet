@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -122,12 +123,28 @@ type Domain interface {
 	// landed.
 	OpsTable() string
 
-	// ReadinessInput reports whether this domain's health gates seat
-	// admission. A strictly ordered domain's stall is a fault; a
-	// compacted domain's gap is a coverage number, and taking a copy
-	// out of service for one would be the outage the number exists to
-	// avoid.
-	ReadinessInput() bool
+	// GatesSeatAdmission reports whether a SEAT depends on this domain's
+	// copy: whether a node admits a seat only once this domain's copy is
+	// established at a lag of zero ([Health.Established], strict), and
+	// whether this copy going out of service leaves the node's seats routed
+	// through its peers — so that a node which then cannot name a peer
+	// gives them up.
+	//
+	// IT DOES NOT DECIDE WHETHER THE COPY IS JUDGED. Every domain's copy is
+	// judged ([Health.Healthy]) and a wrong one goes out of service for
+	// that domain's operations alone, whatever this answers — ADR-0079. The
+	// one declaration that used to answer both questions let a domain that
+	// did not gate seats escape the judgement too, so a wrong copy of it was
+	// served for ever.
+	//
+	// TRUE for a domain a seat's tools read on every turn, where a seat
+	// attached to a copy that is behind answers "there is no such item"
+	// about work it was just handed. FALSE for a compacted domain, whose gap
+	// is a coverage number rather than a fault — statelogtest refuses one
+	// that answers true — and for any domain whose lag must not withhold
+	// every seat claim on a node: a busy log a seat rarely reads is an
+	// outage of the whole company bought to protect one tool.
+	GatesSeatAdmission() bool
 
 	// ClaimsIdentity reports whether two nodes at one checkpoint are
 	// ASSERTED to hold byte-identical Replicated tables.
@@ -615,7 +632,7 @@ type Record struct {
 	// act on it. An applier that could read it might branch on it, and a
 	// state machine whose rows depend on which keys the node happened to
 	// hold is no longer a pure function of the record.
-	verdict Verdict
+	verdict recordseal.Verdict
 
 	// ack acknowledges this record's delivery, and is unexported because
 	// exactly one caller may use it: the apply loop, after the transaction
@@ -623,6 +640,13 @@ type Record struct {
 	// it would be able to acknowledge a record from inside the transaction
 	// that writes its rows — which the store may roll back and run again.
 	ack func() error
+
+	// release hands this record's delivery back to the broker, which
+	// delivers it again at once ([Message.Release]); nil where the fetcher
+	// has no such call. Unexported for ack's reason: only the apply loop
+	// decides that a record it holds will not be consumed, and only outside
+	// a transaction ([Runner.Run]'s unwind).
+	release func() error
 }
 
 // Applier is a domain's deterministic state machine. ONE per domain, ONE

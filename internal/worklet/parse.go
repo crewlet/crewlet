@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -95,10 +96,12 @@ const (
 //
 // Three things, and only three: it turns a decoded record into the candidate
 // set, it asks the party registry whether each handle is still a seat, and it
-// renders what survives as the spine's own shape. Every rule about WHO — the
-// eighteen reasons, their precedence, the mute, the fallback — lives in
-// recipients.go, where it can be exercised without a registry, a webhook or an
-// organization.
+// renders what survives as the spine's own shape. Every rule about WHO lives
+// where it can be exercised without a registry, a webhook or an organization:
+// the eighteen reasons and their precedence in recipients.go, the mute in the
+// snapshot wake.go forms, and the rule the reasons are applied by — one reason
+// per handle, the fallback chain, the post-filter — in internal/routing, which
+// every native domain shares.
 type Parser struct {
 	logger *slog.Logger
 }
@@ -302,6 +305,11 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		Subject:   subjectLine(snapshot, record.Subject, record.Notify.Kind),
 		Body:      body,
 		Metadata:  metadata,
+		// AND WHO THE SENDER IS, by the record's own kind: the actor is a
+		// seat's handle, a credential's login or a node's name, and only the
+		// kind tells a turn this wakes whether a colleague is asking or
+		// nobody is (notify.FirstPartyWriter).
+		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor),
 	}
 }
 

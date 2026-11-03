@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
 // THE SESSION A CONVERSATION'S NEXT TURN CONTINUES, FROZEN AT ITS FIRST LAUNCH.
@@ -20,7 +20,7 @@ import (
 // on the write that creates the record and by no other, so every relaunch, on
 // whatever node, reads the read the first launch made and never makes another —
 // and records it on the executor log as the turn's `begin`
-// ([executordomain.NewBegin]), whose row then HOLDS the base against every
+// ([SessionWrites.Begin]), whose row then HOLDS the base against every
 // release while the turn is live and has kept no session of its own: a
 // sibling's end, the seat's budget and the retention all pass it over, so a
 // relaunch can still fetch it.
@@ -39,14 +39,15 @@ import (
 // answers.
 //
 // TWENTY-FOUR KIBIBYTES, from the log's own bounds: at most
-// [executordomain.MaxAbsorbs] turns absorbed and [executordomain.MaxSiblings]
+// internal/executordomain's MaxAbsorbs turns absorbed and its MaxSiblings
 // siblings told, each a canonical turn id with its object's key, digest and
 // size — under two and a half kilobytes together — and one base, whose
 // free-text fields the log holds to their bounds (its content key, harness,
 // harness version and session id, and its home and workspace paths: 2,527
 // bytes), which JSON escapes at worst six bytes for one: about fifteen
-// kilobytes, and with the keys and numbers under nineteen. A test builds the
-// largest read the log admits and holds it here. It rides beside the turn's
+// kilobytes, and with the keys and numbers under nineteen. internal/engine's
+// TestAFrozenReadFitsItsBound builds the largest read the log admits and holds
+// it here. It rides beside the turn's
 // frozen endings in its parked state (internal/agent/prompts' EndingsMaxBytes),
 // each a bounded share of one record.
 const ConversationBaseMaxBytes = 24 << 10
@@ -63,7 +64,7 @@ type ConversationBase struct {
 	ReadThrough int64 `json:"read_through"`
 
 	// Absorbs are the turns the read handed out in full and the turn's brief
-	// told ([executordomain.Head.Absorbs], restricted to the told): what the
+	// told ([executorkeep.ConversationHead.Absorbs], restricted to the told): what the
 	// turn's end absorbs once it has landed a capture. A turn the brief's
 	// bound left out is not among them, and stays for the next read.
 	Absorbs []string `json:"absorbs,omitempty"`
@@ -142,16 +143,16 @@ type BaseSibling struct {
 // head as the base where the brief told it — which it always does. Nil where
 // the read was made at no position, a log with no record yet, which handed out
 // nothing a record could name.
-func NewConversationBase(head executordomain.Head, told []string) *ConversationBase {
-	if head.Position.Seq == 0 {
+func NewConversationBase(head executorkeep.ConversationHead, told []string) *ConversationBase {
+	if head.ReadThrough == 0 {
 		return nil
 	}
 	isTold := make(map[string]bool, len(told))
 	for _, turn := range told {
 		isTold[turn] = true
 	}
-	base := &ConversationBase{ReadThrough: head.Position.Packed()}
-	for _, turn := range head.Absorbs() {
+	base := &ConversationBase{ReadThrough: head.ReadThrough}
+	for _, turn := range head.Absorbs {
 		if isTold[turn] {
 			base.Absorbs = append(base.Absorbs, turn)
 		}
@@ -174,7 +175,7 @@ func NewConversationBase(head executordomain.Head, told []string) *ConversationB
 // dispatch read ([NewConversationBase]), and what a reader of a seat's sessions
 // decides a conversation's head by ([ReadContinuityOf]), so the two decide one
 // shape by one decision ([BaseContinuityOf]).
-func baseSessionOf(row executordomain.Session) BaseSession {
+func baseSessionOf(row executorkeep.TurnRow) BaseSession {
 	return BaseSession{Turn: row.Turn,
 		Object: row.Object.Key.String(), ObjectHash: string(row.Object.Hash), ObjectSize: row.Object.Size,
 		ContentKey: row.ContentKey, Harness: row.Harness, HarnessVersion: row.HarnessVersion,
@@ -192,7 +193,7 @@ func (s BaseSession) archive() SessionArchive {
 // no longer names the session the read froze, "" where it does: the row holding
 // the base is what keeps its object from the collector, and a launch fetches it
 // under the row it reads.
-func (s BaseSession) namedBy(row executordomain.Session) string {
+func (s BaseSession) namedBy(row executorkeep.TurnRow) string {
 	switch {
 	case row.Turn != s.Turn:
 		return fmt.Sprintf("the executor log answered turn %s's row for turn %s's", row.Turn, s.Turn)
@@ -226,7 +227,7 @@ func (s BaseSession) namedBy(row executordomain.Session) string {
 // What the box a launch gets says of its harness's own release, whether the
 // launch's box is one of its own, and whether the seat's budget can carry the
 // session, are the launch's to ask, and this decides none of them.
-func BaseContinuityOf(base BaseSession, own *executordomain.Session, run *PendingRun,
+func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingRun,
 	restorer ArchiveRestorer) SessionContinuity {
 
 	switch {
@@ -238,7 +239,7 @@ func BaseContinuityOf(base BaseSession, own *executordomain.Session, run *Pendin
 	case run != nil && run.Kept != nil:
 		return SessionContinuity{Why: "the turn has kept a session of its own, which holds everything the " +
 			"session its conversation's last turn left does, and its relaunches continue that one instead"}
-	case own != nil && own.Ended():
+	case own != nil && own.Ended:
 		return SessionContinuity{Why: "the turn has ended, so no launch of it continues its conversation's session"}
 	case own != nil && own.LaunchSeq > 0:
 		return SessionContinuity{Why: "the turn's row on the executor log has landed a capture of its own, " +

@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
@@ -11,11 +12,14 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// rowShape is what an authority row asks, as far as a gate names it.
+// rowShape is what an authority row asks, as far as a gate names it: the
+// role grant that decides an agent seat in place of the class included, so a
+// row that gains or loses one is a row of another shape.
 type rowShape struct {
-	class authz.Class
-	app   iam.Grant
-	role  artifacts.Role
+	class     authz.Class
+	app       iam.Grant
+	role      artifacts.Role
+	seatGrant authz.SeatGrant
 }
 
 // gateRows is the row shape each gate stands for: the meaning [Gate]'s
@@ -33,6 +37,7 @@ var gateRows = map[Gate]rowShape{
 	GateArtifactViewer: {class: authz.ClassShared, role: artifacts.RoleViewer},
 	GateArtifactEditor: {class: authz.ClassShared, role: artifacts.RoleEditor, app: iam.GrantArtifacts},
 	GateArtifactOwner:  {class: authz.ClassShared, role: artifacts.RoleOwner},
+	GateHealthTools:    {class: authz.ClassAdmin, seatGrant: authz.SeatGrantHealth},
 }
 
 // shapeOf is a tool's authority row as a gate would name it, and false for a
@@ -51,7 +56,8 @@ func shapeOf(tool string) (rowShape, bool) {
 	}
 	app, _ := authz.AppOf(action)
 	role, _ := authz.MinRoleOf(action)
-	shape := rowShape{class: class, app: app, role: role}
+	grant, _ := authz.SeatGrantOf(action)
+	shape := rowShape{class: class, app: app, role: role, seatGrant: grant}
 	if class == authz.ClassOwnRecord || class == authz.ClassOwnOrLead {
 		if s, governed := subjectOf[tool]; governed && aboutTheCaller(s) {
 			shape.class = authz.ClassApp
@@ -199,5 +205,58 @@ func TestAnAppGateAdmitsAnAgentHoldingTheAppAndNoOther(t *testing.T) {
 	}
 	if decided == 0 {
 		t.Fatal("no tool is filed under an app gate, so this decided nothing")
+	}
+}
+
+// grantChart is a chart whose roles carry the health grant for the seats it
+// names and for nobody else; it relates nothing else.
+type grantChart struct {
+	authz.NoChart
+	granted map[string]bool
+}
+
+// SeatGranted answers from the seats the chart names.
+func (c grantChart) SeatGranted(_ context.Context, actor string, grant authz.SeatGrant) (bool, error) {
+	return grant == authz.SeatGrantHealth && c.granted[actor], nil
+}
+
+// A HEALTH GATE ADMITS A SEAT WHOSE ROLE CARRIES THE GRANT, AND NO OTHER.
+//
+// What [GateHealthTools] promises a reader ("agents whose role carries
+// health_tools"), asked of internal/authz itself: the grant decides an agent
+// seat in place of the row's class, so a seat holding every app and no grant
+// is refused, and the same seat once its role carries the grant is admitted.
+// The walk above holds the declared shape to the row; this holds the shape's
+// words to the decision.
+func TestAHealthGateAdmitsASeatWhoseRoleCarriesTheGrantAndNoOther(t *testing.T) {
+	t.Parallel()
+	agent := iam.Principal{Kind: iam.KindSeat, Login: "ana", Seat: "ana",
+		Stage: iam.StageActive, Grants: iam.Apps}
+	decided := 0
+	for _, f := range filed {
+		if f.gate != GateHealthTools {
+			continue
+		}
+		for _, c := range []struct {
+			chart grantChart
+			admit bool
+		}{
+			{grantChart{granted: map[string]bool{"ana": true}}, true},
+			{grantChart{granted: map[string]bool{"bo": true}}, false},
+		} {
+			d := authz.Decide(t.Context(), agent, authz.Action(f.tool), authz.Object{},
+				c.chart, time.Now())
+			if d.Unknown() {
+				t.Fatalf("%s could not be decided: %v", f.tool, d.Err)
+			}
+			if d.Allowed != c.admit {
+				t.Errorf("%s, filed as %q, decided %v (%s) for a seat whose role "+
+					"carries the grant: %v", f.tool, f.gate, d.Allowed, d.Reason, c.admit)
+			}
+		}
+		decided++
+	}
+	if decided == 0 {
+		t.Fatal("no tool is filed under the health gate, so this decided nothing")
 	}
 }

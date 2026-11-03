@@ -40,7 +40,6 @@ import {
   Callout,
   CopyButton,
   DeepWorkCard,
-  DiffView,
   OpenInAppCard,
   ProposalCard,
   Prose,
@@ -54,10 +53,9 @@ import {
   type RunState,
   type StepListStep,
   type StepState,
-  collapseDiff,
-  diffLines,
 } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
+import { DiffView } from "~/components/DiffView.tsx";
 import {
   ASSISTANT_DEEP_ACTIVITY_LINES,
   type AssistantBriefAction,
@@ -571,12 +569,7 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
           return {
             ...base,
             kind: "fact",
-            value: (
-              <DiffView
-                aria-label={change.label}
-                sections={collapseDiff(diffLines(before, after))}
-              />
-            ),
+            value: <DiffView aria-label={change.label} before={before} after={after} />,
             block: true,
           };
         }

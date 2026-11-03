@@ -130,7 +130,7 @@ func TestTheSurfacesWriteDomainsLeaveTheEnginesOut(t *testing.T) {
 		t.Errorf("SurfaceWriteDomains lists %v, the executor log among them, whose writes are "+
 			"the engine's alone", listed)
 	}
-	for _, domain := range []string{trackerDomain, pagesDomain, artifactsDomain, artifactDataDomain, chatDomain} {
+	for _, domain := range []string{trackerDomain, pagesDomain, artifactsDomain, artifactDataDomain, chatDomain, codeDomain} {
 		if !slices.Contains(listed, domain) {
 			t.Errorf("SurfaceWriteDomains lists %v, without %s, which a surface writes", listed, domain)
 		}

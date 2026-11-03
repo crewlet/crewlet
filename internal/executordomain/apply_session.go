@@ -814,7 +814,7 @@ type endBody struct {
 // this one to dedupe whether or not its captures carried the key; an end
 // naming another key than the row's writes nothing, as the decide refuses it.
 func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
-	if !present(p.Handle) || !present(p.Turn) || !p.Ending.within() ||
+	if !present(p.Handle) || !present(p.Turn) || !p.Ending.Within() ||
 		len(p.AskExcerpt) > AskExcerptMaxBytes {
 		return 0, nil
 	}
@@ -854,7 +854,7 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	}
 	delivered := p.Ending.Delivered
 	written := 0
-	if u := p.Ending.Unkept; found && row.hasObject && u != nil && u.supersedes(row.launchSeq, row.captureSeq) {
+	if u := p.Ending.Unkept; found && row.hasObject && u != nil && unkeptSupersedes(*u, row.launchSeq, row.captureSeq) {
 		// THE TURN'S LAST ATTEMPT WAS NOT KEPT, and the object the row
 		// names is an older capture of the turn that does not hold what
 		// came after it: it goes, and the ending stays, as a release by the

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
 // A HARNESS'S OWN SESSION, CARRIED BETWEEN BOXES.
@@ -92,7 +92,7 @@ type CarryCheck struct {
 // ValidSessionID reports whether id has the shape every session id a harness
 // mints has — Claude Code's UUID, OpenCode's `ses_` and its characters —
 // loosely: letters, digits, `-` and `_`, at most
-// [executordomain.SessionIDMaxBytes] of them.
+// [executorkeep.SessionIDMaxBytes] of them.
 //
 // ONE RULE, HELD WHEREVER A BOX NAMES A SESSION. The id is the box's word —
 // a line of its session record, or what its harness printed, which its own
@@ -102,7 +102,7 @@ type CarryCheck struct {
 // and the record refuses it again as it is published ([collectedRecord]),
 // whatever runner, or host of another build, read the box.
 func ValidSessionID(id string) bool {
-	return id != "" && len(id) <= executordomain.SessionIDMaxBytes &&
+	return id != "" && len(id) <= executorkeep.SessionIDMaxBytes &&
 		!strings.ContainsFunc(id, func(r rune) bool {
 			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
 		})
@@ -110,7 +110,7 @@ func ValidSessionID(id string) bool {
 
 // ValidRelease reports whether release has the shape of a harness's release as
 // the engine reads one off its `--version` ("2.1.310"): three runs of digits
-// joined by dots, at most [executordomain.HarnessVersionMaxBytes] bytes, the
+// joined by dots, at most [executorkeep.HarnessVersionMaxBytes] bytes, the
 // most the executor log records one at.
 //
 // A RELEASE HAS A LENGTH, AND ITS NUMBERS DO NOT: they are runs of digits a box
@@ -119,7 +119,7 @@ func ValidSessionID(id string) bool {
 // as none, it is what every reader takes a release it cannot read for, a
 // current one. Held where [ValidSessionID] is, for its reasons.
 func ValidRelease(release string) bool {
-	if release == "" || len(release) > executordomain.HarnessVersionMaxBytes {
+	if release == "" || len(release) > executorkeep.HarnessVersionMaxBytes {
 		return false
 	}
 	parts := 0
@@ -195,7 +195,7 @@ type SessionTake struct {
 	// passes.
 	Scrub []string
 
-	// MaxBytes is the largest archive kept (executordomain.SessionMaxBytes):
+	// MaxBytes is the largest archive kept (executorkeep.SessionMaxBytes):
 	// one the box describes as larger is refused before a byte of it is read,
 	// and it bounds what the scrub reads out of the archive — the plaintext
 	// it expands to, and each piece of it the scrub holds whole — so an

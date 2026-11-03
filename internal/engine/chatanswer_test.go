@@ -135,6 +135,7 @@ func newChatAnswerRig(t *testing.T) *chatAnswerRig {
 		Answers:  fleetAnswers(),
 		Audience: noAudience{}, Queue: q, Pending: rig.store, Manager: manager,
 		Resume: rig.resumer, Hold: inboxHold{q: q}, After: (&handCranked{}).after,
+		Pushes: noPushes{},
 		Lease: func(string) (sandbox.Fence, bool) {
 			return sandbox.Fence{Owner: "node-a", Epoch: 1}, true
 		},

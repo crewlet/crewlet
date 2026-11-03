@@ -41,10 +41,13 @@ import (
 //
 // The lock itself is [flock.Try]'s — an advisory lock the KERNEL releases when
 // its holder exits, however it exits, so a crashed engine leaves nothing to
-// reap; that package says why that beats a pid file. It is taken on a SIDECAR
-// file rather than the database itself, because the driver opens and closes
-// the database on its own schedule and a lock on a descriptor it owns is a
-// lock we cannot reason about.
+// reap; that package says why that beats a pid file, why flock rather than
+// fcntl, why the sidecar is never removed and why a lock that is only advisory
+// is still the right one. It is taken on a SIDECAR file rather than the
+// database itself, because the driver opens and closes the database on its own
+// schedule and a lock on a descriptor it owns is a lock we cannot reason
+// about. What this file adds on top is what only the store needs: the
+// refcount below, and the discard.
 //
 // # Cross-PROCESS, not cross-handle
 //
@@ -58,15 +61,6 @@ import (
 // as firmly as one in another. Refusing in-process would break the
 // legitimate case (a test proving that mutual exclusion lives in a SQL
 // statement rather than in a pool) while catching nothing the real bug does.
-//
-// # Advisory, and honest about it
-//
-// A process that never asks does not notice. That is the correct trade here:
-// every opener of this database is this binary, the lock is taken inside
-// Open, and a foreign tool reading the file is a case no lock in Go would
-// have stopped either. What it guarantees is that two crewlet processes
-// cannot both hold one database — which is every occurrence of the bug that
-// actually exists.
 
 // lockSuffix names the sidecar. Beside the database rather than in a temp
 // directory, so a bind mount or a copied data directory carries the lock with
@@ -85,8 +79,10 @@ var ErrLocked = errors.New("store: the database is open in another process")
 // Shared by every handle this process has open on that path, and freed when
 // the last of them closes — see the refcount note above.
 type fileLock struct {
-	path string
-	held *flock.Lock
+	// dbPath is the key this claim is filed under in locksHeld, so the
+	// last release finds its entry without walking the map.
+	dbPath string
+	held   *flock.Lock
 
 	// holds is how many live handles share this claim. Guarded by
 	// locksHeld's mutex, never by a field of its own: the count and the
@@ -192,7 +188,7 @@ func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 	case err != nil:
 		return nil, fmt.Errorf("store: locking %s: %w", dbPath, err)
 	}
-	lock := &fileLock{path: path, held: held, holds: 1, discarding: discarding}
+	lock := &fileLock{dbPath: dbPath, held: held, holds: 1, discarding: discarding}
 	locksHeld.by[dbPath] = lock
 	return lock, nil
 }
@@ -262,11 +258,11 @@ func (l *fileLock) release() {
 	if l.holds--; l.holds > 0 {
 		return
 	}
-	for path, held := range locksHeld.by {
-		if held == l {
-			delete(locksHeld.by, path)
-			break
-		}
+	// The entry is this claim — each handle releases its share once, its
+	// Close being guarded — but compared rather than assumed, so a release
+	// that ever ran twice could not drop a newer claim filed under the path.
+	if locksHeld.by[l.dbPath] == l {
+		delete(locksHeld.by, l.dbPath)
 	}
 	// The sidecar stays where it is — see [flock]'s package doc.
 	l.held.Release()

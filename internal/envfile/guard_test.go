@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/regexlit"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -42,13 +43,13 @@ var handBuilt = regexp.MustCompile(
 var touchesEnvFile = regexp.MustCompile(`\.env\b|envFile|EnvFile|envfile\.`)
 
 // What each pattern cannot match without, derived from the pattern itself
-// (see [sourcetree.Required]). Neither expression has a literal prefix the
+// (see [regexlit.Required]). Neither expression has a literal prefix the
 // regexp package can jump to, so over the whole tree each ran at the race
 // detector's megabyte a second; a file holding none of these substrings is
 // one the expression provably does not match, and is skipped unread by it.
 var (
-	handBuiltNeeds      = sourcetree.Required(handBuilt)
-	touchesEnvFileNeeds = sourcetree.Required(touchesEnvFile)
+	handBuiltNeeds      = regexlit.Required(handBuilt)
+	touchesEnvFileNeeds = regexlit.Required(touchesEnvFile)
 )
 
 // minInScope is the fewest files the scope may find in this tree. Forty-seven

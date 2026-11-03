@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
 // turnsOf is the turn ids of sessions, in order.
@@ -30,7 +32,7 @@ func TestAHeadShowsEveryTurnNoEndedTurnWasShown(t *testing.T) {
 	e := newEstate(t)
 	earlier, parked, failed, next := newTurn(), newTurn(), newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:room", earlier, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:room", earlier, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", earlier, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 
 	// THE PARKED TURN READS THE HEAD, captures and waits on a person.
 	first := e.head("ana", "chat:room")
@@ -39,10 +41,10 @@ func TestAHeadShowsEveryTurnNoEndedTurnWasShown(t *testing.T) {
 	}
 	e.capture(launching(first, capturing("ana", "chat:room", parked, 1, 1, 100, budget)))
 	// A TURN BESIDE IT fails before its first capture.
-	e.end(ending("ana", "chat:room", failed, "", Ending{Outcome: OutcomeFailed,
+	e.end(ending("ana", "chat:room", failed, "", executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
 		Failure: "the box was lost before its first collection"}))
 	// THE PARKED TURN resumes and ends after it.
-	e.end(ending("ana", "chat:room", parked, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", parked, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 
 	h := e.head("ana", "chat:room")
 	if h.Session == nil || h.Session.Turn != parked {
@@ -64,7 +66,7 @@ func TestAHeadShowsEveryTurnNoEndedTurnWasShown(t *testing.T) {
 	}
 
 	e.capture(launching(h, capturing("ana", "chat:room", next, 1, 1, 100, budget)))
-	e.end(ending("ana", "chat:room", next, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", next, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	for _, gone := range []string{parked, failed} {
 		if _, found := e.session("ana", gone); found {
 			t.Errorf("turn %s was shown to the next turn and survived its end", gone)
@@ -124,7 +126,7 @@ func TestAConversationsHeadIsTheTurnThatReadItLast(t *testing.T) {
 	const fires = "schedule/role/0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11/health-check"
 	earlier, parked, beside, next := newTurn(), newTurn(), newTurn(), newTurn()
 	e.capture(capturing("ana", fires, earlier, 1, 1, 100, budget))
-	e.end(ending("ana", fires, earlier, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, earlier, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 
 	// THE PARKED TURN reads the head, captures and waits on a person; THE
 	// TURN BESIDE IT reads after it, continues the same head and ends; and
@@ -137,8 +139,8 @@ func TestAConversationsHeadIsTheTurnThatReadItLast(t *testing.T) {
 			second.Position, first.Position)
 	}
 	e.capture(launching(second, capturing("ana", fires, beside, 1, 1, 100, budget)))
-	e.end(ending("ana", fires, beside, "", Ending{Outcome: OutcomeCompleted}))
-	e.end(ending("ana", fires, parked, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, beside, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	e.end(ending("ana", fires, parked, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 
 	h := e.head("ana", fires)
 	if h.Session == nil || h.Session.Turn != beside {
@@ -152,7 +154,7 @@ func TestAConversationsHeadIsTheTurnThatReadItLast(t *testing.T) {
 	}
 	e.agreedHead("ana", fires, parked)
 	e.capture(launching(h, capturing("ana", fires, next, 1, 1, 100, budget)))
-	e.end(ending("ana", fires, next, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, next, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	for _, gone := range []string{beside, parked} {
 		if _, found := e.session("ana", gone); found {
 			t.Errorf("turn %s was handed to the next turn and survived its end", gone)
@@ -164,8 +166,8 @@ func TestAConversationsHeadIsTheTurnThatReadItLast(t *testing.T) {
 	early, late := newTurn(), newTurn()
 	e.capture(launching(now, capturing("ana", fires, early, 1, 1, 100, budget)))
 	e.capture(launching(now, capturing("ana", fires, late, 1, 1, 100, budget)))
-	e.end(ending("ana", fires, early, "", Ending{Outcome: OutcomeCompleted}))
-	e.end(ending("ana", fires, late, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, early, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	e.end(ending("ana", fires, late, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	if tie := e.agreedHead("ana", fires, early); tie != late {
 		t.Fatalf("of two turns that read the conversation alike the head is %q, want %q, the one "+
 			"that ended last", tie, late)
@@ -174,7 +176,7 @@ func TestAConversationsHeadIsTheTurnThatReadItLast(t *testing.T) {
 	// A TURN THAT READ NOTHING ends last, and the head stays the turn that read.
 	blind := newTurn()
 	e.capture(capturing("ana", fires, blind, 1, 1, 100, budget))
-	e.end(ending("ana", fires, blind, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, blind, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	h = e.head("ana", fires)
 	if h.Session == nil || h.Session.Turn != late {
 		t.Fatalf("the head is %+v, want the turn that read the conversation, not one that read "+
@@ -205,22 +207,22 @@ func TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued(t *testing.T) {
 	const fires = "schedule/role/0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11/health-check"
 	f09, f10, f11, f12, f13 := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
 	e.capture(capturing("ana", fires, f09, 1, 1, 100, budget))
-	e.end(ending("ana", fires, f09, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, f09, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 
 	// F10 CONTINUES F09 and parks on a person's question, its session kept.
 	e.capture(launching(e.head("ana", fires), capturing("ana", fires, f10, 1, 1, 100, budget)))
 	// F11 FIRES BESIDE IT, continues F09 too and ends, its end absorbing F09.
 	e.capture(launching(e.head("ana", fires), capturing("ana", fires, f11, 1, 1, 100, budget)))
-	e.end(ending("ana", fires, f11, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, f11, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	// F12 CONTINUES F11 and ends, its end absorbing F11.
 	at12 := e.head("ana", fires)
 	if at12.Session == nil || at12.Session.Turn != f11 {
 		t.Fatalf("the premise: F12 is handed %+v, want F11's session", at12.Session)
 	}
 	e.capture(launching(at12, capturing("ana", fires, f12, 1, 1, 100, budget)))
-	e.end(ending("ana", fires, f12, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, f12, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	// F10 IS ANSWERED and ends last of all.
-	e.end(ending("ana", fires, f10, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, f10, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 
 	at13 := e.head("ana", fires)
 	if at13.Session == nil || at13.Session.Turn != f12 {
@@ -235,7 +237,7 @@ func TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued(t *testing.T) {
 	e.agreedHead("ana", fires, f10)
 
 	e.capture(launching(at13, capturing("ana", fires, f13, 1, 1, 100, budget)))
-	e.end(ending("ana", fires, f13, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", fires, f13, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	for _, gone := range []string{f12, f10} {
 		if _, found := e.session("ana", gone); found {
 			t.Errorf("fire %s was handed to F13 and survived its end", gone)
@@ -260,7 +262,7 @@ func TestAHeadBoundsWhatItHandsOutAndWhatItLeavesStays(t *testing.T) {
 	for range MaxSiblings + 2 {
 		run := newTurn()
 		e.capture(capturing("ana", "chat:room", run, 1, 1, 100, budget))
-		e.end(ending("ana", "chat:room", run, "", Ending{Outcome: OutcomeCompleted}))
+		e.end(ending("ana", "chat:room", run, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 		siblings = append(siblings, run)
 	}
 	// The newest of them is the head; the rest are its siblings.
@@ -278,7 +280,7 @@ func TestAHeadBoundsWhatItHandsOutAndWhatItLeavesStays(t *testing.T) {
 	}
 	next := newTurn()
 	e.capture(launching(h, capturing("ana", "chat:room", next, 1, 1, 100, budget)))
-	e.end(ending("ana", "chat:room", next, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", next, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	if _, found := e.session("ana", siblings[0]); !found {
 		t.Fatal("the sibling no launch was offered was absorbed")
 	}
@@ -287,7 +289,7 @@ func TestAHeadBoundsWhatItHandsOutAndWhatItLeavesStays(t *testing.T) {
 	var endings []string
 	for range MaxEndings + 2 {
 		run := newTurn()
-		e.end(ending("ana", "chat:room", run, "", Ending{Outcome: OutcomeFailed}))
+		e.end(ending("ana", "chat:room", run, "", executorkeep.Ending{Outcome: executorkeep.OutcomeFailed}))
 		endings = append(endings, run)
 	}
 	h = e.head("ana", "chat:room")
@@ -302,7 +304,7 @@ func TestAHeadBoundsWhatItHandsOutAndWhatItLeavesStays(t *testing.T) {
 	}
 	last := newTurn()
 	e.capture(launching(h, capturing("ana", "chat:room", last, 1, 1, 100, budget)))
-	e.end(ending("ana", "chat:room", last, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", last, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	h = e.head("ana", "chat:room")
 	if want := []string{siblings[0], endings[0], endings[1]}; !slices.Equal(turnsOf(h.Endings), want) {
 		t.Errorf("after the end of a turn shown the newest, the next read shows %v, want "+
@@ -335,7 +337,7 @@ func TestASeatsPagesKeepEveryRowInItsPlace(t *testing.T) {
 	}
 	// BETWEEN THE PAGES the oldest row is captured again and another ends.
 	e.capture(capturing("ana", "chat:room", runs[0], 2, 1, 100, budget))
-	e.end(ending("ana", "chat:room", runs[1], "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", runs[1], "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	second, err := e.reader().Sessions(t.Context(), "ana", first.Next, 2, stale)
 	if err != nil {
 		t.Fatal(err)
@@ -361,10 +363,10 @@ func TestTheRetentionNominatesRowsTombstonesAndRemovals(t *testing.T) {
 	e := newEstate(t)
 	absorbed, head, fresh := newTurn(), newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:room", absorbed, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:room", absorbed, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", absorbed, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	h := e.head("ana", "chat:room")
 	e.capture(launching(h, capturing("ana", "chat:room", head, 1, 1, 100, budget)))
-	e.end(ending("ana", "chat:room", head, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", head, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	e.removeSeat("ben")
 	cutoff := stamped(e.seq)
 	e.capture(capturing("ana", "chat:other", fresh, 1, 1, 100, budget))
@@ -409,7 +411,7 @@ func TestALostEndIsNominatedOnlyForATurnThatNeverEnded(t *testing.T) {
 	lost, ended, fresh := newTurn(), newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:a", lost, 1, 1, 100, budget))
 	e.capture(capturing("ana", "chat:b", ended, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:b", ended, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:b", ended, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	before := stamped(e.seq)
 	e.capture(capturing("ana", "chat:c", fresh, 1, 1, 100, budget))
 	got, err := e.reader().Unended(t.Context(), before, 10)
@@ -433,7 +435,7 @@ func TestTheSealedCensusCountsWhatTheRowsName(t *testing.T) {
 	const tight = 100
 	older, newer := newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:a", older, 1, 1, 60, tight))
-	e.end(ending("ana", "chat:a", older, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:a", older, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	rotated := capturing("ana", "chat:b", newer, 1, 1, 60, tight)
 	rotated.ContentKey = "k2"
 	// THE OLDER SESSION IS RELEASED to make room for this one.
@@ -509,18 +511,18 @@ func TestARowThatNamesNoSessionSaysWhichOfThreeReasons(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
 	nothing, begun, stale, landed, newest := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
-	e.end(ending("ana", "chat:a", nothing, "", Ending{Outcome: OutcomeFailed}))
+	e.end(ending("ana", "chat:a", nothing, "", executorkeep.Ending{Outcome: executorkeep.OutcomeFailed}))
 	e.begin(beginning(e.head("ana", "chat:b"), "ana", "chat:b", begun, ""))
 	e.capture(capturing("ana", "chat:c", stale, 1, 1, 10, budget))
-	e.end(ending("ana", "chat:c", stale, "", Ending{Outcome: OutcomeCompleted,
-		Unkept: &Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the object store's reservation is spent"}}))
+	e.end(ending("ana", "chat:c", stale, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+		Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the object store's reservation is spent"}}))
 	// THE BUDGET'S RELEASE: an end whose unkept capture is the very one the row
 	// names releases nothing, and the next capture past the seat's budget
 	// takes the session, the oldest ended one.
 	const tight = 100
 	e.capture(capturing("ana", "chat:d", landed, 1, 1, 60, tight))
-	e.end(ending("ana", "chat:d", landed, "", Ending{Outcome: OutcomeCompleted,
-		Unkept: &Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: "its record was never answered"}}))
+	e.end(ending("ana", "chat:d", landed, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+		Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: "its record was never answered"}}))
 	if s, _ := e.session("ana", landed); !s.HasObject() {
 		t.Fatalf("the end released a session whose unkept capture had landed: %+v", s)
 	}

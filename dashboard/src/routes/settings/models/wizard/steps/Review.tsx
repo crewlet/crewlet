@@ -11,22 +11,14 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import {
-  Callout,
-  DescriptionList,
-  DiffList,
-  Disclosure,
-  Link,
-  Spinner,
-  Text,
-  type DiffRow,
-} from "@crewlethq/ui";
+import { Callout, DescriptionList, Disclosure, Link, Spinner, Text } from "@crewlethq/ui";
 import {
   DEFAULT_HARNESS_MAX_CONCURRENT,
   DEFAULT_HARNESS_TIMEOUT_SECONDS,
   SEAT_JOB_FIELDS,
 } from "~/contract/models.ts";
 import { href } from "~/app/router.tsx";
+import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { listed } from "~/lib/format.ts";
 import { SEAT_JOBS, agentRoles, type Dropped, type Uses } from "~/lib/modelUses.ts";
 import type { CompanyDocument, ConfigProblem, ConfigWarning } from "~/protocol/types.ts";
@@ -69,12 +61,30 @@ const show = (value: unknown) =>
       ? JSON.stringify(value)
       : String(value);
 
-/** One row of a diff, by whether the value appeared, went or changed. */
-function row(path: string, from: string | undefined, to: string | undefined): DiffRow | null {
+/**
+ * One change of the revision as the dashboard's one diff draws a setting
+ * (`components/DiffView.tsx`, keyed by its path): a value that appeared is
+ * its new value added, one that went its old value removed, and one that
+ * changed is both, so the diff underlines what moved inside it. ONE HUNK A
+ * CHANGE, skipping nothing, as the configuration's own diff draws them
+ * (`routes/settings/Config.tsx`'s `configHunks`).
+ */
+function row(path: string, from: string | undefined, to: string | undefined): DiffHunk | null {
   if (from === to) return null;
-  if (from === undefined) return { kind: "added", path, to: to ?? "" };
-  if (to === undefined) return { kind: "removed", path, from };
-  return { kind: "changed", path, from, to };
+  const line = (kind: "add" | "remove", text: string) => ({
+    kind,
+    text,
+    before: null,
+    after: null,
+    path,
+  });
+  return {
+    skipped: 0,
+    lines: [
+      ...(from === undefined ? [] : [line("remove", from)]),
+      ...(to === undefined ? [] : [line("add", to)]),
+    ],
+  };
 }
 
 /** Every change the revision makes, with the paths the engine writes: shown only inside the disclosure. */
@@ -85,8 +95,8 @@ export function changesOf(
   names: (handle: string) => string,
   secrets: readonly string[],
   editing: boolean,
-): DiffRow[] {
-  const out: DiffRow[] = [];
+): DiffHunk[] {
+  const out: DiffHunk[] = [];
   const llmOf = (doc: CompanyDocument) =>
     isRecord(doc.providers) && isRecord(doc.providers.llm) ? doc.providers.llm : {};
   const was = isRecord(llmOf(before)[key]) ? (llmOf(before)[key] as Record<string, unknown>) : {};
@@ -111,12 +121,16 @@ export function changesOf(
     show(isRecord(doc.assistant) ? doc.assistant.llm : undefined);
   const assistantRow = row("assistant.llm", assistantLlm(before), assistantLlm(after));
   if (assistantRow) out.push(assistantRow);
+  // A SECRET'S VALUE IS NEVER DRAWN, before or after: a new one is added,
+  // and one replaced reads as changed by an old line that says so.
   for (const name of secrets) {
-    out.push({
-      kind: editing ? "changed" : "added",
-      path: `secret ${name}`,
-      to: "stored after its test passes",
-    });
+    out.push(
+      row(
+        `secret ${name}`,
+        editing ? "the stored one" : undefined,
+        "stored after its test passes",
+      )!,
+    );
   }
   return out;
 }
@@ -341,7 +355,15 @@ export function Review({
       ) : null}
 
       <Disclosure title="Every change in the revision" count={rows.length}>
-        <DiffList rows={rows} layout="stacked" emptyMessage="Nothing changes yet." />
+        <DiffView
+          hunks={rows}
+          aria-label="Every change in the revision"
+          empty={
+            <Text as="p" variant="caption" tone="secondary">
+              Nothing changes yet.
+            </Text>
+          }
+        />
       </Disclosure>
     </div>
   );

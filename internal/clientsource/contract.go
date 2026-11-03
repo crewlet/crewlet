@@ -426,6 +426,42 @@ var contract = []Entry{
 	{"TrackerBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"KnowledgeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"ChatBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+	{"CodeHost", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+
+	// code.ts
+	{"REPO_STATUSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryRepositoryState"},
+	{"REPO_SEARCH_MODES", ReadLiteral, "internal/code.TestTheDashboardOffersEverySearchModeOfARepository"},
+	{"COMMAND_OUTCOMES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryOutcomeOfACommand"},
+	{"REPO_NAME", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
+	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
+	{"CHANGE_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfAChange"},
+	{"CHANGE_NEEDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryNeedOfAListingOfChanges"},
+	{"CHANGE_WINDOWS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryWindowOfAListingOfChanges"},
+	{"PRECONDITION_KINDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryPreconditionOfAChange"},
+	{"PRECONDITION_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryPreconditionOfAChange"},
+	{"FINDING_SEVERITIES", ReadLiteral, "internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords"},
+	{"FINDING_CATEGORIES", ReadLiteral, "internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords"},
+	{"CODE_PHRASES", ReadLiteral, "internal/code.TestEveryCodeReasonReadsAsEnglishOnTheClient"},
+	{"CODE_ALARM_KINDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryCodeAlarm"},
+	{"CODE_MAX_BLAME_LINES", ReadScalar, "internal/code.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers"},
+	{"CODE_SCRATCH_IDLE_DAYS", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
+	{"CODE_SCRATCH_MAX_PER_SEAT", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
+	{"CODE_IDENTITY_DOMAIN", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
+	{"CHECK_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfACheck"},
+	{"CHECK_ENDED_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfACheck"},
+	{"CHECK_PURPOSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfACheck"},
+	{"QUEUE_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfAQueue"},
+	{"CodeSearchAnswer", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchHit", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchCoverage", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchRepoSet", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchNodeGap", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CODE_SEARCH_MODES", ReadLiteral, "internal/codeindex.TestTheDashboardOffersEveryModeOfASearch"},
+
+	// merge.ts
+	{"MERGE_METHODS", ReadLiteral, "internal/code.TestTheDashboardOffersEveryMergeMethod"},
+	{"MERGE_REFUSALS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryMergeRefusal"},
+	{"MERGE_CONFLICT", ReadScalar, "internal/code.TestTheDashboardKnowsEveryMergeRefusal"},
 
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
@@ -446,6 +482,7 @@ var contract = []Entry{
 
 	// wire.ts
 	{"PushKind", ReadUnion, "internal/api/stream.TestTheDashboardKnowsExactlyThePushKindsTheEngineSends"},
+	{"InboxChange", ReadInterface, "internal/api/stream.TestTheDashboardReadsAnInboxFrameAsTheEngineSendsIt"},
 	{"QUERY_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastAReadOfTheGroup"},
 	{"MAX_IN_FLIGHT_QUERIES", ReadScalar, "internal/api/stream.TestTheDashboardAsksNoMoreAtOnceThanTheSocketRuns"},
 	{"MAX_EVENTS", ReadScalar, "internal/api/livestate.TestTheDashboardKeepsTheFeedTheEngineKeeps"},
@@ -602,6 +639,7 @@ var contract = []Entry{
 	{"BROKER_FINDING_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerFinding"},
 	{"BROKER_REMOVE_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastABrokerRemoval"},
 	{"OBJECTS_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectsState"},
+	{"OBJECT_FINDINGS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectFinding"},
 
 	// links.ts
 	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/doclet.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},

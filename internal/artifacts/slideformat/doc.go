@@ -30,4 +30,14 @@
 // PURE. It reads no store and holds no clock: the publish pipeline hands it
 // the files' bytes and a lookup of the version's other files, and the read
 // routes call it on the same bytes to answer the dashboard.
+//
+// BUILT AT FIRST USE. Every table and pattern here — the style table, the
+// drawing's elements and attributes, the named colours, the refused elements
+// and the grammars' expressions — is a [sync.OnceValue] built the first time a
+// deck is read, never a package variable built at init. The engine is one
+// binary, and that binary is also every push's proc-receive hook, which runs
+// every linked package's initialisation before its first statement: built at
+// init, the tables were 350 KB of allocations on every push, for a process
+// that reads no deck. cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit
+// holds every package to that.
 package slideformat

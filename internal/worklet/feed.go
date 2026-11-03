@@ -124,7 +124,7 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (chan
 // indistinguishable from a record that could not carry one.
 func wakesAnybody(kind ObjectKind) bool {
 	switch kind {
-	case KindBarrier, KindGeneration, KindEviction, KindTurn, KindRankOrder,
+	case KindBarrier, KindTrimmed, KindGeneration, KindEviction, KindTurn, KindRankOrder,
 		// A FILE IS READ FROM ITS PROJECT, never woken into anybody's
 		// inbox — see [ObjectKind.Routable]'s own list of the kinds
 		// announced elsewhere.

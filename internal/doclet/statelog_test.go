@@ -30,7 +30,7 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// writes skill = 0 where a build with one writes 1, and
 			// the identity claim must still hold. A suite run with a
 			// detector would prove the easy half.
-			Applier: doclet.NewApplier("suite-node", nil, nil),
+			Applier: doclet.NewApplier(nil, nil),
 			// Migrate is nil: these tables ship in the replicated
 			// estate's own migration, so a fresh store already has
 			// them. A domain that created its tables from test code
@@ -46,6 +46,11 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			Kinds:  suiteKinds(),
 			Rows:   doclet.NewRows,
 			Write:  suiteWrite,
+			// THE PRODUCTION ENCODER the engine hands the trim.
+			EncodeTrimmed: doclet.EncodeTrimmed,
+			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
+			// for this log: certified to write no row.
+			EncodeBarrier: doclet.EncodeBarrier,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
@@ -180,6 +185,8 @@ func suitePayload(kind doclet.ObjectKind, id string) (doclet.OpKind, any, doclet
 		}, doclet.ScopeSet{Subject: true}
 	case doclet.KindBarrier:
 		return doclet.OpBarrier, nil, doclet.ScopeSet{Subject: true}
+	case doclet.KindTrimmed:
+		return doclet.OpTrimmed, nil, doclet.ScopeSet{Subject: true}
 	}
 	return doclet.OpPatch, nil, doclet.ScopeSet{Subject: true}
 }
@@ -202,7 +209,7 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 		return statelogtest.GateCandidate{
 			Candidate: statelogtest.Candidate{
 				Domain:  doclet.Domain{},
-				Applier: doclet.NewApplier("suite-node", nil, nil),
+				Applier: doclet.NewApplier(nil, nil),
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -42,7 +43,12 @@ const (
 const maxResponse = 4 << 20
 
 // accountIDPattern is the shape Cloudflare gives every account identifier.
-var accountIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go); the
+// bounded repeat compiles to a program holding every count, about 13 KB.
+var accountIDPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[0-9a-f]{32}$`)
+})
 
 // Message is one entry of an envelope's `errors` or `messages`, with the
 // errors Cloudflare chains under it.
@@ -127,7 +133,7 @@ type ClientOptions struct {
 // empty token, either of which would fail every call with a misleading 4xx.
 func NewClient(opts ClientOptions) (*Client, error) {
 	account := strings.TrimSpace(opts.AccountID)
-	if !accountIDPattern.MatchString(account) {
+	if !accountIDPattern().MatchString(account) {
 		return nil, errors.New("cloudflare: the account ID is not 32 lowercase hexadecimal characters")
 	}
 	token := strings.TrimSpace(opts.Token)

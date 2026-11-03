@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
@@ -65,13 +66,16 @@ func TestABearerAuthenticatesOnlyUnderTheNameIssued(t *testing.T) {
 // cookie it deletes on those three — and the prefixed one has to be Secure,
 // or a browser refuses the Set-Cookie and keeps the original. Clearing only
 // the name this deployment issues left a browser holding the other one signed
-// in after it signed out.
-func TestClearsEndABearerUnderEveryName(t *testing.T) {
+// in after it signed out. Read as a browser reads them, off the response
+// [session.End] sets them on.
+func TestEndingABearerClearsItUnderEveryName(t *testing.T) {
 	t.Parallel()
 	for _, external := range []string{
 		"https://crewlet.example.com", "http://localhost:8000",
 	} {
-		clears := session.Clears(external)
+		rec := httptest.NewRecorder()
+		session.End(rec, external)
+		clears := rec.Result().Cookies()
 		seen := map[string]*http.Cookie{}
 		for _, c := range clears {
 			seen[c.Name] = c
@@ -94,14 +98,18 @@ func TestClearsEndABearerUnderEveryName(t *testing.T) {
 					"refuses for a __Host- cookie", external)
 			}
 		}
-		// THE ISSUED NAME'S CLEAR IS [session.Clear] ITSELF, first, so the
-		// attributes of the one this deployment sets never drift from it.
-		want, got := session.Clear(external), clears[0]
+		// THE ISSUED NAME'S CLEAR COMES FIRST AND CARRIES THE BEARER'S OWN
+		// ATTRIBUTES — the cookie a sign-in sets on this deployment — so the
+		// one this deployment sets and the one that deletes it never drift
+		// apart.
+		set := httptest.NewRecorder()
+		session.Begin(set, external, "v3.value", time.Date(2026, 3, 2, 17, 0, 0, 0, time.UTC))
+		want, got := set.Result().Cookies()[0], clears[0]
 		if got.Name != want.Name || got.Secure != want.Secure ||
 			got.HttpOnly != want.HttpOnly || got.SameSite != want.SameSite ||
-			got.Path != want.Path || got.MaxAge != want.MaxAge {
-			t.Errorf("%s: the first clear is %+v, want session.Clear's %+v",
-				external, got, want)
+			got.Path != want.Path || got.MaxAge >= 0 {
+			t.Errorf("%s: the first clear is %+v, want a deletion of the cookie a "+
+				"sign-in sets, %+v", external, got, want)
 		}
 	}
 }

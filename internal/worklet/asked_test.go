@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -150,7 +151,7 @@ func TestAskedOnSeesOnlyAnOpenAskNamingThem(t *testing.T) {
 				t.Errorf("asked %+v, want %+v: the task, the author and the "+
 					"caller's own remark alone", q, wantQ)
 			}
-			if threads.fresh[0] != want {
+			if !reflect.DeepEqual(threads.fresh[0], want) {
 				t.Errorf("read at %+v, want the caller's %+v", threads.fresh[0], want)
 			}
 		})

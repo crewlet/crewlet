@@ -241,6 +241,18 @@ type ExecutorCollected struct {
 	// Zero on a record that lists them all.
 	DeliveredRefs       []string `json:"delivered_refs,omitempty"`
 	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
+	// PushedRefs are the refs the launch moved on the engine's own code
+	// host, as the code host's push rows written under its launch say, read
+	// when it was collected — the engine's account beside DeliveredRefs, the
+	// launch's own. On this record because a launch that parks on a question
+	// is resumed by an answer, which collects nothing, so the pushes of the
+	// launch that asked are here or nowhere. PushedRefsElided and
+	// PushedRefsUnread mean what they mean on
+	// [AgentPhaseCompleted.PushedRefs]; all three absent on a launch given no
+	// repository it could push to.
+	PushedRefs       []PushedRefRecord `json:"pushed_refs,omitempty"`
+	PushedRefsElided int               `json:"pushed_refs_elided,omitempty"`
+	PushedRefsUnread string            `json:"pushed_refs_unread,omitempty"`
 	// StartedAt is when the store recorded the launch, and DurationMS how
 	// long it ran until this node collected it: the waiter's poll interval
 	// is inside it, and the coding itself is the rest. Absent where the

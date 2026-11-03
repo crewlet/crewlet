@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -582,15 +586,27 @@ func TestAFakeRuntimeIsExecutableWhenItIsHandedOver(t *testing.T) {
 	}
 	t.Cleanup(func() { close(stop); forkers.Wait() })
 
+	// Each probe is a SUBTEST, started from a goroutine of its own. The
+	// probes run at once because their own forks hold the window open
+	// beside the forkers' — with the guard removed, and counting whole runs
+	// of this 64-probe test under -race, probing one at a time let 4 runs
+	// in 20 pass, and probing at once 2 in 40 — and each is a subtest
+	// because fakeRuntime fails through FailNow, which only a test's own
+	// goroutine may call: from a goroutine of this test's, it ended that
+	// goroutine and marked this test finished while it ran on. t.Run,
+	// unlike FailNow, may be called from many goroutines at once, so long
+	// as every call returns before this test does.
 	var probes sync.WaitGroup
 	failures := make(chan string, 64)
-	for range 64 {
+	for probe := range 64 {
 		probes.Go(func() {
-			runtime := fakeRuntime(t, "docker", dockerRootlessFormat,
-				`[name=rootless name=seccomp,profile=builtin]`, 0)
-			if !runtimeIsRootless(t.Context(), containerCLI{path: runtime}) {
-				failures <- runtime
-			}
+			t.Run(fmt.Sprintf("probe-%d", probe), func(t *testing.T) {
+				runtime := fakeRuntime(t, "docker", dockerRootlessFormat,
+					`[name=rootless name=seccomp,profile=builtin]`, 0)
+				if !runtimeIsRootless(t.Context(), containerCLI{path: runtime}) {
+					failures <- runtime
+				}
+			})
 		})
 	}
 	probes.Wait()
@@ -599,5 +615,84 @@ func TestAFakeRuntimeIsExecutableWhenItIsHandedOver(t *testing.T) {
 		t.Fatalf("%d of 64 rootless probes could not run the runtime they "+
 			"were just handed; every one of them reads downstream as a "+
 			"rootful runtime and adds --user", n)
+	}
+}
+
+// EVERY EXECUTABLE THIS SUITE WRITES IS WRITTEN UNDER THE FORK LOCK, because
+// writeExecutable writes every one. A stub written any other way can be
+// inherited by a fork in flight, and its first exec fails ETXTBSY a few runs
+// in a few hundred, as an answer that reads as the code under test being
+// wrong: the paused-container case's stub was once written that way while
+// the two beside it were not, and with eight goroutines forking beside it, 3
+// of its 200 runs read a paused container as running.
+//
+// It reads this package's own test files, the external suite's included, and
+// refuses every os.WriteFile, os.OpenFile and os.Chmod outside
+// writeExecutable whose mode carries an exec bit — and every mode it cannot
+// read as a literal, which it names rather than assumes harmless. A file no
+// case execs is written without one. It requires the one write
+// writeExecutable makes to be found as well, or a reader that recognised
+// nothing would pass on any tree.
+//
+// Mutation: write the paused-container stub with os.WriteFile(…, 0o700)
+// again, and this names the line.
+func TestEveryExecutableThisSuiteWritesIsWrittenUnderTheForkLock(t *testing.T) {
+	t.Parallel()
+	// Where each call takes its mode among its arguments.
+	modeAt := map[string]int{"WriteFile": 2, "OpenFile": 2, "Chmod": 1}
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	settled := 0
+	for _, name := range files {
+		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, isFunc := decl.(*ast.FuncDecl)
+			helper := isFunc && fn.Recv == nil && fn.Name.Name == "writeExecutable"
+			ast.Inspect(decl, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				at, writes := modeAt[sel.Sel.Name]
+				if !ok || pkg.Name != "os" || !writes || len(call.Args) <= at {
+					return true
+				}
+				where := fset.Position(call.Pos())
+				lit, ok := call.Args[at].(*ast.BasicLit)
+				if !ok || lit.Kind != token.INT {
+					t.Errorf("%s: os.%s with a mode this gate cannot read; spell it as an integer literal",
+						where, sel.Sel.Name)
+					return true
+				}
+				mode, err := strconv.ParseUint(lit.Value, 0, 32)
+				switch {
+				case err != nil:
+					t.Errorf("%s: os.%s with a mode this gate cannot read (%v)", where, sel.Sel.Name, err)
+				case mode&0o111 == 0:
+				case helper:
+					settled++
+				default:
+					t.Errorf("%s: os.%s writes an executable outside writeExecutable, so a fork "+
+						"can hold it open at its first exec; write it with writeExecutable",
+						where, sel.Sel.Name)
+				}
+				return true
+			})
+		}
+	}
+	if settled != 1 {
+		t.Fatalf("found %d executable writes in writeExecutable, want its one os.WriteFile: "+
+			"this gate is not reading what it thinks it reads", settled)
 	}
 }

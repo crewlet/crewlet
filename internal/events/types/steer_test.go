@@ -56,8 +56,8 @@ func TestBoundaryAndLaunchIDAreOmittedWhenEmpty(t *testing.T) {
 
 // THE DASHBOARD NAMES EVERY STEP A NOTE IS READ AT, read out of its own source.
 //
-// The turn trace says each boundary in words and places a read inside a coding
-// run on the run's bar rather than on a round. A boundary the engine records
+// The turn trace says each boundary in words and places a read inside an executor
+// on the run's bar rather than on a round. A boundary the engine records
 // that the dashboard does not list is drawn as a round that does not exist;
 // one it lists that the engine never records is copy nobody can reach.
 func TestTheDashboardNamesEverySteerBoundary(t *testing.T) {

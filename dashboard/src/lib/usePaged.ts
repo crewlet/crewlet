@@ -4,24 +4,45 @@
  *
  * The task page draws three — its comments (`work_comments`), the agent turns
  * charged to it (`work_item_turns`) and what changed on it (`work_activity`) —
- * a seat's profile draws its turns (`turns {seat}`), and chat draws a person's
- * Activity (`chat_activity`) and a thread (`chat_thread`). Each is answered a
- * page at a time with a cursor to the page after: newest first, every one of
- * them but the thread, which reads forwards from its root. Each used to be
- * read as its first page and nothing more, so a task past twenty comments or
- * a seat past fifty turns had a history nobody could reach — and a count of
- * the page read as a count of the history.
+ * a seat's profile draws its turns (`turns {seat}`), chat draws a person's
+ * Activity (`chat_activity`) and a thread (`chat_thread`), Live its turns and
+ * recent phases, the Inbox its lists, Artifacts a folder, and the Code
+ * workspace its repositories, changes and pushes and a repository's refs,
+ * history, tree, files and diffs (`code_*`). Each is answered a page at a time
+ * with a cursor to the page after: newest first for a history, in the order the
+ * engine keeps for a listing (a repository's name, a path), forwards from its
+ * root for a thread. Each used to be read as its first page and nothing more,
+ * so a task past twenty comments or a seat past fifty turns had a history
+ * nobody could reach — and a count of the page read as a count of the history.
  *
  * THE SHAPE `usePaged` HAS, for its reasons: the first page is an ordinary
- * `useQuery` (polled, re-asked on reconnect and after this tab's own write, at
- * its read floor); every page after it is asked when the reader asks for it,
- * and held against the question it was asked under. An entry is drawn once,
- * by its id, on the first page that carries it.
+ * `useQuery` or `useCodeQuery` (polled, re-asked on reconnect and after this
+ * tab's own write, at its read floor) and it STAYS LIVE while the reader pages
+ * on — Chatlet's feeds are read for what arrives at their top — so the join
+ * below, not a first page held still, is what keeps the list whole; every page
+ * after it is asked when the reader asks for it, and belongs to the reading of
+ * the question it was asked under. An entry is drawn once, by its id, on the
+ * first page that carries it.
+ *
+ * A NEW QUESTION DISCARDS WHAT THE LAST ONE HELD. Kept under the old question
+ * instead, its pages came back the moment the reader returned to it — and for
+ * that moment the first page is the other question's answer, which `useQuery`
+ * shows until the new one lands, so the join read the returning question's
+ * pages from a cursor another question minted. A reader who comes back starts
+ * again from the first page, and a page still on its way for a reading that
+ * ended is dropped when it lands, whatever question is on screen by then — the
+ * same one again included.
  *
  * WHERE THE CURSOR IS is the caller's to say (`cursorOf`), because the
- * answers do not agree on a key: Worklet's histories carry `next_cursor`
- * and the turn list `next`, and a hook that read one of them would page the
- * other as a list with nothing after it.
+ * answers do not agree on a key: Worklet's histories carry `next_cursor`,
+ * the turn list and the code listings `next`, and a hook that read one of them
+ * would page the others as a list with nothing after it.
+ *
+ * A PAGE THAT FAILS IS ASKED AGAIN BY THE SAME PRESS: it keeps what is held
+ * and the cursor it was asked from, so [Paged.next] reads it again. Its code
+ * is `pageError`, which a caller says BESIDE the control that asks it
+ * (`components/common.tsx`'s `PageFailed`), never in its place: in its place
+ * it left the reader nothing to press, and nothing to do but reload.
  *
  * # Every page has to meet the next one
  *
@@ -143,9 +164,10 @@ interface HeldPage<A> {
   answer: A;
 }
 
-/** What the reader has paged through, for one question. */
+/** What the reader has paged through, for one reading of one question. */
 interface Kept<A> {
-  question: string;
+  /** The reading these belong to: the question, and which time it was asked. */
+  era: string;
   /**
    * The first page these were last JOINED to. It is what is drawn as the
    * first while a later answer that does not join is being joined, so the
@@ -189,10 +211,11 @@ const errorOf = (err: unknown): QueryErrorCode =>
 
 /**
  * THE QUESTION IS THE CALLER'S, asked with its kind written out at the call
- * — the first page through `useQuery("…")` and every later one through
- * `socket.query("…")` — because a kind this hook took as a variable is one
- * the engine's reader gate cannot see (`app/source.test.ts`), and a question
- * no gate can see asked is one the engine may stop answering unnoticed.
+ * — the first page through `useQuery("…")` or `useCodeQuery("…")`, every
+ * later one through `socket.query("…")` or `codeRest.query("…")` — because a
+ * kind this hook took as a variable is one the engine's reader gate cannot see
+ * (`app/source.test.ts`), and a question no gate can see asked is one the
+ * engine may stop answering unnoticed.
  */
 export function usePaged<A, T>(
   first: QueryResult<A>,
@@ -206,10 +229,21 @@ export function usePaged<A, T>(
   cursorOf: (answer: A) => string,
 ): Paged<T, A> {
   const question = JSON.stringify(params);
+  // WHICH READING OF THE QUESTION THIS IS: a new question starts the next one,
+  // so what the last held is never drawn, joined or paged on again — not even
+  // when the reader comes back to it (the package doc's first part).
+  const readings = useRef({ question, count: 0 });
+  if (readings.current.question !== question) {
+    readings.current = { question, count: readings.current.count + 1 };
+  }
+  const era = `${readings.current.count}:${question}`;
   const [held, setHeld] = useState<Kept<A> | null>(null);
   const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<QueryErrorCode | null>(null);
-  const kept = held && held.question === question ? held : null;
+  // A FAILURE BELONGS TO ITS READING too: a new question is not told that the
+  // last one's page could not be read.
+  const [failed, setFailed] = useState<{ era: string; code: QueryErrorCode } | null>(null);
+  const pageError = failed?.era === era ? failed.code : null;
+  const kept = held && held.era === era ? held : null;
 
   // THE LATEST OF WHAT THE CALLER HANDS IN, read when a change runs rather
   // than depended on: the callers build them inline, and a change queued
@@ -218,8 +252,8 @@ export function usePaged<A, T>(
   ask.current = page;
   const reading = useRef<Reading<A, T>>({ pick, idOf, cursorOf });
   reading.current = { pick, idOf, cursorOf };
-  const asked = useRef(question);
-  asked.current = question;
+  const asked = useRef(era);
+  asked.current = era;
   const latest = useRef(first);
   latest.current = first;
 
@@ -249,9 +283,9 @@ export function usePaged<A, T>(
   // THE CHANGES, each run on the line and nowhere else. They read only refs,
   // so the copy made at the first render is every render's.
   const changes = useMemo(() => {
-    /** What is held for `q`, while `q` is still the question asked. */
+    /** What is held for the reading `q`, while `q` is still the one asked. */
     const holding = (q: string) =>
-      asked.current === q && book.current?.question === q ? book.current : null;
+      asked.current === q && book.current?.era === q ? book.current : null;
 
     /** The page a render draws first, from what is held now. */
     const drawnFirst = (kept: Kept<A> | null): A | null => {
@@ -293,13 +327,13 @@ export function usePaged<A, T>(
       // BOUNDED BY EVERYTHING HELD, all of which is below this gap.
       const gap = await bridge(answer, anchor, kept.pages.length);
       if (holding(q) !== kept) return;
-      if (gap.error) setPageError(gap.error);
+      if (gap.error) setFailed({ era: q, code: gap.error });
       if (gap.outcome === "met") {
-        commit({ question: q, top: answer, pages: [...gap.pages, ...kept.pages] });
+        commit({ era: q, top: answer, pages: [...gap.pages, ...kept.pages] });
       } else if (gap.outcome === "ended" && gap.pages.length > 0) {
         // THE HISTORY ENDED BEFORE THE HELD PAGES: they hold what has gone,
         // and what the walk read is the whole of the rest.
-        commit({ question: q, top: answer, pages: gap.pages });
+        commit({ era: q, top: answer, pages: gap.pages });
       } else {
         commit(null);
       }
@@ -374,7 +408,7 @@ export function usePaged<A, T>(
       commit(
         kept
           ? { ...kept, pages: [...kept.pages, { cursor, answer }] }
-          : { question: q, top: tail, pages: [{ cursor, answer }] },
+          : { era: q, top: tail, pages: [{ cursor, answer }] },
       );
     };
 
@@ -399,43 +433,43 @@ export function usePaged<A, T>(
     joinQueued.current = true;
     serially(async () => {
       joinQueued.current = false;
-      await changes.join(question);
+      await changes.join(era);
     });
-  }, [first.data, kept, question, serially, changes]);
+  }, [first.data, kept, era, serially, changes]);
 
   const pagingNow = useRef(false);
   const next = useCallback(() => {
     if (!following || pagingNow.current) return;
     pagingNow.current = true;
     setPaging(true);
-    setPageError(null);
+    setFailed(null);
     serially(async () => {
       try {
-        await changes.onward(question);
+        await changes.onward(era);
       } catch (err) {
-        setPageError(errorOf(err));
+        setFailed({ era, code: errorOf(err) });
       } finally {
         pagingNow.current = false;
         setPaging(false);
       }
     });
-  }, [following, question, serially, changes]);
+  }, [following, era, serially, changes]);
 
   // ONE RE-READ WAITING AT A TIME: a second asked while the first waits for
   // its turn widens it, rather than queueing another read of the same pages.
   // One asked once the first has started waits for it, because the first
   // may have read before the change the second was asked for.
-  const rereadQueued = useRef<{ question: string; reached: PagesReached<A>[] } | null>(null);
+  const rereadQueued = useRef<{ era: string; reached: PagesReached<A>[] } | null>(null);
   const refresh = useCallback(
     (reached?: PagesReached<A>) => {
       const accept: PagesReached<A> = reached ?? (() => true);
       const q = asked.current;
       const waiting = rereadQueued.current;
-      if (waiting && waiting.question === q) {
+      if (waiting && waiting.era === q) {
         waiting.reached.push(accept);
         return;
       }
-      const wanted = { question: q, reached: [accept] };
+      const wanted = { era: q, reached: [accept] };
       rereadQueued.current = wanted;
       serially(async () => {
         if (rereadQueued.current === wanted) rereadQueued.current = null;

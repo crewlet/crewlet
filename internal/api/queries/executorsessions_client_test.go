@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -51,7 +52,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	// THE CONVERSATION'S HEAD, the newest of its turns that left a session.
 	read := sealedSession(t, store, "ana", gzipText(t, openCodeExport(texts...)))
 	read.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 2}
-	read.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeStopped, Decision: "done",
+	read.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
 		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", CompletedWork: "Filed ENG-7.",
 		BlockedOn: "the review", StoppedBy: "ana.diaz", StopReason: "wrong branch",
 		Failure: "the round cap ran out"}
@@ -65,8 +66,8 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	unkept := sealedSession(t, store, "ana", gzipText(t, openCodeExport("look again")))
 	unkept.Object, unkept.LaunchSeq, unkept.CaptureSeq = objstore.Object{}, 1, 1
 	unkept.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 3}
-	unkept.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeFailed, DeliveredTo: "chatlet",
-		DeliveryUnknown: true, Unkept: &executordomain.Unkept{LaunchSeq: 2, CaptureSeq: 1,
+	unkept.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed, DeliveredTo: "chatlet",
+		DeliveryUnknown: true, Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
 			Reason: "refused: past the seat's budget"}}
 	// A SCHEDULE'S NEWEST FIRE, which the schedule's next fire would continue.
 	fired := sealedSession(t, store, "ana", gzipText(t, openCodeExport("check the services")))
@@ -148,7 +149,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		"TranscriptState":     stringsOf(queries.TranscriptStates),
 		"TranscriptEntryKind": stringsOf(executor.EntryKinds),
 		"TranscriptCut":       stringsOf(executor.TranscriptCuts),
-		"SessionOutcome":      stringsOf(executordomain.Outcomes),
+		"SessionOutcome":      stringsOf(executorkeep.Outcomes),
 		"SessionContinuesIn":  stringsOf(sandbox.ContinuesIns),
 		"SessionContinuedBy":  stringsOf(sandbox.ContinuedBys),
 	} {

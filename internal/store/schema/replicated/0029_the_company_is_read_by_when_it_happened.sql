@@ -3,12 +3,12 @@
 --
 -- # The two readers
 --
--- `work_flow` (tracker.Reader.Flow) answers "how many tasks were in each status
+-- `work_flow` (worklet.Reader.Flow) answers "how many tasks were in each status
 -- group at the end of each of the last N days or weeks, and how many were
 -- completed in each": it takes today's census and walks the history BACKWARD
 -- over the window, undoing every change that moved a task between groups, into
 -- or out of existence, or between projects. `company_feed`'s tracker half
--- (tracker.Reader.CompanyFeed) pages completions, creates and hand-offs newest
+-- (worklet.Reader.CompanyFeed) pages completions, creates and hand-offs newest
 -- first. Both select on the instant a change took effect and on nothing that
 -- narrows them first — no subject, no project, no position — so without this
 -- index both are a scan of `tracker_history`, a table that is never swept and

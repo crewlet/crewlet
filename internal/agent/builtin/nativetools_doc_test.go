@@ -96,11 +96,13 @@ func operatorOnlyTools(t *testing.T) []string {
 
 // everyOperatorOnlyTool is [operatorOnlyTools] and the operator-only tools
 // that are not the tracker's: answering a parked executor, pausing and
-// resuming a seat, steering a running turn and answering a question from the
-// company's knowledge — each a person's decision about the company, served on
-// the operator surface alone — and the chat gestures only a person makes.
-// Counted from the catalogue with every seam wired, for the pages that count
-// them all.
+// resuming a seat, steering a running turn, answering a question from the
+// company's knowledge, who read a unit's repository and a person's own marks
+// on their code inbox — each a person's decision, audit or gesture, served on
+// the operator surface alone —
+// and the chat gestures only a person makes. Counted from the catalogue with
+// every seam wired — the code reads on both sides, so the code reads a seat
+// holds too are not counted — for the pages that count them all.
 //
 // EVERY SEAM, AND CHECKED: the operator surface the fixture builds must serve
 // every tool [builtin.OperatorTools] declares ([operatorCandidates]), or a
@@ -117,7 +119,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	work.Placer = func(builtin.Actor) builtin.WorkPlacer { return nil }
 	work.Inbox = newFakeTracker()
 	seat, err := builtin.Register(tools.NewRegistry(), builtin.Deps{Work: work,
-		Pages: full.Pages, Knowledge: full.Knowledge, Chat: full.Chat})
+		Pages: full.Pages, Knowledge: full.Knowledge, Chat: full.Chat, Code: full.Code})
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -138,8 +140,19 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 			Org: func() *org.Organization { return company }, Actor: actor},
 		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Wire: steerWire, Actor: actor},
 		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget, Actor: actor},
+		// THE CODE READS AS EVERY SURFACE WIRES THEM — the code host and
+		// the requester ceiling's halves — or the catalogue serves none of
+		// them, nor the readers audit that stands beside them; AND ITS
+		// WRITES, or neither they nor a person's own code mark are served.
+		Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters, Chart: full.Code.Chart,
+			Writer: full.Code.Writer, Holder: full.Code.Holder, Actor: builtin.PrincipalActor},
+		Readers: builtin.ReadersDeps{Readers: &readersFake{}},
 	})
-	if declared := operatorCandidates(t); len(served) != declared {
+	// THE CODE TOOLS JOIN THE LIST through codeCandidates, which this
+	// fixture wires: every read and write a seat's registry takes, beside
+	// the list's own audit and mark.
+	declared := operatorCandidates(t) + len(builtin.CodeToolNames()) + len(builtin.CodeWrites())
+	if len(served) != declared {
 		names := make([]string, 0, len(served))
 		for _, tool := range served {
 			names = append(names, tool.Name())
@@ -156,8 +169,8 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		}
 	}
 	for _, name := range append([]string{builtin.AnswerExecutorTool, builtin.PauseSeatTool,
-		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool},
-		chatlet.OperatorOnlyTools()...) {
+		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool,
+		builtin.CodeRepoReadersTool, builtin.CodeMarkInboxTool}, chatlet.OperatorOnlyTools()...) {
 		if !slices.Contains(only, name) {
 			t.Fatalf("the operator surface with every seam wired does not serve %s "+
 				"(it adds %v), so this count is not the one the page lists", name, only)

@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
@@ -64,9 +65,18 @@ type headLog struct {
 
 var (
 	_ headReader             = (*headLog)(nil)
-	_ sandbox.SessionWrites  = (*headLog)(nil)
-	_ sandbox.SessionRestore = (*headLog)(nil)
+	_ executorLogWrites      = (*headLog)(nil)
+	_ sandbox.SessionRestore = headRestore{}
 )
+
+// headRestore is the sandbox's restore over the headLog, read as the engine's
+// own restore reads the router's: at the level a relaunch reads, made the
+// sandbox's view of the row ([restoreRow]).
+type headRestore struct{ *headLog }
+
+func (r headRestore) Session(ctx context.Context, handle, turn string) (executorkeep.TurnRow, error) {
+	return restoreRow(r.headLog.Session(ctx, handle, turn, executordomain.RelaunchRead()))
+}
 
 func newHeadLog() *headLog {
 	return &headLog{rows: map[string]executordomain.Session{}, tombs: map[string]bool{},
@@ -98,7 +108,7 @@ func (l *headLog) endedOn(conversation, turn, sessionID, body string,
 		ContentKey: "k1", ArchiveFormat: sandbox.FakeArchiveFormat, LaunchSeq: 1, CaptureSeq: 1,
 		Home: "/boxes/" + turn + "/home", ContextTokens: contextTokens,
 		AskExcerpt: "what " + turn + " was asked",
-		Ending: &executordomain.Ending{Outcome: executordomain.OutcomeCompleted, Delivered: true,
+		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, Delivered: true,
 			DeliveredTo: "slack", CompletedWork: "what " + turn + " landed"}}
 	row.EndedAt, row.EndedAtPosition = time.Now().UTC(), l.nextLocked()
 	l.rows[turn], l.tombs[turn] = row, true
@@ -112,7 +122,7 @@ func (l *headLog) endingOnly(turn, account string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	row := executordomain.Session{Handle: "swe", Turn: turn, ConversationKey: "chat:D1", WorkKey: "wk-" + turn,
-		Ending: &executordomain.Ending{Outcome: executordomain.OutcomeCompleted, CompletedWork: account}}
+		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, CompletedWork: account}}
 	row.EndedAt, row.EndedAtPosition = time.Now().UTC(), l.nextLocked()
 	l.rows[turn], l.tombs[turn] = row, true
 }
@@ -275,7 +285,7 @@ func (l *headLog) Session(_ context.Context, handle, turn string,
 	return row, nil
 }
 
-func (l *headLog) Fetch(_ context.Context, row executordomain.Session, dst io.Writer) error {
+func (l *headLog) Fetch(_ context.Context, row executorkeep.TurnRow, dst io.Writer) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	body, ok := l.archives[row.Object.Key.String()]
@@ -286,7 +296,7 @@ func (l *headLog) Fetch(_ context.Context, row executordomain.Session, dst io.Wr
 	return err
 }
 
-func (l *headLog) OpenSpooled(_ executordomain.Session, sealed io.Reader) (io.Reader, error) {
+func (l *headLog) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
 	return sealed, nil
 }
 
@@ -352,13 +362,13 @@ func (conversingKeep) MintedAt(context.Context, string, string, time.Time) (time
 	return time.Date(2026, 8, 23, 11, 0, 0, 0, time.UTC), nil
 }
 
-func (conversingKeep) Seal(string, string, io.Reader, io.Writer) (executordomain.SealedSpool, error) {
-	return executordomain.SealedSpool{}, errors.New("no case here keeps a session")
+func (conversingKeep) Seal(string, string, io.Reader, io.Writer) (executorkeep.SealedSpool, error) {
+	return executorkeep.SealedSpool{}, errors.New("no case here keeps a session")
 }
 
-func (conversingKeep) Upload(context.Context, executordomain.SealedSpool,
-	io.Reader) (executordomain.SealedObject, error) {
-	return executordomain.SealedObject{}, errors.New("no case here keeps a session")
+func (conversingKeep) Upload(context.Context, executorkeep.SealedSpool,
+	io.Reader) (executorkeep.SealedObject, error) {
+	return executorkeep.SealedObject{}, errors.New("no case here keeps a session")
 }
 
 // conversingLaunch is a seat whose turns serve the conversation key —
@@ -407,9 +417,9 @@ func newConversingLaunch(t *testing.T, ceiling, spent int) conversingLaunch {
 	heads := newHeadLog()
 	e := &Engine{backends: &Backends{Queue: q, Fleet: fleet}, bridge: bridge}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Answers: testAnswers(), Audience: noAudience{},
+		Answers: testAnswers(), Audience: noAudience{}, Pushes: noPushes{},
 		Queue: q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
-		Restore: heads, Sessions: heads, Keep: conversingKeep{},
+		Restore: headRestore{heads}, Sessions: executorRecordsOf(heads), Keep: conversingKeep{},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -552,7 +562,7 @@ func TestTheFrozenBaseOutlivesASiblingsEnd(t *testing.T) {
 	}
 	if _, err := k.log.End(k.ctx, executordomain.Call{}, executordomain.NewEnd{Handle: "swe", Turn: "t3",
 		ConversationKey: "chat:D1", WorkKey: "wk-t3",
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
 		t.Fatalf("t3's end: %v", err)
 	}
 	if row, ok := k.log.row("b1"); !ok || row.Object.Key != b1.Object.Key {
@@ -652,7 +662,7 @@ func TestAScheduledFireContinuesThePreviousFiresSession(t *testing.T) {
 	}
 	if _, err := k.log.End(k.ctx, executordomain.Call{}, executordomain.NewEnd{Handle: "swe", Turn: "f2",
 		ConversationKey: k.key, WorkKey: "wk-f2",
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
 		t.Fatalf("f2's end: %v", err)
 	}
 	if row, ok := k.log.row("f1"); ok {
@@ -811,7 +821,7 @@ func TestAnEndingLeftOutOfTheBriefIsNotAbsorbed(t *testing.T) {
 	}
 	if _, err := k.log.End(k.ctx, executordomain.Call{}, executordomain.NewEnd{Handle: "swe", Turn: "t2",
 		ConversationKey: "chat:D1", WorkKey: "wk-t2",
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
 		t.Fatalf("t2's end: %v", err)
 	}
 	for _, turn := range left {
@@ -881,7 +891,7 @@ func TestTheSwitchOffCarriesNothingBetweenTurns(t *testing.T) {
 		t.Fatalf("runTurn = %+v, %v; want the turn refused at the delegation cap", res, err)
 	}
 	if ends := awaitEnds(t, cappedLog, "run-1", 1); len(ends) != 1 || ends[0].ConversationKey != "chat:D1" ||
-		ends[0].Ending.Outcome != executordomain.OutcomeFailed {
+		ends[0].Ending.Outcome != executorkeep.OutcomeFailed {
 		t.Fatalf("with the switch off a turn refused at the delegation cap ended %+v, want its one end, failed",
 			ends)
 	}
@@ -897,7 +907,7 @@ func TestTheSwitchOffCarriesNothingBetweenTurns(t *testing.T) {
 		t.Fatal("a turn whose job would not start ran")
 	}
 	if ends := awaitEnds(t, abandonedLog, "run-1", 1); len(ends) != 1 ||
-		ends[0].Ending.Outcome != executordomain.OutcomeFailed {
+		ends[0].Ending.Outcome != executorkeep.OutcomeFailed {
 		t.Fatalf("with the switch off a turn whose first launch was abandoned ended %+v, want its one end, "+
 			"failed", ends)
 	}
@@ -967,7 +977,7 @@ func TestATurnThatNeverLaunchedTellsTheNextTurnHowItEnded(t *testing.T) {
 	if len(ends) != 1 {
 		t.Fatalf("recorded %d ends of the turn, want 1", len(ends))
 	}
-	if end := ends[0]; end.ConversationKey != "chat:D1" || end.Ending.Outcome != executordomain.OutcomeFailed ||
+	if end := ends[0]; end.ConversationKey != "chat:D1" || end.Ending.Outcome != executorkeep.OutcomeFailed ||
 		!strings.Contains(end.Ending.Failure, string(types.GuardDepthCap)) {
 		t.Fatalf("the end is %+v, want the conversation's turn failed at the delegation cap", end)
 	}
@@ -1013,7 +1023,7 @@ func TestAnAbandonedFirstLaunchEndsItsTurnOnTheLog(t *testing.T) {
 		t.Fatalf("recorded %d ends of the turn, want 1", len(ends))
 	}
 	failure := ends[0].Ending.Failure
-	if ends[0].Ending.Outcome != executordomain.OutcomeFailed ||
+	if ends[0].Ending.Outcome != executorkeep.OutcomeFailed ||
 		!strings.Contains(failure, "abandoned after its run was recorded") ||
 		strings.Contains(failure, leakedToken) {
 		t.Fatalf("the end is %+v, want the turn failed on its abandoned launch, redacted", ends[0].Ending)

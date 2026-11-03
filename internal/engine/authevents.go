@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -93,12 +94,12 @@ type refusalWitness struct{ trail *authevents.Trail }
 // RecordRefused implements [statelog.Witness].
 func (w refusalWitness) RecordRefused(ctx context.Context, r statelog.Refusal) {
 	switch r.Verdict {
-	case statelog.KeyUnknown:
+	case recordseal.KeyUnknown:
 		w.trail.Emit(ctx, types.RecordUnverifiable{
 			Domain: r.Domain, KeyID: r.KeyID, Held: r.Held,
 			Position: r.Position.String(),
 		})
-	case statelog.Tampered:
+	case recordseal.Tampered:
 		w.trail.Emit(ctx, types.RecordTampered{
 			Domain: r.Domain, KeyID: r.KeyID, Held: r.Held,
 			Position: r.Position.String(),

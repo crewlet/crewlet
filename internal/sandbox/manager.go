@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/words"
@@ -12,14 +13,25 @@ import (
 
 // DefaultBoxTimeout is a box's TTL and keepalive window.
 //
-// NOT a run-time limit: a launched job is never force-stopped on a timer, and
-// the waiter refreshes a running box's TTL to this value every tick so the
-// clock never kills it. It is effectively the ORPHAN-RECLAIM GRACE — how long
-// a box outlives an engine that stops heart-beating before the provider
-// reclaims it. 900s is 60 waiter ticks: ample slack for a node that pauses for
-// GC, a deploy, or a slow reconcile, and short enough that a crashed engine's
-// boxes do not linger for an operator to find.
+// NOT a run-time limit, and not a provisioning one: a launched job is never
+// force-stopped on a timer, and the waiter refreshes a running box's TTL to
+// this value every tick so the clock never kills it — as the launch refreshes
+// the box it is still provisioning ([keepProvisioning]), so no sum of setup
+// steps is raced against it either. It is effectively the
+// ORPHAN-RECLAIM GRACE — how long a box outlives an engine that stops
+// heart-beating before the provider reclaims it. 900s is 60 waiter ticks:
+// ample slack for a node that pauses for GC, a deploy, or a slow reconcile,
+// and short enough that a crashed engine's boxes do not linger for an
+// operator to find.
 const DefaultBoxTimeout = 900 * time.Second
+
+// provisionRefresh is how often a box the launch is still provisioning has its
+// timer refreshed ([keepProvisioning]): the waiter's own cadence
+// ([DefaultPollInterval]), so a box being provisioned is kept alive exactly as
+// a running one is — sixty refreshes inside [DefaultBoxTimeout], each one
+// control-plane call, as a running box's tick costs — and a refresh that fails
+// leaves fifty-nine more before the timer can run out.
+const provisionRefresh = DefaultPollInterval
 
 // DefaultPauseTTL bounds a box PAUSED on a clarification.
 //
@@ -362,12 +374,12 @@ func (m *Manager) DefaultSetup() []SetupStep { return slices.Clone(m.setup) }
 func (m *Manager) BoxTimeout() time.Duration { return m.timeout }
 
 // RunnerFor returns the runner for a harness.
-func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
-	runner, ok := m.runners[codingAgent]
+func (m *Manager) RunnerFor(harness string) (Runner, error) {
+	runner, ok := m.runners[harness]
 	if !ok {
 		return nil, &ConfigError{msg: fmt.Sprintf(
 			"no harness runner registered for %q (have: %s)",
-			codingAgent, words.And(slices.Sorted(maps.Keys(m.runners))))}
+			harness, words.And(slices.Sorted(maps.Keys(m.runners))))}
 	}
 	return runner, nil
 }
@@ -402,20 +414,22 @@ type SpecInput struct {
 }
 
 // CommitAttribution is the credit a run's own commits carry under this
-// manager's catalogue: Crewlet as co-author, and run named where the run has
-// a page to be named by ("" names none) — or nil where the company turned the
-// credit off. Every launch path asks it, so a run is credited however it was
-// launched ([RunRequest.Attribution]).
+// manager's catalogue: a — Crewlet as co-author, the seat and its work item
+// where the run is a seat's, and the run where it has a page to be named by —
+// or nil where the company turned the credit off, which names nothing at all:
+// a company that does not want Crewlet in its history wants no Crewlet
+// trailer in it either. Every launch path asks it, so a run is credited
+// however it was launched ([RunRequest.Attribution]).
 //
 // ASKED OF THE MANAGER rather than carried on the [Spec], because a spec is
 // written onto a run's records and this is the catalogue's say at the moment
 // of the launch: a revision that turns it off reaches the next launch, not a
 // run already started.
-func (m *Manager) CommitAttribution(run string) *CommitAttribution {
+func (m *Manager) CommitAttribution(a CommitAttribution) *CommitAttribution {
 	if !m.attributes {
 		return nil
 	}
-	return &CommitAttribution{Run: run}
+	return &a
 }
 
 // BuildSpec overlays per-role inputs onto the provider defaults.
@@ -462,44 +476,192 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 // promises the full environment. Teardown uses a context of its own, because
 // the failure that got us here is often the caller's context expiring — and a
 // close that skips because the context is already dead leaks the box.
+//
+// THE BOX IS KEPT ALIVE from its creation until it is handed back or torn
+// down ([keepProvisioning]): the install and the steps run one after another,
+// each to its own timeout, and their sum is bounded by nothing the box's
+// timer knows of.
 func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(spec.Harness)
 	if err != nil {
 		return nil, nil, err
 	}
-	// THE CURRENT CATALOGUE ALONE: a retired cell reaches the boxes already
-	// on it and never a new one.
-	provider, err := m.configured(spec.Placement)
+	box, err := m.provision(ctx, spec, setup, runner)
 	if err != nil {
 		return nil, nil, err
+	}
+	return box, runner, nil
+}
+
+// AcquireBox provisions a box for spec with NO HARNESS — a check's box,
+// which runs a repository's own command and nothing of a seat's — and applies
+// setup to it: [Manager.Acquire] less the runner's install, torn down on a
+// setup failure the same way.
+//
+// WHAT A CODING BOX CARRIES AND THIS ONE DOES NOT, each refused rather than
+// dropped, since a caller that sets one meant an executor:
+//
+//   - a HARNESS ([Spec.Harness]): none is installed, and on a remote cell
+//     the harness's name picks the box's image;
+//   - a LOGIN ([Spec.CredentialFiles]): a check runs a change's own code, and
+//     a subscription login seeded beside it is a model's credential that code
+//     reads;
+//   - a RUN'S GRANTS ([Spec.Repos]): they ride an executor's row, which no
+//     such box has; its repository is its clone step's ([CloneRecipe]);
+//   - the CATALOGUE'S DEFAULT CELL: an empty [Spec.Placement] is where a seat
+//     that names none runs (providers.sandbox.default_run_in), never this
+//     box's — the caller names its cell;
+//   - the DIRECT cell: a box given a repository's own command to run never
+//     runs it as the engine's own user on the engine host, where it reads
+//     what the engine reads — config refuses `direct` for a check by name
+//     (code.checks, U1 a), and this refuses it where a box is made.
+//
+// AND NONE OF THE OPERATOR'S SETUP: the steps applied are exactly setup,
+// never the catalogue's own ([Manager.DefaultSetup], providers.sandbox.setup),
+// which provisions coding boxes for their harnesses — their env and files are
+// often credentials, and a check runs a change's own code. An executor's
+// launch hands those steps in itself; this box's caller hands in its git's
+// floor and its checkout ([GitVersionStep], [CloneRecipe]).
+func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, error) {
+	switch {
+	case spec.Harness != "":
+		return nil, fmt.Errorf("sandbox: a box with no harness names none, and this one names %q",
+			spec.Harness)
+	case len(spec.CredentialFiles) > 0:
+		return nil, fmt.Errorf("sandbox: a box with no harness is seeded no login, and this one is "+
+			"given %d credential files", len(spec.CredentialFiles))
+	case len(spec.Repos) > 0:
+		return nil, fmt.Errorf("sandbox: a box with no harness is no run, so it holds no run's grants, "+
+			"and this one is given %d repositories: its repository is its clone step's", len(spec.Repos))
+	case spec.Placement == "":
+		return nil, fmt.Errorf("sandbox: a box with no harness names its cell: the catalogue's default " +
+			"is where a seat that names none runs (providers.sandbox.default_run_in)")
+	case spec.Placement == Direct:
+		return nil, fmt.Errorf("sandbox: a box with no harness never runs %s: it runs a repository's own "+
+			"command, which there would run as the engine's own user on the engine host, reading what the "+
+			"engine reads", Direct)
+	}
+	return m.provision(ctx, spec, setup, nil)
+}
+
+// provision is a box for spec from the CURRENT CATALOGUE — a retired cell
+// reaches the boxes already on it and never a new one — with runner's agent
+// installed where there is a runner, and setup applied, run WITH the spec's
+// environment so a recipe can read the engine's identity facts and its own
+// configured tokens at provisioning time. A failure of either tears the box
+// down before it is answered ([Manager.discard]), and the box is kept alive
+// from its creation until both are done ([keepProvisioning]), for a check's
+// box as for an executor's.
+func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, runner Runner) (Sandbox, error) {
+	placement := spec.Placement
+	if placement == "" {
+		placement = m.placement
+	}
+	provider, err := m.configured(placement)
+	if err != nil {
+		return nil, err
 	}
 	box, err := provider.Create(ctx, spec)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if err := runner.Install(ctx, box); err != nil {
-		log.ErrorContext(ctx, "sandbox_install_failed", "sandbox_id", box.ID(), "error", err.Error())
-		m.discard(ctx, box)
-		return nil, nil, err
+	// STOPPED BEFORE THE BOX IS TORN DOWN, on every path below: a refresh
+	// racing the teardown would ask a provider to keep a box it is killing,
+	// and on the local backend would write the keepalive stamp back into a
+	// box directory the teardown had just removed.
+	stopKeepalive := keepProvisioning(ctx, box, m.timeout)
+	if runner != nil {
+		if err := runner.Install(ctx, box); err != nil {
+			stopKeepalive()
+			log.ErrorContext(ctx, "sandbox_install_failed", "sandbox_id", box.ID(), "error", err.Error())
+			m.discard(ctx, box)
+			return nil, err
+		}
 	}
-	// Setup commands run WITH the run env so recipes can reference the
-	// engine's identity facts and their own configured tokens at
-	// provisioning time.
 	if err := ApplySetup(ctx, box, setup, spec.Env); err != nil {
+		stopKeepalive()
 		// Logged distinctly from an install failure so the operator debugs
-		// the right subsystem: this one is their config.
+		// the right subsystem: this one is their config, or the box's git.
 		log.ErrorContext(ctx, "sandbox_setup_failed", "sandbox_id", box.ID(), "error", err.Error())
 		m.discard(ctx, box)
-		return nil, nil, err
+		return nil, err
 	}
+	stopKeepalive()
 	names := make([]string, 0, len(setup))
 	for _, step := range setup {
 		names = append(names, step.Name)
 	}
 	log.DebugContext(ctx, "sandbox_acquired",
-		"sandbox_id", box.ID(), "placement", string(spec.Placement),
+		"sandbox_id", box.ID(), "placement", string(placement),
 		"harness", spec.Harness, "setup_steps", names)
-	return box, runner, nil
+	return box, nil
+}
+
+// keepProvisioning keeps box's timer from running out while the engine
+// provisions it, and returns what stops it: [Sandbox.SetTimeout] to ttl at once
+// and every [provisionRefresh] after, until the stop — which waits for a
+// refresh in flight, so nothing of it touches the box once the stop returns.
+// The caller stops it when its provisioning ends, whichever way it ends, and
+// before anything tears the box down.
+//
+// THE WAITER'S KEEPALIVE DOES NOT REACH A BOX BEING PROVISIONED: it refreshes
+// the boxes of RUNNING rows that name one, and a launch's row is LAUNCHING
+// with no box on it until the box is ready. Everything provisioning runs — the
+// harness's install, the operator's setup, the box's git check and a
+// clone for each repository ([MaxRunRepos]), one after another, each up to its
+// own timeout ([DefaultSetupTimeout]) — ran inside the timer the box was
+// created or reconnected with alone, and a sum past it had the provider reap
+// the box mid-step: on E2B a launch failed on the transport's error under the
+// step's name, nothing naming the timer, and a reused box lost the work an
+// earlier job left in it; in the local backend's `direct` cell another
+// launch's orphan sweep deleted a box that had no job yet to show it was in
+// use. Refreshed while the engine works on the box, the timer stays what
+// [DefaultBoxTimeout] says it is, the grace a box outlives an engine that
+// stopped working on it, and only a step's own timeout ends a slow step.
+//
+// PROVISIONING ONLY: what the launch does after it — writing the box on the
+// row, starting the job, writing its command — is a few control-plane calls
+// each bounded in seconds, made inside the timer the last refresh set, and
+// the waiter's keepalive takes the box over once its run's row runs.
+//
+// THE FIRST REFRESH IS MADE BEFORE THIS RETURNS: a reused box's timer is
+// whatever its reconnect left — in the `direct` cell a keepalive stamp as old
+// as the last tick of the job before — and the step about to run must not
+// begin on a box an orphan sweep may take. A refresh that fails is logged and
+// left to the next, as the waiter's is: a box its provider has reclaimed fails
+// the step that runs on it, naming itself.
+func keepProvisioning(ctx context.Context, box Sandbox, ttl time.Duration) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	refresh := func() {
+		if err := box.SetTimeout(ctx, ttl.Seconds()); err != nil && ctx.Err() == nil {
+			log.DebugContext(ctx, "sandbox_provision_keepalive_failed",
+				"sandbox_id", box.ID(), "error", err.Error())
+		}
+	}
+	refresh()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(provisionRefresh)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// A tick that lands with the stop is the stop's: once asked
+				// to stop, the box is not asked to stay.
+				if ctx.Err() != nil {
+					return
+				}
+				refresh()
+			}
+		}
+	}()
+	return sync.OnceFunc(func() {
+		cancel()
+		<-done
+	})
 }
 
 // discardGrace bounds a cleanup that has to outlive the context that asked for
@@ -525,8 +687,11 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 // auto-resumes a paused one. No re-Install and no setup re-apply — the box
 // already carries its bin directory, the work dir and the launch's provisioning,
 // which is why a box is only ever reattached for the harness it was installed for.
-func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
-	runner, err := m.RunnerFor(codingAgent)
+// A repository on the engine's code host is never provisioning: the run
+// checks each out itself, with the commands `code_checkout` answers, so the
+// box keeps what an earlier job cloned and is given nothing here.
+func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, harness string) (Sandbox, Runner, error) {
+	runner, err := m.RunnerFor(harness)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -539,14 +704,14 @@ func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID,
 		return nil, nil, err
 	}
 	log.DebugContext(ctx, "sandbox_reconnected", "sandbox_id", sandboxID,
-		"placement", string(placement), "harness", codingAgent)
+		"placement", string(placement), "harness", harness)
 	return box, runner, nil
 }
 
 // Attach reattaches to an existing box for a READER, without resuming it — see
 // [Provider.Attach]. A paused box its backend cannot read is [ErrBoxPaused].
-func (m *Manager) Attach(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
-	runner, err := m.RunnerFor(codingAgent)
+func (m *Manager) Attach(ctx context.Context, placement Placement, sandboxID, harness string) (Sandbox, Runner, error) {
+	runner, err := m.RunnerFor(harness)
 	if err != nil {
 		return nil, nil, err
 	}
