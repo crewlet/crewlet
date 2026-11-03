@@ -33,6 +33,7 @@ import {
   referenceNames,
   seatLabels,
   takenIdentities,
+  TOOL_NAMES,
   toolCredentialNames,
   unitsLedBy,
   unpinnedProvider,
@@ -256,6 +257,28 @@ describe("credentials", () => {
     });
     const qa = locate(added.draft, "new:qa");
     expect(qa?.kind === "seat" && vendorIdentities(added, qa.node)).toEqual([]);
+  });
+
+  // AN EXPO ROBOT LEAVES WITH ITS SEAT: the engine deletes it once the seat is
+  // off or gone, so a seat that is on at Expo has nothing there to decommission.
+  test("an Expo seat names no account to decommission", () => {
+    const doc = fixtureCompany();
+    doc.integrations = {
+      ...doc.integrations,
+      expo: {
+        enabled: true,
+        provisioning: { account_name: "acme", access_token: "${EXPO_ACCESS_TOKEN}" },
+      },
+    };
+    doc.units![0]!.children![0]!.roles![0]!.integrations = {
+      expo: { enabled: true, level: "developer" },
+    };
+    const state = keyedState(doc);
+    const sre = locate(state.draft, "seat:sre");
+    if (sre?.kind !== "seat") throw new Error("seat:sre");
+    expect(isConnected(doc, "expo")).toBe(true);
+    expect(TOOL_NAMES.expo).toBe("Expo");
+    expect(vendorIdentities(state, sre.node)).toEqual([]);
   });
 
   // The labels are a map, which the fact once printed as "[object Object]".
