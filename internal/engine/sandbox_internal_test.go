@@ -99,7 +99,7 @@ func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) 
 	if err != nil {
 		t.Fatalf("%s's executor chain: %v", seat.Name, err)
 	}
-	return newCodingRun(member.Provider.(*harness.Provider), seatEnv)
+	return newCodingRun(member.Provider.(*harness.Provider), seatEnv, nil)
 }
 
 // AN API-KEY ENTRY'S BOX IS HANDED THE KEY ITS OWN CALLS USE, RESOLVED.
