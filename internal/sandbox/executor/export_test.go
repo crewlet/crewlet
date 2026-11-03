@@ -56,7 +56,7 @@ type OpenCodeTimes struct {
 func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, times OpenCodeTimes) string {
 	return "sh -c " + shellQuote(openCodeScript(req, session, paths, openCodeTimes{
 		listen: cmp.Or(times.Listen, openCodeListenWait), mcp: cmp.Or(times.MCP, openCodeMCPWait),
-		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, openCodeStopWait),
+		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, sandbox.JobStopGrace),
 	}))
 }
 

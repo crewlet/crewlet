@@ -49,10 +49,6 @@ const ContainerPrefix = "crewlet-sbx-"
 // internal/engine holds the two in order.
 const ControlTimeout = 120 * time.Second
 
-// termGrace is how long a direct box's process group gets between SIGTERM and
-// SIGKILL.
-const termGrace = 5 * time.Second
-
 // minReapAge floors the orphan reaper's cutoff regardless of the TTL it is
 // handed. A spec with a tiny (or zero) timeout would otherwise make every box
 // on the host instantly reapable, including ones another engine just created
@@ -1343,12 +1339,12 @@ func removeBox(l boxLayout) {
 
 // awaitJobExit waits for a signalled job group to actually be gone.
 //
-// Bounded by [termGrace] and by the caller's context: a group that will not go
+// Bounded by [JobStopGrace] and by the caller's context: a group that will not go
 // is not a reason to hold a teardown open forever, and the caller proceeds
 // either way. A record the kernel will not give counts as still there, so the
 // wait runs its course rather than racing a removal against a live tree.
 func awaitJobExit(ctx context.Context, l boxLayout) {
-	deadline := time.Now().Add(termGrace)
+	deadline := time.Now().Add(JobStopGrace)
 	for time.Now().Before(deadline) {
 		if _, current, err := jobGroup(l); err == nil && !current {
 			return

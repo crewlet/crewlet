@@ -76,14 +76,6 @@ const openCodeMCPWait = 60 * time.Second
 // mid-run already makes rare.
 const openCodeLoginSync = 30 * time.Second
 
-// openCodeStopWait bounds how long the script waits for a process of its own
-// — its server, its login exporter — to go once told to, before it kills it.
-// Bounded, because the done marker waits on the script: a server that ignored
-// SIGTERM would otherwise hold the run open for ever. Measured on 2.0.32, the
-// server goes in a tenth of a second, and in three with a stdio MCP server
-// still connecting, which it stops itself; five is room above that.
-const openCodeStopWait = 5 * time.Second
-
 // OpenCode drives OpenCode 2 headless — the `@opencode/cli` package. 1.x cannot
 // run this script: it has no `serve` it can be pointed at, refuses the 2.0
 // config format, and keeps its login where 2.0 does not look; the script says
@@ -208,14 +200,14 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 // cancelled in the session, before the server stops ([openCodeLeftoverSteers]).
 func (OpenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
 	return "sh -c " + shellQuote(openCodeScript(req, session, paths, openCodeTimes{
-		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: openCodeStopWait,
+		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: sandbox.JobStopGrace,
 	}))
 }
 
 // openCodeTimes is how long a run's script waits for its server to listen
 // ([openCodeListenWait]) and for its MCP servers to connect
 // ([openCodeMCPWait]), how often it exports a login ([openCodeLoginSync]), and
-// how long it gives a process of its own to go ([openCodeStopWait]): a value
+// how long it gives a process of its own to go ([sandbox.JobStopGrace]): a value
 // rather than the constants read inline, so a case about a wait runs it at a
 // length that case can tell apart — a bound run out at one a test can afford,
 // or a stop stretched to one no prompt end could be mistaken for.
@@ -680,7 +672,7 @@ func openCodePack(paths Paths, staged, server string) string {
 }
 
 // openCodeStops is the script's three stops: end, which stops one process of
-// the script's own, bounded by stop ([openCodeStopWait]) and killing it only
+// the script's own, bounded by stop ([sandbox.JobStopGrace]) and killing it only
 // if it is still there at the end of the wait; and stop and unsync, which end
 // its server and its login exporter ([openCodeExporter]).
 //
