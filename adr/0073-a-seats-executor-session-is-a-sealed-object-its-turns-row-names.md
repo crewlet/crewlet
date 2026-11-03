@@ -49,9 +49,8 @@ below the position its launch read at, because a read bounded at sixteen
 endings and eight offered sessions would otherwise have its end delete turns
 nobody was ever shown.
 
-A person's removal does not reach these rows yet, as it did not reach the
-conversation ledger they replace; a later record amends this one with the
-erasure.
+A person's removal does not reach these rows yet; a later record amends this
+one with the erasure.
 
 ## Why the obvious alternatives are wrong
 

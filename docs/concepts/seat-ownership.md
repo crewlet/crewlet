@@ -258,20 +258,23 @@ than admitting it without its newest memory.
 
 The subject carries the seat's **id**, as its lease and its mailbox do.
 
-Five of the tables name a seat by its handle inside the row rather than by the
-id (`episodes`, `counterparty_profiles`, the two skill tables and the
-conversation ledger), in a column called `agent_handle` (`observer_handle` for
-a profile). The rows travel under the id's subjects and land under the handle,
-and a carried row travels by column name.
+Four of the tables name a seat by its handle inside the row rather than by the
+id (`episodes`, `counterparty_profiles` and the two skill tables), in a column
+called `agent_handle` (`observer_handle` for a profile). The rows travel under
+the id's subjects and land under the handle, and a carried row travels by
+column name.
 
 What travels: the diary, episodes, counterparty profiles, synthesized skills
-and their versions, onboarding markers, and the conversation ledger. What does
-not: this node's own audit log and dispatch history, which are records of what
-*this node* did rather than of what the seat knows.
+and their versions, and onboarding markers. What does not: this node's own
+audit log and dispatch history, which are records of what *this node* did
+rather than of what the seat knows. A seat's executor sessions need no
+carrying: their rows are the replicated estate's, the same on every data node,
+and their bytes the fleet's object store's
+([Conversation Sessions](conversation-sessions.md#where-a-session-lives)).
 
 A row that arrives for one this node already has is resolved by what kind of
-row it is. An append-only row — a diary entry, an episode, a skill version, a
-ledger entry — is immutable once written, so the carried copy is discarded and
+row it is. An append-only row — a diary entry, an episode, a skill version —
+is immutable once written, so the carried copy is discarded and
 the local row stands, with one exception: a diary note's or an
 episode's **vector**, which the holder fills after the insert for a row written
 without one or under a model the company has since left. Setting the vector
@@ -303,9 +306,9 @@ the whole fleet.
 
 **A read is answered by the holder.** Every node that ever held a seat keeps a
 copy of its memory, and only the node holding it now keeps that copy current.
-So a screen reading a seat's memory or its conversation ledger
-(`agent_memory`, `conversations`) is never answered from whichever node served
-the request: that node reads the seat's lease and answers from its own store if
+So a screen reading a seat's memory (`agent_memory`) is never answered from
+whichever node served the request: that node reads the seat's lease and answers
+from its own store if
 it is the holder and has the seat attached, asks the holding incarnation on an
 ephemeral scatter if a peer is, and answers empty — naming no holder — if no
 node holds the seat, because a copy of unknown age is not the seat's memory. A
@@ -576,7 +579,7 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 | `scheduler` | Evaluates every schedule and fires what is due | The fleet's fire claim already makes a dispatch at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
 | `learning` | All four learning background passes: clustering skills out of episodes, the active → stale → archived lifecycle, episode compaction, and cross-agent promotion | Clustering reads every agent's episodes and **writes** skills, so N nodes produce N sets of near-identical pages and N× the LLM spend; the curator publishes a lifecycle event per transition and races its own optimistic-concurrency guard. One lease for all four because they run on one loop |
 | `integration-reconcile` | Runs every connected third-party app's [reconcile pass](integration-reconcile.md) on its own cadence | N nodes would each sweep every surface on every tick. What stops two writers at one third-party app is a different lease, `worker:setup-provision-<kind>`, which every writer at a surface holds around one pass and gives back when it ends, so it is mutual exclusion rather than a duty; this one keeps the sweep itself on one node |
-| `maintenance` | Retention sweeps for every short-horizon table in the node's own database (`events`, `scheduled_runs`, `conversation_sessions`, the expired and over-cap `agent_diary` rows, `counterparty_profiles`), plus both halves of the A2A channel sweep: the idle-close of an ask nothing will answer any more — a channel whose seat still owes its answer, on an executor's record or in an inbox held by its executor, a pause or a spent budget window, is [spared](event-system.md#ephemeral-a2a-channels-internala2a) — and the delete of one closed long enough. And the retirement of a [removed seat's mailbox](#the-removed-seat), its executor and its executor sessions once the seat has been absent for 24 hours, and the forgetting of a removed human seat's [chat read state](#the-removed-seat) after the same 24 hours. And the coordination store's [removal markers](coordination.md#removal-markers-are-swept), from every shared-state bucket with no age, once they are three hours old — each purged through its own revision, so a key written again since is untouched. The channel and mailbox records, the chat read state and the markers are the *shared* things swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one, or a present seat from a removed one | Idempotent range deletes, so peers are harmless, just N times the write amplification and vacuum churn. The mailbox retirement is not idempotent in the same way, so it takes its own compare-and-set on every record and claims the seat's own lease while it deletes, rather than relying on the duty's lease |
+| `maintenance` | Retention sweeps for every short-horizon table in the node's own database (`events`, `scheduled_runs`, the expired and over-cap `agent_diary` rows, `counterparty_profiles`), plus both halves of the A2A channel sweep: the idle-close of an ask nothing will answer any more — a channel whose seat still owes its answer, on an executor's record or in an inbox held by its executor, a pause or a spent budget window, is [spared](event-system.md#ephemeral-a2a-channels-internala2a) — and the delete of one closed long enough. And the retirement of a [removed seat's mailbox](#the-removed-seat), its executor and its executor sessions once the seat has been absent for 24 hours, and the forgetting of a removed human seat's [chat read state](#the-removed-seat) after the same 24 hours. And the coordination store's [removal markers](coordination.md#removal-markers-are-swept), from every shared-state bucket with no age, once they are three hours old — each purged through its own revision, so a key written again since is untouched. The channel and mailbox records, the chat read state and the markers are the *shared* things swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one, or a present seat from a removed one | Idempotent range deletes, so peers are harmless, just N times the write amplification and vacuum churn. The mailbox retirement is not idempotent in the same way, so it takes its own compare-and-set on every record and claims the seat's own lease while it deletes, rather than relying on the duty's lease |
 | `retention` | The state-log **trim**: every 15 minutes it evaluates each domain's floor across every data node's position, the backups and the holds, purges what they all permit, and publishes what it concluded and which term is holding it (see [Retention](../guides/retention.md)) | Two nodes purging and publishing at once would publish two conclusions about one log, and how long a term has been holding is a property of a series of ticks that must be one node's |
 | `embeddings` | Computes the embedding of every page and task whose vector is missing or stale and publishes it to the vectors log, which every data node applies | Each node embedding the corpus would be one provider bill per node for one company — the cost the vectors log exists to pay once |
 | `chat-prune` | Chatlet's [message horizon](chatlet.md#retention): every hour, on a node that runs the revision the fleet's activation pointer names, it reads each room's oldest message against that revision's `chat.chatlet.message_retention_days` or the room's own — every room the company ever made, archived rooms and conversations included, a thousand rooms to a read, the horizon asked again before each read after the first so that a lap the fleet's pointer moves under ends there, and a tick that runs out of its hour continues from the room it stopped at rather than starting again at the first — and publishes a prune record carrying the cutoff to the chat log — at most an hour of a room's history per record, and up to 24 records a room per tick while a backlog drains — which every data node applies as the same range delete | The cutoff is the decision, so it has to be one node's: the rows are replicated content, and a node reading its own clock would delete a different set from every other, for good. Two holders would not diverge — a cutoff is compared with the broker's own instant on each message — but would publish every record twice on the company's busiest log |

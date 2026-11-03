@@ -2030,8 +2030,9 @@ it was handed against every release. A seat that leaves the company takes its
 rows with it once its [mailbox is retired](../concepts/seat-ownership.md#the-removed-seat),
 by one record every node applies in order, which also refuses a capture or an
 end decided before it and landing after; that record of the removal goes with
-the same retention. A person's removal does not reach the sessions yet, as it
-did not reach the conversation ledger they replace.
+the same retention. A person's removal does not reach the sessions: what they
+said to a seat stays in the sessions of the turns that read it until each row
+goes by one of the ways above, the retention at the latest.
 
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each data node applies the log into its own copy, so a fleet

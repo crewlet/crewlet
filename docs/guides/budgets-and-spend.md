@@ -148,8 +148,8 @@ case it is recorded, as after any refusal.
 
 The same holds wherever the engine turns work away on a window that is already
 full before making a call: a seat's delivery parked until the window turns
-over, a person's `answer_knowledge` question refused, a reflection pass or a
-conversation entry's rewrites declined. Each is the gate's refusal, recorded as
+over, a person's `answer_knowledge` question refused, a reflection pass
+declined. Each is the gate's refusal, recorded as
 the window's `refused_at` on the scope a charge would have been refused by —
 the company's before the seat's — so a window that an executor's launch, a background
 pass or a person's answers filled says when it last turned work away rather
@@ -265,7 +265,7 @@ Each call states its **stage** — whose cost it is — and its **purpose**:
 | Stage | What spent it (purposes) | Charged to | In the turn's cost and its task's spend |
 |---|---|---|---|
 | `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what its executor cost between two parts of the turn — the executor's bridged tools and the condensing of a collected launch's report or failure (`condense_report`, `condense_tool_error`) | the seat and the company | **yes** — what its executor cost between two parts of the turn is paid by the part that resumes from it |
-| `reflection` | The learning workers after the turn (`persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`) and the conversation ledger's account of it | the seat and the company | no — drawn beside the turn in its Reflection lane: it is what the seat remembers, not what the work cost |
+| `reflection` | The learning workers after the turn (`persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`) | the seat and the company | no — drawn beside the turn in its Reflection lane: it is what the seat remembers, not what the work cost |
 | `background` | The episode compaction, clustered synthesis and skill promotion passes (`episode_compaction`, `skill_clustering`, `skill_promotion`), and the probe of a model entry at its usage limit when it is tried again, one for every seat parked on it, charged to the parked seat it runs as (`provider_probe`) | the seat and the company (the company alone for a unit a person leads) | no, there is no turn |
 | `operator` | A person's question answered on the operator surface (`answer_knowledge`, and `condense_source` for a page too long to read whole) | the company alone: a person has no seat budget | no — no turn |
 

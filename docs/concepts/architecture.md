@@ -485,7 +485,7 @@ flowchart TB
     OVER["<b>Override</b><br/>a done that answered in text<br/>on a turn somebody is waiting for"]
     DONE["<b>done</b>"]
     FAIL["<b>failed</b>"]
-    AFTER["<b>What the turn leaves behind</b><br/>events · episode · diary entries ·<br/>conversation-ledger entry · token spend"]
+    AFTER["<b>What the turn leaves behind</b><br/>events · episode · diary entries ·<br/>its end on the executor log · token spend"]
 
     WHO --> EXEC
     EXEC -->|"launches its run"| SUSP
@@ -626,7 +626,6 @@ What each of the four holds, in full:
 | **`agent_diary`** · **`episodes`** | A seat's notes and turns, each with the vector of the model it came from — recall is a per-seat scan the database ranks, with no vector index |
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
 | `memory_change_sequence` | One counter, which every new diary note, episode and skill version — and every vector set on a note or an episode — is stamped from, so the [memory changelog](seat-ownership.md#a-seats-memory-follows-it) carries what changed since its last cycle. It only ever increases: a row's rowid is handed out again once the newest row is deleted, and a watermark over it skipped the next row written |
-| **`conversation_sessions`** | What this seat already said in that thread |
 | `company_config` · `scheduled_runs` | Every config revision this node has met, with three facts only it can know — the revision it boots on, the fleet's revision as it last saw it, and an offline change it has not published ([Control plane](control-plane.md#a-nodes-own-store-keeps-three-facts-apart)) — and cron bookkeeping. Which revision is the company is the activation pointer, below, never a row here |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
 | `page_links` | Which pages and tasks link to which page: the **backlinks**, derived by the same indexer from the same bodies it tokenises (`doclet.Links`), so a page answers "linked from" with no scan of anybody's text. Cascades from `kb_docs`, and rebuilt by the same local walk |
@@ -953,7 +952,7 @@ here.
 | Knowledge-base-sourced prompt fragments, and keeping every node's copy current | `internal/agent/skills`, `internal/agent/skillsync` | [Tool skills](tool-skills.md) |
 | Live knowledge search | `internal/knowledge` | [Knowledge system](knowledge-system.md) |
 | Diary, episodes, skill induction, profiles | `internal/learning` | [Agent learning](agent-learning.md) |
-| What a seat already said in one thread | `internal/agent/ledger` | [Conversation sessions](conversation-sessions.md) |
+| A conversation's next turn continuing its last turn's session | `internal/executordomain`, `internal/sandbox`, `internal/engine` (`conversation.go`) | [Conversation sessions](conversation-sessions.md) |
 | Models, each a harness, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
 | Every agent seat's executor run, detached in a box | `internal/sandbox`, `internal/hostbox`, `internal/agent/runner` (`agentrun.go`) | [Code sandbox](code-sandbox.md) |
 | Cron-scoped recurring work | `internal/schedule` | [Scheduling](scheduling.md) |

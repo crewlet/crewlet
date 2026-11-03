@@ -357,8 +357,7 @@ while no part of the turn is running: the executor's calls through the
 tool bridge (the rewrites its tools ask for, the workers it delegates to) and
 the condensing of a collected launch's report, failure or question, which the part
 of the turn that resumes from it pays. Learning afterwards (reflection,
-diary, skills, the conversation ledger's account of the turn) is the seat's own
-and is not charged to the task; it is still on the seat's day in the [spend
+diary, skills) is the seat's own and is not charged to the task; it is still on the seat's day in the [spend
 history](budgets-and-spend.md#auxiliary-spend).
 Beside the tokens, two counts say *why* a task was expensive: `spend_workers`,
 how many delegated tasks its turns ran, and `spend_sent_back`, how many reviews
@@ -2096,12 +2095,12 @@ change is the same kind.
 
 **A task's wakes are one conversation, named by the task's id.** Wakes about
 one task that queue up while a seat is busy are merged into one digest turn,
-and every turn a seat takes on a task is filed in that task's
-[conversation ledger](../concepts/conversation-sessions.md), so its next turn
-picks the thread up where it left off. Both are keyed on the task's **id**
-(`work:task:<id>`), never on its key: two tasks can hold one key — see
-`key_collision` — and keyed on it a seat woken about the duplicate was handed
-the claimant's changes and the claimant's history as its own; and a move to
+and every turn a seat takes on a task serves that task's
+[conversation](../concepts/conversation-sessions.md), so its next turn
+continues the session its last turn on the task left. Both are keyed on the
+task's **id** (`work:task:<id>`), never on its key: two tasks can hold one key
+— see `key_collision` — and keyed on it a seat woken about the duplicate was
+handed the claimant's changes and the claimant's session as its own; and a move to
 another project gives a task a new key without ending its thread. A
 `prioritised` wake joins the conversation of the task it put first.
 
