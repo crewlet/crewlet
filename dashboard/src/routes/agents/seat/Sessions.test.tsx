@@ -40,13 +40,13 @@ const TURN = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11";
 /** The turn whose session the turn below was handed, a run id as the engine spells one. */
 const BASE = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c10";
 
-/** The newest turn of the conversation the turn below served. */
+/** The newest turn in the line of the conversation the turn below served: its head. */
 const NEWEST = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c19";
 
 /** Why an older turn's session is not the one its conversation's next turn continues. */
 const OLDER_THAN_HEAD_WHY =
-  `the conversation's next turn is handed turn ${NEWEST}'s session, the newest the ` +
-  "conversation left, and is told how this one ended where its brief has room";
+  `the conversation's next turn is handed turn ${NEWEST}'s session, the newest in the ` +
+  "conversation's line, and is told how this one ended where its brief has room";
 
 /**
  * A completed turn whose session is kept, its conversation's newest — which
@@ -297,14 +297,18 @@ test("an ended turn's account says whether its conversation's next turn would co
 // fire's account names the schedule's next fire wherever another
 // conversation's names its next turn — continued, not continued with the
 // engine's reason, and not to be said yet.
+//
+// Mutation: drop CONTINUED_BY's next_fire entry, so a fire's account falls back
+// to NO_LAUNCH's words, or give it next_turn's words, and a line reads
+// otherwise.
 test("an ended fire's account says whether the schedule's next fire would continue it", () => {
   const fire: Partial<ExecutorSessionRow> = {
     conversation_key: `schedule/role/${BASE}/health-check`,
     continued_by: "next_fire",
   };
   const olderFireWhy =
-    `the schedule's next fire is handed fire ${NEWEST}'s session, the newest the schedule ` +
-    "left, and is told how this one ended where its brief has room";
+    `the schedule's next fire is handed fire ${NEWEST}'s session, the newest in the ` +
+    "schedule's line, and is told how this one ended where its brief has room";
   expect(continuableWords(session(fire))).toBe(
     "The schedule's next fire would continue this session in whichever box it gets, " +
       "where that box can take it up and the seat's budget can carry it.",
