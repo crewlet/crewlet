@@ -1,1 +1,0 @@
-import{t as e}from"./react-DlYQp10C.js";import{mi as t}from"./chunk-KCLHYBIZ-CG3_-k7h.js";var n=e();function r({className:e,children:r,...i}){return(0,n.jsx)(`p`,{...i,className:t(`crewlet-page-note`,e),children:r})}export{r as t};

@@ -2744,6 +2744,8 @@ test("a key check posts the typed value and the form's other values, and shows t
   expect(
     verdict.closest(".crewlet-status")?.querySelector(".crewlet-status-dot--success"),
   ).toBeTruthy();
+  // THE WHOLE SENTENCE, wrapped: a verdict's remedy is at its end.
+  expect(verdict.closest(".crewlet-status")?.classList.contains("crewlet-status--wrap")).toBe(true);
 });
 
 // A SEAT'S KEY IS CHECKED AS THAT SEAT'S. A per-seat app's credential belongs

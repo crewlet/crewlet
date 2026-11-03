@@ -1606,7 +1606,12 @@ const (
 	// from 5443.7 KiB to 5444.6 KiB (+0.9 KiB, 967 bytes): the icons chunk
 	// +1409 bytes for the two marks, less 442 bytes net across the kit's
 	// renamed chunks, the shell page and the stylesheet. 5445 KiB.
-	treeBudget = 5<<20 + 325<<10
+	// A level an agent cannot be given drawn disabled with its reason, a
+	// setup verdict that wraps, and the kit's move to 0.92.0 (a StatusDot's
+	// word that wraps) took it from 5444.6 KiB to 5446.1 KiB (+1.5 KiB, 1534
+	// bytes): the kit +1472 bytes net across its renamed chunks and its
+	// stylesheet, and the access and settings chunks +62 bytes. 5447 KiB.
+	treeBudget = 5<<20 + 327<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
