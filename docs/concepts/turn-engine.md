@@ -248,7 +248,10 @@ The **task description** is not mutated by a `self_iterate` round: the correctio
 ### One scope wider: how the conversation's earlier turns ended
 
 Everything above is scoped to a single turn. The seat's next turn on *this
-Slack thread / issue / pull request* continues the session its last turn left
+Slack thread / issue / pull request* — or a schedule's next fire, a schedule
+being a conversation of each seat that runs it
+([Scheduling](scheduling.md#each-fire-continues-the-last-fires-session)) —
+continues the session its last turn left
 ([Code Sandbox](code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)),
 which holds what that turn did and said; what no transcript holds — whether
 its reply reached the party waiting, its reviewer's last word, what landed,

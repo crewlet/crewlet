@@ -13,7 +13,8 @@ turn's row of the `executor` state log
 ([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md);
 [Code Sandbox](code-sandbox.md#each-launchs-session-kept)). The turn's own
 relaunches continue it, and so does the next turn of its conversation — the
-thread, the issue, the pull request or the work item its trigger named.
+thread, the issue, the pull request or the work item its trigger named, or the
+schedule that fired it.
 
 ---
 
@@ -24,11 +25,12 @@ thread, the issue, the pull request or the work item its trigger named.
 | A relaunch of a turn whose job before left a kept capture | That capture, in any box ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
 | A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, its newest ended turn whose row still names a kept session, restored into a box of the launch's own |
 | A relaunch of a turn that has kept no session of its own — its first job lost with its box, its capture refused or unanswered — in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation |
+| A schedule's **next fire** | The session the schedule's last fire left on the seat: a schedule is a conversation of each seat that runs it ([Schedules](#schedules)) |
 | Anything else | A session of its own, the reason logged as `executor_session_not_continued` |
 
 A turn that serves no conversation — a colleague's ask, a generic source's
-wake, a scheduled fire — continues nothing from an earlier turn: its own
-relaunches continue its session, and its next wake starts fresh.
+wake — continues nothing from an earlier turn: its own relaunches continue its
+session, and its next wake starts fresh.
 
 ## What the engine adds
 
@@ -60,6 +62,12 @@ has the mechanism):
   own, so the lead says it is on a fresh checkout, that what the session had
   not committed and pushed went with the box it was worked in, and that
   absolute paths under the base's home were that box's.
+
+A schedule's conversation is told all three in its own words: the block is
+`## How this schedule's earlier fires ended`, each of its accounts a fire's,
+and the lead `## A new fire of this schedule begins here`, saying that the
+session above is the schedule's last fire's and that the schedule firing
+again, not a message, woke it ([Schedules](#schedules)).
 
 **No reply text.** The turn's own reply is in the session that continues it;
 a session started fresh is told whether the reply reached anybody and what
@@ -158,7 +166,8 @@ any node continues them.
 handle, and its conversation's: `conversation_key` is the
 **conversation identity** the trigger was stamped with — the `{source}:{local}`
 grammar of [the event system](event-system.md#inbox-batching--coalescing),
-`jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`, `work:task:<id>` —
+`jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`, `work:task:<id>`, or a
+schedule's own, `schedule/unit/backend/daily-standup` —
 never the partition key the seat's inbox coalesces on. The two are the same
 string for every source but chat, and for chat they differ on exactly one
 surface: **a direct message is one conversation however it is threaded**, so
@@ -177,7 +186,8 @@ one row per turn, from its first launch where the turn read its conversation
 and from its first capture otherwise, the latest begun first, with how it
 ended, what it was asked, whether its session is kept and, where not, why —
 and **which launch would continue it** (`continued_by`: `relaunch` for a live
-turn's, `next_turn` for an ended turn's), whether it would and where, decided
+turn's, `next_turn` for an ended turn's, `next_fire` for a schedule's ended
+fire's), whether it would and where, decided
 by the decision that launch takes. A row that is not its conversation's head
 names the turn whose session the conversation's next turn is handed instead,
 and `base_turn` names the session a turn's first launch was handed, so a
@@ -185,6 +195,38 @@ conversation's line of sessions reads from row to row. A turn's transcript is
 `GET /agents/{id}/sessions/{turn_id}`. Rows go as the turns that were handed
 them end, with the retention, and with their seat
 ([Reading a seat's sessions](code-sandbox.md#reading-a-seats-sessions)).
+
+## Schedules
+
+A schedule is a **conversation of each seat that runs it**. The scheduler
+stamps every fire with the schedule's key — `schedule/<scope>/<scope id>/<name>`,
+each part escaped — so one seat's fires of one schedule are one conversation of
+that seat: the next fire's first launch continues the session the last fire
+left, its brief tells how the earlier fires ended, and its end absorbs the
+fires its brief told, as a conversation's next turn does. A unit schedule each
+member runs is one conversation on each member's seat, and the fires that
+waited in a seat's inbox together run once, on that one key.
+
+- **What keeps the line, and what starts it afresh.** An edit to the schedule's
+  `task`, `cron`, `timezone` or `timeout_seconds` keeps its conversation. A
+  schedule renamed, moved between a role and a unit, or on a role of a company
+  whose `name` changed has a new key and starts fresh; and a seat that starts
+  running a schedule — a `lead` schedule's new lead — starts it on its own
+  seat.
+- **Kept for the retention.** A schedule whose fires are further apart than
+  `retention_days` never continues: its last session is gone before its next
+  fire comes.
+- **Paid for on every request.** A continued fire sends the schedule's session
+  with every request of its run — up to about 100 000 tokens each with Claude
+  Code's pinned window — where a fire started fresh begins at its brief. There
+  is no per-schedule switch: `enabled: false` starts every fire fresh, as it
+  does every conversation's next turn.
+- **Nobody replies into it.** Every fire carries the key and nothing a person
+  writes does, so a fire is never taken as the answer to the question the last
+  fire's run parked on; such a run is answered by its turn.
+
+[Scheduling](scheduling.md#each-fire-continues-the-last-fires-session) has the
+whole of it.
 
 ---
 
@@ -197,6 +239,9 @@ compaction — Claude Code's pinned window of 100,000 tokens, OpenCode's near it
 model's own — so a conversation's session, however many turns it spans, never
 makes a request much larger than one turn's
 ([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)).
+A schedule pays it on every fire: a fire of ten Claude Code requests on a
+session at the window is charged about a million input tokens, most of them
+cache reads ([Schedules](#schedules)).
 
 **Its first launch is held to that context.** The launch needs the larger of
 `turn_engine.executor_min_budget_tokens` and the base's context with the lead
@@ -243,7 +288,9 @@ the next start — and never deletes one whose turn's run is still live or whose
 session a live turn holds. A turn that never ended, a day past its last record
 with no run of it live, it first ends as `lost`, so a lost end holds the seat's
 budget for a day rather than for the whole retention. A conversation quiet for
-longer than the retention starts its next turn fresh.
+longer than the retention starts its next turn fresh, and so a schedule whose
+fires come further apart than the retention starts every fire fresh
+([Schedules](#schedules)).
 
 **`max_bytes_per_seat`** is the most one seat's sessions may hold: past it a
 capture releases the seat's oldest ended sessions first, keeping how each turn
@@ -265,4 +312,5 @@ the default `nats` bucket belongs on S3 (`store.objects.backend`).
 - [Turn Engine](turn-engine.md) — the phases, the within-turn prior-work ledger, and how a turn ends on the executor log
 - [Agent Learning](agent-learning.md) — episodes, the diary, counterparty profiles
 - [Event System](event-system.md) — the two keys, and inbox coalescing
+- [Scheduling](scheduling.md#each-fire-continues-the-last-fires-session) — a schedule as a conversation of each seat that runs it
 - [Architecture](architecture.md#5-where-state-lives) — where state lives, and the replicated domains the executor log is one of

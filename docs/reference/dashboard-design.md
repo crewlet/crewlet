@@ -1235,7 +1235,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
 | `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the units and seats and the company's name are written; the company's node carries no Edit, and its principles are the toolbar's Edit principles, which opens Company › Principles, the one place its mission, vision and standing policies are written *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Worklet's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
-| `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|access\|settings` · `conversation=` · `session=` (Memory); human: overview · work · settings |
+| `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|access\|settings` · `session=` (Memory); human: overview · work · settings |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Agents, Activity and Settings, its settings form opening in place; a service's counts, its projects or spaces each linking to the service's own list of them, then its Agents, Activity and Settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
@@ -3801,23 +3801,15 @@ under "What it did" said every chat turn had done "Message from Ana"; and a
 compacted row as how many turns it stands for, their pattern and what varied,
 and how many of them ended done), the skills it taught itself and who it has worked with (when last,
 relative, as every list on the profile says it), each header
-the holder's total ("Latest 50 of 142" where the list is a page of it), and the
-**Conversations** it holds a ledger in (`conversation=` opens one) — each
-thread's KEY on a line of its own, since it is the thread's only identity, with
-its turns and when it last moved under it, and a Worklet task's uuid cut to its
-head (`work:task:4d631f6d`) with the whole key on the row's title. Choosing a
-thread shows it: beside the list (a wide screen column) the list scrolls
-inside a box bounded by the scroller's view, handing the wheel back to the page
-at either end, its chosen row kept in that view — a thread the address names
-as soon as the list is drawn — and the thread's turns stick under the page's
-top; stacked
-on a phone, the turns are scrolled to and their heading takes focus. A chosen
-thread's turns are drawn only from an answer read since it was chosen — until
-then they are loading — so the last thread's turns never stand under the new
-one's name. Each turn's trigger reads as plain words, its markdown stripped. A
-seat no node holds says why it shows nothing. Beside them are the seat's
+the holder's total ("Latest 50 of 142" where the list is a page of it). An
+episode's conversation is its KEY, the conversation's only identity, with a
+Worklet task's uuid cut to its head (`work:task:4d631f6d`) and a schedule's
+parts printed as they were written (`schedule/unit/eng/weekly report`, not
+`weekly%20report`), the whole key on the cell's title. A seat no node holds
+says why it shows nothing. Under them are the seat's
 **Sessions** (`session=` opens one): every turn whose executor captured its
-harness's session, the whole record of what its run read, called and wrote —
+harness's session, and every turn that read its conversation, from its first
+launch — the whole record of what its run read, called and wrote —
 read through any node, since the rows are the replicated estate's and the
 bytes the fleet's object store's, and on the same `audit.seat.read` as the
 rest of the tab, the verb an executor's live output is decided by. Each row is
@@ -3826,22 +3818,34 @@ what its turn was asked, as plain words in two lines, over how the turn ended
 release, and when; the list pages by the engine's cursor (**Load older
 sessions**), is asked again each minute, and says when the node that answered
 may be missing rows it could not read; a poll that fails says so in the list's
-own card, never in place of the transcript beside it. Choosing one shows it as
-a thread is shown, the list bounded beside it and the chosen row kept in its
-view: the engine's account of how the turn ended, as the list's row last read
+own card, never in place of the transcript beside it. Choosing one shows it:
+beside the list (a wide screen column) the list scrolls inside a box bounded by
+the scroller's view, handing the wheel back to the page at either end, its
+chosen row kept in that view — a session the address names as soon as the list
+is drawn — and the chosen session sticks under the page's top; stacked on a
+phone, the session is scrolled to and its heading takes focus. It is subtitled
+with its conversation, printed as an episode's is, or "No conversation"; then
+comes the engine's account of how the turn ended, as the list's row last read
 says it — a turn's end is recorded with no new capture, so it reaches the
-list's poll and never the transcript — with the decision, whether its reply
-reached anybody and where, what landed, what blocked it, who stopped it and
-why, the failure, each only where the ending carries it, what is kept of the
-session and its size, and a link to the turn — and a sentence saying whether a
-relaunch of the turn would continue the session, as the engine decided it and
-no more: that one would, in whichever box it gets, where that box can take it
-up and the seat's budget can carry it, or only in the box its run parked in,
-while that box is held, with the engine's reason no other box would; where it
-would not, the engine's own reason; or, where the engine could not decide (a
-record it could not read, a job still working, a capture still being kept, the
-node holding the seat not answering what a relaunch is launched on), that this
-cannot be said now and why: an unknown is never drawn as a no. Under
+list's poll and never the transcript — with the decision; whether its reply
+reached the party waiting and on what surface, that it did not reach them, or
+that whether it did is not known; that its newest session was not kept, and
+why; its answer to a colleague; what landed, what blocked it, who stopped it
+and why, the failure, each only where the ending carries it; what is kept of
+the session and its size, and a link to the turn; where its first launch was
+handed a session to continue, a link that opens that session here, so a
+conversation's sessions read one from the next — and a sentence saying which
+launch would continue the session and whether it would, as the engine decided
+it and no more: a relaunch of the turn while it is live, the conversation's
+next turn once it has ended, or the schedule's next fire for a fire of a
+schedule; that it would, in whichever box it gets, where that box can take it
+up and the seat's budget can carry it, or, a relaunch alone, only in the box
+its run parked in, while that box is held, with the engine's reason no other
+box would; where it would not, the engine's own reason; or, where the engine
+could not decide (a record it could not read, a job still working, a capture
+still being kept, the node holding the seat not answering what a launch is
+launched on, a turn whose end is not on the log yet), that this cannot be said
+now and why: an unknown is never drawn as a no. Under
 it is the
 **transcript**, a page at a time (**Load more of the transcript**) as the
 harness recorded it: each entry labelled by who it is from (brief, note, model,

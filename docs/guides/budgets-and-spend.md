@@ -66,7 +66,9 @@ at the ceiling: raise it to the floor, or lower the floor (`0` turns it off).
 turn, a send-back, a person's answer, a lost job or a replaced sign-in
 [continues the turn's harness session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)
 where it can; a conversation's next turn
-[continues the session its last turn left](../concepts/code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session);
+[continues the session its last turn left](../concepts/code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session),
+and a schedule's next fire
+[the session its last fire left](../concepts/scheduling.md#each-fire-continues-the-last-fires-session);
 and a continued run sends the session's whole context again before it reads a
 word of its brief. So its launch needs the larger of the floor
 and that context with the brief that continues it: the whole input of the
@@ -113,6 +115,21 @@ to about *n* × 170 000. So is a Claude Code run whose repository's own settings
 switch its compaction off, up to its model's window. A session past 100 000
 tokens is continued wherever the seat's budget can carry it, by the floor
 above.
+
+**A schedule pays for its session on every fire.** A schedule is a
+conversation of each seat that runs it, so each of its fires continues the
+session its last fire left on that seat and pays for it on every request: up
+to about 100 000 input tokens a request with Claude Code's pinned window, where
+a fire started fresh begins at its prompt and its brief. An hourly check whose
+session has reached the window and whose run makes ten requests is charged
+about a million input tokens a fire, twenty-four million a day on its seat and
+the company, most of them cache reads. Its first launch needs that session's
+context left in every capped window and, short of it, parks the seat's mail
+until a window has room, as any continued first launch does. There is no
+per-schedule switch: the seat's and the company's ceilings bound it, and
+`turn_engine.conversation_session.enabled: false` starts every fire fresh, as
+it does every conversation's next turn
+([Scheduling](../concepts/scheduling.md#each-fire-continues-the-last-fires-session)).
 
 A round's size is known only from its reply, so by the time it is judged the
 vendor has billed it, and **a refused round is counted like any other**. The

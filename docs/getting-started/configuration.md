@@ -108,7 +108,8 @@ turn_engine:                            # optional — executor/reviewer turn co
   extension_round_step: 8               # max rounds the judge may grant per extension call
   conversation_session:                 # each executor launch's session, kept and continued
                                         #   by the turn's relaunches and by its conversation's
-                                        #   next turn — ONE thread / issue / PR — which is
+                                        #   next turn — ONE thread / issue / PR, or one
+                                        #   schedule on one seat, its next fire — which is
                                         #   also told how the conversation's earlier turns
                                         #   ended (see concepts/conversation-sessions.md)
     enabled: true                       # a live kill switch; off keeps and continues no
@@ -120,7 +121,9 @@ turn_engine:                            # optional — executor/reviewer turn co
     retention_days: 30                  # days a seat's sessions are kept past their turn's
                                         #   last record — the event store's horizon; read
                                         #   off the fleet's revision at every reaper pass,
-                                        #   so a change is honoured at the next one
+                                        #   so a change is honoured at the next one. A
+                                        #   schedule whose fires are further apart never
+                                        #   continues: every fire starts fresh
     max_bytes_per_seat: 67108864        # object-store bytes one seat's captured executor
                                         #   sessions may hold (33 MiB..64 GiB); past it a
                                         #   capture releases the seat's oldest ENDED
@@ -2026,7 +2029,7 @@ units:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | yes | Unique within the role/unit; part of the idempotency key |
+| `name` | string | yes | Unique within the role/unit; part of the idempotency key and of the [conversation](../concepts/scheduling.md#each-fire-continues-the-last-fires-session) every fire is on its runner seat, so a rename starts the schedule's sessions afresh. At most 400 bytes escaped as a URL path segment (a space or a slash takes three bytes, a letter outside ASCII six or more) |
 | `cron` | string | yes | Standard 5-field cron (`min hour dom month dow`), evaluated in `timezone` |
 | `task` | string | yes | Task prompt handed to the runner agent |
 | `timezone` | string | no | IANA timezone this one schedule fires in (default: the company's [`timezone`](#the-companys-clock)). Not `Local` or `localtime` |
