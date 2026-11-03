@@ -3,6 +3,8 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -69,11 +71,35 @@ func (s *stubRuns) reads() (listed, got int) {
 	return s.listed, s.got
 }
 
-// stubTargets is the member a relaunch of each seat's turn would be launched
-// on; a seat it does not name has none.
-type stubTargets map[string]sandbox.RelaunchTarget
+// stubTargets is the node holding each seat as the sessions surface asks it
+// what a relaunch of the seat's turns would be launched on, and every archive
+// set it was asked about; a seat it does not name has no member.
+type stubTargets struct {
+	mu      sync.Mutex
+	targets map[string]sandbox.RelaunchTarget
+	asked   [][]sandbox.SessionArchive
+}
 
-func (s stubTargets) RelaunchTarget(handle string) sandbox.RelaunchTarget { return s[handle] }
+// targetOf is the holder of ana's seat answering target.
+func targetOf(target sandbox.RelaunchTarget) *stubTargets {
+	return &stubTargets{targets: map[string]sandbox.RelaunchTarget{"ana": target}}
+}
+
+func (s *stubTargets) RelaunchTarget(_ context.Context, _ uuid.UUID, handle string,
+	archives []sandbox.SessionArchive) sandbox.RelaunchTarget {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asked = append(s.asked, slices.Clone(archives))
+	return s.targets[handle]
+}
+
+// asks is every archive set the holder was asked about, in order.
+func (s *stubTargets) asks() [][]sandbox.SessionArchive {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.asked)
+}
 
 // restoring is a runner of harness that restores every session that harness
 // wrote, and none another wrote — or, given why, none at all, saying so.
@@ -89,22 +115,23 @@ func (r restoring) Restores(archive sandbox.SessionArchive) (bool, string) {
 	return true, ""
 }
 
-func (r restoring) CheckCarry(_ context.Context, _ sandbox.Sandbox, archive sandbox.SessionArchive) (sandbox.CarryCheck, error) {
-	ok, why := r.Restores(archive)
-	return sandbox.CarryCheck{Continues: ok, Why: why}, nil
-}
+// holder is the node holding ana's seat, on whose host the run's direct box
+// was launched.
+const holder = "node-a"
 
 // claudeTarget is a relaunch of ana's turns launched on a Claude Code member in
-// the direct cell, whose runner restores what Claude Code wrote.
+// the direct cell, as the node holding the seat picks it, whose runner
+// restores what Claude Code wrote.
 func claudeTarget() sandbox.RelaunchTarget {
-	return sandbox.RelaunchTarget{Harness: executor.ClaudeCodeName, Placement: sandbox.Direct,
+	return sandbox.RelaunchTarget{Harness: executor.ClaudeCodeName, Placement: sandbox.Direct, Node: holder,
 		Restorer: restoring{harness: executor.ClaudeCodeName}}
 }
 
 // liveSession is ana's live turn whose job, its second, kept its session's
 // first capture, as the executor log's row names it and the run's record keeps
 // it, written by harness — the job parked on a question, its box held in the
-// direct cell, as a collection leaves a job that asked.
+// direct cell on the host of the node holding the seat, as a collection leaves
+// a job that asked.
 func liveSession(harness string) (executordomain.Session, sandbox.PendingRun) {
 	turn := uuid.NewString()
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
@@ -116,8 +143,8 @@ func liveSession(harness string) (executordomain.Session, sandbox.PendingRun) {
 		Object:    objstore.Object{Key: key, Hash: objstore.Hash(strings.Repeat("a", 64)), Size: 4096},
 		LaunchSeq: 2, CaptureSeq: 1}
 	return row, sandbox.PendingRun{TurnID: turn, AgentHandle: "ana", Status: sandbox.StatusAwaiting,
-		SandboxID: "box-1", Placement: string(sandbox.Direct), Harness: harness, SessionID: "s-1",
-		LaunchSeq: 2, Capture: &kept, Kept: &kept}
+		SandboxID: "box-1", Placement: string(sandbox.Direct), LaunchNode: holder, Harness: harness,
+		SessionID: "s-1", LaunchSeq: 2, Capture: &kept, Kept: &kept}
 }
 
 // continuableSources answers the sessions questions over rows, deciding each
@@ -130,7 +157,7 @@ func continuableSources(t *testing.T, rows []executordomain.Session, runs *stubR
 	if runs != nil {
 		s.SessionRuns = runs
 	}
-	s.RelaunchTargets = stubTargets{"ana": claudeTarget()}
+	s.RelaunchTargets = targetOf(claudeTarget())
 	return s
 }
 
@@ -166,13 +193,15 @@ func decided(row queries.SessionRow) string {
 // that other harness, nowhere; a live turn whose run is over continues nothing,
 // and an ended turn's session no later turn continues yet — each not
 // continuable, saying why. A whole page reads the coordination store ONCE, and
-// once more for the one live row the listing does not hold, and one session read
-// alone reads its own turn's record and nothing else.
+// once more for the one live row the listing does not hold, and asks the node
+// holding the seat ONCE, about every live row's session at once; one session
+// read alone reads its own turn's record and asks about its own session, and
+// nothing else.
 //
 // Mutation: decide a row by anything but sandbox.ReadContinuityOf, read the
-// store once per row, ask the runner of the harness that wrote the session
-// rather than the relaunch's member, or answer a decided ending as live, and a
-// check goes red.
+// store or ask the holder once per row, ask the runner of the harness that
+// wrote the session rather than the relaunch's member, or answer a decided
+// ending as live, and a check goes red.
 func TestASessionsRowSaysWhetherARelaunchWouldContinueIt(t *testing.T) {
 	t.Parallel()
 	continues, continuesRun := liveSession(executor.ClaudeCodeName)
@@ -224,6 +253,11 @@ func TestASessionsRowSaysWhetherARelaunchWouldContinueIt(t *testing.T) {
 		t.Errorf("a page of six rows read the seat's runs %d times and a turn's %d, want one listing "+
 			"and the one live turn it does not hold", listed, got)
 	}
+	targets := s.RelaunchTargets.(*stubTargets)
+	if asks := targets.asks(); len(asks) != 1 || len(asks[0]) != 2 {
+		t.Errorf("a page asked the node holding the seat %v, want once, about the two sessions its live "+
+			"rows hold", asks)
+	}
 
 	read, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": continues.Turn})
 	if err != nil {
@@ -238,19 +272,26 @@ func TestASessionsRowSaysWhetherARelaunchWouldContinueIt(t *testing.T) {
 		t.Errorf("after a page and a session read alone, the seat's runs were listed %d times and a "+
 			"turn's read %d, want the page's one listing and two turns read alone", listed, got)
 	}
+	if asks := targets.asks(); len(asks) != 2 || len(asks[1]) != 1 ||
+		asks[1][0] != sandbox.ArchiveOf(continues) {
+		t.Errorf("after a page and a session read alone, the holder was asked %v, want the session read "+
+			"alone asking about its own session once", asks)
+	}
 }
 
 // A LIVE SESSION WHOSE RUN RECORD CANNOT BE READ IS UNDECIDED, NEVER A NO, AND
-// AN ENDED ONE NEEDS NO RECORD. A coordination store that does not answer —
-// or a node wired with none to read — leaves every live turn's row with
-// `continuable` null and its reason saying the record could not be read — a no
-// would tell a person a session starts over that may well be continued — while
-// the page is still answered, and an ended turn's row is decided off the log
-// alone. A page of ended turns reads nothing from the store at all.
+// AN ENDED ONE NEEDS NO RECORD. A coordination store that does not answer, a
+// node wired with none to read, and a node wired with no way to ask the node
+// holding the seat what a relaunch is launched on each leave every live turn's
+// row with `continuable` null and its reason saying why — a no would tell a
+// person a session starts over that may well be continued — while the page is
+// still answered, and an ended turn's row is decided off the log alone. A page
+// of ended turns reads nothing from the store at all.
 //
 // Mutation: answer an unread record as a run that is over, read a node with no
-// run records as one whose runs are all over, fail the page, or read the store
-// for a page of ended turns, and a check goes red.
+// run records as one whose runs are all over, read a node that asks no holder
+// as one whose relaunch continues nothing, fail the page, or read the store for
+// a page of ended turns, and a check goes red.
 func TestALiveSessionWhoseRunCannotBeReadIsUndecided(t *testing.T) {
 	t.Parallel()
 	live, liveRun := liveSession(executor.ClaudeCodeName)
@@ -259,9 +300,13 @@ func TestALiveSessionWhoseRunCannotBeReadIsUndecided(t *testing.T) {
 	down := &stubRuns{runs: []sandbox.PendingRun{liveRun}, err: errors.New("the coordination store is down")}
 	unwired := continuableSources(t, []executordomain.Session{live, ended}, nil)
 	unwired.SessionRuns = nil
+	unasked := continuableSources(t, []executordomain.Session{live, ended},
+		&stubRuns{runs: []sandbox.PendingRun{liveRun}})
+	unasked.RelaunchTargets = nil
 	for name, s := range map[string]queries.Sources{
 		"a store that does not answer": continuableSources(t, []executordomain.Session{live, ended}, down),
 		"a node with no run records":   unwired,
+		"a node that asks no holder":   unasked,
 	} {
 		page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
 		if err != nil {
@@ -270,9 +315,8 @@ func TestALiveSessionWhoseRunCannotBeReadIsUndecided(t *testing.T) {
 		for turn, row := range rowsByTurn(t, page) {
 			switch turn {
 			case live.Turn:
-				if row.Continuable != nil || !strings.Contains(row.NotContinuable, "could not be read") {
-					t.Errorf("%s: the live turn's row is %s, want undecided, saying the record could not "+
-						"be read", name, decided(row))
+				if row.Continuable != nil || row.NotContinuable == "" {
+					t.Errorf("%s: the live turn's row is %s, want undecided, saying why", name, decided(row))
 				}
 			case ended.Turn:
 				if row.Continuable == nil || *row.Continuable ||
@@ -305,12 +349,18 @@ func TestALiveSessionWhoseRunCannotBeReadIsUndecided(t *testing.T) {
 // the session that box holds whatever became of its capture — so a run whose
 // kept capture no relaunch restores (written by a release no other box
 // continues, or not kept at all) is still continuable, only in its parked box,
-// with the reason no other box would; and not once its box is gone (a pause
-// past its time-to-live), its record names no session, or the relaunch's member
-// is another harness or in another cell, none of which continues in that box.
+// with the reason no other box would, its answer recorded or its answer's claim
+// under way as much as parked; and not where the relaunch could not continue in
+// that box: its box gone (a pause past its time-to-live), its record naming no
+// session, the relaunch's member another harness or in another cell, a box on
+// an engine host that is not the host of the node holding the seat — the seat
+// moved since its job launched — or a box that ran another session of the turn
+// than the row's, started in its place, each saying why.
 //
-// Mutation: decide the row on the kept capture alone, or read a box the
-// relaunch would not continue in as one it would, and a case goes red.
+// Mutation: decide the row on the kept capture alone, read a box the relaunch
+// would not continue in as one it would — skip its host, or the session it
+// holds — or read an answer's claim as a run no answer carries on, and a case
+// goes red.
 func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing.T) {
 	t.Parallel()
 	const older = "the session was written by Claude Code 2.1.265, older than 2.1.300"
@@ -320,11 +370,14 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 	elsewhere.Placement = sandbox.Container
 	other := refusing
 	other.Harness = executor.OpenCodeName
+	moved := refusing
+	moved.Node = "node-b"
 	for name, tc := range map[string]struct {
 		run       func(*sandbox.PendingRun)
 		target    sandbox.RelaunchTarget
 		inParked  bool
 		continues bool
+		why       string
 	}{
 		"its kept capture, in any box":   {target: claudeTarget(), continues: true},
 		"a release no other box resumes": {target: refusing, continues: true, inParked: true},
@@ -336,13 +389,26 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 			}},
 		"its answer recorded": {target: refusing, continues: true, inParked: true,
 			run: func(r *sandbox.PendingRun) { r.Status = sandbox.StatusAnswered }},
-		"a box its pause reclaimed": {target: refusing,
+		"its answer's claim under way": {target: refusing, continues: true, inParked: true,
+			run: func(r *sandbox.PendingRun) {
+				final := *r.Kept
+				final.Final = true
+				r.Status, r.Capture, r.Kept = sandbox.StatusResumed, &final, &final
+				r.Answer = &sandbox.RecordedAnswer{EventIDs: []string{"ev-1"}}
+			}},
+		"a box its pause reclaimed": {target: refusing, why: "is gone",
 			run: func(r *sandbox.PendingRun) { r.Status, r.SandboxID = sandbox.StatusReseed, "" }},
-		"a record naming no session":  {target: refusing, run: func(r *sandbox.PendingRun) { r.SessionID = "" }},
-		"a member in another cell":    {target: elsewhere},
-		"a member of another harness": {target: other},
-		"a run that is not parked": {target: refusing,
-			run: func(r *sandbox.PendingRun) { r.Status, r.Launch.Collected = sandbox.StatusRunning, true }},
+		"a record naming no session": {target: refusing, why: "names no session",
+			run: func(r *sandbox.PendingRun) { r.SessionID = "" }},
+		"a member in another cell":                     {target: elsewhere, why: "in the container cell"},
+		"a member of another harness":                  {target: other, why: "launched on " + executor.OpenCodeName},
+		"a box on another node's host, the seat moved": {target: moved, why: "cannot continue in it"},
+		"a box that ran another session of the turn": {target: refusing, why: "another session of the turn",
+			run: func(r *sandbox.PendingRun) {
+				r.Launch.FreshSessionID, r.Launch.SessionStart = "f-1", sandbox.SessionStartFresh
+			}},
+		"a box whose word never reached its record": {target: refusing, why: "never said",
+			run: func(r *sandbox.PendingRun) { r.Launch.FreshSessionID = "f-1" }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -351,7 +417,7 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 				tc.run(&run)
 			}
 			s := continuableSources(t, []executordomain.Session{row}, &stubRuns{runs: []sandbox.PendingRun{run}})
-			s.RelaunchTargets = stubTargets{"ana": tc.target}
+			s.RelaunchTargets = targetOf(tc.target)
 			page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
 			if err != nil {
 				t.Fatalf("executor_sessions: %v", err)
@@ -372,6 +438,8 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 				t.Errorf("the row is %s, want why no other box would", decided(got))
 			case !tc.inParked && tc.continues && got.NotContinuable != "":
 				t.Errorf("the row is %s, want no reason", decided(got))
+			case !strings.Contains(got.NotContinuable, tc.why):
+				t.Errorf("the row is %s, want it saying %q", decided(got), tc.why)
 			}
 		})
 	}
@@ -380,17 +448,28 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 // WHETHER A RELAUNCH CONTINUES IS UNDECIDED WHERE A RELAUNCH WOULD NOT DECIDE
 // NOW EITHER, never a no. The job a relaunch would follow still working, or
 // being collected — its session is taken by the read that collects it — the
-// capture of that job still being kept, which a relaunch waits for, and every
-// member of the seat's chain sitting out its plan, where which of them takes the
-// relaunch decides it: each is `continuable` null, saying why.
+// capture of that job still being kept, which a relaunch waits for; what a
+// relaunch is launched on not to be said now — every member of the seat's
+// chain sitting out its plan, where which of them takes the relaunch decides
+// it, or the node holding the seat not answering; a round lost a second time,
+// carried on in a session of its own unless the job had submitted its work,
+// which its resume decides; and a collected job whose session no other box
+// continues, which the resume of its collection carries on in its box only
+// where its sign-in was replaced while it ran: each is `continuable` null,
+// saying why.
 //
 // Mutation: read a job still working as one that left no capture, a capture
-// still being kept as one not kept, or a chain sitting out as one with no
-// runner, and a case goes red.
+// still being kept as one not kept, a target that cannot be said as one with no
+// runner, a second loss as a round continued from its capture, or a collected
+// job's resume as one that carries nothing on in its box, and a case goes red.
 func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(t *testing.T) {
 	t.Parallel()
-	sittingOut := sandbox.RelaunchTarget{Waiting: true,
+	sittingOut := sandbox.RelaunchTarget{Undecided: true,
 		Why: "every member of the seat's executor chain is sitting out its plan"}
+	silent := sandbox.RelaunchTarget{Undecided: true,
+		Why: "node-a, which holds the seat, did not say within 2s what a relaunch is launched on"}
+	refusing := claudeTarget()
+	refusing.Restorer = restoring{harness: executor.ClaudeCodeName, why: "a release no other box resumes"}
 	for name, tc := range map[string]struct {
 		run    func(*sandbox.PendingRun, time.Time)
 		target sandbox.RelaunchTarget
@@ -409,6 +488,16 @@ func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(
 				r.Capture = &begun
 			}},
 		"every member sitting out": {target: sittingOut, why: "sitting out its plan"},
+		"the holder not answering": {target: silent, why: "did not say"},
+		"a round lost a second time": {target: claudeTarget(), why: "lost a second time",
+			run: func(r *sandbox.PendingRun, _ time.Time) {
+				r.Status, r.Launch.Collected, r.RoundLosses = sandbox.StatusRunning, true, 1
+				r.Lost = &sandbox.JobLoss{Cause: sandbox.LossBoxGone}
+			}},
+		"a collected job's resume": {target: refusing, why: "sign-in was replaced",
+			run: func(r *sandbox.PendingRun, _ time.Time) {
+				r.Status, r.Launch.Collected = sandbox.StatusRunning, true
+			}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -418,7 +507,7 @@ func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(
 				tc.run(&run, now)
 			}
 			s := continuableSources(t, []executordomain.Session{row}, &stubRuns{runs: []sandbox.PendingRun{run}})
-			s.RelaunchTargets = stubTargets{"ana": tc.target}
+			s.RelaunchTargets = targetOf(tc.target)
 			s.Now = func() time.Time { return now }
 			page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
 			if err != nil {
@@ -429,6 +518,33 @@ func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(
 				t.Errorf("the row is %s, want undecided saying %q", decided(got), tc.why)
 			}
 		})
+	}
+}
+
+// A CLAIM WHOSE READ TOOK THE JOB'S FINAL CAPTURE IS DECIDED. The read a claim
+// makes takes the job's session first, and the claim's row stays resumed for
+// the whole resumed turn, its review included — which is when a person most
+// wants to know what a send-back would continue. So once that final capture is
+// taken and kept, the row is decided as any other: continued from it in any box
+// — and while the claim's read has taken nothing yet, it is still undecided.
+//
+// Mutation: read every resumed row as a job still being collected, and the
+// claim whose capture is kept is undecided.
+func TestAClaimWhoseReadTookTheJobsFinalCaptureIsDecided(t *testing.T) {
+	t.Parallel()
+	row, run := liveSession(executor.ClaudeCodeName)
+	final := *run.Kept
+	final.Final = true
+	run.Status, run.Capture, run.Kept = sandbox.StatusResumed, &final, &final
+	s := continuableSources(t, []executordomain.Session{row}, &stubRuns{runs: []sandbox.PendingRun{run}})
+	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	if got := rowsByTurn(t, page)[row.Turn]; got.Continuable == nil || !*got.Continuable ||
+		got.ContinuesIn != sandbox.ContinuesInAnyBox {
+		t.Errorf("a claim whose read took and kept the job's final capture is %s, want continuable in any "+
+			"box", decided(got))
 	}
 }
 
@@ -484,28 +600,46 @@ func TestALiveRowTheListingDoesNotHoldIsReadAlone(t *testing.T) {
 }
 
 // levelledSessions is the executor log as two copies answer it: the copy a page
-// is read from, behind, and the row a read at the relaunch's level is answered
-// with, which has applied the turn's newest capture.
+// is read from, and the row a read at the relaunch's level is answered with —
+// which, where through names it, has applied the turn's newest capture — and
+// how many reads at that level it was asked for.
 type levelledSessions struct {
 	*stubSessions
 	through map[string]executordomain.Session
+
+	mu      sync.Mutex
+	reReads int
 }
 
-func (l levelledSessions) Session(ctx context.Context, handle, turn string,
+func (l *levelledSessions) Session(ctx context.Context, handle, turn string,
 	fresh statelog.Freshness) (executordomain.SessionRead, error) {
 
-	if row, ok := l.through[turn]; ok && fresh.Level == sandbox.RelaunchRead().Level {
-		return executordomain.SessionRead{Session: row, Complete: true}, nil
+	if fresh.Level == sandbox.RelaunchRead().Level {
+		l.mu.Lock()
+		l.reReads++
+		l.mu.Unlock()
+		if row, ok := l.through[turn]; ok {
+			return executordomain.SessionRead{Session: row, Complete: true}, nil
+		}
 	}
 	return l.stubSessions.Session(ctx, handle, turn, fresh)
+}
+
+// readAgain is how many reads at the relaunch's level the log was asked for.
+func (l *levelledSessions) readAgain() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.reReads
 }
 
 // A LIVE ROW IS DECIDED ON THE LOG AS A RELAUNCH READS IT. A page read from a
 // copy of the executor log behind the run's record holds the turn's older
 // capture where the record keeps the newer — and a relaunch, which reads the
-// row at linearizable, continues the newer. So the row is decided on the log
-// read again at the relaunch's level: continuable, where the behind copy alone
-// read it as a log naming another capture.
+// row at linearizable, continues the newer. So the row is read again at the
+// relaunch's level, once, and decided on that: continuable in any box with no
+// reason, where the behind copy alone read it as a log naming another capture.
+// The run's job was collected and its box handed back, so nothing else would
+// continue its session.
 //
 // Mutation: decide the row on the page's own read, and it says no.
 func TestALiveRowIsDecidedOnTheLogAsARelaunchReadsIt(t *testing.T) {
@@ -514,21 +648,84 @@ func TestALiveRowIsDecidedOnTheLogAsARelaunchReadsIt(t *testing.T) {
 	newer := *run.Kept
 	newer.CaptureSeq = 2
 	run.Capture, run.Kept = &newer, &newer
+	run.Status, run.Launch.Collected, run.SandboxID = sandbox.StatusRunning, true, ""
 	applied := behind
 	applied.CaptureSeq = 2
 	store, _ := sessionObjectStore(t)
 	s := sessionSources(t, nil, store)
-	s.ExecutorSessions = levelledSessions{stubSessions: &stubSessions{rows: []executordomain.Session{behind}},
+	onLog := &levelledSessions{stubSessions: &stubSessions{rows: []executordomain.Session{behind}},
 		through: map[string]executordomain.Session{behind.Turn: applied}}
+	s.ExecutorSessions = onLog
 	s.SessionRuns = &stubRuns{runs: []sandbox.PendingRun{run}}
-	s.RelaunchTargets = stubTargets{"ana": claudeTarget()}
+	s.RelaunchTargets = targetOf(claudeTarget())
 	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
 	if err != nil {
 		t.Fatalf("executor_sessions: %v", err)
 	}
-	if got := rowsByTurn(t, page)[behind.Turn]; got.Continuable == nil || !*got.Continuable {
-		t.Errorf("a row read from a copy behind the run's record is %s, want continuable, as a relaunch "+
-			"reading the log at its level continues it", decided(got))
+	got := rowsByTurn(t, page)[behind.Turn]
+	if got.Continuable == nil || !*got.Continuable || got.ContinuesIn != sandbox.ContinuesInAnyBox ||
+		got.NotContinuable != "" {
+		t.Errorf("a row read from a copy behind the run's record is %s, want continuable in any box with "+
+			"no reason, as a relaunch reading the log at its level continues it", decided(got))
+	}
+	if n := onLog.readAgain(); n != 1 {
+		t.Errorf("the row was read again at the relaunch's level %d times, want once", n)
+	}
+}
+
+// A ROW NAMING ITS RUN'S KEPT CAPTURE IS NOT READ AGAIN, nor is a row the
+// decision never reaches. A read at the relaunch's level appends a barrier to
+// the executor log, and a row that already names the capture the run's record
+// keeps decides as that read would — a newer capture is stamped on the record
+// before a byte of it moves — while one whose job still works, or whose turn
+// has ended, is decided without its capture at all. So a page of such rows,
+// asked every minute, reads the log once, at its own level. And a transcript's
+// later page decides nothing again: its first page says it, once, and a later
+// one leaves it null, saying so, reading no run record and asking no node.
+//
+// Mutation: read every live row again at the relaunch's level, or decide a
+// later page again, and a check goes red.
+func TestARowNamingItsRunsKeptCaptureIsNotReadAgain(t *testing.T) {
+	t.Parallel()
+	kept, keptRun := liveSession(executor.ClaudeCodeName)
+	working, workingRun := liveSession(executor.ClaudeCodeName)
+	workingRun.Status, workingRun.LaunchSeq = sandbox.StatusRunning, 3
+	ended, _ := liveSession(executor.ClaudeCodeName)
+	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	store, _ := sessionObjectStore(t)
+	s := sessionSources(t, nil, store)
+	onLog := &levelledSessions{stubSessions: &stubSessions{rows: []executordomain.Session{kept, working, ended}}}
+	s.ExecutorSessions = onLog
+	runs := &stubRuns{runs: []sandbox.PendingRun{keptRun, workingRun}}
+	s.SessionRuns = runs
+	targets := targetOf(claudeTarget())
+	s.RelaunchTargets = targets
+	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	if got := rowsByTurn(t, page)[kept.Turn]; got.Continuable == nil || !*got.Continuable {
+		t.Errorf("a row naming its run's kept capture is %s, want continuable", decided(got))
+	}
+	if n := onLog.readAgain(); n != 0 {
+		t.Errorf("a page whose rows name their runs' kept captures read the log again %d times, want none", n)
+	}
+
+	_, gotBefore := runs.reads()
+	asksBefore := len(targets.asks())
+	cursor := kept.Object.Key.String() + "." + strconv.Itoa(executor.TranscriptVersion) + ".5"
+	later, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": kept.Turn,
+		"cursor": cursor})
+	if err != nil {
+		t.Fatalf("a transcript's later page: %v", err)
+	}
+	row := later.(queries.SessionAnswer).Session
+	if row.Continuable != nil || !strings.Contains(row.NotContinuable, "first page") {
+		t.Errorf("a transcript's later page says %s, want it left to the first page", decided(row))
+	}
+	if _, got := runs.reads(); got != gotBefore || len(targets.asks()) != asksBefore {
+		t.Errorf("a transcript's later page read %d run records and asked the holder %d times, want "+
+			"neither", got-gotBefore, len(targets.asks())-asksBefore)
 	}
 }
 
@@ -547,7 +744,7 @@ func TestAContinuityReasonIsRedacted(t *testing.T) {
 	target := claudeTarget()
 	target.Restorer = restoring{harness: executor.ClaudeCodeName, why: "the box answered " + secret}
 	s := continuableSources(t, []executordomain.Session{row}, &stubRuns{runs: []sandbox.PendingRun{run}})
-	s.RelaunchTargets = stubTargets{"ana": target}
+	s.RelaunchTargets = targetOf(target)
 	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
 	if err != nil {
 		t.Fatalf("executor_sessions: %v", err)

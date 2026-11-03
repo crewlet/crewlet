@@ -75,13 +75,17 @@ export interface ExecutorSessionRow {
   /**
    * Whether a relaunch of the turn would continue this session, as far as the
    * engine can know before a box is chosen: decided as a relaunch decides it,
-   * and never for an ended turn, whose session no later turn continues yet.
-   * Whether the box a relaunch gets takes the session up, and whether the
-   * seat's budget can carry it, are the launch's to find out. Null where it
-   * cannot be decided now — a run record or a log row that could not be read,
-   * a job still working or being collected, a capture still being kept, every
-   * member of the seat's chain sitting out its plan — which `not_continuable`
-   * then says: an unknown is never sent as a no.
+   * for the member the node holding the seat would launch it on now, and never
+   * for an ended turn, whose session no later turn continues yet. Whether the
+   * box a relaunch gets takes the session up, and whether the seat's budget can
+   * carry it, are the launch's to find out. Null where it cannot be decided now
+   * — a run record or a log row that could not be read, a job still working or
+   * being collected, a capture still being kept, what a relaunch is launched on
+   * not to be said (every member of the seat's chain sitting out its plan, no
+   * node holding the seat, the node holding it not answering), a relaunch only
+   * the resume of its job's collection decides — which `not_continuable` then
+   * says: an unknown is never sent as a no. A transcript's later page leaves it
+   * null, its first page having said it.
    */
   continuable: boolean | null;
   /** Where a relaunch would continue it; present only where it would. */

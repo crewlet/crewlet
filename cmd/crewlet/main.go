@@ -2451,7 +2451,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// relaunch decides it: off the FLEET's run records — the store
 			// a relaunch reads its own turn's from — and the member a
 			// relaunch of the seat's turn would be launched on, as the
-			// company this node runs picks it.
+			// node holding the seat picks it, asked of that node.
 			SessionRuns:     sandbox.NewCoordStore(e.Backends().Fleet),
 			RelaunchTargets: e,
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —

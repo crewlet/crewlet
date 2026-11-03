@@ -21,6 +21,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -155,18 +156,20 @@ func (k keptLaunch) relaunch(t *testing.T, basis runner.SessionBasis, inPlace *r
 // coordinator's choice and the turn's row on the executor log: the session, its
 // place, the calls it had been answered — the highest, and the places below it
 // still in flight — the notes it had read, whether its harness was cut off,
-// where it was last worked, and what its last request carried, which the
-// launch's floor is made of.
+// where it was last worked, what its last request carried, which the launch's
+// floor is made of, and the harness that wrote it, which the member the launch
+// picks must run.
 //
 // Mutation: drop any of them from the answer, and the brief that continues the
-// session tells it the wrong things, or the floor counts nothing.
+// session tells it the wrong things, the floor counts nothing, or the launch
+// cannot hold its member to the session's harness.
 func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 	t.Parallel()
 	k := newKeptLaunch(t, 40000, 0, 0)
 	got := k.l.ProbeSession(k.ctx)
 	want := runner.SessionBasis{LaunchSeq: k.kept.LaunchSeq, CaptureSeq: 1, SessionID: "s-1",
-		BridgeSeq: 3, BridgeOpen: []int{2}, NoteCursor: 4, Interrupted: true, Home: "/boxes/4f2a/home",
-		ContextTokens: 40000}
+		Harness: "claude-code", BridgeSeq: 3, BridgeOpen: []int{2}, NoteCursor: 4, Interrupted: true,
+		Home: "/boxes/4f2a/home", ContextTokens: 40000}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the probe answered %+v, want %+v", got, want)
 	}
@@ -404,25 +407,27 @@ func TestAResumeReadsWhichSessionTheJobsBoxStarted(t *testing.T) {
 	}
 }
 
-// A RELAUNCH IS TARGETED AT THE MEMBER IT WOULD BE LAUNCHED ON, by the one pick
-// the relaunch's own probe and every reader of whether a relaunch continues a
-// session ask ([Engine.RelaunchTarget]): the seat's first member with an in-box
-// runner that is not sitting out its plan, the cell its run lands in and its
-// runner — never the runner of the harness that wrote the session, which a seat
-// whose plan member is spent is not relaunched on. A chain every member of
-// which sits out has no member yet, and says it waits rather than that none
-// restores the session; a handle the company holds no seat under has none.
+// A RELAUNCH IS TARGETED AT THE MEMBER IT WOULD BE LAUNCHED ON, as the node
+// holding the seat picks it ([Engine.RelaunchTarget], which a node with no
+// broker, the whole fleet, answers from its own pick): the seat's first member
+// with an in-box runner that is not sitting out its plan there, the cell its
+// run lands in, that node, and its runner — never the runner of the harness
+// that wrote the session, which a seat whose plan member is spent is not
+// relaunched on. A chain every member of which sits out has no member yet, and
+// says it cannot be said rather than that none restores the session; a handle
+// the company holds no seat under has none.
 //
 // Mutation: answer the catalogue's runner for a harness, skip the sit-out,
-// resolve the cell otherwise than the launch does, or read a chain sitting out
-// as one with no runner, and a case goes red.
+// resolve the cell otherwise than the launch does, leave the holder off the
+// target, or read a chain sitting out as one with no runner, and a case goes
+// red.
 func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		members []chainMember
-		harness string
-		cell    sandbox.Placement
-		waiting bool
+		members   []chainMember
+		harness   string
+		cell      sandbox.Placement
+		undecided bool
 	}{
 		"the chain's head, in the catalogue's default cell": {harness: "claude-code", cell: sandbox.Direct,
 			members: []chainMember{{key: "api", agent: "claude-code", model: "claude-golden"}}},
@@ -431,7 +436,7 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 				{key: "plan", agent: "claude-code", model: "opus", spent: true},
 				{key: "oc", agent: "opencode", model: "anthropic/claude-sonnet-5", runIn: config.Placement(sandbox.Container)},
 			}},
-		"every member sitting out": {waiting: true,
+		"every member sitting out": {undecided: true,
 			members: []chainMember{{key: "plan", agent: "claude-code", model: "opus", spent: true}}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -440,31 +445,26 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 			e, runners := launchRigRestoring(t, c, bridgeFor(t, mcpbridge.Options{
 				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 			}), &keptLog{rows: map[string]executordomain.Session{}, archives: map[string][]byte{}})
-			got := e.RelaunchTarget(seat.Handle())
-			// AND THE PROBE ASKS THE SAME PICK: of a turn with no run record, it
-			// answers the member's runner's decision where there is a member,
-			// and the pick's own reason where there is none.
-			basis := launcherOn(e, c, seat, "t-none").ProbeSession(t.Context())
-			if tc.waiting {
-				if !got.Waiting || got.Restorer != nil || !strings.Contains(got.Why, "sitting out its plan") {
-					t.Fatalf("a chain sitting out is targeted %+v, want it waiting, saying so", got)
-				}
-				if basis.Continues() || basis.Why != got.Why {
-					t.Errorf("the probe answered %+v, want the pick's reason %q", basis, got.Why)
+			e.id = "node-a"
+			id, ok := c.Org.AgentIDFor(seat)
+			if !ok {
+				t.Fatal("the seat has no agent id")
+			}
+			got := e.RelaunchTarget(t.Context(), id, seat.Handle(), nil)
+			if tc.undecided {
+				if !got.Undecided || got.Restorer != nil || !strings.Contains(got.Why, "sitting out its plan") {
+					t.Fatalf("a chain sitting out is targeted %+v, want it undecided, saying so", got)
 				}
 				return
 			}
-			want, ok := sandbox.Runner(runners[tc.harness]).(sandbox.SessionRestorer)
+			want, ok := sandbox.Runner(runners[tc.harness]).(sandbox.ArchiveRestorer)
 			if !ok {
 				t.Fatalf("the %s runner restores no carried session, so this case proves nothing", tc.harness)
 			}
-			if got.Waiting || got.Harness != tc.harness || got.Placement != tc.cell || got.Restorer != want ||
-				got.Why != "" {
-				t.Fatalf("a relaunch is targeted %+v, want the %s member's runner in the %s cell",
+			if got.Undecided || got.Harness != tc.harness || got.Placement != tc.cell || got.Node != "node-a" ||
+				got.Restorer != want || got.Why != "" {
+				t.Fatalf("a relaunch is targeted %+v, want the %s member's runner in the %s cell on node-a",
 					got, tc.harness, tc.cell)
-			}
-			if basis.Continues() || !strings.Contains(basis.Why, "no run record") {
-				t.Errorf("the probe answered %+v, want the member's runner asked of a turn with no record", basis)
 			}
 		})
 	}
@@ -472,8 +472,130 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 	e, _ := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
-	if got := e.RelaunchTarget("nobody"); got.Restorer != nil || got.Waiting || !strings.Contains(got.Why, "no seat") {
+	if got := e.localRelaunchTarget("nobody"); got.Restorer != nil || got.Undecided ||
+		!strings.Contains(got.Why, "no seat") {
 		t.Errorf("a handle no seat holds is targeted %+v, want no member, said", got)
+	}
+}
+
+// A RELAUNCH TARGET SAYS WHETHER THE COMPANY KEEPS SESSIONS, as the node
+// holding the seat runs it: where `turn_engine.conversation_session.enabled` is
+// false, or the node has no object store to keep one in, a relaunch continues
+// no kept session whatever the turn kept — as the coordinator's own check says
+// at the launch — and a company that keeps them says nothing.
+//
+// Mutation: drop the keep from the target, or set it whatever the switch says,
+// and a case goes red.
+func TestARelaunchTargetSaysWhetherTheCompanyKeepsSessions(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		objects, off bool
+		noKept       bool
+	}{
+		"a company that keeps sessions":   {objects: true},
+		"a company that keeps none":       {objects: true, off: true, noKept: true},
+		"a node with nowhere to keep one": {noKept: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, seat := executorCompany(t)
+			if tc.off {
+				c.Config.TurnEngine.ConversationSession.Enabled = org.Off()
+			}
+			e, _ := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+			}))
+			if tc.objects {
+				store, err := objstore.NewStore(memobj.New())
+				if err != nil {
+					t.Fatal(err)
+				}
+				e.objects = &objectStore{store: store}
+			}
+			got := e.localRelaunchTarget(seat.Handle())
+			if (got.NoKept == sandbox.NoKeptSession) != tc.noKept || (!tc.noKept && got.NoKept != "") {
+				t.Fatalf("the target says %q of keeping sessions, want kept none %v", got.NoKept, tc.noKept)
+			}
+		})
+	}
+}
+
+// A RELAUNCH'S PROBE ASKS EVERY MEMBER OF THE CHAIN, never one picked: the
+// launch picks its member once, as it launches, and a member's plan can be
+// spent or come back between the probe and that pick, so the briefs that
+// continue a session are written wherever some member restores it — a Claude
+// Code session for a chain whose Claude Code plan is spent now — and the
+// reason where none drives the harness that wrote it says so.
+//
+// Mutation: ask only the member a launch would pick now, and the spent plan's
+// session reads as one no member continues.
+func TestARelaunchsProbeAsksEveryMemberOfTheChain(t *testing.T) {
+	t.Parallel()
+	claude := sandbox.SessionArchive{Harness: "claude-code", SessionID: "s-1", Format: sandbox.FakeArchiveFormat}
+	for name, tc := range map[string]struct {
+		members  []chainMember
+		restores bool
+		why      string
+	}{
+		"a spent plan of the session's harness behind another": {restores: true,
+			members: []chainMember{
+				{key: "plan", agent: "claude-code", model: "opus", spent: true},
+				{key: "oc", agent: "opencode", model: "anthropic/claude-sonnet-5"},
+			}},
+		"no member of the session's harness": {why: "no member of the seat's executor chain runs claude-code",
+			members: []chainMember{{key: "oc", agent: "opencode", model: "anthropic/claude-sonnet-5"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, seat := chainCompany(t, tc.members...)
+			_, runners := launchRigRestoring(t, c, bridgeFor(t, mcpbridge.Options{
+				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+			}), &keptLog{rows: map[string]executordomain.Session{}, archives: map[string][]byte{}})
+			for _, r := range runners {
+				r.Carries = true
+			}
+			restores, err := c.chainRestores(seat, c.catalogue)
+			if err != nil {
+				t.Fatalf("chainRestores: %v", err)
+			}
+			ok, why := restores.Restores(claude)
+			if ok != tc.restores || !strings.Contains(why, tc.why) {
+				t.Fatalf("the chain restores the session %v (%q), want %v saying %q", ok, why, tc.restores, tc.why)
+			}
+		})
+	}
+}
+
+// A LAUNCH HOLDS ITS SESSION'S FLOOR TO THE MEMBER IT PICKS. The probe wrote the
+// briefs continuing a session some member of the chain restores; the launch
+// picks its member once, as it launches, and where that member runs another
+// harness than the one that wrote the session — its plan spent, or another's
+// back, since the probe — it continues none: the launch starts the run fresh,
+// held to the static floor rather than to a session it will not send, and
+// refused only where that floor does not fit.
+//
+// Mutation: reckon the floor before the pick, for the session the probe
+// answered, and the launch is refused on a floor its run never needed.
+func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
+	t.Parallel()
+	k := newKeptLaunch(t, 40000, 100000, 70000)
+	basis := k.l.ProbeSession(k.ctx)
+	if !basis.Continues() || basis.Harness != "claude-code" {
+		t.Fatalf("the probe answered %+v, want the kept Claude Code session", basis)
+	}
+	basis.Harness = "opencode"
+	decided, err := k.relaunch(t, basis, nil)
+	if err != nil {
+		t.Fatalf("a launch whose member runs another harness than the session's: %v, want it launched on "+
+			"the static floor", err)
+	}
+	if len(decided) != 1 || decided[0].Continues {
+		t.Fatalf("the runner was told %+v, want once: a session of its own", decided)
+	}
+	started := k.jobs.Started()
+	if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" {
+		t.Fatalf("the relaunch started with session %q and brief %q, want a session of its own on the "+
+			"fresh brief", last.Resume, last.Brief)
 	}
 }
 

@@ -839,16 +839,20 @@ func TestACutOffSessionIsHandedAgainTheNotesItsJobTookLast(t *testing.T) {
 // half a person's answer takes beside it. A live turn's kept capture the target's
 // runner restores continues in any box; one it does not — or one not kept — is
 // continued only in the box the run parked in, where the run holds that box and
-// names its session and the relaunch's member is of the box's harness in its
-// cell, the launch's own test of a box it continues in; anywhere else, not at
-// all — and only that, in a company that keeps no session. And it is
-// undecided, never a no, wherever a relaunch would not decide now either: a job
-// still working or being collected, a capture still being kept, and every
-// member of the seat's chain sitting out.
+// it ran the row's session, the relaunch's member is of the box's harness in its
+// cell, and a box on an engine host is on the host of the node holding the seat:
+// the launch's own tests of a box it continues in; anywhere else, not at all —
+// and only that, in a company that keeps no session. A lost job's box continues
+// nothing. And it is undecided, never a no, wherever a relaunch would not decide
+// now either: a job still working, or a claim whose read has not taken the job's
+// final capture, a capture still being kept, a target that cannot be said, a
+// round lost a second time, and a collected job's resume, which carries its
+// round on in its box only where its sign-in was replaced while it ran.
 //
-// Mutation: drop the parked box's half, read any undecided state as a no, or
-// let a box of another harness or cell count as the parked one, and a case goes
-// red.
+// Mutation: drop the parked box's half or any test of it — its host, the session
+// it ran — read any undecided state as a no, read a claim whose read took the
+// final capture as one still collecting, or let a box of another harness or
+// cell count as the parked one, and a case goes red.
 func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
@@ -858,11 +862,16 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 		ArchiveFormat: FakeArchiveFormat, Object: objstore.Object{Key: key, Size: 1}, LaunchSeq: 2, CaptureSeq: 1}
 	parked := func() PendingRun {
 		return PendingRun{TurnID: "t1", Status: StatusAwaiting, SandboxID: "box-1", Placement: string(Direct),
-			Harness: "claude-code", SessionID: "s-1", LaunchSeq: 2, Capture: &kept, Kept: &kept}
+			LaunchNode: "node-a", Harness: "claude-code", SessionID: "s-1", LaunchSeq: 2, Capture: &kept,
+			Kept: &kept}
 	}
-	target := RelaunchTarget{Harness: "claude-code", Placement: Direct, Restorer: fakeRestorer{}}
+	target := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
 	older := target
 	older.Restorer = fakeRestorer{why: "older than 2.1.300"}
+	moved := older
+	moved.Node = "node-b"
+	final := kept
+	final.Final = true
 	for name, tc := range map[string]struct {
 		run      func(*PendingRun)
 		target   RelaunchTarget
@@ -872,33 +881,52 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	}{
 		"its kept capture":  {target: target, decided: true, in: ContinuesInAnyBox},
 		"in its parked box": {target: older, decided: true, in: ContinuesInParkedBox, whyHolds: "older than"},
-		"its box reclaimed": {target: older, decided: true, whyHolds: "older than",
+		"its box reclaimed": {target: older, decided: true, whyHolds: "is gone",
 			run: func(r *PendingRun) { r.SandboxID = "" }},
-		"a member elsewhere": {decided: true, whyHolds: "older than",
-			target: RelaunchTarget{Harness: "claude-code", Placement: Container, Restorer: older.Restorer}},
-		"a member of another harness": {decided: true, whyHolds: "older than",
-			target: RelaunchTarget{Harness: "opencode", Placement: Direct, Restorer: older.Restorer}},
+		"a member elsewhere": {decided: true, whyHolds: "in the container cell",
+			target: RelaunchTarget{Harness: "claude-code", Placement: Container, Node: "node-a",
+				Restorer: older.Restorer}},
+		"a member of another harness": {decided: true, whyHolds: "launched on opencode",
+			target: RelaunchTarget{Harness: "opencode", Placement: Direct, Node: "node-a",
+				Restorer: older.Restorer}},
+		"a box on the host of a node that no longer holds the seat": {target: moved, decided: true,
+			whyHolds: "cannot continue in it"},
+		"a box that ran another session of the turn": {target: older, decided: true,
+			whyHolds: "another session of the turn", run: func(r *PendingRun) {
+				r.Launch.FreshSessionID, r.Launch.SessionStart = "f-1", SessionStartFresh
+			}},
+		"a lost job's box": {target: older, decided: true, whyHolds: "older than", run: func(r *PendingRun) {
+			r.Status, r.Launch.Collected, r.Lost = StatusRunning, true, &JobLoss{Cause: LossBoxGone}
+		}},
 		"a job still running": {target: target, whyHolds: "still working",
 			run: func(r *PendingRun) { r.Status, r.LaunchSeq = StatusRunning, 3 }},
-		"a claim under way": {target: target, whyHolds: "being collected",
+		"a claim still collecting": {target: target, whyHolds: "being collected",
 			run: func(r *PendingRun) { r.Status = StatusResumed }},
+		"a claim whose read took the final capture": {target: target, decided: true, in: ContinuesInAnyBox,
+			run: func(r *PendingRun) { r.Status, r.Capture, r.Kept = StatusResumed, &final, &final }},
 		"a collected job held": {target: target, decided: true, in: ContinuesInAnyBox,
 			run: func(r *PendingRun) { r.Status, r.Launch.Collected = StatusRunning, true }},
+		"a collected job's resume, its capture no other box continues": {target: older, whyHolds: "sign-in",
+			run: func(r *PendingRun) { r.Status, r.Launch.Collected = StatusRunning, true }},
+		"a round lost a second time": {target: target, whyHolds: "lost a second time", run: func(r *PendingRun) {
+			r.Status, r.Launch.Collected, r.RoundLosses = StatusRunning, true, 1
+			r.Lost = &JobLoss{Cause: LossBoxGone}
+		}},
 		"a capture being kept": {target: target, whyHolds: "still being kept", run: func(r *PendingRun) {
 			begun := kept
 			begun.CaptureSeq, begun.State, begun.At = 2, CaptureBegun, now.Add(-time.Second)
 			r.Capture = &begun
 		}},
-		"every member sitting out": {whyHolds: "sitting out",
-			target: RelaunchTarget{Waiting: true, Why: "every member is sitting out its plan"}},
+		"a target that cannot be said": {whyHolds: "sitting out",
+			target: RelaunchTarget{Undecided: true, Why: "every member is sitting out its plan"}},
 		"no member at all": {decided: true, whyHolds: "no runner member",
 			target: RelaunchTarget{Why: "the seat's chain has no runner member"}},
 		"a decided ending": {target: target, decided: true, whyHolds: "is ending",
 			run: func(r *PendingRun) { r.Ending = &RecordedEnding{ID: "ending-1"} }},
 		"a company that keeps no session": {decided: true, in: ContinuesInParkedBox,
 			whyHolds: "keeps no executor session",
-			target: RelaunchTarget{Harness: "claude-code", Placement: Direct, Restorer: fakeRestorer{},
-				NoKept: NoKeptSession}},
+			target: RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a",
+				Restorer: fakeRestorer{}, NoKept: NoKeptSession}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -918,6 +946,45 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 				t.Fatalf("ReadContinuityOf = %+v, want no reason beside a session continued in any box", got)
 			}
 		})
+	}
+}
+
+// A ROW IS READ AGAIN AS A RELAUNCH READS IT ONLY WHERE THAT CAN CHANGE ITS
+// ANSWER: where the decision reaches the row's capture and the row names
+// another than the one its run's record keeps — a copy of the log behind the
+// record — never where it names the kept one, which decides as the relaunch's
+// read would, nor where the job still works, its capture is still being kept,
+// or its turn has ended, which decide without the row's capture.
+//
+// Mutation: read every live row again, or none, and a case goes red.
+func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 2, State: CaptureLanded, At: now}
+	run := func() *PendingRun {
+		return &PendingRun{TurnID: "t1", Status: StatusAwaiting, LaunchSeq: 2, Capture: &kept, Kept: &kept}
+	}
+	naming := func(capture int64) executordomain.Session {
+		return executordomain.Session{Handle: "swe", Turn: "t1", LaunchSeq: 2, CaptureSeq: capture}
+	}
+	ended := naming(1)
+	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	working := run()
+	working.Status, working.LaunchSeq = StatusRunning, 3
+	for name, tc := range map[string]struct {
+		row   executordomain.Session
+		run   *PendingRun
+		again bool
+	}{
+		"a row behind its run's record":    {row: naming(1), run: run(), again: true},
+		"a row naming the kept capture":    {row: naming(2), run: run()},
+		"a row whose job is still working": {row: naming(1), run: working},
+		"an ended turn's row":              {row: ended, run: run()},
+		"a row whose run is over":          {row: naming(1)},
+	} {
+		if got := RereadsRow(tc.row, tc.run, now); got != tc.again {
+			t.Errorf("%s: read again %v, want %v", name, got, tc.again)
+		}
 	}
 }
 

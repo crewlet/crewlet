@@ -212,19 +212,31 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 			"seat, so a bridged call would have nobody to act as; this is an assembly " +
 			"fault in the runner, not a setting")
 	}
+	// THE MEMBER, PICKED ONCE AND FIRST ([agentLauncher.member]): a session is
+	// continued only by the harness that wrote it, so which member the launch
+	// takes decides what its run sends first, and the floor below is reckoned
+	// for this pick and no other — never for the member the runner's probe
+	// asked about, whose plan may have been spent or come back since. Its
+	// hand-offs are announced once the seat's budget lets the launch go on.
+	var handoffs []chain.Fallback
+	member, agent, pickErr := l.member(ctx, manager, func(f chain.Fallback) { handoffs = append(handoffs, f) })
 	// THE FLOOR OF WHAT THIS LAUNCH SENDS FIRST ([launchFloor]): a launch that
 	// may continue a session sends its context before its brief, so its floor
 	// is the session's context with the brief that continues it, never the
 	// static one alone — and one no window of the seat's budget can ever
 	// carry continues nothing, its run starting a session of its own on the
 	// static floor ([agentLauncher.continuedFloor]).
-	req, floor := l.continuedFloor(ctx, req)
+	req, floor := l.continuedFloor(ctx, req, agent)
 	if err := executorHeadroom(ctx, e.remainingFor(company, handle), floor); err != nil {
 		return runner.Launched{}, err
 	}
-	member, agent, err := l.member(ctx, manager, req.OnFallback)
-	if err != nil {
-		return runner.Launched{}, err
+	if req.OnFallback != nil {
+		for _, f := range handoffs {
+			req.OnFallback(f)
+		}
+	}
+	if pickErr != nil {
+		return runner.Launched{}, pickErr
 	}
 
 	// THE CELL THE RUN GOES TO ([memberCell]), because it decides which
@@ -320,7 +332,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
 	// a fallback launch on a later member is judged on that member's entry,
 	// never the chain's head.
-	if err = sandboxCredentials(agent, member.Key, handle, spec.Placement, run.env); err != nil {
+	if err := sandboxCredentials(agent, member.Key, handle, spec.Placement, run.env); err != nil {
 		return runner.Launched{}, err
 	}
 
@@ -477,20 +489,36 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	return runner.Launched{LaunchID: result.LaunchID, BridgeFrom: bridgeFrom}, nil
 }
 
-// continuedFloor is req as the seat's budget lets it be launched, and the floor
-// it is held to ([launchFloor]): the larger of the static floor and, for each
-// session the launch may continue, that session's context with the brief that
-// continues it — the turn's kept capture, in the longer of its two briefs,
-// since which box the launch gets is the launch's to learn, and the job
-// before's own copy in its box with the brief that carries it on. A context no
-// capture measured is unknown, and holds the launch to the static floor.
+// continuedFloor is req as the seat's budget lets it be launched on member — the
+// member the launch picked, nil where it could pick none — and the floor it is
+// held to ([launchFloor]): the larger of the static floor and, for each session
+// the launch may continue, that session's context with the brief that continues
+// it — the turn's kept capture, in the longer of its two briefs, since which
+// box the launch gets is the launch's to learn, and the job before's own copy
+// in its box with the brief that carries it on. A context no capture measured
+// is unknown, and holds the launch to the static floor.
+//
+// THE KEPT CAPTURE ONLY WHERE MEMBER RUNS THE HARNESS THAT WROTE IT
+// ([runner.SessionBasis.Harness]): a session is continued only by its own
+// harness, so a launch on a member running another starts a session of its own,
+// and is held to the static floor rather than to a session it will not send.
 //
 // A FLOOR NO WINDOW CAN EVER LEAVE ROOM FOR ([launchFloor.fits]) is not waited
 // for: req goes without the sessions it would continue, its run starts a
 // session of its own on the static floor, which config already holds every
 // ceiling above, and the line says why. A seat with no capped window carries
 // any session.
-func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunRequest) (runner.AgentRunRequest, launchFloor) {
+func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunRequest,
+	member *harness.Provider) (runner.AgentRunRequest, launchFloor) {
+
+	if s := req.Session; s != nil && member != nil && s.Basis.Harness != member.Harness() {
+		log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
+			"turn_id", l.turn.RunID, "detail", fmt.Sprintf("the session was written by %s, and the member "+
+				"the launch picked runs %s: a session is continued only by the harness that wrote it",
+				s.Basis.Harness, member.Harness()),
+			"outcome", "the run starts a session of its own")
+		req.Session = nil
+	}
 	static := staticFloor(l.company)
 	floor := static
 	if s := req.Session; s != nil && s.Basis.Continues() {

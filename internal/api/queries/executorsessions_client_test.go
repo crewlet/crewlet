@@ -54,7 +54,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	reads := &stubSessions{rows: []executordomain.Session{read, missing, live, continued}}
 	sources := sessionSources(t, reads, store)
 	sources.SessionRuns = &stubRuns{runs: []sandbox.PendingRun{continuedRun}}
-	sources.RelaunchTargets = stubTargets{"ana": claudeTarget()}
+	sources.RelaunchTargets = targetOf(claudeTarget())
 	r := queries.NewRegistry()
 	queries.Register(r, sources)
 

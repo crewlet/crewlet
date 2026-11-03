@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // Lost is a run whose job was LOST with the host it ran on before it finished:
@@ -154,7 +155,7 @@ func (a *Asked) what() string                              { return "carrying on
 func (l *Lost) session() string                         { return "" }
 func (l *Lost) continuation(provenance.Boundary) string { return l.Continuation() }
 func (l *Lost) reseed(provenance.Boundary) string       { return l.Reseed() }
-func (l *Lost) keeps() bool                             { return l.Losses <= 1 }
+func (l *Lost) keeps() bool                             { return sandbox.KeptAfterLoss(l.Losses) }
 func (l *Lost) branch() string                          { return "" }
 func (l *Lost) what() string                            { return "carrying on the round its host lost" }
 

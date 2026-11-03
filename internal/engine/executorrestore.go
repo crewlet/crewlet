@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -25,11 +26,16 @@ import (
 //
 // WHICH SESSION A RELAUNCH CONTINUES is asked before its runner builds the run's
 // surface and briefs ([agentLauncher.ProbeSession]): the kept capture of the job
-// the relaunch follows, where the runner of the member the launch would pick
-// restores it. WHETHER THE SEAT'S BUDGET CAN CARRY IT is the launch's to decide,
-// once the briefs that continue it exist ([agentLauncher.launch], [launchFloor]):
-// the context the session sends first is known here, and the brief beside it
-// only once the runner has written it.
+// the relaunch follows, where the runner of a member of the seat's chain restores
+// it. WHICH MEMBER TAKES IT, AND WHETHER THE SEAT'S BUDGET CAN CARRY IT, are the
+// launch's to decide, once the briefs that continue it exist
+// ([agentLauncher.launch], [launchFloor]): the member is picked once, as it
+// launches, and the context the session sends first is known here, the brief
+// beside it only once the runner has written it.
+//
+// WHAT A READER OF A SESSION IS TOLD A RELAUNCH WOULD DO is asked of the node
+// holding the seat ([Engine.RelaunchTarget]): the member that node would launch
+// a relaunch on now, as its own bench of spent plans has it.
 
 // executorRestore is the engine's part of continuing a turn's kept session
 // ([sandbox.SessionRestore]).
@@ -72,15 +78,20 @@ func (r executorRestore) OpenSpooled(row executordomain.Session, sealed io.Reade
 
 // ProbeSession answers which kept session of the turn a relaunch continues
 // ([runner.SessionProber]): the kept capture of the job the relaunch follows,
-// as [sandbox.Coordinator.ContinuedCapture] decides for the runner of the
-// member the launch would pick — or why it continues none, which is logged —
-// and either way what that job's session's last request carried, which the
-// launch's floor is made of.
+// as [sandbox.Coordinator.ContinuedCapture] decides it for the seat's chain —
+// where the runner of a member that could take the launch restores it — or why
+// it continues none, which is logged; and either way what that job's session's
+// last request carried, which the launch's floor is made of.
 //
-// THE MEMBER IS THE ONE THE LAUNCH WOULD PICK, without the hand-offs the pick
-// announces: the first of the chain's runner members not sitting out. A member
-// that starts sitting out between this and the launch is the launch's to pass
-// over, and a session its runner cannot restore is started fresh by the launch.
+// ANY MEMBER OF THE CHAIN, never one picked here: the launch picks its member
+// once, as it launches ([agentLauncher.member]), and a member's plan can be
+// spent or come back between this and that pick. Asked for one member, the
+// probe answered for a member the launch then passed over — holding the launch
+// to the floor of a session it would start fresh, or writing no continuation
+// for a session its member could have taken up. So the briefs that continue the
+// session are written wherever some member restores it, and the launch hands
+// them on only where the member it picked runs the harness that wrote the
+// session ([SessionBasis.Harness], [agentLauncher.continuedFloor]).
 func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
 	basis := l.probeSession(ctx)
 	if !basis.Continues() {
@@ -98,54 +109,122 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 	if rt == nil || rt.coordinator == nil || manager == nil {
 		return runner.SessionBasis{Why: "this node has no sandbox runtime for this company"}
 	}
-	target := l.company.relaunchTarget(l.seat, manager)
-	if target.Restorer == nil {
-		return runner.SessionBasis{Why: target.Why}
+	restores, err := l.company.chainRestores(l.seat, manager)
+	switch {
+	case err != nil:
+		return runner.SessionBasis{Why: err.Error()}
+	case len(restores) == 0:
+		// NOTHING TO WAIT FOR: no member could take a session up, whatever
+		// the job's capture comes to.
+		return runner.SessionBasis{Why: "no member of the seat's executor chain continues a session " +
+			"carried between boxes"}
 	}
-	continued, why := rt.coordinator.ContinuedCapture(ctx, l.turn.RunID, target.Restorer)
+	continued, why := rt.coordinator.ContinuedCapture(ctx, l.turn.RunID, restores)
 	if why != "" {
 		return runner.SessionBasis{Why: why, ContextTokens: continued.Context}
 	}
 	captured := continued.Capture
 	return runner.SessionBasis{
 		LaunchSeq: captured.LaunchSeq, CaptureSeq: captured.CaptureSeq, SessionID: continued.Row.SessionID,
+		Harness:   continued.Row.Harness,
 		BridgeSeq: captured.BridgeSeq, BridgeOpen: captured.BridgeOpen, NoteCursor: captured.NoteCursor,
 		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
 	}
 }
 
-// relaunchTarget is what a relaunch of seat's turn would be launched on
-// ([sandbox.RelaunchTarget]): the first member of the seat's executor chain
-// with an in-box runner that is not sitting out its plan — the member the
-// launch's own pick takes ([agentLauncher.member]), without the hand-offs the
-// pick announces — the cell its run lands in, and its runner, as it takes up a
-// session carried between boxes; or why there is none.
-//
-// THE ONE PICK, asked by the relaunch's probe of the session it continues
-// ([agentLauncher.ProbeSession]) and by every reader of whether a relaunch
-// would ([Engine.RelaunchTarget]), so a row of a seat's sessions is decided by
-// the runner its relaunch would take it up with — never by the runner of the
-// harness that wrote it, which a seat whose chain moved to another harness, or
-// whose first member's plan is spent, would not launch on. A member that starts
-// sitting out between this and the launch is the launch's to pass over, and a
-// session its runner cannot restore is started fresh by the launch.
-func (c *Company) relaunchTarget(seat *org.Role, manager *sandbox.Manager) sandbox.RelaunchTarget {
+// chainRestores is whether some member of seat's executor chain that a launch
+// can take restores a session ([sandbox.ArchiveRestorer]): the runner of each
+// member with an in-box runner, sitting out its plan or not — which one takes
+// the launch is the launch's pick, made as it launches.
+func (c *Company) chainRestores(seat *org.Role, manager *sandbox.Manager) (chainRestorers, error) {
 	members, err := executorRunners(c, seat, manager)
 	if err != nil {
-		return sandbox.RelaunchTarget{Why: err.Error()}
+		return nil, err
+	}
+	var out chainRestorers
+	for _, m := range members {
+		agent, ok := m.Provider.(*harness.Provider)
+		if !ok {
+			continue
+		}
+		run, err := manager.RunnerFor(agent.Harness())
+		if err != nil {
+			continue
+		}
+		restorer, ok := run.(sandbox.ArchiveRestorer)
+		if !ok {
+			continue
+		}
+		out = append(out, harnessRestorer{harness: agent.Harness(), restorer: restorer})
+	}
+	return out, nil
+}
+
+// harnessRestorer is one member's runner as it restores a session, and the
+// harness it drives.
+type harnessRestorer struct {
+	harness  string
+	restorer sandbox.ArchiveRestorer
+}
+
+// chainRestorers is the runners of a seat's chain as one [sandbox.ArchiveRestorer]:
+// an archive is restored where the runner of a member driving the harness that
+// wrote it restores it — a session is continued only by its own harness — and
+// the reason is that runner's where none does.
+type chainRestorers []harnessRestorer
+
+var _ sandbox.ArchiveRestorer = chainRestorers(nil)
+
+// Restores answers [sandbox.ArchiveRestorer] for the chain.
+func (c chainRestorers) Restores(archive sandbox.SessionArchive) (bool, string) {
+	why := ""
+	for _, r := range c {
+		if r.harness != archive.Harness {
+			continue
+		}
+		ok, refused := r.restorer.Restores(archive)
+		if ok {
+			return true, ""
+		}
+		why = refused
+	}
+	if why == "" {
+		why = fmt.Sprintf("no member of the seat's executor chain runs %s, which wrote the session: a "+
+			"session is continued only by the harness that wrote it", archive.Harness)
+	}
+	return false, why
+}
+
+// relaunchTarget is what a relaunch of seat's turn would be launched on now,
+// as this node picks it ([sandbox.RelaunchTarget]): the first member of the
+// seat's executor chain with an in-box runner that is not sitting out its plan
+// on this node — the member the launch's own pick takes
+// ([agentLauncher.member]), without the hand-offs the pick announces — the cell
+// its run lands in, this node, and its runner as it restores a session carried
+// between boxes; or why there is none.
+//
+// THIS NODE'S PICK, and so the one a reader of a relaunch is handed only where
+// this node holds the seat: which members sit out is this node's own bench, and
+// the relaunch is decided on the node holding the seat ([Engine.RelaunchTarget]
+// asks that node).
+func (c *Company) relaunchTarget(seat *org.Role, manager *sandbox.Manager, node string) sandbox.RelaunchTarget {
+	members, err := executorRunners(c, seat, manager)
+	if err != nil {
+		return sandbox.RelaunchTarget{Node: node, Why: err.Error()}
 	}
 	for _, m := range members {
 		agent, ok := m.Provider.(*harness.Provider)
 		if !ok || agent.SittingOut() != nil {
 			continue
 		}
-		target := sandbox.RelaunchTarget{Harness: agent.Harness(), Placement: memberCell(c, manager, m.Key)}
+		target := sandbox.RelaunchTarget{Harness: agent.Harness(), Placement: memberCell(c, manager, m.Key),
+			Node: node}
 		run, err := manager.RunnerFor(agent.Harness())
 		if err != nil {
 			target.Why = err.Error()
 			return target
 		}
-		restorer, ok := run.(sandbox.SessionRestorer)
+		restorer, ok := run.(sandbox.ArchiveRestorer)
 		if !ok {
 			target.Why = agent.Harness() + "'s runner continues no session carried between boxes"
 			return target
@@ -153,29 +232,30 @@ func (c *Company) relaunchTarget(seat *org.Role, manager *sandbox.Manager) sandb
 		target.Restorer = restorer
 		return target
 	}
-	return sandbox.RelaunchTarget{Waiting: true, Why: "every member of the seat's executor chain is " +
-		"sitting out its plan, and which of them takes a relaunch decides what it continues"}
+	return sandbox.RelaunchTarget{Node: node, Undecided: true, Why: "every member of the seat's executor " +
+		"chain is sitting out its plan on the node holding the seat, and which of them takes a relaunch " +
+		"decides what it continues"}
 }
 
-// RelaunchTarget is what a relaunch of the seat handle's turn would be launched
-// on, as the company this node runs picks it ([Company.relaunchTarget]) — what
-// the read surface hands [sandbox.ReadContinuityOf] for each row of a seat's
-// sessions (internal/api/queries' `continuable`), so the row is decided by the
-// member and the runner a relaunch would take — and, where the company keeps no
-// session, that a relaunch continues no kept one, by the keep the coordinator's
-// launch asks ([executorKeep.Keeps]). A node running no company, or none that
-// reaches a sandbox cell, and a handle the company holds no seat under, have no
-// member to say anything of, which the target says.
-func (e *Engine) RelaunchTarget(handle string) sandbox.RelaunchTarget {
+// localRelaunchTarget is what a relaunch of the seat handle's turn would be
+// launched on, as the company this node runs picks it now ([Company.relaunchTarget])
+// — and, where the company keeps no session, that a relaunch continues no kept
+// one, by the keep the coordinator's launch asks ([executorKeep.Keeps]). A node
+// running no company, or none that reaches a sandbox cell, and a handle the
+// company holds no seat under, have no member to say anything of, which the
+// target says.
+func (e *Engine) localRelaunchTarget(handle string) sandbox.RelaunchTarget {
 	company := e.Company()
 	if company == nil || company.catalogue == nil || company.Org == nil {
-		return sandbox.RelaunchTarget{Why: "this node runs no company whose seats launch in a box"}
+		return sandbox.RelaunchTarget{Node: e.id, Why: "the node holding the seat runs no company whose " +
+			"seats launch in a box"}
 	}
 	seat := company.Org.Role(handle)
 	if seat == nil {
-		return sandbox.RelaunchTarget{Why: "the company this node runs holds no seat " + handle}
+		return sandbox.RelaunchTarget{Node: e.id, Why: "the company the node holding the seat runs holds " +
+			"no seat " + handle}
 	}
-	target := company.relaunchTarget(seat, company.catalogue)
+	target := company.relaunchTarget(seat, company.catalogue, e.id)
 	if !(executorKeep{engine: e}).Keeps() {
 		target.NoKept = sandbox.NoKeptSession
 	}

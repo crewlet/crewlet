@@ -265,6 +265,12 @@ type SessionBasis struct {
 	LaunchSeq, CaptureSeq int64
 	SessionID             string
 
+	// Harness is the harness that wrote the session, the only one that
+	// continues it: a launch hands the continuation on only where the member
+	// it picks as it launches runs it, and starts a session of its own where
+	// that member runs another.
+	Harness string
+
 	// BridgeSeq, BridgeOpen and NoteCursor are what the session accounts
 	// for — the highest bridged call it had been answered, the places below
 	// that held no call yet when it was captured, and the last note read —
@@ -298,10 +304,11 @@ type SessionBasis struct {
 func (b SessionBasis) Continues() bool { return b.CaptureSeq > 0 }
 
 // SessionProber is an [AgentLauncher] that says, before a relaunch writes its
-// run's briefs, which kept session of the turn the launch will continue: the
-// kept capture of the job the relaunch follows where its harness and format
-// let the launcher's runner restore it, or why not. Whether the seat's budget
-// can carry it is the launch's to decide, once the briefs exist.
+// run's briefs, which kept session of the turn the launch may continue: the
+// kept capture of the job the relaunch follows where its harness and format let
+// a runner the launch can pick restore it, or why not. Which member the launch
+// picks, and whether the seat's budget can carry the session, are the launch's
+// to decide, once the briefs exist.
 //
 // ASKED FIRST because what the run is told depends on it: a continued session
 // is told what it lacks rather than everything. OPTIONAL: a launcher without

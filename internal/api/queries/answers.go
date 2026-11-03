@@ -336,11 +336,11 @@ type Sources struct {
 	// SessionRuns and RelaunchTargets are what a session's row is told
 	// whether a relaunch continues it by (`continuable`), beside the row
 	// itself: the turns' run records in the fleet's coordination store, and
-	// the member a relaunch of the seat's turn would be launched on, by the
-	// engine's one pick of it — the sources a relaunch decides on (see
-	// executorsessions.go). Nil leaves every live turn's row undecided, said
-	// as such: a node that cannot read what a relaunch reads cannot say what
-	// a relaunch would do.
+	// the member a relaunch of the seat's turn would be launched on, as the
+	// node holding the seat picks it — the sources a relaunch decides on
+	// (see executorsessions.go). Nil leaves every live turn's row undecided,
+	// said as such: a node that cannot read what a relaunch reads cannot say
+	// what a relaunch would do.
 	SessionRuns     SessionRuns
 	RelaunchTargets RelaunchTargets
 

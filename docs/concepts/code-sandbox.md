@@ -607,7 +607,7 @@ Whether a restore succeeds is the box's to find out, as its run starts, and the 
 
 A continued run sends its session's whole context again before it reads a word of its brief, and every request it makes carries that context — mostly served from the prompt cache, and every token of it counted against the seat's windows, the cached share included ([Cache share](../guides/budgets-and-spend.md#cache-share)). So:
 
-- **Its launch's floor** is the larger of `turn_engine.executor_min_budget_tokens` and the session's context with the brief that continues it: the whole input of the session's last request, cache included, read off the session's own transcript as it was captured (Claude Code's last main-thread assistant message's usage; OpenCode's last settled assistant message's tokens), and the estimate of the longer of its two briefs, since which box the launch gets is the launch's to learn. That holds for the job before's own copy in its box as much as for its kept capture — its context is what the job's newest capture measured, kept or not — and a session no capture measured (keeping switched off) has no known context, its launch held to the floor alone. A continued launch is a relaunch, a resumed segment's, so one refused below its floor is held — or, an answer's, turned back — on that figure, never parked: the dispatcher's park holds a seat's mail for its turns' first launches, which continue no session. Its reason says what the figure is made of ([Budgets and Spend](../guides/budgets-and-spend.md#budget-windows)).
+- **Its launch's floor** is the larger of `turn_engine.executor_min_budget_tokens` and the session's context with the brief that continues it: the whole input of the session's last request, cache included, read off the session's own transcript as it was captured (Claude Code's last main-thread assistant message's usage; OpenCode's last settled assistant message's tokens), and the estimate of the longer of its two briefs, since which box the launch gets is the launch's to learn. That holds for the job before's own copy in its box as much as for its kept capture — its context is what the job's newest capture measured, kept or not — and a session no capture measured (keeping switched off) has no known context, its launch held to the floor alone. **The floor is the member's the launch picks**: the launch picks its member of the seat's chain once, as it launches — the first not sitting out its plan — before it reckons the floor, and a kept session written by another harness than that member's is started fresh, held to the floor alone; the briefs that continue it were written beforehand wherever some member of the chain could take it up, since a plan can be spent, or come back, between the two. A continued launch is a relaunch, a resumed segment's, so one refused below its floor is held — or, an answer's, turned back — on that figure, never parked: the dispatcher's park holds a seat's mail for its turns' first launches, which continue no session. Its reason says what the figure is made of ([Budgets and Spend](../guides/budgets-and-spend.md#budget-windows)).
 - **Its context is bounded by its harness's compaction.** Every Claude Code run compacts its conversation at **100,000 tokens** (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, pinned by the wrapper over whatever the seat, the image or a profile set, with the variables that would switch compaction off unset), so no request of a run, or of a run that continues its session, carries much more. OpenCode compacts near its model's own window — once a conversation reaches the window less 15% of it, at least 16,000 tokens, on 2.2; less 10% on 2.0 — which the engine does not move: OpenCode's setting for it (`compaction.buffer`) is a share or a count of the model's window, which the engine does not know, and a count at or past the window has 2.0 compact on every request. So a continued OpenCode run's request carries up to about its model's window less that share. A session past the window — an OpenCode one, or a Claude Code one whose repository switched its compaction off — is continued wherever the seat's budget can carry it, its floor saying so.
 
 **The 100,000 is a judgement**, and the knob it trades on is cost against detail. A continued Claude Code run's every request carries up to the window, so the window bounds what one request can charge — four times the default floor — where a model's own window, a million tokens on some, would let one carry ten times that; a Claude Code run that continues a session and makes *n* requests is charged up to about *n* × 100,000 input tokens, most of them cache reads, and an OpenCode run up to *n* times its model's compaction point. A smaller window compacts sooner and charges less; a larger one keeps more of the session verbatim. 100,000 is the least Claude Code accepts, and a coding run's durable state is its checkout and its turn's records rather than its transcript, so a session compacted there keeps the work in hand and its own summary of the rest.
@@ -1320,37 +1320,58 @@ is still kept.
 **Each says whether a relaunch would continue it** (`continuable`), where
 (`continues_in`), and where not, why (`not_continuable`), decided by the one
 decision a relaunch takes ([above](#a-relaunch-continues-the-turns-session))
-over what a relaunch reads: the turn's row of the executor log, read at the
-level a relaunch reads it (`linearizable`, read again where the page was read
-below it, since a copy of the log behind the run's record would read a capture
-a relaunch continues as one the log no longer names), the turn's run record in
-the coordination store and the job that record names as the one a relaunch
-would follow, and the member of the seat's executor chain a relaunch would be
-launched on — the first not sitting out its plan, by the same pick the
-relaunch's own probe makes — with the cell its run lands in and its runner.
+over what a relaunch reads: the turn's row of the executor log as a relaunch
+reads it, the turn's run record in the coordination store and the job that
+record names as the one a relaunch would follow, and the member of the seat's
+executor chain a relaunch would be launched on now — the first not sitting out
+its plan — with the cell its run lands in and its runner. **The member is the
+one the node holding the seat would pick**: which members sit out a spent plan
+is what that node's own calls have met, and which company revision says
+sessions are kept is the revision it runs, and a relaunch is decided there. So
+the node answering asks it — itself where it holds the seat, and otherwise the
+node the seat's lease names, once a page — and is answered with that node's
+pick and whether that member's runner restores each session the page holds.
 `any_box` where the turn is live and not ending, the newest capture of that job
 was kept and is the one the row names, and that runner restores its harness,
-format and release. `parked_box` where that is not so but a person's answer
-would still carry the turn's parked run on in the box it parked in — the run
-still holds the box and names its session, and the member is of the box's
-harness in its cell — which continues the session that box holds there and
-nowhere else, for as long as the box is held; `not_continuable` then says why
-no other box would. As far as the engine can know before a box is chosen, and
-no further: whether the box a relaunch gets runs a harness release that can
+format and release; a round whose job was lost a second time is carried on in a
+session of its own, which a reader is told cannot be said where a review of the
+work it submitted may yet continue it. `parked_box` where that is not so but a
+person's answer would still carry the turn's parked run on in the box it parked
+in — the run still holds the box, the box ran the row's own session (not one it
+started in that one's place, and not one whose job's box never said which of
+the two it ran), the member is of the box's harness in its cell, and a box on
+the engine host is on the host of the node holding the seat, which alone can
+continue in it — which continues the session that box holds there and nowhere
+else, for as long as the box is held; `not_continuable` then says why no other
+box would. A box that cannot be continued in says why, beside why the kept
+capture is not continued. As far as the engine can know before a box is chosen,
+and no further: whether the box a relaunch gets runs a harness release that can
 take the session up, and whether the seat's budget can carry its context, are
 the launch's to find out, and no row says them. An ended turn's session is
 never continuable: no later turn continues a session yet; and a turn whose
 run's ending is decided is ending, from the decision on. **An unknown is never
 a no**: `continuable` is null, with its reason, where the run record or the
 row at the relaunch's level could not be read, and where a relaunch would not
-decide now either — the job it would follow still working or being collected,
-whose session the read that collects it takes; that job's capture still being
-kept; every member of the seat's chain sitting out its plan. A page reads the
+decide now either — the job it would follow still working, or a claim on it
+whose read has not yet taken its final capture (a claim whose read has is
+decided as any other, its review included); that job's capture still being
+kept; what a relaunch is launched on not to be said (every member of the
+seat's chain sitting out its plan, no node holding the seat, the node holding
+it not answering within two seconds); and a relaunch only the resume of a
+collected job decides — whether its round is carried on in its box, which it
+is where the job's sign-in was replaced while it ran. A page reads the
 coordination store once, one listing of the seat's live runs — and one turn's
 record alone for a live row the listing does not hold, a record of a status
 this build does not know or one it could not decode — and not at all where
 every turn on it has ended; where the store does not answer, a live turn's row
-says so, and the page is answered all the same.
+says so, and the page is answered all the same. **A row is read again at the
+relaunch's level** (`linearizable`) only where the page was read below it and
+the row names another capture than the one its run's record keeps — a copy of
+the log behind the record, which would read a capture a relaunch continues as
+one the log no longer names: a read at that level costs a barrier on the
+executor log, and a row naming the kept capture decides as one read there
+would. A transcript's later pages (read with a `cursor`) leave `continuable`
+null: its first page says it.
 
 **One session opens as its transcript**
 ([`GET /agents/{id}/sessions/{turn_id}`](../reference/api-endpoints.md#get-agentsidsessionsturn_id)):
