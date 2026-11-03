@@ -173,7 +173,8 @@ each continue their own sessions, never each other's.
 A seat's sessions are its **Sessions**, under its profile's Memory tab
 ([A seat's profile](../reference/dashboard-design.md#a-seats-profile)), and
 [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions):
-one row per turn from its first launch on, the latest begun first, with how it
+one row per turn, from its first launch where the turn read its conversation
+and from its first capture otherwise, the latest begun first, with how it
 ended, what it was asked, whether its session is kept and, where not, why —
 and **which launch would continue it** (`continued_by`: `relaunch` for a live
 turn's, `next_turn` for an ended turn's), whether it would and where, decided

@@ -152,11 +152,13 @@ const SESSION_DETAIL_ID = "prof-session-transcript";
 /**
  * How often the list is asked again while it is on screen.
  *
- * A MINUTE: a row appears when a turn's run is collected and changes when the
- * turn ends — minutes apart on a busy seat — and nothing pushes either. The
- * transcript is not polled at all, nor asked again on a reconnect: a session's
- * archive changes only with a new capture, which the list shows and the reader
- * is offered, and how its turn ended is the list's row's.
+ * A MINUTE: a row appears at a turn's first launch where the turn read its
+ * conversation, and at its first capture otherwise, and changes with each
+ * capture and when the turn ends — minutes apart on a busy seat — and nothing
+ * pushes any of it. The transcript is not polled at all, nor asked again on a
+ * reconnect: a session's archive changes only with a new capture, which the
+ * list shows and the reader is offered, and how its turn ended is the list's
+ * row's.
  */
 const SESSIONS_POLL_MS = 60_000;
 
@@ -271,7 +273,7 @@ export function Sessions({ seat, now }: { seat: Seat; now: number }) {
                 size="compact"
                 icon={<SquareTerminalGlyph size={32} />}
                 title="No sessions recorded"
-                description="A turn's session appears here once its run is collected."
+                description="A turn appears here from its first launch where it read its conversation, and otherwise once its session is first kept or it ends."
               />
             )}
             {(sessions.more || sessions.paging || sessions.pageError) && (

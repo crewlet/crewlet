@@ -2182,7 +2182,11 @@ test("a seat no node holds says why its memory is empty", async () => {
 test("a seat with no executor sessions says so under its memory", async () => {
   mount("#/company/org/seats/swe?tab=memory", { answers: { agent_memory: memoryOf() } });
   expect(await screen.findByText("No sessions recorded")).toBeTruthy();
-  expect(screen.getByText("A turn's session appears here once its run is collected.")).toBeTruthy();
+  expect(
+    screen.getByText(
+      "A turn appears here from its first launch where it read its conversation, and otherwise once its session is first kept or it ends.",
+    ),
+  ).toBeTruthy();
   expect(askedFor("executor_sessions")[0]?.params).toMatchObject({ handle: "swe" });
 });
 
