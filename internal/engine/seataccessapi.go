@@ -204,7 +204,7 @@ func (a *SeatAccessAPI) HandIn(ctx context.Context, q setupapi.AccessQuery, hand
 			Remedy: "Try again in a moment"}
 	}
 	asks := map[string]seataccess.Ask{handle: {HandIn: value, Rotate: handed.Rotate, Lane: lane}}
-	if err := a.syncNow(ctx, q.Kind, by, asks, []string{handle}, nil); err != nil {
+	if err = a.syncNow(ctx, q.Kind, by, asks, []string{handle}, nil); err != nil {
 		return seataccess.HandedIn{}, err
 	}
 	// THE SYNC IS WHAT SEALED IT, and it refuses what changed since the check.
@@ -223,9 +223,9 @@ func (a *SeatAccessAPI) HandIn(ctx context.Context, q setupapi.AccessQuery, hand
 	// READ BACK WITH THE SEALED VALUE, so the answer already shows what the
 	// account holds besides it (a robot's older tokens). The seal stands
 	// either way; the next pass reads it again.
-	if err := a.syncNow(ctx, q.Kind, by, nil, []string{handle}, nil); err != nil {
+	if reread := a.syncNow(ctx, q.Kind, by, nil, []string{handle}, nil); reread != nil {
 		log.WarnContext(ctx, "seat_access_reread_deferred", "kind", q.Kind, "seat", handle,
-			"error", err.Error())
+			"error", reread.Error())
 	}
 	return handed, nil
 }
