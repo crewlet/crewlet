@@ -33,7 +33,7 @@ import (
 // a relaunch of a turn that has kept nothing continues the base, as that
 // relaunch's question decides it ([ReadContinuityOf], [TargetAsk]).
 
-// ConversationBaseMaxBytes bounds a frozen read as the run's record carries it,
+// ConversationBaseMaxBytes bounds the freeze as the run's record carries it,
 // as JSON: what [NewConversationBase] can make of any read the executor log
 // answers.
 //

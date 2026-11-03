@@ -418,7 +418,7 @@ create alone and kept by every reset), and the launch publishes the turn's
 operation the turn derives, asked for fifteen seconds on the launching frame: a
 begin the log has not held by then leaves the launch continuing no base, and one
 that lands later holds no longer than the turn's first capture or its end. Every
-capture of the turn carries the frozen read, so a capture made after a sibling
+capture of the turn carries the read its first launch froze, so a capture made after a sibling
 of the conversation ended still names the read the turn was handed.
 
 **The base is continued only while the turn's row holds it, and only in a box of

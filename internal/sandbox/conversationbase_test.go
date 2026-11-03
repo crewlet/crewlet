@@ -736,7 +736,7 @@ func mustKey(t *testing.T, s string) objstore.Key {
 	return key
 }
 
-// A FROZEN READ FITS ITS BOUND, whatever the log admits: the largest read a head
+// THE FREEZE FITS ITS BOUND, whatever the log admits: the largest read a head
 // can answer — the most turns it hands out and the most siblings it offers, each
 // a turn and an object, and a base whose every free-text field is at the log's
 // bound and escapes at JSON's worst — encodes within [ConversationBaseMaxBytes],
@@ -797,7 +797,7 @@ func TestAFrozenReadFitsItsBound(t *testing.T) {
 	case len(raw) > ConversationBaseMaxBytes:
 		t.Fatalf("the largest read encodes in %d bytes, past its bound of %d", len(raw), ConversationBaseMaxBytes)
 	}
-	t.Logf("the largest frozen read is %d bytes of %d", len(raw), ConversationBaseMaxBytes)
+	t.Logf("the largest freeze is %d bytes of %d", len(raw), ConversationBaseMaxBytes)
 
 	// ONLY WHAT THE BRIEF TOLD: the head and the newest ending, the rest left
 	// out by the brief's bound.
