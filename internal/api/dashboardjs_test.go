@@ -1635,7 +1635,17 @@ const (
 	// the tab loads in (271 bytes gzipped). The initial load did not grow:
 	// its files are the same bytes but for the chunk names they list. It
 	// moved down to 5455 KiB, the measured size's next KiB.
-	treeBudget = 5<<20 + 335<<10
+	// DigitalOcean (its catalogue entry, and the Set up sheet taught a token
+	// that is the agent's whole identity: the team to switch to, the name to
+	// type, and a numbered guide to the scope picker derived from the levels'
+	// grants and the lane's refused and unneeded scopes, with Regenerate Token
+	// on a rotate) took it from 5454.2 KiB to 5460.1 KiB (+5.9 KiB, 5992
+	// bytes): the integrations model chunk +5691 bytes (1705 bytes gzipped),
+	// the catalogue chunk +241 bytes, and 60 bytes across the settings and
+	// org chunks that import them. The initial load did not grow. 5461 KiB.
+	// Expo's story and builder facts, aligned with its hand-off, added 45
+	// bytes, which the same KiB holds.
+	treeBudget = 5<<20 + 341<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

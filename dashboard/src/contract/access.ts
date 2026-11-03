@@ -15,7 +15,9 @@
  * system_post_all_public"; Cloudflare's `read`, `operate` or `configure`,
  * Crewlet's own sets of permission groups; Expo's `viewer`, `runner`,
  * `developer` or `release_manager`, each a set of Expo permissions named for
- * the Expo role that holds them) and is drawn under the vendor's exact name, which
+ * the Expo role that holds them; DigitalOcean's `read`, `operate` or
+ * `administer`, each a set of DigitalOcean token scopes sent as its `grants`)
+ * and is drawn under the vendor's exact name, which
  * `options` carries. Datadog's, Jira's and Confluence's lists are read live
  * from the vendor, so no list of them lives here. GitHub has no levels; a
  * seat holds GitHub App permissions.
@@ -184,6 +186,10 @@ export interface AccessObserved {
   disabled_by?: AccessDisabledBy;
   /** The account as the vendor names it. */
   account?: string;
+  /**
+   * The vendor's identifier for the account, or an opaque fingerprint where
+   * every seat acts as the same person (DigitalOcean's tokens). Never drawn.
+   */
   account_id?: string;
   level?: string;
   permissions?: Record<string, GitHubAccess>;
