@@ -198,6 +198,8 @@ interface AccessFailure {
   remedy: string;
   actor: AccessActor;
   action_url?: string;
+  /** The account the person makes or acts on at the vendor, by name, where the step has one. */
+  account?: string;
 }
 
 interface AccessSync {
@@ -286,6 +288,16 @@ export interface AccessPlanAnswer {
 
 /** `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`. */
 export type AccessSeatAction = "rotate" | "remove" | "keep" | "restore" | "retry" | "done";
+
+/**
+ * `POST .../access/seats/{handle}/{lane}/credential`: a credential a person
+ * made at the vendor, checked and sealed. `detail` says what was checked and
+ * kept; `access` is the tab as it now stands.
+ */
+export interface AccessCredentialAnswer {
+  detail: string;
+  access: AccessAnswer;
+}
 
 /** `POST .../access/seats/{handle}/{lane}/install`: a fresh, single-use install link. */
 export interface AccessInstallLink {
