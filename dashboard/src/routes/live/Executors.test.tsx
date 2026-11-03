@@ -234,6 +234,41 @@ test("a bridged call's arguments are shown as the JSON document they are", () =>
   expect(block?.textContent).toContain('{\n  "path": "a.go",\n  "id": 9007199254740993\n}');
 });
 
+// THE CALL A PERSON LET BE MADE is a call of its round, made by the run's resume
+// rather than over the bridge, and recorded without its arguments or its result,
+// which rode the run sealed: drawn as "(none)" and "(nothing returned)", a reply
+// the call posted read as a call that sent and returned nothing.
+//
+// Mutation: drop the approved tag, or draw an approved call's empty records as
+// any other call's, and this goes red.
+test("a call a person approved is marked so, its sealed records never drawn as empty", () => {
+  const container = overflowing(
+    <Router>
+      <BridgeLog
+        run={run({
+          bridge_calls: [
+            {
+              name: "add_issue_comment",
+              approved: true,
+              origin: "mcp:github",
+              server: "github",
+              at: "2026-06-15T12:03:00Z",
+            },
+          ],
+        })}
+      />
+    </Router>,
+    "height",
+    openFirstCall,
+  );
+  expect(screen.getByText("approved")).toBeTruthy();
+  expect(screen.queryByText("failed")).toBeNull();
+  const args = container.querySelector('[aria-label="add_issue_comment arguments"]');
+  const result = container.querySelector('[aria-label="add_issue_comment result"]');
+  expect(args?.textContent).toContain("(sealed with the approval, not kept on the record)");
+  expect(result?.textContent).toContain("(handed to the run sealed, not kept on the record)");
+});
+
 // ---------------------------------------------------------------------------
 // A run's own page
 // ---------------------------------------------------------------------------

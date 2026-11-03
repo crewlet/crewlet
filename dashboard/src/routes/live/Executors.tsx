@@ -1213,6 +1213,16 @@ function noCallsWords(run: ExecutorRow): string {
 }
 
 /**
+ * What a call a person approved ([BridgeCall.approved]) is said to have sent
+ * and returned. Neither is on its record: the resume made the call off the
+ * arguments the run held sealed, and handed its result to the job that carried
+ * the work on sealed too, so "(none)" and "(nothing returned)" would say a call
+ * that sent and returned both did neither.
+ */
+const SEALED_ARGUMENTS = "(sealed with the approval, not kept on the record)";
+const SEALED_RESULT = "(handed to the run sealed, not kept on the record)";
+
+/**
  * One bridged call's two records, formatted.
  *
  * INSIDE the lazy disclosure, and that placement is the point. `useMemo` in
@@ -1259,7 +1269,7 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
           plain
           focusWhenScrollable
           label={`${call.name} arguments`}
-          code={args || "(none)"}
+          code={args || (call.approved ? SEALED_ARGUMENTS : "(none)")}
         />
       </div>
       <div className="col gap-1">
@@ -1268,7 +1278,7 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
           plain
           focusWhenScrollable
           label={`${call.name} ${call.failed ? "error" : "result"}`}
-          code={output || "(nothing returned)"}
+          code={output || (call.approved ? SEALED_RESULT : "(nothing returned)")}
         />
       </div>
     </div>
@@ -1287,6 +1297,7 @@ function BridgeCallRow({ call }: { call: BridgeCall }) {
       title={
         <span className="row gap-2 baseline">
           <InlineCode>{call.name}</InlineCode>
+          {call.approved && <Tag variant="info">approved</Tag>}
           {call.failed && <Tag variant="danger">failed</Tag>}
           <span className="spacer" />
           <span className="t-caption">{fmtTime(call.at)}</span>

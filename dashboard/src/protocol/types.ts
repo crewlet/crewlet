@@ -946,6 +946,14 @@ export interface BridgeCall {
    *  server name for an `mcp:` one. Absent on a call no tool answered. */
   origin?: string;
   server?: string;
+  /**
+   * The call a person let be made once its run asked for their approval:
+   * made by the run's resume on the engine host rather than by the job over
+   * its bridge, and recorded among its round's calls. Its arguments and its
+   * result are never here: they rode the run sealed, for the job that carried
+   * the work on, so neither is drawn as empty.
+   */
+  approved?: boolean;
 }
 
 // ---------------------------------------------------------------------------
