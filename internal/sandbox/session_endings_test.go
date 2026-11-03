@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -288,9 +289,13 @@ func (h *holdSpy) detach(handle string) {
 // counted the deleted run as holding again, and held the seat's inbox with
 // nothing left to recount it: the seat took no mail until it moved.
 //
-// Mutation: drop the move an ending's delete makes ([Coordinator.moved]), and
-// the frame's stale listing is written last, the seat counted held and its inbox
-// held for a run that is gone.
+// Two moves order the frame's recount after the retry's here, the retry's delete
+// ([Coordinator.moved]) and the retry's own recount as it is written
+// ([Coordinator.syncSeat]), and either orders it alone; the two cases after this
+// one hold each to a race only it orders.
+//
+// Mutation: drop both moves, and the frame's stale listing is written last, the
+// seat counted held and its inbox held for a run that is gone.
 func TestARecountReadBeforeAnEndingsDeleteNeverOutlivesIt(t *testing.T) {
 	t.Parallel()
 	rig, writes := loggingRig(t)
@@ -319,6 +324,85 @@ func TestARecountReadBeforeAnEndingsDeleteNeverOutlivesIt(t *testing.T) {
 	}
 }
 
+// A RECOUNT READ BEFORE A DELETE OF THIS NODE'S READS AGAIN, though nothing
+// recounts the seat after the delete: an ending this node finishes deletes the
+// run's record and moves the seat ([Coordinator.moved]), as every count it
+// applies does, so a listing that straddles the delete is read again rather
+// than written over it — which counted the run whose record is gone as holding,
+// and held the seat's inbox behind it.
+//
+// Mutation: drop the move an ending's delete makes ([Coordinator.moved]), and
+// the recount writes its stale listing, the seat counted held for a run that is
+// gone.
+func TestARecountReadBeforeADeleteOfThisNodesReadsAgain(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	holds := rig.withHold()
+	stale := &listsThen{PendingStore: rig.coordinator.pending}
+	rig.coordinator.pending = stale
+	launchScheduled(t, rig, "t1")
+	run := rig.get("t1")
+	// THE RUN ENDS HERE, its record deleted, while the recount's listing is on
+	// its way back; nothing recounts the seat after the delete.
+	stale.arm(func() {
+		if decided, err := rig.coordinator.endRecord(t.Context(), run, ending{
+			fence: rigLease, whileIn: Active, launch: EveryLaunch, reclaim: true,
+		}); err != nil || decided == nil {
+			t.Errorf("the premise: the run's ending = %v, %v, want it decided and finished here",
+				decided, err)
+		}
+		if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+			t.Errorf("the premise: the ending deleted the record (found %v, %v)", found, err)
+		}
+	})
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	if held, _ := rig.coordinator.SeatRuns("swe"); held || holds.holding("swe") {
+		t.Fatalf("the seat is counted held (%v) and its inbox held (%v) for a run whose record is gone",
+			held, holds.holding("swe"))
+	}
+}
+
+// A RECOUNT OLDER THAN ONE WRITTEN BEFORE IT READS AGAIN. The store moves under
+// a seat's recounts by other nodes' hands too, which move nothing this node
+// counts: the seat's last holder finishing an ending it decided, whose steps
+// after the decision take no lease, deletes the run's record. A recount whose
+// listing was read before that delete, and written after a newer recount that
+// read the store without the run, counted the run as holding again over the
+// newer count, and held the seat's inbox with nothing left to recount it.
+//
+// Mutation: drop the move a recount makes as it is written
+// ([Coordinator.syncSeat]), and the older listing is written last, the seat
+// counted held for a run that is gone.
+func TestARecountOlderThanOneWrittenBeforeItReadsAgain(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	holds := rig.withHold()
+	stale := &listsThen{PendingStore: rig.coordinator.pending}
+	rig.coordinator.pending = stale
+	launchScheduled(t, rig, "t1")
+	ctx := t.Context()
+	stale.arm(func() {
+		// ANOTHER NODE ENDS THE RUN, record and all, in the store alone...
+		decided, ok, err := rig.pending.DecideEnding(ctx, "t1",
+			ending{whileIn: Active, launch: EveryLaunch}.decision())
+		if err != nil || !ok {
+			t.Errorf("the premise: another node's ending = %v, %v", ok, err)
+			return
+		}
+		if _, deleted, err := rig.pending.Finish(ctx, "t1", decided.Ending.ID); err != nil || !deleted {
+			t.Errorf("the premise: another node's delete = %v, %v", deleted, err)
+		}
+		// ...AND A NEWER RECOUNT HERE reads the store after it, and is
+		// written first.
+		rig.coordinator.syncSeat(ctx, "swe")
+	})
+	rig.coordinator.syncSeat(ctx, "swe")
+	if held, _ := rig.coordinator.SeatRuns("swe"); held || holds.holding("swe") {
+		t.Fatalf("the seat is counted held (%v) and its inbox held (%v) for a run whose record is gone",
+			held, holds.holding("swe"))
+	}
+}
+
 // A SEAT TAKEN BACK BESIDE AN ENDING STILL BEING FINISHED HOLDS ITS MAIL BEHIND
 // IT. This node's retry of a resumed turn's ending waits for the turn's capture
 // to land before it records the turn's end; meanwhile the seat's lease lapses,
@@ -331,7 +415,10 @@ func TestARecountReadBeforeAnEndingsDeleteNeverOutlivesIt(t *testing.T) {
 // behind returns.
 //
 // Mutation: leave an ending another attempt on the node is finishing to that
-// attempt alone ([Coordinator.endRun]), and the seat taken back is not held.
+// attempt alone ([Coordinator.endRun]), and the seat taken back is not held; or
+// ask the ending kept behind the attempt again only on the hand-back's spacing
+// ([Coordinator.finishOnce]), and the seat's mail waits that long after the
+// record is gone.
 func TestASeatTakenBackBesideAnEndingStillBeingFinishedHoldsItsMail(t *testing.T) {
 	t.Parallel()
 	rig, writes, keep := keepingRig(t)
@@ -380,6 +467,12 @@ func TestASeatTakenBackBesideAnEndingStillBeingFinishedHoldsItsMail(t *testing.T
 	}
 
 	landed()
+	// ASKED AGAIN THE MOMENT THE ATTEMPT IT WAITED BEHIND RETURNED, which
+	// finished it: the hold behind a record that is gone lifts then, not a
+	// hand-back's spacing later.
+	if due := rig.retries.delays(); !slices.Equal(due, []time.Duration{0}) {
+		t.Fatalf("the ending kept behind the attempt is asked again in %v, want at once", due)
+	}
 	for range 3 {
 		rig.fireRetries()
 	}
