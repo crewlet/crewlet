@@ -24,6 +24,7 @@ import {
   emptyScopeHint,
   joinLevels,
   levelName,
+  boxSettings,
   noToolRemedy,
   onlyScope,
   productOnly,
@@ -348,12 +349,12 @@ test("a scope picker with nothing to offer says whether the list was read", () =
 // none, as the engine would, and says so under the row before the review.
 test("a lane whose empty scope reaches nothing refuses an agent that is on with none", () => {
   const required: Lane = { ...GITHUB_LANE, scope_required: true };
-  expect(refusedScope(required, { enabled: true, scope: [] })).toBe(
-    "Choose at least one GitHub repository for every agent that is on.",
+  expect(refusedScope(required, { enabled: true, scope: [] }, "SRE")).toBe(
+    "Choose at least one repository for SRE: an agent in no repository can reach nothing.",
   );
-  expect(refusedScope(required, { enabled: true, scope: ["gophrase/backend"] })).toBeNull();
-  expect(refusedScope(required, { enabled: false })).toBeNull();
-  expect(refusedScope(GITHUB_LANE, { enabled: true, scope: [] })).toBeNull();
+  expect(refusedScope(required, { enabled: true, scope: ["gophrase/backend"] }, "SRE")).toBeNull();
+  expect(refusedScope(required, { enabled: false }, "SRE")).toBeNull();
+  expect(refusedScope(GITHUB_LANE, { enabled: true, scope: [] }, "SRE")).toBeNull();
   expect(emptyScopeHint(required, { enabled: true })).toBe(
     "Not in any repository yet, so it can reach nothing. Choose its repositories.",
   );
@@ -399,6 +400,8 @@ test("a box tool reading several variables names each agent's own lines", () => 
   expect(toolWords(EXPO_LANE, boxed("SRE"))).toBe(
     "Not set up: its sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY",
   );
+  expect(boxSettings(boxed("SRE"))).toBe("SCW_DEFAULT_PROJECT_ID");
+  expect(boxSettings(offLane())).toBeNull();
   expect(
     noToolRemedy(EXPO_LANE, [
       { name: "SRE", saved: boxed("SRE") },

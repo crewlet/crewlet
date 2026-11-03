@@ -59,6 +59,7 @@ import { PermissionsDialog, RemoveDialog, ReviewDialog, RotateDialog } from "./D
 import {
   accessWords,
   availableActions,
+  boxSettings,
   emptyScopeHint,
   joinLevels,
   lanesOf,
@@ -227,7 +228,7 @@ export function AgentsAccess({
       const saved = seat.lanes[lane.key];
       if (d && saved && !sameDesired(lane, d, saved.desired)) {
         changes++;
-        refused ??= refusedLevel(lane, d) ?? refusedScope(lane, d) ?? undefined;
+        refused ??= refusedLevel(lane, d) ?? refusedScope(lane, d, seat.name) ?? undefined;
       }
     }
 
@@ -979,6 +980,8 @@ function Details({
 }) {
   const o = saved.observed;
   const outside = managedOutside(lane);
+  // WHAT CREWLET PUTS IN THE SEAT'S BOX ITSELF, beside the lines a person adds.
+  const settings = boxSettings(saved);
   const buttons =
     actions.length > 0 ? (
       <span className="agent-access-detail-actions">
@@ -1036,6 +1039,9 @@ function Details({
               ),
             ],
             ["Tool", toolWords(lane, saved)],
+            ...(settings
+              ? [["Set by Crewlet", <span className="mono">{settings}</span>] as const]
+              : []),
             ["Last sync", syncValue(saved, now)],
           ]}
         />

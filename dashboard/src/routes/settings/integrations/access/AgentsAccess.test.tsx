@@ -3,7 +3,8 @@
  *
  * The invariants: a change is a draft until reviewed, and the review shows
  * the engine's plan and saves against the revision it read; a row's details
- * are five pairs at one size with only the actions the seat can take; a seat
+ * are five pairs at one size, and a sixth where Crewlet sets anything in the
+ * agent's box, with only the actions the seat can take; a seat
  * that is off reads as one sentence; a refusal and a change made by hand each
  * offer their one choice; a reader who may not change access is shown the
  * reading alone; and where the operator manages access, the tab is values
@@ -955,4 +956,28 @@ test("a refusal naming no control stays in the review", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   const review = await screen.findByRole("dialog");
   expect(await within(review).findByText("Atlassian grants no lane forge.")).toBeTruthy();
+});
+
+// WHAT CREWLET PUTS IN AN AGENT'S BOX ITSELF is named in its details, beside
+// the lines a person adds, and only where it puts something there.
+test("an agent's details name the settings Crewlet puts in its box, and only those", () => {
+  const data = expoAnswer();
+  const qa = data.seats.find((s) => s.handle === "qa")!.lanes.expo!;
+  qa.box = {
+    env: [
+      ...qa.box!.env,
+      { name: "EXPO_PUBLIC_ACCOUNT", value: "gophrase", by: "crewlet" },
+      { name: "EAS_NO_VCS", value: "1", by: "crewlet" },
+    ],
+  };
+  draw(data);
+  details("QA", "Expo");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="QA on Expo"]')!);
+  expect(facts.getByText("Set by Crewlet")).toBeTruthy();
+  expect(facts.getByText("EXPO_PUBLIC_ACCOUNT and EAS_NO_VCS")).toBeTruthy();
+  expect(facts.getByText("Live, EAS CLI in its box, as EXPO_TOKEN")).toBeTruthy();
+  cleanup();
+  draw(expoAnswer());
+  details("QA", "Expo");
+  expect(screen.queryByText("Set by Crewlet")).toBeNull();
 });
