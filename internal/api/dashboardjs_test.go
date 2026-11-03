@@ -1639,7 +1639,16 @@ const (
 	// box's files, and the connect form's public view of a minted value, took
 	// it from 5454.2 KiB to 5454.8 KiB (+557 bytes), all of it the
 	// integrations model chunk. It stays at 5455 KiB.
-	treeBudget = 5<<20 + 335<<10
+	// Google Cloud (its catalogue entry, its Agents tab words with the link to
+	// preparing a project and the note on gcloud, and the org builder's
+	// leftover service account) and the kit's move to 0.93.0 (the Google Cloud
+	// mark) took it from 5454.8 KiB to 5457.2 KiB (+2.4 KiB, 2470 bytes): the
+	// integrations model chunk +1975 bytes, the icons chunk +779 bytes for the
+	// mark, the entry +672 bytes, the catalogue chunk +311 bytes and the org
+	// builder's +142, less 926 bytes net across the kit's renamed chunks (an
+	// 840-byte one folded into the entry) and 483 bytes across the rest. The
+	// initial load did not grow: it is one file fewer. 5458 KiB.
+	treeBudget = 5<<20 + 338<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
