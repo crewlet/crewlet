@@ -161,4 +161,12 @@ func TestALiveOfferKeepsTheCatalogsFactsAndMarksItsScopeRead(t *testing.T) {
 	if unscoped.Scoped || unscoped.ScopeLive {
 		t.Errorf("an unscoped lane = %+v, want neither scoped nor read", unscoped)
 	}
+	// RELEASABLE IS THE CATALOG'S, and the vendor's page is the vendor's: an
+	// Expo offer read live keeps both, or the Agents tab drops "Keep the robot".
+	const page = "https://expo.dev/accounts/acme/settings/access-tokens"
+	expo := liveOffer(seataccess.Options{Lane: seataccess.LaneExpo, Rotatable: true, Releasable: true},
+		seataccess.Options{Lane: seataccess.LaneExpo, ActionURL: page})
+	if !expo.Releasable || !expo.Rotatable || expo.ActionURL != page {
+		t.Errorf("an Expo lane's live offer = %+v, want it releasable and rotatable with its page", expo)
+	}
 }

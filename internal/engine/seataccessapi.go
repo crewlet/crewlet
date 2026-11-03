@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
 	"sync"
@@ -139,6 +140,94 @@ func (a *SeatAccessAPI) InstallLink(ctx context.Context, q setupapi.AccessQuery,
 		return "", fmt.Errorf("%w: %s", setupapi.ErrNotAwaitingInstall, handle)
 	}
 	return a.installLink(ctx, handle, rec.Account.ID)
+}
+
+// HandIn checks a credential a person pasted for one seat's lane with the
+// vendor's session, then runs that seat's sync carrying it, so the sync seals
+// it and records the account as for any credential it seals.
+func (a *SeatAccessAPI) HandIn(ctx context.Context, q setupapi.AccessQuery, handle string,
+	lane seataccess.Lane, value string, by iam.Actor) (seataccess.HandedIn, error) {
+
+	vendor, ok := seataccess.Lookup(q.Kind)
+	if !ok {
+		return seataccess.HandedIn{}, setupapi.ErrNoHandIn
+	}
+	var seat *seataccess.Seat
+	for _, s := range seataccess.SeatsOf(q.Company) {
+		if s.Handle == handle {
+			seat = &s
+			break
+		}
+	}
+	if seat == nil {
+		return seataccess.HandedIn{}, fmt.Errorf("%w: %s", setupapi.ErrNoSuchAccessSeat, handle)
+	}
+	want, _ := seataccess.DesiredOf(seat.Role, lane)
+	if !want.Enabled {
+		return seataccess.HandedIn{}, fmt.Errorf("%w: %s", setupapi.ErrNotAwaitingHandIn, handle)
+	}
+	ledger, err := a.engine.SeatAccessLedger()
+	if err != nil {
+		return seataccess.HandedIn{}, err
+	}
+	records, err := ledger.Records(ctx, q.Kind)
+	if errors.Is(err, coord.ErrUnavailable) {
+		return seataccess.HandedIn{}, fmt.Errorf("%w: %w", setupapi.ErrAccessUnavailable, err)
+	}
+	if err != nil {
+		return seataccess.HandedIn{}, err
+	}
+	session, err := vendor.Open(ctx, seataccess.OpenInput{Config: q.Company, Org: q.Roster, Env: a.engine.resolver()})
+	if errors.Is(err, integration.ErrNotConfigured) {
+		return seataccess.HandedIn{}, fmt.Errorf("%w: %w", setupapi.ErrNotAwaitingHandIn, err)
+	}
+	if err != nil {
+		return seataccess.HandedIn{}, err
+	}
+	hands, ok := session.(seataccess.HandsIn)
+	if !ok {
+		return seataccess.HandedIn{}, setupapi.ErrNoHandIn
+	}
+	in := seataccess.HandInInput{Seat: seat.SeatRef, Lane: lane, Want: want, Records: records, Value: value}
+	if rec, ok := records[handle]; ok {
+		in.Record = &rec
+	}
+	handed, err := hands.CheckHandIn(ctx, in)
+	if refusal, ok := errors.AsType[*seataccess.Refusal](err); ok {
+		return seataccess.HandedIn{}, &setupapi.AccessRefusal{Status: http.StatusBadRequest,
+			Reason: refusal.Said, Remedy: refusal.Remedy}
+	}
+	if err != nil {
+		name := seataccess.KindName(q.Kind)
+		return seataccess.HandedIn{}, &setupapi.AccessRefusal{Status: http.StatusBadGateway,
+			Reason: name + " did not answer, so the token was not checked. Nothing was stored.",
+			Remedy: "Try again in a moment"}
+	}
+	asks := map[string]seataccess.Ask{handle: {HandIn: value, Rotate: handed.Rotate, Lane: lane}}
+	if err = a.syncNow(ctx, q.Kind, by, asks, []string{handle}, nil); err != nil {
+		return seataccess.HandedIn{}, err
+	}
+	// THE SYNC IS WHAT SEALED IT, and it refuses what changed since the check.
+	after, err := ledger.Records(ctx, q.Kind)
+	if err != nil {
+		return seataccess.HandedIn{}, err
+	}
+	sync := after[handle].Lanes[lane].Sync
+	if sync != nil && sync.Outcome == seataccess.OutcomeFailed && sync.Error != nil {
+		return seataccess.HandedIn{}, &setupapi.AccessRefusal{Status: http.StatusBadRequest,
+			Reason: sync.Error.Said, Remedy: sync.Error.Remedy}
+	}
+	if after[handle].Credential == nil {
+		return seataccess.HandedIn{}, fmt.Errorf("engine: %s's %s sync sealed no credential", handle, q.Kind)
+	}
+	// READ BACK WITH THE SEALED VALUE, so the answer already shows what the
+	// account holds besides it (a robot's older tokens). The seal stands
+	// either way; the next pass reads it again.
+	if reread := a.syncNow(ctx, q.Kind, by, nil, []string{handle}, nil); reread != nil {
+		log.WarnContext(ctx, "seat_access_reread_deferred", "kind", q.Kind, "seat", handle,
+			"error", reread.Error())
+	}
+	return handed, nil
 }
 
 // Answer composes one integration's Agents tab.
@@ -348,7 +437,8 @@ func seatInput(ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desir
 // liveOffer is what a vendor answered for a lane, with the facts its catalog
 // holds kept as base has them, and a scoped lane's scope marked as read.
 func liveOffer(base, live seataccess.Options) seataccess.Options {
-	live.Rotatable, live.Scoped, live.ScopeRequired = base.Rotatable, base.Scoped, base.ScopeRequired
+	live.Rotatable, live.Releasable = base.Rotatable, base.Releasable
+	live.Scoped, live.ScopeRequired = base.Scoped, base.ScopeRequired
 	live.ScopeLive = base.Scoped
 	return live
 }
@@ -402,7 +492,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 		o := base[lane]
 		if registered {
 			if spec, ok := vendor.Catalog().Lane(lane); ok {
-				o.Rotatable = spec.Rotatable
+				o.Rotatable, o.Releasable = spec.Rotatable, spec.Releasable
 			}
 		}
 		if session != nil {
@@ -420,7 +510,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 			o = seataccess.WithReach(o, vendor, company, roster)
 		}
 		if !provisioned {
-			o.Managed, o.Rotatable = seataccess.ManagedExternal, false
+			o.Managed, o.Rotatable, o.Releasable = seataccess.ManagedExternal, false, false
 		}
 		out = append(out, o)
 	}

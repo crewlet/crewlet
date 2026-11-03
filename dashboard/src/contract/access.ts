@@ -107,6 +107,13 @@ export interface AccessOptions {
   scope_required?: boolean;
   /** Whether a person can ask Crewlet to rotate a seat's credential on this lane. */
   rotatable?: boolean;
+  /** Where a person takes this lane's steps at the vendor, for a step that names no page of its own. */
+  action_url?: string;
+  /**
+   * Whether a person may keep a turned-off agent's account at the vendor
+   * rather than delete it there (the `release` action, on its remove wait).
+   */
+  releasable?: boolean;
   /**
    * The `mcp_servers` entry a per-seat tool server for this lane is started
    * from, where one takes the seat's credential; absent where none does
@@ -173,9 +180,24 @@ export interface AccessObserved {
   created_at?: string;
   /** When a sync found the account changed at the vendor by somebody else. */
   changed_by_hand_at?: string;
+  /**
+   * The credentials the account still holds besides the sealed one (an old
+   * token after a rotate), for a person to delete at the vendor. Absent where
+   * the vendor cannot tell.
+   */
+  retired?: AccessRetired[];
 }
 
-type AccessOp = "create" | "enable" | "level" | "scope" | "mint" | "disable" | "remove" | "rotate";
+/** One credential the account still holds that is not the sealed one. */
+interface AccessRetired {
+  /** What the person looks for at the vendor (Expo's token prefix), drawn as it is. */
+  label: string;
+  /** When the vendor says it was created. */
+  since?: string;
+}
+
+type AccessOp =
+  "create" | "enable" | "level" | "scope" | "mint" | "disable" | "remove" | "rotate" | "retire";
 
 type AccessVerb =
   | "create"
@@ -343,7 +365,18 @@ export interface AccessRefusal {
 }
 
 /** `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`. */
-export type AccessSeatAction = "rotate" | "remove" | "keep" | "restore" | "retry" | "done";
+export type AccessSeatAction =
+  "rotate" | "remove" | "keep" | "restore" | "retry" | "done" | "release";
+
+/**
+ * `POST .../access/seats/{handle}/{lane}/credential`: a credential a person
+ * made at the vendor, checked and sealed. `detail` says what was checked and
+ * kept; `access` is the tab as it now stands.
+ */
+export interface AccessCredentialAnswer {
+  detail: string;
+  access: AccessAnswer;
+}
 
 /** `POST .../access/seats/{handle}/{lane}/install`: a fresh, single-use install link. */
 export interface AccessInstallLink {

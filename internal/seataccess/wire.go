@@ -137,6 +137,13 @@ type PlanAnswer struct {
 	StepUp bool `json:"step_up,omitempty"`
 }
 
+// CredentialAnswer is the answer to a credential a person pasted for a seat:
+// the sentence they read and the tab as it now stands.
+type CredentialAnswer struct {
+	Detail string `json:"detail"`
+	Access Answer `json:"access"`
+}
+
 // Draft is the body of the plan and save routes: each seat's lanes as the
 // person left them. A seat or lane it leaves out keeps its setting.
 type Draft struct {
@@ -168,12 +175,18 @@ const (
 
 	// ActionDone re-reads the vendor after a person took a step there.
 	ActionDone SeatAction = "done"
+
+	// ActionRelease keeps at the vendor an account a step waits for a person
+	// to delete ("Keep the robot at Expo"): the step closes and Crewlet stops
+	// tracking the account.
+	ActionRelease SeatAction = "release"
 )
 
 // Valid reports whether a is an action this build takes.
 func (a SeatAction) Valid() bool {
 	return slices.Contains([]SeatAction{
 		ActionRotate, ActionRemove, ActionKeep, ActionRestore, ActionRetry, ActionDone,
+		ActionRelease,
 	}, a)
 }
 

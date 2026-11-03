@@ -273,13 +273,19 @@ func (v *Vendor) Steps(seat seataccess.SeatRef, lane seataccess.Lane, op seatacc
 		seataccess.OpLevel: seataccess.VerbRerole, seataccess.OpScope: seataccess.VerbScope,
 		seataccess.OpMint: seataccess.VerbMint, seataccess.OpDisable: seataccess.VerbDisable,
 		seataccess.OpRevoke: seataccess.VerbRevoke, seataccess.OpRemove: seataccess.VerbRemove,
-		seataccess.OpRotate: seataccess.VerbRotate,
+		seataccess.OpRotate: seataccess.VerbRotate, seataccess.OpRetire: seataccess.VerbRevoke,
 	}[op]
+	// A RETIRE IS A PERSON'S at every vendor: they delete what the vendor
+	// still holds.
+	by := seataccess.ByCrewlet
+	if op == seataccess.OpRetire {
+		by = seataccess.ByYou
+	}
 	n := max(v.StepsPerOp[op], 1)
 	out := make([]seataccess.Step, 0, n)
 	for i := range n {
 		out = append(out, seataccess.Step{
-			Verb: verb, By: seataccess.ByCrewlet,
+			Verb: verb, By: by,
 			Text: fmt.Sprintf("%s %s on %s (%d)", op, seat.Handle, lane, i+1),
 		})
 	}

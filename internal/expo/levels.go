@@ -1,34 +1,24 @@
 package expo
 
-import (
-	"slices"
+import "github.com/crewlet/crewlet/internal/config"
 
-	"github.com/crewlet/crewlet/internal/config"
-)
-
-// level is one seat level: its name and note in Expo's own role terms, and
-// the Expo permissions its robot holds on the account.
+// level is one seat level: Expo's robot role for it, its name in Expo's
+// website and that website's description of it.
 type level struct {
 	id, name, note string
-	perms          []Permission
+	role           Role
 }
 
-// levels is THE ONE TABLE mapping a seat level to Expo permissions, least
-// access first. Expo does not document each role's permissions, so the sets are
-// read from its role names for a live account to confirm. Never Admin or Own.
+// levels is THE ONE TABLE mapping a seat level to the Expo role its robot
+// holds, least access first. A robot is compared by its Role, never by the
+// permissions a role happens to carry. Admin and Owner are in no level.
 var levels = []level{
-	{config.ExpoLevelViewer, "Viewer",
-		"Views the account's projects through Expo Go, and changes nothing",
-		[]Permission{PermissionView}},
-	{config.ExpoLevelRunner, "Runner",
-		"Views the account's projects and performs low-risk actions on them",
-		[]Permission{PermissionView, PermissionRun}},
+	{config.ExpoLevelViewer, "Viewer", "View all projects", RoleViewOnly},
+	{config.ExpoLevelRunner, "Runner", "View all projects and perform low-risk actions on them", RoleRunner},
 	{config.ExpoLevelDeveloper, "Developer",
-		"Creates projects, makes builds, releases updates and manages credentials",
-		[]Permission{PermissionView, PermissionRun, PermissionPublish}},
+		"Create builds, publish updates to unprotected channels and manage credentials", RoleDeveloper},
 	{config.ExpoLevelReleaseManager, "Release Manager",
-		"Everything a Developer does, and manages protected resources such as protected update channels",
-		[]Permission{PermissionView, PermissionRun, PermissionPublish, PermissionPublishProtected}},
+		"Everything a Developer does, and publish to protected channels", RoleReleaseManager},
 }
 
 // Levels is every seat level, least access first.
@@ -44,7 +34,7 @@ func find(id string) (level, bool) {
 	return level{}, false
 }
 
-// LevelName is a level as a person reads it, in Expo's role terms.
+// LevelName is a level as Expo's website names the role.
 func LevelName(id string) string {
 	if l, ok := find(id); ok {
 		return l.name
@@ -52,41 +42,43 @@ func LevelName(id string) string {
 	return id
 }
 
-// LevelNote is the sentence saying what a level allows.
+// LevelNote is Expo's own sentence for what a level's role allows.
 func LevelNote(id string) string {
 	l, _ := find(id)
 	return l.note
 }
 
-// Permissions is the Expo permissions a level grants, sorted, and false for a
-// level this build does not offer.
-func Permissions(id string) ([]Permission, bool) {
+// RoleOf is the Expo role a level's robot holds, and false for a level this
+// build does not offer.
+func RoleOf(id string) (Role, bool) {
 	l, ok := find(id)
-	if !ok {
-		return nil, false
-	}
-	return permissionSet(l.perms), true
+	return l.role, ok
 }
 
-// levelOf is the level whose permissions are exactly held, or "" where none
-// is: a robot somebody changed at Expo, which the sync puts back.
-func levelOf(held []Permission) string {
-	have := permissionSet(held)
+// levelOf is the level whose role is role, or "" for a role no level is
+// (Admin, Owner or a custom role).
+func levelOf(role Role) string {
 	for _, l := range levels {
-		if slices.Equal(have, permissionSet(l.perms)) {
+		if l.role == role {
 			return l.id
 		}
 	}
 	return ""
 }
 
-// difference is what want holds that have does not, sorted.
-func difference(want, have []Permission) []Permission {
-	var out []Permission
-	for _, p := range permissionSet(want) {
-		if !slices.Contains(have, p) {
-			out = append(out, p)
-		}
+// roleName is a role as Expo's website names it, for a sentence.
+func roleName(role Role) string {
+	if id := levelOf(role); id != "" {
+		return LevelName(id)
 	}
-	return out
+	switch role {
+	case RoleAdmin:
+		return "Admin"
+	case RoleOwner:
+		return "Owner"
+	case RoleCustom:
+		return "custom role"
+	default:
+		return string(role)
+	}
 }

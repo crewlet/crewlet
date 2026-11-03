@@ -1618,7 +1618,14 @@ const (
 	// word that wraps) took it from 5447.7 KiB to 5449.2 KiB (+1.5 KiB, 1529
 	// bytes): the kit +1467 bytes net across its renamed chunks and its
 	// stylesheet, and the access and settings chunks +62 bytes. 5450 KiB.
-	treeBudget = 5<<20 + 330<<10
+	// The Expo handoff (the Set up sheet a person walks to make each agent's
+	// robot at Expo and paste its token, a rotate through it, the reminder of
+	// an old credential still at the vendor, keeping a turned-off robot, and
+	// the Cloud and Infrastructure group) took it from 5449.2 KiB to 5456.5 KiB
+	// (+7.3 KiB, 7475 bytes): the integrations model chunk +7310 bytes and its
+	// stylesheet +152 bytes, and 13 bytes across the chunks that import them.
+	// The initial load did not grow. 5457 KiB.
+	treeBudget = 5<<20 + 337<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

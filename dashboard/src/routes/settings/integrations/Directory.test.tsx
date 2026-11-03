@@ -273,7 +273,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
     ["Code", ["GitHub", "GitLab"]],
     ["Observability", ["Datadog"]],
-    ["Edge and DNS", ["Cloudflare"]],
+    ["Cloud and Infrastructure", ["Cloudflare"]],
     ["Mobile apps", ["Expo"]],
   ]);
 });

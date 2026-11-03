@@ -2584,7 +2584,7 @@ changed. Every node serving the API serves them, because every node opens the fl
 | `POST /setup/integrations/{kind}/provision`, `POST /setup/integrations/github/app` | `admin`: a writing pass is handed a sink that mints and seals, and an app's private key is sealed on its way back |
 | `GET /setup/integrations/{kind}/access`, `POST /setup/integrations/{kind}/access/plan` | `admin` (`setup.read`): the plan writes nothing, so it asks for no proof |
 | `PUT /setup/integrations/{kind}/access` | `admin` (`setup.access.write`) and a proof inside `step_up`. A save that raises an agent to an administration role at the vendor also asks `setup.access.raise`, which needs a **person present**: a machine token is refused `403 token_refused` |
-| `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`, `POST /setup/integrations/slack/access/seats/{handle}/{lane}/install` | `admin` (`setup.connect`) and a proof inside `step_up`; `rotate` also asks `secrets.write`, since it seals a fresh credential; `keep` writes the document as a save does, so it also asks `setup.access.write`, and `setup.access.raise` where what it keeps is an administration role |
+| `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`, `POST /setup/integrations/slack/access/seats/{handle}/{lane}/install`, `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential` | `admin` (`setup.connect`) and a proof inside `step_up`; `rotate` and `credential` also ask `secrets.write`, since each seals a credential; `keep` writes the document as a save does, so it also asks `setup.access.write`, and `setup.access.raise` where what it keeps is an administration role |
 
 **Connecting is `admin`'s and nothing more.** `/setup` performs no write of
 its own — a credential goes through the store `/secrets` serves — so connecting
@@ -2607,8 +2607,9 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `GET` | `/setup/integrations/{kind}/access` | Every agent seat on one integration: what the document asks (`desired`), what the vendor showed on the last sync (`observed`), the last sync, the plan the next sync takes, and whether the agent's tool is live; what each lane offers now; and the integration's notice. The revision it was read at is `revision` and the `ETag`. See [Each agent's access to an integration](#each-agents-access-to-an-integration) |
 | `POST` | `/setup/integrations/{kind}/access/plan` | What a draft would do at the vendor, step by step, writing nothing |
 | `PUT` | `/setup/integrations/{kind}/access` | Save a draft as one revision of the company document, held to the revision the tab was read at, then start the sync. `?dry_run=true` answers the plan and the warnings and writes nothing |
-| `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}` | One action on one agent's account: `rotate`, `remove` (only once the agent is off), `keep` (write the vendor's setting into the document), `restore`, `retry` or `done` |
+| `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}` | One action on one agent's account: `rotate`, `remove` (only once the agent is off), `keep` (write the vendor's setting into the document), `restore`, `retry`, `done` or `release` (keep the account at the vendor) |
 | `POST` | `/setup/integrations/slack/access/seats/{handle}/{lane}/install` | A fresh, single-use link a person follows to approve one agent's Slack app install, while the app waits for it. `{"url": "..."}`, `Cache-Control: no-store`, never stored and never part of a read |
+| `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/credential` | A credential a person created at the vendor and pasted for one agent (Expo's robot token): checked at the vendor, then sealed by the agent's sync. `{"detail", "access"}`, or `400 invalid_input` beside `value` |
 | `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped (`crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle), where a provisioner's `-secret-store` run made that way records `provision`, `models` for a model's credential the Models page wrote, and `mcp` for an MCP server's header or variable [stored from its page](#put-mcp-serversnamevalueskey); see [the secret store](../concepts/secret-store.md#the-design)), and `write_only` (whether no reveal answers the value: one stored from Settings › MCP & tools is); `engine_keys`, a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values`, the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate; and `assistant_values`, Ask Crewlet's sealed values counted the same way (a file a conversation keeps counted by the key its content is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves (each leaves with its conversation), or `null` on a node that runs no Ask Crewlet estate; and `executor_values`, the seats' executor sessions counted the same way (each session a turn's row names counted by the key its object is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves either (each leaves with its row), or `null` on a node that runs no executor log. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator. The longest answer is some 384 KiB — the largest value a write admits, in the characters JSON spells longest — which is what a client reading it must be prepared to take |
@@ -4086,10 +4087,10 @@ link, so the dashboard asks the begin route above for one and submits a form.
 
 ### Each agent's access to an integration
 
-Every integration the engine creates an account or a credential per agent on
+Every integration the engine manages an account or a credential per agent on
 (Slack, Mattermost, Atlassian for Jira and Confluence, GitHub, GitLab, Datadog,
-Cloudflare and Expo) has an Agents tab, and these four routes are what it reads
-and writes. Each agent seat's setting lives in the company document under
+Cloudflare and Expo) has an Agents tab, and these routes are what it reads and
+writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
 Datadog role id, a GitLab access level, a Jira project role id; Cloudflare's
@@ -4165,7 +4166,10 @@ company's own where it declares one reading the lane's credential (an enabled
 one first), else the name the catalogue's server is conventionally declared
 under. It is absent where no server reads the lane's credential (Expo, whose
 tool is the CLI in the agent's box). Each entry of `options` also says whether a person can
-ask for a credential on that lane to be rotated (`rotatable`), and carries
+ask for a credential on that lane to be rotated (`rotatable`), whether they may
+keep at the vendor an account a step waits for them to delete (`releasable`),
+and where they take the lane's own steps at the vendor (`action_url`, which
+each of their steps in a `plan` carries), and carries
 `"managed": "external"` where the engine does not provision the integration
 for the company, which is wherever it does not hold the authority that creates
 an agent's account: Datadog, GitLab or Mattermost without a `provisioning`
@@ -4177,7 +4181,11 @@ apps with. On such a lane a seat's switch still binds its
 tool to the credential handed in from outside Crewlet, its access is managed
 where that credential was issued, and its `observed.credential` names the
 variable the seat holds with `"source": "external"`. A credential Crewlet
-minted says `"source": "minted"`. Where the operator writes the company
+minted says `"source": "minted"`. `observed.retired` lists the credentials an
+account still holds besides the sealed one (`label`, what the vendor shows of
+each, and `since`, when it was created as near as Crewlet knows), where the
+vendor can tell: while it is non-empty on a lane that is on, every pass plans
+the `retire` op, a person's step to delete them at the vendor. Where the operator writes the company
 document (`api.auth.company_writers`), the answer carries
 `"managed_by": "operator"` and the tab is read-only: a save and `keep` are
 refused `403 config_managed`, naming the Seat object as the place to change
@@ -4289,6 +4297,7 @@ acts on one agent's account, and answers the tab:
 | `restore` | Turns back on an account somebody turned off at the vendor, which no sync does unasked, or restores a changed role now rather than on the next pass. On a lane managed outside Crewlet it is `409 access_external` |
 | `retry` | Runs the sync again after a vendor refusal was settled |
 | `done` | Reads the vendor again after a person took a step there (a GitHub App's creation or permission request, a Slack install) |
+| `release` | Keeps at the vendor an account a step waits for a person to delete ("Keep the robot at Expo"): the step closes, the engine stops tracking the account, and the audit records the person's choice. Only on a lane whose options say `releasable`, and only while the lane waits on its `remove` step: `409 invalid_input` otherwise |
 
 Every action but `keep` is carried by a sync, and one asked while a sync of the
 same integration runs is `409 pass_in_flight`. `keep` writes its revision and
@@ -4303,6 +4312,30 @@ agent is on in Slack and its app waits for a person to approve the install
 (`409 invalid_input` otherwise), never stored, never logged and never part of
 `GET`. It writes nothing to the company document, so it is offered where the
 operator writes the document too.
+
+**`POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential`**
+takes `{"value": "<token>"}`: a credential a person created at the vendor for
+one agent, for an integration whose accounts only a person can create (Expo's
+robots). It asks `secrets.write` beside the route's own verb, since it seals a
+credential, before it reads the body; both ask a proof inside `step_up`.
+- **Route checks:** before anything reaches the vendor, an empty value, a
+  `${VAR}` reference, and stray whitespace or invisible characters are each
+  refused as `400 invalid_input` with `"field": "value"`.
+- **Vendor check:** the engine then checks the value at the vendor with reads
+  only. For Expo it checks that the token works, that it is a robot's, that
+  the robot holds a role on the company's account, that the role is the
+  agent's level and not Admin or Owner, and that no other agent has the robot.
+  A refusal is `400 invalid_input` with the vendor's sentence in `detail`, what
+  to do in `hint`, and `"field": "value"`.
+- **Sealing:** a value that passes is sealed by the agent's own sync under the
+  name the engine derives for it, the agent is read back with it, and the
+  answer is `{"detail": "Works. ...", "access": <the Agents tab>}`. The value is
+  never echoed, logged or recorded: the audit line names the seat, the lane,
+  the account and its id, and what the vendor shows of the credential (Expo's
+  token prefix).
+- **Other refusals:** an agent that is not on at the integration is
+  `409 invalid_input`, a kind that takes no pasted credential is
+  `404 no_seat_access`, and a sync in flight is `409 pass_in_flight`.
 
 #### Moving a company onto per-seat access
 
