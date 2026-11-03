@@ -74,7 +74,7 @@ import { RunQuestion } from "~/components/RunQuestion.tsx";
 import { answerFate, type GivenAnswer } from "./answerFate.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
-import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
+import { CHECKED_WORDS, renderInline, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
@@ -384,7 +384,7 @@ function AskPane({
           </>,
         )}
         <ReadingPaneTitle>
-          {renderTokens(askHeadline(ask), "question", "text", true)}
+          {renderInline(askHeadline(ask), "question", { links: "text", scoped: true })}
         </ReadingPaneTitle>
         {context && (
           <ReadingPaneLead>
@@ -401,7 +401,7 @@ function AskPane({
             }
             footer={chips}
           >
-            <p>{renderTokens(reasoning.text, "reasoning", "checked", true)}</p>
+            <p>{renderInline(reasoning.text, "reasoning", { ...CHECKED_WORDS, scoped: true })}</p>
           </ReadingPaneReasoning>
         ) : (
           chips
@@ -509,7 +509,10 @@ function AnsweredPane({
           <RunQuestion question={answeredQuestion(answered)} />
         ) : (
           <ReadingPaneTitle>
-            {renderTokens(ask ? askHeadline(ask.ask) : "", "question", "text", true)}
+            {renderInline(ask ? askHeadline(ask.ask) : "", "question", {
+              links: "text",
+              scoped: true,
+            })}
           </ReadingPaneTitle>
         )}
         {context && (
@@ -1065,7 +1068,7 @@ function RunPane({
             }
             footer={chips}
           >
-            <p>{renderTokens(reasoning.text, "reasoning", "checked", true)}</p>
+            <p>{renderInline(reasoning.text, "reasoning", { ...CHECKED_WORDS, scoped: true })}</p>
           </ReadingPaneReasoning>
         ) : (
           chips

@@ -571,6 +571,28 @@ describe("the pane", () => {
     expect(screen.getByText("The only cost is the webinar slot.")).toBeTruthy();
   });
 
+  // An ask's headline and reasoning were drawn as words, so their markdown showed.
+  test("an ask's headline, reasoning and row read its markdown, not its syntax", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = askItem({
+      ...DECISION,
+      question: "Merge at head **b003820**?",
+      rationale: "Ship once `make check` passes.",
+    });
+    mount({ answers: { decisions: decisionsOf(ask) } });
+    await settle();
+    // jsdom's accessible name trims each run, so the words are read as text.
+    const heading = screen.getByRole("heading", { name: /^Merge at head\s*b003820\?$/ });
+    expect(heading.textContent).toBe("Merge at head b003820?");
+    expect(heading.querySelector("strong")?.textContent).toBe("b003820");
+    expect(document.querySelector(".crewlet-reading-pane__reasoning code")?.textContent).toBe(
+      "make check",
+    );
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain("Merge at head b003820?");
+    expect(list.textContent).not.toContain("**");
+  });
+
   // A one-paragraph free-text ask used to be its own headline, unformatted.
   test("a free-text ask written as one paragraph is read formatted under a plain heading", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
