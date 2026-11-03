@@ -279,15 +279,18 @@ func TestAStateWhoseClosedRoundsReviewsOutgrowItsShareCutsThemToTheirOpening(t *
 	}
 }
 
-// A STATE WHOSE CLOSED ROUNDS ARE PAST ITS SHARE, CONDENSED, SAYS SO. A turn of
-// enough rounds is past the share however far its rounds are condensed, though
-// its own context is small: the refusal names the closed rounds as what does
-// not fit, never the turn's own context, which a reader would go looking for in
-// the trigger's words.
+// A STATE WHOSE CLOSED ROUNDS' INTENTS OUTGROW ITS SHARE CUTS THEM TO THEIR
+// OPENING. A round's intent is its submission's summary, tens of KiB at the
+// most, and a turn's rounds have no ceiling: three hundred rounds of long
+// summaries are past the share with nothing else in them to give up. Each
+// intent keeps its opening, said to be cut — what the round was about, which
+// the prior-work ledger prints as its "Set out to:" — rather than the park
+// being refused for a turn whose own context fits.
 //
-// Mutation: blame the turn's own context whatever is past the share, and a park
-// refused for its rounds sends its reader to a trigger that is a line long.
-func TestAStateWhoseClosedRoundsArePastItsShareCondensedSaysSo(t *testing.T) {
+// Mutation: refuse the state with its intents whole, and a turn of many rounds
+// with long summaries can no longer park; cut the turn's endings instead, and
+// a resumed turn is told its conversation's earlier turns short.
+func TestAStateWhoseClosedRoundsIntentsOutgrowItsShareCutsThemToTheirOpening(t *testing.T) {
 	t.Parallel()
 	state := worst()
 	state.Iterations = nil
@@ -295,7 +298,51 @@ func TestAStateWhoseClosedRoundsArePastItsShareCondensedSaysSo(t *testing.T) {
 		state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1,
 			Intent: strings.Repeat("set out to do it all. ", 400)})
 	}
-	_, _, err := execstate.EncodeWithin(state, budget)
+	if raw, _ := execstate.Encode(state); len(raw) <= budget {
+		t.Fatalf("the case's state weighs %d, within its share: it needs one past it", len(raw))
+	}
+	blob, condensed, err := execstate.EncodeWithin(state, budget)
+	if err != nil || len(blob) > budget || condensed.Intents != 300 {
+		t.Fatalf("EncodeWithin = %d bytes, %+v, %v; want it within %d, every round's intent cut",
+			len(blob), condensed, err, budget)
+	}
+	got, _, err := execstate.Decode(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endingsKept(t, got, state)
+	for _, round := range got.Iterations {
+		if !strings.HasPrefix(round.Intent, "set out to do it all. ") ||
+			!strings.Contains(round.Intent, "not kept") || len(round.Intent) > 5<<10 {
+			t.Fatalf("round %d keeps an intent of %d bytes, want its opening with the cut said",
+				round.Iteration, len(round.Intent))
+		}
+	}
+}
+
+// A STATE WHOSE CLOSED ROUNDS ARE PAST ITS SHARE, CONDENSED, SAYS SO. A turn of
+// enough rounds is past the share however far its rounds are condensed, though
+// its own context is small: every round's intent, text and review cut to the
+// last of their openings still weighs some kilobytes, and four hundred of them
+// are past it. The refusal names the closed rounds as what does not fit, never
+// the turn's own context, which a reader would go looking for in the trigger's
+// words.
+//
+// Mutation: blame the turn's own context whatever is past the share, and a park
+// refused for its rounds sends its reader to a trigger that is a line long.
+func TestAStateWhoseClosedRoundsArePastItsShareCondensedSaysSo(t *testing.T) {
+	t.Parallel()
+	state := worst()
+	state.Iterations = nil
+	for i := range 400 {
+		state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1,
+			Intent: strings.Repeat("set out to do it all. ", 400), Text: strings.Repeat("the draft. ", 2000),
+			CompletedWork: strings.Repeat("landed. ", 1000), ReviewNotes: strings.Repeat("fix it. ", 1000)})
+	}
+	_, condensed, err := execstate.EncodeWithin(state, budget)
+	if condensed.Intents == 0 || condensed.Texts == 0 || condensed.Reviews == 0 {
+		t.Errorf("the refused state was condensed %+v, want its intents, texts and reviews cut first", condensed)
+	}
 	tooLarge, ok := errors.AsType[*execstate.TooLargeError](err)
 	if !ok || tooLarge.OwnContext() || !strings.Contains(err.Error(), "closed rounds") {
 		t.Errorf("EncodeWithin = %v, want ErrTooLarge naming the closed rounds", err)

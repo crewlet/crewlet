@@ -1888,10 +1888,12 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	switch tooLarge, ok := errors.AsType[*execstate.TooLargeError](err); {
 	case ok:
 		what := "its closed rounds, condensed as far as a park condenses them (every round's calls " +
-			"folded by tool, its text and its review cut to their openings), still take it past its share"
+			"folded by tool, its text, its intent and its review cut to their openings), still take it " +
+			"past its share"
 		if tooLarge.OwnContext() {
-			what = "the turn's own context (its ask, its trigger's words, its turn-start context) is past " +
-				"its share by itself, which no condensing of its closed rounds could change"
+			what = "the turn's own context (its ask, its trigger's words, its turn-start context and how its " +
+				"conversation's earlier turns ended) is past its share by itself, which no condensing of its " +
+				"closed rounds could change"
 		}
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_too_large",
 			"the parked turn state is past its share of the run's row: "+what, err)
@@ -1903,8 +1905,9 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	case condensed.Any():
 		log.InfoContext(ctx, "sandbox_suspension_condensed", "turn_id", turnID, "seat", tel.handle,
 			"results_dropped", condensed.Results, "payloads_left_out", condensed.LeftOut,
-			"texts_cut", condensed.Texts, "tallies_folded", condensed.Identities,
-			"rounds_calls_folded", condensed.Calls, "reviews_cut", condensed.Reviews, "bytes", len(blob),
+			"texts_cut", condensed.Texts, "intents_cut", condensed.Intents,
+			"tallies_folded", condensed.Identities, "rounds_calls_folded", condensed.Calls,
+			"reviews_cut", condensed.Reviews, "bytes", len(blob),
 			"detail", "the parked turn's closed rounds were condensed to fit its share of the run's "+
 				"row; every call keeps its tool, its identity or its tool's count, and its outcome")
 	}

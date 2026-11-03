@@ -43,7 +43,11 @@ import (
 //     fits a round's text to a few thousand characters anyway
 //     (ledger.RenderedArtifactLimit), and the opening it is fitted from is
 //     what is kept.
-//  4. The DIGESTS in a closed round's tallies — the calls its run's record
+//  4. The rounds' INTENTS — what each set out to do, its submission's summary,
+//     which the prior-work ledger prints whole as its "Set out to:" — held to
+//     their opening: prose, which gives way before anything a resumed call
+//     log counts by, and after the text it summarises.
+//  5. The DIGESTS in a closed round's tallies — the calls its run's record
 //     dropped ([ledger.Iteration.Elided]) and the ones its calls' own work made
 //     ([ledger.Iteration.Absorbed]) — each tool's calls folded into one count of
 //     calls to it whose arguments are not known: an over-count of that tool for
@@ -51,7 +55,7 @@ import (
 //     check reads, which is names and outcomes. A round's tallies are bounded on
 //     its run's row, but a turn's rounds are not, so many long ones can carry
 //     more of them than the state has room for.
-//  5. The closed rounds' CALLS THEMSELVES, each folded into its round's tally of
+//  6. The closed rounds' CALLS THEMSELVES, each folded into its round's tally of
 //     the calls its record does not list ([ledger.Iteration.Elided]) — by
 //     identity first, its tool, its digest and its outcome, so a resumed call
 //     log still seeds it exactly, and past that by tool, as the tallies were.
@@ -60,14 +64,14 @@ import (
 //     a tally's calls as the calls they were ([ledger.Called]); what is lost is
 //     the prior-work ledger's line for each, which says how many calls of each
 //     tool the round made instead ([ledger.FormatElided]).
-//  6. The rounds' REVIEW PROSE — what their reviewer said landed and what it
+//  7. The rounds' REVIEW PROSE — what their reviewer said landed and what it
 //     sent back to correct — held to its opening, as the produced text is.
 //
 // Every call keeps its tool, its identity — or, past the last fold, the count
-// of calls to its tool it is one of — and its outcome, and every round its
-// intent, the opening of its review and the tools and outcomes of the calls
-// its record no longer lists — which is everything a resumed segment derives
-// an operation id or judges a delivery from.
+// of calls to its tool it is one of — and its outcome, and every round the
+// opening of its intent and of its review and the tools and outcomes of the
+// calls its record no longer lists — which is everything a resumed segment
+// derives an operation id or judges a delivery from.
 //
 // PAST THAT THE STATE IS REFUSED ([ErrTooLarge], as a [*TooLargeError] saying
 // which of two things is past the share). The turn's own context — what it was
@@ -116,6 +120,8 @@ type Condensed struct {
 	LeftOut int
 	// Texts is how many rounds' produced texts were cut to their opening.
 	Texts int
+	// Intents is how many rounds' intents were cut to their opening.
+	Intents int
 	// Identities is how many closed rounds' tallies were folded by tool.
 	Identities int
 	// Calls is how many closed rounds' calls were folded into their tallies.
@@ -126,7 +132,7 @@ type Condensed struct {
 
 // Any reports whether anything was given up.
 func (c Condensed) Any() bool {
-	return c.Results+c.LeftOut+c.Texts+c.Identities+c.Calls+c.Reviews > 0
+	return c.Results+c.LeftOut+c.Texts+c.Intents+c.Identities+c.Calls+c.Reviews > 0
 }
 
 // turnRecord is the record a condensed payload says it is not kept on.
@@ -143,6 +149,15 @@ var callTiers = []int{2 << 10, 512, 128}
 // tier: sixteen KiB is several times what the prior-work ledger fits a round's
 // text to, and four is about that.
 var textTiers = []int{16 << 10, 4 << 10}
+
+// intentTiers are the bytes a closed round's intent keeps of its opening, tier
+// by tier: what the round set out to do in its executor's own words, its
+// submission's summary — which the live tool holds to tens of KiB
+// (internal/sandbox's MaxSubmissionBytes), and a turn's rounds have no ceiling.
+// FOUR KIB is a summary of ordinary length whole, and ONE KIB its first
+// paragraph, which still says what the round was about. The tiers of
+// [reviewTiers], for prose a reader takes the opening of in the same way.
+var intentTiers = []int{4 << 10, 1 << 10}
 
 // reviewTiers are the bytes each of a round's two pieces of review prose keeps
 // of its opening, tier by tier: four KiB is a reviewer's whole correction of
@@ -185,6 +200,17 @@ func EncodeWithin(s State, budget int) (json.RawMessage, Condensed, error) {
 			if text, whole := turnRecord.Text(s.Iterations[i].Text, tier); whole > 0 {
 				s.Iterations[i].Text = text
 				c.Texts++
+			}
+		}
+		if blob, err = Encode(s); err != nil || len(blob) <= budget {
+			return blob, c, err
+		}
+	}
+	for _, tier := range intentTiers {
+		for i := range s.Iterations {
+			if intent, whole := turnRecord.Text(s.Iterations[i].Intent, tier); whole > 0 {
+				s.Iterations[i].Intent = intent
+				c.Intents++
 			}
 		}
 		if blob, err = Encode(s); err != nil || len(blob) <= budget {
