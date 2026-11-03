@@ -335,11 +335,12 @@ function pauseDeadline(run: ExecutorRow): string | null {
  *
  * An executor is answered by its TURN (`answer_executor`), which reaches it
  * whatever woke the turn that launched it. The banner used to say how to
- * answer and offer nothing to press: an executor a schedule tick or a task
- * assignment launched stored no conversation at all, so "the run resumes when
- * the coordinator carries an answer back" described a door with no handle on
- * it. The chat
- * path is still named where there is one, as the other way in.
+ * answer and offer nothing to press: an executor a task assignment launched
+ * stores no conversation at all, and one a schedule launched stores its
+ * schedule's, which nothing a person writes in chat is ever taken as an answer
+ * on, so "the run resumes when the coordinator carries an answer back"
+ * described a door with no handle on it. The chat path is still named where
+ * there is one (`answerable_in_chat`), as the other way in.
  */
 export function AwaitingBanner({
   run,
