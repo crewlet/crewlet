@@ -1603,12 +1603,14 @@ const (
 	// and its sheet +179 bytes, the kit's chunks +313 bytes net, the Problems
 	// chunk +66 bytes, and 72 bytes across the rest. 5444 KiB.
 	// The Expo Set up sheet (a person makes each agent's robot at Expo and
-	// pastes its token here, checked and sealed by the engine), the handoff it
-	// reads off the sync's wait, and Expo's lane words for that flow took it
-	// from 5443.7 KiB to 5449.9 KiB (+6.2 KiB, 6305 bytes): the integrations
-	// model chunk +6153 bytes and its stylesheet +152 bytes. The initial load
-	// did not grow. 5450 KiB.
-	treeBudget = 5<<20 + 330<<10
+	// pastes its token here, checked and sealed by the engine, and rotates it
+	// the same way), the handoff it reads off the sync's wait, the reminder of
+	// an old credential still at the vendor, keeping a turned-off robot, and
+	// the Cloud and Infrastructure group took it from 5443.7 KiB to 5451.0 KiB
+	// (+7.3 KiB, 7466 bytes): the integrations model chunk +7301 bytes and its
+	// stylesheet +152 bytes, and 13 bytes across the chunks that import them.
+	// The initial load did not grow. 5452 KiB.
+	treeBudget = 5<<20 + 332<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
