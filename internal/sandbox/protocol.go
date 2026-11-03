@@ -54,8 +54,16 @@
 // So is a STOPPED one — a person's pause with `stop_running` ends the seat's
 // launching and running runs at once ([Coordinator.StopSeat]) — as a stop and
 // never as a loss, with who stopped it recorded in the deciding write
-// ([PendingRun.Stop]), its spend read off the box and charged before the box
-// goes, and the turn parked on it closed as stopped ([CoordinatorOptions.CloseStopped]).
+// ([PendingRun.Stop]), its job ENDED and its spend read off the box and charged
+// before the box goes, and the turn parked on it closed as stopped
+// ([CoordinatorOptions.CloseStopped]).
+//
+// AND A STOPPED OR LOST JOB IS ENDED BEFORE ITS SESSION IS TAKEN: the read
+// sends its script a request to end it — SIGUSR1 to the pid the script recorded
+// in its box ([Sandbox.EndJob], [JobEnder]) — which stops its harness and packs
+// its session as its own end does, and kills what is left past the wait
+// ([Sandbox.KillJob]), so what is taken is final wherever the job ended. See
+// endjob.go.
 //
 // The reap fences the row to its lease before it revives or lets go of
 // anything — and the revival stamps that lease on the row itself — and a take

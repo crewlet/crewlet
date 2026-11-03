@@ -541,6 +541,22 @@ type FakeRunner struct {
 	// before it answers — a box that takes a while to read.
 	LiveGate chan struct{}
 
+	// EndFunc, when set, answers every request to end a job
+	// ([FakeRunner.AskEnd]) in place of the default — a script that hears it
+	// and ends its job — and is called without the runner's lock. Unheard
+	// makes every request answer [EndUnheard] and ask nothing: a script that
+	// records no end protocol, as an older build's records none. Set either
+	// before the first stop or loss.
+	EndFunc func(ctx context.Context, box Sandbox, handle RunHandle) (EndAsk, error)
+	Unheard bool
+	// endsAs is what a job asked to end reports ([FakeRunner.EndsAs]), nil
+	// for what it would have reported as it stood; ended is every box whose
+	// job heard an end request and ended, by the box's id; asks counts the
+	// requests made.
+	endsAs *Result
+	ended  map[string]bool
+	asks   int
+
 	// Session, when set, is the harness session every box this runner is
 	// asked about holds: what [FakeRunner.TakeSession] hands a capture,
 	// and what makes this fake a [SessionTaker]. Set it before the first
@@ -597,7 +613,75 @@ func (p *fakePlay) played() bool { return p.finished.Load() }
 
 // NewFakeRunner returns a runner under the given name.
 func NewFakeRunner(name string) *FakeRunner {
-	return &FakeRunner{name: name, installed: map[string]bool{}, plays: map[string]*fakePlay{}}
+	return &FakeRunner{name: name, installed: map[string]bool{}, plays: map[string]*fakePlay{},
+		ended: map[string]bool{}}
+}
+
+// fakeScriptPID is the pid a [FakeRunner]'s job's script answers an end request
+// on, as a real script records its own in its box.
+const fakeScriptPID = 4243
+
+var _ JobEnder = (*FakeRunner)(nil)
+
+// AskEnd asks the job in box to end, as a real runner does: the request sent
+// through the box ([Sandbox.EndJob], which a [FakeSandbox] records), and the
+// job — by default — hearing it and ending, so the next poll of its box
+// reports it over and its collection reads what [FakeRunner.EndsAs] set, or
+// what it would have reported as it stood. [FakeRunner.EndFunc] and
+// [FakeRunner.Unheard] say otherwise; a box that answers the pid is no process
+// of the job is [EndGone].
+func (r *FakeRunner) AskEnd(ctx context.Context, box Sandbox, handle RunHandle) (EndAsk, error) {
+	r.mu.Lock()
+	end, unheard := r.EndFunc, r.Unheard
+	r.asks++
+	r.mu.Unlock()
+	switch {
+	case end != nil:
+		return end(ctx, box, handle)
+	case unheard:
+		return EndUnheard, nil
+	}
+	switch err := box.EndJob(ctx, handle.CommandID, fakeScriptPID); {
+	case errors.Is(err, ErrNotJobProcess):
+		return EndGone, nil
+	case err != nil:
+		return "", err
+	}
+	r.EndJobIn(box)
+	return EndAsked, nil
+}
+
+// EndsAs makes a job asked to end report result once it has.
+func (r *FakeRunner) EndsAs(result Result) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.endsAs = &result
+}
+
+// EndJobIn is the job in box ending as a request to end it would leave it: over
+// at its next poll, reporting what [FakeRunner.EndsAs] set — what an
+// [FakeRunner.EndFunc] calls where it lets a request end the job.
+func (r *FakeRunner) EndJobIn(box Sandbox) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ended == nil {
+		r.ended = map[string]bool{}
+	}
+	r.ended[box.ID()] = true
+}
+
+// endedLocked reports whether the job in box heard a request to end it and
+// ended. A NIL BOX is a case asking the runner alone about a job, as the
+// engine's rigs poll it, and holds no job a request ended.
+func (r *FakeRunner) endedLocked(box Sandbox) bool {
+	return box != nil && r.ended[box.ID()]
+}
+
+// Asks is how many requests to end a job were made of this runner.
+func (r *FakeRunner) Asks() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.asks
 }
 
 // play is a played job's result, playing it first if nothing has yet; ok is
@@ -682,12 +766,18 @@ func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (J
 	r.mu.Lock()
 	poll := r.PollFunc
 	_, lost := r.lostJob(handle)
+	ended := r.endedLocked(box)
 	r.mu.Unlock()
 	if poll != nil {
 		return poll(ctx, box)
 	}
 	if lost {
 		return JobLost, nil
+	}
+	// AN ENDED JOB IS OVER, whatever else is staged: its script wrote its
+	// done marker, which a real runner reads before it asks anything else.
+	if ended {
+		return JobEnded, nil
 	}
 	if _, played := r.play(ctx, handle); played {
 		return JobEnded, nil
@@ -720,9 +810,14 @@ func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle)
 	}
 	r.mu.Lock()
 	partial, lost := r.lostJob(handle)
+	endsAs := r.endsAs
+	ended := r.endedLocked(box)
 	r.mu.Unlock()
 	if lost {
 		return partial, nil
+	}
+	if ended && endsAs != nil {
+		return *endsAs, nil
 	}
 	if result, played := r.play(ctx, handle); played {
 		return result, nil

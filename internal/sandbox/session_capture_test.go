@@ -95,7 +95,7 @@ func TestASpoolNeverOutlivesItsCapture(t *testing.T) {
 		rig, _, _ := keepingRig(t)
 		run := rig.launchKept(t, "t1")
 		spooled, kept := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
-			rig.runner, readCapture(BoxReadCollect, Result{}, false))
+			rig.runner, readCapture(BoxReadCollect, Result{}, true))
 		if spooled == nil {
 			t.Fatalf("the take spooled nothing: %+v", kept)
 		}
@@ -300,7 +300,7 @@ func TestACapturesOutcomeIsStampedInTheRoomTheReadLeavesIt(t *testing.T) {
 	rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
 	read, by := readUntil(t)
 	spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
-		readCapture(BoxReadCollect, Result{}, false))
+		readCapture(BoxReadCollect, Result{}, true))
 	if spooled != nil {
 		t.Fatalf("a take whose seal failed spooled %+v", spooled)
 	}
@@ -343,7 +343,7 @@ func TestAPlaceReservedAsTheTakesTimeRanOutIsSettled(t *testing.T) {
 			rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
 			read, by := readUntil(t)
 			spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
-				readCapture(BoxReadCollect, Result{}, false))
+				readCapture(BoxReadCollect, Result{}, true))
 			if spooled != nil {
 				t.Fatalf("a take whose place was never answered spooled %+v", spooled)
 			}

@@ -96,3 +96,138 @@ const JobStopGrace = 5 * time.Second
 // teardown has always had (Close) — beside the command that carries it into a
 // container or a VM.
 const JobKillWait = 2 * JobStopGrace
+
+// JobEndWait is the most the read that ends a stopped or lost job waits, once
+// its script was asked ([EndAsked]), for the job to be over before it kills it
+// ([Coordinator.endJob]).
+//
+// TWO MINUTES AND FIFTEEN SECONDS, which is everything the ended script does on
+// its way out, each at its own bound: the harness's grace ([JobStopGrace]); the
+// pack, at [SessionPackWait] — its minute for tar and gzip over a session at its
+// bound, and the minute it keeps for a harness to come up, which an OpenCode
+// script's export through its own running server does not spend and its `api`
+// calls do; and the script's own stops of its login exporter and its server,
+// a grace each. A job not over by then has a pack that is stuck, or an `api`
+// call that is wedged, and is killed — its session then packed by the read.
+const JobEndWait = SessionPackWait + 3*JobStopGrace
+
+// JobEndBudget is the most an end adds to the read it is made in: the wait for
+// the job to be over, and the kill past it ([JobKillWait]).
+const JobEndBudget = JobEndWait + JobKillWait
+
+// jobEndPoll is how often the read asks whether an ended job is over: the
+// runner's own poll, a marker read and, in a container or a VM, one exec of a
+// tenth to half a second. An end takes seconds, so a second costs at most a
+// second of it and a handful of execs.
+const jobEndPoll = time.Second
+
+// endJob ENDS a stopped or lost job before its session is taken, on its box's
+// host, as the first step of the read that takes it ([Coordinator.readBox],
+// [Coordinator.readLost]), and reports whether the job is over when it is done.
+//
+// A job that is already over has strays at most — a process its harness left
+// running in its group — which the kill sweeps. Any other is ASKED to end
+// ([JobEnder]): its script ends its harness and packs the session as its own
+// exit does (internal/sandbox/executor's end.go), so what the read then takes
+// is the job's own end, the step in flight settled, and FINAL. The read waits
+// for that, at most [JobEndWait], polling every [jobEndPoll], and then KILLS
+// what is left of the job ([Sandbox.KillJob]) — a sweep after a clean end, the
+// escalation past the wait, and at once where nothing could be asked: a script
+// of an older build or one not yet at its first line ([EndUnheard]), a pid that
+// is no process of the job ([EndGone]), a box that could not be asked.
+//
+// A JOB STILL RUNNING AFTER ALL THAT — a box whose kill could not reach it, a
+// poll that cannot say — is taken as it stands, not final, and its reclaim ends
+// it; the log says so.
+//
+// THE KILL OUTLIVES THE READ: it runs under a context of its own ([detached]),
+// since the stop or the loss decided the job's end, and a read cut short — its
+// asker gone — must not leave the job running on the strength of the read alone.
+func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, runner Runner) bool {
+	if run.CommandID == "" {
+		// NO JOB WAS STARTED in the box — a launch stopped or lost before its
+		// command was recorded — so there is nothing to end.
+		return true
+	}
+	handle := run.Handle()
+	if state, err := runner.Poll(ctx, box, handle); err == nil && state.Over() {
+		c.killJob(ctx, run, box, "")
+		return true
+	}
+	ask, err := EndUnheard, error(nil)
+	if ender, ok := runner.(JobEnder); ok {
+		ask, err = ender.AskEnd(ctx, box, handle)
+	}
+	began := time.Now()
+	var why string
+	switch {
+	case err != nil:
+		why = "ask_failed"
+		log.WarnContext(ctx, "sandbox_job_end_unasked", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+			"error", err.Error(), "detail", "the job could not be asked to end, so it is killed at once")
+	case ask == EndUnheard:
+		why = "script_unheard"
+	case ask == EndGone:
+		why = "not_the_jobs"
+	case c.awaitEnd(ctx, box, runner, handle):
+		log.InfoContext(ctx, "sandbox_job_ended", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+			"launch_id", run.LaunchID, "waited_seconds", time.Since(began).Seconds())
+		c.killJob(ctx, run, box, "")
+		return true
+	default:
+		why = "outlived_its_end"
+	}
+	if why == "outlived_its_end" {
+		log.WarnContext(ctx, "sandbox_job_killed", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+			"why", why, "waited_seconds", time.Since(began).Seconds())
+	} else {
+		log.InfoContext(ctx, "sandbox_job_killed", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+			"why", why)
+	}
+	c.killJob(ctx, run, box, why)
+	state, err := runner.Poll(ctx, box, handle)
+	if err == nil && state.Over() {
+		return true
+	}
+	detail := "the job is still running after it was asked to end and killed, so its session is taken as it " +
+		"stands, not final, and its box's reclaim ends it"
+	if err != nil {
+		detail = "whether the job is over could not be read after it was killed: " + err.Error() +
+			"; its session is taken as it stands, not final, and its box's reclaim ends it"
+	}
+	log.WarnContext(ctx, "sandbox_job_unended", "turn_id", run.TurnID, "sandbox_id", run.SandboxID, "detail", detail)
+	return false
+}
+
+// awaitEnd waits for an asked job to be over, at most [Coordinator.endWait] and
+// no longer than ctx: whether it was.
+func (c *Coordinator) awaitEnd(ctx context.Context, box Sandbox, runner Runner, handle RunHandle) bool {
+	deadline := time.NewTimer(c.endWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(c.endPoll)
+	defer tick.Stop()
+	for {
+		if state, err := runner.Poll(ctx, box, handle); err == nil && state.Over() {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-tick.C:
+		}
+	}
+}
+
+// killJob kills what is left of run's job in box ([Sandbox.KillJob]) under a
+// context of its own ([detached]) — see [Coordinator.endJob] — why being the
+// reason the end gave for it, "" for the sweep after the job's own end.
+func (c *Coordinator) killJob(ctx context.Context, run PendingRun, box Sandbox, why string) {
+	killCtx, cancel := detached(ctx)
+	defer cancel()
+	if err := box.KillJob(killCtx, run.CommandID); err != nil {
+		log.WarnContext(ctx, "sandbox_job_kill_failed", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+			"why", why, "error", err.Error())
+	}
+}

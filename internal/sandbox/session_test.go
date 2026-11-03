@@ -664,15 +664,14 @@ func TestTheSwitchOffKeepsNothingAndStillEndsTheTurn(t *testing.T) {
 
 // A STOP TAKES THE STOPPED JOB'S SESSION OFF THE FRAME THAT DECIDED IT, BEFORE
 // ITS BOX GOES: the pause watch decides the stop and hands the rest to the
-// ending's retry, which packs the session now — the job never reached its own
-// pack, and is still working, so the take is not final — and reclaims the box
-// after; the capture is recorded before the turn's end, which says the turn
-// was stopped.
+// ending's retry, whose read ends the job — here one already over — and takes
+// the session its script left, final, and reclaims the box after; the capture
+// is recorded before the turn's end, which says the turn was stopped.
 //
 // Mutation: take the stop's session on the frame that decided it, as the read
-// once did, as the run's script left it, or after the reclaim (the fake reads
-// no reclaimed box), and the frame is held for an upload, nothing is packed,
-// or there is no box left to pack in.
+// once did, packed as it stands, or after the reclaim (the fake reads no
+// reclaimed box), and the frame is held for an upload, the job's own end is
+// packed over, or there is no box left to read.
 func TestAStopTakesItsSessionOffTheFrameAndBeforeTheReclaim(t *testing.T) {
 	t.Parallel()
 	rig, writes, _ := keepingRig(t)
@@ -689,8 +688,8 @@ func TestAStopTakesItsSessionOffTheFrameAndBeforeTheReclaim(t *testing.T) {
 	rig.fireRetries()
 
 	takes := rig.runner.Takes()
-	if len(takes) != 1 || !takes[0].Pack {
-		t.Fatalf("takes %+v, want the stopped job's session packed now", takes)
+	if len(takes) != 1 || takes[0].Pack {
+		t.Fatalf("takes %+v, want the stopped job's session taken as its end left it", takes)
 	}
 	captures := writes.captured()
 	if len(captures) != 1 || captures[0].n.LaunchSeq != launched.LaunchSeq || captures[0].err != nil {
@@ -920,7 +919,8 @@ func TestTheScrubReadsTheLoginAgainWhereItIsRefreshed(t *testing.T) {
 // A LOST RUN'S BOX IS TAKEN BEFORE ITS ENDING RECLAIMS IT: a launch whose engine
 // restarted before its turn could park is reaped as its seat is recovered, and
 // its box — on this node's host, still there — is read for its session by the
-// ending's retry, attached, packed now, and reclaimed after.
+// ending's retry, attached, its job ended, the session its end left taken, and
+// the box reclaimed after.
 //
 // Mutation: drop the loss's take, or make it after the reclaim, and the lost
 // job's session is gone with its box.
@@ -937,8 +937,8 @@ func TestALostRunsBoxIsTakenBeforeItsEndingReclaimsIt(t *testing.T) {
 	rig.fireRetries()
 
 	takes := rig.runner.Takes()
-	if len(takes) != 1 || !takes[0].Pack {
-		t.Fatalf("takes %+v, want the lost job's session packed before its box went", takes)
+	if len(takes) != 1 || takes[0].Pack {
+		t.Fatalf("takes %+v, want the lost job's session taken as its end left it, before its box went", takes)
 	}
 	if len(writes.captured()) != 1 {
 		t.Fatalf("recorded %d captures of the lost job, want 1", len(writes.captured()))
@@ -1083,19 +1083,21 @@ func TestACaptureTheSeatsBudgetCannotHoldIsNotUploaded(t *testing.T) {
 }
 
 // EVERY COLLECTION TAKES WHAT ITS JOB LEFT, AND SAYS WHETHER THE JOB HAD ENDED:
-// the archive the run's script packed at its harness's exit, as it is; a job
-// that ended without packing — one that failed before it got there — packed
-// now, and final; and a job its turn's cap ended while it still ran, packed now
-// as it stood and NOT final, since it went on working until its box was paused.
+// a job that is over is taken as over, and final — the archive the run's
+// script packed at its harness's exit, as it is, and for a job that ended
+// without packing (one that failed before it got there) one the runner packs
+// now where the script left none ([SessionTake.Pack]); and a job its turn's
+// cap ended while it still ran, packed now as it stood and NOT final, since it
+// went on working until its box was paused.
 //
 // AND A JOB WHOSE POLL CANNOT SAY WHETHER IT STILL WORKS is taken for one that
 // does: packed as it stands and not final, so a collection retried after it
 // takes the job again rather than passing over what it did meanwhile.
 //
-// Mutation: read a job that never packed as one with nothing to take, call a
-// cap-ended job's capture final, take its archive as its script left it, or
-// take a job whose poll failed for one that had ended, and a row below
-// differs.
+// Mutation: read a job that never packed as one with nothing to take, or as
+// one still working, call a cap-ended job's capture final, take its archive as
+// its script left it, or take a job whose poll failed for one that had ended,
+// and a row below differs.
 func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1104,7 +1106,7 @@ func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 		wantPack, final           bool
 	}{
 		{name: "packed by its script", packed: true, final: true},
-		{name: "ended without packing", wantPack: true, final: true},
+		{name: "ended without packing", final: true},
 		{name: "ended at its turn's cap while it ran", capped: true, wantPack: true},
 		{name: "at its turn's cap, its poll unanswered", capped: true, pollFails: true, wantPack: true},
 	} {

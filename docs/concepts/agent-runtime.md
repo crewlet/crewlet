@@ -527,8 +527,10 @@ stateDiagram-v2
   [executor](code-sandbox.md) has no rounds the engine sees, so the node holding the
   seat ends it as soon as the stop reaches it — when the pause lands, when the
   node next reads every pause, or when it acquires the stopped seat: its
-  tool bridge is closed, what it had spent is read off its box and charged, the
-  box is reclaimed, and the stop is announced as `executor_stopped` (never
+  tool bridge is closed, its job is ended — its harness told to stop and its
+  session packed as its own end packs it, or killed where it will not stop —
+  what it had spent is read off its box and charged, the box is reclaimed, and
+  the stop is announced as `executor_stopped` (never
   `executor_failed` — a stop is not a loss). The turn that was parked on the
   executor is closed in the same shape as a turn stopped at its next round:
   `agent_turn_stopped` and a completion carrying `stopped`. A launch the stop

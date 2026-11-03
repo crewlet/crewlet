@@ -1,0 +1,410 @@
+package sandbox
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// stampSpy is a run's store that keeps every capture stamped on a row, so a case
+// can read whether a take was final after the ending that took it has deleted
+// the row.
+type stampSpy struct {
+	PendingStore
+	mu     sync.Mutex
+	stamps []SessionCapture
+}
+
+func (s *stampSpy) StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
+	s.mu.Lock()
+	s.stamps = append(s.stamps, capture)
+	s.mu.Unlock()
+	return s.PendingStore.StampCapture(ctx, turnID, capture)
+}
+
+// begun is every capture stamped as begun: one per take.
+func (s *stampSpy) begun() []SessionCapture {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []SessionCapture
+	for _, c := range s.stamps {
+		if c.State == CaptureBegun {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// spyStamps puts a [stampSpy] in front of the rig coordinator's store.
+func (r *coordRig) spyStamps() *stampSpy {
+	spy := &stampSpy{PendingStore: r.coordinator.pending}
+	r.coordinator.pending = spy
+	return spy
+}
+
+// steps is what a case watched happen, in order.
+type steps struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (s *steps) note(step string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seen = append(s.seen, step)
+}
+
+func (s *steps) all() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.seen)
+}
+
+// first is where step first falls, or -1.
+func (s *steps) first(step string) int { return slices.Index(s.all(), step) }
+
+// watchEnd has the rig record, in order, the run's bridge session closed, its
+// job asked to end — which a script then ends — and its job killed, with how
+// many sessions had been taken by then.
+func (r *coordRig) watchEnd(box *FakeSandbox) *steps {
+	seen := &steps{}
+	r.coordinator.ended = func(string) { seen.note("session closed") }
+	r.runner.EndFunc = func(_ context.Context, box Sandbox, _ RunHandle) (EndAsk, error) {
+		seen.note("asked")
+		r.runner.EndJobIn(box)
+		return EndAsked, nil
+	}
+	box.KillJobFunc = func(context.Context, string) error {
+		seen.note(fmt.Sprintf("killed after %d takes", len(r.runner.Takes())))
+		return nil
+	}
+	return seen
+}
+
+// A STOP ENDS ITS JOB BEFORE IT TAKES ITS SESSION. The frame that decides the
+// stop closes the run's bridge session and goes; the ending's retry reads the
+// job's box, and the read ENDS THE JOB first — asks its script, which ends it,
+// and sweeps what is left — and only then takes the session the job's end left,
+// final, before the box is reclaimed; the capture is recorded before the turn's
+// end. And it is stamped INTERRUPTED, though its script packed it after a clean
+// exit: a harness told to stop was stopped mid-step.
+//
+// Mutation: take the session before the job's end, and it is packed as it
+// stands, not final; read a job ended on request as a clean exit, and its
+// capture is stamped whole.
+func TestAStopEndsItsJobBeforeItTakesItsSession(t *testing.T) {
+	t.Parallel()
+	rig, writes, _ := keepingRig(t)
+	stamps := rig.spyStamps()
+	launched := rig.launchKept(t, "t1")
+	seen := rig.watchEnd(rig.provider.Box(launched.SandboxID))
+	// WHAT THE ENDED JOB'S SCRIPT REPORTS: the archive it packed as its own
+	// exit does, after a harness that went within its grace.
+	rig.runner.EndsAs(Result{Text: "halfway through", SessionID: "s-1",
+		Captured: &rig.runner.Session.Archive, JobEnd: JobEndAsked})
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	if rig.runner.Asks() != 0 {
+		t.Fatal("the frame that decided the stop asked the job to end itself")
+	}
+	rig.fireRetries()
+	rig.awaitKeeps()
+	rig.fireRetries()
+
+	closed, asked := seen.first("session closed"), seen.first("asked")
+	if closed < 0 || asked < 0 || closed > asked || seen.first("killed after 0 takes") < asked {
+		t.Fatalf("the stop went %v, want its session closed, its job asked to end and swept, before anything "+
+			"was taken", seen.all())
+	}
+	takes := rig.runner.Takes()
+	if len(takes) != 1 || takes[0].Pack {
+		t.Fatalf("takes %+v, want the session the job's end left", takes)
+	}
+	if begun := stamps.begun(); len(begun) != 1 || !begun[0].Final || !begun[0].Interrupted {
+		t.Fatalf("the stop's capture was stamped %+v, want it final and interrupted", begun)
+	}
+	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
+		t.Fatalf("killed %v, want the box reclaimed after its session was taken", killed)
+	}
+	if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
+		t.Fatalf("the log was written %v, want the capture before the turn's end", got)
+	}
+}
+
+// A LOSS ENDS ITS JOB BEFORE IT TAKES ITS SESSION. A launch whose engine
+// restarted before its turn could park is reaped as its seat is recovered: its
+// job may still be working, so the ending closes its bridge session before
+// anything else — nothing it does after that acts as the seat — then its read
+// ends the job, takes the session its end left, final, and the box is
+// reclaimed after.
+//
+// Mutations: drop the loss's end, and the job is never asked and its session is
+// packed as it stands; drop the early close of the session, and the job acts as
+// the seat through its whole take, until the reclaim closes it.
+func TestALossEndsItsJobBeforeItTakesItsSession(t *testing.T) {
+	t.Parallel()
+	rig, _, _ := keepingRig(t)
+	stamps := rig.spyStamps()
+	launched := rig.launching("t1")
+	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+	seen := rig.watchEnd(rig.provider.Box(launched.SandboxID))
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+	rig.fireRetries()
+	rig.awaitKeeps()
+	rig.fireRetries()
+
+	order := seen.all()
+	closed, asked := seen.first("session closed"), seen.first("asked")
+	if closed < 0 || asked < 0 || closed > asked || seen.first("killed after 0 takes") < asked {
+		t.Fatalf("the loss went %v, want its session closed, then its job asked to end and swept, before "+
+			"anything was taken", order)
+	}
+	takes := rig.runner.Takes()
+	if len(takes) != 1 || takes[0].Pack {
+		t.Fatalf("takes %+v, want the session the lost job's end left", takes)
+	}
+	if begun := stamps.begun(); len(begun) != 1 || !begun[0].Final {
+		t.Fatalf("the loss's capture was stamped %+v, want it final", begun)
+	}
+	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
+		t.Fatalf("killed %v, want the lost job's box reclaimed after", killed)
+	}
+}
+
+// A JOB THAT OUTLIVES ITS END IS KILLED BEFORE ITS TAKE. A script asked to end
+// whose job is not over by the end's wait — a pack stuck, a call wedged — has
+// what is left of its job killed: a kill that ends it leaves a session taken
+// final; one that does not leaves it taken as it stands, not final, and says
+// so.
+//
+// Mutation: take the session when the wait runs out, killing nothing, and the
+// job is never killed and is taken as it stands.
+func TestAJobThatOutlivesItsEndIsKilledBeforeItsTake(t *testing.T) {
+	for name, killEnds := range map[string]bool{"a kill that ends it": true, "a kill that does not": false} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLogs(t)
+			rig, _, _ := keepingRig(t)
+			rig.coordinator.endWait = 50 * time.Millisecond
+			stamps := rig.spyStamps()
+			launched := rig.launchKept(t, "t1")
+			box := rig.provider.Box(launched.SandboxID)
+			rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) { return EndAsked, nil }
+			var kills atomic.Int32
+			box.KillJobFunc = func(context.Context, string) error {
+				kills.Add(1)
+				if killEnds {
+					rig.runner.EndJobIn(box)
+				}
+				return nil
+			}
+			if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+				t.Fatalf("StopSeat: %v", err)
+			}
+			rig.fireRetries()
+			rig.awaitKeeps()
+			rig.fireRetries()
+
+			if n := kills.Load(); n != 1 {
+				t.Fatalf("the job that outlived its end was killed %d times, want once", n)
+			}
+			takes, begun := rig.runner.Takes(), stamps.begun()
+			if len(takes) != 1 || len(begun) != 1 {
+				t.Fatalf("takes %+v, stamped %+v; want one take", takes, begun)
+			}
+			if takes[0].Pack == killEnds || begun[0].Final != killEnds {
+				t.Fatalf("the take packed now %v and was stamped final %v, want final %v",
+					takes[0].Pack, begun[0].Final, killEnds)
+			}
+			if !strings.Contains(logs.String(), "sandbox_job_killed") ||
+				!strings.Contains(logs.String(), "outlived_its_end") {
+				t.Fatalf("no kill past the end's wait was said:\n%s", logs.String())
+			}
+			if unended := strings.Contains(logs.String(), "sandbox_job_unended"); unended == killEnds {
+				t.Fatalf("a job the kill ended %v was said unended %v:\n%s", killEnds, unended, logs.String())
+			}
+		})
+	}
+}
+
+// AN UNHEARD JOB IS KILLED, NOT WAITED FOR. A job whose script answers no end
+// request — an older build's, one not yet at its first line — is asked nothing,
+// and the read kills it at once: nothing would ever end it within the wait.
+//
+// Mutation: wait out the end's wait for an unheard job, and it is polled
+// through the whole of it before it is killed.
+func TestAnUnheardJobIsKilledNotWaitedFor(t *testing.T) {
+	t.Parallel()
+	rig, _, _ := keepingRig(t)
+	launched := rig.launchKept(t, "t1")
+	box := rig.provider.Box(launched.SandboxID)
+	rig.runner.Unheard = true
+	var mu sync.Mutex
+	polls, killed, pollsAtKill := 0, false, -1
+	rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		polls++
+		if killed {
+			return JobEnded, nil
+		}
+		return JobRunning, nil
+	}
+	box.KillJobFunc = func(context.Context, string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		killed, pollsAtKill = true, polls
+		return nil
+	}
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	rig.fireRetries()
+	rig.awaitKeeps()
+	rig.fireRetries()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if pollsAtKill != 1 {
+		t.Fatalf("the unheard job was polled %d times before it was killed, want once — whether it was over",
+			pollsAtKill)
+	}
+	if rig.runner.Asks() != 1 {
+		t.Fatalf("the job was asked to end %d times, want once", rig.runner.Asks())
+	}
+	if takes := rig.runner.Takes(); len(takes) != 1 || takes[0].Pack {
+		t.Fatalf("takes %+v, want the killed job's session taken final", takes)
+	}
+}
+
+// A STOP OF A BOX ON ANOTHER HOST ENDS ITS JOB THERE. Only a box's host reaches
+// a `direct` or `container` box, so the node that holds the stopped seat and not
+// the box asks the host for the stop's read, and ends nothing itself; the host
+// makes the read the run's row licenses, and its read ends the job.
+//
+// Mutation: end the job on the asker, and its own box backend — which holds no
+// such box — is asked to.
+func TestAStopOfABoxOnAnotherHostEndsItsJobThere(t *testing.T) {
+	t.Parallel()
+	asker, _, _ := keepingRig(t)
+	asks := &boxAsks{result: Result{}}
+	asker.onNode(t, "node-b", asks, &nudges{})
+	run := asker.launchedBy("t1", "node-a")
+	asker.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+	if err := asker.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	asker.fireRetries()
+	asker.awaitKeeps()
+	asker.fireRetries()
+	if got := asks.reads(); !slices.Contains(got, BoxReadStop) {
+		t.Fatalf("asked the host %v, want the stop's read", got)
+	}
+	if asker.runner.Asks() != 0 || len(asker.provider.Box(run.SandboxID).JobCalls()) != 0 {
+		t.Fatalf("the asker ended the job itself: %d asks, %v", asker.runner.Asks(),
+			asker.provider.Box(run.SandboxID).JobCalls())
+	}
+
+	// AND THE HOST'S READ ENDS IT, licensed by the stop the row records.
+	host, _, _ := keepingRig(t)
+	host.onNode(t, "node-a", &boxAsks{}, &nudges{})
+	hosted := host.launchedBy("t2", "node-a")
+	host.handOver(t, "t2", HandedSecrets{Values: []string{handedToken}})
+	if err := host.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	if _, _, err := host.coordinator.ReadHostedBox(t.Context(), "t2", hosted.LaunchID, hosted.SandboxID,
+		BoxReadStop); err != nil {
+		t.Fatalf("ReadHostedBox of the stop: %v", err)
+	}
+	if host.runner.Asks() != 1 {
+		t.Fatalf("the host asked the stopped job to end %d times, want once", host.runner.Asks())
+	}
+	if calls := host.provider.Box(hosted.SandboxID).JobCalls(); !slices.Contains(calls, "kill cmd-1") {
+		t.Fatalf("the host's read made %v of the box, want its job swept", calls)
+	}
+}
+
+// A STOP WITH THE SWITCH OFF ENDS ITS JOB OFF THE FRAME. Ending a job is waiting
+// for it, so every stop of a job that started in a box is read by the ending's
+// retry, whatever `conversation_session.enabled` says: the switch decides what
+// is kept of a session, not how a stop ends a job. The frame that decided the
+// stop touches nothing of the box; the retry ends the job, reads it and
+// reclaims the box, keeping no session.
+//
+// Mutation: read a local stop with the switch off on the frame that decided it,
+// as a stop once was, and the pause watch waits for the job's end.
+func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
+	t.Parallel()
+	rig, writes, keep := keepingRig(t)
+	keep.policy.Keep = false
+	launched := rig.launchKept(t, "t1")
+	box := rig.provider.Box(launched.SandboxID)
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	if rig.runner.Asks() != 0 || len(box.JobCalls()) != 0 || len(rig.provider.KilledIDs()) != 0 {
+		t.Fatalf("the frame that decided the stop touched the box: %d asks, %v, killed %v",
+			rig.runner.Asks(), box.JobCalls(), rig.provider.KilledIDs())
+	}
+	rig.fireRetries()
+	rig.awaitKeeps()
+	rig.fireRetries()
+
+	if rig.runner.Asks() != 1 {
+		t.Fatalf("the stop's retry asked the job to end %d times, want once", rig.runner.Asks())
+	}
+	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
+		t.Fatalf("killed %v, want the stopped job's box reclaimed", killed)
+	}
+	if takes := rig.runner.Takes(); len(takes) != 0 || len(writes.captured()) != 0 {
+		t.Fatalf("took %d sessions and recorded %d captures with the switch off", len(takes), len(writes.captured()))
+	}
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the stopped run's record was left behind")
+	}
+}
+
+// A STOP'S OR A LOSS'S READ IS GIVEN ITS JOB'S END ON TOP OF THE TAKE: its ask
+// waits a collection's budget and the end's, counted at the host's share as
+// the take is, so a host's take after an end at its bound is given its whole
+// budget all the same; and a collection, which ends nothing, waits what it
+// waited.
+//
+// Mutation: one budget for every read, and the take after an end at its bound
+// is cut short of its own.
+func TestAStopOrLossReadIsGivenItsJobsEndOnTopOfTheTake(t *testing.T) {
+	t.Parallel()
+	if got := BoxReadBudget(BoxReadCollect); got != 460*time.Second {
+		t.Errorf("a collection's read waits %v, want the 460s it waited", got)
+	}
+	endBudget := JobEndBudget
+	end := time.Duration(float64(endBudget) / BoxReadAnswerShare)
+	for _, read := range []BoxRead{BoxReadStop, BoxReadLoss} {
+		over := BoxReadBudget(read) - BoxReadBudget(BoxReadCollect)
+		if diff := over - end; diff < -time.Nanosecond || diff > time.Nanosecond {
+			t.Errorf("a %s read waits %v beyond a collection's, want the end's %v at the host's share", read, over, end)
+		}
+	}
+
+	// THE HOST'S READ, ITS JOB'S END SPENT AT ITS BOUND and the read's own
+	// poll beside it, still hands its take the take's whole budget.
+	share := time.Duration(float64(BoxReadBudget(BoxReadStop)) * BoxReadAnswerShare)
+	spent := JobEndBudget + time.Duration(float64(pollBound)*BoxReadAnswerShare)
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))
+	defer cancel()
+	rig := newCoordRig(t)
+	take, cancelTake, _ := rig.coordinator.takeContext(ctx)
+	defer cancelTake()
+	deadline, _ := take.Deadline()
+	if left := time.Until(deadline); left < SessionTakeBudget-time.Second {
+		t.Fatalf("a take after an end at its bound is given %v, want its whole %v", left, SessionTakeBudget)
+	}
+}
