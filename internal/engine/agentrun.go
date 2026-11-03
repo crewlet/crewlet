@@ -336,7 +336,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		servers = e.boxServers(ctx, company, l.seat, settings)
 	}
 
-	run := newCodingRun(agent, runEnv.env)
+	run := newCodingRun(agent, runEnv.env, runEnv.defaults)
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       cell,
 		Harness:         agent.Harness(),
@@ -348,7 +348,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
 	// a fallback launch on a later member is judged on that member's entry,
 	// never the chain's head.
-	if err := sandboxCredentials(agent, member.Key, handle, spec.Placement, run.env); err != nil {
+	if err := sandboxCredentials(agent, member.Key, handle, spec.Placement, run.signIn); err != nil {
 		return runner.Launched{}, err
 	}
 

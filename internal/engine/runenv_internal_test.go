@@ -461,10 +461,11 @@ func TestASetupFileWhoseSecretIsEmptyIsTheRunsGap(t *testing.T) {
 	}
 }
 
-// AN INTEGRATION'S BOX DEFAULTS SIT BELOW EVERY LAYER A PERSON WRITES: a setup
-// step and the seat's own env each replace one, the agent's identity is never
-// replaced by one, and one whose reference does not resolve is left out and
-// said, never holding the run.
+// AN INTEGRATION'S BOX DEFAULTS SIT BELOW EVERY LAYER A PERSON WRITES, and
+// apart from the run's own: a setup step, the seat's own env and the agent's
+// identity each keep a name, the rest are returned for the launch to lay
+// beneath the entry's env, and one whose reference does not resolve is left
+// out and said, never holding the run.
 func TestBoxDefaultsSitBelowEveryLayerAPersonWrites(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, expoRunDoc)
@@ -481,14 +482,17 @@ func TestBoxDefaultsSitBelowEveryLayerAPersonWrites(t *testing.T) {
 	run := e.runEnvironment(t.Context(), c, seat,
 		&org.RoleSandbox{Env: map[string]string{"CLI_ZONE": "nl-ams-1"}}, step, defaults)
 	for key, want := range map[string]string{
-		"CLI_ORG": "org-1", "CLI_PROJECT": "from-step", "CLI_ZONE": "nl-ams-1", "CREWLET_AGENT_HANDLE": "qa",
+		"CLI_PROJECT": "from-step", "CLI_ZONE": "nl-ams-1", "CREWLET_AGENT_HANDLE": "qa",
 	} {
 		if got := run.env[key]; got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
-	if value, present := run.env["CLI_UNSET"]; present {
-		t.Errorf("an unresolved default reached the run as %q", value)
+	if !maps.Equal(run.defaults, map[string]string{"CLI_ORG": "org-1"}) {
+		t.Errorf("defaults = %v, want only the one no layer above sets", run.defaults)
+	}
+	if _, present := run.env["CLI_ORG"]; present {
+		t.Error("a default was merged into the run's own env")
 	}
 	if run.gap != nil {
 		t.Errorf("an unresolved default held the run: %+v", run.gap)
