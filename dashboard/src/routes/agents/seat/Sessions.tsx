@@ -73,6 +73,7 @@ import type {
   ExecutorSessionAnswer,
   ExecutorSessionRow,
   ExecutorSessionsAnswer,
+  SessionContinuesIn,
   SessionOutcome,
   TranscriptEntry,
   TranscriptEntryKind,
@@ -571,6 +572,20 @@ export function readCutWords(readBytes: number, shown: number): string {
 }
 
 /**
+ * What a relaunch would continue a session in, as the sentence that says it
+ * leads. Keyed by the engine's own set, so a place the engine adds is a
+ * typecheck failure here before it is a raw word on a reader's screen.
+ */
+const CONTINUES_IN: Record<SessionContinuesIn, string> = {
+  any_box:
+    "A relaunch of this turn would continue this session in whichever box it gets, " +
+    "where that box can take it up and the seat's budget can carry it",
+  parked_box:
+    "A relaunch of this turn would continue this session only in the box its run " +
+    "parked in, while that box is held and where the seat's budget can carry it",
+};
+
+/**
  * Whether a relaunch of the session's turn would continue it, as a sentence:
  * the engine's decision (`continuable`) and where (`continues_in`), with its
  * own reason (`not_continuable`) where it would not, where it would only in the
@@ -587,16 +602,11 @@ export function readCutWords(readBytes: number, shown: number): string {
 export function continuableWords(row: ExecutorSessionRow): string {
   const why = (row.not_continuable ?? "").replace(/\.\s*$/, "");
   if (row.continuable) {
+    const lead = CONTINUES_IN[row.continues_in ?? "any_box"] ?? CONTINUES_IN.any_box;
     if (row.continues_in === "parked_box") {
-      const lead =
-        "A relaunch of this turn would continue this session only in the box its run " +
-        "parked in, while that box is held and where the seat's budget can carry it";
       return why ? `${lead}; no other box would: ${why}.` : `${lead}.`;
     }
-    return (
-      "A relaunch of this turn would continue this session in whichever box it gets, " +
-      "where that box can take it up and the seat's budget can carry it."
-    );
+    return `${lead}.`;
   }
   const lead =
     row.continuable === null
