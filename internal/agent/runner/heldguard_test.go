@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/org"
@@ -66,7 +67,7 @@ func (c *firstCommit) Begin(context.Context) (runner.HeldPrior, error) {
 	return runner.HeldPrior{}, nil
 }
 
-func (c *firstCommit) Record(_ context.Context, result sandbox.HeldResult) error {
+func (c *firstCommit) Record(_ context.Context, result sandbox.HeldResult, _ toolloop.ToolResult) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.result == nil {
