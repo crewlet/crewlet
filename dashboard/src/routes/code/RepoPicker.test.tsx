@@ -9,9 +9,11 @@
  * list stays open for it; a row taken is the choice; and the chosen name stays
  * a row where the pages loaded do not hold it.
  */
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { QUIET_MS } from "~/lib/useQuiet.ts";
 import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
+import { settled } from "~/test/settle.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 
 afterEach(() => {
@@ -67,16 +69,26 @@ test("typed text is asked as the listing's prefix, lowercased, once it rests", a
 });
 
 // AN OPENING NO NAME COULD HAVE is said in place and never sent: the engine
-// refuses a prefix its grammar cannot begin. Mutation: drop the check, and
-// `a_b` is asked.
+// refuses a prefix its grammar cannot begin. ON A FAKED CLOCK, moved past the
+// quiet the field waits out before it asks, so the absence is asserted where
+// the question would have gone out, never after a guess at the machine's
+// load. Mutation: drop the check, and `a_b` is asked.
 test("an opening no repository name could have is said and never asked", async () => {
   const asked = stubListing();
   mountCode("#/code", <RepoPicker repo="" onChoose={() => {}} />);
   await waitFor(() => expect(listings(asked)).toHaveLength(1));
-  fireEvent.change(field(), { target: { value: "a_b" } });
-  expect(await screen.findByText("No repository name begins with “a_b”")).toBeTruthy();
-  await new Promise((resolve) => setTimeout(resolve, 500));
-  expect(prefixes(asked)).toEqual([null]);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    fireEvent.change(field(), { target: { value: "a_b" } });
+    expect(screen.getByText("No repository name begins with “a_b”")).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(QUIET_MS);
+    });
+    await settled(() => listings(asked).length);
+    expect(prefixes(asked)).toEqual([null]);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // LOAD MORE PAGES ON UNDER THE SAME PREFIX, and the list stays open for the

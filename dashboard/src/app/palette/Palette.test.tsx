@@ -33,6 +33,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+import { settled } from "~/test/settle.ts";
 
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -1716,12 +1717,20 @@ describe("code", () => {
   test("Code asks the search once the term rests, and a line opens its file at the searched commit", async () => {
     const asked = codeEngine();
     const p = mount();
-    await p.type("needle");
-    // A PAUSE IN ALL ASKS NOTHING OF THE CODE HOST.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, QUIET_MS + 100));
-    });
-    expect(searched(asked)).toEqual([]);
+    // A PAUSE IN ALL ASKS NOTHING OF THE CODE HOST, ON A FAKED CLOCK moved
+    // past the quiet the term waits out, so the absence is asserted where the
+    // question would have gone out, never after a guess at the machine's load.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await p.type("needle");
+      act(() => {
+        vi.advanceTimersByTime(QUIET_MS);
+      });
+      await settled(() => searched(asked).length);
+      expect(searched(asked)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
     await act(async () => {
       fireEvent.click(screen.getByRole("tab", { name: "Code" }));
     });
