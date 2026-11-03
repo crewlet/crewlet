@@ -82,6 +82,7 @@ var Tools = []Tool{
 	{Key: "datadog", Surfaces: []ToolSurface{{string(KindDatadog), "Datadog"}}},
 	{Key: "cloudflare", Surfaces: []ToolSurface{{string(KindCloudflare), "Cloudflare"}}},
 	{Key: "expo", Surfaces: []ToolSurface{{string(KindExpo), "Expo"}}},
+	{Key: "digitalocean", Surfaces: []ToolSurface{{string(KindDigitalOcean), "DigitalOcean"}}},
 }
 
 // ToolState is a tool's standing in the one question a person asks of it: does
