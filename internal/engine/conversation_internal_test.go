@@ -49,6 +49,11 @@ type headLog struct {
 	// as a log does where the base moved before the begin landed.
 	holdNothing bool
 
+	// headErr, where set, is what every head read answers in place of the
+	// head: a log the estate router could not reach, or a copy the read
+	// ladder refused.
+	headErr error
+
 	heads  int
 	begins []executordomain.NewBegin
 }
@@ -107,6 +112,9 @@ func (l *headLog) Head(_ context.Context, handle, conversationKey string,
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.heads++
+	if l.headErr != nil {
+		return executordomain.Head{}, l.headErr
+	}
 	if fresh.Level != statelog.ReadLinearizable {
 		return executordomain.Head{}, errors.New("a head read below the level another node's end is seen at")
 	}
@@ -776,6 +784,44 @@ func TestTheSwitchOffCarriesNothingBetweenTurns(t *testing.T) {
 		ends[0].Ending.Outcome != executordomain.OutcomeFailed {
 		t.Fatalf("with the switch off a turn whose first launch was abandoned ended %+v, want its one end, "+
 			"failed", ends)
+	}
+}
+
+// A CONVERSATION THAT CANNOT BE READ IS LESS CONTEXT, NOT A FAILED TURN. A head
+// read that fails — the estate router unable to reach a data node, a copy the
+// read ladder refuses — fails open: the turn is told nothing of how its
+// conversation's earlier turns ended, its first launch freezes no read, records
+// no begin and continues no session, and it launches all the same, on its fresh
+// brief, the probe saying why it continued nothing.
+//
+// Mutation: fail or panic on a head that cannot be read, or freeze a read
+// nobody made, and a check goes red.
+func TestAnUnreadableConversationIsLessContextNotAFailedTurn(t *testing.T) {
+	t.Parallel()
+	k := newConversingLaunch(t, 0, 0)
+	k.log.endedTurn("b1", "s-b1", "B1's transcript", 42000)
+	k.log.headErr = errors.New("no data node answered the estate router")
+	read := k.read("t2")
+	if read.endingsBlock() != "" || read.frozen() != nil || !strings.Contains(read.why, "could not be read") ||
+		!strings.Contains(read.why, "no data node answered") {
+		t.Fatalf("a head read that failed left %+v, want nothing read, saying why", read)
+	}
+	l := k.launcher("t2", read)
+	basis := l.ProbeSession(k.ctx)
+	if basis.ContinuesBase() || basis.Continues() || !strings.Contains(basis.Why, "could not be read") {
+		t.Fatalf("the first launch is answered %+v, want no session, the failed read its reason", basis)
+	}
+	if _, err := k.launch(t, l, basis, read.endingsBlock()); err != nil {
+		t.Fatalf("a turn whose conversation could not be read did not launch: %v", err)
+	}
+	pending := k.e.sandbox.Load().pending
+	if run, _, err := pending.Get(k.ctx, "t2"); err != nil || run.Base != nil {
+		t.Fatalf("the record froze %+v (%v), want no read", run.Base, err)
+	}
+	last := k.lastStarted(t)
+	if begins := k.log.begun("t2"); len(begins) != 0 || last.Resume != "" || last.Brief != freshBrief("") {
+		t.Fatalf("the launch recorded begins %+v and started session %q on brief %q, want none, on the "+
+			"fresh brief", begins, last.Resume, last.Brief)
 	}
 }
 
