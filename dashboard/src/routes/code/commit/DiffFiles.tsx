@@ -12,10 +12,10 @@
  * `layout=` how, each a filter of the page it is on.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Button, Select, Skeleton, Stack } from "@crewlethq/ui";
-import { useParam } from "~/app/router.tsx";
-import { DiffView } from "~/components/DiffView.tsx";
+import { useNavigator, useParam } from "~/app/router.tsx";
+import { DiffView, type DiffHunk, type DiffLine } from "~/components/DiffView.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { usePatchPages } from "~/lib/patchPages.ts";
@@ -28,6 +28,26 @@ import { repoHref } from "../paths.ts";
 /** A `line=` as the address spells it: a line number, or 0 for none. */
 function lineOf(param: string): number {
   return /^[1-9][0-9]*$/.test(param) ? Number(param) : 0;
+}
+
+/**
+ * Where the hunks read so far stand to a line of the newer side: whether one
+ * draws it, and the furthest newer line any of them reaches (0 for none).
+ * Git writes a file's hunks in the newer side's order, each over a run of its
+ * lines, so a line the hunks reach past without drawing lies between two of
+ * them: unchanged, outside what the diff changes.
+ */
+function placeOf(hunks: readonly DiffHunk[], line: number): { drawn: boolean; reached: number } {
+  let drawn = false;
+  let reached = 0;
+  for (const hunk of hunks) {
+    for (const l of hunk.lines) {
+      if (l.after === null) continue;
+      if (l.after === line) drawn = true;
+      if (l.after > reached) reached = l.after;
+    }
+  }
+  return { drawn: line > 0 && drawn, reached };
 }
 
 /** What git's status letter says of a file. */
@@ -46,7 +66,8 @@ function statusWord(f: CodeDiffFile): string {
 }
 
 export function DiffFiles({ repo, base, head }: { repo: string; base: string; head: string }) {
-  const [file, setFile] = useParam("file", "", "filter");
+  const nav = useNavigator();
+  const [file] = useParam("file", "", "filter");
   const [layout, setLayout] = useParam("layout", "unified", "filter");
   const [lineParam] = useParam("line", "", "filter");
   const params = useMemo(() => ({ name: repo, base, head }), [repo, base, head]);
@@ -110,7 +131,10 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
                     // address can carry: listed, and not opened.
                     disabled={Boolean(f.path_b64)}
                     title={statusWord(f)}
-                    onClick={() => setFile(f.path)}
+                    // A LINE IS THE FILE'S IT WAS NAMED IN: opening another
+                    // file drops it, rather than marking that file's line
+                    // of the same number.
+                    onClick={() => nav.filter({ file: f.path, line: null })}
                   >
                     <span className="mono">{f.path}</span>{" "}
                     <span className="muted">
@@ -169,10 +193,14 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
  * listing holds is known binary before anything is asked, and nothing is.
  *
  * A LINE THE ADDRESS NAMES (`line`, of the newer side) is marked where the
- * patch draws it and scrolled into view once, as it is first drawn. One the
- * patch does not draw, read to its end, is outside what the diff changes:
- * said, with the file itself at `head` offered on that line, rather than a
- * patch drawn as if it held the line.
+ * patch draws it and brought into view once, as it is first drawn, by the
+ * diff itself, which knows which of its blocks holds it however long the
+ * patch is (`DiffView`'s `reveal`). The patch is read on to the page that
+ * holds it, a page at a time with no press, and no further. One the patch
+ * does not draw is outside what the diff changes — known once a line past it
+ * is read, or the whole patch was read short of it: said, with the file
+ * itself at `head` offered on that line, rather than a patch drawn as if it
+ * held the line.
  */
 function FilePatch({
   repo,
@@ -197,21 +225,33 @@ function FilePatch({
     codeRest.query("code_diff", { ...params, cursor }),
   );
   const entry = listed ?? file;
-  const drawn = line > 0 && hunks.some((h) => h.lines.some((l) => l.after === line));
-  const region = useRef<HTMLElement>(null);
-  const scrolled = useRef("");
+  // ONE PREDICATE FOR THE LINE, kept across renders: the diff marks what it
+  // accepts and reveals it once for it, wherever its window is (`DiffView`).
+  const at = useCallback((l: DiffLine) => l.after === line, [line]);
+  const { drawn, reached } = useMemo(() => placeOf(hunks, line), [hunks, line]);
+  // THE PATCH IS FOLLOWED TO THE LINE: its hunks are in the newer side's
+  // order, so while every line read ends before it and git wrote more, the
+  // page holding it is still to come, and it is asked for without a press —
+  // only up to that page, never the rest of the file. A page that failed
+  // stops it, its pager offering the press that asks again.
+  const short = line > 0 && !drawn && reached < line;
+  const follow = short && paged.more && !paged.paging && !paged.pageError;
+  const { next } = paged;
   useEffect(() => {
-    const place = `${path}\u0000${line}`;
-    if (!drawn || scrolled.current === place) return;
-    const marked = region.current?.querySelector<HTMLElement>(".diff-view__line[data-picked]");
-    if (!marked) return;
-    scrolled.current = place;
-    marked.scrollIntoView?.({ block: "center" });
-  }, [drawn, path, line]);
+    if (follow) next();
+  }, [follow, next]);
+  // OUTSIDE AS SOON AS THE ORDER SAYS SO: a line read past it, or the whole
+  // patch read short of it, never the reader paging to the end by hand.
   const outside =
-    line > 0 && !drawn && !!entry && !entry.binary && !!read.data && !read.loading && !paged.more;
+    line > 0 &&
+    !drawn &&
+    !!entry &&
+    !entry.binary &&
+    !!read.data &&
+    !read.loading &&
+    (!short || !paged.more);
   return (
-    <section ref={region} aria-label={`Changes to ${path}`} className="code-file">
+    <section aria-label={`Changes to ${path}`} className="code-file">
       {entry?.binary ? (
         <p className="muted">A binary file: git draws no lines of it.</p>
       ) : read.loading && !read.data ? (
@@ -234,10 +274,14 @@ function FilePatch({
       ) : (
         <Stack gap={2}>
           <DiffView
+            // A NEW FILE IS A NEW DIFF: its window, and the line it reveals
+            // once, start over.
+            key={path}
             hunks={hunks}
             layout={layout}
             aria-label={`Changes to ${path}`}
-            picked={line > 0 ? (l) => l.after === line : undefined}
+            picked={line > 0 ? at : undefined}
+            reveal={line > 0 ? at : undefined}
           />
           <PatchPager paged={paged} />
         </Stack>
