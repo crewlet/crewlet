@@ -140,7 +140,8 @@ func sessionObjectStore(t *testing.T) (*executordomain.SessionStore, *memobj.Bac
 }
 
 // openCodeExport is an OpenCode export of one person's message per text, in
-// order: the document a run's script exports.
+// order: the document a run's script exports, each message one of OpenCode 2's
+// (`SessionMessage.Info`, its kind in `type`).
 func openCodeExport(texts ...string) string {
 	var b strings.Builder
 	b.WriteString(`{"info":{"id":"ses_0123456789abcdef0123456789abcdef"},"messages":[`)
@@ -148,8 +149,8 @@ func openCodeExport(texts ...string) string {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		fmt.Fprintf(&b, `{"info":{"role":"user","time":{"created":%d}},"parts":[{"type":"text","text":%q}]}`,
-			1793361600000+int64(i)*1000, text)
+		fmt.Fprintf(&b, `{"id":"msg_%d","type":"user","text":%q,"time":{"created":%d}}`,
+			i, text, 1793361600000+int64(i)*1000)
 	}
 	b.WriteString("]}")
 	return b.String()

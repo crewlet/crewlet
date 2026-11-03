@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"cmp"
 	"compress/flate"
 	"compress/gzip"
 	"context"
@@ -35,8 +36,9 @@ import (
 // `subagents/`, and the tool results spilled to files — and its task list
 // ([claudeArchiveFormat]); OpenCode's is the document
 // `opencode session export` prints, gzipped: the session and its settled
-// messages, each a list of parts ([openCodeArchiveFormat]). A format this
-// build does not pack is not read ([Carries]).
+// messages, each one of the kinds OpenCode 2 writes, told apart by its `type`
+// ([openCodeArchiveFormat], [openCodeMessage]). A format this build does not
+// pack is not read ([Carries]).
 //
 // # Entries, in the order the harness recorded them
 //
@@ -47,14 +49,15 @@ import (
 // them. The run's own conversation comes first and then each subagent's, in
 // the order the archive holds them, every entry of a subagent naming it. What
 // is NOT an entry is the harness's bookkeeping — a session's title, a snapshot
-// of the files it edited, its system notices, the model's thinking (its
-// working, not what the run did, as the live transcript treats it), and a tool
-// result Claude Code spilled to a file, which the result's own entry names. A
-// part of the record this read could not read is an entry of its own
-// ([EntryUnread]), said where it was — a line that is no record, a record or a
-// message of no shape this read knows, a transcript that is no plain file — so
-// a gap is never read as continuity. Which entries there are, and how many each
-// record makes, is [TranscriptVersion]'s.
+// of the files it edited, its system notices and the notices it writes into a
+// person's turn, the model's thinking (its working, not what the run did, as
+// the live transcript treats it), and a tool result Claude Code spilled to a
+// file, which the result's own entry names. A part of the record this read
+// could not read is an entry of its own ([EntryUnread]), said where it was — a
+// line that is no record, a record or a message of no shape this read knows, a
+// transcript that is no plain file — so a gap is never read as continuity.
+// Which entries there are, and how many each record makes, is
+// [TranscriptVersion]'s.
 //
 // A NOTE IS KNOWN BY ITS HEADING, wherever the harness filed it. Every note
 // opens with the heading the engine writes ([noteHeadOpen]); OpenCode admits
@@ -161,8 +164,10 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 // rather than continued at an ordinal that names another entry here.
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
-// was not, one read as more entries or as fewer, one no longer read.
-const TranscriptVersion = 1
+// was not, one read as more entries or as fewer, one no longer read. At 2, an
+// OpenCode export's messages are read as the kinds OpenCode 2 writes them in,
+// where a build at 1 read every one of them as no entry.
+const TranscriptVersion = 2
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
@@ -1169,47 +1174,125 @@ func (OpenCode) transcript(ctx context.Context, b *transcriptBuilder, archive io
 	return b.openCodeExport(ctx, archive)
 }
 
-// openCodeMessage is the part of one message of an OpenCode export a read
-// takes: who wrote it, whether it is a compaction's summary — `summary` is
-// `true` on such an assistant message, and an object on a user message, which
-// is no summary — when, and its parts, raw: a message whose parts are no list
-// is said rather than read as one that has none.
+// openCodeKind is which kind of message one message of an OpenCode export is:
+// its `type`, the tag of OpenCode 2's `SessionMessage.Info`
+// (packages/schema/src/session-message.ts), whose eleven kinds are the same at
+// 2.0.32 and 2.2.5. Who writes each, and what a transcript makes of it, is
+// [transcriptBuilder.openCodeMessage]'s.
+type openCodeKind string
+
+// The kinds of message an OpenCode export holds.
+const (
+	openCodeUser             openCodeKind = "user"
+	openCodeAssistant        openCodeKind = "assistant"
+	openCodeCompaction       openCodeKind = "compaction"
+	openCodeSynthetic        openCodeKind = "synthetic"
+	openCodeSystem           openCodeKind = "system"
+	openCodeSkill            openCodeKind = "skill"
+	openCodeShell            openCodeKind = "shell"
+	openCodeIdle             openCodeKind = "idle"
+	openCodeAgentSwitched    openCodeKind = "agent-switched"
+	openCodeModelSwitched    openCodeKind = "model-switched"
+	openCodeLocationSwitched openCodeKind = "location-switched"
+)
+
+// The statuses a tool call settles in (`SessionMessage.ToolState`): with its
+// answer, or on a failure. A compaction that settled with its summary is
+// `completed` too.
+const (
+	openCodeCompleted  = "completed"
+	openCodeCallFailed = "error"
+)
+
+// openCodeMessage is one message of an OpenCode export, as far as this
+// package reads one: OpenCode 2's `SessionMessage.Info`, a flat object whose
+// `type` says which kind it is ([openCodeKind]) and whose other fields are that
+// kind's own, each absent from a kind that does not carry it. Decoded loosely
+// ([transcriptBuilder.openCodeNext]), so a field a release retyped reads as
+// its zero and the rest of the message as written.
+//
+// ONE TYPE FOR EVERY READER OF AN EXPORT: who wrote a message and when, what
+// it says, and what a step's request measured and whether it failed are all
+// read off this one, so no two readers of the one document disagree about what
+// a message is. OpenCode 1.x's `{"info": {"role": …}, "parts": […]}` is no
+// message of this document: every message of a 2.x export read in that shape
+// had no role and no parts, and a transcript showed nothing.
 type openCodeMessage struct {
-	Info struct {
-		Role    string          `json:"role"`
-		Summary json.RawMessage `json:"summary"`
-		Time    struct {
-			Created int64 `json:"created"`
-		} `json:"time"`
-	} `json:"info"`
-	Parts json.RawMessage `json:"parts"`
+	// Type is the message's kind.
+	Type openCodeKind `json:"type"`
+
+	// Time is when OpenCode recorded the message, in milliseconds since the
+	// epoch: when a person's message arrived, a step began, a compaction
+	// started.
+	Time struct {
+		Created int64 `json:"created"`
+	} `json:"time"`
+
+	// Text is a person's words on a user message — and OpenCode's own on its
+	// synthetic, system and skill messages, which no entry reads.
+	Text string `json:"text"`
+
+	// Content is an assistant step's, raw: the model's text, its reasoning and
+	// the tools it called, in order ([openCodeContent]). Raw, so content that
+	// is no list is said rather than read as a step that wrote nothing.
+	Content json.RawMessage `json:"content"`
+
+	// Status is a compaction's — running, completed or failed — and Summary
+	// what a completed one hands the model in place of the conversation
+	// before it.
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
+
+	// Tokens is what an assistant step's request measured, and Error, raw,
+	// the failure the step ended on: absent, or null, where it ended without
+	// one.
+	Tokens *openCodeTokens `json:"tokens"`
+	Error  json.RawMessage `json:"error"`
 }
 
-// openCodePart is one part of a message: its text, or a tool's call — its
-// state carrying the input, and the output or the error once it settled.
-// Instants are milliseconds since the epoch.
-type openCodePart struct {
-	Type  string `json:"type"`
-	Text  string `json:"text"`
-	Tool  string `json:"tool"`
-	State struct {
-		Status string          `json:"status"`
-		Input  json.RawMessage `json:"input"`
-		Output string          `json:"output"`
-		Error  string          `json:"error"`
-		Time   struct {
-			Start int64 `json:"start"`
-			End   int64 `json:"end"`
-		} `json:"time"`
-	} `json:"state"`
-	Time struct {
-		Start int64 `json:"start"`
+// openCodeTokens is what one step's request measured (`TokenUsage.Info`):
+// its prompt not served from a cache, and the cache's reads and writes beside
+// it, which together are the whole prompt the request carried.
+type openCodeTokens struct {
+	Input int64 `json:"input"`
+	Cache struct {
+		Read  int64 `json:"read"`
+		Write int64 `json:"write"`
+	} `json:"cache"`
+}
+
+// openCodeContent is one item of an assistant step's content
+// (`SessionMessage.AssistantContent`), told apart by `type`: `text` the model
+// wrote, its `reasoning`, or a `tool` it called — the tool's Name, the call
+// as it stands, and when OpenCode recorded it, in milliseconds since the
+// epoch: when the model began it, when it ran, when it settled.
+type openCodeContent struct {
+	Type  string        `json:"type"`
+	Text  string        `json:"text"`
+	Name  string        `json:"name"`
+	State openCodeState `json:"state"`
+	Time  struct {
+		Created   int64 `json:"created"`
+		Ran       int64 `json:"ran"`
+		Completed int64 `json:"completed"`
 	} `json:"time"`
 }
 
+// openCodeState is a tool call as it stands (`SessionMessage.ToolState`), told
+// apart by `status`: `streaming` while the model writes its input, which is
+// then the text written so far; `running` once it is called; `completed`, its
+// answer the list in `content`; or `error`, its failure in `error` and what
+// it answered before it in `content`. Each raw, and read by what it holds.
+type openCodeState struct {
+	Status  string          `json:"status"`
+	Input   json.RawMessage `json:"input"`
+	Content json.RawMessage `json:"content"`
+	Error   json.RawMessage `json:"error"`
+}
+
 // openCodeExport reads the export document a message at a time, its other
-// fields (the session's own) passed: `{"info": …, "messages": [{"info": …,
-// "parts": […]}, …]}`.
+// fields (the session's own) passed: `{"info": …, "messages": [{"type":
+// "user", …}, {"type": "assistant", …}, …]}`.
 //
 // ONE MESSAGE IS HELD AT A TIME, to about [TranscriptBounds.LineBytes] — the
 // bound a line of a record is read whole to — counted afresh before every
@@ -1291,9 +1374,9 @@ func (b *transcriptBuilder) openCodeDocument(ctx context.Context, dec *json.Deco
 }
 
 // openCodeNext decodes the next message of the list and reads it. A message
-// that is no object, or whose parts are no list, is said; within one, a field
-// whose type a release changed is skipped rather than losing the message, as
-// the stream's events are ([decodeOpenCodeEvent]).
+// that is no object is said; within one, a field whose type a release changed
+// is skipped rather than losing the message, as the stream's events are
+// ([decodeOpenCodeEvent]).
 func (b *transcriptBuilder) openCodeNext(ctx context.Context, dec *json.Decoder) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1312,17 +1395,13 @@ func (b *transcriptBuilder) openCodeNext(ctx context.Context, dec *json.Decoder)
 			return err
 		}
 	}
-	parts, ok := openCodeParts(m.Parts)
-	if !ok {
-		return b.unread("a message of the export whose parts are not a list was not read")
-	}
-	return b.openCodeMessage(ctx, m, parts)
+	return b.openCodeMessage(ctx, m)
 }
 
-// openCodeParts is a message's parts, and false where they are there and are
-// no list. Decoded loosely, a part whose field a release retyped kept with the
-// rest of what it says.
-func openCodeParts(raw json.RawMessage) ([]openCodePart, bool) {
+// openCodeItems is a step's content, and false where it is there and is no
+// list. Decoded loosely, an item whose field a release retyped is kept with
+// the rest of what it says.
+func openCodeItems(raw json.RawMessage) ([]openCodeContent, bool) {
 	raw = bytes.TrimSpace(raw)
 	switch {
 	case absent(raw):
@@ -1330,14 +1409,14 @@ func openCodeParts(raw json.RawMessage) ([]openCodePart, bool) {
 	case raw[0] != '[':
 		return nil, false
 	}
-	var parts []openCodePart
-	if err := json.Unmarshal(raw, &parts); err != nil {
+	var items []openCodeContent
+	if err := json.Unmarshal(raw, &items); err != nil {
 		var mismatch *json.UnmarshalTypeError
 		if !errors.As(err, &mismatch) {
 			return nil, false
 		}
 	}
-	return parts, true
+	return items, true
 }
 
 // pastHeld is how a walk of an export ended: a part of it past the bound one
@@ -1355,53 +1434,180 @@ func (b *transcriptBuilder) pastHeld(held *heldValue, err error) error {
 	return errTranscriptPage
 }
 
-// openCodeMessage reads one message's parts: a person's text is the brief — or
-// a note, where it is one — the model's is its own words, or a summary on a
-// compaction's message, and a tool part is the call and, once it settled, its
-// result. Reasoning, the steps' bookkeeping, files and patches are no entry.
-func (b *transcriptBuilder) openCodeMessage(ctx context.Context, m openCodeMessage,
-	parts []openCodePart) error {
+// openCodeMessage reads one message by its kind. A person's message is the
+// brief — or a note, where it is one: the run's plugin admits a note as a
+// person's message — read by its text alone, as a Claude Code message's text
+// is read and an image beside it is not; an assistant's step is what its model
+// wrote and every tool it called ([transcriptBuilder.openCodeStep]); and a
+// completed compaction is its summary, which the model reads in place of the
+// conversation before it.
+//
+// EVERY OTHER KIND IS OPENCODE'S OWN, and no entry, as the records Claude Code
+// writes for itself are none ([transcriptBuilder.claudeLine]):
+//
+//   - synthetic: a notice OpenCode writes into the person's turn — a
+//     background job's ending, a mode's reminder, an instruction file it
+//     loaded — the counterpart of a record Claude Code marks as its own
+//     (`isMeta`). Never searched for a note: OpenCode files a note as a
+//     person's message, and a notice can carry what a tool printed, which is
+//     never a note;
+//   - system: the run's instructions again, handed to the model as an update
+//     where they changed since the session last read them;
+//   - skill: a skill a person activated, its body handed to the model in a
+//     message of OpenCode's own, as Claude Code hands one in a record of its
+//     own;
+//   - shell: a command a person ran in the session, outside the model, whose
+//     output reaches the model only as a synthetic notice;
+//   - idle, agent-switched, model-switched and location-switched: an
+//     execution's end, and the session's agent, model or directory changed.
+//
+// A compaction still running, or one that failed, is none either: it handed
+// the model no summary.
+//
+// A MESSAGE OF NO KIND THIS READ KNOWS IS SAID, as a message of no shape it
+// knows is. The kinds are the whole of what the releases this build drives
+// write, so one outside them comes from a release this read was not written
+// for, and its words may be what the model read: a gap never read as
+// continuity.
+func (b *transcriptBuilder) openCodeMessage(ctx context.Context, m openCodeMessage) error {
+	at := unixMillis(m.Time.Created)
+	switch m.Type {
+	case openCodeUser:
+		return b.prose(ctx, EntryBrief, at, m.Text)
+	case openCodeAssistant:
+		return b.openCodeStep(ctx, m.Content, at)
+	case openCodeCompaction:
+		if m.Status != openCodeCompleted {
+			return nil
+		}
+		return b.prose(ctx, EntrySummary, at, m.Summary)
+	case openCodeSynthetic, openCodeSystem, openCodeSkill, openCodeShell, openCodeIdle,
+		openCodeAgentSwitched, openCodeModelSwitched, openCodeLocationSwitched:
+		return nil
+	}
+	return b.unread("a message of the export of no kind this read knows was not read")
+}
 
-	at := unixMillis(m.Info.Time.Created)
-	summary := bytes.Equal(bytes.TrimSpace(m.Info.Summary), []byte("true"))
-	for _, p := range parts {
+// openCodeStep reads an assistant step's content, an item at a time: its text
+// as the model's words, and each tool it called ([transcriptBuilder.openCodeTool]).
+// Reasoning is the model's working and no entry, as Claude Code's thinking is
+// none, and so is an item of a type this build does not know; content that is
+// no list is said.
+func (b *transcriptBuilder) openCodeStep(ctx context.Context, content json.RawMessage, at time.Time) error {
+	items, ok := openCodeItems(content)
+	if !ok {
+		return b.unread("a message of the export whose content is not a list was not read")
+	}
+	for _, item := range items {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		var err error
-		switch p.Type {
+		switch item.Type {
 		case "text":
-			kind := EntryModel
-			switch {
-			case m.Info.Role == "user":
-				kind = EntryBrief
-			case m.Info.Role != "assistant":
-				continue
-			case summary:
-				kind = EntrySummary
-			}
-			err = b.prose(ctx, kind, firstInstant(unixMillis(p.Time.Start), at), p.Text)
+			err = b.prose(ctx, EntryModel, at, item.Text)
 		case "tool":
-			err = b.add(TranscriptEntry{Kind: EntryToolCall, Tool: p.Tool,
-				At: firstInstant(unixMillis(p.State.Time.Start), at)}, compactJSON(p.State.Input))
-			if err != nil {
-				return err
-			}
-			ended := firstInstant(unixMillis(p.State.Time.End), at)
-			switch p.State.Status {
-			case "completed":
-				err = b.add(TranscriptEntry{Kind: EntryToolResult, Tool: p.Tool, At: ended},
-					p.State.Output)
-			case "error":
-				err = b.add(TranscriptEntry{Kind: EntryToolResult, Tool: p.Tool, At: ended,
-					Failed: true}, p.State.Error)
-			}
+			err = b.openCodeTool(item, at)
 		}
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// openCodeTool reads one tool the model called: the call, its input as JSON,
+// dated when it ran — or, one that never ran, when the model began it — and,
+// once it settled, what answered it, dated when it did: a completed call's
+// answer, or a failed one's failure, marked. A call OpenCode stopped while the
+// model was still writing it, or while it ran, has no result.
+func (b *transcriptBuilder) openCodeTool(item openCodeContent, at time.Time) error {
+	called := firstInstant(unixMillis(item.Time.Ran), firstInstant(unixMillis(item.Time.Created), at))
+	if err := b.add(TranscriptEntry{Kind: EntryToolCall, Tool: item.Name, At: called},
+		openCodeCallInput(item.State.Input)); err != nil {
+		return err
+	}
+	settled := firstInstant(unixMillis(item.Time.Completed), at)
+	switch item.State.Status {
+	case openCodeCompleted:
+		return b.add(TranscriptEntry{Kind: EntryToolResult, Tool: item.Name, At: settled},
+			openCodeAnswer(item.State.Content))
+	case openCodeCallFailed:
+		return b.add(TranscriptEntry{Kind: EntryToolResult, Tool: item.Name, At: settled, Failed: true},
+			openCodeFailure(item.State))
+	}
+	return nil
+}
+
+// openCodeCallInput is a call's input as one line of JSON: the object it was
+// called with, or, for a call whose input the model was still writing, the
+// text it had written — as JSON where it parses so far, and as written where
+// it does not.
+func openCodeCallInput(raw json.RawMessage) string {
+	var written string
+	if json.Unmarshal(raw, &written) == nil {
+		return compactJSON(json.RawMessage(written))
+	}
+	return compactJSON(raw)
+}
+
+// openCodeAnswer is what a tool answered, the list `Tool.Content` is: each
+// text item's text, a line apart, as a Claude Code tool's result reads
+// ([claudeResultText]), and each file it answered with as the words a file
+// reads in ([openCodeFileText]).
+func openCodeAnswer(raw json.RawMessage) string {
+	var items []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+		Mime string `json:"mime"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		var mismatch *json.UnmarshalTypeError
+		if !errors.As(err, &mismatch) {
+			return ""
+		}
+	}
+	var texts []string
+	for _, item := range items {
+		switch {
+		case item.Type == "text" && strings.TrimSpace(item.Text) != "":
+			texts = append(texts, item.Text)
+		case item.Type == "file":
+			texts = append(texts, openCodeFileText(item.Mime))
+		}
+	}
+	return strings.Join(texts, "\n")
+}
+
+// openCodeFileText is what a file a tool answered with reads as in text: an
+// image as a Claude Code tool's image reads ([claudeImagePlaceholder]), and
+// any other file as a file. Its bytes, inline or behind a URI, are no text.
+func openCodeFileText(mime string) string {
+	if strings.HasPrefix(mime, "image/") {
+		return claudeImagePlaceholder
+	}
+	return "[a file]"
+}
+
+// openCodeFailure is what a failed call answered, as OpenCode hands it to the
+// model: the failure's message — the object `SessionError.Error`, its class
+// where it says nothing more — and then whatever the call answered before it
+// failed. The failure is decoded loosely, as the message around it is.
+func openCodeFailure(state openCodeState) string {
+	var failure struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(state.Error, &failure)
+	said := cmp.Or(failure.Message, failure.Type)
+	answered := openCodeAnswer(state.Content)
+	switch {
+	case answered == "":
+		return said
+	case said == "":
+		return answered
+	}
+	return said + "\n" + answered
 }
 
 // unixMillis is an export's instant, or zero where it carries none, or none an
