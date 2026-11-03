@@ -1,6 +1,6 @@
 # AWS
 
-AWS gives each agent its **own IAM role** in your account, at the level you choose, and signs it in for an hour at a time, so CloudTrail names the agent behind every call it makes. An agent works through the **AWS CLI** in its box and through **AWS's MCP Server**, both as its own role.
+AWS gives each agent its **own IAM role** in your account, at the level you choose, and signs it in for 15 minutes at a time, so CloudTrail names the agent behind every call it makes. An agent works through the **AWS CLI** in its box and through **AWS's MCP Server**, both as its own role.
 
 Connecting creates one CloudFormation stack in your account. Crewlet stores no access key: it signs in through **IAM Roles Anywhere** with a certificate authority it holds itself, whose certificate the stack registers. Nothing here receives events from AWS yet; see [What is not supported yet](#what-is-not-supported-yet).
 
@@ -102,9 +102,9 @@ Crewlet records each role by name and role ID and never adopts a role by its nam
 
 ### Sessions are issued at use
 
-An agent's credentials are never stored. When a run or a tool needs them, Crewlet signs a 15-minute certificate for the agent, opens the broker with it, and assumes the agent's role for **an hour**, naming the session after the agent, which is also its source identity in CloudTrail. The box's credentials file is rewritten as the session renews.
+An agent's credentials are never stored. When a run or a tool needs them, Crewlet signs a 15-minute certificate for the agent, opens the broker with it, and assumes the agent's role for **15 minutes**, naming the session after the agent, which is also its source identity in CloudTrail. The session is renewed with 5 minutes left, and the box's credentials file is rewritten as it renews.
 
-After a seat is turned off and back on within the hour, a session issued before it was turned off may work again until it expires.
+After a seat is turned off and back on within 15 minutes, a session issued before it was turned off may work again until it expires.
 
 ### The agent's tools
 
@@ -171,7 +171,7 @@ integrations:
 | IAM roles per account (1,000 by default) | One role per agent; Test warns when fewer than 20 are left. |
 | Managed policies per role (10 by default) | An agent holds at most five of Crewlet's. |
 | Policy changes are eventually consistent | A level change or a turn-off applies within about 2 minutes, as measured live. |
-| A chained role session lasts at most an hour | Sessions are issued for an hour and renewed before they end. |
+| A session lasts 15 minutes at least (STS's minimum) | Sessions are issued for 15 minutes and renewed with 5 left. An agent role's maximum session is an hour, IAM's minimum for a role. |
 
 ## What is not supported yet
 
