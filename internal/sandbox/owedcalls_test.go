@@ -16,11 +16,15 @@ import (
 // collection asks the job's session to carry what it still owes
 // ([CoordinatorOptions.Settle]), and where it carried something reads the
 // job's calls again: the resumed turn judges the round on the submission the
-// run made, which the claim's read of the row did not hold.
+// run made, which the claim's read of the row did not hold. AND IS CHARGED
+// WHAT THEY COST: the carry writes the session's running total of the engine's
+// spend beside the calls — a `delegate` among them ran workers — and the
+// resume pays the job's spend off what it read.
 //
 // Mutation: collect without asking, or without reading the job's calls again
 // after a carry, and the resume judges a run that submitted as one that did
-// not.
+// not; read the calls again without the spend their carry wrote, and the
+// workers a carried call ran are charged nowhere.
 func TestAJobsOwedCallsAreCarriedBeforeItsRecordIsRead(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -30,13 +34,18 @@ func TestAJobsOwedCallsAreCarriedBeforeItsRecordIsRead(t *testing.T) {
 		mu    sync.Mutex
 		asked []string
 	)
+	// WHAT THE SESSION'S METER READ when it carried the call: a delegated
+	// worker's run and the auxiliary call beside it.
+	carried := EngineSpend{Aux: AuxTokens{Input: 120, Output: 30}, Workers: 1, WorkerInput: 900,
+		WorkerOutput: 200}
 	rig.coordinator.settle = func(ctx context.Context, runID, launchID string) bool {
 		mu.Lock()
 		asked = append(asked, runID+"/"+launchID)
 		mu.Unlock()
 		recorded, err := rig.pending.AppendBridgeCall(ctx, runID, BridgeAppend{Launch: launchID,
 			Owed: []OwedAppend{{Call: BridgeCall{Name: SubmitWorkTool, Seq: 1, StartedAt: rig.now,
-				Args: `{"outcome":"delivered"}`, Digest: strings.Repeat("d", 64)}}}})
+				Args: `{"outcome":"delivered"}`, Digest: strings.Repeat("d", 64)}}},
+			Spent: carried})
 		if err != nil {
 			t.Errorf("the carry: %v", err)
 		}
@@ -62,6 +71,11 @@ func TestAJobsOwedCallsAreCarriedBeforeItsRecordIsRead(t *testing.T) {
 		t.Errorf("the resume judges the run on %+v, missing the submission its session carried",
 			calls[0].Run.BridgeCalls)
 	}
+	if got := calls[0].Engine; got.Workers != carried.Workers || got.WorkerInput != carried.WorkerInput ||
+		got.WorkerOutput != carried.WorkerOutput || got.Aux.Input < carried.Aux.Input ||
+		got.Aux.Output < carried.Aux.Output {
+		t.Errorf("the resume is charged %+v of engine spend, want at least the %+v the carry wrote", got, carried)
+	}
 }
 
 // AND A LOST JOB'S, BEFORE ITS ROUND IS CARRIED ON. A job lost with its host is
@@ -74,7 +88,8 @@ func TestAJobsOwedCallsAreCarriedBeforeItsRecordIsRead(t *testing.T) {
 //
 // Mutation: carry a lost job's round on without asking, or without reading the
 // job's calls again after a carry, and the resume reads a job that submitted as
-// one that did not.
+// one that did not; read them again without the spend the carry wrote, and
+// the workers a carried call ran are charged nowhere.
 func TestALostJobsOwedCallsAreCarriedBeforeItsRoundIsCarriedOn(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -82,13 +97,15 @@ func TestALostJobsOwedCallsAreCarriedBeforeItsRoundIsCarriedOn(t *testing.T) {
 		mu    sync.Mutex
 		asked []string
 	)
+	carried := EngineSpend{Workers: 2, WorkerInput: 1400, WorkerOutput: 350}
 	rig.coordinator.settle = func(ctx context.Context, runID, launchID string) bool {
 		mu.Lock()
 		asked = append(asked, runID+"/"+launchID)
 		mu.Unlock()
 		recorded, err := rig.pending.AppendBridgeCall(ctx, runID, BridgeAppend{Launch: launchID,
 			Owed: []OwedAppend{{Call: BridgeCall{Name: SubmitWorkTool, Seq: 1, StartedAt: rig.now,
-				Args: `{"outcome":"delivered"}`, Digest: strings.Repeat("d", 64)}}}})
+				Args: `{"outcome":"delivered"}`, Digest: strings.Repeat("d", 64)}}},
+			Spent: carried})
 		if err != nil {
 			t.Errorf("the carry: %v", err)
 		}
@@ -117,6 +134,11 @@ func TestALostJobsOwedCallsAreCarriedBeforeItsRoundIsCarriedOn(t *testing.T) {
 	}) {
 		t.Errorf("the resume reads the lost job's calls as %+v, missing the submission its session carried",
 			calls[0].Run.BridgeCalls)
+	}
+	if got := calls[0].Engine; got.Workers != carried.Workers || got.WorkerInput != carried.WorkerInput ||
+		got.WorkerOutput != carried.WorkerOutput {
+		t.Errorf("the lost job's resume is charged %+v of engine spend, want the %+v the carry wrote", got,
+			carried)
 	}
 }
 

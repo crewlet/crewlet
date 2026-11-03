@@ -1632,8 +1632,16 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 // rereadCalls is run with its job's calls read again off its row: the list, the
 // count of the calls it does not list, and the two tallies with the round they
 // are kept for — as one, since a tally read against another read's calls names
-// no round. The run as claimed where the row cannot be read, or no longer holds
-// the job.
+// no round — and what the calls cost the engine ([LaunchRecord.Bridged]). The
+// run as claimed where the row cannot be read, or no longer holds the job.
+//
+// THE SPEND WITH THE CALLS, because one write carried both: every append, a
+// session's carry of what it owed included, writes the session's running
+// total beside the calls ([PendingStore.AppendBridgeCall]), and the resume
+// charges the job's engine spend off this run ([ResumeRequest.Engine]). Read
+// again without it, a carried call's work — a `delegate`'s workers above all —
+// is on the record the resume reads and its cost is charged nowhere: the next
+// launch resets the job's record.
 func (c *Coordinator) rereadCalls(ctx context.Context, run PendingRun) PendingRun {
 	latest, found, err := c.pending.Get(ctx, run.TurnID)
 	switch {
@@ -1646,6 +1654,9 @@ func (c *Coordinator) rereadCalls(ctx context.Context, run PendingRun) PendingRu
 		run.BridgeCalls, run.BridgeCallsElided = latest.BridgeCalls, latest.BridgeCallsElided
 		run.ElidedCalls, run.AbsorbedCalls = latest.ElidedCalls, latest.AbsorbedCalls
 		run.TallyRound = latest.TallyRound
+		// THE NEWER TOTAL, as the store keeps one ([EngineSpend.Newest]):
+		// each figure only grows within one session's meter.
+		run.Launch.Bridged = run.Launch.Bridged.Newest(latest.Launch.Bridged)
 	}
 	return run
 }
