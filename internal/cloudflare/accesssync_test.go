@@ -185,10 +185,15 @@ func TestACloudflareSeatThroughTheSync(t *testing.T) {
 		t.Error("a rotation left the sealed value as it was")
 	}
 
-	// OFF deletes the token and clears its sealed value.
+	// OFF disables the token, so the agent stops at once, then deletes it
+	// and clears its sealed value.
 	off := false
 	w.seat().Enabled = &off
+	writes = len(w.f.wrote())
 	w.sync()
+	if got := w.f.wrote()[writes:]; !slices.Equal(got, []string{"update " + tok.ID, "delete " + tok.ID}) {
+		t.Errorf("turning off wrote %q, want the token disabled then deleted", got)
+	}
 	if _, ok := w.f.token(tok.ID); ok {
 		t.Error("turning the agent off left its token at Cloudflare")
 	}
@@ -342,6 +347,31 @@ func TestOneSeatsUnreadableTokenIsItsOwnFault(t *testing.T) {
 	ops, _ := w.ledger.Record(integration.KindCloudflare, "ops")
 	if tok, _ := w.f.token(ops.Account.ID); w.levelOf(tok) != config.CloudflareLevelOperate {
 		t.Error("the readable seat was not synced beside the unreadable one")
+	}
+}
+
+// A DELETE THAT FAILS LEAVES THE TOKEN DISABLED, and the next pass deletes it.
+func TestAFailedDeleteLeavesTheTokenOffAndIsRetried(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, config.CloudflareLevelRead)
+	w.sync()
+	id := w.record().Account.ID
+	off := false
+	w.seat().Enabled = &off
+	w.f.set(func(f *fakeCloudflare) { f.refuse["delete"] = http.StatusBadGateway })
+	if report := w.sync(); len(report.Findings) != 1 {
+		t.Fatalf("a failed delete reported %+v, want the seat's failure", report.Findings)
+	}
+	if tok, ok := w.f.token(id); !ok || tok.Status != cloudflare.StatusDisabled {
+		t.Fatalf("after a failed delete the token is %+v, want it disabled", tok)
+	}
+	w.f.set(func(f *fakeCloudflare) { delete(f.refuse, "delete") })
+	w.sync()
+	if _, ok := w.f.token(id); ok {
+		t.Error("the next pass left the disabled token at Cloudflare")
+	}
+	if _, ok := w.sink.Held(sealed); ok {
+		t.Error("the next pass left the value sealed")
 	}
 }
 

@@ -80,9 +80,11 @@ func cloudflareSteps(
 	case seataccess.OpMint, seataccess.OpRotate:
 		return []seataccess.Step{roll, renew}
 	case seataccess.OpDisable:
-		off := step(seataccess.VerbDisable, "Delete its token")
-		off.Note = "Cloudflare keeps no history for a token, so turning the agent back on mints a new one."
-		return []seataccess.Step{off}
+		// DISABLED FIRST, so the agent stops even where the delete fails;
+		// a token left disabled is deleted by the next pass's revoke.
+		gone := step(seataccess.VerbRevoke, "Delete its token")
+		gone.Note = "Cloudflare keeps no history for a token, so turning the agent back on mints a new one."
+		return []seataccess.Step{step(seataccess.VerbDisable, "Disable its token"), gone}
 	case seataccess.OpRevoke:
 		return []seataccess.Step{step(seataccess.VerbRevoke, "Clear "+sink)}
 	case seataccess.OpRemove:
@@ -256,7 +258,12 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 			return s.roll(ctx, in)
 		}
 		return s.renew(ctx, in)
-	case seataccess.OpDisable, seataccess.OpRevoke, seataccess.OpRemove:
+	case seataccess.OpDisable:
+		if in.Step.Verb == seataccess.VerbDisable {
+			return s.disable(ctx, in)
+		}
+		return s.delete(ctx, in)
+	case seataccess.OpRevoke, seataccess.OpRemove:
 		return s.delete(ctx, in)
 	default:
 		return seataccess.StepResult{}, fmt.Errorf("cloudflare: no step for %q", in.Step.Op)
@@ -366,9 +373,21 @@ func (s *accessSession) renew(ctx context.Context, in seataccess.ApplyInput) (se
 	})
 }
 
-// delete deletes the seat's token, which is off, a revoke and a remove alike:
-// a Cloudflare token keeps no history worth keeping a disabled one for. One
-// already gone is the state asked for.
+// disable turns the token off at once, keeping everything else it holds.
+func (s *accessSession) disable(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
+	return s.withToken(ctx, in, func(tok Token) (seataccess.StepResult, error) {
+		if _, err := s.client.UpdateToken(ctx, tok.ID, TokenSpec{
+			Name: tok.Name, Policies: tok.Policies, ExpiresOn: tok.ExpiresOn, Status: StatusDisabled,
+		}); err != nil {
+			return seataccess.StepResult{}, s.refused(in, err)
+		}
+		return seataccess.StepResult{Disabled: true}, nil
+	})
+}
+
+// delete deletes the seat's token, which is the end of off, a revoke and a
+// remove alike: a Cloudflare token keeps no history worth keeping a disabled
+// one for. One already gone is the state asked for.
 func (s *accessSession) delete(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	id := tokenID(in)
 	if id == "" {
