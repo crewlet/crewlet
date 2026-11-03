@@ -3,7 +3,10 @@ package sandbox
 import (
 	"context"
 	"io"
+	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/executordomain"
 )
 
 // A HARNESS'S OWN SESSION, CARRIED BETWEEN BOXES.
@@ -84,6 +87,49 @@ type CarryCheck struct {
 
 	// Why says, in a person's words, why it cannot; "" where it can.
 	Why string
+}
+
+// ValidSessionID reports whether id has the shape every session id a harness
+// mints has — Claude Code's UUID, OpenCode's `ses_` and its characters —
+// loosely: letters, digits, `-` and `_`, at most
+// [executordomain.SessionIDMaxBytes] of them.
+//
+// ONE RULE, HELD WHEREVER A BOX NAMES A SESSION. The id is the box's word —
+// a line of its session record, or what its harness printed, which its own
+// agent can write as it likes — and it names an archive, is handed to a later
+// run's script, and rides the launch's record, whose fit it may not decide. So
+// a runner refuses any other as it reads the box (internal/sandbox/executor),
+// and the record refuses it again as it is published ([collectedRecord]),
+// whatever runner, or host of another build, read the box.
+func ValidSessionID(id string) bool {
+	return id != "" && len(id) <= executordomain.SessionIDMaxBytes &&
+		!strings.ContainsFunc(id, func(r rune) bool {
+			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
+		})
+}
+
+// ValidRelease reports whether release has the shape of a harness's release as
+// the engine reads one off its `--version` ("2.1.310"): three runs of digits
+// joined by dots, at most [executordomain.HarnessVersionMaxBytes] bytes, the
+// most the executor log records one at.
+//
+// A RELEASE HAS A LENGTH, AND ITS NUMBERS DO NOT: they are runs of digits a box
+// printed, so a run as long as the line read as a release. One past the bound
+// is refused, never cut, because a shortened release names another — and read
+// as none, it is what every reader takes a release it cannot read for, a
+// current one. Held where [ValidSessionID] is, for its reasons.
+func ValidRelease(release string) bool {
+	if release == "" || len(release) > executordomain.HarnessVersionMaxBytes {
+		return false
+	}
+	parts := 0
+	for part := range strings.SplitSeq(release, ".") {
+		parts++
+		if part == "" || strings.ContainsFunc(part, func(r rune) bool { return r < '0' || r > '9' }) {
+			return false
+		}
+	}
+	return parts == 3
 }
 
 // SessionRestorer is a [Runner] that continues a session carried from another

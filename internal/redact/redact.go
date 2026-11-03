@@ -1327,6 +1327,9 @@ func isSpace(c byte) bool { return c == ' ' || c == '\t' }
 // was the wrapping's syntax taken for one: run on across such a break, more of
 // the generator's texts were redacted other than exactly, and a second pass
 // changed transcripts heavy in password keys.
+//
+// ONE READ OF THE VALUE, HOWEVER MANY BREAKS IT HOLDS: whether a letter or a
+// digit follows a break is read only as far as the first one ([wordAfter]).
 func valueEnd(text string, at int) int {
 	for i := at; i < len(text); i++ {
 		switch c := text[i]; {
@@ -1377,13 +1380,32 @@ func keyAfterBreak(text string, i int) bool {
 }
 
 // wordAfter reports whether text from i to the next space holds a letter or a
-// digit, in any script ([isValue]).
+// digit, in any script, as [wordless] reads one ([isValue]).
+//
+// READ UP TO THE FIRST ONE, AND NO FURTHER: the answer is in it. Read to the
+// space whatever it held, a value written in pieces with no space in it —
+// `pwd=x\nx\nx…`, or a key after every break, `pwd=x\npwd=x\n…` — was read to
+// its end again at every break ([valueEnd]), its breaks times its length:
+// 64 KiB took 0.7 s, and every doubling four times as long, so the 32 MiB a
+// box's file is read whole up to took days. Stopped at the first, a read never
+// passes the next escaped break, whose `n` is a letter, so the reads of a
+// value's breaks lie side by side and the value is read once.
 func wordAfter(text string, i int) bool {
-	j := i
-	for j < len(text) && !valueSpace(text[j]) {
-		j++
+	for i < len(text) && !valueSpace(text[i]) {
+		if c := text[i]; c < utf8.RuneSelf {
+			if isAlnum(rune(c)) {
+				return true
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if wordRune(r, size) {
+			return true
+		}
+		i += size
 	}
-	return !wordless(text[i:j])
+	return false
 }
 
 // trimDebris is s without the debris of its line break — a real CR, an escaped

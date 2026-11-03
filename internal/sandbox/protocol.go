@@ -319,8 +319,8 @@ type Result struct {
 	CostUSD          float64
 
 	// SessionID is the harness session the run worked in, as its harness reported it
-	// or, where it reported nothing, as the run's script recorded it before
-	// the harness started.
+	// or, where it reported nothing — or nothing shaped as a harness's session
+	// id — as the run's script recorded it before the harness started.
 	SessionID string
 
 	// Continued says the run continued the session it was asked to
@@ -340,12 +340,15 @@ type Result struct {
 	// carried in could not be restored — so whoever reads what the run did
 	// learns why it began again rather than finding a new session id alone.
 	// "" for a run that continued its session, and for one asked to start
-	// one.
+	// one. ONE SENTENCE, redacted and cut to [MaxFellBackBytes] where the
+	// runner reads it and again as the launch's record is published
+	// ([BoundFellBack]): the line it is read from is a file in the box.
 	FellBack string
 
 	// HarnessVersion is the release of the harness that ran, as its `--version` gave
 	// it ("2.1.310"), read by the run's script in the box; "" where it
-	// recorded none this build can read.
+	// recorded none this build can read, one longer than the executor log
+	// records a release at included.
 	HarnessVersion string
 
 	// Captured is the run's session as its box packed it when the harness

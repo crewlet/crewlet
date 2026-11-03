@@ -318,7 +318,7 @@ type memberPlan struct {
 // THE SECOND READING MUST BE THE FIRST'S ARCHIVE: a file whose rewrite comes
 // out another size, or a member the first reading did not have, is an archive
 // that changed between the two, and the scrub fails rather than write a tar
-// whose headers lie.
+// whose headers lie. The failure names the member SHORT ([memberNamed]).
 func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writer, s scrubber,
 	b scrubBounds) error {
 
@@ -357,7 +357,8 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 		plan := plans[i]
 		i++
 		if h.Typeflag != plan.kind {
-			return fmt.Errorf("executor: the session's archive changed its member %s while it was read", h.Name)
+			return fmt.Errorf("executor: the session's archive changed its member %s while it was read",
+				memberNamed(h.Name))
 		}
 		if !plan.keep {
 			return nil
@@ -379,7 +380,8 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 			return memberErr
 		}
 		if w.n != plan.size {
-			return fmt.Errorf("executor: the session's archive changed its member %s while it was read", h.Name)
+			return fmt.Errorf("executor: the session's archive changed its member %s while it was read",
+				memberNamed(h.Name))
 		}
 		return nil
 	})
@@ -394,6 +396,16 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 	}
 	return zw.Close()
 }
+
+// memberNamed is an archive member's name as a failure quotes it: its first
+// line, redacted and held to what a transcript line quotes of a path
+// ([firstLine], [transcriptDetailLimit]).
+//
+// THE NAME IS THE ARCHIVE'S, which the box wrote, and a tar can name a member
+// in up to a MiB (a PAX record); the failure becomes the reason the run's
+// session was not kept, which the run's row, the launch's record and a box
+// host's reply to the node that asked for the read all carry.
+func memberNamed(name string) string { return firstLine(name, transcriptDetailLimit) }
 
 // eachMember reads a gzipped tar member by member, its plaintext bounded.
 func eachMember(src io.Reader, b scrubBounds, member func(*tar.Header, io.Reader) error) error {
