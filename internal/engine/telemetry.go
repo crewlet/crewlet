@@ -157,6 +157,13 @@ type turnTelemetry struct {
 	// back at completion for the one rule dispatch cannot decide.
 	written *turnctx.Written
 
+	// holds is what this turn has named that the code host's expiry could
+	// take from under it, shared with every tool call and delegate worker
+	// through the turn context ([turnctx.Turn.Holds]): a fresh set for a
+	// dispatched turn, the row's for a resumed one with the row's writer
+	// attached ([Engine.rowHolds]) — the one turn's, across every segment.
+	holds *turnctx.Holds
+
 	// resumed marks a segment that re-entered a parked run, and launchID
 	// the launch it collected — together they name the segment its
 	// charge is recorded under (see turnspend.go). jobInput and jobOutput
@@ -319,7 +326,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.askParts = e.askOf(req)
 	t.ask, t.askLabel = t.askParts.Text(), t.askParts.Label()
 	t.senders = sendersSpoken(t.interactions)
-	t.requester = requesterIdentity(company, requesterOf(req.Events, t.interactions))
+	t.requester = requesterIdentity(company, requesterOf(req.Events, t.interactions, req.Handle))
 	// The turn's own span, not the trigger's ids copied forward.
 	//
 	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
@@ -350,6 +357,10 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// and a fresh set for what the turn is about to write.
 	t.workItem, t.workItemBasis = workItemOf(req)
 	t.written = &turnctx.Written{}
+	// AND A FRESH HOLD SET, with no row behind it until a launch opens one:
+	// held in this process's memory while the turn runs, which this node
+	// answers the code host's expiry for ([Engine.codeHolds]).
+	t.holds = turnctx.NewHolds(nil)
 	t.auxSpent = auxspend.NewTally()
 	t.boundary = provenance.NewBoundary()
 	t.task = DescribeTrigger(req.Ask(), t.boundary)
@@ -397,6 +408,11 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// through here too, and the runner seeds its log with what the
 			// run called before it parked.
 			Calls: turnctx.NewCallLog(),
+			// AND ITS OWN LOOKUPS, empty for every segment a resumed one
+			// included: a name the turn looked up before it parked may
+			// name something else by the time it resumes, and one lookup a
+			// segment is the whole cost (see [turnctx.Lookups]).
+			Lookups: turnctx.NewLookups(),
 			// The turn's deadline, for the runs it launches to carry.
 			Deadline: t.deadline,
 			// The seat and the ORG both come off the pinned epoch, so a
@@ -455,6 +471,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			WorkItem:      t.workItem,
 			WorkItemBasis: t.workItemBasis,
 			Written:       t.written,
+			// AND WHAT IT HOLDS FROM THE CODE HOST'S EXPIRY, which every
+			// tool call takes its hold in before its request.
+			Holds: t.holds,
 			// AND THE SEGMENT'S AUXILIARY TALLY, which every in-turn
 			// auxiliary call adds to through the turn's attribution, and
 			// the meter every one of them is charged through and asks.
@@ -993,6 +1012,10 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	// judges the whole turn rather than its second half.
 	t.workItem, t.workItemBasis = resumedWorkItem(in.Run)
 	t.written = turnctx.WrittenFrom(in.State.Written, in.State.WrittenMany)
+	// THE HOLDS THE ROW CARRIES, OFF THE RESUMED TURN for the reason its
+	// unit of work is (resumedTurn read the row into it, with the row's
+	// writer attached): the same turn, holding what it named before it parked.
+	t.holds = in.Turn.Holds
 	// A FRESH TALLY, never the parked one's: what the segments before this
 	// one spent on auxiliary calls is in what they charged or carried.
 	t.auxSpent = auxspend.NewTally()
@@ -1081,7 +1104,8 @@ func requesterIdentity(company *Company, handle string) string {
 	return ""
 }
 
-// requesterOf is the seat whose wake started a turn, or "" when no seat's did.
+// requesterOf is the seat whose wake started seat's turn, or "" when no other
+// seat's did.
 //
 // OFF THE FIRST EVENT, the one [Engine.describeTurn] describes the trigger
 // from: a colleague's ask names its asker, and a notification's first
@@ -1091,7 +1115,14 @@ func requesterIdentity(company *Company, handle string) string {
 // constituent's sender is known: "the requester" is who started the
 // conversation this turn answers, and a later voice in the same thread is not
 // them.
-func requesterOf(evs []*events.Event, interactions []types.InboundInteraction) string {
+//
+// BUT NEVER THE SEAT ITSELF. The outcome of a seat's own act — a workflow or
+// a pipeline its own push failed, which a code host tells the actor of — wakes
+// it with itself as the sender, and asks it nothing: the requester is whoever
+// spoke first besides it, or nobody. Read as the requester, the seat put its
+// own handle on a run's row for that run's questions to reach, and a
+// colleague who asked in the same thread was no requester at all.
+func requesterOf(evs []*events.Event, interactions []types.InboundInteraction, seat string) string {
 	for _, ev := range evs {
 		if ev == nil {
 			continue
@@ -1101,10 +1132,13 @@ func requesterOf(evs []*events.Event, interactions []types.InboundInteraction) s
 		}
 		break
 	}
-	if len(interactions) == 0 {
-		return ""
+	for _, in := range interactions {
+		if in.Sender.Handle != "" && in.Sender.Handle == seat {
+			continue
+		}
+		return in.Sender.Handle
 	}
-	return interactions[0].Sender.Handle
+	return ""
 }
 
 // sendersSpoken is every distinct identifiable sender of a turn's

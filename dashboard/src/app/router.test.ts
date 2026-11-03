@@ -37,6 +37,7 @@ import {
   workspaceOf,
   workspaceOpen,
   workspaceRow,
+  type ServicesRun,
   type WorkspaceRow,
 } from "./nav.ts";
 import { keyRow, sequenceWords } from "./keymap.ts";
@@ -62,7 +63,9 @@ import { ALL_PROJECTS, scopeAt } from "./scope.ts";
 import { segmentsOf } from "~/test/routes.ts";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 
-/** Every Settings section's own address but Spend's readings, which `nav gates by app` sets apart. */
+/** A company running every service built into Crewlet. */
+const EVERY_SERVICE: ServicesRun = { tracker: true, knowledge: true, chat: true, code: true };
+
 /** Settings' Admin pages: every section but Spend's readings, Models and MCP & tools, which every member reads. */
 function settingsPaths(): string[][] {
   return workspaceRow("settings")!
@@ -178,6 +181,10 @@ describe("navigation identity", () => {
       integrations: "n",
       budgets: "b",
       worklet: "w",
+      // `o`: Code's other letters are chords already (`c` the Principles',
+      // `d` Schedules', `e` Brand's), and taking `c` would move the
+      // Principles onto `p`, which is Switch project's.
+      code: "o",
       chatlet: "t",
       doclet: "k",
       artifacts: "f",
@@ -226,15 +233,16 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // FIFTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
+  // SIXTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
   // them and nothing else from the table: a section that became a sidebar row
   // is a second column of navigation arriving one row at a time. Workspace
-  // runs in the order `nav.ts` argues: the work, then the talking, then what
-  // the talking produced (so Chatlet sits after Worklet and before Doclet). The
-  // SIXTEENTH is the reader's own Account, which has no row (the user block
-  // at the sidebar's foot is the reader, and its menu links it) and is a
-  // workspace all the same, so the palette and its chord reach it.
-  test("the sidebar's rows are fifteen workspaces, in the story's order, and the menu holds the sixteenth", () => {
+  // runs in the order `nav.ts` argues: the work and its code, then the
+  // talking, then what the talking produced (so Code sits after Worklet, and
+  // Chatlet after Code and before Doclet). The SEVENTEENTH is the reader's own
+  // Account, which has no row (the user block at the sidebar's foot is the
+  // reader, and its menu links it) and is a workspace all the same, so the
+  // palette and its chord reach it.
+  test("the sidebar's rows are sixteen workspaces, in the story's order, and the menu holds the seventeenth", () => {
     const run = (place: string) => WORKSPACES.filter((w) => w.place === place).map((w) => w.key);
     expect(run("you")).toEqual(["home", "inbox", "me"]);
     expect(run("company")).toEqual([
@@ -245,7 +253,7 @@ describe("the navigation grammar", () => {
       "integrations",
       "budgets",
     ]);
-    expect(run("workspace")).toEqual(["worklet", "chatlet", "doclet", "artifacts", "live"]);
+    expect(run("workspace")).toEqual(["worklet", "code", "chatlet", "doclet", "artifacts", "live"]);
     expect(run("foot")).toEqual(["settings"]);
     expect(run("menu")).toEqual(["account"]);
     // THE COMPANY'S FIRST ROW IS "Principles", the same name in the sidebar,
@@ -274,7 +282,7 @@ describe("the navigation grammar", () => {
       Runtime: ["models", "mcp-tools", "secrets", "limits"],
       Spend: ["spend", "spend-tasks"],
       Access: ["people", "service-accounts", "tokens", "sign-in", "audit"],
-      Engine: ["nodes", "config", "backups", "storage"],
+      Engine: ["nodes", "config", "backups", "storage", "code"],
     });
     // IT LANDS ON ITS FIRST SECTION and holds every address under it.
     expect(workspaceRow("settings")?.path).toEqual(["settings", "models"]);
@@ -348,14 +356,14 @@ describe("the navigation grammar", () => {
     // its locks are drawn per section, in its column.
     const spend = settings.sections.find((s) => s.key === "spend")!;
     expect(sectionOpen(spend, [])).toBe(true);
-    expect(workspaceOpen(settings, [])).toBe(true);
-    expect(workspaceMissing(settings, [])).toEqual([]);
-    expect(workspaceOpen(workspaceRow("account")!, [])).toBe(true);
+    expect(workspaceOpen(settings, [], EVERY_SERVICE)).toBe(true);
+    expect(workspaceMissing(settings, [], EVERY_SERVICE)).toEqual([]);
+    expect(workspaceOpen(workspaceRow("account")!, [], EVERY_SERVICE)).toBe(true);
     // A WORKSPACE'S OWN PERMISSION IS NEEDED BESIDE ITS SECTION'S.
     const guarded: WorkspaceRow = { ...workspaceRow("live")!, grants: ["worklet"] };
-    expect(workspaceOpen(guarded, [])).toBe(false);
-    expect(workspaceMissing(guarded, [])).toEqual(["worklet"]);
-    expect(workspaceOpen(guarded, ["worklet"])).toBe(true);
+    expect(workspaceOpen(guarded, [], EVERY_SERVICE)).toBe(false);
+    expect(workspaceMissing(guarded, [], EVERY_SERVICE)).toEqual(["worklet"]);
+    expect(workspaceOpen(guarded, ["worklet"], EVERY_SERVICE)).toBe(true);
     // THE READER'S OWN ADDRESSES, which the frame draws for anybody signed in.
     expect(personalPath(["account"])).toBe(true);
     expect(personalPath(["settings", "models"])).toBe(false);
@@ -380,10 +388,9 @@ describe("the navigation grammar", () => {
     const opens = (path: string[], held: string[]) => {
       const row = workspaceRow(workspaceOf(path))!;
       const section = sectionOf(path);
-      return workspaceOpen(row, held) && (!section || sectionOpen(section, held));
+      return workspaceOpen(row, held, EVERY_SERVICE) && (!section || sectionOpen(section, held));
     };
     const TRACKER_ONLY = [
-      ["inbox"],
       ["me"],
       ["worklet"],
       ["worklet", "tasks"],
@@ -436,6 +443,17 @@ describe("the navigation grammar", () => {
       // the apps' state and connecting stay an Admin's, on the page itself.
       ["company", "integrations"],
       ["company", "budgets"],
+      // NO APP GATES CODE (ADR-0033): every person reads every repository,
+      // and the engine holds each answer to the reader's own grant.
+      ["code"],
+      ["code", "repos"],
+      ["code", "search"],
+      ["code", "pushes"],
+      ["code", "queue"],
+      ["code", "checks"],
+      // NOR THE INBOX: it is composed from every native domain's notices,
+      // each read under its own permission on the engine's side.
+      ["inbox"],
       ["live"],
       ["live", "executors"],
       ["settings", "spend"],
@@ -681,6 +699,105 @@ describe("the resolver", () => {
     expect(resolve(["company", "org", "seats"]).resolved).toBe(false);
   });
 
+  // CODE'S SECTIONS ARE ITS ADDRESSES and take no tail of their own: the
+  // repository a history is narrowed to is `repo=`, never a segment, and the
+  // bare `#/code` is the row's landing, its changes — as `#/worklet` is Worklet's
+  // projects. (A repository's own page is under Repositories: below.)
+  // Mutation: send the bare head to Not Found again and the row lands nowhere.
+  test("Code's sections are its six lists, and no word under them is a page", () => {
+    expect(resolve(["code"])).toMatchObject({ screen: "code-changes", workspace: "code" });
+    expect(resolve(["code", "repos"])).toMatchObject({ screen: "code-repos", workspace: "code" });
+    expect(resolve(["code", "search"])).toMatchObject({ screen: "code-search", workspace: "code" });
+    expect(resolve(["code", "pushes"])).toMatchObject({ screen: "code-pushes", workspace: "code" });
+    expect(resolve(["code", "queue"])).toMatchObject({ screen: "code-queue", workspace: "code" });
+    expect(resolve(["code", "checks"])).toMatchObject({ screen: "code-checks", workspace: "code" });
+    for (const path of [
+      ["code", "pushes", "web"],
+      ["code", "queue", "web"],
+      ["code", "checks", "unit"],
+      ["code", "search", "web"],
+      ["code", "changes"],
+      ["code", "web"],
+    ]) {
+      expect(resolve(path).resolved, `#/${path.join("/")}`).toBe(false);
+      expect(workspaceOf(path), `#/${path.join("/")}`).toBe("code");
+    }
+    expect(workspaceRow("code")?.path).toEqual(["code"]);
+    expect(ownedBy(workspaceRow("code")!)).toEqual(["code"]);
+  });
+
+  // A REPOSITORY'S PAGE IS UNDER REPOSITORIES, by its name, and its trail
+  // leads back to the listing. Its tabs, its revision and its path are the
+  // query, never a segment: one segment more is no page. Mutation: send
+  // `repos/{name}` to Not Found, or read a deeper tail as the repository, and
+  // this fails.
+  test("a repository's page is under Repositories, by its name", () => {
+    expect(resolve(["code", "repos", "web"])).toMatchObject({
+      screen: "code-repo",
+      repo: "web",
+      workspace: "code",
+    });
+    expect(resolve(["code", "repos", "web", "src"]).resolved).toBe(false);
+    expect(crumbsFor(["code", "repos", "web"]).map((c) => c.label)).toEqual([
+      "Code",
+      "Repositories",
+      "web",
+    ]);
+  });
+
+  // A COMMIT'S PAGE NAMES ITS COMMIT WHOLE, and a comparison is its
+  // repository's; both trails lead back through the repository. Mutation:
+  // take an abbreviation as a commit's page, or drop the repository's crumb,
+  // and this fails.
+  test("a commit's page is by its whole id, and a comparison is its repository's", () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    expect(resolve(["code", "repos", "web", "commits", sha])).toMatchObject({
+      screen: "code-commit",
+      repo: "web",
+      sha,
+      workspace: "code",
+    });
+    for (const short of ["0123456", sha.toUpperCase(), `${sha}0`]) {
+      expect(resolve(["code", "repos", "web", "commits", short]).resolved, short).toBe(false);
+    }
+    expect(resolve(["code", "repos", "web", "compare"])).toMatchObject({
+      screen: "code-compare",
+      repo: "web",
+    });
+    expect(crumbsFor(["code", "repos", "web", "commits", sha]).map((c) => c.label)).toEqual([
+      "Code",
+      "Repositories",
+      "web",
+      "0123456",
+    ]);
+    expect(crumbsFor(["code", "repos", "web", "compare"]).map((c) => c.label)).toEqual([
+      "Code",
+      "Repositories",
+      "web",
+      "Compare",
+    ]);
+  });
+
+  // A CHANGE IS ITS REPOSITORY'S, at the path its reference is short for, and
+  // numbered from 1: a number with a leading zero, or none, is no change's.
+  // Mutation: read the number off any segment, and `042` is a change.
+  test("a change's page is its repository's, numbered from 1", () => {
+    expect(resolve(["code", "repos", "web", "changes", "42"])).toMatchObject({
+      screen: "code-change",
+      repo: "web",
+      number: 42,
+      workspace: "code",
+    });
+    for (const n of ["0", "042", "x", ""]) {
+      expect(resolve(["code", "repos", "web", "changes", n]).resolved, n).toBe(false);
+    }
+    expect(resolve(["code", "repos", "web", "changes"]).resolved).toBe(false);
+    expect(crumbsFor(["code", "repos", "web", "changes", "42"]).map((c) => c.label)).toEqual([
+      "Code",
+      "web!42",
+    ]);
+  });
+
   // A RESERVED WORD THAT IS NOT A WORK SECTION IS NOTHING HERE. Read as an item
   // id it would ask Worklet for an item called `turns`.
   test("a reserved word under a workspace that does not have it is Not Found", () => {
@@ -884,6 +1001,21 @@ describe("the breadcrumb", () => {
     ]);
   });
 
+  // A LANDING IS THE SECTION AT THE ROW'S OWN ADDRESS, never one merely as
+  // deep: Code lands on Changes, at `#/code`, and Repositories and Pushes,
+  // deeper, are named. Judged by depth, the trail and the tab read "Code"
+  // over a repository's pushes.
+  test("Code's landing is the workspace alone, and its other sections are named", () => {
+    expect(crumbsFor(["code"]).map((c) => c.label)).toEqual(["Code"]);
+    const pushes = crumbsFor(["code", "pushes"]);
+    expect(pushes.map((c) => c.label)).toEqual(["Code", "Pushes"]);
+    expect(pushes[0]?.path).toEqual(["code"]);
+    expect(titleOf(pushes)).toBe("Pushes");
+    expect(crumbsFor(["code", "repos"]).map((c) => c.label)).toEqual(["Code", "Repositories"]);
+    expect(crumbsFor(["code", "queue"]).map((c) => c.label)).toEqual(["Code", "Queue"]);
+    expect(crumbsFor(["code", "checks"]).map((c) => c.label)).toEqual(["Code", "Checks"]);
+  });
+
   // EXCEPT SETTINGS', whose landing is one of the column's sections: "Settings"
   // alone over the models said nothing the column's selected row did not.
   // A LANDING CLOSED TO THE READER OPENS THE FIRST SECTION THEY MAY OPEN, never
@@ -898,7 +1030,7 @@ describe("the breadcrumb", () => {
         samePath(s.path, settings.path) ? { ...s, grants: ["admin"] } : s,
       ),
     };
-    const runs = { tracker: true, knowledge: true, chat: true };
+    const runs = { tracker: true, knowledge: true, chat: true, code: true };
     expect(landingPath(gated, ["worklet"], runs)).toEqual(["settings", "mcp-tools"]);
     expect(landingPath(gated, ["admin"], runs)).toEqual(gated.path);
     // A reader not read yet: the workspace's own path, as the frame draws a lock only once it knows.

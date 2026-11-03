@@ -19,8 +19,8 @@
 //
 // A run whose request asks for it ([sandbox.RunRequest.Attribution]) has every
 // commit it authors as itself carry `Co-authored-by: Crewlet
-// <noreply@crewlet.ai>` and the run's own `Crewlet-Run:`, added by a git hook
-// the runner installs in the box and the wrapper points git at through the
+// <noreply@crewlet.ai>` and the Crewlet trailers naming its seat, its run and
+// its work item, added by a git hook the runner installs in the box and the wrapper points git at through the
 // run's environment — the same for every harness, and whether or not the model
 // remembered anything (attribution.go, attribution_hook.sh).
 //

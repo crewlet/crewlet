@@ -102,7 +102,21 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	// the handles a membership names or an add put in, the emoji a reaction
 	// is, and the topic and purpose people gave a room, shown as they were
 	// given.
-	"channel", "message_id", "members", "added", "emoji", "topic", "purpose"}
+	"channel", "message_id", "members", "added", "emoji", "topic", "purpose",
+	// THE CODE HOST'S WRITES: the repository and the change by the names a
+	// screen opens them by, the branch a write moved, the commit it left there
+	// and the one before it, a repository's settings as the values its screen
+	// shows them by, the reviewers a change asked and the findings a write
+	// resolved, by the ids a change's screen finds them by.
+	"repo", "change", "branch", "commit", "previous", "visibility", "search",
+	"default_branch", "reviewers", "findings_resolved",
+	// AND ITS QUEUE, CHECKS, REVERTS AND PURGES: a queue entry by its id, the
+	// branch a merge or an entry targets and the state it reached, the commit
+	// a check ran on and the branch it was checked for, the change a revert
+	// reverts and the class a change it could not open was refused under, and
+	// a purge's request by its id with the git nodes that serve and hold it.
+	"entry_id", "target", "state", "sha", "checked_for", "reverts", "change_refusal",
+	"request", "maintainer", "git_nodes"}
 
 // writtenForThePerson are the answers whose text at one path is a model's
 // answer written FOR the person who asked, by tool and path: the product

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 )
@@ -22,7 +23,9 @@ import (
 // quoted into a family that does not exist.
 
 // slideFamily is one name the slide format's font-family grammar takes.
-var slideFamily = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9 _-]{0,39}$`)
+var slideFamily = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[A-Za-z][A-Za-z0-9 _-]{0,39}$`)
+})
 
 // maxSlideFamilies is how many names a slide's font-family list holds.
 const maxSlideFamilies = 8
@@ -70,7 +73,7 @@ func slideStack(f Face) string {
 	var out []string
 	for _, name := range strings.Split(FontStack(f), ",") {
 		name = strings.Trim(strings.TrimSpace(name), `"`)
-		if slideFamily.MatchString(name) && len(out) < maxSlideFamilies {
+		if slideFamily().MatchString(name) && len(out) < maxSlideFamilies {
 			out = append(out, name)
 		}
 	}

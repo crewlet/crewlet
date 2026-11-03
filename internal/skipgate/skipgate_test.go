@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -26,7 +27,7 @@ func TestAnUndeclaredSkipIsReported(t *testing.T) {
 
 	unlisted, stale := Judge([]Skip{
 		{Package: "internal/nowhere", Test: "TestSomethingQuietlyOff"},
-	}, ran("internal/nowhere"))
+	}, wholeRun("internal/nowhere"))
 
 	if len(unlisted) != 1 || unlisted[0].Test != "TestSomethingQuietlyOff" {
 		t.Errorf("unlisted = %v, want the one undeclared skip", unlisted)
@@ -44,7 +45,7 @@ func TestADeclaredSkipIsAccepted(t *testing.T) {
 		if a.When != Environment {
 			continue
 		}
-		unlisted, _ := Judge([]Skip{{Package: a.Package, Test: a.Test}}, ran(a.Package))
+		unlisted, _ := Judge([]Skip{{Package: a.Package, Test: a.Test}}, wholeRun(a.Package))
 		if len(unlisted) != 0 {
 			t.Errorf("%s %s is on the allowlist and was reported unlisted", a.Package, a.Test)
 		}
@@ -55,11 +56,14 @@ func TestADeclaredSkipIsAccepted(t *testing.T) {
 
 // THE STALENESS DIRECTION, and the scoping that makes it usable.
 //
-// Both halves matter and the second is why this gate was briefly unusable: an
-// Always entry that did not fire is stale ONLY if its package ran. `make test`
-// and `make test-solo` each cover one half of the tree, so without the
-// scoping each target fails on the other's entries.
-func TestAnAlwaysEntryIsStaleOnlyWhenItsPackageRan(t *testing.T) {
+// An Always entry whose test reported nothing is judged only where its
+// package PASSED on an unnarrowed run ([coverage]): there every test ran to
+// its result, so one that did not is not there to skip. Both halves matter,
+// and the second is why this gate was briefly unusable: a run that did not
+// cover the package says nothing about the entry. `make test` and
+// `make test-solo` each cover one half of the tree, so without the scoping
+// each target fails on the other's entries.
+func TestAnAlwaysEntryIsJudgedOnlyWhereItsPackagePassedUnnarrowed(t *testing.T) {
 	t.Parallel()
 
 	var probe Allowance
@@ -73,23 +77,277 @@ func TestAnAlwaysEntryIsStaleOnlyWhenItsPackageRan(t *testing.T) {
 		t.Fatal("no Always entry to exercise; this case is asserting about nothing")
 	}
 
-	t.Run("its package ran and it did not skip", func(t *testing.T) {
+	t.Run("a passing run of every test of its package never ran it", func(t *testing.T) {
 		t.Parallel()
-		_, stale := Judge(nil, ran(probe.Package))
+		_, stale := Judge(nil, wholeRun(probe.Package))
 		if !slices.ContainsFunc(stale, func(s Skip) bool { return s.Test == probe.Test }) {
-			t.Errorf("stale = %v, want %s — its package ran and it did not skip",
-				stale, probe.Test)
+			t.Errorf("stale = %v, want %s — a passing unnarrowed run of its package "+
+				"never ran it, so it was renamed or deleted", stale, probe.Test)
 		}
 	})
 
-	t.Run("its package did not run", func(t *testing.T) {
+	t.Run("a passing run of its package narrowed away from it", func(t *testing.T) {
 		t.Parallel()
-		_, stale := Judge(nil, ran("internal/somewhere-else"))
+		cov := wholeRun(probe.Package)
+		cov.narrowed = true
+		_, stale := Judge(nil, cov)
+		if slices.ContainsFunc(stale, func(s Skip) bool { return s.Test == probe.Test }) {
+			t.Errorf("%s was called stale by a run of its package that a -run or "+
+				"-skip narrowed; the filter left it out", probe.Test)
+		}
+	})
+
+	t.Run("its package was not in the run", func(t *testing.T) {
+		t.Parallel()
+		_, stale := Judge(nil, wholeRun("internal/somewhere-else"))
 		if slices.ContainsFunc(stale, func(s Skip) bool { return s.Test == probe.Test }) {
 			t.Errorf("%s was called stale by a run that did not cover its package; "+
 				"each test target covers one half of the tree", probe.Test)
 		}
 	})
+}
+
+// wholeRun is the coverage of a passing run of every test in pkgs that
+// reported none of them: what a run covering those packages says when the
+// declared tests are not there.
+func wholeRun(pkgs ...string) coverage {
+	return coverage{passed: ran(pkgs...), reported: map[string]bool{}}
+}
+
+// stream renders test2json records, each {Action, Package, Test} with the
+// package given as its short path, into the stream read consumes.
+func stream(t *testing.T, records ...[3]string) report {
+	t.Helper()
+	lines := make([]string, 0, len(records))
+	for _, rec := range records {
+		e := map[string]string{"Action": rec[0], "Package": "github.com/crewlet/crewlet/" + rec[1]}
+		if rec[2] != "" {
+			e["Test"] = rec[2]
+		}
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, string(b))
+	}
+	return read(bufio.NewScanner(strings.NewReader(strings.Join(lines, "\n"))), devNull(t))
+}
+
+// coverageOf is what main judges a read stream by.
+func coverageOf(r report, narrowed bool) coverage {
+	return coverage{passed: r.passed(), reported: r.reported, narrowed: narrowed}
+}
+
+// firstAlways is an Always entry to exercise, and the case fails rather than
+// asserting about nothing when the table has none.
+func firstAlways(t *testing.T) Allowance {
+	t.Helper()
+	for _, a := range allowed {
+		if a.When == Always {
+			return a
+		}
+	}
+	t.Fatal("no Always entry to exercise; this case is asserting about nothing")
+	return Allowance{}
+}
+
+// firstMeasured is the same for the measured table.
+func firstMeasured(t *testing.T) Measurement {
+	t.Helper()
+	if len(measured) == 0 {
+		t.Fatal("no measured entry to exercise; this case is asserting about nothing")
+	}
+	return measured[0]
+}
+
+// A TEST A -run FILTER LEFT OUT SAYS NOTHING ABOUT ITS ENTRY.
+//
+// The bug this replaced: `go test -run X ./internal/store` exited 1 on every
+// one of the package's Always entries, with every test that ran green,
+// because a package that ran was taken to have run every test declared in it.
+func TestAnAlwaysSkipItsRunFilteredOutIsNotStale(t *testing.T) {
+	t.Parallel()
+	probe := firstAlways(t)
+
+	r := stream(t,
+		[3]string{"run", probe.Package, "TestSomethingElseEntirely"},
+		[3]string{"pass", probe.Package, "TestSomethingElseEntirely"},
+		[3]string{"pass", probe.Package, ""},
+	)
+	_, stale := Judge(r.skipped, coverageOf(r, true))
+	if slices.ContainsFunc(stale, func(s Skip) bool { return s.Package == probe.Package }) {
+		t.Errorf("stale = %v on a run narrowed to another test of %s; a test that never "+
+			"started under a filter says nothing about its entry", stale, probe.Package)
+	}
+}
+
+// A STRUCTURAL SKIP THAT STOPPED SKIPPING IS STALE, filtered run or not: the
+// test reported a result, so the run judged it, and it passed instead of
+// skipping.
+func TestAnAlwaysSkipThatRanAndPassedIsStale(t *testing.T) {
+	t.Parallel()
+	probe := firstAlways(t)
+
+	r := stream(t,
+		[3]string{"run", probe.Package, probe.Test},
+		[3]string{"pass", probe.Package, probe.Test},
+		[3]string{"pass", probe.Package, ""},
+	)
+	for _, narrowed := range []bool{true, false} {
+		_, stale := Judge(r.skipped, coverageOf(r, narrowed))
+		if !slices.ContainsFunc(stale, func(s Skip) bool {
+			return s.Package == probe.Package && s.Test == probe.Test
+		}) {
+			t.Errorf("narrowed=%v: stale = %v, want %s %s — it started and passed "+
+				"instead of skipping", narrowed, stale, probe.Package, probe.Test)
+		}
+	}
+}
+
+// A MEASUREMENT A -run FILTER LEFT OUT HAS NOT STOPPED REPORTING.
+func TestAMeasurementItsRunFilteredOutIsNotStale(t *testing.T) {
+	t.Parallel()
+	m := firstMeasured(t)
+
+	r := stream(t,
+		[3]string{"run", m.Package, "TestSomethingElseEntirely"},
+		[3]string{"pass", m.Package, "TestSomethingElseEntirely"},
+		[3]string{"pass", m.Package, ""},
+	)
+	if stale := JudgeMeasured(r.measuredSeen, coverageOf(r, true)); len(stale) != 0 {
+		t.Errorf("stale = %v on a run narrowed to another test of %s; the filter left "+
+			"the measurement out", stale, m.Package)
+	}
+}
+
+// A DECLARED TEST ITS BINARY DIED UNDER IS NOT STALE, filtered run or not.
+//
+// It started and never reported: the -timeout panic inside it, a sibling's
+// panic, or the race detector's abort while it sat paused under t.Parallel.
+// The stream has its `run` record, no result for it, and then the package's
+// `fail`. That says nothing about whether it would have skipped or measured,
+// and judging it by the `run` told the reader of a measurement that hit the
+// timeout to rename or drop its entry — the wrong defect, on a run that is red
+// already.
+func TestADeclaredTestItsBinaryDiedUnderIsNotStale(t *testing.T) {
+	t.Parallel()
+	probe, m := firstAlways(t), firstMeasured(t)
+
+	r := stream(t,
+		[3]string{"run", probe.Package, probe.Test},
+		[3]string{"output", probe.Package, probe.Test},
+		[3]string{"fail", probe.Package, ""},
+		[3]string{"run", m.Package, m.Test},
+		[3]string{"output", m.Package, m.Test},
+		[3]string{"fail", m.Package, ""},
+	)
+	for _, narrowed := range []bool{true, false} {
+		cov := coverageOf(r, narrowed)
+		if _, stale := Judge(r.skipped, cov); slices.ContainsFunc(stale, func(s Skip) bool {
+			return s.Package == probe.Package && s.Test == probe.Test
+		}) {
+			t.Errorf("narrowed=%v: stale = %v: %s %s was judged although its binary "+
+				"died under it", narrowed, stale, probe.Package, probe.Test)
+		}
+		if stale := JudgeMeasured(r.measuredSeen, cov); len(stale) != 0 {
+			t.Errorf("narrowed=%v: stale = %v: a measurement was judged although its "+
+				"binary died under it", narrowed, stale)
+		}
+	}
+}
+
+// A DECLARED TEST THAT IS NOT THERE IS STALE on a run of every test of its
+// package — the half of the gate that judging only started tests would lose.
+//
+// Unnarrowed, every test of a package that ran starts, so a declared one that
+// did not was renamed or deleted, and the table would otherwise describe a
+// test that no longer exists for ever: a measurement printing nothing, an
+// Always entry excusing nothing.
+func TestADeclaredTestThatNoLongerExistsIsStaleOnARunOfEveryTest(t *testing.T) {
+	t.Parallel()
+	probe, m := firstAlways(t), firstMeasured(t)
+
+	r := stream(t,
+		[3]string{"run", probe.Package, "TestSomethingElseEntirely"},
+		[3]string{"pass", probe.Package, "TestSomethingElseEntirely"},
+		[3]string{"pass", probe.Package, ""},
+		[3]string{"run", m.Package, "TestSomethingElseEntirely"},
+		[3]string{"pass", m.Package, "TestSomethingElseEntirely"},
+		[3]string{"pass", m.Package, ""},
+	)
+	cov := coverageOf(r, false)
+	if _, stale := Judge(r.skipped, cov); !slices.ContainsFunc(stale, func(s Skip) bool {
+		return s.Package == probe.Package && s.Test == probe.Test
+	}) {
+		t.Errorf("stale = %v, want %s %s — an unnarrowed run of its package never "+
+			"started it", stale, probe.Package, probe.Test)
+	}
+	if stale := JudgeMeasured(r.measuredSeen, cov); !slices.ContainsFunc(stale, func(s Skip) bool {
+		return s.Package == m.Package && s.Test == m.Test
+	}) {
+		t.Errorf("stale = %v, want %s %s — an unnarrowed run of its package never "+
+			"started it", stale, m.Package, m.Test)
+	}
+}
+
+// A PACKAGE THAT FAILED SAYS NOTHING ABOUT THE TESTS IT NEVER STARTED.
+//
+// A binary that panicked under one test, was stopped by -failfast or hit the
+// timeout never reached the rest, so a declared test it did not start is not
+// one that was renamed or deleted, and saying so sends the reader after the
+// wrong defect on a run that is red already. Unnarrowed, the package ran: only
+// its result tells the two apart.
+func TestADeclaredTestAPackageDiedBeforeIsNotStale(t *testing.T) {
+	t.Parallel()
+	probe, m := firstAlways(t), firstMeasured(t)
+
+	r := stream(t,
+		[3]string{"run", probe.Package, "TestThatPanicked"},
+		[3]string{"fail", probe.Package, ""},
+		[3]string{"run", m.Package, "TestThatPanicked"},
+		[3]string{"fail", m.Package, ""},
+	)
+	cov := coverageOf(r, false)
+	if _, stale := Judge(r.skipped, cov); slices.ContainsFunc(stale, func(s Skip) bool {
+		return s.Package == probe.Package && s.Test == probe.Test
+	}) {
+		t.Errorf("stale = %v: %s %s was judged in a package that failed before "+
+			"starting it", stale, probe.Package, probe.Test)
+	}
+	if stale := JudgeMeasured(r.measuredSeen, cov); len(stale) != 0 {
+		t.Errorf("stale = %v: a measurement was judged in a package that failed "+
+			"before starting it", stale)
+	}
+}
+
+// WHETHER A COMMAND NARROWS ITS PACKAGES' TESTS is read from every spelling
+// `go test` accepts, because a missed one fails a targeted run on entries it
+// never ran, and a false one stops an unnarrowed run catching a renamed test.
+func TestACommandLineThatNamesRunOrSkipNarrowsTheRun(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		goflags string
+		want    bool
+	}{
+		{"every test", []string{"test", "-race", "-json", "./internal/store"}, "-p=1", false},
+		{"-run and its value", []string{"test", "-json", "./internal/store", "-run", "TestX"}, "", true},
+		{"-run=value", []string{"test", "-run=TestX", "./internal/store"}, "", true},
+		{"--run", []string{"test", "--run", "TestX", "./internal/store"}, "", true},
+		{"-skip", []string{"test", "-skip", "TestX", "./internal/store"}, "", true},
+		{"-test.run after -args", []string{"test", "./internal/store", "-args", "-test.run=TestX"}, "", true},
+		{"-run in GOFLAGS", []string{"test", "./internal/store"}, "-p=1 -run=TestX", true},
+		{"an empty -run selects every test", []string{"test", "-run", "", "./internal/store"}, "", false},
+		{"an empty -run= selects every test", []string{"test", "-run=", "./internal/store"}, "", false},
+		{"a bare GOFLAGS -run takes no following word", []string{"test", "./internal/store"}, "-run -p=1", false},
+		{"a flag merely ending in run", []string{"test", "-dryrun", "x", "./internal/store"}, "", false},
+	} {
+		if got := narrows(tc.args, tc.goflags); got != tc.want {
+			t.Errorf("%s: narrows(%q, %q) = %v, want %v", tc.name, tc.args, tc.goflags, got, tc.want)
+		}
+	}
 }
 
 // A PACKAGE-LEVEL skip record is not a test skipping.
@@ -376,12 +634,137 @@ func TestTheTimingsTimeWhatPassed(t *testing.T) {
 // rather than the functions it is made of.
 const runMain = "SKIPGATE_TEST_RUN_MAIN"
 
+// emitStream, as this binary's first argument under runMain, makes it the
+// PRODUCER instead: it prints the file the next argument names, as a stream,
+// and ignores the rest — so a case can hand skipgate a command line carrying
+// whatever go test flags it is judging. An argument rather than a variable,
+// because skipgate's own process and the producer it starts share one
+// environment, and only the producer is handed this.
+const emitStream = "-skipgate-test-emit"
+
 func TestMain(m *testing.M) {
 	if os.Getenv(runMain) == "1" {
+		if len(os.Args) > 2 && os.Args[1] == emitStream {
+			b, err := os.ReadFile(os.Args[2])
+			if err != nil {
+				os.Exit(2)
+			}
+			os.Stdout.Write(b)
+			return
+		}
 		main()
 		return
 	}
 	os.Exit(m.Run())
+}
+
+// THE PROGRAM READS THE NARROWING FROM THE COMMAND IT RUNS, end to end.
+//
+// One stream, two command lines: a package that ran, a test of it that is
+// not the declared one, and nothing else. Handed a -run, skipgate passes it —
+// the targeted run this fix exists for. Handed none, the declared test's
+// absence is a fact about the test, and the gate fails naming it as renamed
+// or deleted rather than as a skip that stopped firing.
+func TestTheGateJudgesTheCommandItRuns(t *testing.T) {
+	t.Parallel()
+	probe := firstAlways(t)
+
+	pkg := "github.com/crewlet/crewlet/" + probe.Package
+	gate := gateOver(t,
+		`{"Action":"run","Package":"`+pkg+`","Test":"TestSomethingElseEntirely"}`,
+		`{"Action":"pass","Package":"`+pkg+`","Test":"TestSomethingElseEntirely"}`,
+		`{"Action":"pass","Package":"`+pkg+`"}`,
+	)
+
+	if out, err := gate("-run", "TestSomethingElseEntirely"); err != nil {
+		t.Errorf("a run narrowed with -run failed on an entry whose test it never "+
+			"started (%v):\n%s", err, out)
+	}
+	out, err := gate()
+	if err == nil {
+		t.Fatalf("a run of every test of %s passed without the declared %s:\n%s",
+			probe.Package, probe.Test, out)
+	}
+	if !strings.Contains(out, probe.Test+" is allowed as When: Always and NEVER RAN") {
+		t.Errorf("the missing test was not named as one that never ran:\n%s", out)
+	}
+}
+
+// THE PROGRAM JUDGES A NEVER-STARTED TEST BY ITS PACKAGE'S RESULT, end to
+// end: a package whose binary died under another test fails the run, and the
+// gate names no declared test of it as renamed or deleted, since the binary
+// never reached it.
+func TestTheGateNamesNoMissingTestInAPackageThatDied(t *testing.T) {
+	t.Parallel()
+	probe := firstAlways(t)
+
+	pkg := "github.com/crewlet/crewlet/" + probe.Package
+	gate := gateOver(t,
+		`{"Action":"run","Package":"`+pkg+`","Test":"TestThatPanicked"}`,
+		`{"Action":"output","Package":"`+pkg+`","Test":"TestThatPanicked","Output":"panic: boom\n"}`,
+		`{"Action":"fail","Package":"`+pkg+`"}`,
+	)
+
+	out, err := gate()
+	if err == nil {
+		t.Fatalf("a run whose package failed passed:\n%s", out)
+	}
+	if strings.Contains(out, probe.Test+" is allowed as When: Always") {
+		t.Errorf("a declared test of a package that died before reaching it was "+
+			"judged stale:\n%s", out)
+	}
+}
+
+// THE PROGRAM CALLS NO TEST ITS BINARY DIED UNDER STALE, end to end: the
+// measurement hit the -timeout, so the stream has its `run`, its output and
+// then the package's `fail`. The run fails on that, and the gate tells nobody
+// to rename or drop the entry, nor that a structural skip stopped firing.
+func TestTheGateCallsNoTestItsBinaryDiedUnderStale(t *testing.T) {
+	t.Parallel()
+	probe, m := firstAlways(t), firstMeasured(t)
+
+	var lines []string
+	for _, d := range [][2]string{{probe.Package, probe.Test}, {m.Package, m.Test}} {
+		pkg := "github.com/crewlet/crewlet/" + d[0]
+		lines = append(lines,
+			`{"Action":"run","Package":"`+pkg+`","Test":"`+d[1]+`"}`,
+			`{"Action":"output","Package":"`+pkg+`","Test":"`+d[1]+`","Output":"panic: test timed out\n"}`,
+			`{"Action":"fail","Package":"`+pkg+`"}`,
+		)
+	}
+	out, err := gateOver(t, lines...)()
+	if err == nil {
+		t.Fatalf("a run whose packages failed passed:\n%s", out)
+	}
+	for _, wrong := range []string{
+		probe.Test + " is allowed as When: Always",
+		m.Test + " is declared in the measured table",
+	} {
+		if strings.Contains(out, wrong) {
+			t.Errorf("a declared test its binary died under was judged stale (%q):\n%s",
+				wrong, out)
+		}
+	}
+}
+
+// gateOver writes a test2json stream of lines and returns a function that runs
+// skipgate's main over a producer that prints it, handing that producer the
+// given go test flags — so a case controls both the stream and the command
+// line skipgate reads its narrowing from.
+func gateOver(t *testing.T, lines ...string) func(producerFlags ...string) (string, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stream.json")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return func(producerFlags ...string) (string, error) {
+		args := append([]string{"--", os.Args[0], emitStream, path}, producerFlags...)
+		cmd := exec.CommandContext(t.Context(), os.Args[0], args...)
+		// GOFLAGS emptied, so the runner's own cannot narrow a case.
+		cmd.Env = append(os.Environ(), runMain+"=1", "GOFLAGS=")
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
 }
 
 // A -timings PATH THAT CANNOT BE WRITTEN FAILS BEFORE THE SUITE RUNS.

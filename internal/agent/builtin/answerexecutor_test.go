@@ -17,8 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -40,7 +40,7 @@ func (d *deskFake) Answerer(run sandbox.PendingRun) string {
 // answerSeal is a fleet keyring's answer seal, under key material of its own.
 func answerSeal(t *testing.T, material string) *sandbox.AnswerSeal {
 	t.Helper()
-	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", material))
+	seal, err := sandbox.NewAnswerSeal(recordseal.OneKey("answers", material))
 	if err != nil {
 		t.Fatalf("NewAnswerSeal: %v", err)
 	}

@@ -34,7 +34,10 @@ import (
 // runner binds to every phase that discovers (internal/toolname). Not the
 // operator's own surface ([OperatorTools]): those verbs are offered to a
 // person's assistant, never to an agent, and a catalogue of what agents hold
-// listing them would answer a question nobody asked.
+// listing them would answer a question nobody asked. Nor a tool the registry
+// holds whose row bars every agent (the code host's three a person alone
+// makes): the authority table withholds it from every seat's surfaces
+// ([Withheld]), so no agent holds it either.
 
 // Group is one shelf of the built-in catalogue.
 //
@@ -57,6 +60,14 @@ const (
 	// GroupArtifacts is the artifacts agents make and share, their
 	// folders, the company's brand and each artifact's data.
 	GroupArtifacts Group = "artifacts"
+	// GroupCode is the company's own code host: its repositories, their
+	// branches and history, the changes proposed to them, their reviews
+	// and their checks.
+	GroupCode Group = "code"
+	// GroupHealth is the deployment's health: every live node and the git
+	// nodes' caches. A shelf of its own rather than the code's, because it
+	// answers about the fleet, not about one repository.
+	GroupHealth Group = "health"
 	// GroupColleagues is finding a colleague and asking another agent.
 	GroupColleagues Group = "colleagues"
 	// GroupMemory is the agent's own diary, past turns and skills.
@@ -65,10 +76,10 @@ const (
 	GroupDiscovery Group = "discovery"
 )
 
-// Groups are the eight, in the order the catalogue shows them.
+// Groups are the ten, in the order the catalogue shows them.
 var Groups = []Group{
 	GroupWork, GroupProjects, GroupKnowledge, GroupChat, GroupArtifacts,
-	GroupColleagues, GroupMemory, GroupDiscovery,
+	GroupCode, GroupHealth, GroupColleagues, GroupMemory, GroupDiscovery,
 }
 
 // Valid reports whether g is a group this build files tools under.
@@ -87,6 +98,10 @@ var groupWords = map[Group]struct{ label, description string }{
 		"Chatlet rooms and direct messages."},
 	GroupArtifacts: {"Artifacts",
 		"Documents, slides, sheets and dashboards agents make and share, and the data behind them."},
+	GroupCode: {"Code",
+		"The company's repositories on its own code host: their files and history, branches, changes, reviews and checks."},
+	GroupHealth: {"Health",
+		"The deployment's health: every live node, and the git nodes' caches."},
 	GroupColleagues: {"Colleagues",
 		"Finding a colleague, and asking another agent a question."},
 	GroupMemory: {"Memory and skills",
@@ -155,13 +170,18 @@ const (
 	// GateArtifactOwner names the artifact's owner ([authz.ClassShared], least
 	// role owner, no app).
 	GateArtifactOwner Gate = "artifact_owner"
+	// GateHealthTools names an agent whose role carries the health grant,
+	// `role.health_tools` ([authz.ClassAdmin] with [authz.SeatGrantHealth]):
+	// the grant alone decides an agent seat, and no app or relation does.
+	// Named after the grant, as [GateWorklet] is after the app.
+	GateHealthTools Gate = "health_tools"
 )
 
-// Gates are the eleven, in declaration order.
+// Gates are the twelve, in declaration order.
 var Gates = []Gate{
 	GateEverybody, GateSelf, GateWorklet, GateWorkletAsked, GateProjectLead,
 	GateDoclet, GateChatlet, GateArtifacts, GateArtifactViewer,
-	GateArtifactEditor, GateArtifactOwner,
+	GateArtifactEditor, GateArtifactOwner, GateHealthTools,
 }
 
 // Valid reports whether g is a gate this build names.
@@ -241,6 +261,55 @@ var filed = []struct {
 	{MoveArtifactTool, GroupArtifacts, GateArtifactEditor},
 	{WriteArtifactDataTool, GroupArtifacts, GateArtifactViewer},
 	{SetArtifactSchemaTool, GroupArtifacts, GateArtifactEditor},
+
+	// THE CODE HOST'S TOOLS ARE EVERYBODY'S ON THE TABLE, because what a
+	// seat may do to a repository is decided in the code domain, by the
+	// repository's grant for the seat and for whoever woke its turn — never
+	// by a permission a role could hold without the grant. The reads, the
+	// everyday first; then the writes: a branch's, a repository's, a
+	// change's lifecycle and conversation, and its checks. Not the three a
+	// person alone makes (code_report_check, code_purge_unreachable,
+	// code_import_repo), whose rows bar every agent, so no seat is offered
+	// them.
+	{CodeListReposTool, GroupCode, GateEverybody},
+	{CodeGetRepoTool, GroupCode, GateEverybody},
+	{CodeResolveTool, GroupCode, GateEverybody},
+	{CodeReadTool, GroupCode, GateEverybody},
+	{CodeSearchTool, GroupCode, GateEverybody},
+	{CodeDiffTool, GroupCode, GateEverybody},
+	{CodeCompareTool, GroupCode, GateEverybody},
+	{CodeLandedInTool, GroupCode, GateEverybody},
+	{CodeLogTool, GroupCode, GateEverybody},
+	{CodeBlameTool, GroupCode, GateEverybody},
+	{CodeListChangesTool, GroupCode, GateEverybody},
+	{CodeGetChangeTool, GroupCode, GateEverybody},
+	{CodeGetCheckFailuresTool, GroupCode, GateEverybody},
+	{CodeCommitFilesTool, GroupCode, GateEverybody},
+	{CodeRevertTool, GroupCode, GateEverybody},
+	{CodeCherryPickTool, GroupCode, GateEverybody},
+	{CodeCreateBranchTool, GroupCode, GateEverybody},
+	{CodeDeleteBranchTool, GroupCode, GateEverybody},
+	{CodeCreateRepoTool, GroupCode, GateEverybody},
+	{CodeUpdateRepoTool, GroupCode, GateEverybody},
+	{CodeDeleteRepoTool, GroupCode, GateEverybody},
+	{CodeRestoreRepoTool, GroupCode, GateEverybody},
+	{CodeProtectBranchTool, GroupCode, GateEverybody},
+	{CodeOpenChangeTool, GroupCode, GateEverybody},
+	{CodeUpdateChangeTool, GroupCode, GateEverybody},
+	{CodeCloseChangeTool, GroupCode, GateEverybody},
+	{CodeRequestReviewTool, GroupCode, GateEverybody},
+	{CodeReviewChangeTool, GroupCode, GateEverybody},
+	{CodeCommentOnChangeTool, GroupCode, GateEverybody},
+	{CodeResolveFindingTool, GroupCode, GateEverybody},
+	{CodeApplySuggestionsTool, GroupCode, GateEverybody},
+	{CodeRebaseChangeTool, GroupCode, GateEverybody},
+	{CodeMergeChangeTool, GroupCode, GateEverybody},
+	{CodeDequeueChangeTool, GroupCode, GateEverybody},
+	{CodeRevertChangeTool, GroupCode, GateEverybody},
+	{CodeRerunChecksTool, GroupCode, GateEverybody},
+
+	{FleetHealthTool, GroupHealth, GateHealthTools},
+	{CodeStatusTool, GroupHealth, GateHealthTools},
 
 	{LookupColleagueTool, GroupColleagues, GateEverybody},
 	{A2AAskTool, GroupColleagues, GateEverybody},

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Errors this backend reports. Callers branch on these, or on the contract's
@@ -85,11 +86,13 @@ type Config struct {
 	//
 	// Empty binds EVERY interface, which is right for a node with one
 	// address and wrong twice over otherwise. On a multi-homed host it is
-	// a security setting: the route port is unauthenticated cluster
-	// access, and a member that binds it on a public interface is
-	// offering that to anyone who can reach the machine. On a host whose
-	// peers are on a private network it is also the only way to say which
-	// address that is.
+	// a security setting: the route port admits only a member presenting a
+	// route credential of [Config.FleetAuth]'s ring, and that credential
+	// crosses the network in clear once per connection, as does every byte
+	// of the cluster's traffic after it — so a member that binds it on a
+	// public interface offers both to anyone who can reach the machine. On
+	// a host whose peers are on a private network it is also the only way
+	// to say which address that is.
 	//
 	// It says nothing about what peers are TOLD to dial — that is
 	// ClusterAdvertise below, and the two differ precisely when they have
@@ -131,10 +134,11 @@ type Config struct {
 	// listening has nowhere for a stateless node to join. [AnyPort] binds
 	// whichever port the OS hands out, read back with [Server.LeafPort].
 	//
-	// It accepts any connection that reaches it, exactly as the route port
-	// does, and for the same reason: the fleet is one trust domain on a
-	// network its operator controls. Both belong on that network and
-	// nowhere else.
+	// It admits only a leaf whose link presents a leaf nkey of
+	// [Config.FleetAuth]'s ring and signs this member's nonce with it — no
+	// secret crosses the network — and everything the link carries after
+	// crosses it in clear, as the route port's traffic does. Both belong on
+	// the network the fleet's operator controls and nowhere else.
 	LeafPort int
 
 	// LeafHost is the interface the leaf listener binds, empty for all of
@@ -145,6 +149,15 @@ type Config struct {
 	// LeafAdvertise is the address this member tells leaves to reach it
 	// on, when the one it binds is not the one they can route to.
 	LeafAdvertise string
+
+	// FleetAuth is what this broker presents and accepts on its fleet
+	// listeners: credentials derived from Tier A's secrets.keys
+	// ([FleetAuthFrom]). REQUIRED on a member that opens a route or a leaf
+	// listener or names a peer, and on a leaf ([ErrNoFleetKeys]); a solo
+	// member and a cluster that is only named open and dial nothing, and
+	// need none. The embedded branch's alone: an external cluster is
+	// reached with its own operator's Credentials, Token or TLS.
+	FleetAuth FleetAuth
 
 	// ServerName is this member's identity inside the cluster. REQUIRED
 	// when clustering or joining as a leaf, and ignored otherwise.
@@ -612,6 +625,14 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 		AllowRollup:       spec.allowRollup,
 		AllowDirect:       spec.allowDirect,
 		MirrorDirect:      spec.mirrorDirect,
+		// THE STREAM'S IDENTITY, stamped by the create that makes it,
+		// because the broker's own creation instant does not survive a
+		// snapshot restore and this does — see [statelog.CreatedAtKey].
+		// Minted ONCE for this ensure, so a create the placement retries
+		// asks for the same stream each time; a peer racing with its own
+		// stamp is the "name already in use" the read-back below answers,
+		// and whichever create won is the stream's identity.
+		Metadata: statelog.StampCreatedAt(nil, time.Now()),
 	}
 	if spec.maxPerSubject == 0 {
 		// The client spells "unlimited" as -1; a zero would be read as a
@@ -728,16 +749,14 @@ func (q *Queue) createOrObserveStream(
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	// THROUGH [jsprovision.Timing.Read], so a request the group never
+	// THROUGH [jsprovision.ReadWith], so a request the group never
 	// answered is re-issued inside the ceiling above rather than being the
 	// whole of it — a second after it was sent, because a read is answered
-	// when the server processes it or never ([jsprovision.ReadTerm]).
-	var info jetstream.Stream
-	err := q.provisioning().Read(lookupCtx,
-		func(ctx context.Context) error {
-			var e error
-			info, e = q.js.Stream(ctx, spec.name)
-			return e
+	// when the server processes it or never ([jsprovision.ReadTerm]) — and
+	// is still listened for, since one behind a backlog is answered late.
+	info, err := jsprovision.ReadWith(lookupCtx, q.provisioning(),
+		func(ctx context.Context) (jetstream.Stream, error) {
+			return q.js.Stream(ctx, spec.name)
 		}, nil)
 	stopLookup()
 	cancelLookup()
@@ -821,12 +840,11 @@ func (q *Queue) createOrObserveStream(
 	// inside that window reports not-found for a stream that exists and
 	// fails the boot before [Queue.DomainLog]'s own retry could help. ON
 	// ctx AND NOT createCtx, because createCtx is the deadline that just
-	// expired — [jsprovision.Settle] owns this read's own short window.
-	err = q.provisioning().Settle(ctx, func(ctx context.Context) error {
-		var e error
-		info, e = q.js.Stream(ctx, spec.name)
-		return e
-	})
+	// expired — [jsprovision.SettleWith] owns this read's own short window.
+	info, err = jsprovision.SettleWith(ctx, q.provisioning(),
+		func(ctx context.Context) (jetstream.Stream, error) {
+			return q.js.Stream(ctx, spec.name)
+		})
 	if err != nil {
 		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
 		// beside it: "no suitable peers" or "deadline exceeded" on the
@@ -1357,10 +1375,9 @@ func (q *Queue) ensureMailbox(ctx context.Context, stream, filter, name string,
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	getErr := q.provisioning().Read(lookupCtx,
-		func(ctx context.Context) error {
-			_, e := q.js.Consumer(ctx, stream, name)
-			return e
+	_, getErr := jsprovision.ReadWith(lookupCtx, q.provisioning(),
+		func(ctx context.Context) (jetstream.Consumer, error) {
+			return q.js.Consumer(ctx, stream, name)
 		}, nil)
 	stopLookup()
 	// THE THREE ANSWERS, and only the FIRST of them ends the call here.
@@ -1531,13 +1548,12 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	// visible to this member only on its next metadata update, so one
 	// lookup answers at an arbitrary instant inside that window and fails
 	// a boot over a consumer that exists. ON ctx AND NOT createCtx, for
-	// the reason [jsprovision.Settle] gives: createCtx may be the deadline
-	// that just expired.
-	err := q.provisioning().Settle(ctx, func(ctx context.Context) error {
-		var e error
-		cons, e = q.js.Consumer(ctx, stream, cfg.Durable)
-		return e
-	})
+	// the reason [jsprovision.SettleWith] gives: createCtx may be the
+	// deadline that just expired.
+	cons, err := jsprovision.SettleWith(ctx, q.provisioning(),
+		func(ctx context.Context) (jetstream.Consumer, error) {
+			return q.js.Consumer(ctx, stream, cfg.Durable)
+		})
 	if err != nil {
 		return nil, false, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 	}
@@ -1647,9 +1663,28 @@ func carriesSubscriptions(stream string) bool {
 //
 // An ephemeral consumer (a stream subscription, a peek, a memory replay) is not
 // a subscription and is skipped. A durable consumer is listed under the pair
-// its metadata records when that pair derives its name; one whose metadata
-// carries no such pair (something other than this backend made or rewrote it)
-// is logged and left out rather than listed under a guessed pair (see pairOf).
+// its metadata records when that pair derives its name (see pairOf); one whose
+// metadata carries no such pair (something other than this backend made or
+// rewrote it), or that the broker holds offline and so answers with no
+// configuration at all, is logged and left out rather than listed under a
+// guessed pair.
+//
+// EVERY PAGE OF BOTH LISTINGS IS ITS OWN READ ([jsapi.Meta]): only the
+// metadata leader answers either, so a member that still believes in a leader
+// the group has just lost drops a page without a word, and the client's
+// listers asked each page once and held it for the client's five-second
+// default. A stream names page is presumed lost after the read term and asked
+// again two seconds after it was sent, for every caller. A consumers page is
+// not presumed lost until the four seconds the metadata leader waits for the
+// consumers' own leaders have passed beside the read term — five seconds, the
+// client's whole default — so it is asked again only for a caller whose
+// deadline outlasts that and a re-ask. A caller that sets none asks each
+// consumers page ONCE, as the client did: the mailbox sweep, which runs on the
+// maintenance worker's lifetime, still fails its tick over a consumers page a
+// member drops, and lists again at its next. And a consumer the metadata
+// leader could not get an answer about fails the listing rather than being
+// left out of it, so a mailbox is never judged absent because its leader was
+// slow ([jsapi.UnreadError]).
 func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]queue.Subscription, error) {
 	if q.isClosed() {
 		return nil, ErrClosed
@@ -1658,18 +1693,17 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 		return nil, fmt.Errorf("%w: a subscription listing needs a topic pattern; pass \">\" for "+
 			"every subscription", ErrSubject)
 	}
-
-	// Collected before any consumer is listed, and each lister drained to
-	// its end: the client's listers publish on unbuffered channels from a
-	// goroutine of their own, so abandoning one part-way leaks it.
-	names := q.js.StreamNames(ctx)
+	meta, err := jsapi.NewMeta(q.js)
+	if err != nil {
+		return nil, err
+	}
 	var streams []string
-	for name := range names.Name() {
+	if err := meta.StreamNames(ctx, func(name string) error {
 		if carriesSubscriptions(name) {
 			streams = append(streams, name)
 		}
-	}
-	if err := names.Err(); err != nil {
+		return nil
+	}); err != nil {
 		return nil, fmt.Errorf("list streams: %w", q.brokerFailed(ctx, err))
 	}
 
@@ -1679,26 +1713,31 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 	// missing can be listed as Partial once every consumer has been read.
 	lanes := map[queue.Subscription]bool{}
 	for _, name := range streams {
-		stream, err := q.js.Stream(ctx, name)
-		if errors.Is(err, jetstream.ErrStreamNotFound) {
-			// Deleted between the two reads; it holds nothing now.
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("open stream %s: %w", name, q.brokerFailed(ctx, err))
-		}
-		consumers := stream.ListConsumers(ctx)
-		for info := range consumers.Info() {
-			if of, ok := laneOf(info); ok {
-				lanes[of] = true
-				continue
+		err := meta.Consumers(ctx, name, func(c jsapi.Consumer) error {
+			if c.Info == nil {
+				q.log.WarnContext(ctx, "jetstream_subscription_offline", "stream", name,
+					"consumer", c.Name, "reason", c.Offline,
+					"detail", "the broker holds this consumer offline and answers it with no "+
+						"configuration, so it names no subscription pair and is left out of the "+
+						"subscription listing; a server that supports what it was made with "+
+						"runs it again")
+				return nil
 			}
-			sub, ok := q.subscriptionOf(ctx, name, info)
+			if of, ok := laneOf(c.Info); ok {
+				lanes[of] = true
+				return nil
+			}
+			sub, ok := q.subscriptionOf(ctx, name, c.Info)
 			if ok && topics.Match(topicPattern, sub.Topic) {
 				out = append(out, sub)
 			}
+			return nil
+		})
+		if errors.Is(err, jsapi.ErrNoStream) {
+			// Deleted between the two listings; it holds nothing now.
+			continue
 		}
-		if err := consumers.Err(); err != nil {
+		if err != nil {
 			return nil, fmt.Errorf("list consumers of stream %s: %w", name,
 				q.brokerFailed(ctx, err))
 		}

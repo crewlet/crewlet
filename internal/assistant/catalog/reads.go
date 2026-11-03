@@ -735,7 +735,7 @@ func readTools() []Tool {
 			// OFFERED AS THE KNOWLEDGE QUESTION ANSWERS: to a reader who
 			// sees pages or tasks (it searches both), not on one app.
 			Routes: []string{"GET /query/{what}"}, Fence: true,
-			// THE NATIVE KNOWLEDGE BASE IS WRITTEN BY THE COMPANY; a connected
+			// DOCLET IS WRITTEN BY THE COMPANY; a connected
 			// one (Confluence) by whoever its own users are.
 			TrustOf: func(_ Args, answer any) provenance.Trust { return knowledgeTrust(answer) },
 			Shows:   []authz.ObjectKind{authz.KindPage, authz.KindTask},
@@ -991,8 +991,8 @@ func outsideWhere(rows, field string) func(Args, any) provenance.Trust {
 	}
 }
 
-// carriesRunAsk reports whether any row of answer at rows carries a coding
-// run's question at field.
+// carriesRunAsk reports whether any row of answer at rows carries an executor's
+// question at field.
 func carriesRunAsk(answer any, rows, field string) bool {
 	list, _ := cards.Lookup(answer, rows).([]any)
 	for _, row := range list {

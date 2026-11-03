@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -53,11 +54,17 @@ func stamped(seq uint64) time.Time { return monday.Add(time.Duration(seq) * time
 // how many rows it wrote.
 func (e *estate) apply(subject Subject, op OpKind, scope ScopeSet, payload any) (statelog.Position, int) {
 	e.t.Helper()
+	return e.applyEncoded(op, e.encode(subject, op, scope, payload))
+}
+
+// encode is the record the harness applies for subject, op, scope and payload:
+// the bytes a writer publishes, which [estate.applyEncoded] applies.
+func (e *estate) encode(subject Subject, op OpKind, scope ScopeSet, payload any) []byte {
+	e.t.Helper()
 	body, err := json.Marshal(payload)
 	if err != nil {
 		e.t.Fatalf("encode the %s payload: %v", op, err)
 	}
-	e.seq++
 	encoded, err := Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{
 			OpID: statelog.NewOpID(monday, "harness"), Subject: subject, Op: op,
@@ -68,6 +75,14 @@ func (e *estate) apply(subject Subject, op OpKind, scope ScopeSet, payload any) 
 	if err != nil {
 		e.t.Fatalf("encode the %s record: %v", op, err)
 	}
+	return encoded
+}
+
+// applyEncoded applies one encoded record at the next position and answers
+// that position and how many rows it wrote.
+func (e *estate) applyEncoded(op OpKind, encoded []byte) (statelog.Position, int) {
+	e.t.Helper()
+	e.seq++
 	env, err := Domain{}.Envelope(encoded)
 	if err != nil {
 		e.t.Fatalf("envelope the %s record: %v", op, err)
@@ -245,7 +260,7 @@ func capturing(seat, conversation, turn string, launch, seq, size, budget int64)
 }
 
 // ending is a turn's end in conversation.
-func ending(seat, conversation, turn, work string, e Ending) End {
+func ending(seat, conversation, turn, work string, e executorkeep.Ending) End {
 	return End{V: 1, Handle: seat, Turn: turn, ConversationKey: conversation,
 		WorkKey: work, AskExcerpt: "fix the build", Ending: e}
 }

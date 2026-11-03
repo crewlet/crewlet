@@ -37,14 +37,15 @@ var dutyTTLs = map[string]struct {
 	// sizesCeiling is false for a bound derived from coord.MaxDutyTTL.
 	sizesCeiling bool
 }{
-	"maintenanceDutyTTL": {maintenanceDutyTTL, true},
-	"retentionDutyTTL":   {retentionDutyTTL, true},
-	"embedDutyTTL":       {embedDutyTTL, true},
-	"collectorDutyTTL":   {collectorDutyTTL, true},
-	"trashReaperDutyTTL": {trashReaperDutyTTL, true},
-	"chatPruneDutyTTL":   {chatPruneDutyTTL, true},
-	"integrationDutyTTL": {integrationDutyTTL, true},
-	"learningDutyTTL":    {learningDutyTTL, true},
+	"maintenanceDutyTTL":   {maintenanceDutyTTL, true},
+	"retentionDutyTTL":     {retentionDutyTTL, true},
+	"embedDutyTTL":         {embedDutyTTL, true},
+	"collectorDutyTTL":     {collectorDutyTTL, true},
+	"codeRetentionDutyTTL": {codeRetentionDutyTTL, true},
+	"trashReaperDutyTTL":   {trashReaperDutyTTL, true},
+	"chatPruneDutyTTL":     {chatPruneDutyTTL, true},
+	"integrationDutyTTL":   {integrationDutyTTL, true},
+	"learningDutyTTL":      {learningDutyTTL, true},
 	// THE IDENTITY DUTIES' LEASE is three of a duty's interval, and the longest
 	// is the roster's (identityduties_internal_test.go): the one claim site
 	// passes the helper's parameter, which only the roster resolves.

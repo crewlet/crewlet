@@ -1005,7 +1005,7 @@ func TestARoomAskedHereIsAnsweredByThisNodesOwnCopyEvenLagging(t *testing.T) {
 	own := &chatDesk{}
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true, rooms: own}
 	r := peered.router(t, "data-self", local)
-	fresh := statelog.Freshness{Level: statelog.ReadStale, MinPosition: chatSeen}
+	fresh := statelog.FloorAt(statelog.ReadStale, chatSeen)
 
 	if _, err := r.Chat().ChannelHere(t.Context(), "jane", "room-1", fresh); err != nil {
 		t.Fatalf("channel here: %v", err)

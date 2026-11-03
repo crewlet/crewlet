@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/solo"
@@ -29,10 +30,19 @@ import (
 // embedding its own NATS server, in this one process. See
 // `go doc ./internal/solo`.
 //
+// THE HOOK FIRST, before the sink is installed. Every node here that hosts
+// code execs THIS binary as its proc-receive hook ([codetest.HookCommand],
+// handed to the engine as engine.Options.GitHook), because the test binary is
+// not `crewlet`; started that way it is a push's hook and not a test run, and
+// it answers exactly as `crewlet code hook` does — main()'s reason for asking
+// before anything else: the hook's stdout is git's protocol and its stderr
+// reaches the pushing client, so a log line on either is a corrupted push.
+//
 // And it is where this binary becomes one of the three processes a model call
-// re-executes it as — FIRST, before the sink or the framework, so the child's
+// re-executes it as: also before the sink or the framework, so the child's
 // stdout is exactly the stream it speaks, and as a dispatch here rather than a
-// test function, which every ordinary run would otherwise report as a skip:
+// test function, which every ordinary run would otherwise report as a skip. A
+// process is one of these or a test run, never two:
 //
 //   - the relay to a seat's tools, `<binary> mcp-relay <socket>`, which the
 //     engine names its own executable as ([mcprelay.DispatchIfRelay]) — this
@@ -42,6 +52,9 @@ import (
 //   - the scripted model's harness ([scriptedHarnessEnv]).
 //   - the executor's harness in its box ([harnessEnv]).
 func TestMain(m *testing.M) {
+	if status, ok := codetest.RunHookIfAsked(); ok {
+		os.Exit(status)
+	}
 	mcprelay.DispatchIfRelay()
 	if os.Getenv(heldToolServerEnv) != "" {
 		os.Exit(runHeldToolServer())

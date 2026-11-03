@@ -465,6 +465,49 @@ func TestACallIsToldItsRoundOnThePhasesScale(t *testing.T) {
 	}
 }
 
+// A CALL KNOWS ITS ROUND'S MODEL: each round's calls are told the model that
+// round ran on — the model the harness's record names for that request, else the
+// provider's configured identity, the precedence the round's own record
+// follows — so a write a seat's tool makes names the model behind it, and a
+// phase a fallback moved between members names the member that made each
+// call. A context no loop stamped names none.
+//
+// Mutation: stamp the model once per loop, from its first round, and the
+// second round's call is told the first member.
+func TestACallKnowsItsRoundsModel(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("read")
+	var mu sync.Mutex
+	var models []string
+	surf.hook = func(ctx context.Context, _ llm.ToolCall) {
+		mu.Lock()
+		models = append(models, toolloop.CallModel(ctx))
+		mu.Unlock()
+	}
+	first, second := calling("one", "read"), calling("two", "read")
+	first.Model, second.Model = "first-member", "second-member"
+	prov := &llmtest.Script{ModelName: "configured",
+		Runs: []llmtest.Run{runOf(first, second, calling("three", "read"), says("done"))}}
+	cfg := toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 5, Host: host(t), Messages: opening()}
+	res, err := toolloop.Run(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{"first-member", "second-member", "configured"}
+	if !slices.Equal(models, want) {
+		t.Errorf("the calls were told models %v, want %v — each its own round's", models, want)
+	}
+	for i, model := range want {
+		if i >= len(res.Rounds) || res.Rounds[i].Model != model {
+			t.Errorf("round %d's record and the model its call was told (%q) disagree: rounds %+v",
+				i+1, model, res.Rounds)
+		}
+	}
+	if got := toolloop.CallModel(t.Context()); got != "" {
+		t.Errorf("a context no loop stamped names model %q", got)
+	}
+}
+
 // THE PHASE NAMES THE ENTRY THAT SERVED IT, by the model's own precedence: the
 // configured head stands in until a run's answer names an entry, the first that
 // does wins, and a bare backend that names none leaves the head as the answer.

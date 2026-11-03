@@ -104,7 +104,8 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent", "crewlet.events", "crewlet.notifications",
 		"crewlet.config", "dlq.", ".inbox", ".control", ".reflect", "agent-",
 		"crewlet.tracker.log", "crewlet.pages.log", "crewlet.iam.log",
-		"crewlet.chat.log", "crewlet.executor.log", "crewlet.rooms",
+		"crewlet.chat.log", "crewlet.executor.log", "crewlet.code.log",
+		"crewlet.rooms",
 	} {
 		if !markers[want] {
 			t.Errorf("marker %q was not derived from topics.go's constants; the "+
@@ -119,6 +120,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		// hand-built subject would come from.
 		"crewlet.tracker.log.task.x", "crewlet.tracker.vectors.>",
 		"crewlet.pages.log.%s.%s", "crewlet.usage.log.day",
+		"crewlet.code.log.repo.x",
 		"crewlet.iam.log.person.0f3c", "crewlet.iam.log.session.0f3c",
 		"crewlet.iam.log.>",
 		"crewlet.chat.log.message.x", "crewlet.chat.log.%s.%s",
@@ -138,6 +140,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	for _, built := range []string{
 		topics.TrackerLogSubject("task", "x"),
 		topics.PagesLogSubject("page", "x"),
+		topics.CodeLogSubject("repo", "x"),
 		topics.IamLogSubject("person", "x"),
 		topics.LogSubject(topics.UsageLogPrefix, "day", "x"),
 		topics.TrackerVectorsWildcard,

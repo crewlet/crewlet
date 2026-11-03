@@ -23,7 +23,10 @@ type When string
 
 const (
 	// Always: this skip is expected on EVERY run, and an entry that does not
-	// fire is reported as stale.
+	// fire where the run judges its test is reported as stale: its test
+	// reported a result that was not a skip, or, on a passing run of every
+	// test of its package, never ran at all (the package doc's "Stale means
+	// its test reported").
 	Always When = "always"
 
 	// Environment: this skip fires only where the machine lacks something,
@@ -242,6 +245,24 @@ var allowed = []Allowance{
 			"of it; the table cases check the bytes written, which is what a wrong quoting " +
 			"rule would agree with.",
 	},
+
+	// -----------------------------------------------------------------
+	// Environment: the right to chown. Unlike the entries above, this one
+	// DOES fire on the gates' runners, which run unprivileged — and the
+	// coverage it skips is held on every machine by its sibling case, which
+	// makes the owner differ through git's own switch rather than the
+	// filesystem.
+	// -----------------------------------------------------------------
+	{
+		Package: "internal/code/gitproc/gittest",
+		Test:    "TestACheckoutAnotherUserOwnsIsReadOnlyWhereTrusted/chowned_to_another_uid",
+		When:    Environment,
+		Why: "Needs a process that may chown (root, or CAP_CHOWN) to hand a repository to " +
+			"another uid. The git_assumes_another_owner case drives the same refusal and the " +
+			"same safe.directory comparison through GIT_TEST_ASSUME_DIFFERENT_OWNER on every " +
+			"machine, the module's own checkout included; this one is what says that switch " +
+			"stands in for a real owner.",
+	},
 }
 
 // Measurement is one test whose OUTPUT reaches the log even when it PASSES.
@@ -277,11 +298,15 @@ type Measurement struct {
 
 // measured is every test whose output survives a pass.
 //
-// TWO-SIDED, exactly like the Always half of [allowed]: an entry whose package
-// ran but whose test never reported is STALE and fails the build. A renamed or
+// TWO-SIDED, exactly like the Always half of [allowed]: an entry whose test
+// the run judges ([coverage]) and that never reported is STALE and fails the
+// build — one a passing unnarrowed run of its package never ran to a result,
+// since a test that reports a result is a measurement seen. A renamed or
 // deleted measurement would otherwise stop reaching the log silently, which is
 // the failure this table was added to fix — so the table cannot be allowed to
-// rot into describing a test that no longer exists.
+// rot into describing a test that no longer exists. A run narrowed with -run
+// that leaves it out, or a package that failed before reaching it or died
+// under it (the -timeout panic inside it), says nothing about it.
 var measured = []Measurement{
 	{
 		Package: "internal/store",
@@ -309,12 +334,14 @@ func measurement(pkg, test string) *Measurement {
 	return nil
 }
 
-// JudgeMeasured reports declared measurements whose package ran but which never
-// reported a result — a renamed or deleted test, printing nothing, for ever.
-func JudgeMeasured(seen map[string]bool, ran map[string]bool) []Skip {
+// JudgeMeasured reports declared measurements this run judges ([coverage])
+// that never reported a result — a renamed or deleted test, printing nothing,
+// for ever. Judged by the test, never by its package alone: a run narrowed
+// with -run that left the measurement out has not seen it stop.
+func JudgeMeasured(seen map[string]bool, cov coverage) []Skip {
 	var stale []Skip
 	for _, m := range measured {
-		if !ran[m.Package] || seen[m.Package+"\x00"+m.Test] {
+		if !cov.judges(m.Package, m.Test) || seen[m.Package+"\x00"+m.Test] {
 			continue
 		}
 		stale = append(stale, Skip{Package: m.Package, Test: m.Test})

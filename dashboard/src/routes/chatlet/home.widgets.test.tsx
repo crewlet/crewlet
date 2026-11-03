@@ -12,6 +12,7 @@ import type { Store } from "~/protocol/index.ts";
 import type { ReactNode } from "react";
 import type { OrgServices } from "~/contract/services.ts";
 import { ADA, NATIVE_SERVICES, mountChat } from "~/test/chat.tsx";
+import { afterMicrotasks, settled } from "~/test/settle.ts";
 import { INCOMPLETE_NOTE } from "~/components/work.tsx";
 import { NOTHING_TO_LIST } from "~/routes/home/board/kit.tsx";
 import { widgets } from "./home.widgets.tsx";
@@ -73,12 +74,6 @@ const RAIL = {
   ],
 };
 
-async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
-}
-
 /** How many times `what` has been asked. */
 const asks = (socket: { query: ReturnType<typeof vi.fn> }, what: string) =>
   socket.query.mock.calls.filter(([asked]) => asked === what).length;
@@ -108,7 +103,7 @@ describe("unread rooms", () => {
   test("lists the rooms with something unread, the engine's count on each, and counts the muted ones", async () => {
     const { Component } = ROOMS;
     const { socket } = mountHome(<Component params={{}} />, { answers: { chat_channels: RAIL } });
-    await settle();
+    await afterMicrotasks();
     expect(socket.query.mock.calls.map(([what]) => what)).toContain("chat_channels");
     expect(screen.getByText("Unread rooms · 2")).toBeTruthy();
     expect(screen.getByText("general")).toBeTruthy();
@@ -134,7 +129,7 @@ describe("unread rooms", () => {
     mountHome(<Component params={{}} />, {
       answers: { chat_channels: { ...RAIL, read_state: false } },
     });
-    await settle();
+    await afterMicrotasks();
     expect(screen.getByText(/couldn’t be read/)).toBeTruthy();
     expect(screen.queryByText("You’re caught up")).toBeNull();
     expect(screen.queryByText("general")).toBeNull();
@@ -150,7 +145,7 @@ describe("unread rooms", () => {
         },
       },
     });
-    await settle();
+    await afterMicrotasks();
     // NOT "CAUGHT UP": a muted room has messages waiting, and the line that
     // says so goes where the list would have been.
     expect(screen.queryByText("You’re caught up")).toBeNull();
@@ -166,7 +161,7 @@ describe("unread rooms", () => {
     mountHome(<Component params={{}} />, {
       answers: { chat_channels: { ...RAIL, truncated: true } },
     });
-    await settle();
+    await afterMicrotasks();
     expect(screen.getByText("general")).toBeTruthy();
     expect(screen.getByText(cut)).toBeTruthy();
     cleanup();
@@ -181,7 +176,7 @@ describe("unread rooms", () => {
         },
       },
     });
-    await settle();
+    await afterMicrotasks();
     expect(screen.queryByText("You’re caught up")).toBeNull();
     expect(screen.getByText(NOTHING_TO_LIST)).toBeTruthy();
     expect(screen.getByText(cut)).toBeTruthy();
@@ -192,7 +187,7 @@ describe("unread rooms", () => {
     mountHome(<Component params={{}} />, {
       answers: { chat_channels: { ...RAIL, channels: [room("c-quiet", "quiet", 0)] } },
     });
-    await settle();
+    await afterMicrotasks();
     expect(screen.getByText("You’re caught up")).toBeTruthy();
   });
 });
@@ -240,7 +235,7 @@ describe("mentions", () => {
     const { socket } = mountHome(<Component params={{}} />, {
       answers: { chat_activity: FEED([mention({ thread_root: "m-1" })]) },
     });
-    await settle();
+    await afterMicrotasks();
     // ACTIVITY'S NEWEST PAGE OF MENTIONS, cut to what the card draws.
     const asked = socket.query.mock.calls.find(([what]) => what === "chat_activity");
     expect(asked?.[1]).toMatchObject({ kind: "mention", limit: 5 });
@@ -256,7 +251,7 @@ describe("mentions", () => {
   test("a mention in a room lands the room on its message", async () => {
     const { Component } = MENTIONS;
     mountHome(<Component params={{}} />, { answers: { chat_activity: FEED([mention()]) } });
-    await settle();
+    await afterMicrotasks();
     const row = screen.getByText("general").closest("a");
     expect(row?.getAttribute("href")).toBe("#/chatlet/c-general?message=m-2");
     // ONE `#`, the glyph's, as on the unread rooms beside it.
@@ -279,7 +274,7 @@ describe("mentions", () => {
   test("nobody has named the reader", async () => {
     const { Component } = MENTIONS;
     mountHome(<Component params={{}} />, { answers: { chat_activity: FEED([]) } });
-    await settle();
+    await afterMicrotasks();
     expect(screen.getByText("Nobody has named you")).toBeTruthy();
   });
 });
@@ -295,7 +290,7 @@ describe("an answer that could not account for everything", () => {
         chat_channels: { ...RAIL, complete: false, channels: [room("c-quiet", "quiet", 0)] },
       },
     });
-    await settle();
+    await afterMicrotasks();
     expect(screen.queryByText("You’re caught up")).toBeNull();
     expect(screen.getByText(NOTHING_TO_LIST)).toBeTruthy();
     expect(screen.getByText(INCOMPLETE_NOTE, { exact: false })).toBeTruthy();
@@ -308,7 +303,7 @@ describe("an answer that could not account for everything", () => {
         chat_channels: { ...RAIL, unreadable: 1, channels: [room("c-quiet", "quiet", 0)] },
       },
     });
-    await settle();
+    await afterMicrotasks();
     expect(screen.queryByText("You’re caught up")).toBeNull();
     expect(screen.getByText(/1 room came from a newer version of the engine/)).toBeTruthy();
   });
@@ -318,7 +313,7 @@ describe("an answer that could not account for everything", () => {
     mountHome(<Component params={{}} />, {
       answers: { chat_activity: FEED([], { complete: false }) },
     });
-    await settle();
+    await afterMicrotasks();
     expect(screen.queryByText("Nobody has named you")).toBeNull();
     expect(screen.getByText(NOTHING_TO_LIST)).toBeTruthy();
   });
@@ -332,7 +327,7 @@ describe("a reader chat answers nothing for", () => {
       const { socket } = mountHome(<Component params={{}} />, {
         viewer: { ...ADA, handle: "", owner: "token:ci" },
       });
-      await settle();
+      await settled(() => socket.query.mock.calls.length);
       expect(
         screen.getByText("Chatlet is read as a seat, and this sign-in holds none."),
       ).toBeTruthy();
@@ -350,7 +345,7 @@ describe("a reader chat answers nothing for", () => {
   ])("%s is asked nothing", async (_, services) => {
     for (const { Component } of [ROOMS, MENTIONS]) {
       const { socket } = mountChat(<Component params={{}} />, { services });
-      await settle();
+      await settled(() => socket.query.mock.calls.length);
       expect(socket.query.mock.calls.map(([what]) => what)).toEqual(["viewer"]);
       cleanup();
     }

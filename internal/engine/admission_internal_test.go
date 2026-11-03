@@ -29,7 +29,7 @@ func TestOnlyTheLogsThatGateAdmissionTellTheClaimGate(t *testing.T) {
 	gating := 0
 	for _, d := range registeredDomains() {
 		hook := s.levelHook(d)
-		if !d.ReadinessInput() {
+		if !d.GatesSeatAdmission() {
 			if hook != nil {
 				t.Errorf("%s's health does not gate admission, and its coming "+
 					"level tells the claim gate", d.Name())

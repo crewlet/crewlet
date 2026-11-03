@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -237,9 +238,9 @@ func TestASessionNobodyCanReadIsNoSession(t *testing.T) {
 func TestAnArchivePastItsBoundIsRefused(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionStore(t, "k1")
-	big := io.NopCloser(io.LimitReader(zeros{}, executordomain.SessionMaxBytes+1))
+	big := io.NopCloser(io.LimitReader(zeros{}, executorkeep.SessionMaxBytes+1))
 	if _, err := store.Put(t.Context(), "ana", statelog.NewOpID(time.Now(), ""), big); !errors.Is(err,
-		executordomain.ErrSessionTooLarge) {
+		executorkeep.ErrSessionTooLarge) {
 		t.Fatalf("an archive a byte past its bound: %v, want ErrSessionTooLarge", err)
 	}
 }
@@ -257,14 +258,14 @@ func (zeros) Read(p []byte) (int, error) {
 // and what the object store's pacing pin reads.
 func TestTheSealedCapHoldsASessionAtItsBound(t *testing.T) {
 	t.Parallel()
-	if executordomain.SealedMaxBytes < executordomain.SessionMaxBytes {
+	if executorkeep.SealedMaxBytes < executorkeep.SessionMaxBytes {
 		t.Fatalf("the sealed cap %d is below the archive's own %d",
-			executordomain.SealedMaxBytes, executordomain.SessionMaxBytes)
+			executorkeep.SealedMaxBytes, executorkeep.SessionMaxBytes)
 	}
-	if got := secrets.SealedStreamSize(executordomain.SessionMaxBytes,
-		string(bytes.Repeat([]byte("k"), secrets.MaxStreamKeyIDBytes))); got != executordomain.SealedMaxBytes {
+	if got := secrets.SealedStreamSize(executorkeep.SessionMaxBytes,
+		string(bytes.Repeat([]byte("k"), secrets.MaxStreamKeyIDBytes))); got != executorkeep.SealedMaxBytes {
 		t.Fatalf("an archive at its bound seals to %d and the cap is %d", got,
-			executordomain.SealedMaxBytes)
+			executorkeep.SealedMaxBytes)
 	}
 }
 
@@ -277,9 +278,9 @@ func TestTheSealedCapHoldsASessionAtItsBound(t *testing.T) {
 // this fails.
 func TestTheSeatBudgetFloorHoldsOneSessionAtItsBound(t *testing.T) {
 	t.Parallel()
-	if config.SessionBytesPerSeatFloor < executordomain.SealedMaxBytes {
+	if config.SessionBytesPerSeatFloor < executorkeep.SealedMaxBytes {
 		t.Errorf("max_bytes_per_seat accepts %d bytes and one sealed session is up to %d",
-			config.SessionBytesPerSeatFloor, executordomain.SealedMaxBytes)
+			config.SessionBytesPerSeatFloor, executorkeep.SealedMaxBytes)
 	}
 	if config.DefaultSessionBytesPerSeat < config.SessionBytesPerSeatFloor {
 		t.Errorf("the default budget of %d bytes is below the field's own floor of %d",
@@ -332,8 +333,8 @@ func TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted(t *testing.T) {
 		Object: put.Object}); !errors.Is(err, executordomain.ErrUnreadable) {
 		t.Errorf("the object named by another seat: %v, want ErrUnreadable", err)
 	}
-	if _, err := store.Seal("ana", turn, io.LimitReader(zeros{}, executordomain.SessionMaxBytes+1),
-		io.Discard); !errors.Is(err, executordomain.ErrSessionTooLarge) {
+	if _, err := store.Seal("ana", turn, io.LimitReader(zeros{}, executorkeep.SessionMaxBytes+1),
+		io.Discard); !errors.Is(err, executorkeep.ErrSessionTooLarge) {
 		t.Errorf("an archive a byte past its bound was sealed: %v, want ErrSessionTooLarge", err)
 	}
 }

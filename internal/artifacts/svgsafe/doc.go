@@ -50,4 +50,14 @@
 // the element naming it. A drawing is refused when a reference reaches back
 // into what refers to it (a cycle), or when it would draw more than
 // [MaxExpandedElements] once every reference is expanded.
+//
+// BUILT AT FIRST USE. Every table and pattern here — the elements and
+// attributes, the attribute classes and the value grammar's expressions — is a
+// [sync.OnceValue] built the first time a drawing is read, never a package
+// variable built at init. The engine is one binary, and that binary is also
+// every push's proc-receive hook, which runs every linked package's
+// initialisation before its first statement: built at init, the tables were
+// 291 KB of allocations on every push, for a process that reads no drawing.
+// cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit holds every package to
+// that.
 package svgsafe

@@ -56,14 +56,14 @@ func (b *broker) taken() []string {
 	defer b.mu.Unlock()
 	out := make([]string, 0, len(b.took))
 	for _, ev := range b.took {
-		out = append(out, noticeOf(ev))
+		out = append(out, parkNoticeWords(ev))
 	}
 	return out
 }
 
-// noticeOf is a notice in a case's words: whose, which and, for a park, until
+// parkNoticeWords is a notice in a case's words: whose, which and, for a park, until
 // when.
-func noticeOf(ev *events.Event) string {
+func parkNoticeWords(ev *events.Event) string {
 	if p, ok := events.DataAs[*types.SeatProviderParked](ev); ok && p != nil {
 		return p.AgentHandle + " parked until " + p.RetryAt.Format("15:04")
 	}
@@ -83,8 +83,8 @@ func releasedNotice(handle, why string) *events.Event {
 		events.TraceContext{})
 }
 
-// logLines counts the log lines named event in buf.
-func logLines(buf *syncBuffer, event string) int {
+// countLogLines counts the log lines named event in buf.
+func countLogLines(buf *syncBuffer, event string) int {
 	return strings.Count(buf.String(), "msg="+event)
 }
 
@@ -150,7 +150,7 @@ func TestABrokerOutageCostsOneAttemptPerStepAndOneLineEachWay(t *testing.T) {
 		t.Errorf("the broker was asked %d times for %d notices during the outage, want at "+
 			"most %d, one attempt per step of the backoff", tried, renewals*len(seats), most)
 	}
-	if got := logLines(logs, "seat_provider_park_notices_held"); got != 1 {
+	if got := countLogLines(logs, "seat_provider_park_notices_held"); got != 1 {
 		t.Errorf("the outage was said %d times, want once:\n%s", got, logs)
 	}
 
@@ -163,7 +163,7 @@ func TestABrokerOutageCostsOneAttemptPerStepAndOneLineEachWay(t *testing.T) {
 	if got := b.taken(); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("the broker took %q, want each seat's newest notice once: %q", got, want)
 	}
-	if got := logLines(logs, "seat_provider_park_notices_published"); got != 1 {
+	if got := countLogLines(logs, "seat_provider_park_notices_published"); got != 1 {
 		t.Errorf("the recovery was said %d times, want once:\n%s", got, logs)
 	}
 

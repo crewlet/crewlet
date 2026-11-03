@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/crewlet/crewlet/internal/envfile"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -41,6 +42,14 @@ var log = logging.Get("sandbox.executor")
 // the first text holding a pull request's URL gives every one it holds. A
 // named ref outranks a scraped one wherever each is found, because a scrape
 // cannot tell a pull request the run opened from one it only read.
+//
+// EACH REF AS THE TEXT HOLDS IT, BYTE FOR BYTE, a URL that is not UTF-8
+// included — on a `Delivered:` line, or in the host a scrape reads. Whether
+// the run's record can carry a ref is the coordinator's to judge, for every
+// runner alike ([sandbox.Result.DeliveredRefs]), and it can judge only the
+// bytes it is handed: mended into UTF-8 here, as a decode mends one, a ref
+// would reach the record as a URL nobody delivered, with nothing left to
+// tell it from one somebody did.
 func deliveredRefs(texts ...string) []string {
 	for _, text := range texts {
 		if refs := namedRefs(text); len(refs) > 0 {
@@ -73,9 +82,12 @@ func namedRefs(text string) []string {
 }
 
 // namedRef is the ref a `Delivered:` line holds after its label, if it holds
-// one: a URL, or a name git accepts for a branch ([sandbox.ValidBranch]),
-// unwrapped from the backticks, emphasis or angle brackets a report puts
-// around it and from the full stop a sentence puts after it.
+// one: a URL, whatever bytes it holds ([deliveredRefs] says why), or a branch
+// name the engine's one grammar takes ([gitref.ValidBranch]: a name git
+// accepts, valid UTF-8 and at most [gitref.MaxBranchBytes], what a ref under
+// refs/heads can be), unwrapped from the backticks, emphasis or angle
+// brackets a report puts around it and from the full stop a sentence puts
+// after it.
 //
 // ALONE ON ITS LINE, because the label is not proof of a ref: "Delivered: the
 // fix for the flake" is a sentence, and its first word is no branch anybody
@@ -94,7 +106,7 @@ func namedRef(rest string) (string, bool) {
 	if u, err := url.Parse(ref); err == nil && u.Scheme != "" && u.Host != "" {
 		return ref, u.User == nil
 	}
-	return ref, sandbox.ValidBranch(ref)
+	return ref, gitref.ValidBranch(ref)
 }
 
 // prPattern is a pull or merge request's URL by its SHAPE, on any host: the
@@ -454,7 +466,7 @@ func (r *Runner) noteInstruction() string {
 // this returns.
 func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 	paths := PathsFor(box)
-	if _, err := box.Exec(ctx, "mkdir -p "+shellQuote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
+	if _, err := box.Exec(ctx, "mkdir -p "+sandbox.ShellQuote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: preparing %s: %w", paths.BinDir(), err)
 	}
 	return nil
@@ -529,7 +541,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 func shellQuoteAll(paths []string) string {
 	quoted := make([]string, len(paths))
 	for i, path := range paths {
-		quoted[i] = shellQuote(path)
+		quoted[i] = sandbox.ShellQuote(path)
 	}
 	return strings.Join(quoted, " ")
 }
@@ -617,7 +629,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// system text from — all but the instruction about notes, which a harness
 	// that reads them adds itself, where a note can reach its run
 	// ([noteReader]).
-	req.System = finalSystem(req.System, paths)
+	req.System = finalSystem(req.System, paths, req.ReportedRepos)
 	// AND THE SERVERS AS THIS BOX DIALS THEM, for the same reason: their
 	// URLs, the tool bridge's included, are written in the engine host's
 	// network, and a loopback one reaches nothing from inside a container
@@ -693,7 +705,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// bin directory is prepended INSIDE the script ([withBoxBin]) rather
 	// than exported around it: an assignment made outside would be replaced
 	// by the profile before the agent ever ran.
-	pid, err := box.StartBackground(ctx, "sh -lc "+shellQuote(script), sandbox.ExecOptions{Env: req.Env})
+	pid, err := box.StartBackground(ctx, "sh -lc "+sandbox.ShellQuote(script), sandbox.ExecOptions{Env: req.Env})
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: starting %s: %w", r.harness.Name(), err)
 	}
@@ -827,7 +839,7 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 func wrapperScript(inner string, out Output, paths Paths, hooks string) (string, error) {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
-		stdin = shellQuote(paths.Brief())
+		stdin = sandbox.ShellQuote(paths.Brief())
 	}
 	var b strings.Builder
 	// A STATEMENT OF ITS OWN, before the harness's: an assignment prefix on the
@@ -854,28 +866,30 @@ func wrapperScript(inner string, out Output, paths Paths, hooks string) (string,
 		b.WriteString(attributionExports(hooks))
 	}
 	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; ",
-		inner, stdin, shellQuote(out.Stdout), shellQuote(paths.Err()))
+		inner, stdin, sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(paths.Err()))
 	if out.Result != "" && out.Result != out.Stdout {
-		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", shellQuote(out.Stdout), shellQuote(out.Result))
+		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(out.Result))
 	}
 	fmt.Fprintf(&b, "echo $code > %s; echo $code > %s",
-		shellQuote(paths.ExitCode()), shellQuote(paths.Done()))
+		sandbox.ShellQuote(paths.ExitCode()), sandbox.ShellQuote(paths.Done()))
 	return b.String(), nil
 }
 
 // finalSystem appends the report instruction, addressed at THIS box, to the
-// run's standing instructions.
+// run's standing instructions — saying which of its pushes the engine reports
+// for it (native, the repositories on the engine's own code host it may push
+// to).
 //
 // Composed here rather than at the launch because the findings path is a
 // property of the box the run lands in, which the caller does not know when it
 // builds the request. On the system side, because it is not part of the task:
 // it is how every run works, whatever it was asked.
-func finalSystem(system string, paths Paths) string {
+func finalSystem(system string, paths Paths, native []string) string {
 	parts := make([]string, 0, 2)
 	if system = strings.TrimSpace(system); system != "" {
 		parts = append(parts, system)
 	}
-	parts = append(parts, strings.TrimSpace(FindingsInstruction(paths.Findings())))
+	parts = append(parts, strings.TrimSpace(FindingsInstruction(paths.Findings(), native)))
 	return strings.Join(parts, "\n\n")
 }
 
@@ -900,7 +914,7 @@ func withNoteInstruction(system, instruction string) string {
 // one command, so an executable a setup step installed there resolves ahead of
 // the image's.
 func withBoxBin(cmd string, paths Paths) string {
-	return "PATH=" + shellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
+	return "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
 // Poll reports what is known of the detached job ([sandbox.JobState]).

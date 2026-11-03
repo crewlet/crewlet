@@ -51,11 +51,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
+	"github.com/crewlet/crewlet/internal/regexlit"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/static"
 )
 
-// staticDir is the directory package static embeds, on disk.
+// staticDir is package static's directory on disk: the dashboard's committed
+// build output, which the package embeds all of but the trees
+// [unembeddedTrees] declares.
 func staticDir(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(sourcetree.Root(t), "static")
@@ -73,8 +76,8 @@ func servedTree(t *testing.T) string {
 // Every one of these is a real failure mode of a committed build artifact: a
 // merge that took one side's index.html and the other's assets, a `git add`
 // that missed the fonts directory, a build run with the protocol config
-// skipped. Each leaves a tree that looks plausible in a diff and serves a blank
-// page.
+// skipped or writing into the served tree. Each leaves a tree that looks
+// plausible in a diff and serves a blank page.
 func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	t.Parallel()
 	served := servedTree(t)
@@ -108,10 +111,18 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 
 	// The protocol bundle is a SEPARATE build target and is easy to forget:
 	// internal/e2e replays a real company's socket frames through it under
-	// plain node, and without it that gate silently has nothing to run.
-	if _, err := os.Stat(filepath.Join(served, "protocol.js")); err != nil {
-		t.Errorf("no protocol.js — internal/e2e's client replay has nothing to "+
-			"run against; `npm run build` in dashboard/ emits it: %v", err)
+	// plain node, and without it that gate silently has nothing to run. It is
+	// built BESIDE the served tree and never into it: no page loads it, and
+	// in static/dashboard it rode the embed into every engine binary.
+	protocol := filepath.Join(staticDir(t), "protocol", "protocol.js")
+	if _, err := os.Stat(protocol); err != nil {
+		t.Errorf("no %s — internal/e2e's client replay has nothing to run against; "+
+			"`npm run build` in dashboard/ emits it: %v", protocol, err)
+	}
+	if _, err := os.Stat(filepath.Join(served, "protocol.js")); err == nil {
+		t.Errorf("static/dashboard holds protocol.js, which no page loads, and the embed carries " +
+			"every file there into every engine binary: dashboard/vite.protocol.config.ts builds it " +
+			"into static/protocol")
 	}
 
 	// The faces are embedded rather than fetched, which is what makes the
@@ -662,12 +673,6 @@ func TestBareFocusRulesReadTheSelectorList(t *testing.T) {
 	}
 }
 
-// protocolModule is the second build target: the socket client alone, which
-// internal/e2e replays captured frames through. No page imports it, so the
-// crawl from the shell never reaches it, and a gate over "everything the
-// engine serves as a script" has to name it.
-const protocolModule = dashboardBase + "protocol.js"
-
 // A priceForm is one shape a price takes in a built module.
 type priceForm struct {
 	what string
@@ -748,15 +753,15 @@ type priceFound struct {
 }
 
 // priceFormNeeds is what each of priceForms cannot match without
-// (sourcetree.Required), by index. Every form but the field name's opens with
+// (regexlit.Required), by index. Every form but the field name's opens with
 // a class or `\b`, which leaves the regexp package no prefix to jump to, so
 // each ran over every byte of every module; a module that holds nothing a form
 // needs is not handed to it, which cannot change what it finds. The big
 // chunks hold most of what the forms need, so this skips the small ones.
-var priceFormNeeds = func() []sourcetree.Prefilter {
-	out := make([]sourcetree.Prefilter, len(priceForms))
+var priceFormNeeds = func() []regexlit.Prefilter {
+	out := make([]regexlit.Prefilter, len(priceForms))
 	for i, form := range priceForms {
-		out[i] = sourcetree.Required(form.re)
+		out[i] = regexlit.Required(form.re)
 	}
 	return out
 }()
@@ -804,10 +809,11 @@ func pricesInModule(module []byte) []priceFound {
 // `cost_usd` into a `costUSD` nothing drew.
 //
 // Every module the shell reaches, lazy chunks included, through the crawl
-// TestTheShellLoadsFromTheBinary uses, and protocol.js, which no page imports.
+// TestTheShellLoadsFromTheBinary uses: every script the engine serves, since
+// protocol.js, which no page imports, is built beside the served tree
+// (static/protocol) and served by nobody.
 func TestTheDashboardRendersNoPrice(t *testing.T) {
 	t.Parallel()
-	a := embeddedDashboard.app
 	c := embeddedDashboard.crawl
 	// A crawl that lost a file would scan less than the engine serves and
 	// call it clean. TestTheShellLoadsFromTheBinary names each problem; this
@@ -817,15 +823,14 @@ func TestTheDashboardRendersNoPrice(t *testing.T) {
 			"price in one of them would go unseen; TestTheShellLoadsFromTheBinary names them",
 			len(c.problems))
 	}
-	modules := map[string][]byte{protocolModule: mustFetch(t, a, protocolModule, "text/javascript")}
+	modules := map[string][]byte{}
 	for _, f := range c.ofKind(".js") {
 		modules[f.url] = f.body
 	}
-	// A FLOOR: the entry, the React chunk the build splits out, and
-	// protocol.js. A crawl that reached nothing would otherwise pass.
-	if len(modules) < 3 {
-		t.Fatalf("scanned %d modules; the entry, the React chunk and protocol.js are three",
-			len(modules))
+	// A FLOOR: the entry and the React chunk the build splits out. A crawl
+	// that reached nothing would otherwise pass.
+	if len(modules) < 2 {
+		t.Fatalf("scanned %d modules; the entry and the React chunk are two", len(modules))
 	}
 	for url, body := range modules {
 		for _, p := range pricesInModule(body) {
@@ -922,6 +927,22 @@ func TestTheNoticesAreServedAsText(t *testing.T) {
 	}
 }
 
+// unembeddedTrees are the directories under static/ that the dashboard's build
+// writes and the binary deliberately does not carry, each with why: the one
+// exception TestEveryStaticFileIsInTheBinary makes, holding each to the
+// opposite rule, that none of its files is in the binary.
+//
+// Declared here rather than moved out of static/, because static/ is where
+// every build target of dashboard/ is committed: `make dashboard` writes it,
+// `make dashboard-check` judges it, and .gitattributes keeps it out of text
+// merges. The embed takes the targets a browser asks for; a target that is
+// build output and no asset stays beside them, and is named here.
+var unembeddedTrees = map[string]string{
+	"protocol": "the wire protocol alone (dashboard/vite.protocol.config.ts), which internal/e2e's " +
+		"replay reads from disk and no page loads: embedded, it was 124 KiB of a test's module in " +
+		"every engine binary and image",
+}
+
 // TestEveryStaticFileIsInTheBinary guards the embed pattern against the tree.
 //
 // The pattern is a LIST, and a list is a thing that goes stale. It named
@@ -929,10 +950,16 @@ func TestTheNoticesAreServedAsText(t *testing.T) {
 // the favicon and the sidebar brand, both asked for by the shell — were simply
 // absent from the binary. Every module and stylesheet served perfectly; the
 // page just had no logo.
+//
+// A tree [unembeddedTrees] declares is held the other way, since a pattern
+// that took it would put it back in every binary. The declaration is exact in
+// both directions: an entry whose tree holds no file excuses nothing today and
+// would let the next file to land there pass unread, so it is deleted.
 func TestEveryStaticFileIsInTheBinary(t *testing.T) {
 	t.Parallel()
 	static := staticDir(t)
 	embedded := embeddedTree(t)
+	unembedded := map[string]int{}
 	err := sourcetree.Walk(static, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || strings.HasSuffix(p, ".go") {
 			return err
@@ -942,15 +969,23 @@ func TestEveryStaticFileIsInTheBinary(t *testing.T) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		want, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
 		got, ok := embedded[rel]
+		if tree, _, below := strings.Cut(rel, "/"); below && unembeddedTrees[tree] != "" {
+			unembedded[tree]++
+			if ok {
+				t.Errorf("%s is in the binary, and nothing under static/%s/ is to be: %s; take it out "+
+					"of the embed pattern in static/static.go", rel, tree, unembeddedTrees[tree])
+			}
+			return nil
+		}
 		if !ok {
 			t.Errorf("%s is in %s but not in the binary; add it to the embed "+
 				"pattern in static/static.go", rel, static)
 			return nil
+		}
+		want, err := os.ReadFile(p)
+		if err != nil {
+			return err
 		}
 		if !bytes.Equal(got, want) {
 			t.Errorf("%s: %d bytes embedded, %d on disk", rel, len(got), len(want))
@@ -959,6 +994,12 @@ func TestEveryStaticFileIsInTheBinary(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walking %s: %v", static, err)
+	}
+	for tree, why := range unembeddedTrees {
+		if unembedded[tree] == 0 {
+			t.Errorf("unembeddedTrees excuses static/%s/, which holds no file: delete the entry. It was: %s",
+				tree, why)
+		}
 	}
 }
 
@@ -1017,7 +1058,8 @@ func mustFetch(t *testing.T, a *api.App, url, wantType string) []byte {
 // The dashboard's size budget: ONE set of numbers, and this file is where
 // they live. dashboard/vite.config.ts's chunkSizeWarningLimit is derived from
 // lazyChunkBudget and names this test as its authority; the prose in
-// docs/reference/dashboard-design.md ("How it is built") quotes these values.
+// docs/reference/dashboard-design.md ("How it is built") quotes these values,
+// and TestTheDesignReferenceQuotesTheBudgets holds its table to them.
 //
 // Script and stylesheet sizes are what the engine SENDS a browser that asks
 // for gzip, read off its own answer (servedSize): the file compressed at
@@ -1184,7 +1226,46 @@ const (
 	// Rollup shares into the Access chunk) took it past 381.0 KiB by about
 	// 0.2 KiB: the entry script +105 bytes and the Access chunk +76 bytes,
 	// gzipped. It moved to 382 KiB, which is 2.09 seconds on that link.
-	initialBudget = 382 << 10
+	// The code host, merged beside all of it, adds what it added to the frame
+	// it was built on, about 3 KiB there: its own changes to the frame (the
+	// store_full refusal's sentence among the act errors, a wait said in
+	// hours, and Not Found's hint said as a sentence, about 0.4 KiB, all in
+	// the entry's graph because the frame answers every write and every
+	// unknown address), the formatter cache's frozen shapes and fixes (about
+	// 0.2 KiB: every module's date and number shapes are frozen constants
+	// whose key the cache reads once, in lib/formatters.ts, which every
+	// screen formats through), and the Code workspace (its row, its two
+	// routes, its trail, its service notice and its words in the frame, about
+	// 0.3 KiB of the entry, and about 1.4 KiB of the bundler regrouping what
+	// the first paint already loaded: the code screens reach the peek rail
+	// through the grid and nothing of the lazy-screen table beside it, so the
+	// two are compressed apart). Merged, the load measured 381.7 KiB
+	// (390,899 bytes), so it moved to 382 KiB, which is 2.08 seconds on that
+	// link. The code host's next round, merged in (My work's sections read
+	// from the services that run them, a code host's own word on an act's
+	// refusal and its not_ready class among the act errors, and the
+	// workspace's service notice for My work's queue), took it to 382.2 KiB,
+	// with no screen's module in the entry, so it moved to 383 KiB, still
+	// 2.08 seconds on that link. Code search, a repository's import,
+	// mirrors, index and purge, and the checks' latest attempts and window
+	// end, merged in, took it to 382.5 KiB with no screen newly in the first
+	// paint: a seat's Code tab in the seats workspace the first paint loads,
+	// the frame's code routes, keys, palette hits and sheet rules, and the
+	// bundler splitting two helpers into chunks of their own beside a merge
+	// of two shared ones. Still under 383 KiB.
+	// Merged with main's uilet 0.86.1 and MCP sign-in, each measured on its
+	// own side above, the two add: the code host's 4.3 KiB over the 378.2 KiB
+	// both sides started from, on main's 381.2 KiB, is about 385.5 KiB, so it
+	// moved to 386 KiB.
+	// Main's kit 0.92.0 (a StatusDot's word that wraps) regroups the kit's
+	// shared code the first paint loads: two small chunks of its own (about
+	// 0.7 and 0.4 KiB gzipped, each its own gzip stream) against about
+	// 0.6 KiB less entry script, and the wrap's rules in the one sheet. It
+	// took main's by about 0.7 KiB, which main's 382 KiB still held. Merged,
+	// the same regrouping took this from about 385.6 KiB to 386.3 KiB, past
+	// 386 KiB by main's own growth alone, so it moved to 387 KiB, which is
+	// 2.11 seconds on that link.
+	initialBudget = 387 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1542,6 +1623,45 @@ const (
 	// shared code Rollup moved between chunks and of the Add dialog's rules
 	// out of the one sheet. The page is all in the settings chunk, so the
 	// initial load did not grow. 5385 KiB.
+	// The code host's screens, merged beside it (the Code workspace: its
+	// repositories, a repository's files and history, its changes with their
+	// reviews, checks and merge queue, and their words), took it from 5253.0
+	// KiB to 5377.4 KiB (+124.4 KiB), nearly all of it in chunks a reader
+	// fetches on opening Code; the frame's part is in initialBudget's history
+	// above. 5378 KiB. The code host's next round, merged in (the merge
+	// queue's and the checks' screens, the merge controls on a change,
+	// Settings › Code and the changes on Home), took it to 5428.4 KiB
+	// (+50.9 KiB): the Code workspace +15.5 KiB, a change's page +7.7 KiB,
+	// Settings +6.1 KiB, the shared chunks +5.9 KiB, the change list +2.8
+	// KiB, Home +2.6 KiB and the checks' screens +2.5 KiB, less 4.2 KiB in
+	// the entry, nearly all of it fetched on opening Code. 5429 KiB. Code
+	// search and a repository's import, mirrors, index and purge, merged in,
+	// left it at 5271.9 KiB, because the bundle got smaller beside them:
+	// protocol.js, the wire protocol alone that internal/e2e replays frames
+	// through and no page loads, was built into static/dashboard and so
+	// embedded, about 124 KiB every binary carried for a test. Built into
+	// static/protocol, which nothing embeds, it is out of the tree. Still
+	// 5429 KiB.
+	// Merged with main's executor launches, uilet 0.86.1 and 0.89.0, Chatlet's
+	// receipts and membership, the Sessions view and Settings › MCP & tools
+	// above, each measured on its own side from about 5253 KiB, the two add:
+	// the code host's +28 KiB on main's 5384.9 KiB, less main's 0.8 KiB of
+	// wire protocol that static/protocol keeps out of the tree, measured
+	// 5412.5 KiB. 5413 KiB.
+	// The code host's round merged on top (a change list's open findings,
+	// updated column and window, a change's reviews, comments and findings a
+	// page at a time, who set each protection rule, every protected
+	// repository and any repository found in the pickers, a file's earlier
+	// lines a page at a time) took it to 5415.6 KiB (+3.1 KiB): the changes
+	// chunk +1.7 KiB, the Code workspace +0.5 KiB, Settings +0.4 KiB, the
+	// quiet-input hook +0.3 KiB and the Inbox +0.2 KiB, less 0.3 KiB of the
+	// page-link module and +0.3 KiB net elsewhere, all of it fetched on
+	// opening Code or Settings. 5416 KiB. The diff reader's next round (a
+	// failed check's line revealed wherever its window is, the patch read on
+	// to the page holding it, the line dropped when the reader opens another
+	// file, and a change's reviews and comments asked again only once spoken)
+	// took it to 5416.6 KiB (+1.0 KiB): the DiffView chunk +0.7 KiB and the
+	// Code workspace +0.2 KiB, all of it fetched on opening Code. 5417 KiB.
 	// A team's MCP limits in the Remove dialog (each seat's and unit's
 	// mcp_limits block a removal clears, listed and counted with the other
 	// fields that name the server) took it from 5384.9 KiB to 5385.2 KiB
@@ -1573,6 +1693,19 @@ const (
 	// 5437.3 KiB (+0.9 KiB, 970 bytes): the Executors chunk +0.7 KiB, the
 	// inbox chunk +0.2 KiB, and 44 bytes of the home, live and entry scripts.
 	// 5438 KiB.
+	// Merged with the code host, each measured on its own side (main's from
+	// 5384.9 KiB, the code host's at 5416.6 KiB, 5,546,592 bytes), the two
+	// add: main's MCP grants, levels, held calls, changed tools, sign-in and
+	// ending executors above are +52.4 KiB (53,639 bytes) — the settings
+	// chunk +44.0 KiB and its sheet +1.2 KiB, the Access chunk +2.8 KiB,
+	// useLatestHandlers +1.5 KiB, the writes chunk +1.5 KiB, the decision
+	// row's +1.4 KiB and the Executors chunk +0.7 KiB, less 0.7 KiB net
+	// elsewhere (1.4 KiB out of the shared chunks against 0.7 KiB more in the
+	// inbox, its column, the entry and the one sheet) — and the merge itself
+	// 158 bytes: the changed tools' review drawn in components/DiffView
+	// rather than the package's diffs (151 bytes of the settings chunk) and
+	// 7 bytes of minified names. Measured 5469.1 KiB (5,600,389 bytes). It
+	// moved by main's own 53 KiB, from the code host's 5417 KiB: 5470 KiB.
 	// The Cloudflare integration (its catalogue entry, story and Agents tab
 	// lane words, and the org builder reading a seat's vendor accounts from
 	// its access blocks) took it from 5437.3 KiB to 5438.6 KiB (+1.3 KiB,
@@ -1586,6 +1719,10 @@ const (
 	// the view) took it from 5438.6 KiB to 5439.3 KiB (+0.7 KiB, 760 bytes),
 	// all of it the agents chunk the view loads in (+281 bytes gzipped): 339
 	// bytes past 5439 KiB. The initial load did not grow. 5440 KiB.
+	// Merged again with those two, measured on the merged tree: main's
+	// +2.0 KiB (2,060 bytes, the 1,300 and the 760 above) took it from
+	// 5469.3 KiB (5,600,519 bytes) to 5471.3 KiB (5,602,579 bytes). It moved
+	// by main's own 2 KiB, from 5470 KiB: 5472 KiB.
 	// The Expo integration (its catalogue entry, story and Agents tab words,
 	// with its box tool remedy, the org builder's Expo facts, and @crewlethq
 	// 0.90.0 for the Expo mark) took it from 5439.3 KiB to 5441.5 KiB (+2.2
@@ -1602,40 +1739,63 @@ const (
 	// the settings chunk +1134 bytes, the integrations model chunk +485 bytes
 	// and its sheet +179 bytes, the kit's chunks +313 bytes net, the Problems
 	// chunk +66 bytes, and 72 bytes across the rest. 5444 KiB.
+	// Merged again with those two, measured on the merged tree (main's
+	// Cloudflare configure level and pasted-token checks after them add no
+	// byte to the bundle): main's +4.4 KiB (4,477 bytes, the 2228 and the
+	// 2249 above) came to 4,424 bytes here, 53 fewer in minified names,
+	// taking it from 5471.3 KiB (5,602,579 bytes) to 5475.6 KiB (5,607,003
+	// bytes). It moved by main's own 4 KiB, from 5472 KiB: 5476 KiB.
 	// The kit's move to 0.91.0 (the Scaleway and DigitalOcean marks) took it
 	// from 5443.7 KiB to 5444.6 KiB (+0.9 KiB, 967 bytes): the icons chunk
 	// +1409 bytes for the two marks, less 442 bytes net across the kit's
 	// renamed chunks, the shell page and the stylesheet. 5445 KiB.
+	// Merged again with that, measured on the merged tree: main's +967 bytes
+	// came to 1,022 bytes here, 55 more, taking it
+	// from 5475.6 KiB (5,607,003 bytes) to 5476.6 KiB (5,608,025 bytes). It
+	// moved by main's own 1 KiB, from 5476 KiB: 5477 KiB.
+	//
 	// The Agents tab's generic scope and tool mechanics (scope names, a list
 	// that could not be read, a required scope and its single-entry pre-fill,
 	// an open connection's typed entries, a refusal drawn beside its control,
 	// each seat's box lines from the engine and a lane's two tool routes) took
-	// it from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, 3165 bytes): the
+	// main's from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, 3165 bytes): the
 	// integrations model chunk +3096 bytes, its sheet +61 bytes and 8 bytes
-	// elsewhere. 5448 KiB.
+	// elsewhere. Merged again with it, main's +3165 bytes came to 3,163 bytes
+	// on the merged tree, taking it from 5476.6 KiB (5,608,025 bytes) to
+	// 5479.7 KiB (5,611,188 bytes). It moved by main's own 3 KiB, from
+	// 5477 KiB: 5480 KiB.
 	// A level an agent cannot be given drawn disabled with its reason, a
 	// setup verdict that wraps, and the kit's move to 0.92.0 (a StatusDot's
-	// word that wraps) took it from 5447.7 KiB to 5449.2 KiB (+1.5 KiB, 1529
-	// bytes): the kit +1467 bytes net across its renamed chunks and its
-	// stylesheet, and the access and settings chunks +62 bytes. 5450 KiB.
+	// word that wraps) took main's from 5447.7 KiB to 5449.2 KiB (+1.5 KiB,
+	// 1529 bytes): the kit +1467 bytes net across its renamed chunks and its
+	// stylesheet, and the access and settings chunks +62 bytes. Merged again
+	// with it, main's +1529 bytes came to 1,508 bytes on the merged tree,
+	// taking it from 5479.7 KiB (5,611,188 bytes) to 5481.1 KiB (5,612,696
+	// bytes). It moved by main's own 2 KiB, from 5480 KiB: 5482 KiB.
 	// The Expo handoff (the Set up sheet a person walks to make each agent's
 	// robot at Expo and paste its token, a rotate through it, the reminder of
 	// an old credential still at the vendor, keeping a turned-off robot, and
-	// the Cloud and Infrastructure group) took it from 5449.2 KiB to 5456.5 KiB
-	// (+7.3 KiB, 7475 bytes): the integrations model chunk +7310 bytes and its
-	// stylesheet +152 bytes, and 13 bytes across the chunks that import them.
-	// The initial load did not grow. 5457 KiB.
+	// the Cloud and Infrastructure group) took main's from 5449.2 KiB to
+	// 5456.5 KiB (+7.3 KiB, 7475 bytes): the integrations model chunk +7310
+	// bytes and its stylesheet +152 bytes, and 13 bytes across the chunks that
+	// import them. The initial load did not grow. Merged again with it, main's
+	// +7475 bytes came to 7,477 bytes on the merged tree, taking it from
+	// 5481.1 KiB (5,612,696 bytes) to 5488.4 KiB (5,620,173 bytes). It moved by
+	// main's own 7 KiB, from 5482 KiB: 5489 KiB.
 	// A conversation's next turn continuing the session its last turn left —
 	// the Sessions view saying which launch would continue each session
 	// (`continued_by`), naming the session a turn's first launch was handed
 	// (`base_turn`, a link to that session) and whether its reply reached the
 	// party waiting, net of the Memory tab's Conversations section it
-	// replaces, with its thread list and their turns — took it from 5456.5
+	// replaces, with its thread list and their turns — took main's from 5456.5
 	// KiB to 5454.2 KiB (-2.3 KiB, 2367 bytes), all of it the agents chunk
 	// the tab loads in (271 bytes gzipped). The initial load did not grow:
-	// its files are the same bytes but for the chunk names they list. It
-	// moved down to 5455 KiB, the measured size's next KiB.
-	treeBudget = 5<<20 + 335<<10
+	// its files are the same bytes but for the chunk names they list.
+	// Merged again with it, main's -2367 bytes came to -2,380 bytes on the
+	// merged tree, taking it from 5488.4 KiB (5,620,173 bytes) to 5486.1 KiB
+	// (5,617,793 bytes). It moved down by main's own 2 KiB, from 5489 KiB to
+	// the measured size's next KiB: 5487 KiB.
+	treeBudget = 5<<20 + 367<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
@@ -1742,6 +1902,103 @@ func TestTheDashboardFitsItsBudget(t *testing.T) {
 		t.Errorf("static/dashboard is %s, over its %s: every engine binary and image carries "+
 			"it, opened or not", kib(tree), kib(treeBudget))
 	}
+}
+
+// TestTheDesignReferenceQuotesTheBudgets holds the design reference's budget
+// table (docs/reference/dashboard-design.md, "The bundle has a budget") to the
+// four constants above: a row for each and none other, each quoting its
+// constant in the unit the row is written in.
+//
+// The page is where a reader sizing a deployment's first paint learns the
+// budget, and it drifted while nothing read it: the initial load stayed at
+// 316 KiB through four moves of its constant, to 324, and the tree at 4 MiB
+// after its constant moved to 4.25. A move of a constant now carries the page
+// with it, as the history beside each constant already asks.
+//
+// Mutation: move initialBudget and leave the page, and its row quotes the old
+// value; drop a row, and the table has three.
+func TestTheDesignReferenceQuotesTheBudgets(t *testing.T) {
+	t.Parallel()
+	page := filepath.Join(sourcetree.Root(t), "docs", "reference", "dashboard-design.md")
+	raw, err := os.ReadFile(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each row by the words its first cell opens with, and the budget it
+	// quotes in the unit the page writes it in.
+	want := []struct{ row, budget string }{
+		{"The initial load:", quotedBudget(initialBudget, 1<<10, "KiB")},
+		{"Each chunk fetched later:", quotedBudget(lazyChunkBudget, 1<<10, "KiB")},
+		{"Every font face", quotedBudget(fontBudget, 1000, "KB")},
+		{"The whole of `static/dashboard`", quotedBudget(treeBudget, 1<<10, "KiB")},
+	}
+	rows := budgetTable(t, string(raw))
+	if len(rows) != len(want) {
+		t.Errorf("%s: the budget table has %d rows, want one for each of the %d budgets",
+			page, len(rows), len(want))
+	}
+	for _, w := range want {
+		found := false
+		for _, r := range rows {
+			if !strings.HasPrefix(r[0], w.row) {
+				continue
+			}
+			found = true
+			if r[1] != w.budget {
+				t.Errorf("%s: the budget table quotes %q for %q, want its constant, %q",
+					page, r[1], w.row, w.budget)
+			}
+		}
+		if !found {
+			t.Errorf("%s: the budget table has no row opening %q", page, w.row)
+		}
+	}
+}
+
+// quotedBudget is a budget of n bytes as the design reference writes it: in
+// units of size bytes, the unit named.
+func quotedBudget(n, size int, unit string) string {
+	return fmt.Sprintf("%g %s", float64(n)/float64(size), unit)
+}
+
+// budgetTable is the rows of the design reference's table under "The bundle
+// has a budget", each as its four cells trimmed.
+func budgetTable(t *testing.T, page string) [][]string {
+	t.Helper()
+	const title = "**The bundle has a budget, measured as the engine sends it.**"
+	start := strings.Index(page, title)
+	if start < 0 {
+		t.Fatalf("the design reference has no paragraph %s", title)
+	}
+	var rows [][]string
+	inTable := false
+	for _, line := range strings.Split(page[start:], "\n") {
+		if !strings.HasPrefix(line, "|") {
+			if inTable {
+				break
+			}
+			continue
+		}
+		if !inTable {
+			inTable = true
+			continue // the header
+		}
+		if strings.HasPrefix(line, "|---") {
+			continue
+		}
+		cells := strings.Split(strings.Trim(line, "|"), "|")
+		if len(cells) != 4 {
+			t.Fatalf("the budget table's row %q has %d cells, want 4", line, len(cells))
+		}
+		for i := range cells {
+			cells[i] = strings.TrimSpace(cells[i])
+		}
+		rows = append(rows, cells)
+	}
+	if !inTable {
+		t.Fatalf("the design reference's paragraph %s is followed by no table", title)
+	}
+	return rows
 }
 
 // kib renders a byte count the way the budgets are written.

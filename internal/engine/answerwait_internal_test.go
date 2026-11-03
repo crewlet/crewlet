@@ -112,6 +112,7 @@ func TestADeliveryThatReachesAHeldSeatTakesTheHoldTheQueueRefused(t *testing.T) 
 	rt := e.sandbox.Load()
 	hold := &refusedOnce{inner: seatHold{engine: e}}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: &resumeSpy{}, Hold: hold,
 		Lease: e.launchFence,
@@ -321,6 +322,7 @@ func spyRuntime(t *testing.T, e *Engine) (*sandbox.Coordinator, *resumeSpy) {
 	}
 	resumer := &resumeSpy{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer, Lease: e.launchFence,
@@ -426,6 +428,7 @@ func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
 		return refusal, refused
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: store,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: admit, After: retries.after, Lease: e.launchFence,

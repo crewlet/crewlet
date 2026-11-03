@@ -22,6 +22,7 @@ func everyLogPrefix() []string {
 		topics.AssistantLogPrefix,
 		topics.ChatLogPrefix,
 		topics.ExecutorLogPrefix,
+		topics.CodeLogPrefix,
 	}
 }
 
@@ -32,7 +33,7 @@ func everyLogPrefix() []string {
 // nobody checks is how a new log reaches the broker with its neighbours' parsers
 // never asked about it. A state log is the one shape of constants here a stream
 // is created from: a <name>Stream, a <name>Prefix, and a <name>Wildcard that is
-// exactly that prefix and ".>". Read from the source, a tenth log is on the
+// exactly that prefix and ".>". Read from the source, an eleventh log is on the
 // list the day its constants are, or this fails naming it.
 func TestEveryLogPrefixIsEveryStateLog(t *testing.T) {
 	t.Parallel()
@@ -143,6 +144,10 @@ func TestTheLogsBuildersAreThePrefixRelativeGrammar(t *testing.T) {
 			topics.LogSubject(topics.PagesLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the pages log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
 		}
+		if got, want := topics.CodeLogSubject(tc.kind, tc.id),
+			topics.LogSubject(topics.CodeLogPrefix, tc.kind, tc.id); got != want {
+			t.Errorf("the code log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
+		}
 		if got, want := topics.IamLogSubject(tc.kind, tc.id),
 			topics.LogSubject(topics.IamLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the identity log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
@@ -196,6 +201,7 @@ func TestALogSubjectRefusesWhatItsInverseCouldNotRecover(t *testing.T) {
 		// The vectors share the tracker's head and are another log.
 		topics.TrackerVectorsPrefix + ".task.x",
 		topics.PagesLogPrefix + ".task.x",
+		topics.CodeLogPrefix + ".task.x",
 	} {
 		if kind, id, ok := topics.LogPath(prefix, subject); ok {
 			t.Errorf("%q was read under %q as (%q, %q)", subject, prefix, kind, id)
@@ -242,6 +248,8 @@ func TestEachStateLogIsNamedAsItAlwaysHasBeen(t *testing.T) {
 			"CREWLET_CHAT_LOG", "crewlet.chat.log"},
 		{"executor", topics.ExecutorLogStream, topics.ExecutorLogPrefix,
 			topics.ExecutorLogWildcard, "CREWLET_EXECUTOR_LOG", "crewlet.executor.log"},
+		{"code", topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard,
+			"CREWLET_CODE_LOG", "crewlet.code.log"},
 	} {
 		if tc.stream != tc.wantStream || tc.prefix != tc.wantPrefix ||
 			tc.wildcard != tc.wantPrefix+".>" {

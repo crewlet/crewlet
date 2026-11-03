@@ -25,8 +25,10 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -227,7 +229,6 @@ var domainErrors = map[string]map[string]classRow{
 		"ErrAlreadyAnswered":        {err: worklet.ErrAlreadyAnswered, means: answered},
 		"ErrBadQuery":               {err: worklet.ErrBadQuery, means: malformed},
 		"ErrForbidden":              {err: worklet.ErrForbidden, means: notPermitted},
-		"ErrInboxFull":              {err: worklet.ErrInboxFull, means: inboxCeiling},
 		"ErrIndexBuilding":          {err: worklet.ErrIndexBuilding, means: nodeCondition},
 		"ErrInvalid":                {err: worklet.ErrInvalid, means: malformed},
 		"ErrNoChartActivation":      {err: worklet.ErrNoChartActivation, why: "a chart apply's wiring, never a caller's request"},
@@ -325,6 +326,55 @@ var domainErrors = map[string]map[string]classRow{
 			why: "a document version this build cannot read, a fault of the copy"},
 		"InvalidError": {err: &chatlet.InvalidError{}, means: malformed},
 	},
+	code.Domain{}.Name(): {
+		"ErrRepoNotFound":   {err: code.ErrRepoNotFound, means: absent},
+		"ErrRefNotFound":    {err: code.ErrRefNotFound, means: absent},
+		"ErrChangeNotFound": {err: code.ErrChangeNotFound, means: absent},
+		"ErrCheckNotFound":  {err: code.ErrCheckNotFound, means: absent},
+		"ErrObjectNotFound": {err: code.ErrObjectNotFound, means: absent},
+		"ErrNotATree":       {err: code.ErrNotATree, means: absent},
+		"ErrNotABlob":       {err: code.ErrNotABlob, means: absent},
+		// A REPOSITORY BEING PURGED, within its deleted retention, not
+		// deleted or managed by its configuration refuses by what it is
+		// now: the same request lands once somebody changes that, as an
+		// artifact in the trash does.
+		"ErrPurging":       {err: code.ErrPurging, means: objectState},
+		"ErrNotYet":        {err: code.ErrNotYet, means: objectState},
+		"ErrNotDeleted":    {err: code.ErrNotDeleted, means: objectState},
+		"ErrConfigManaged": {err: code.ErrConfigManaged, means: objectState},
+		"ErrSnapshotMoved": {err: code.ErrSnapshotMoved, means: staleRead},
+		"ErrNotPermitted":  {err: code.ErrNotPermitted, means: notPermitted},
+		// THE SEAT A TURN READS FOR, not the asker: a decision about whom
+		// the call is made for, which the same turn cannot change.
+		"ErrAboveCeiling":  {err: code.ErrAboveCeiling, means: notPermitted},
+		"ErrInvalid":       {err: code.ErrInvalid, means: malformed},
+		"ErrBadCursor":     {err: code.ErrBadCursor, means: malformed},
+		"ErrBadLevel":      {err: code.ErrBadLevel, means: malformed},
+		"ErrSliceTooLarge": {err: code.ErrSliceTooLarge, means: malformed},
+		"ErrRecordCap":     {err: code.ErrRecordCap, means: malformed},
+		// THIS NODE'S CONDITION: another node, or this one a moment later,
+		// answers the same call.
+		"ErrNotServing": {err: code.ErrNotServing, means: nodeCondition},
+		"ErrAnswerDue":  {err: code.ErrAnswerDue, means: nodeCondition},
+		"ErrGitUnready": {err: &code.ErrGitUnready{}, means: nodeCondition},
+
+		"ErrNoActivation":     {err: code.ErrNoActivation, why: "a configuration apply's wiring, never a caller's request"},
+		"ErrSuperseded":       {err: code.ErrSuperseded, why: "a configuration reconcile a later activation fenced off, never a caller's request"},
+		"ErrNotConfigManaged": {err: code.ErrNotConfigManaged, why: "a configuration reconcile reaching a repository it does not manage, never a caller's request"},
+		"ErrInvalidProposal": {err: code.ErrInvalidProposal,
+			why: "a proposal the domain's own committer built wrong, decided by the applier as a fault"},
+		"TooWideError": {err: &code.TooWideError{},
+			why: "a push too wide for one entry, which the client pushes in parts and a committer never builds"},
+		"ErrInvalidLayer": {err: code.ErrInvalidLayer, why: "a published layer a git node built wrong, the cache's fault"},
+		"ErrBadLayer":     {err: code.ErrBadLayer, why: "a stored layer that is not what its row says, a fault of the store"},
+		"ErrBadBundle":    {err: code.ErrBadBundle, why: "a stored pack that is not what its row says, a fault of the store"},
+		"BadBundle":       {err: &code.BadBundle{Err: code.ErrBadBundle}, why: "a stored pack that is not what its row says, a fault of the store"},
+		"ErrMisplaced": {err: code.ErrMisplaced,
+			why: "a re-anchoring answer placing another set than its anchors, which no git node of this build " +
+				"gives: the asking node's own fault, never a caller's request"},
+		"ErrFutureVersion": {err: &code.ErrFutureVersion{},
+			why: "a record a newer build wrote, which the framework defers rather than refuses"},
+	},
 }
 
 // EVERY ERROR A NATIVE DOMAIN DECLARES IS CLASSED, or named as no refusal.
@@ -420,9 +470,11 @@ func TestEveryDomainRefusalIsClassed(t *testing.T) {
 		}
 	}
 	// THE FRAMEWORK'S OWN, which every domain's writer may return as
-	// written.
+	// written, and the inbox's ceiling, which every domain that keeps a
+	// person's inbox (Worklet's and the code host's) refuses with.
 	for err, want := range map[error]tools.Refusal{
 		statelog.ErrExists: tools.RefusalExists, statelog.ErrConflict: tools.RefusalConflict,
+		inbox.ErrFull: tools.RefusalInboxFull,
 	} {
 		if class, ok := WriterClass(err); !ok || class != want {
 			t.Errorf("WriterClass(%v) = %q, %v; want %q", err, class, ok, want)
@@ -448,7 +500,7 @@ func TestEveryDomainRefusalIsClassed(t *testing.T) {
 // drop the prefix strip from worklet.Sentence, and a row goes red.
 func TestNoDomainRefusalReadsAsAGoError(t *testing.T) {
 	t.Parallel()
-	prefixes := []string{"worklet: ", "doclet: ", "chatlet: ", "statelog: ", "artifactsdomain: ",
+	prefixes := []string{"worklet: ", "doclet: ", "chatlet: ", "code: ", "statelog: ", "artifactsdomain: ",
 		"artifactdata: ", "artifacts: ", "%!"}
 	leaks := func(text string) string {
 		for _, p := range prefixes {
@@ -750,7 +802,7 @@ func domainPackages() map[string]string {
 	internal := path.Dir(reflect.TypeFor[statelog.Position]().PkgPath())
 	out := map[string]string{}
 	for _, d := range []statelog.Domain{worklet.Domain{}, doclet.Domain{}, chatlet.Domain{},
-		artifactsdomain.Domain{}, artifactdata.Domain{}} {
+		artifactsdomain.Domain{}, artifactdata.Domain{}, code.Domain{}} {
 		out[d.Name()] = strings.TrimPrefix(reflect.TypeOf(d).PkgPath(), internal+"/")
 	}
 	return out

@@ -413,10 +413,16 @@ func (s SlackIdentity) IsZero() bool { return s == SlackIdentity{} }
 // the same account, and two seats resolving to one login means an @mention can
 // no longer say which agent is meant.
 //
-// EVERYTHING HERE EXCEPT THE TIER AND THE REPOSITORIES IS WRITTEN BY THE
-// ENGINE. An app is created from a manifest the engine builds, and GitHub
-// returns its id, slug, key and webhook secret exactly once, at conversion
-// time. What a person does is click through the creation and the install.
+// EVERYTHING HERE EXCEPT THE REPOSITORIES IS WRITTEN BY THE ENGINE. An app is
+// created from a manifest the engine builds, and GitHub returns its id, slug,
+// key and webhook secret exactly once, at conversion time. What a person does
+// is click through the creation and the install.
+//
+// HOW MUCH THE APP MAY DO IS NOT HERE: it is the seat's [Role.CodeAccess], the
+// one tier every code host reads. The app is created with, and every token it
+// mints carries, that tier's permission set, so a tier stated here as well
+// would be a second answer to one question — and one a company on the native
+// code host would have nowhere to write.
 type GitHubApp struct {
 	// Enabled is the seat's stored on or off. Off suspends the installation
 	// and keeps the app (D1), and an off seat is issued no token.
@@ -572,8 +578,8 @@ type RoleSandbox struct {
 	// A POINTER, because there are three states and a float64 has two:
 	// UNSET inherits the provider default, an explicit 0 means never pause.
 	// A plain number would read an unset field as "never pause", so every
-	// seat that said nothing would lose its checkout the moment a coding
-	// agent asked a question.
+	// seat that said nothing would lose its checkout the moment a harness
+	// asked a question.
 	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty"`
 
 	// Setup is this seat's OWN provisioning, applied after the engine-wide
@@ -812,6 +818,35 @@ type Role struct {
 	Project string `yaml:"project,omitempty" json:"project,omitempty"`
 	Space   string `yaml:"space,omitempty" json:"space,omitempty"`
 
+	// CodeAccess is the seat's `role.code.access` as written — read_only,
+	// review or full_access — or empty where the document says nothing.
+	//
+	// THE ENGINE'S OWN CODE HOST'S TIER ALONE: it caps what the seat may do
+	// on the code host, and reaches nothing at a vendor — GitHub reads the
+	// seat's role.integrations.github.permissions, its own permission set
+	// in its own terms, and never this tier.
+	//
+	// WHAT WAS WRITTEN, never a default: empty and read_only are the same
+	// tier, and the code host reads silence as read_only through its one
+	// reading (config.RoleCode.AccessOrDefault), so a default written here
+	// would be a second statement of it. What a seat may DO is that
+	// reading, never this field read bare.
+	CodeAccess string `yaml:"code_access,omitempty" json:"code_access,omitempty"`
+
+	// HealthTools is the seat's `role.health_tools`: whether its role carries
+	// the health grant (internal/authz's SeatGrantHealth), which admits this
+	// agent to the fleet_health and code_status tools — an administrator's
+	// reads of the deployment — and which its surfaces offer it for that
+	// reason; the same grant is who an alarm's transition wakes
+	// (internal/alarmwake). False is no grant, the default: a seat never holds
+	// admin, and the deployment's health is given to a seat only by name.
+	//
+	// AN AGENT SEAT'S ALONE, refused on a human seat by the config layer as an
+	// admission rule (internal/config, validateHumanSeatGrants): a person is
+	// decided by their own permissions, so a grant on their seat would read
+	// as live and do nothing.
+	HealthTools bool `yaml:"health_tools,omitempty" json:"health_tools,omitempty"`
+
 	// Schedules are this seat's own recurring work; each fires a task into
 	// this seat's inbox on its cron expression.
 	Schedules []Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty"`
@@ -913,12 +948,15 @@ func (r *Role) ResolvedEmail(lookup EnvLookup) string {
 // `integrations.confluence` sent an operator to the company's own vendor
 // blocks.
 //
-// A seat's own GitHub App ([Role.GitHub]) is refused on a human seat too,
-// but by the config layer, as an ADMISSION rule rather than one of these
-// runnable ones: nothing about running depends on the block, since every
-// path that creates, installs or reconciles an app skips a human seat, so a
-// stored revision carrying one runs as it did. Listing it here as well would
-// report one mistake twice.
+// What a seat holds on a code host — its code access tier ([Role.CodeAccess])
+// and its own GitHub App ([Role.GitHub]) — is refused on a human seat too, but
+// by the config layer, as an ADMISSION rule rather than one of these runnable
+// ones: nothing about running depends on either, since nothing running reads a
+// tier off a human seat and every path that creates, installs or reconciles an
+// app skips one, so a stored revision carrying one runs as it did — and a later
+// build may relax the rule (a tier that caps a person) without this build
+// refusing to apply what its newer peer admitted. Listing them here as well
+// would report one mistake twice.
 func (r *Role) humanForbidden() []string {
 	fields := []struct {
 		name string

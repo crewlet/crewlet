@@ -337,7 +337,7 @@ test("a complete readmission is held while the serving node could not read the e
 test("a log whose evictions could not be read says so above the node block", () => {
   query.data = report(
     [node()],
-    [logRow("tracker"), logRow("pages", { evictions_unreadable: true })],
+    [logRow("tracker"), logRow("pages", { evictions_unreadable: true }), logRow("code")],
   );
   render(
     <Router>

@@ -30,6 +30,7 @@ func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.Type = config.StreamNATS
 	b.Stream.URL = broker.URL()
+	b.Stream.Token = externaltest.Token
 	b.Coordination.Type = config.CoordinationEmbeddedKV
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))

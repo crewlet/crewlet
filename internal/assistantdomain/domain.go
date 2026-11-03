@@ -218,12 +218,12 @@ func (Domain) ScopeIndex() string { return "assistant_log_deferred_scope" }
 // OpsTable is the operation ledger: what this node has already applied.
 func (Domain) OpsTable() string { return "assistant_ops" }
 
-// ReadinessInput reports that this domain's health does NOT gate seat
-// admission: no seat reads a conversation on its turn path, so a stalled
-// assistant copy must not stop a node admitting seats. The copy still goes out
-// of service for its own readers: a stalled strict replay is a fault, and the
-// framework refuses every read of it.
-func (Domain) ReadinessInput() bool { return false }
+// GatesSeatAdmission reports that no seat depends on this domain's copy: no
+// seat reads a conversation on its turn path, so a stalled assistant copy must
+// not stop a node admitting seats. The copy is still judged and goes out of
+// service for its own readers (ADR-0079): a stalled strict replay is a fault,
+// and the framework refuses every read of it.
+func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that every node's Replicated tables must be
 // byte-identical: N copies of one SQL state from one ordered log.

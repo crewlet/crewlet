@@ -220,38 +220,82 @@ func sanitizeName(s string) string {
 	return string(out)
 }
 
-// lookupTermJS records the time to answer that every existence lookup was given,
-// and answers it from the real broker.
+// lookupTermJS DROPS the first request of every existence lookup, as a member
+// that is not leading the object drops a read without a word, and answers from
+// the real broker every request sent while a dropped one is still outstanding:
+// the re-ask of a read that keeps listening for its lost request. It records
+// each dropped request, by the lookup's call, and whether a re-ask was sent
+// beside it.
+//
+// A LOOKUP'S FIRST REQUEST IS TOLD BY WHAT IS OUTSTANDING, not by a count. A
+// request that finds no dropped one of its call outstanding opens a lookup; one
+// that finds one is a re-ask of it. Counted as every other request instead, a
+// re-ask the broker answered slower than the read term was followed by a
+// second one, which was dropped as if it opened a lookup, and the next
+// lookup's first request was answered.
 type lookupTermJS struct {
 	jetstream.JetStream
 
-	mu   sync.Mutex
-	left map[string][]time.Duration
+	mu sync.Mutex
+	// held is each call's dropped request still outstanding, and dropped
+	// every request each call had dropped, in order.
+	held    map[string]*droppedAsk
+	dropped map[string][]*droppedAsk
 }
 
-// note records what ctx gave call to answer in — or a negative duration for a
-// call handed no deadline at all.
-func (d *lookupTermJS) note(ctx context.Context, call string) {
-	left := time.Duration(-1)
-	if deadline, ok := ctx.Deadline(); ok {
-		left = time.Until(deadline)
-	}
+// droppedAsk is one dropped request, and whether a re-ask was sent while it was
+// still outstanding.
+type droppedAsk struct{ reasked bool }
+
+// ask records a request of call and answers the dropped request it opens, or
+// nil for a re-ask, which is answered.
+func (d *lookupTermJS) ask(call string) *droppedAsk {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.left[call] = append(d.left[call], left)
+	if held := d.held[call]; held != nil {
+		held.reasked = true
+		return nil
+	}
+	drop := &droppedAsk{}
+	d.held[call], d.dropped[call] = drop, append(d.dropped[call], drop)
+	return drop
+}
+
+// ended is call's dropped request ending, once its read has stopped listening.
+func (d *lookupTermJS) ended(call string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.held, call)
 }
 
 func (d *lookupTermJS) Stream(ctx context.Context, name string) (jetstream.Stream, error) {
-	d.note(ctx, "stream "+name)
+	call := "stream " + name
+	if d.ask(call) != nil {
+		<-ctx.Done()
+		d.ended(call)
+		return nil, ctx.Err()
+	}
 	return d.JetStream.Stream(ctx, name)
 }
 
 func (d *lookupTermJS) Consumer(ctx context.Context, stream, name string) (jetstream.Consumer, error) {
-	d.note(ctx, "consumer "+name)
+	call := "consumer " + name
+	if d.ask(call) != nil {
+		<-ctx.Done()
+		d.ended(call)
+		return nil, ctx.Err()
+	}
 	return d.JetStream.Consumer(ctx, stream, name)
 }
 
-// EVERY LOOKUP IS ASKED AT THE READ TERM, never at a write's.
+// lookupTermPatience bounds [TestEveryLookupIsAskedAgainAtTheReadTerm] as a
+// hang guard and nothing more. At the read term the case's lookups end in a
+// fraction of a second. A lookup asked at the case's hour-long write term never
+// ends inside it, and neither does one held as a single request to the
+// thirty-second lookup ceiling, which the guard sits under.
+const lookupTermPatience = 20 * time.Second
+
+// EVERY LOOKUP IS ASKED AGAIN AT THE READ TERM, never at a write's.
 //
 // The server answers a read when it processes it or never
 // ([jsprovision.ReadTerm]): an object another node has just asked for is in
@@ -259,55 +303,81 @@ func (d *lookupTermJS) Consumer(ctx context.Context, stream, name string) (jetst
 // every other member drops a lookup of it without a word. A lookup held for a
 // write's term waits on a reply that does not exist — a three-member fleet
 // booting together was measured spending sixteen idle seconds on one stream
-// lookup that way. So each request a lookup sends carries the read term as its
-// deadline, which at this solo broker's production timing is a second against
-// a write's thirty: a lookup asked as a write is told apart by the deadline it
-// carried.
+// lookup that way. So a lookup whose request is dropped is asked again a read
+// term and a re-ask later, its dropped request still outstanding beside it.
 //
-// All three lookups the provisioning path makes: the stream's before its
-// create, the mailbox's before its create, and the attachment's open.
-func TestEveryLookupIsAskedAtTheReadTerm(t *testing.T) {
+// Every lookup the provisioning path makes has its first request dropped. They
+// include the stream's before its create, the mailbox's before its create and
+// the attachment's open. Each must be asked again while that request is still
+// outstanding.
+//
+// THE WRITE'S TERM IS AN HOUR, so what tells the cadences apart is whether the
+// re-ask comes at all, never how long it took. A lookup asked at the write's
+// term, or not asked again, is still waiting when [lookupTermPatience] ends the
+// case, and the step reports it. A lookup that abandons its lost request before
+// asking again finds nothing outstanding, so each of its requests is dropped in
+// turn and it never ends either. Measured instead against a gap of a read term
+// past the cadence, the case failed on a loaded race-detector run whose re-ask
+// came 63 ms behind its 70 ms timer: how late a timer's goroutine wakes is the
+// scheduler's latency, which the read never promised.
+func TestEveryLookupIsAskedAgainAtTheReadTerm(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
-	rec := &lookupTermJS{JetStream: q.js, left: map[string][]time.Duration{}}
+	timing := q.provisioning()
+	timing.ReadTerm, timing.ReAsk, timing.AskTerm = 50*time.Millisecond, 20*time.Millisecond, time.Hour
+	q.timing = timing
+	rec := &lookupTermJS{JetStream: q.js, held: map[string]*droppedAsk{},
+		dropped: map[string][]*droppedAsk{}}
 	q.js = rec
-	ctx := t.Context()
+	ctx, cancel := context.WithTimeout(t.Context(), lookupTermPatience)
+	defer cancel()
+	// failed reports a step that did not provision, and what one still
+	// asking when the case's patience ran out means.
+	failed := func(step string, err error) {
+		t.Helper()
+		if ctx.Err() != nil {
+			t.Fatalf("%s: %v — still asking after %v: a dropped lookup held for the "+
+				"write's %v term, or never asked again, waits on a reply nobody will "+
+				"send", step, err, lookupTermPatience, timing.AskTerm)
+		}
+		t.Fatalf("%s: %v", step, err)
+	}
 
 	spec, err := specForSubject("lookupterm.probe", time.Hour)
 	if err != nil {
 		t.Fatalf("spec: %v", err)
 	}
 	if err := q.ensureStream(ctx, spec); err != nil {
-		t.Fatalf("ensure stream: %v", err)
+		failed("ensure stream", err)
 	}
 	topic := seatInbox("lookup-term")
 	group := seatGroup("lookup-term")
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
-		t.Fatalf("ensure subscription: %v", err)
+		failed("ensure subscription", err)
 	}
 	if err := q.Subscribe(ctx, topic, group, func(context.Context, *events.Event) queue.Result {
 		return queue.Ack()
 	}); err != nil {
-		t.Fatalf("subscribe: %v", err)
+		failed("subscribe", err)
 	}
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	if n := len(rec.left["stream "+spec.name]); n == 0 {
-		t.Errorf("the stream %s was never looked up, so nothing here measured "+
-			"the term its lookup runs at", spec.name)
+	if n := len(rec.dropped["stream "+spec.name]); n < 1 {
+		t.Errorf("no lookup of the stream %s was dropped, so nothing here held it "+
+			"to the term it is asked again at", spec.name)
 	}
-	if n := len(rec.left["consumer "+consumerName(topic, group)]); n < 2 {
-		t.Errorf("the mailbox was looked up %d time(s), want the provisioning "+
-			"probe and the attachment's open", n)
+	if n := len(rec.dropped["consumer "+consumerName(topic, group)]); n < 2 {
+		t.Errorf("the mailbox was looked up %d time(s) with its first request "+
+			"dropped, want the provisioning probe and the attachment's open", n)
 	}
-	read := q.provisioning().ReadTerm
-	for call, lefts := range rec.left {
-		for _, left := range lefts {
-			if left < 0 || left > read {
-				t.Errorf("%s was given %v to answer, want at most the %v read "+
-					"term — a dropped lookup held that long waits on a reply "+
-					"nobody will send", call, left, read)
+	for call, drops := range rec.dropped {
+		for i, drop := range drops {
+			if !drop.reasked {
+				t.Errorf("%s, lookup %d: its dropped request was never asked again "+
+					"while it was outstanding — a lookup that abandons a request "+
+					"it presumed lost replaces a late answer with a request a "+
+					"term behind it", call, i+1)
 			}
 		}
 	}

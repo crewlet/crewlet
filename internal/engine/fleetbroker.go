@@ -12,10 +12,11 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -46,14 +47,17 @@ import (
 // # Every request and every reply is signed
 //
 // A removal on that subject is an INSTRUCTION a member carries out through its
-// own system account — the one action the design keeps off the shared account
-// every anonymous connection is bound to, a leaf's link included — and it
-// changes the quorum every election and every create runs on. The broker
-// authenticates nothing itself, so unsigned, anybody who could reach the
-// cluster or the leaf port could remove a voter, past the grant, the step-up,
-// the confirmation and the live-member refusal the operator's route puts in
-// front of the gesture — all of which run on the ASKING node. So the subject
-// is a channel of internal/signedask's, in domains of its own
+// own system account — the one action the design keeps off the global account
+// every node's connections, a leaf's link included, are bound to — and it
+// changes the quorum every election and every create runs on. The broker's
+// admission vouches for a CONNECTION, never a message: an embedded broker
+// admits only a key derived from the keyring (ADR-0094), but a route's
+// password crosses the fleet network in clear, and an external cluster admits
+// whom its operator chooses. So unsigned, anything the broker admitted could
+// remove a voter, past the grant, the step-up, the confirmation and the
+// live-member refusal the operator's route puts in front of the gesture — all
+// of which run on the ASKING node. So the subject is a channel of
+// internal/signedask's, in domains of its own
 // ([fleetBrokerChannel]): a member carries out only a request the fleet
 // signed, bound to an id it has not taken and a deadline still ahead
 // ([signedask.Channel.Admit]), and the asker believes only a reply the fleet
@@ -97,7 +101,7 @@ type brokerWire = signedask.Channel[brokerRequest, brokerReply]
 // keyring every state-log record is signed under. The keyring is required on
 // every node, so this fails only on a bootstrap [config.Bootstrap.Validate]
 // would already have refused.
-func newBrokerWire(ring statelog.Keyring) (*brokerWire, error) {
+func newBrokerWire(ring recordseal.Keyring) (*brokerWire, error) {
 	wire, err := signedask.New[brokerRequest, brokerReply](fleetBrokerChannel, ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the fleet broker's envelopes: %w", err)
@@ -148,10 +152,14 @@ func BrokerRemoveWait() time.Duration { return jsprovision.Budget(true) + broker
 
 // brokerMembership is what the engine asks of its own embedded broker.
 // Declared here, by the consumer; a leaf's and a solo member's answer
-// [jetstream.ErrNoMetaGroup].
+// [jetstream.ErrNoMetaGroup], and name no client listener.
 type brokerMembership interface {
 	MetaGroup() (jetstream.MetaGroup, error)
 	RemovePeer(ctx context.Context, peer string) error
+	// ClientListener is the member's loopback client listener, where an
+	// operator's nats tool reaches its broker with the operator key
+	// ([jetstream.Server.ClientListener]), and "" where it opens none.
+	ClientListener() string
 }
 
 // BrokerFindingKind is one way the two records of the broker's membership
@@ -219,6 +227,15 @@ type BrokerView struct {
 	// Node is the node that answered, and Kind its own broker's kind.
 	Node string `json:"node"`
 	Kind string `json:"kind"`
+
+	// Client is the ANSWERING node's own loopback client listener,
+	// host:port — where an operator on that node's host reaches its broker
+	// with the nats tool and the operator key `crewlet fleet broker
+	// credential` writes (ADR-0094) — and absent where it opens none: a solo
+	// member, a member with only a leaf listener, a leaf, an external
+	// cluster's client. The node's, as Node and Kind are, never the fleet's:
+	// a client listener is reachable from its own host alone.
+	Client string `json:"client,omitempty"`
 
 	// External is a fleet whose broker is an external cluster: its
 	// membership is that cluster's operator's, and nothing below lists it.
@@ -468,7 +485,7 @@ func (e *Engine) serveFleetBroker(ctx context.Context) error {
 	}
 	// THE IDS THIS MEMBER HAS TAKEN, for as long as it serves.
 	taken := signedask.NewGuard()
-	stop, err := e.backends.Queue.Serve(ctx, fleetBrokerSubject(e.id),
+	stop, err := e.backends.Queue.Serve(ctx, fleetBrokerSubject(e.id), queue.ConcurrentAnswers,
 		func(ctx context.Context, raw []byte) ([]byte, error) {
 			return e.brokerWire.SealReply(e.answerBroker(ctx, raw, taken, time.Now()))
 		})
@@ -683,6 +700,9 @@ func (f *FleetBroker) ask(ctx context.Context, member string, req brokerRequest)
 // metadata group as a member reports it, and where the two disagree.
 func (f *FleetBroker) List(ctx context.Context) (BrokerView, error) {
 	view := BrokerView{Node: f.e.id, Kind: f.e.profile.Broker.String(), Findings: []BrokerFinding{}}
+	if broker := f.e.backends.broker; broker != nil {
+		view.Client = broker.ClientListener()
+	}
 	live, err := f.livePresence(ctx)
 	if err != nil {
 		return BrokerView{}, err

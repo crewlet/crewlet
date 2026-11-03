@@ -51,9 +51,6 @@ import {
   Skeleton,
   highlightTerms,
   InlineCode,
-  DiffView,
-  collapseDiff,
-  diffLines,
   firstChangedLines,
 } from "@crewlethq/ui";
 import {
@@ -76,9 +73,11 @@ import { choiceKey, urlAction } from "~/app/assistant/urlAction.ts";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { useOwnStar } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { DiffView } from "~/components/DiffView.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateCompact, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import { compareLines, notComparedReason } from "~/lib/lineDiff.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { useRecents } from "~/lib/recents.ts";
@@ -414,6 +413,10 @@ function LatestNotes({ run, zone }: { run: Run; zone: string | undefined }) {
  * and cut to a preview, with the count of the rest and the way to the whole
  * save. Nothing for a save this node no longer holds the revisions of, or one
  * that left the body as it was.
+ *
+ * A SAVE THE LINE DIFF DID NOT COMPARE is said to be one, with the way to it,
+ * as History says it: a preview of a comparison that was not made would list
+ * the page's first lines as removed by a save that never touched them.
  */
 function SaveDiff({ change, detail }: { change: PageChange; detail: PageDetail }) {
   const id = detail.page.id;
@@ -439,26 +442,38 @@ function SaveDiff({ change, detail }: { change: PageChange; detail: PageDetail }
       ? made.data?.body
       : undefined;
   const prior = before.data?.version === revs?.before.version ? before.data?.body : undefined;
-  const preview = useMemo(
-    () =>
-      after === undefined || prior === undefined
-        ? null
-        : firstChangedLines(collapseDiff(diffLines(prior, after), 0), LATEST_DIFF_LINES),
+  const compared = useMemo(
+    () => (after === undefined || prior === undefined ? null : compareLines(prior, after, 0)),
     [prior, after],
   );
-  if (!revs || !preview || preview.sections.length === 0) return null;
+  const preview = useMemo(
+    () =>
+      compared?.kind === "compared"
+        ? firstChangedLines(compared.hunks, LATEST_DIFF_LINES)
+        : { sections: [], more: 0 },
+    [compared],
+  );
+  if (!revs || !compared) return null;
+  const save = (
+    <a className="prose-link" href={href(pagePath(id), { version: String(revs.made.version) })}>
+      this save
+    </a>
+  );
+  if (compared.kind !== "compared") {
+    return (
+      <p className="knowledge-note">
+        The save was not compared line by line: {notComparedReason(compared)}. Open {save} to read
+        it.
+      </p>
+    );
+  }
+  if (preview.sections.length === 0) return null;
   return (
     <>
-      <DiffView sections={preview.sections} aria-label="Latest change" />
+      <DiffView hunks={preview.sections} aria-label="Latest change" />
       {preview.more > 0 && (
         <p className="knowledge-note">
-          {plural(preview.more, "more changed line")} in{" "}
-          <a
-            className="prose-link"
-            href={href(pagePath(id), { version: String(revs.made.version) })}
-          >
-            this save
-          </a>
+          {plural(preview.more, "more changed line")} in {save}
         </p>
       )}
     </>

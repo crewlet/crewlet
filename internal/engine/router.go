@@ -7,11 +7,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // THE ESTATE'S ROUTER, ON EVERY NODE.
@@ -29,7 +32,11 @@ import (
 // Every live data node, as this node's WATCHED presence view names them
 // ([wholeEstate] over [coord.LeaseView]) — the view the fleet's other
 // per-request questions read, never a second one, and never a listing of the
-// fleet per call.
+// fleet per call. Who serves a repository's GIT work is read off the same
+// view — every live node with the git role ([wholeGit], ADR-0089) — and so is
+// what each of them advertises it can give its background work, read together
+// with them off one listing ([wholeGit.Listing]), which places a repository's
+// maintenance; this node's own git half is asked per request ([engineGit]).
 //
 // # What this node answers
 //
@@ -40,8 +47,8 @@ import (
 // within the snapshot slack) is asked only once every data node whose copy
 // does not has run nothing, by this node's router and by every other node's
 // alike: a worse node to ask, never no node (estate's [estate.Router] doc). A
-// copy that is WRONG is out of service ([localEstate.For]), and the node keeps
-// its seats.
+// domain's copy that is WRONG is out of service for that domain's operations
+// alone ([localEstate.For], ADR-0079), and the node keeps its seats.
 
 // The placement the router is handed.
 var _ estate.Placement = wholeEstate{}
@@ -50,10 +57,10 @@ var _ estate.Placement = wholeEstate{}
 // whether it answers requests — is trusted by the request gate
 // ([localEstate.For]) before it is read again.
 //
-// ONE SECOND. The verdict reads the broker for every log whose health judges a
-// copy — a JetStream API request per log at least — and a gate that asked per
-// request would put those round trips in front of every tool call a data node
-// answers. Refreshed
+// ONE SECOND. The verdict reads the broker for every log — a JetStream API
+// request per log at least — and the published floors once
+// ([stateLog.readFloors]), and a gate that asked per request would put those
+// round trips in front of every tool call a data node answers. Refreshed
 // at most once a second, and never on a request's own path once it has been
 // read — see [localEstate.verdict] — a node pays at most one verdict's reads a
 // second however many requests it answers; and a verdict a second old errs
@@ -82,12 +89,19 @@ func (e *Engine) newRouter(q estate.Asker, nodeID string,
 	envelopes *estate.Envelopes) (*estate.Router, error) {
 
 	opts := estate.RouterOptions{
-		Self: nodeID, Queue: q, Placement: e.estatePlacement(),
+		Self: nodeID, Queue: q, Placement: e.estatePlacement(), Git: e.gitPlacement(),
 		Session: estate.NewSession(), Seams: e.serverSeams(),
+		Timing:    estate.Production(),
 		Envelopes: envelopes,
 	}
 	if e.local != nil {
 		opts.Local = e.local
+	}
+	// THIS NODE'S OWN GIT HALF, where it has the git role: asked per request
+	// ([engineGit]), since the code host is built at boot or at the first
+	// apply that hosts code — after this router exists.
+	if e.profile.Roles.Has(placement.RoleGit) {
+		opts.LocalGit = e.localGit()
 	}
 	r, err := estate.NewRouter(opts)
 	if err != nil {
@@ -138,6 +152,97 @@ func (w wholeEstate) Holders() ([]string, error) {
 // Unanswered asks the roster to list again, because a node it named went
 // silent.
 func (w wholeEstate) Unanswered(string) { w.roster.Invalidate() }
+
+// gitPlacement is who serves git as this node routes a repository's git work
+// (ADR-0089): every live node whose presence profile names the git role, from
+// the same watched view as the estate's placement — and, read together with
+// them off one listing of that view, what each of them advertises it can give
+// its background work, which places a repository's maintenance
+// ([wholeGit.Listing]).
+func (e *Engine) gitPlacement() estate.GitPlacement {
+	return wholeGit{roster: presenceRoster{view: e.dataView}}
+}
+
+// wholeGit is the router's git placement: every live node with the git role,
+// as this node's watched presence view names them — [wholeEstate]'s twin over
+// the git role, for its reasons: answered from memory on every git read, and
+// listed again at once when a node it named went silent.
+type wholeGit struct {
+	// roster is every live git node, from memory.
+	roster gitRoster
+}
+
+// gitRoster is every live git node, as the router's git placement reads them.
+type gitRoster interface {
+	// LiveGitNodes is every live git node; an error is UNKNOWN.
+	LiveGitNodes() ([]string, error)
+
+	// GitListing is every live git node and what each advertises it can
+	// give its background work, off ONE listing; an error is UNKNOWN.
+	GitListing() (estate.GitListing, error)
+
+	// Invalidate asks for the nodes to be listed again: one it named went
+	// silent.
+	Invalidate()
+}
+
+// Holders is every live git node, sorted. An error from the roster is
+// UNKNOWN, never "no git node".
+func (w wholeGit) Holders() ([]string, error) {
+	nodes, err := w.roster.LiveGitNodes()
+	if err != nil {
+		return nil, fmt.Errorf("engine: who serves git: %w", err)
+	}
+	out := slices.Clone(nodes)
+	slices.Sort(out)
+	return out, nil
+}
+
+// Listing is every live git node, sorted as Holders sorts them, and what each
+// one's presence row says its git cache gives its background work
+// ([coord.GitBackgroundKey]), off ONE listing of the view: the nodes and the
+// figures read together, so a node is weighed by the listing that names it
+// ([estate.GitPlacement]). An error from the roster is UNKNOWN, never "no git
+// node".
+func (w wholeGit) Listing() (estate.GitListing, error) {
+	listing, err := w.roster.GitListing()
+	if err != nil {
+		return estate.GitListing{}, fmt.Errorf("engine: who serves git, and what each git node can give "+
+			"its background work: %w", err)
+	}
+	slices.Sort(listing.Nodes)
+	return listing, nil
+}
+
+// Unanswered asks the roster to list again, because a node it named went
+// silent.
+func (w wholeGit) Unanswered(string) { w.roster.Invalidate() }
+
+// localGit is this node's git half as the router and the estate server ask for
+// it: resolved on every request ([engineGit]), never once.
+func (e *Engine) localGit() estate.LocalGit { return engineGit{e: e} }
+
+// engineGit is [estate.LocalGit] over the PUBLISHED native runtime: its git
+// half ([gitHalf]) — the reads by object id of the query server and the merge
+// previews [Engine.buildCodeHost] built beside the code host, and the engine
+// writes of the code host itself.
+//
+// LOADED ON EVERY CALL, never captured when the router or the server is built,
+// because the code host — and the query server and the previews with it — is
+// built at boot or at the first apply that sets code.native, after both exist:
+// captured, a git node that applied its company after boot would answer "no
+// code host" to every git read and every engine write until it restarted.
+type engineGit struct{ e *Engine }
+
+// Git is the runtime's git half, or false where no runtime is published or it
+// built no code host.
+func (g engineGit) Git() (estate.GitServer, bool) {
+	n := g.e.native.Load()
+	if n == nil || n.gitReads == nil || n.mergePreviews == nil || n.codeHost == nil {
+		return nil, false
+	}
+	return gitHalf{reads: n.gitReads, writes: n.codeHost, previews: n.mergePreviews}, true
+}
 
 // estateEnvelopes is how this node signs and verifies every envelope the
 // estate's router and server exchange — under the fleet keyring every state-log
@@ -198,40 +303,76 @@ type heldVerdict struct {
 	copyVerdict
 }
 
-// For implements [estate.LocalBackends]: the backend over this node's copy,
-// or false while the copy is out of service.
+// For implements [estate.LocalBackends]: the backend over this node's copy of
+// domain — or of the seat copy, for [estate.SeatCopy] — or false while that
+// copy is out of service.
 //
-// A COPY THAT IS WRONG IS NOT SERVED. An applier halted at a record it cannot
-// decode or held one past the deferral grace, an eviction, rows below the
-// log's first record, a checkpoint on another stream, a stalled prefix: a copy
-// in any of those states goes OUT OF SERVICE — this node's router sends its
-// own seats' calls to the other data nodes, and another node asking is told
-// `out_of_service` — and never sheds the node's seats, which read the estate
-// from a data node whose copy is sound. That is the whole of the remedy a
-// fault needs: the seats were never the problem, the copy was, and moving them
-// cost every one of them its processes and its memory to be served by the very
+// A DOMAIN'S COPY THAT IS WRONG IS NOT SERVED — for that domain's operations
+// alone (ADR-0079). An applier halted at a record it cannot decode or held one
+// past the deferral grace, an eviction, rows below the log's first record, a
+// checkpoint on another stream, a stalled prefix: a domain's copy in any of
+// those states goes OUT OF SERVICE — this node's router sends its own seats'
+// calls on that domain to the other data nodes, and another node asking for
+// one is told `out_of_service` — while every other domain's copy keeps
+// answering here: a tracker applier halted at a record sends the node's
+// tracker calls to a peer and its knowledge-base calls are still answered
+// from its own pages. It never sheds the node's seats, which are served by a
+// data node whose copy is sound. That is the whole of the remedy a fault
+// needs: the seats were never the problem, the copy was, and moving them cost
+// every one of them its processes and its memory to be served by the very
 // same peers.
 //
 // THE COPY IS THE CORE'S, judged from boot: a data node runs every log from
-// its first second, company or none, so its copy is judged — and its identity
-// directory served — before its first company arrives. Only the native halves
-// wait for one: a data node that booted with no company is served with the
-// directory and no halves, so a tracker or page operation on it is answered
-// "no native backend here" and moves on. A data node whose core is not up yet —
-// the moment between [New] building the router and starting the core — is
-// served with nothing at all, the same "not here".
-func (l *localEstate) For(ctx context.Context) (estate.Backend, bool) {
+// its first second, company or none, so each domain's copy is judged — and its
+// identity directory and its usage rows served ([Engine.estateBackend]) —
+// before its first company arrives. Only the native halves wait for one: a
+// data node that booted with no company, or whose company keeps its tracker
+// and knowledge base on vendors, is served with the core's halves alone, so a
+// tracker or page operation on it is answered "no native backend here" and
+// moves on. A data node whose core is not up yet — the moment between [New]
+// building the router and starting the core — is served with nothing at all,
+// the same "not here".
+func (l *localEstate) For(ctx context.Context, domain string) (estate.Backend, bool) {
 	c := l.e.core.Load()
 	if c == nil || c.log == nil {
 		return estate.Backend{}, true
 	}
 	v := l.verdict(ctx, c)
-	if v.fault != "" {
+	if !v.serves(domain) {
 		return estate.Backend{}, false
 	}
 	b := l.e.estateBackend(c, l.e.native.Load())
-	b.Answers = func(context.Context) bool { return v.answers }
+	b.Answers = func(context.Context) bool { return v.answers(domain) }
 	return b, true
+}
+
+// serves reports whether this node's copy of domain is in service, waiting
+// only as [localEstate.For] does — on a copy never judged, up to ctx. For a
+// reader of the copy that is not an estate operation ([searchCopies]), which
+// must not answer from a copy the router has stopped serving.
+func (l *localEstate) serves(ctx context.Context, domain string) bool {
+	c := l.e.core.Load()
+	if c == nil || c.log == nil {
+		return true
+	}
+	return l.verdict(ctx, c).serves(domain)
+}
+
+// copyOutOfService is the first of domains, in the order given, whose copy on
+// this node is out of service ([localEstate.serves], ADR-0079) — or false
+// where every one serves, or where this node holds no estate to judge. A
+// fleet duty that decides from those domains' rows asks it before it claims
+// ([dutyDecline]).
+func (e *Engine) copyOutOfService(ctx context.Context, domains ...string) (string, bool) {
+	if e == nil || e.local == nil {
+		return "", false
+	}
+	for _, domain := range domains {
+		if !e.local.serves(ctx, domain) {
+			return domain, true
+		}
+	}
+	return "", false
 }
 
 // verdict is the copy's verdict, read again once it is older than
@@ -253,10 +394,12 @@ func (l *localEstate) For(ctx context.Context) (estate.Backend, bool) {
 //
 // # A reading that could not reach the broker changes nothing it could not see
 //
-// A copy that was answering keeps answering, and one that was faulted stays so
-// unless a log that was read says otherwise — a broker blip must not send every
-// request away from a sound copy, nor bring a wrong one back into service on no
-// information. A copy never judged answers nothing: nobody has measured it.
+// A domain's copy that was answering keeps answering, and one that was wrong
+// stays so, unless its own log was read and says otherwise
+// ([copyVerdict.carried]) — a broker blip must not send every request away from
+// a sound copy, nor bring a wrong one back into service on no information, and
+// one domain's unread health says nothing about any other's. A copy never
+// judged answers nothing: nobody has measured it.
 func (l *localEstate) verdict(ctx context.Context, c *core) copyVerdict {
 	v, known, reading := l.peek(ctx, c)
 	if known {
@@ -299,9 +442,11 @@ func (l *localEstate) peek(ctx context.Context, c *core) (v copyVerdict, known b
 	return slot.held.copyVerdict, slot.known, reading
 }
 
-// servesUnasked reports whether this node answers from its own copy as far as
-// it can tell WITHOUT WAITING: it runs its core, and the last verdict read of
-// the copy — where one has been — found it sound.
+// servesUnasked reports whether this node answers its SEATS from its own copy
+// as far as it can tell WITHOUT WAITING: it runs its core, and the last
+// verdict read of the copy — where one has been — found every domain a seat
+// depends on in service ([estate.SeatCopy]). A wrong copy of any other domain
+// costs that domain's calls a peer and never the seats (ADR-0079).
 //
 // For serviceability, which asks it on every sweep and may not wait on the
 // broker. A copy nobody has judged yet is not read as a wrong one — its first
@@ -314,7 +459,39 @@ func (l *localEstate) servesUnasked(ctx context.Context) bool {
 		return false
 	}
 	v, known, _ := l.peek(ctx, c)
-	return !known || v.fault == ""
+	return !known || v.serves(estate.SeatCopy)
+}
+
+// outOfService is which of domains this node's copy holds OUT OF SERVICE as far
+// as it can tell without waiting — a verdict read found that domain's copy
+// wrong (ADR-0079), or found the estate file shut, which takes every domain's
+// copy with it — in the order domains names them, and nil for none.
+//
+// FOR A WATCH OVER ONE SUBSYSTEM'S APPLIERS — the inbox relay's sources, the
+// artifact rooms' two logs — each of which withholds what those appliers
+// announce while their copy is out, and so NAMES THE DOMAINS IT WATCHES: a
+// wrong copy of any other domain leaves their announcements complete, and a
+// watch that read another domain's verdict withheld a sound copy's pushes and
+// delivered a wrong one's. A copy nobody has judged yet and a node whose core
+// is not up are not out of service — [localEstate.For] serves both — and a
+// stale verdict answers while the read that replaces it runs, exactly as a
+// request is answered.
+func (l *localEstate) outOfService(ctx context.Context, domains ...string) []string {
+	c := l.e.core.Load()
+	if c == nil || c.log == nil {
+		return nil
+	}
+	v, known, _ := l.peek(ctx, c)
+	if !known {
+		return nil
+	}
+	var out []string
+	for _, domain := range domains {
+		if !v.serves(domain) {
+			out = append(out, domain)
+		}
+	}
+	return out
 }
 
 // refresh reads the copy's verdict once and stores it, stamped with the
@@ -329,33 +506,43 @@ func (l *localEstate) refresh(ctx context.Context, c *core, done chan struct{}) 
 
 	l.mu.Lock()
 	known, held := l.slot.known, l.slot.held
-	if v.refusal == statelog.RefuseBrokerUnreachable {
-		v.answers = known && held.answers
-	}
-	// A FAULT IS CARRIED ONLY WHERE ITS OWN LOG WENT UNREAD. Carried
-	// whenever any log went unread, a copy whose faulted log had just been
-	// read and found sound stayed out of service for as long as some OTHER
-	// log's health could not be read in its budget — on a loaded broker,
-	// reading after reading — which is the opposite of what an unread
-	// number may do in either direction.
-	if v.fault == "" && known && slices.Contains(v.unread, held.fault) {
-		v.fault = held.fault
-	}
+	v = v.carried(held.copyVerdict, known)
 	l.slot.held, l.slot.known, l.slot.reading = heldVerdict{at: l.now(), copyVerdict: v}, true, nil
 	l.mu.Unlock()
 
-	if v.fault != "" && (!known || held.fault == "") {
-		log.WarnContext(ctx, "estate_copy_not_served", "log", v.fault,
-			"detail", "this node's copy of the estate is wrong rather than behind, "+
-				"so it goes out of service; its seats read the estate from the "+
-				"other data nodes until the copy recovers")
+	// ONE LINE PER DOMAIN that went out of service, naming it and the fault
+	// that holds: which log's copy is wrong, and why, is what an operator
+	// acts on, and every other domain's copy is still serving.
+	for _, out := range v.newlyWrong(held.copyVerdict, known) {
+		if out.domain == shutEstate {
+			log.WarnContext(ctx, "estate_copy_not_served", "domain", out.domain,
+				"detail", "this node's copy of the estate is not open, so every "+
+					"domain's copy goes out of service: their operations go to the "+
+					"other data nodes until the file is open again, and the node's "+
+					"seats stay")
+			continue
+		}
+		log.WarnContext(ctx, "estate_copy_not_served", "domain", out.domain,
+			"reason", string(out.why),
+			"detail", "this node's copy of "+out.domain+" is wrong rather than behind, so it "+
+				"goes out of service: that domain's operations go to the other data "+
+				"nodes until the copy recovers, every other domain's copy keeps "+
+				"serving, and the node's seats stay")
 	}
 }
 
 // estateBackend is this data node's answer for its copy of the estate: the
-// core's — its logs and the identity directory, from boot — and the native
-// halves over them where the company keeps them (n, nil before the first
-// company).
+// core's — its logs, the identity directory and the usage domain's rows, from
+// boot — and the native halves over them where the company keeps them (n, nil
+// before the first company).
+//
+// THE USAGE DOMAIN'S ROWS ARE THE CORE'S, read off the file a data node holds
+// open from boot whatever its company runs ([HoldsEstate]), never the native
+// runtime's: a company on vendors for both its tracker and its knowledge base,
+// hosting no code, builds no native half, and with the reads tied to one every
+// data node answered every spend, activity and readers screen "no native
+// backend here", so the router refused each as an estate nobody served — a 503
+// asking the screen to retry what no retry could ever answer.
 //
 // WRITES ONLY WHILE THIS NODE PUBLISHES. A node restarted into a maintenance
 // mode is the evidence a capacity operation is established from, and a write
@@ -365,9 +552,20 @@ func (l *localEstate) refresh(ctx context.Context, c *core, done chan struct{}) 
 // core builds in every mode because its logs run in every mode: a reader of
 // them is served there, and a writer handed out beside it would take a peer's
 // artifacts write as surely as a native one.
+//
+// EVERY BACKEND CARRIES THE NODE'S CONFIGURATION POSTURE ([estate.Backend.
+// Current]) through the one gate this node's trigger admission, scheduler,
+// inbound consumer and integration reconcile already read ([Engine.admits],
+// which the reconciler fills): a node confirmed behind the company's
+// configuration is asked last for every estate operation, so what it supplies
+// from its own epoch — the chart, the units, the scope, the code limits —
+// answers only where no current data node does. The gate is read when an
+// operation runs, never when the backend is built, since a backend outlives
+// the posture it was built under.
 func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	b := estate.Backend{
-		Committed: e.WaitCommitted,
+		Usage: usage.Reader{Estate: e.usageEstate()}, Current: e.admits,
+		Reached: e.WaitReached,
 		Admits: func(ctx context.Context) bool {
 			ok, refusal := c.log.Established(ctx, true)
 			if !ok && refusal != "" {
@@ -429,6 +627,9 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	if n.searcher != nil {
 		b.Knowledge = n.searcher
 	}
+	if n.indexer != nil {
+		b.Backlinks = n.indexer
+	}
 	if n.chatReader != nil {
 		b.Chat = n.chatReader
 	}
@@ -452,6 +653,17 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	if w.chat != nil {
 		b.ChatWriter = w.chat
 	}
+	// THE CODE HALF, where the runtime was built for it: the reader always,
+	// the committer, the change writer, the checks writer, the marks writer
+	// and the lifecycle store only where this node publishes — each nil in a
+	// maintenance mode, and code.Served then refuses a proposal, a
+	// conversation's or a check's write and a lifecycle request as a node that
+	// ran nothing, so the router asks the next data node with the same push id
+	// or operation rather than this node appending it.
+	if n.built.runsCode() {
+		b.Code = code.Served{Committer: w.committer, ChangeWriter: w.changes, ChecksWriter: w.checks,
+			Reader: n.codeReader, Store: w.code, Marks: w.marks}
+	}
 	return b
 }
 
@@ -471,8 +683,11 @@ func (e *Engine) serverSeams() estate.ServerSeams {
 	return seams
 }
 
-// presenceRoster is the fleet's presence view as the router's placement reads
-// it: every live data node, from memory.
+// presenceRoster is the fleet's presence view as the router's placements read
+// it: every live data node, and every live git node, from memory — one view
+// for both, so the two placements can never disagree about who is live — and,
+// read together with the git nodes off one listing of it, what each of them
+// advertises it can give its background work ([presenceRoster.GitListing]).
 type presenceRoster struct{ view *coord.LeaseView }
 
 // LiveDataNodes is every live data node. A node with no view has no
@@ -487,6 +702,56 @@ func (r presenceRoster) LiveDataNodes() ([]string, error) {
 		return nil, fmt.Errorf("engine: which nodes hold the estate: %w", err)
 	}
 	return dataNodesOf(leases), nil
+}
+
+// LiveGitNodes is every live node with the git role. A node with no view has
+// no coordination and so no fleet: nobody else to ask, which is an answer
+// rather than an unknown — its own git half, where it has one, is asked in
+// process ([estate.RouterOptions.LocalGit]).
+func (r presenceRoster) LiveGitNodes() ([]string, error) {
+	if r.view == nil {
+		return nil, nil
+	}
+	leases, _, err := r.view.Leases()
+	if err != nil {
+		return nil, fmt.Errorf("engine: which nodes serve git: %w", err)
+	}
+	return gitNodesOf(leases), nil
+}
+
+// GitListing is every live node with the git role, by the rule
+// [presenceRoster.LiveGitNodes] lists them by ([gitNodeOf]), and what each
+// one's presence row says its git cache gives its background work
+// ([coord.GitBackgroundKey], which every git node's seat host writes on every
+// beat beside its status, from [Engine.gitBackgroundBudget]) — off ONE read of
+// the view, each lease decoded once, so a node is weighed by the very listing
+// that names it. A row that names a figure says it, zero included: a git node
+// with nothing to give — no code host built yet, or transfers that keep all of
+// its memory. A row that names none is NOT SAYING — a build or a host that
+// writes none — and has no entry. A beat whose status read overran says it
+// all the same: the figure is not in the status. A node with no view has no
+// fleet: no git node, and nobody saying anything. An error is UNKNOWN: the
+// view could not be read.
+func (r presenceRoster) GitListing() (estate.GitListing, error) {
+	if r.view == nil {
+		return estate.GitListing{}, nil
+	}
+	leases, _, err := r.view.Leases()
+	if err != nil {
+		return estate.GitListing{}, fmt.Errorf("engine: which nodes serve git: %w", err)
+	}
+	listing := estate.GitListing{Budgets: map[string]int64{}}
+	for _, lease := range leases {
+		node, ok := gitNodeOf(lease)
+		if !ok {
+			continue
+		}
+		listing.Nodes = append(listing.Nodes, node)
+		if budget, said := coord.GitBackgroundFromMeta(lease.Meta); said {
+			listing.Budgets[node] = budget
+		}
+	}
+	return listing, nil
 }
 
 // Invalidate lists again: a node the view named went silent,

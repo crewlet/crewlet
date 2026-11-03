@@ -101,7 +101,8 @@ func About(tool string, args map[string]any) httpjson.Detail {
 // classAnswer is how one refusal class is answered.
 type classAnswer struct {
 	// status is the 4xx a refusal of the class is answered with — or the
-	// 500 of a FAULT, which no request can change and no wait clears — and
+	// 507 of a full object store, which only an operator's room clears, or
+	// the 500 of a FAULT, which no request can change and no wait clears — and
 	// ZERO for a class waiting can clear, which is answered `503` through
 	// [httpjson.UnavailableWith] — the one writer that sets the
 	// Retry-After beside the envelope, so no row here could state a 503
@@ -117,11 +118,16 @@ type classAnswer struct {
 // gesture the domain forbids this caller, 409 for a state the request collided
 // with — re-read it, or (for a spent budget, a full inbox, a quota the
 // company's holdings reached, a turn's notes full or spent, a run that
-// stopped) change it — 503 for a node that could not serve it, the one class
-// a retry of the same request can fix, and 500 for a node that FAILED at
-// something of its own ([crewletmcp.RefusalInternalError]): nothing the
-// caller does next helps, and a 503 there told a client to come back in two
-// seconds, for ever. A test answers every class this build knows through
+// stopped) change it —
+// 503 for a node that could not serve it, the one class a retry of the same
+// request can fix, 507 for content the object store had no room for
+// ([crewletmcp.RefusalStoreFull]), which neither the request nor a wait
+// changes and an operator's room does — HTTP's own status for a server that
+// cannot store what the request needs, and never a 503, whose Retry-After sent
+// the same bytes back into the same full bucket — and 500 for a node that
+// FAILED at something of its own ([crewletmcp.RefusalInternalError]): nothing
+// the caller does next helps, and a 503 there told a client to come back in
+// two seconds, for ever. A test answers every class this build knows through
 // [Fail] and holds each to exactly one status.
 var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalInvalid:            {http.StatusUnprocessableEntity, httpjson.CodeInvalid},
@@ -129,6 +135,7 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalForbidden:          {http.StatusForbidden, httpjson.CodeForbidden},
 	crewletmcp.RefusalStaleVersion:       {http.StatusConflict, httpjson.CodeStaleVersion},
 	crewletmcp.RefusalConflict:           {http.StatusConflict, httpjson.CodeConflict},
+	crewletmcp.RefusalNotReady:           {http.StatusConflict, httpjson.CodeNotReady},
 	crewletmcp.RefusalExists:             {http.StatusConflict, httpjson.CodeExists},
 	crewletmcp.RefusalAlreadyAnswered:    {http.StatusConflict, httpjson.CodeAlreadyAnswered},
 	crewletmcp.RefusalReassignmentBudget: {http.StatusConflict, httpjson.CodeReassignmentBudget},
@@ -138,6 +145,7 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalNotesSpent:         {http.StatusConflict, httpjson.CodeNotesSpent},
 	crewletmcp.RefusalNotRunning:         {http.StatusConflict, httpjson.CodeNotRunning},
 	crewletmcp.RefusalBudgetExhausted:    {http.StatusConflict, httpjson.CodeBudgetExhausted},
+	crewletmcp.RefusalStoreFull:          {http.StatusInsufficientStorage, httpjson.CodeStoreFull},
 	crewletmcp.RefusalUnavailable:        {0, httpjson.CodeUnavailable},
 	crewletmcp.RefusalInternalError:      {http.StatusInternalServerError, httpjson.CodeInternalError},
 }
@@ -190,6 +198,13 @@ func fail(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
 		if remedy := said.Remedy(); !remedy.IsZero() {
 			detail["remedy"] = remedy
 		}
+	}
+	// THE CODE HOST'S OWN WORD, beside the class: several of its refusals
+	// share one class, and a surface that answers each in its own words
+	// reads which one this was here ([builtin.HostRefusal]).
+	var host *builtin.HostRefusal
+	if errors.As(cause, &host) {
+		detail["refusal"] = host.Refusal
 	}
 	var unknown *builtin.UnknownOutcome
 	var refused *builtin.DecisionRefused

@@ -198,7 +198,14 @@ collector could have deleted those objects. Only then does a byte move.
 
 One principal may hold `artifacts.limits.pending_bytes` reserved (512 MiB by
 default) and a company four times that; past it an intent is refused `429
-uploads_outstanding`, naming when the oldest reservation expires.
+uploads_outstanding`, naming when the oldest reservation expires. A file
+whose bytes the object store has no room for — the default `nats` bucket
+holding as many bytes as it [reserves](object-store.md#its-byte-reservation),
+or an `s3` bucket whose provider [refuses the write for
+room](object-store.md#an-s3-bucket--s3) — is refused `507 store_full`, naming
+the file and the room an operator makes; a publish refused for it gives back
+what it staged and its reservation, since the same publish is refused the same
+until that room is made.
 
 **The quotas are Tier A**, because a tenant administrator must not raise their
 own, and each record that consumes quota carries the limits it was decided
@@ -276,9 +283,16 @@ What an **agent** may do is narrower than its shares, on purpose:
   they could write, except on an artifact the agent owns, which anybody who
   can message the agent may ask it to change. The somebody is whoever woke the
   turn: a colleague's ask, or the first speaker of the message, comment or
-  remark it answers, on a vendor's surface or on the engine's own tracker,
-  knowledge base and chat alike. A turn woken by somebody the company does not
-  know does nothing on an artifact beyond those changes to the agent's own.
+  remark it answers, on a vendor's surface or on Worklet, Doclet and Chatlet
+  alike. A turn woken by somebody the company does not know does nothing on an
+  artifact beyond those changes to the agent's own. The ceiling holds the turn
+  somebody woke and no turn after it: a colleague the agent asks reads for the
+  agent, the turn the colleague's answer wakes is the agent's own, and what the
+  agent already knows — its memory, what it read in a turn nobody woke — is no
+  read at all, so an artifact refused to somebody in one turn can still reach
+  them through what the agent tells them later
+  ([Reads made for somebody else](code-host.md#reads-made-for-somebody-else)
+  says the same of a repository).
 
 "**Seen by**" lists who has opened an artifact, to its editors and above. It is
 on by default, and a company turns it off with `artifacts.seen_by: nobody`.
@@ -442,7 +456,29 @@ sequenceDiagram
   references on the allowed CDNs, as a script or link element, a module import
   or an import map entry, are copied into the version when it is published,
   integrity-checked, so viewing works without the CDN and the CDN never sees a
-  viewer. Any other remote script a page states is refused. What the linter
+  viewer. The node fetches each file itself and connects only to an address on
+  the public internet: none in a block IANA reserves for a special purpose, and
+  an IPv6 one only in global unicast (`2000::/3`). Each address a CDN name
+  resolves to is judged as the connection to it is made, so a name that
+  resolves into the network the engine runs in is refused rather than fetched,
+  and one that resolves both ways is fetched from its public addresses alone.
+  On a network that reaches IPv4 through NAT64, an address under its
+  translation prefix is judged by the IPv4 address it carries; the node learns
+  the network's own prefixes by asking its resolver for `ipv4only.arpa`
+  (RFC 7050), at most once a connection and only when it is about to connect
+  to an IPv6 address in global unicast or in `64:ff9b:1::/48`, the one kind
+  of address whose verdict such a prefix can change. A resolver that fails
+  that lookup, rather than answering it has no record, keeps the node from
+  that address, and the copy goes on over the CDN's addresses that need no
+  answer: an IPv4 one, or one under the well-known `64:ff9b::/96`. A prefix
+  the resolver names counts only in global unicast or in `64:ff9b:1::/48`,
+  the block RFC 8215 reserves for a network's own translation prefix, so no
+  answer can open a network that is not on the internet to the fetch. A
+  translator on the well-known `64:ff9b::/96`, in `64:ff9b:1::/48` or in the
+  network's own global unicast space reaches a CDN that has only IPv4
+  addresses; one on a unique-local prefix does not, and such a network sets
+  `HTTPS_PROXY` to a proxy that reaches the CDN, which the node dials as
+  itself. Any other remote script a page states is refused. What the linter
   cannot read is a script the page's own script builds at run time:
   `'strict-dynamic'` trusts it from any host, so a page whose author means to
   can send what a viewer may read to another site. Only an `editor` publishes,
@@ -647,8 +683,9 @@ merges from.
 [ADR-0040](https://github.com/crewlet/crewlet/blob/main/adr/0040-content-a-model-reads-carries-its-provenance.md)):
 another principal's page, a viewer's row, a colleague's file. The fence labels
 who wrote it and says it is data, never an instruction. Fencing reduces prompt
-injection and does not remove it; the requester ceiling, `humans_only` columns
-and the human-only verbs hold whatever a model does.
+injection and does not remove it; `humans_only` columns and the human-only
+verbs hold whatever a model does, and the requester ceiling whatever it does in
+the turn somebody woke.
 
 ---
 

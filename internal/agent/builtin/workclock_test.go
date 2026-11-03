@@ -16,9 +16,9 @@ import (
 // that cut "today" on UTC answered about the wrong date for the last seven
 // hours of every Los Angeles day. And the clock is READ AT THE CALL rather
 // than captured when the tools were registered: the operator's surface is
-// built once at startup, so a captured zone answered every assistant on the
-// clock the company booted with — which, before that surface was given one at
-// all, was UTC.
+// built again only when what it serves changes, never for a new clock, so a
+// captured zone answered every assistant on the clock the surface was last
+// built under — which, before that surface was given one at all, was UTC.
 func TestTheWorkToolsCutTheirDayOnTheCompanysClockAtTheCall(t *testing.T) {
 	t.Parallel()
 	losAngeles, err := time.LoadLocation("America/Los_Angeles")

@@ -16,14 +16,20 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/recordseal"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -66,7 +72,6 @@ var sentinels = []sentinel{
 	{"worklet.ErrAlreadyAnswered", worklet.ErrAlreadyAnswered},
 	{"worklet.ErrBadQuery", worklet.ErrBadQuery},
 	{"worklet.ErrForbidden", worklet.ErrForbidden},
-	{"worklet.ErrInboxFull", worklet.ErrInboxFull},
 	{"worklet.ErrInvalid", worklet.ErrInvalid},
 	{"worklet.ErrIndexBuilding", worklet.ErrIndexBuilding},
 	{"worklet.ErrNoChartActivation", worklet.ErrNoChartActivation},
@@ -88,6 +93,16 @@ var sentinels = []sentinel{
 	{"worklet.ErrTooBroad", worklet.ErrTooBroad},
 	{"worklet.ErrUploadStale", worklet.ErrUploadStale},
 
+	// THE INBOX RULES', which a person's gesture on a domain's inbox is
+	// decided by on the data node that writes it: a list at its ceiling is
+	// answered as itself, since its remedy is another gesture. And a composed
+	// cursor this build did not issue, refused where the inbox is composed:
+	// registered with the rest, so the day a composition is asked across a
+	// hop its refusal arrives as itself rather than as a bare message.
+	{"inbox.ErrBadCursor", inbox.ErrBadCursor},
+	{"inbox.ErrFull", inbox.ErrFull},
+	{"inbox.ErrInvalid", inbox.ErrInvalid},
+
 	{"doclet.ErrBadCursor", doclet.ErrBadCursor},
 	{"doclet.ErrConflict", doclet.ErrConflict},
 	{"doclet.ErrInvalid", doclet.ErrInvalid},
@@ -99,6 +114,54 @@ var sentinels = []sentinel{
 	{"doclet.ErrStaleVersion", doclet.ErrStaleVersion},
 	{"doclet.ErrTitleTaken", doclet.ErrTitleTaken},
 	{"doclet.ErrUnservedOrder", doclet.ErrUnservedOrder},
+
+	{"search.ErrIndexBuilding", search.ErrIndexBuilding},
+	{"search.ErrNoMethods", search.ErrNoMethods},
+	{"search.ErrNoViewer", search.ErrNoViewer},
+
+	// A REPOSITORY'S READERS refuse a cursor or a range their asker formed —
+	// the asker's mistake, answered by name whichever data node read it.
+	{"usage.ErrBadCursor", usage.ErrBadCursor},
+	{"usage.ErrBadRange", usage.ErrBadRange},
+
+	// THE CODE HOST'S, every one of them — ErrBadBundle, ErrBadLayer,
+	// ErrSuperseded, ErrAnswerDue and ErrMisplaced included, though none is
+	// answered across the wire today (a bad bundle never leaves the receiving
+	// node, nor a bad layer the git node that checked it; a superseded
+	// reconcile is the deciding node's own; a read whose answer fell due is
+	// answered unready by the git node it fell due on; a re-anchoring answer
+	// placing another set than its anchors is refused on the node that asked
+	// for it, as that node's own fault) — for the reason the list is complete
+	// at all.
+	{"code.ErrAboveCeiling", code.ErrAboveCeiling},
+	{"code.ErrAnswerDue", code.ErrAnswerDue},
+	{"code.ErrBadBundle", code.ErrBadBundle},
+	{"code.ErrBadCursor", code.ErrBadCursor},
+	{"code.ErrBadLayer", code.ErrBadLayer},
+	{"code.ErrBadLevel", code.ErrBadLevel},
+	{"code.ErrChangeNotFound", code.ErrChangeNotFound},
+	{"code.ErrCheckNotFound", code.ErrCheckNotFound},
+	{"code.ErrConfigManaged", code.ErrConfigManaged},
+	{"code.ErrInvalid", code.ErrInvalid},
+	{"code.ErrInvalidLayer", code.ErrInvalidLayer},
+	{"code.ErrInvalidProposal", code.ErrInvalidProposal},
+	{"code.ErrMisplaced", code.ErrMisplaced},
+	{"code.ErrNoActivation", code.ErrNoActivation},
+	{"code.ErrNotABlob", code.ErrNotABlob},
+	{"code.ErrNotATree", code.ErrNotATree},
+	{"code.ErrNotConfigManaged", code.ErrNotConfigManaged},
+	{"code.ErrNotDeleted", code.ErrNotDeleted},
+	{"code.ErrNotPermitted", code.ErrNotPermitted},
+	{"code.ErrNotServing", code.ErrNotServing},
+	{"code.ErrNotYet", code.ErrNotYet},
+	{"code.ErrObjectNotFound", code.ErrObjectNotFound},
+	{"code.ErrPurging", code.ErrPurging},
+	{"code.ErrRecordCap", code.ErrRecordCap},
+	{"code.ErrRefNotFound", code.ErrRefNotFound},
+	{"code.ErrRepoNotFound", code.ErrRepoNotFound},
+	{"code.ErrSliceTooLarge", code.ErrSliceTooLarge},
+	{"code.ErrSnapshotMoved", code.ErrSnapshotMoved},
+	{"code.ErrSuperseded", code.ErrSuperseded},
 
 	{"chatlet.ErrArchived", chatlet.ErrArchived},
 	{"chatlet.ErrConflict", chatlet.ErrConflict},
@@ -132,14 +195,15 @@ var sentinels = []sentinel{
 	{"statelog.ErrStopped", statelog.ErrStopped},
 	{"statelog.ErrStreamRecreated", statelog.ErrStreamRecreated},
 	{"statelog.ErrUnavailable", statelog.ErrUnavailable},
-	{"statelog.ErrUnsigned", statelog.ErrUnsigned},
+	{"recordseal.ErrUnsigned", recordseal.ErrUnsigned},
 	{"statelog.ErrWaitAbandoned", statelog.ErrWaitAbandoned},
 	{"statelog.ErrWrongStream", statelog.ErrWrongStream},
 
 	// THE IDENTITY DIRECTORY'S, which a node holding no data reads through
-	// a data node ([opIdentityBinding], [opSeatHolders]) — and the identity
-	// vocabulary's and the session's, which the questions a person verb is
-	// decided on answer in ([iam.Holders], [session.ResolveSeat]).
+	// a data node ([opIdentityBinding], [opSeatHolders], [opSeatHolder]) —
+	// and the identity vocabulary's and the session's, which the questions a
+	// person verb is decided on answer in ([iam.Holders],
+	// [session.ResolveSeat]).
 	{"iamdomain.ErrAssistRefused", iamdomain.ErrAssistRefused},
 	{"iamdomain.ErrCollapsed", iamdomain.ErrCollapsed},
 	{"iamdomain.ErrInvalid", iamdomain.ErrInvalid},
@@ -227,13 +291,16 @@ var sentinels = []sentinel{
 	{"executordomain.ErrNotDue", executordomain.ErrNotDue},
 	{"executordomain.ErrNotFound", executordomain.ErrNotFound},
 	{"executordomain.ErrOverBudget", executordomain.ErrOverBudget},
-	{"executordomain.ErrSessionTooLarge", executordomain.ErrSessionTooLarge},
 	{"executordomain.ErrStaleCapture", executordomain.ErrStaleCapture},
 	{"executordomain.ErrTurnEnded", executordomain.ErrTurnEnded},
 	{"executordomain.ErrUnreadable", executordomain.ErrUnreadable},
 	{"executordomain.ErrUploadStale", executordomain.ErrUploadStale},
+	// And the session's bound the log refuses a capture past, which is
+	// internal/executorkeep's: the sandbox that takes a session stops at it too.
+	{"executorkeep.ErrSessionTooLarge", executorkeep.ErrSessionTooLarge},
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
+	{"estate.ErrNoGitNode", ErrNoGitNode},
 }
 
 // typedKind is one error type whose value crosses the wire.
@@ -274,6 +341,21 @@ var typedKinds = []typedKind{
 	{"chatlet.ErrFutureVersion", reflect.TypeFor[*chatlet.ErrFutureVersion]()},
 	{"chatlet.ErrUnknownVersion", reflect.TypeFor[chatlet.ErrUnknownVersion]()},
 	{"chatlet.InvalidError", reflect.TypeFor[*chatlet.InvalidError]()},
+
+	{"inbox.Refusal", reflect.TypeFor[*inbox.Refusal]()},
+
+	{"search.ErrFutureVersion", reflect.TypeFor[*search.ErrFutureVersion]()},
+
+	{"usage.ErrFutureVersion", reflect.TypeFor[*usage.ErrFutureVersion]()},
+
+	// THE CODE HOST'S, every one of them — BadBundle included, though it is
+	// never answered across the wire today (a bundle its seal refused is
+	// answered by the landing on the node that stored it) — for the reason
+	// the list is complete at all.
+	{"code.BadBundle", reflect.TypeFor[*code.BadBundle]()},
+	{"code.ErrFutureVersion", reflect.TypeFor[*code.ErrFutureVersion]()},
+	{"code.ErrGitUnready", reflect.TypeFor[*code.ErrGitUnready]()},
+	{"code.TooWideError", reflect.TypeFor[*code.TooWideError]()},
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},

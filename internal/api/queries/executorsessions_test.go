@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
@@ -224,7 +225,7 @@ func sealedSession(t *testing.T, store *executordomain.SessionStore, handle stri
 		Handle: handle, Turn: turn, ConversationKey: "chat:room", Harness: executor.OpenCodeName,
 		HarnessVersion: "2.0.32", Object: put.Object, ContentKey: put.ContentKey,
 		ArchiveFormat: executor.OpenCode{}.ArchiveFormat(), CapturedAt: at, EndedAt: at.Add(time.Minute),
-		Ending: &executordomain.Ending{Outcome: executordomain.OutcomeCompleted, Decision: "done"},
+		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, Decision: "done"},
 	}
 }
 
@@ -256,10 +257,10 @@ func TestASeatsSessionsAreListedInTheReadersOrderAPageAtATime(t *testing.T) {
 			AskExcerpt: "fix the deploy with " + plantedKey},
 		{Handle: "bo", Turn: uuid.NewString()},
 		{Handle: "ana", Turn: turns[1], ConversationKey: "chat:room", CapturedAt: at, EndedAt: at,
-			Ending: &executordomain.Ending{Outcome: executordomain.OutcomeFailed,
+			Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
 				Failure: "the round cap ran out"}},
 		{Handle: "ana", Turn: turns[2], EndedAt: at,
-			Ending: &executordomain.Ending{Outcome: executordomain.OutcomeLost}},
+			Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeLost}},
 	}}
 	s := sessionSources(t, reads, nil)
 	first, err := askAsSeat(t, s, "ana", "executor_sessions", map[string]any{"limit": 2})
@@ -283,7 +284,7 @@ func TestASeatsSessionsAreListedInTheReadersOrderAPageAtATime(t *testing.T) {
 		t.Errorf("the ask's excerpt reads %q, want it redacted", kept.AskExcerpt)
 	}
 	if released.Kept || released.ObjectBytes != 0 || released.CapturedAt == nil ||
-		released.Ending == nil || released.Ending.Outcome != executordomain.OutcomeFailed {
+		released.Ending == nil || released.Ending.Outcome != executorkeep.OutcomeFailed {
 		t.Errorf("the released session reads %+v", released)
 	}
 
@@ -575,9 +576,9 @@ func TestAnEndingsProseIsRedactedAtThisRead(t *testing.T) {
 	turn := uuid.NewString()
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	reads := &stubSessions{rows: []executordomain.Session{{Handle: "ana", Turn: turn, CapturedAt: at,
-		EndedAt: at, Ending: &executordomain.Ending{Outcome: executordomain.OutcomeStopped,
+		EndedAt: at, Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped,
 			CompletedWork: quoted, BlockedOn: quoted, StoppedBy: "ana.diaz", StopReason: quoted,
-			Failure: quoted, Unkept: &executordomain.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: quoted}}}}}
+			Failure: quoted, Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: quoted}}}}}
 	store, _ := sessionObjectStore(t)
 	s := sessionSources(t, reads, store)
 	listed, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
@@ -670,9 +671,9 @@ func TestASessionWhoseObjectCannotBeReadIsAnsweredAsSuch(t *testing.T) {
 	unsupported.Harness = "codex"
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	nothing := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), EndedAt: at,
-		Ending: &executordomain.Ending{Outcome: executordomain.OutcomeFailed}}
+		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed}}
 	released := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), CapturedAt: at,
-		EndedAt: at, Ending: &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}
+		EndedAt: at, Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}
 	reads := &stubSessions{rows: []executordomain.Session{missing, tampered, malformed, unsupported,
 		nothing, released}}
 	s := sessionSources(t, reads, store)

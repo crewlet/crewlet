@@ -9,9 +9,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/redact"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A TURN'S SESSION, CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS — AND A
@@ -100,31 +99,43 @@ import (
 // # Never a failed launch
 //
 // An object the store no longer holds or whose seal does not open
-// ([executordomain.ErrUnreadable]), a log that does not answer, a box whose
+// (executordomain.ErrUnreadable), a log that does not answer, a box whose
 // harness cannot take the session up: each starts the run on a session of its
 // own, handed the brief written for one, and is logged with its reason
 // (`executor_session_not_continued`). The session is fetched SEALED onto this
 // node's disk and opened whole once before a byte of it reaches the box
-// ([executordomain.SessionStore.Fetch]), so the decision is made before the
+// ([executorkeep.TurnRowStore.Fetch]), so the decision is made before the
 // brief is, never part way through writing the archive into the box.
 
 // SessionRestore is what continuing a turn's kept session needs of the engine:
 // the turn's row on the executor log, read through the ESTATE ROUTER'S reads
-// (internal/estate's ExecutorReads) at the level the caller asks — a capture
-// another node recorded is read at `linearizable`, which waits for this node's
-// copy, or asks a data node whose copy has it — and the sealed object it names,
-// fetched and opened through the domain's session store.
+// (internal/estate's ExecutorReads) at the level a relaunch reads it
+// (executordomain.RelaunchRead: a capture another node recorded is read at
+// `linearizable`, which waits for this node's copy, or asks a data node whose
+// copy has it), as the sandbox's view of it ([executorkeep.TurnRow]); and the
+// sealed object it names, fetched and opened through the domain's session
+// store. The row is the leaf's type because the sandbox links no state log:
+// the log's own row type carries its positions, and so its graph.
 type SessionRestore interface {
-	// Session reads one turn's row (executordomain.Reader.Session).
-	Session(ctx context.Context, handle, turn string, fresh statelog.Freshness) (executordomain.Session, error)
+	// Session reads one turn's row (executordomain.Reader.Session, made the
+	// sandbox's view by executordomain.Session.Kept), wrapping
+	// [ErrTurnRowNotFound] where the log holds no row for the turn.
+	Session(ctx context.Context, handle, turn string) (executorkeep.TurnRow, error)
 
 	// Fetch copies the sealed object row names into dst, checked against the
-	// row (executordomain.SessionStore.Fetch), and OpenSpooled opens what it
+	// row (executorkeep.TurnRowStore.Fetch), and OpenSpooled opens what it
 	// copied against the row's associated data
-	// (executordomain.SessionStore.OpenSpooled).
-	Fetch(ctx context.Context, row executordomain.Session, dst io.Writer) error
-	OpenSpooled(row executordomain.Session, sealed io.Reader) (io.Reader, error)
+	// (executorkeep.TurnRowStore.OpenSpooled).
+	Fetch(ctx context.Context, row executorkeep.TurnRow, dst io.Writer) error
+	OpenSpooled(row executorkeep.TurnRow, sealed io.Reader) (io.Reader, error)
 }
+
+// ErrTurnRowNotFound is [SessionRestore.Session]'s answer for a turn the
+// executor log holds no row for: a turn whose begin never landed and that
+// captured nothing, whose launches hold no base against its release. The
+// engine wraps the log's own refusal (executordomain.ErrNotFound) in it, since
+// the sandbox links no state log to compare against that one.
+var ErrTurnRowNotFound = errors.New("sandbox: the executor log holds no row for the turn")
 
 // ExecutorContextWindow is the context, in tokens, at which every Claude Code
 // executor run compacts its conversation (CLAUDE_CODE_AUTO_COMPACT_WINDOW,
@@ -145,10 +156,10 @@ type SessionRestore interface {
 // ONE HUNDRED THOUSAND, and a judgment that trades a session's detail for what
 // every request of a continued run costs: four times the launch floor
 // (turn_engine.executor_min_budget_tokens), the least Claude Code accepts
-// (100,000 to 1,000,000), and enough for the work in hand, since a coding
-// run's durable state is its checkout and its turn's records rather than its
-// transcript, so a session compacted at it keeps the recent work verbatim and
-// a summary of the rest. A larger window keeps more verbatim detail and
+// (100,000 to 1,000,000), and enough for the work in hand, since an
+// executor's durable state is its checkout and its turn's records rather than
+// its transcript, so a session compacted at it keeps the recent work verbatim
+// and a summary of the rest. A larger window keeps more verbatim detail and
 // charges more per request.
 const ExecutorContextWindow = 100_000
 
@@ -189,11 +200,11 @@ type ArchiveRestorer interface {
 // What the box a launch gets says of its harness's own release, and what the
 // seat's budget says of the session's context, are the launch's to ask, and
 // this decides neither.
-func ContinuityOf(row executordomain.Session, run *PendingRun, follows int64,
+func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 	restorer ArchiveRestorer) SessionContinuity {
 
 	switch {
-	case run == nil || row.Ended():
+	case run == nil || row.Ended:
 		return SessionContinuity{Why: "the turn has ended, so no relaunch of it continues its session: a " +
 			"session its turn ended with is continued only by its conversation's next turn, where it is the " +
 			"conversation's newest"}
@@ -248,7 +259,7 @@ func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
 // ArchiveOf is the archive a turn's row names, as a restorer and a run take
 // it: what a reader of whether a launch continues the row's session asks the
 // node holding the seat about.
-func ArchiveOf(row executordomain.Session) SessionArchive {
+func ArchiveOf(row executorkeep.TurnRow) SessionArchive {
 	return SessionArchive{Harness: row.Harness, SessionID: row.SessionID, Format: row.ArchiveFormat,
 		Version: row.HarnessVersion}
 }
@@ -442,7 +453,7 @@ type ReadContinuity struct {
 //     whether a relaunch in a box of its own would continue instead the session
 //     the turn's first launch was handed, the turn having kept none of its own
 //     ([relaunchedBase]). row is read at the level a relaunch reads it
-//     ([RelaunchRead]) wherever the decision reaches it ([RereadsRow]): a copy
+//     (executordomain.RelaunchRead) wherever the decision reaches it ([RereadsRow]): a copy
 //     of the log behind the run's record reads a capture the relaunch would
 //     continue as one the log no longer names.
 //   - AN ENDED TURN'S, BY ITS CONVERSATION'S NEXT TURN: [BaseContinuityOf], the
@@ -452,7 +463,7 @@ type ReadContinuity struct {
 //     (executordomain's Page.Heads, SessionRead.Head) — and of target's runner,
 //     the member the node holding the seat would launch that turn on, asked by
 //     no turn ([TargetAsk]). A row that names no session says why
-//     ([executordomain.Session.NotKept]); one that is not its conversation's
+//     (executordomain.Session.NotKept); one that is not its conversation's
 //     head names the head, the session the next turn is handed instead; and a
 //     turn that served no conversation is continued by no launch at all.
 //   - A LIVE TURN'S, ITS RUN OVER (run nil) OR ENDING
@@ -480,11 +491,11 @@ type ReadContinuity struct {
 // As far as the engine can know before a box is chosen: whether the box a
 // launch gets runs a harness release that takes the session up, and whether
 // the seat's budget can carry it, are the launch's to find out.
-func ReadContinuityOf(row executordomain.Session, head string, run *PendingRun, target RelaunchTarget,
+func ReadContinuityOf(row executorkeep.TurnRow, head string, run *PendingRun, target RelaunchTarget,
 	now time.Time) ReadContinuity {
 
 	switch {
-	case row.Ended():
+	case row.Ended:
 		return nextTurnContinuity(row, head, target)
 	case run == nil || run.endDecided():
 		return endingContinuity(row, run)
@@ -502,7 +513,7 @@ const servedNoConversation = "the turn served no conversation, so no later turn 
 // nextTurnContinuity is [ReadContinuityOf] of an ended turn's row: whether its
 // conversation's next turn would continue its session, head being the turn the
 // read that answered row named its conversation's head.
-func nextTurnContinuity(row executordomain.Session, head string, target RelaunchTarget) ReadContinuity {
+func nextTurnContinuity(row executorkeep.TurnRow, head string, target RelaunchTarget) ReadContinuity {
 	not := func(why string) ReadContinuity {
 		return ReadContinuity{By: ContinuedByNextTurn, Decided: true, Why: why}
 	}
@@ -510,7 +521,7 @@ func nextTurnContinuity(row executordomain.Session, head string, target Relaunch
 	case row.ConversationKey == "":
 		return ReadContinuity{Decided: true, Why: servedNoConversation}
 	case !row.HasObject():
-		return not(row.NotKept())
+		return not(row.NotKept)
 	case head == "":
 		// UNKNOWN, NEVER A NO: a read of a row that names a session of an ended
 		// turn names a head for its conversation — that row, if nothing newer —
@@ -537,7 +548,7 @@ func nextTurnContinuity(row executordomain.Session, head string, target Relaunch
 // which no later turn continues; for any other, whether its conversation's next
 // turn continues the session the row names is decided once the turn's end is on
 // the log, where the read that answered row did not find it.
-func endingContinuity(row executordomain.Session, run *PendingRun) ReadContinuity {
+func endingContinuity(row executorkeep.TurnRow, run *PendingRun) ReadContinuity {
 	over := "the turn's run is over"
 	if run != nil {
 		over = "the turn is ending"
@@ -553,7 +564,7 @@ func endingContinuity(row executordomain.Session, run *PendingRun) ReadContinuit
 // relaunchContinuity is [ReadContinuityOf] of a live turn's row whose run is
 // neither over nor ending: whether a relaunch of the turn would continue its
 // session.
-func relaunchContinuity(row executordomain.Session, run PendingRun, target RelaunchTarget,
+func relaunchContinuity(row executorkeep.TurnRow, run PendingRun, target RelaunchTarget,
 	now time.Time) ReadContinuity {
 
 	switch {
@@ -595,7 +606,7 @@ func relaunchContinuity(row executordomain.Session, run PendingRun, target Relau
 	if kept.Continues {
 		return ReadContinuity{Decided: true, Continues: true, In: ContinuesInAnyBox}
 	}
-	box, why := inParkedBox(run, row, target)
+	box, why := inParkedBox(run, row, target, now)
 	reason := kept.Why
 	if why != "" {
 		reason += "; " + why
@@ -625,7 +636,7 @@ func relaunchContinuity(row executordomain.Session, run PendingRun, target Relau
 // is the launch's to get, and so said: a relaunch into the box the turn's job
 // ran in continues the session that box holds instead
 // ([Coordinator.continueBase]).
-func relaunchedBase(row executordomain.Session, run PendingRun, target RelaunchTarget) string {
+func relaunchedBase(row executorkeep.TurnRow, run PendingRun, target RelaunchTarget) string {
 	switch {
 	case target.NoKept != "" || run.Base == nil || run.Base.Session == nil:
 		return ""
@@ -655,9 +666,9 @@ func relaunchedBase(row executordomain.Session, run PendingRun, target RelaunchT
 // turn: the conversation's next turn is admitted under the revision the holder
 // runs when it comes, never one a segment of the ended turn still pins in the
 // moments before that segment returns.
-func TargetAsk(row executordomain.Session, head string, run *PendingRun) (RelaunchAsk, bool) {
+func TargetAsk(row executorkeep.TurnRow, head string, run *PendingRun) (RelaunchAsk, bool) {
 	switch {
-	case row.Ended():
+	case row.Ended:
 		if row.ConversationKey == "" || !row.HasObject() || head != row.Turn {
 			return RelaunchAsk{}, false
 		}
@@ -673,7 +684,7 @@ func TargetAsk(row executordomain.Session, head string, run *PendingRun) (Relaun
 }
 
 // RereadsRow reports whether a reader that read row below the level a relaunch
-// reads it ([RelaunchRead]) must read it again there before deciding its
+// reads it (executordomain.RelaunchRead) must read it again there before deciding its
 // continuity: only where the decision reaches the row — the turn live and not
 // ending, its job neither working nor its capture still being kept — and the
 // row names another capture than the one run's record keeps, or the record
@@ -688,8 +699,8 @@ func TargetAsk(row executordomain.Session, head string, run *PendingRun) (Relaun
 // asks every minute — appended a barrier to the executor log for each live row
 // (statelog's linearizable read), one after another, for an answer the row it
 // held already gave.
-func RereadsRow(row executordomain.Session, run *PendingRun, now time.Time) bool {
-	if run == nil || row.Ended() || run.endDecided() || jobWorking(*run) || captureInFlight(*run, now) {
+func RereadsRow(row executorkeep.TurnRow, run *PendingRun, now time.Time) bool {
+	if run == nil || row.Ended || run.endDecided() || jobWorking(*run) || captureInFlight(*run, now) {
 		return false
 	}
 	kept := run.Kept
@@ -764,7 +775,7 @@ const (
 // nor reaches. AND OF THE SESSION THE ROW NAMES: the relaunch continues the
 // session the box ran ([PendingRun.SessionRan]), and a box that ran another
 // session of the turn continues the row's nowhere.
-func inParkedBox(run PendingRun, row executordomain.Session, target RelaunchTarget) (boxCarry, string) {
+func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget, now time.Time) (boxCarry, string) {
 	carried, undecided := boxContinues, ""
 	switch {
 	case run.Status == StatusAwaiting || run.Status == StatusReseed || run.Status == StatusAnswered ||
@@ -802,9 +813,19 @@ func inParkedBox(run PendingRun, row executordomain.Session, target RelaunchTarg
 		return boxNot, ""
 	}
 	prior := PriorBox{SandboxID: run.SandboxID, Placement: run.Placement, Harness: run.Harness,
-		Status: StatusResumed, LaunchNode: run.LaunchNode}
+		Status: StatusResumed, LaunchNode: run.LaunchNode, Since: run.BoxSince}
 	switch {
-	case !prior.ContinuesIn(Spec{Placement: target.Placement, Harness: target.Harness}):
+	// THE BOX'S AGE FIRST, with a reason of its own: the launch's test of a box
+	// it continues in refuses one past [KeptBoxMaxAge], or one the row never
+	// dated, whatever its cell and harness ([PriorBox.ContinuesIn]).
+	case run.BoxSince.IsZero():
+		return boxNot, "the box its run ran in was never dated, so no age of it holds to the bound a " +
+			"relaunch continues in a box within"
+	case now.Sub(run.BoxSince) >= KeptBoxMaxAge:
+		return boxNot, fmt.Sprintf("the box its run ran in was first attached %s, and a relaunch "+
+			"continues only in a box younger than %d days", run.BoxSince.UTC().Format(time.RFC3339),
+			int(KeptBoxMaxAge/(24*time.Hour)))
+	case !prior.ContinuesIn(Spec{Placement: target.Placement, Harness: target.Harness}, now):
 		return boxNot, fmt.Sprintf("the box its run ran in runs %s in the %s cell, and a relaunch is "+
 			"launched on %s in the %s cell", run.Harness, run.Placement, target.Harness, target.Placement)
 	case !prior.ReachableFrom(target.Node, target.Placement):
@@ -822,7 +843,7 @@ func inParkedBox(run PendingRun, row executordomain.Session, target RelaunchTarg
 // launch froze it (Base).
 type ContinuedSession struct {
 	Capture SessionCapture
-	Row     executordomain.Session
+	Row     executorkeep.TurnRow
 
 	// Base is the session the conversation's last turn left, which the
 	// relaunch continues in place of a kept capture of the turn's own; nil
@@ -837,13 +858,6 @@ type ContinuedSession struct {
 	// continued; zero where no capture of the job measured any.
 	Context int64
 }
-
-// RelaunchRead is the level a relaunch reads its turn's row at, and so the
-// level every reader of whether a relaunch would continue the turn's session
-// decides on ([ReadContinuityOf]): the capture it continues may have been
-// recorded by another node's keep, which this node's copy may not have applied
-// yet.
-func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
 
 // relaunchCaptureWait bounds how long a relaunch waits for the capture of the
 // job it follows to be kept, on the frame that relaunches: see the file
@@ -919,7 +933,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		}
 		return answer, why
 	}
-	row, err := c.restore.Session(ctx, run.AgentHandle, turnID, RelaunchRead())
+	row, err := c.restore.Session(ctx, run.AgentHandle, turnID)
 	if err != nil {
 		return answer, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
 	}
@@ -943,9 +957,9 @@ func (c *Coordinator) frozenBase(ctx context.Context, run PendingRun, restorer A
 	if run.Kept != nil {
 		return nil, BaseContinuityOf(base, nil, &run, restorer).Why
 	}
-	own, err := c.restore.Session(ctx, run.AgentHandle, run.TurnID, RelaunchRead())
+	own, err := c.restore.Session(ctx, run.AgentHandle, run.TurnID)
 	switch {
-	case errors.Is(err, executordomain.ErrNotFound):
+	case errors.Is(err, ErrTurnRowNotFound):
 		return nil, fmt.Sprintf("the turn's row on the executor log holds nothing: its begin never landed, so "+
 			"turn %s's session is held against no release", base.Turn)
 	case err != nil:
@@ -1160,7 +1174,7 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 		return continuedLaunch{}, "the turn's kept session is not the one its launch was asked to continue"
 	}
 	restorer, _ := runner.(SessionRestorer)
-	row, err := c.restore.Session(ctx, req.Turn.AgentHandle, req.Turn.TurnID, RelaunchRead())
+	row, err := c.restore.Session(ctx, req.Turn.AgentHandle, req.Turn.TurnID)
 	if err != nil {
 		return continuedLaunch{}, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
 	}
@@ -1260,11 +1274,11 @@ func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opene
 		return continuedLaunch{}, "the launch was given no brief that continues its conversation's session"
 	}
 	base := *opened.Base.Session
-	var own *executordomain.Session
+	var own *executorkeep.TurnRow
 	if !begun {
-		read, err := c.restore.Session(ctx, req.Turn.AgentHandle, req.Turn.TurnID, RelaunchRead())
+		read, err := c.restore.Session(ctx, req.Turn.AgentHandle, req.Turn.TurnID)
 		switch {
-		case errors.Is(err, executordomain.ErrNotFound):
+		case errors.Is(err, ErrTurnRowNotFound):
 			return continuedLaunch{}, fmt.Sprintf("the turn's row on the executor log holds nothing: its "+
 				"begin never landed, so turn %s's session is held against no release", base.Turn)
 		case err != nil:
@@ -1273,7 +1287,7 @@ func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opene
 		}
 		own = &read
 	}
-	row, err := c.restore.Session(ctx, req.Turn.AgentHandle, base.Turn, RelaunchRead())
+	row, err := c.restore.Session(ctx, req.Turn.AgentHandle, base.Turn)
 	if err != nil {
 		return continuedLaunch{}, fmt.Sprintf("turn %s's row on the executor log could not be read: %v",
 			base.Turn, err)
@@ -1329,15 +1343,15 @@ const restoreSpoolPrefix = spoolPrefix + "restore-"
 // byte vouched for by the object store and its seal opened whole once, ready
 // to be carried into a box.
 type fetchedSession struct {
-	row  executordomain.Session
+	row  executorkeep.TurnRow
 	file string
 }
 
 // fetchSession spools row's session sealed and checks it can be read whole,
-// before any of it reaches a box ([executordomain.SessionStore.Fetch]) — in the
+// before any of it reaches a box ([executorkeep.TurnRowStore.Fetch]) — in the
 // coordinator's spool directory ([Coordinator.spoolDirectory]), where its
 // sweep looks.
-func (c *Coordinator) fetchSession(ctx context.Context, row executordomain.Session) (*fetchedSession, error) {
+func (c *Coordinator) fetchSession(ctx context.Context, row executorkeep.TurnRow) (*fetchedSession, error) {
 	c.sweepSpools()
 	file, err := os.CreateTemp(c.spoolDirectory(), restoreSpoolPrefix+"*")
 	if err != nil {

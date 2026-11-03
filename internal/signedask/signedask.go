@@ -4,11 +4,13 @@
 //
 // # Why a request is an instruction
 //
-// The fleet's broker authenticates nothing itself (ADR-0031): its embedded
-// members route to each other over a port, a node without data reaches them as
-// a leaf over another, and every anonymous connection is bound to the one
-// account the engine's own subjects live in. So a message on a subject a node
-// SERVES is whatever anybody who can reach either port chose to write. Where
+// The fleet's broker vouches for a CONNECTION, never a message (ADR-0031): an
+// embedded broker admits only a route, a leaf link or an operator presenting a
+// key derived from the keyring (ADR-0094), but a route's password crosses the
+// fleet network in clear once per connection, and an external cluster admits
+// whom its operator chooses — and every connection it admits is bound to the
+// one account the engine's own subjects live in. So a message on a subject a
+// node SERVES is whatever anything the broker admitted chose to write. Where
 // the node only answers a question about itself, that is a forged question and
 // an answer nobody needed. Where the node CARRIES THE REQUEST OUT, the message
 // is an instruction — and an unsigned instruction is exactly what ADR-0031
@@ -24,7 +26,7 @@
 //     private room as anybody;
 //   - the FLEET BROKER'S MEMBERSHIP (internal/engine, fleetbroker.go): a member
 //     removes a voter from the broker's metadata group through its own system
-//     account, the one action the design keeps off the shared account — so
+//     account, the one action the design keeps off the global account — so
 //     unsigned, anybody on the broker could change the quorum every election
 //     runs on, past the grant, the step-up and the live-member refusal the
 //     operator's route puts in front of it;
@@ -52,11 +54,15 @@
 //     channels: the node running a person's turn hands over the frames another
 //     node's client missed, or stops the turn, on the asking node's word that
 //     the person asked. So unsigned, anybody on the broker could stop anybody's
-//     turn, or end one by answering for the node running it.
+//     turn, or end one by answering for the node running it;
+//   - a CODE SEARCH of several repositories (internal/codesearch): every git
+//     node reads the repositories a request assigns it AS THE ASKER IT NAMES,
+//     judging that asker's grant to each — so unsigned, anybody on the broker
+//     could read any repository as any seat or person in the company.
 //
 // # One frame, the state log's
 //
-// The frame is [statelog.Signer] and [statelog.Verifier]: the key id in the
+// The frame is [recordseal.Signer] and [recordseal.Verifier]: the key id in the
 // clear, an HMAC over the domain, the id and the body under a key derived from
 // the keyring per domain. A second signature format here would be a second
 // implementation of a rule nothing compares (ADR-0008), and the rotation story
@@ -151,7 +157,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -185,10 +191,10 @@ type Reply interface {
 type Channel[Q Request, R Reply] struct {
 	requestDomain  string
 	replyDomain    string
-	requests       *statelog.Signer
-	requestsOpened *statelog.Verifier
-	replies        *statelog.Signer
-	repliesOpened  *statelog.Verifier
+	requests       *recordseal.Signer
+	requestsOpened *recordseal.Verifier
+	replies        *recordseal.Signer
+	repliesOpened  *recordseal.Verifier
 }
 
 // New builds a node's half of the channel name from the fleet keyring — Tier A
@@ -196,23 +202,23 @@ type Channel[Q Request, R Reply] struct {
 // is signed under. It refuses a keyring that names no active key or holds no
 // key at all, for the state log's reason: a node that signed under nothing
 // would be refused by every peer, one request at a time, for ever.
-func New[Q Request, R Reply](name string, ring statelog.Keyring) (*Channel[Q, R], error) {
+func New[Q Request, R Reply](name string, ring recordseal.Keyring) (*Channel[Q, R], error) {
 	if name == "" {
 		return nil, errors.New("signedask: a channel needs a name — it is the key domain " +
 			"its envelopes are signed under")
 	}
 	c := &Channel[Q, R]{requestDomain: name + ".request", replyDomain: name + ".reply"}
 	var err error
-	if c.requests, err = statelog.NewSigner(c.requestDomain, ring); err != nil {
+	if c.requests, err = recordseal.NewSigner(c.requestDomain, ring); err != nil {
 		return nil, fmt.Errorf("signedask: %s: sign the requests this node sends: %w", name, err)
 	}
-	if c.requestsOpened, err = statelog.NewVerifier(c.requestDomain, ring); err != nil {
+	if c.requestsOpened, err = recordseal.NewVerifier(c.requestDomain, ring); err != nil {
 		return nil, fmt.Errorf("signedask: %s: verify the requests this node answers: %w", name, err)
 	}
-	if c.replies, err = statelog.NewSigner(c.replyDomain, ring); err != nil {
+	if c.replies, err = recordseal.NewSigner(c.replyDomain, ring); err != nil {
 		return nil, fmt.Errorf("signedask: %s: sign the replies this node answers with: %w", name, err)
 	}
-	if c.repliesOpened, err = statelog.NewVerifier(c.replyDomain, ring); err != nil {
+	if c.repliesOpened, err = recordseal.NewVerifier(c.replyDomain, ring); err != nil {
 		return nil, fmt.Errorf("signedask: %s: verify the replies this node is sent: %w", name, err)
 	}
 	return c, nil
@@ -252,7 +258,7 @@ func (c *Channel[Q, R]) SealRequest(req Q) ([]byte, error) {
 // Disposition is what a serving node may do with one request it was sent.
 //
 // A NAMED TYPE WITH FIVE VALUES rather than a bool, for the state log's own
-// [statelog.Verdict] reason: the failures have different answers — a key this
+// [recordseal.Verdict] reason: the failures have different answers — a key this
 // node does not hold is "ask another node", a tampered frame is "ask nobody,
 // believe nothing" — and a caller handed `false` for all of them would have to
 // guess which.
@@ -301,10 +307,10 @@ func (c *Channel[Q, R]) Admit(sealed []byte, seen *Guard, now time.Time) Admissi
 	var out Admission[Q]
 	body, verdict := c.requestsOpened.Open(sealed)
 	switch verdict {
-	case statelog.Tampered:
+	case recordseal.Tampered:
 		out.Disposition, out.Why = Tampered, "the request is not signed by this fleet"
 		return out
-	case statelog.KeyUnknown:
+	case recordseal.KeyUnknown:
 		out.Disposition = KeyUnknown
 		out.Why = fmt.Sprintf("the request is signed under a key this node does not hold "+
 			"(it holds %s) — add the key to secrets.keys", words.And(c.HeldKeys()))
@@ -361,9 +367,9 @@ func (c *Channel[Q, R]) OpenReply(sealed []byte, asked string) (rep R, why strin
 	}
 	body, verdict := c.repliesOpened.Open(sealed)
 	switch verdict {
-	case statelog.Tampered:
+	case recordseal.Tampered:
 		return zero, "its reply is not signed by this fleet", nil
-	case statelog.KeyUnknown:
+	case recordseal.KeyUnknown:
 		return zero, fmt.Sprintf("its reply is signed under a key this node does not "+
 			"hold (it holds %s) — add the key to secrets.keys", words.And(c.repliesOpened.KeyIDs())), nil
 	}

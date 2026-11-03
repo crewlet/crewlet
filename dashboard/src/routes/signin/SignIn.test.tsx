@@ -30,6 +30,7 @@ import { page } from "~/lib/session.ts";
 import { starsKey } from "~/lib/starred.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { currentSessionNeed, LiveSocket, Store, sessionRestored } from "~/protocol/index.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -150,7 +151,7 @@ const SIGNED_IN: Answer = {
 /** Every answer in flight lands, after `step` if given. */
 async function answered(step?: () => void): Promise<void> {
   if (step) act(step);
-  await act(async () => {});
+  await afterMicrotasks();
 }
 
 /**
@@ -396,9 +397,7 @@ describe("signing in with a password", () => {
     // AND IT STAYS THERE once the frame has followed the need it recorded.
     await answered();
     screen.getByText("Set up two-step verification");
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await afterMicrotasks();
     expect(location.hash).toBe(enrol);
     expect(currentSessionNeed()).toBe("second_factor");
     // THE SOCKET WAITS: a session that may only enrol is refused it.

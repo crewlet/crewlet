@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -33,7 +34,7 @@ import (
 // Every registered domain reaches it through [statelogtest.Run] as well,
 // which runs the same check as one of its four suites, but the check itself
 // needs only a migrated estate and a declaration, and the migrated estate is
-// this package's. Running all ten here also makes
+// this package's. Running all eleven here also makes
 // the walk two-sided: a domain whose tables stopped being created at all would
 // fail here rather than quietly stop being certified — the two COMPACTED
 // domains (the vectors and each data node's usage) included, whose ledgerless
@@ -47,6 +48,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 		assistantdomain.Domain{},
 		chatlet.Domain{},
 		executordomain.Domain{},
+		code.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -104,6 +106,7 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 		{"assistant_", assistantdomain.Domain{}},
 		{"chat_", chatlet.Domain{}},
 		{"executor_", executordomain.Domain{}},
+		{"code_", code.Domain{}},
 	} {
 		t.Run(tc.domain.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -216,8 +219,8 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 
 // THE DIRECTORY'S INDEXES ARE DECLARED, AS ITS STATEMENTS NEED THEM.
 //
-// What each statement over the people, the invitations and the trail plans as
-// is internal/iamdomain's plan gate (TestTheDirectoryStatementsArePlanned),
+// What each statement over the people, the invitations, the trail and the
+// removals plans as is internal/iamdomain's plan gate (TestTheDirectoryStatementsArePlanned),
 // which plans the package's own named statements — this case used to plan
 // copies of them, and the copies had drifted from the statements they stood
 // for. What is left here is the half that is the SCHEMA's: that the migrations
@@ -251,6 +254,7 @@ func TestTheDirectoryIndexesAreDeclared(t *testing.T) {
 		"iam_history_version_idx":    {"iam_history", "(version)", false},
 		"iam_history_class_idx":      {"iam_history", "(class, broker_at)", false},
 		"iam_history_sweep_idx":      {"iam_history", "(bucket, class, version)", false},
+		"iam_removed_seat_idx":       {"iam_removed", "(seat_id, seat_rebound_by, person_id)", false},
 	} {
 		var table, ddl string
 		if err := db.Read(t.Context(), func(tx *sql.Tx) error {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -182,6 +183,25 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			if live.AdminPosture != "" {
 				row["admin"] = live.AdminPosture
 			}
+			// WHAT IS WRONG ON THAT NODE, as its own alarm table found
+			// it at its last beat: each alarm firing there, the
+			// longest-standing first, with when it was raised. The one
+			// place a person reads every node's alarms at once — the
+			// health envelope names those of whichever node served it.
+			//
+			// AN EMPTY LIST IS A NODE THAT LOOKED AND FOUND NOTHING, and
+			// absent is a node with no table it has evaluated (one
+			// running no state log, or one mid-boot): a blank drawn as
+			// "no alarms" would call a node healthy that cannot say.
+			if live.AlarmsEvaluated {
+				marks := make([]map[string]any, 0, len(live.Alarms))
+				for _, m := range live.Alarms {
+					marks = append(marks, map[string]any{
+						"kind": m.Kind, "since": isoOrEmpty(m.Since),
+					})
+				}
+				row["alarms"] = marks
+			}
 		}
 		nodeRows = append(nodeRows, row)
 	}
@@ -204,7 +224,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 	out := map[string]any{
 		"nodes": nodeRows, "seats": seatRows, "duties": dutyRows,
 		"unplaceable":    s.unplaceable(profiles, seatRows),
-		"unmanned_roles": unmannedRoles(nodeRows),
+		"unmanned_roles": unmannedRoles(nodeRows, s.currentCompany()),
 		"this_node":      s.NodeID,
 		// What the fleet is converging ON, so a lagging node reads as
 		// "3 epochs behind 41" rather than as a number with nothing to
@@ -424,12 +444,18 @@ func placementFits(p placement.SeatPlacement, nodes []placement.NodeProfile) boo
 	return false
 }
 
-// unmannedRoles are the node roles no live node is running.
+// unmannedRoles are the node roles the company needs and no live node is
+// running.
 //
 // A company whose workers role is unmanned still answers webhooks and still
 // runs turns; what it stops doing is every scheduled and background duty, with
 // no error anywhere. That silence is the whole reason this is a field.
-func unmannedRoles(nodes []map[string]any) []string {
+//
+// ONLY A ROLE THE COMPANY NEEDS ([config.Company.NeedsRole], the rule each
+// node's own unmanned-role warning reads): git serves nothing for a company
+// that hosts no code, and listing it named a role missing on every fleet that
+// declares its nodes' roles without it.
+func unmannedRoles(nodes []map[string]any, company *config.Company) []string {
 	running := map[string]bool{}
 	for _, node := range nodes {
 		for _, role := range node["roles"].([]string) {
@@ -437,13 +463,23 @@ func unmannedRoles(nodes []map[string]any) []string {
 		}
 	}
 	out := []string{}
-	for role := range placement.DefaultRoles() {
-		if !running[string(role)] {
+	for _, role := range placement.Vocabulary() {
+		if company.NeedsRole(role) && !running[string(role)] {
 			out = append(out, string(role))
 		}
 	}
 	slices.Sort(out)
 	return out
+}
+
+// currentCompany is the current epoch's company, nil where this answer has no
+// reader of it.
+func (s Sources) currentCompany() *config.Company {
+	if s.Company == nil {
+		return nil
+	}
+	company, _ := s.Company()
+	return company
 }
 
 // nodeOf reads the node id out of an owner incarnation ({node}:{random}).

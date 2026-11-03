@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
@@ -168,6 +170,18 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		// field's tag and not the other would leave two enums that agree
 		// today and drift on the next value.
 		{"GitHubProvisioning", "org_webhook", strs(ContainerWebhookModes)},
+		{"CodeProtection", "direct_push", strs(CodeDirectPushes)},
+		{"CodeRepo", "visibility", strs(CodeVisibilities)},
+		{"CodeRepo", "search", strs(CodeSearchModes)},
+		// A protection rule's merge gate, and the company's floor beside it.
+		{"CodeProtection", "merge_by", strs(CodeMergeBys)},
+		{"CodeProtection", "approvals", strs(CodeApprovalCounts)},
+		{"CodeProtection", "delete_source", strs(CodeDeleteSources)},
+		{"Code", "merge_by_floor", strs(CodeMergeBys)},
+		// The three tiers, each in its one spelling: the validator reads
+		// exactly these, so an editor underlines exactly what the engine
+		// refuses.
+		{"RoleCode", "access", strs(CodeAccessTiers)},
 		// The two service backends, which the org projection also hands
 		// every reader as `services`: a value the schema offered and the
 		// validator refused would be a company an editor passed and no
@@ -210,6 +224,64 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		got := closedSet(t, field)
 		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
 			t.Fatalf("%s.%s enum = %v, validators accept %v", tc.def, tc.field, got, tc.want)
+		}
+	}
+}
+
+// A LIST OF A CLOSED SET HOLDS EACH MEMBER TO IT, in the schema as in the
+// validator: the list's own enum tag is its members', so an editor underlines
+// a class the engine refuses in a list — no_code_change among them, which no
+// exempting list takes — and none it takes.
+func TestAListOfAClosedSetHoldsEachMember(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
+	for _, tc := range []struct {
+		def, field string
+		want       []string
+	}{
+		{"CodeProtection", "approvals_unless", strs(CodePathClasses)},
+		{"CodeHumanPath", "unless", strs(CodePathClasses)},
+	} {
+		def, _ := defs[tc.def].(map[string]any)
+		props, _ := def["properties"].(map[string]any)
+		field, ok := props[tc.field].(map[string]any)
+		if !ok {
+			t.Fatalf("%s has no %s", tc.def, tc.field)
+		}
+		members, ok := field["items"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s.%s is no list: %v", tc.def, tc.field, field)
+		}
+		if got := closedSet(t, members); strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s.%s's members enum = %v, validators accept %v", tc.def, tc.field, got, tc.want)
+		}
+	}
+}
+
+// A REQUIRED CHECK'S NAME IS THE ONE RULE'S: the schema's pattern for each of a
+// rule's checks and ValidCodeCheckName agree on every name a table reaches for,
+// or an editor underlines a check the engine runs, or passes one every node's
+// reconcile refuses.
+func TestTheRequiredCheckPatternIsTheValidators(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
+	def, _ := defs["CodeProtection"].(map[string]any)
+	props, _ := def["properties"].(map[string]any)
+	field, ok := props["checks"].(map[string]any)
+	if !ok {
+		t.Fatal("the company schema's CodeProtection has no checks")
+	}
+	members, ok := field["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("CodeProtection.checks is no list: %v", field)
+	}
+	pattern := regexp.MustCompile(ownPattern(t, members))
+	for _, name := range []string{
+		"unit", "a", "0", "e2e", "lint.go", "build_linux-arm64", strings.Repeat("a", 64), strings.Repeat("a", 65),
+		"", "Unit", "-unit", ".unit", "_unit", "unit tests", "unit/fast", "ünit", "unit:fast", "a\n",
+	} {
+		if got, want := pattern.MatchString(name), ValidCodeCheckName(name); got != want {
+			t.Errorf("the schema's pattern says %v of %q, ValidCodeCheckName %v", got, name, want)
 		}
 	}
 }
@@ -281,9 +353,37 @@ func TestNodeIDPatternIsOneRule(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s has no %s", tc.def, tc.field)
 		}
-		if got, want := ownPattern(t, field), nodeIDPattern.String(); got != want {
+		if got, want := ownPattern(t, field), nodeIDPattern().String(); got != want {
 			t.Fatalf("%s.%s pattern = %v, the validator's nodeIDPattern is %q",
 				tc.def, tc.field, got, want)
+		}
+	}
+}
+
+// THE SCHEMA'S REPOSITORY NAME IS THE GRAMMAR'S. An editor holds code.repos'
+// names to the pattern the schema states, and the validator — like the domain
+// that records them — to gitref.ValidProjectName, since a declared repository
+// is a project and a name with a dot a seat's own scratch repository; the two
+// agree on every name a table can reach for, or an editor underlines a name
+// the engine runs or passes one every node refuses.
+func TestTheRepoNamePatternIsGitrefs(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
+	def, _ := defs["CodeRepo"].(map[string]any)
+	props, _ := def["properties"].(map[string]any)
+	field, ok := props["name"].(map[string]any)
+	if !ok {
+		t.Fatal("the company schema's CodeRepo has no name")
+	}
+	pattern := regexp.MustCompile(ownPattern(t, field))
+	for _, name := range []string{
+		"web", "a", "0", "9lives", "nimbus-web", "a-b-c", "a--b",
+		strings.Repeat("a", 63), strings.Repeat("a", 64), "a" + strings.Repeat("-", 61) + "b",
+		"", "-web", "web-", "Web", "wEb", "web.app", "web.git", "web_app", "web app",
+		"wéb", "web/app", "..", "w@b", "alice.web",
+	} {
+		if got, want := pattern.MatchString(name), gitref.ValidProjectName(name); got != want {
+			t.Errorf("the schema's pattern says %v of %q, gitref.ValidProjectName %v", got, name, want)
 		}
 	}
 }
@@ -306,7 +406,7 @@ func TestUnitChannelPatternIsOneRule(t *testing.T) {
 	if !ok {
 		t.Fatal("Unit has no channel")
 	}
-	if got, want := ownPattern(t, field), unitChannel.String(); got != want {
+	if got, want := ownPattern(t, field), unitChannel().String(); got != want {
 		t.Fatalf("Unit.channel pattern = %v, the validator's unitChannel is %q", got, want)
 	}
 }
@@ -727,7 +827,7 @@ units:
 		{
 			name: "an external stream named by the environment", tier: TierBootstrap,
 			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: \"${STREAM_TYPE}\"\n  url: \"${NATS_URL}\"\n",
-			env:  map[string]string{"STREAM_TYPE": "nats", "NATS_URL": "nats://nats.example.com:4222"},
+			env:  map[string]string{"STREAM_TYPE": "nats", "NATS_URL": "nats://fixture-token@nats.example.com:4222"},
 		},
 		// A NUMBER OR A SWITCH TAKES A WHOLE REFERENCE, whose value is read
 		// as the same characters written there would be: `8080` is a port,
@@ -765,7 +865,7 @@ units:
 		{
 			name: "an external fleet keeping three copies", tier: TierBootstrap,
 			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: nats\n" +
-				"  url: nats://nats.example.com:4222\n  replicas: 3\n",
+				"  url: nats://nats.example.com:4222\n  replicas: 3\n  credentials: /etc/crewlet/engine.creds\n",
 		},
 		{
 			name: "a leaf keeping the fleet's three copies", tier: TierBootstrap,
@@ -1020,6 +1120,35 @@ units:
 			validatorOnly: true,
 			yaml:          "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s, provisioning: {repos: [engine]}}\n",
 		},
+		// THE ENGINE'S OWN CODE HOST, a branch rule gating its merges with
+		// every field of its gate: neither layer may refuse it.
+		{
+			name: "a merge gate on a protected branch", tier: TierCompany,
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  merge_by_floor: maintainers\n" +
+				"  repos:\n    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, " +
+				"merge_by: persons, approvals: one, approvals_unless: [comment_only], human_paths: [{glob: " +
+				"'deploy/**', unless: [whitespace_only]}], checks: [unit, e2e.linux], landing: {depth: 8, " +
+				"batch: 2}, owners_approve: true, delete_source: none, agents_edit_checks: true}\n",
+		},
+		// A CLASS NO EXEMPTING LIST TAKES, which the members' enum names
+		// while the author is still typing.
+		{
+			name: "no_code_change exempting approvals", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  repos:\n" +
+				"    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, approvals: one, " +
+				"approvals_unless: [no_code_change]}\n",
+		},
+		{
+			name: "a required check with a capital", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  repos:\n" +
+				"    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, checks: [Unit]}\n",
+		},
+		// A CHECK REQUIRED TWICE: a list's uniqueness is the validator's.
+		{
+			name: "a required check listed twice", tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  repos:\n" +
+				"    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, checks: [unit, unit]}\n",
+		},
 		// The Atlassian tracker, which IS served: a Cloud site named by its
 		// cloud id, delivering through the Forge app. Neither layer may
 		// refuse it — the schema because it would underline a working file,
@@ -1139,7 +1268,7 @@ units:
 		},
 		{
 			name: "an external stream with no url", tier: TierBootstrap, editorCatches: true,
-			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: nats\n",
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: nats\n  credentials: /etc/crewlet/engine.creds\n",
 		},
 
 		// Rules the schema cannot express. They belong here to prove the
@@ -1160,6 +1289,15 @@ units:
 			// is what an operator reaches for first. The schema sees a
 			// string and has nothing to say.
 			yaml: "name: Acme\nintegrations:\n  gitlab: {enabled: true, url: https://gitlab.example.com, signing_secret: plain-shared-secret}\n",
+		},
+		// AN EXTERNAL STREAM PRESENTING NO CREDENTIAL. A credential in the
+		// url's userinfo counts, and a url may be a ${VAR} whose value
+		// carries one, so the schema cannot tell a url that presents
+		// nothing from one that does; the validator judges the resolved
+		// value.
+		{
+			name: "an external stream presenting no credential", tier: TierBootstrap, validatorOnly: true,
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: nats\n  url: nats://nats.example.com:4222\n",
 		},
 		// WHAT A REFERENCE RESOLVES TO is the node's business, so the schema
 		// admits one wherever some value would do and the validator judges
@@ -1438,6 +1576,7 @@ func byteBounds() map[string][2]int64 {
 		"pages_log_max_bytes":         {PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling},
 		"iam_log_max_bytes":           {IamLogMaxBytesFloor, IamLogMaxBytesCeiling},
 		"usage_log_max_bytes":         {UsageLogMaxBytesFloor, UsageLogMaxBytesCeiling},
+		"code_log_max_bytes":          {CodeLogMaxBytesFloor, CodeLogMaxBytesCeiling},
 		"artifacts_log_max_bytes":     {ArtifactsLogMaxBytesFloor, ArtifactsLogMaxBytesCeiling},
 		"artifact_data_log_max_bytes": {ArtifactDataLogMaxBytesFloor, ArtifactDataLogMaxBytesCeiling},
 		"assistant_log_max_bytes":     {AssistantLogMaxBytesFloor, AssistantLogMaxBytesCeiling},

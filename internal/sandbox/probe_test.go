@@ -13,13 +13,12 @@ import (
 )
 
 // scriptedRuntime writes an executable named name in a fresh directory that runs
-// script, and answers its path.
+// script, and answers its path — written where no fork can hold it open
+// ([writeExecutable]), since the probe execs it at once.
 func scriptedRuntime(t *testing.T, name, script string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutable(t, path, "#!/bin/sh\n"+script+"\n")
 	return path
 }
 

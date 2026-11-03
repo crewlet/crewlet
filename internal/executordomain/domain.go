@@ -42,9 +42,9 @@ const ExecutorLogMaxBytes = 512 << 20
 //
 // 128 KiB, measured rather than guessed ([TestEveryRecordAtEveryCapFitsTheDeclaredBound]).
 // The largest record is an `end`: its five prose fields at their caps
-// ([CompletedWorkMaxBytes], [BlockedOnMaxBytes], [StopReasonMaxBytes],
-// [FailureMaxBytes], [AskExcerptMaxBytes], eleven KiB between them) encode to
-// about 66 KiB once JSON escapes every `<`, `>` and `&` to six bytes, and the
+// (internal/executorkeep's CompletedWorkMaxBytes, BlockedOnMaxBytes,
+// StopReasonMaxBytes and FailureMaxBytes, and [AskExcerptMaxBytes], eleven
+// KiB between them) encode to about 66 KiB once JSON escapes every `<`, `>` and `&` to six bytes, and the
 // conversation key, the work key, the short fields and the envelope bring the
 // whole to about 74 KiB; a `capture` at its caps, its [MaxAbsorbs] absorbed
 // turns included, is about 21 KiB. The bound
@@ -243,13 +243,14 @@ func (Domain) ScopeIndex() string { return "executor_log_deferred_scope" }
 // OpsTable is the operation ledger: what this node has already applied.
 func (Domain) OpsTable() string { return "executor_ops" }
 
-// ReadinessInput reports that this domain's health does NOT gate seat
-// admission, as the artifacts' and the assistant's do not: a launch that cannot
-// read this log fails open, to a fresh session with the account of what it
-// could not read, so a stalled executor copy must not stop a node admitting
-// seats. The copy still goes out of service for its own readers: a stalled
-// strict replay is a fault, and the framework refuses every read of it.
-func (Domain) ReadinessInput() bool { return false }
+// GatesSeatAdmission reports that no seat depends on this domain's copy, as
+// none does on the artifacts' or the assistant's: a launch that cannot read
+// this log fails open, to a fresh session with the account of what it could
+// not read, so a stalled executor copy must not stop a node admitting seats.
+// The copy is still judged and goes out of service for its own readers
+// (ADR-0079): a stalled strict replay is a fault, and the framework refuses
+// every read of it.
+func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that every node's Replicated tables must be
 // byte-identical: N copies of one SQL state from one ordered log.

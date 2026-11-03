@@ -39,6 +39,30 @@
 // TestTheTestBrokerSizeHoldsAFreshNode is the failure among them that names the
 // cause and this constant.
 //
+// # And the code cache beside it
+//
+// A node that hosts code derives its cache's budget from the ROOM on the
+// cache's volume (internal/engine's codeCacheBudget). The room is the free
+// space, less what a broker storing its streams there may still write under its
+// limit, the request spools and the revision facts' patch spools. A declared
+// limit is a claim on that room, and the room is the runner's free disk. So a
+// fixture with this package's sixteen gibibytes on the temporary volume beside
+// its cache has a derived budget only where the runner has more than about
+// seventeen and a half gibibytes free. Below that the room is nothing, and the
+// node refuses to host code at all. The end-to-end gates' runner had 9.2 GB
+// free (CI run 41669250876), and all five of their code-hosting cases failed at
+// engine.New with that refusal.
+//
+// So a node fixture that declares its broker here declares its code cache
+// beside it ([CodeCacheIn]). The budget is the smallest a node is ever given
+// explicitly. The transfer lane is a fixed one, since an unset lane follows the
+// machine's cores and sizes the request spools taken out of the same room. An
+// explicit budget is never refused for room. On a runner with less free space
+// than the declared tenants, the engine still says, at code_cache_sized, that
+// the budget is more than the room. That is the truth about a declaration that
+// is accounting, and it changes neither the budget the cache is held to nor the
+// case's outcome.
+//
 // # Why not jetstreamtest or externaltest
 //
 // Importing jetstreamtest declares a multi-member suite (see internal/solo),
@@ -74,4 +98,26 @@ const StoreMaxBytes int64 = 16 << 30
 func StoreIn(s *config.Stream, dir string) {
 	s.StoreDir = dir
 	s.StoreMaxBytes = StoreMaxBytes
+}
+
+// CodeCacheMaxBytes is the code cache budget a node fixture declares beside a
+// broker [StoreIn] sized: `git.cache_max_bytes`'s floor, the smallest budget a
+// node is ever given explicitly. A case's repositories hold kilobytes, so the
+// floor holds every one of them with three orders of magnitude to spare.
+const CodeCacheMaxBytes = config.GitCacheMaxBytesFloor
+
+// GitTransfers is the transfer lane a node fixture declares: four transfers,
+// 256 MiB of request spool. Unset, the lane follows the machine's cores, four a
+// core as memory allows. A sixteen-core runner's 4 GiB of spools then came out
+// of the room of every cache beside them, so whether a node hosted code was a
+// property of the machine running the suite, never of the case.
+const GitTransfers = 4
+
+// CodeCacheIn declares g's code cache budget and transfer lane, for a node
+// fixture whose broker [StoreIn] sized on the same volume — see the package
+// doc. A fixture that never hosts code keeps both unread, and one whose subject
+// is the derived budget, or the lane, sets its own.
+func CodeCacheIn(g *config.Git) {
+	g.CacheMaxBytes = CodeCacheMaxBytes
+	g.MaxTransfers = GitTransfers
 }

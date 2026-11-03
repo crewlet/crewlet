@@ -608,10 +608,11 @@ func (c *Company) ReferenceWarnings() []Warning {
 //
 // So is a seat whose executor chain holds an entry that can never run the
 // executor beside one that can ([Company.executorWarnings]), a token budget
-// a seat's ceilings leave idle ([Company.budgetWarnings]), and what the unit
-// channels say about each other ([Company.channelAdvisories]): one room two
-// units claim on a vendor chat surface, and a Chatlet company that gives no
-// team a room.
+// a seat's ceilings leave idle ([Company.budgetWarnings]), a code setting
+// that grants or protects less than it reads as ([Company.codeWarnings]),
+// and what the unit channels say about each other
+// ([Company.channelAdvisories]): one room two units claim on a vendor chat
+// surface, and a Chatlet company that gives no team a room.
 //
 // EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
@@ -633,6 +634,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	out = append(out, c.unreachableWarnings()...)
 	out = append(out, c.executorWarnings()...)
 	out = append(out, c.budgetWarnings()...)
+	out = append(out, c.codeWarnings()...)
 	out = append(out, c.accessAdvisories()...)
 	return append(out, c.channelAdvisories()...)
 }
@@ -881,13 +883,14 @@ func (b *Bootstrap) Warnings() []Warning {
 	// mutation log's alone: the backup term is evaluated per log, and the
 	// ordered logs — the tracker's, the knowledge base's, the artifacts'
 	// and their datastore's, the identity estate's, the Dashboard
-	// Assistant's, chat's and the executor log — carry no age bound, so
-	// nothing else ever removes a record from them. Naming one field sent an
-	// operator to the wrong ceiling whenever another log filled first: a
-	// full identity log refuses every sign-in and every change to who may do
-	// what, a full assistant log every question somebody asks the assistant,
-	// since it cannot record the turn, a full chat log a message somebody
-	// typed, and a full executor log every capture of a seat's session.
+	// Assistant's, chat's, the executor log and the code log — carry no age
+	// bound, so nothing else ever removes a record from them. Naming one
+	// field sent an operator to the wrong ceiling whenever another log filled
+	// first: a full identity log refuses every sign-in and every change to
+	// who may do what, a full assistant log every question somebody asks the
+	// assistant, since it cannot record the turn, a full chat log a message
+	// somebody typed, a full executor log every capture of a seat's session,
+	// and a full code log every push to the company's repositories.
 	//
 	// NO COUNT IN THE SENTENCE: the fields are listed by name, and a test
 	// reads them off [Stream] and holds the message to every one, so a log
@@ -934,9 +937,11 @@ func (b *Bootstrap) Warnings() []Warning {
 				"sign-in, `stream.assistant_log_max_bytes`, where it refuses "+
 				"every question somebody puts to Ask Crewlet, "+
 				"`stream.chat_log_max_bytes`, where it refuses a message "+
-				"somebody typed, and `stream.executor_log_max_bytes`, where "+
-				"it refuses to record an executor's session, so the seat's "+
-				"next turn starts fresh. The two compacted logs "+
+				"somebody typed, `stream.executor_log_max_bytes`, where it "+
+				"refuses to record an executor's session, so the seat's next "+
+				"turn starts fresh, and `stream.code_log_max_bytes`, where it "+
+				"refuses every push to the company's repositories. The two "+
+				"compacted logs "+
 				"(`stream.tracker_vectors_max_bytes`, "+
 				"`stream.usage_log_max_bytes`) age their records out on the "+
 				"broker regardless, but wait on an acknowledgement just the "+
@@ -983,12 +988,12 @@ func (b *Bootstrap) Warnings() []Warning {
 						"members, and the quorum and replica rules count this node "+
 						"once. Remove it. Another name for this host that this file "+
 						"cannot recognise (a DNS alias, `localhost`) would be "+
-						"counted as a member it is not", d.Raw, d.Matches)))
+						"counted as a member it is not", d.Shown, d.Matches)))
 				continue
 			}
 			out = append(out, advisory(where, fmt.Sprintf(
 				"%q repeats peers[%d], and one member listed twice is counted "+
-					"once. Remove it", d.Raw, d.RepeatOf)))
+					"once. Remove it", d.Shown, d.RepeatOf)))
 		}
 	}
 
@@ -1074,6 +1079,15 @@ func (b *Bootstrap) Warnings() []Warning {
 		out = append(out, advisory(field("stream.debug"),
 			"the embedded broker will produce its debug output and no "+
 				"destination records it: "+b.unrecordedDebug()))
+	}
+
+	// A GIT BLOCK ON A NODE THAT SERVES NO GIT is read by nothing: the cache,
+	// its budget and its processes exist only where the role does, and an
+	// operator who sized them believes this node serves code.
+	if !b.Git.IsZero() && !b.Profile("").Roles.Has(placement.RoleGit) {
+		out = append(out, advisory(field("git"), fmt.Sprintf(
+			"is set and this node does not serve git (node.roles names no %q), "+
+				"so nothing reads it", placement.RoleGit)))
 	}
 
 	out = append(out, b.API.warnings(b.ServesAPI())...)
@@ -1187,6 +1201,107 @@ func (b *Bootstrap) loggingLevelName() string {
 		return "`info` (unset)"
 	}
 	return "`" + string(b.Logging.Level) + "`"
+}
+
+// TierWarnings is what is VALID across the two tiers and worth knowing before
+// a company is applied to this node — never a refusal, for [Bootstrap.Warnings]'
+// reason (a warning that can fail a build is one somebody suppresses), and no
+// rule needs both documents any more (the in-memory stream it once refused
+// with the company's help is refused by Tier A alone: [Stream.Durable]).
+// Nil-safe: either document absent is no warning, which is a node that has no
+// company yet.
+//
+// Each is located at the field whose change answers it, and printed in three
+// places: `crewlet validate` given both files, a configuration write's answer
+// (where a person turning code.native on reads the consequence in the answer
+// that applied it), and the engine's own log, once per node per applied epoch
+// (config_tier_warning) — the engine's through [NodeTierWarnings], which also
+// knows the cache budget this node derived.
+//
+// THE DOCUMENTS ALONE compare only an EXPLICIT git.cache_max_bytes with the
+// company's repository limit: a derived budget is a share of a volume neither
+// file describes, so `crewlet validate` and a configuration write, which run
+// where that volume is not, cannot know it.
+func TierWarnings(boot *Bootstrap, company *Company) []Warning {
+	if boot == nil {
+		return nil
+	}
+	return tierWarnings(boot, company, CacheBudget{Bytes: boot.Git.CacheMaxBytes})
+}
+
+// CacheBudget is the code cache's budget as a node resolved it: its bytes, and
+// whether it was DERIVED from the cache's volume because git.cache_max_bytes is
+// unset. The zero value is a node that has resolved none — it serves no git, or
+// its code host is not built — which compares nothing.
+type CacheBudget struct {
+	Bytes   int64
+	Derived bool
+}
+
+// NodeTierWarnings is [TierWarnings] on a running node that knows its code
+// cache's RESOLVED budget, derived or explicit — the engine's own log of them,
+// once per applied epoch. A derived budget is the default on every git node,
+// and one smaller than the company's repository size limit is the same fact as
+// an explicit one: such a repository is served and evicted as soon as it is
+// idle, every later busy period a cold sync of the whole repository, one GET a
+// push it ever took. The node knows that the moment it sizes its cache, which
+// is long before code_cache_over_budget can say so.
+func NodeTierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warning {
+	if boot == nil {
+		return nil
+	}
+	if cache.Bytes <= 0 {
+		cache = CacheBudget{Bytes: boot.Git.CacheMaxBytes}
+	}
+	return tierWarnings(boot, company, cache)
+}
+
+// tierWarnings is the rule [TierWarnings] and [NodeTierWarnings] share, with
+// the cache budget each can know.
+func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warning {
+	if boot == nil || company == nil {
+		return nil
+	}
+	var out []Warning
+	servesGit := boot.Profile("").Roles.Has(placement.RoleGit)
+
+	// EVERY MEMBER HOLDING THE FILES BUCKET HOLDS EVERY PACK. The default
+	// object store is a bucket on the fleet's own broker, replicated to
+	// `stream.replicas` members, and every push stores its pack bundle
+	// there — so in a fleet each of those members holds every repository's
+	// every pack, on the same disk as the logs. Correct, and fine for a small
+	// company; S3 is the production store for code. A solo member is the
+	// single-process deployment, where the one disk holds everything
+	// whichever store is chosen.
+	if company.Code.Native && boot.Store.Objects.BackendOrDefault() == ObjectBackendNATS &&
+		(boot.declaresFleet() || boot.BrokerKind() == placement.BrokerClient) {
+		out = append(out, advisory(field("store.objects.backend"),
+			"every broker member holding a copy of the files bucket holds every pack "+
+				"of every repository; a company whose code outgrows a member's disk "+
+				"takes store.objects.backend: s3"))
+	}
+
+	// A REPOSITORY LARGER THAN THE CACHE. A git node caches a repository
+	// whole, and one past its budget is served and evicted as soon as its
+	// last reader lets go — so every fetch of it is a cold sync, one GET a
+	// push. Compared at whatever budget the caller knows: an explicit one from
+	// the file, and on a running node the one it derived from its volume.
+	if servesGit && company.Code.Native && cache.Bytes > 0 {
+		if limit := company.Code.Limits.Resolved().RepoMaxBytes; cache.Bytes < limit {
+			budget := fmt.Sprintf("this node's budget (%d)", cache.Bytes)
+			if cache.Derived {
+				budget = fmt.Sprintf("this node's budget (%d, derived from git.cache_dir's "+
+					"volume because git.cache_max_bytes is unset)", cache.Bytes)
+			}
+			out = append(out, advisory(field("git.cache_max_bytes"), fmt.Sprintf(
+				"a repository at its size limit (code.limits.repo_max_bytes, %d) cannot "+
+					"be cached within %s: it is served, and evicted as soon as it is idle, "+
+					"so every busy period after is a cold sync of the whole repository",
+				limit, budget)))
+		}
+	}
+
+	return out
 }
 
 // writerWarnings are the company_writers settings that are valid and almost

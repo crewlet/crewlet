@@ -113,6 +113,87 @@ func TestAnMCPFailureIsClippedOnTheWire(t *testing.T) {
 	}
 }
 
+// A STATUS CARRIES THE ALARMS FIRING ON ITS NODE, and "nothing is firing" is a
+// different claim from "this node cannot say".
+//
+// The heartbeat is where every peer reads what is wrong on a node, so each
+// mark has to arrive as it was published — its kind, its start and its place
+// in the longest-standing-first order — on both sides of the JSON round trip
+// the lease store does. And the three states have to stay three: a node that
+// evaluated its table and found nothing publishes an EMPTY list (as `[]`,
+// never the `null` a nil slice marshals to, which would read back as not
+// saying), and a node with no table it has evaluated publishes no key at all,
+// so it is never drawn as a quiet node. A mark naming no kind names nothing a
+// reader could show and is dropped; a since that does not parse keeps the mark,
+// because the alarm firing is the fact.
+//
+// Mutation: publish `alarms` without an evaluation, publish a nil list for an
+// evaluated table, read an absent key as evaluated, or drop the since, and
+// this goes red.
+func TestAStatusCarriesItsFiringAlarms(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	firing := coord.NodeStatus{InFlight: 1, AlarmsEvaluated: true, Alarms: []coord.AlarmMark{
+		{Kind: "backup_age", Since: since},
+		{Kind: "apply_lag", Since: since.Add(2 * time.Minute)},
+	}}
+	quiet := coord.NodeStatus{InFlight: 1, AlarmsEvaluated: true}
+	silent := coord.NodeStatus{InFlight: 1}
+
+	for name, want := range map[string]coord.NodeStatus{
+		"firing": firing, "evaluated with nothing firing": quiet, "no table evaluated": silent,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			raw, err := json.Marshal(map[string]any{coord.StatusKey: want.Meta()})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			wire := string(raw)
+			switch {
+			case !want.AlarmsEvaluated && strings.Contains(wire, `"alarms"`):
+				t.Errorf("a node with no evaluated table published alarms: %s", wire)
+			case want.AlarmsEvaluated && len(want.Alarms) == 0 && !strings.Contains(wire, `"alarms":[]`):
+				t.Errorf("an evaluated table with nothing firing is not an empty list on the wire: %s", wire)
+			}
+			var round map[string]any
+			if err := json.Unmarshal(raw, &round); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			for side, meta := range map[string]map[string]any{
+				"as written":         {coord.StatusKey: want.Meta()},
+				"after a round trip": round,
+			} {
+				got, ok := coord.StatusFromMeta(meta)
+				if !ok {
+					t.Fatalf("%s: a published status read as absent", side)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("%s: read back %+v, want %+v", side, got, want)
+				}
+			}
+		})
+	}
+
+	got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: map[string]any{
+		"alarms": []any{
+			map[string]any{"since": since.Format(time.RFC3339)},
+			"not a mark",
+			map[string]any{"kind": "wal_large", "since": "yesterday"},
+		},
+	}})
+	if want := []coord.AlarmMark{{Kind: "wal_large"}}; !got.AlarmsEvaluated ||
+		!reflect.DeepEqual(got.Alarms, want) {
+		t.Errorf("decoded (%v, %+v), want (true, %+v): a mark naming no kind is dropped, "+
+			"and one whose since does not parse is kept without one", got.AlarmsEvaluated, got.Alarms, want)
+	}
+	if got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: map[string]any{
+		"alarms": "backup_age",
+	}}); got.AlarmsEvaluated {
+		t.Errorf("an alarms key that is not a list read as an evaluated table: %+v", got.Alarms)
+	}
+}
+
 // THE SAME MAP IS READ BOTH SIDES OF A STORE ROUND TRIP, where an int
 // becomes a float64. A reader that knew only the local shape would report
 // every peer's in-flight count as zero — which is the one number this
@@ -137,6 +218,57 @@ func TestAStatusSurvivesTheJSONRoundTripTheLeaseStoreDoes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+// A GIT NODE'S BUDGET IS READ ONLY WHERE ITS ROW SAYS ONE, and saying zero is
+// a claim: a git node with nothing to give its background work writes 0, and a
+// row with no figure — or one no build writes — is a node NOT SAYING, which a
+// reader placing maintenance must never take for either a zero or a figure. It
+// sits beside the status and never in it, so a beat whose status was dropped
+// still says it, and a key of that name inside a status says nothing; and it
+// arrives exact across the JSON round trip the lease store makes, at a size no
+// int32 and no float32 would carry.
+//
+// Mutations: read an absent key as zero — the quiet rows are said, red; read
+// the budget out of the status — the dropped status's row says nothing and the
+// status's key is read, red.
+func TestAGitBudgetIsReadOnlyWhereARowSaysOne(t *testing.T) {
+	t.Parallel()
+	const budget = int64(68)<<30 + 12_345
+	for name, tc := range map[string]struct {
+		meta   map[string]any
+		budget int64
+		says   bool
+	}{
+		"a figure, as written":   {map[string]any{coord.GitBackgroundKey: budget}, budget, true},
+		"zero, which is a claim": {map[string]any{coord.GitBackgroundKey: int64(0)}, 0, true},
+		"a figure beside a dropped status": {
+			map[string]any{"roles": []string{"git"}, coord.GitBackgroundKey: budget}, budget, true},
+		"no figure at all": {map[string]any{"roles": []string{"git"}}, 0, false},
+		"no meta at all":   {nil, 0, false},
+		"a figure inside the status, not beside": {
+			map[string]any{coord.StatusKey: map[string]any{coord.GitBackgroundKey: budget}}, 0, false},
+		"a negative figure":             {map[string]any{coord.GitBackgroundKey: int64(-1)}, 0, false},
+		"a figure that is not a number": {map[string]any{coord.GitBackgroundKey: "64GiB"}, 0, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			raw, err := json.Marshal(tc.meta)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var stored map[string]any
+			if err := json.Unmarshal(raw, &stored); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			for side, meta := range map[string]map[string]any{"as written": tc.meta, "as stored": stored} {
+				got, says := coord.GitBackgroundFromMeta(meta)
+				if got != tc.budget || says != tc.says {
+					t.Errorf("%s: read (%d, says %v), want (%d, says %v)", side, got, says, tc.budget, tc.says)
+				}
+			}
+		})
 	}
 }
 

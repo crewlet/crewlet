@@ -13,6 +13,7 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/crewlet/crewlet/internal/regexlit"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -279,18 +280,18 @@ var (
 	schemeRE     = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*:`)
 )
 
-// What each line-level pattern cannot match without (sourcetree.Required).
+// What each line-level pattern cannot match without (regexlit.Required).
 // Every line of the tree's markdown passes through all of them, and under
 // the race detector a match attempt is an allocation the detector shadows,
 // so a line holding nothing a pattern needs is not handed to it — which
 // cannot change what it finds.
 var (
-	inlineLinkNeeds = sourcetree.Required(inlineLinkRE)
-	refDefNeeds     = sourcetree.Required(refDefRE)
-	codeSpanNeeds   = sourcetree.Required(codeSpanRE)
-	fenceNeeds      = sourcetree.Required(fenceRE)
-	headingNeeds    = sourcetree.Required(headingRE)
-	explicitNeeds   = sourcetree.Required(explicitRE)
+	inlineLinkNeeds = regexlit.Required(inlineLinkRE)
+	refDefNeeds     = regexlit.Required(refDefRE)
+	codeSpanNeeds   = regexlit.Required(codeSpanRE)
+	fenceNeeds      = regexlit.Required(fenceRE)
+	headingNeeds    = regexlit.Required(headingRE)
+	explicitNeeds   = regexlit.Required(explicitRE)
 )
 
 // fence reports whether a line opens or closes a fenced block.

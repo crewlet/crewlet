@@ -52,10 +52,11 @@
 //
 // [OpenNode] and [DB.OpenReplicated] therefore take an advisory OS lock for
 // the life of the handle and answer a second PROCESS with [ErrLocked] — before
-// any driver work, and naming the pid that holds the file. See lock.go for why
-// an OS lock rather than a pid file, and why two handles inside one process share the claim
-// instead. That is what makes the rule above true rather than merely stated:
-// the secret-store CLIs open this database from a second process as their
+// any driver work, and naming the pid that holds the file. The claim is
+// internal/flock's, whose package doc says why an OS lock rather than a pid
+// file; lock.go says why two handles inside one process share it instead.
+// That is what makes the rule above true rather than merely stated: the
+// secret-store CLIs open this database from a second process as their
 // documented gesture, and before the lock the only defence was this comment.
 //
 // Everything that genuinely needs cross-process coordination — seat leases,
@@ -156,7 +157,7 @@ const driverName = "turso"
 
 // Defaults for Options.
 const (
-	// minReaderConns is the floor under the derived reader budget, and it
+	// MinReaderConns is the floor under the derived reader budget, and it
 	// is anchored to the ONE component that reads this store concurrently
 	// with the engine writing it.
 	//
@@ -173,18 +174,25 @@ const (
 	// The floor exists for the small host, where GOMAXPROCS is 1 or 2 and
 	// the derivation below would otherwise size the pool for the CPU and
 	// leave a single dashboard queueing against itself.
-	minReaderConns = 8
+	//
+	// EXPORTED because it is also the most pages the smallest data node
+	// scans at once — every read the estate serves is one transaction on
+	// one of these connections — and a git node holds its full reads of
+	// repositories' rows to it (code/cache.MaxFullRounds), so a change here
+	// moves that cap.
+	MinReaderConns = 8
 
 	// identityReserve is how many of this pool's connections ordinary work
 	// may NEVER occupy, kept for identity work: resolving who is acting
 	// before a route, a query or a tool call can decide anything.
 	//
 	// ONE. It is a reservation rather than extra headroom because headroom
-	// is exactly what a burst consumes: database/sql hands connections out
-	// first-come-first-served, so a socket storm — N tabs × four
+	// is exactly what a burst consumes: database/sql hands a free
+	// connection to whoever asks first, and one given back while callers
+	// wait to a waiter drawn at random, so a socket storm — N tabs × four
 	// in-flight queries each, every one of them a scan — takes every
-	// connection and the identity read queues behind all of them. That
-	// inverts the dependency: the reads that are waiting are the ones
+	// connection and the identity read draws for one against all of them.
+	// That inverts the dependency: the reads that are waiting are the ones
 	// identity has to clear, so the queue feeds itself, exactly as the
 	// reader/writer loop [Writer] exists to break does. One connection is
 	// enough because an identity read is a keyed lookup rather than a scan,
@@ -261,7 +269,7 @@ const (
 // nothing else may take, so each is ADDED rather than taken out. See
 // [Options.poolSize] for the arithmetic.
 func defaultReaderConns() int {
-	return max(minReaderConns, runtime.GOMAXPROCS(0))
+	return max(MinReaderConns, runtime.GOMAXPROCS(0))
 }
 
 // Options configures [OpenNode]. The zero value is valid.
@@ -425,6 +433,20 @@ type DB struct {
 	caps   Capabilities
 	estate Estate
 
+	// connector is what sql opens its connections with, kept for the one
+	// connection this handle opens OUTSIDE its pool: the view a copy holds
+	// while it runs ([DB.holdViewFor]). The same connector rather than a second
+	// one built from the same settings, so that connection carries the same
+	// session state, the same begin mode and the same [Options.WrapDriver]
+	// instance as every pooled one — a fault injector armed on the handle
+	// reaches it too.
+	connector *connector
+
+	// copies is what this handle knows of the copies taken of its file: the
+	// ones holding its write-ahead log now, and what the last to finish held
+	// back — see copies.go.
+	copies copies
+
 	// slot is the replicated estate this node holds open, on a node's own
 	// handle, and nil on every other. The node handle owns its lifetime:
 	// its Close takes it down, because a process holding the replicated
@@ -512,7 +534,7 @@ type DB struct {
 	// take it. [Identity] is what spends it.
 	//
 	// HELD RATHER THAN COUNTED, for the reason a pin is (see [Writer]):
-	// database/sql hands connections out first-come-first-served, so a
+	// database/sql hands a free connection to whoever asks first, so a
 	// spare one nobody holds is taken by the first read burst that wants
 	// it and the reservation is worth nothing.
 	//
@@ -703,7 +725,7 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options) (
 	// replicated estate, so the node's own file keeps its readers and
 	// nothing else.
 	db.pins.declared = opts.pins
-	if db.sql, err = openPrepared(ctx, path, opts); err != nil {
+	if db.sql, db.connector, err = openConnected(ctx, path, opts); err != nil {
 		return nil, err
 	}
 	// Straight to the field, not through [DB.LearnEmbeddingDim]: that one
@@ -778,17 +800,25 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options) (
 // callers want opposite things from it: an open holds it for the life of the
 // handle, and Pending takes it only across its read.
 func openPrepared(ctx context.Context, path string, opts Options) (*sql.DB, error) {
+	pool, _, err := openConnected(ctx, path, opts)
+	return pool, err
+}
+
+// openConnected is [openPrepared] answering the connector the pool draws from
+// as well, for the handle that opens a connection outside its pool
+// ([DB.connector]).
+func openConnected(ctx context.Context, path string, opts Options) (*sql.DB, *connector, error) {
 	// BEFORE THE POOL, because the driver loads its native library on the
 	// first connection and PANICS if the shared cache it loads from is
 	// half-written. Preparing it here turns a process that dies on its
 	// first query into an error a caller can read, and stops two engines
 	// starting at once from corrupting that cache at all.
 	if err := prepareTursoLibrary(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	pool, err := openPool(path, opts.busyTimeout(), opts.WrapDriver)
+	pool, conns, err := openPool(path, opts.busyTimeout(), opts.WrapDriver)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pool.SetMaxOpenConns(opts.poolSize())
 	// Idle capacity matches open capacity: these are file handles on local
@@ -799,9 +829,9 @@ func openPrepared(ctx context.Context, path string, opts Options) (*sql.DB, erro
 
 	if err := pool.PingContext(ctx); err != nil {
 		_ = pool.Close()
-		return nil, fmt.Errorf("store: open %s: %w", path, err)
+		return nil, nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
-	return pool, nil
+	return pool, conns, nil
 }
 
 // engineVersion is what the database engine calls itself, for the one log line
@@ -1030,15 +1060,18 @@ func (d *DB) SQL() *sql.DB {
 // passed in the DSN either — Turso's DSN parser takes a path and a small set
 // of its own options, and none of them is a pragma. A connector wrapping the
 // driver is the one place that runs on every connection, identically.
+//
+// It answers that connector beside the pool, for the one connection a handle
+// opens outside it ([DB.connector]).
 func openPool(path string, busy time.Duration,
 	wrap func(driver.Driver) driver.Driver,
-) (*sql.DB, error) {
+) (*sql.DB, *connector, error) {
 	// sql.Open is lazy — it validates the driver name and nothing else — so
 	// this costs no I/O and exists only to reach the registered driver
 	// value, which database/sql offers no other accessor for.
 	probeHandle, err := sql.Open(driverName, path)
 	if err != nil {
-		return nil, fmt.Errorf("store: driver %q: %w", driverName, err)
+		return nil, nil, fmt.Errorf("store: driver %q: %w", driverName, err)
 	}
 	drv := probeHandle.Driver()
 	_ = probeHandle.Close()
@@ -1050,7 +1083,7 @@ func openPool(path string, busy time.Duration,
 		drv = wrap(drv)
 	}
 
-	return sql.OpenDB(&connector{
+	conns := &connector{
 		drv: drv,
 		dsn: path,
 		session: []string{
@@ -1136,7 +1169,8 @@ func openPool(path string, busy time.Duration,
 			"PRAGMA temp_store = MEMORY",
 			fmt.Sprintf("PRAGMA busy_timeout = %d", busy.Milliseconds()),
 		},
-	}), nil
+	}
+	return sql.OpenDB(conns), conns, nil
 }
 
 // connector opens driver connections and applies session state to each one.

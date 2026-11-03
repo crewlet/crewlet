@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -96,7 +97,7 @@ type roomNode struct {
 }
 
 // roomRing is the keyring every room node's presence frames are sealed under.
-var roomRing = statelog.OneKey("k1", "the stream rooms suite's fleet key material")
+var roomRing = recordseal.OneKey("k1", "the stream rooms suite's fleet key material")
 
 // newRoomNode serves a socket whose Tier A tokens are bound to seats, as the
 // watch suite's are (`<name>-token-long-enough-to-pass`), with artifact rooms

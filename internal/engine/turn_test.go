@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -2431,6 +2432,7 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Answers:  fleetAnswers(),
 		Audience: noAudience{},
 		Queue:    discardPublisher{}, Pending: blindLookupStore{PendingStore: store, blind: blind}, Manager: manager,
@@ -2516,11 +2518,24 @@ func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 	return sandbox.Audience{}
 }
 
+// noPushes reads every run as having pushed nothing: these coordinators run no
+// repository on the code host (runpushes_internal_test.go reads the record).
+type noPushes struct{}
+
+func (noPushes) Pushed(context.Context, sandbox.PendingRun) (sandbox.PushRecord, error) {
+	return sandbox.PushRecord{}, nil
+}
+
+func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, record sandbox.PushRecord,
+	_ bool) ([]sandbox.PushedRef, []sandbox.OpenedChange, error) {
+	return record.Refs, nil, nil
+}
+
 // fleetAnswers is the seal these coordinators seal and open answers under
 // ([sandbox.CoordinatorOptions.Answers]): one fleet keyring for every one of
 // them, as a fleet shares one, so a node opens what another recorded.
 var fleetAnswers = sync.OnceValue(func() *sandbox.AnswerSeal {
-	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", "the engine cases' fleet key material"))
+	seal, err := sandbox.NewAnswerSeal(recordseal.OneKey("answers", "the engine cases' fleet key material"))
 	if err != nil {
 		panic(err)
 	}

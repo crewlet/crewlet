@@ -14,7 +14,7 @@ One interface serves all inter-component communication:
 
 | Where the broker runs | What that is |
 |---|---|
-| **In this process**: `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and on a broker member (a solo node included) it is **required**: left empty they would live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds whether or not the node has a company yet, because every data node runs the engine's core from boot (the **identity estate** among the state logs whose records live on that stream), and Worklet, Doclet and Chatlet put their items, pages and messages there too (see [Configuration](../getting-started/configuration.md#tier-a)). Only a member keeps streams at all: a leaf (an embedded node without `data`, joining the members over `stream.leaf.urls`) runs no JetStream and keeps none, so it sets no `store_dir` (see [Satellite nodes](../guides/satellite-nodes.md)). |
+| **In this process**: `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and on a broker member (a solo node included) it is **required**: left empty they would live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds whether or not the node has a company yet, because every data node runs the engine's core from boot (the **identity estate** among the state logs whose records live on that stream), and Worklet, Doclet, Chatlet and the code host put their items, pages, messages and repositories there too (see [Configuration](../getting-started/configuration.md#tier-a)). Only a member keeps streams at all: a leaf (an embedded node without `data`, joining the members over `stream.leaf.urls`) runs no JetStream and keeps none, so it sets no `store_dir` (see [Satellite nodes](../guides/satellite-nodes.md)). |
 | **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. One thing the operator's server has to promise that the embedded one is built with: messages of 8 MiB, the largest the engine sends — a server that holds the engine's connection to a smaller `max_payload` is refused when the node starts rather than at its first large write (see [Deployment](../guides/deployment.md#an-external-nats-server)). |
 | **Nowhere — the in-memory twin** (`internal/queue/memory`) | The test twin: a real broker object plus N clients rather than one fused thing, so a test can stop a node and still inspect what its subscription retained. |
 
@@ -109,7 +109,7 @@ What the engine relies on, and where each behaviour is enforced (`internal/queue
 
 **A durable consumer, created detached.** `EnsureSubscription` creates a seat's consumer with explicit acks and nothing attached, positioned at `DeliverAll` — about a millisecond, which is what makes it affordable for every node to create the mailbox behind every seat in the company at boot. Never at "latest": such a consumer exists and still discards everything published before something first attaches to it, which is the whole failure this call prevents.
 
-**Every durable subscription can be listed.** `ListSubscriptions` answers which subscriptions the broker holds under a topic pattern, attached or not and whichever node created them, as the exact topic and group each was created with. It is how a mailbox is found after everything that knew its name has forgotten it (see [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat)). On JetStream a durable consumer's name is a lossy rewrite of that pair plus a digest, so each consumer also records the pair in its metadata, written when `EnsureSubscription` creates it, and that pair is listed only when it derives the consumer's own name, because a caller acts on the pair and a pair naming another subscription would send it to delete the wrong one; a durable consumer whose metadata does not derive its own name is logged as `jetstream_subscription_unnamed` and left out. Only streams the engine provisions (`CREWLET_*`) are searched, so another application's consumers on a shared account are never listed.
+**Every durable subscription can be listed.** `ListSubscriptions` answers which subscriptions the broker holds under a topic pattern, attached or not and whichever node created them, as the exact topic and group each was created with. It is how a mailbox is found after everything that knew its name has forgotten it (see [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat)). On JetStream a durable consumer's name is a lossy rewrite of that pair plus a digest, so each consumer also records the pair in its metadata, written when `EnsureSubscription` creates it, and that pair is listed only when it derives the consumer's own name, because a caller acts on the pair and a pair naming another subscription would send it to delete the wrong one; a durable consumer whose metadata does not derive its own name is logged as `jetstream_subscription_unnamed` and left out, and so is one the broker holds offline — made with something this server does not support, and answered with no configuration — as `jetstream_subscription_offline`. Only the metadata leader answers either listing, and a member that has not yet noticed its leader is gone drops a page without a word, so each page is a read of its own: a page of stream names nobody answers is asked again two seconds after it was sent, whoever is listing, and a page of a stream's consumers — which the metadata leader gathers from every consumer's own leader, waiting up to four seconds for them — only once that wait, a read term and a re-ask have passed, six seconds after it was sent and past the client's five-second default: a listing whose caller sets no deadline, as the mailbox sweep does, asks each such page once, as it always did, and a page dropped there fails that sweep's tick and is listed again at the next. A consumer whose own leader did not answer the metadata leader in time fails the listing rather than being left out of it: a mailbox is never judged absent because the broker was slow. Only streams the engine provisions (`CREWLET_*`) are searched, so another application's consumers on a shared account are never listed.
 
 **Three outcomes, not two.** A handler acks, naks, or **defers**:
 
@@ -140,6 +140,24 @@ Work reaches a seat by being **published straight to its inbox subject** by what
 A producer reads the organization from the epoch current when it handles the event (`Engine.Company`), never from a snapshot captured earlier, so an applied revision (including a seat-kind flip) re-routes from the next event on.
 
 **Routing is an org function, not a process-local one.** Every producer resolves its recipient from the organization (a handle or an agent id to a seat — never a display name, which two seats may share — and a seat to its id, which names its inbox subject) and never from which seats this node runs. The inbound work queue has ONE fleet-wide consumer group, so whichever node wins a delivery is the node that has to route it; that node usually is not the one running the recipient. This works because agent ids are *derived* rather than assigned: `org.Organization.AgentIDFor` is a `uuid5` over the org name and the seat's handle, so every node computes the same id for the same seat, and `AgentSeatByID` / `AgentSeatByHandle` invert it with no database and no live instance. The inbox subject itself has one definition, `topics.AgentInbox(seat id)`, because a producer and a consumer that disagree about a topic name do not raise, they just stop talking to each other.
+
+### Who a change concerns, and who it wakes
+
+The engine's own domains — [Worklet](../guides/worklet.md#what-wakes-a-seat), [Doclet](knowledge-system.md#doclet-backend-the-engines-own-pages) and the [code host](code-host.md#who-a-change-wakes) — commit each change as a record on their log, and the notification service's parser for that domain decides who hears about it. Each log has its own wake feed: a fleet-wide consumer group (`crewlet-tracker-feed`, `crewlet-pages-feed`, `crewlet-code-feed`) that reads every committed record on whichever data node takes it and relays the ones that can wake somebody onto `crewlet.notifications.inbound`, so a wake is derived from the committed record rather than published by the node that wrote it, and that log's trim waits on its acknowledgement. Every domain decides by **one rule** (`internal/routing`), applied alike on every node; what differs is only each domain's own list of reasons.
+
+- **One reason per person: the first that names them.** Each domain offers its reasons in its own order of precedence — Worklet's eighteen, from `mention` down to `lead_fallback`; Doclet's `mention`, `watcher` and `container_lead_fallback`; the code host's fifteen, from `mention` down to `lead_fallback` — and a person named by several hears once, under the first. Mentioned on a task they also watch, they are told they were mentioned. There is no exception, not even for a notice about *another* item than the one that changed: one change reaches one person once about one item, so news about another item rides that item's own record. The code host is where one record carries news of several items by construction — up to 64 pushes from unrelated clients land in one push record, each opening or merging changes of its own, and a queue's landing lands several entries — so it applies the rule change by change: such a record tells a person once about each change it names, each a notice and a wake of its own. Closing a task does not itself tell anybody that the tasks it held up are workable. Worklet's unblocked repair does, on its next pass (every fifteen minutes), in a commit on each dependent naming its assignee. That commit is a separate change, with its own [`work_routing`](../guides/worklet.md#a-persons-own-state) answer.
+- **Whom a Worklet change concerns comes from the record alone.** The set is computed from the record's mentions and the routing snapshot its writer copied onto it — no clock, no roster, no author — so the tracker's applier writes the same notice rows on every data node, inside its own transaction, and whichever node wins the delivery computes the same set again for the wake. Those rows, which are what a person's inbox reads, are the complete account of whom the change concerned. The code host's records are routed the same way: every record about a change carries the audience its writer decided, its applier writes a notice row for each, and the wake is computed again from the record. Doclet keeps no notice rows: its mentions and watchers come from the record, and its one fallback, the lead of the container's unit, from the org chart the routing node is running.
+- **Who is woken is that set, filtered in four steps, in this order.** A notice that is a record rather than a wake (Worklet's `unwatched`) is never woken. The person who made the change is left out — of the wake, and of Worklet's notice rows too — except under a reason that is news to them: `unblocked` on Worklet, none on Doclet. A handle the company no longer employs loses its wake, and keeps its notice row where the domain writes one; the roster is asked only about somebody the first two steps kept, so a person who left after making the change is never counted as a recipient it dropped. And a lead fallback is woken only when nobody else survived the first three steps, and then only the first link of its chain that did, the links asked about in order only then: Worklet's chain is the routing unit's lead, then the project's lead, so a lead filing an unassigned item into their own team still reaches the project's lead rather than nobody, and a change nobody else hears about wakes one lead rather than every lead in the chain. Doclet's chain is the one lead of the container's unit, offered only for a page created, trashed or changing status. The code host's is the one lead of the repository's owner, offered only on a change's first facts when nobody who may review it was asked; and the code host wakes **seats only**, so a person its record tells reads the notice in their inbox, and counts as somebody who heard. Every code wake names the work item the change implements, so the turn it starts is charged to that item ([ADR-0097](../../adr/0097-a-change-implements-one-work-item-and-carries-no-spend.md)).
+- **Afterwards, an empty answer is one of three facts.** Worklet answers who each change reached, per change ([`work_routing`](../guides/worklet.md#a-persons-own-state)), and when no row remains it says which empty it is: `nobody` (the routing resolved to no one), `swept` (the change is older than the inbox retention horizon, so its rows may have been cleared), or `unknown` (no horizon was stated to date the absence by) — or `quiet`, a change that announced nothing at all.
+
+### Alarm wakes
+
+A node's [alarms](../reference/alarms.md) wake the seats that may read the deployment's health. Every time an alarm changes on a node — it fires, it clears, or the node's first evaluation since it started finds it up (`firing_at_boot`) — the node hands the transition to an outbox, which publishes it on `crewlet.notifications.inbound` as a delivery of source `alarms`, retried until the broker takes it. The notification service routes it by the same rule as every first-party source (`internal/routing`) to every agent seat whose role carries [`health_tools`](../guides/fleet.md#the-health-tools): one reason, no actor, and a seat the company no longer employs dropped. Each wake's id is derived from the transition and the seat, so a delivery published twice wakes each seat once.
+
+- **The delivery is the record.** Nothing commits beside it: the published delivery is the durable record the wakes derive from ([ADR-0095](../../adr/0095-a-nodes-alarm-transition-is-the-record-its-wake-derives-from.md)), so no write is left for a publish to trail. A transition the node did not live to publish is not recovered, since the outbox is the node's memory: what is firing now is every node's own heartbeat's to say, which `fleet_health` reads and every alarm wake sends its seat to first, and a restarted node's first evaluation says again what is still firing.
+- **One alarm is one conversation, and every transition is a wake.** A per-log alarm is a transition per log and a per-entry alarm a transition per model entry or MCP server, as their log lines are, each wake naming the log or entry it is about, and every data node evaluates its own table, so one fleet-wide condition, such as a stale backup, fires on each data node within one alarm interval (ten seconds; the nodes' evaluations are not synchronised). Every copy is keyed by the alarm alone (`alarm:<kind>`), so the [coalescer](#inbox-batching--coalescing) merges whichever of them are pending together when a seat's turn starts, as it merges any conversation's burst, and one look at `fleet_health` with `firing: true` answers them all. That is ALL that merges them. With `notification_coalesce_window_seconds` at its default `0`, the first copy starts a turn at once and the copies that arrive during it run together as one more, so one fleet-wide condition costs each granted seat two turns however many data nodes raise it; a window of at least the alarm interval gathers them into one, at that much more latency on every wake the seat gets. Nothing holds a transition back: the alarm table has no hysteresis and the outbox publishes every transition it is handed, so an alarm that fires and clears more slowly than a turn runs costs every granted seat one turn per fire and one per clear, for as long as it flaps. Nobody is waiting on an answer, so a woken seat may look and end its turn having done nothing.
+- **Nobody sent it.** The wake names no sender and no actor, so the turn it starts is the seat's own work, as the engine's own notice on a work item is: no [requester ceiling](code-host.md#reads-made-for-somebody-else) bounds what the seat reads in it, and `code_status` beside `fleet_health` answers on the seat's own grant.
+- **The outbox is bounded.** It holds 2048 transitions while the broker refuses them, retrying from two seconds and doubling to the alarm interval, and past that drops the oldest, counted on `crewlet.alarm.transitions.dropped`; `crewlet.alarm.transitions{change}` counts the ones the broker took.
 
 ### A seat's mailbox exists before the seat is running
 
@@ -258,19 +276,20 @@ config_revision_applied    # one node's outcome, and how far it got
 # `operator_id` (pat:<id>, session:<lineage>, or the login). One per call,
 # whatever became of it; never the arguments. Written by the node the call
 # reached. The event store keeps the actor as the row's own column and
-# promotes actor_kind, operator_id, tool and dir to tags (beside every row's
-# `node`), so a listing — which carries no payload — can still say who,
+# promotes actor_kind, operator_id, tool, repo and dir to tags (beside every
+# row's `node`), so a listing — which carries no payload — can still say who,
 # through what, which tool, where
 operator_acted             # an operator tool call that is not a proven read,
-                           # on any of three transports — the dashboard's act
-                           # route (act), a person's assistant over MCP (mcp)
-                           # and the human write surface's routes under /worklet
+                           # on any of four transports — the dashboard's act
+                           # route (act), a person's assistant over MCP (mcp),
+                           # the human write surface's routes under /worklet
                            # and /doclet/pages (work), whose own refusals and
-                           # tool-less verbs are recorded too: tool,
-                           # transport, request_id (the operation the call's
-                           # key became, scoped to the caller, so a retry
-                           # carries the same one), outcome, position or
-                           # refusal
+                           # tool-less verbs are recorded too, and a person's
+                           # git push (/git/: transport git, tool git_push, and
+                           # the repo it named): tool, transport, request_id (the
+                           # operation the call's key became, scoped to the
+                           # caller, so a retry carries the same one),
+                           # outcome, position or refusal
 backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`
@@ -467,6 +486,142 @@ auxiliary_spend            # what the seat's auxiliary model cost for one key �
                            # prompt, no response, no `failed` key. STORED AND
                            # NOT FED: it never takes a row of the activity
                            # feed, and it moves no seat's state
+code_fetched               # one reader's reads of a `visibility: unit`
+                           # repository's CONTENTS on the node that served
+                           # them, coalesced over one flush of the node's
+                           # reads ledger (fifteen seconds): clones and fetches
+                           # whose answers carried a pack (`via: git`) or a
+                           # code tool's answers (`via: tool`, of one `kind`),
+                           # naming the repository by id and its newest name,
+                           # the reader (`principal_kind`, `principal` — the
+                           # credential or the seat's handle — and the `seat`
+                           # it acted as), how many `reads` and the `bytes`
+                           # they were sent, stamped with the newest read's
+                           # instant. Never for a `visibility: company`
+                           # repository. STORED AND NOT FED, as
+                           # auxiliary_spend is: the usage publisher derives
+                           # who read each repository from these rows
+                           # (code-host.md, "Who read it")
+code_check_finished        # one attempt of a check of a commit ENDED, as
+                           # its row on the code log keeps the ending:
+                           # repository by id and name, commit, check name
+                           # and attempt, purpose, target branch, a head
+                           # check's change, state and reason, placement,
+                           # whether the target requires it, and how long it
+                           # ran. Published ONCE, by the data node whose
+                           # checks writer wrote the ending, on its apply —
+                           # never by an applier. An ending that REPLACED one
+                           # the row kept (a slow runner's exit after its
+                           # attempt was errored runner_lost) names it in
+                           # `replaces`: a correction of that ending, never
+                           # the attempt's second. An ending that FAILS a
+                           # change's head (failed, or errored past the
+                           # home's own requeue) names the change's owner,
+                           # and their seat on `agent_id`, the column the
+                           # seat's day counts it off, once by its attempt,
+                           # as `checks_failed`; every other ending names
+                           # no seat, so the day passes it over. STORED
+                           # AND NOT FED (code-host.md, "Who records a
+                           # check")
+change_merged              # a change a MERGE RECORD merged into its
+                           # branch: repository by id and name, the change
+                           # and its number, the branch, the method and the
+                           # commit it moved to, who merged it (a seat's
+                           # handle or a person's human seat) and a person's
+                           # reason where they overrode its merge gate.
+                           # Published ONCE, by the data node whose
+                           # committer landed the record — never by an
+                           # applier, never for a retry its operation ledger
+                           # collapsed. STORED AND FED (code-host.md, "A
+                           # merge, end to end")
+change_opened              # a change was opened — by a change tool, the
+                           # API, or a push's options (`by_push`):
+                           # repository by id and name, the change, its
+                           # number, target branch and title, and its owner
+                           # (a seat's handle or a person's human seat) with
+                           # the owner seat's `agent_id`. Published ONCE, by
+                           # the data node whose committer landed the record,
+                           # never for a collapsed retry; the owner's seat
+                           # day counts it as `changes_opened`. STORED AND
+                           # FED (budgets-and-spend.md, "A seat's changes and
+                           # reviews")
+review_submitted           # a review of a change was given: the change and
+                           # its number, the review, the revision it judged,
+                           # its verdict and how many findings it raised, the
+                           # reviewer with its `agent_id`, and the change's
+                           # owner with `owner_agent_id`. Published ONCE, by
+                           # the data node whose change writer landed the
+                           # record; the reviewer's seat day counts it as
+                           # `reviews_given`, the owner's its findings as
+                           # `findings_received`. STORED AND FED
+code_queue_ejected         # a merge queue put an entry OUT: repository
+                           # by id and name, the entry, its change and
+                           # number, the branch, why (check_failed,
+                           # conflict, gate_unmet, head_moved,
+                           # not_fast_forward, repo_mirrored), the failed
+                           # checks or the conflicted paths, who enqueued
+                           # it, and the
+                           # change's owner with `owner_agent_id`, whose
+                           # seat day counts it once by its entry as
+                           # `ejections`. Published ONCE an entry, by the data node whose
+                           # committer landed the eject record — or the push
+                           # whose move of a queued change's head ejected
+                           # its entry head_moved in the push's own record —
+                           # never by an applier, never for a retry its
+                           # operation ledger collapsed. STORED AND FED
+                           # (code-host.md, "The merge queue")
+code_target_broken         # a protected branch's tip checks found the
+                           # FIRST landing they failed on: repository by id
+                           # and name, the branch, the landing's commit and
+                           # kind, the change it landed and its number
+                           # (none for a person's push), who landed it, and
+                           # the checks it broke. Published ONCE a landing,
+                           # by the data node whose committer landed the
+                           # broken record — never by an applier, never for
+                           # a retry its operation ledger collapsed. STORED
+                           # AND FED (code-host.md, "Tip checks and
+                           # code_green")
+code_mirror_pushed         # a repository's home pushed it to its push
+                           # mirror: repository by id and name, the other
+                           # host's URL (never a credential), the seat whose
+                           # identity there it pushed as, the refs it set
+                           # and onto what, those it deleted, and the
+                           # protected branches it held back with no green
+                           # commit to publish — each list its first 16
+                           # refs in ref order beside the count of all of
+                           # them (updated_count, deleted_count,
+                           # waiting_count), so a first push of a large
+                           # repository stays one event the queue takes.
+                           # Published once a push that
+                           # moved something, by the home git node that
+                           # pushed; a failed push is no event (its home
+                           # raises code_mirror_failing). STORED, NOT FED:
+                           # the audit of what the company published
+                           # (code-host.md, "Mirrors and imports")
+code_imported              # a repository's import ended, whole or short of
+                           # its source: repository by id and name, the
+                           # source's URL (never a credential), mirrored
+                           # for a pull mirror's first fill, the chunks
+                           # that landed, what the repository holds once it
+                           # ended — refs, live bytes, default branch — the
+                           # import's error where it ended short, and the
+                           # end's position on the code log. Published ONCE
+                           # an import, by the home git node that proposed
+                           # the end and heard it applied; a sync is none.
+                           # STORED, NOT FED: where a repository came from;
+                           # its row keeps only its latest import
+                           # (code-host.md, "Mirrors and imports")
+code_expunged              # an expunge's commit applied: repository by id
+                           # and name, the person's purge it served (none
+                           # for the weekly schedule), the expunge's id, the
+                           # objects and bytes it dropped, the commit's
+                           # position on the code log, and store_until — the
+                           # latest a healthy fleet's object store keeps
+                           # the dropped bytes. Published ONCE a commit, by
+                           # the maintainer that proposed it and heard it
+                           # applied. STORED, NOT FED: the audit of what left
+                           # a repository; the repository's detail keeps
+                           # only its latest (code-host.md, "Expunge")
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its
@@ -657,12 +812,21 @@ given a category while declaring an anonymous rate, and a type given a category
 while declaring no rate author at all, both fail the suite in
 `internal/events`. An unstated author is not a claim that the rate is bounded.
 
-**Stored, not fed.** One type is a row like every other and is kept out of the
-activity feed: `auxiliary_spend`, which is accounting rather than activity. The
-feed is a ring of the whole company's last few hundred events — every node's is
-fed by a fleet-wide broadcast — and a turn writes several of these beside its
-own phases, a compaction a burst, so in the feed they would push out the turns
-and failures a reader is watching. The class is declared beside the category
+**Stored, not fed.** Three types are rows like every other and are kept out of
+the activity feed: `auxiliary_spend`, which is accounting rather than activity,
+`code_fetched`, which is an audit, and `code_check_finished`, which is
+counted rather than watched. The feed is a ring of the whole
+company's last few hundred events — every node's is fed by a fleet-wide
+broadcast — and a turn writes several auxiliary records beside its own phases,
+a compaction a burst, while a busy company's readers of its unit repositories —
+a CI token fetching on every build, seats reading files a line range at a
+time — write a record each every fifteen seconds, and every push of every
+change ends each check its repository defines, faster than anybody reads a
+feed: in the feed any of them would push out the turns and failures a reader
+is watching. Who read a repository, and how a change's checks ended, are
+answered where they are asked instead ([Code Host § Who read
+it](code-host.md#who-read-it), [§ Who records a
+check](code-host.md#who-records-a-check)). The class is declared beside the category
 map in `internal/events` and asked by every read of the feed's rows: the live
 projection, its startup seed, and every view a reader scrolls on from the feed
 — the dashboard's event log pages and its axis, the Live strip, a seat's latest
@@ -798,7 +962,11 @@ sequenceDiagram
   the event log that wrote an event would grow the log every time somebody
   looked at it. The roster is the live data nodes, read off the presence
   leases: a node without `data` keeps no event store and serves no API, so it
-  neither asks nor is asked, and the asker is always a data node.
+  neither asks nor is asked, and the asker is always a data node. The read
+  ends once every data node on it has answered, by name, or at the budget —
+  never at a count of replies: a draining node gives its lease back first
+  and answers until it stops, and its answer is kept, but it never stands
+  in for a node the roster names.
 - **Every answer says who answered.** `coverage` is
   `{nodes: [{id, answered, error}], complete}` on every one of these answers.
   `complete` is true only when every live data node answered; a node that did
@@ -962,7 +1130,7 @@ Some facts are worth nothing once superseded: who is looking at an artifact, and
 - **`Broadcast(subject, payload)`** hands the bytes to every process currently listening on a matching pattern and returns. Nothing is stored: a message nobody is listening for never existed, and a listener that starts a moment later never hears it. Delivery is **at most once** and unordered across publishers; a listener that falls behind loses messages rather than holding the publisher. The subject is a literal name (a pattern is refused before anything is sent), and a broker this node cannot reach is refused with `ErrUnavailable` rather than buffered into a reconnect, so a message is never delivered after its moment.
 - **`Listen(pattern, handler)`** makes the process a listener until it withdraws. Every listener hears every matching message, one at a time, on a goroutine of the backend's own; a handler that panics loses that message and keeps its registration, and a withdrawal waits for a handler already running.
 
-The JetStream backend runs both on **core NATS** publish and subscribe, outside JetStream entirely; the memory twin delivers to each listener from a bounded queue of its own, so a slow listener drops its overflow exactly as a slow core subscriber does. Both are certified by the same `queuetest` cases. Presence, who is in an artifact's room on the [dashboard socket](../reference/api-endpoints.md#ws-wsstream), is the one caller today, and every frame it sends is sealed under the fleet keyring, because the broker authenticates nothing.
+The JetStream backend runs both on **core NATS** publish and subscribe, outside JetStream entirely; the memory twin delivers to each listener from a bounded queue of its own, so a slow listener drops its overflow exactly as a slow core subscriber does. Both are certified by the same `queuetest` cases. Presence, who is in an artifact's room on the [dashboard socket](../reference/api-endpoints.md#ws-wsstream), is the one caller today, and every frame it sends is sealed under the fleet keyring, because the broker's admission vouches for a connection, never a frame.
 
 ---
 

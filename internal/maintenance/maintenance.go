@@ -44,6 +44,18 @@
 // stamped when a sweep first finds the seat gone, forgotten
 // [ChatReadForgetGrace] later, the mailbox's grace, so a seat restored inside
 // it gets back its mail and its rooms together.
+//
+// # Never a replicated row
+//
+// Every table swept here is the NODE's own, or a broker's. The replicated
+// estate is written only by a state log's applier (ADR-0002), so a row of it
+// is never deleted here, however short its question: a sweep on each node's
+// own tick would leave two copies of one log holding different rows. The
+// state logs' arbitration anchors are the case that tested it — one row per
+// subject on every node, which a per-node job here once deleted below a
+// floor each node read for itself — and the trim now removes them with a
+// trimmed record every applier takes at one position (ADR-0080). What such a
+// table retains rides a record, never a job of this package's.
 package maintenance
 
 import (
@@ -191,14 +203,13 @@ type Job struct {
 // sweep, never once.
 //
 // A FUNCTION RATHER THAN A DURATION, because a horizon can be the COMPANY's
-// (the inbox's `tracker.worklet.inbox_retention_days`), and every apply
-// replaces the company under a running engine. Read once when the sweep was
-// built, it held the sweep to the revision the node booted on: a revision
-// shortening it was honoured by everything else at once and by the sweep only
-// after a restart, so rows the company had asked to forget were kept for as
-// long as the node stayed up, and a lengthened horizon deleted rows the
-// company had just asked to keep. The other horizons are this build's own and
-// never move; they take [Fixed].
+// (the inbox's `inbox.retention_days`), and every apply replaces the company
+// under a running engine. Read once when the sweep was built, it held the sweep
+// to the revision the node booted on: a revision shortening it was honoured by
+// everything else at once and by the sweep only after a restart, so rows the
+// company had asked to forget were kept for as long as the node stayed up, and
+// a lengthened horizon deleted rows the company had just asked to keep. The
+// other horizons are this build's own and never move; they take [Fixed].
 //
 // An answer of zero or less is REFUSED for that sweep rather than used: the
 // cutoff it makes is now, which deletes every row the table holds. A horizon

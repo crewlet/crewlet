@@ -132,7 +132,8 @@ func payloadBytes(held []Record) int {
 }
 
 // dedupe keeps ONE record per position and CHAINS the acknowledgements of the
-// copies it drops.
+// copies it drops — and their releases, for the loop that gives the kept copy
+// back unconsumed ([Runner.Run]'s unwind).
 //
 // Both halves are load-bearing and they pull in opposite directions. Two
 // copies of one position applied twice is a record written on top of its own
@@ -153,6 +154,7 @@ func dedupe(held []Record) []Record {
 			continue
 		}
 		last.ack = chain(last.ack, rec.ack)
+		last.release = chain(last.release, rec.release)
 	}
 	return out
 }

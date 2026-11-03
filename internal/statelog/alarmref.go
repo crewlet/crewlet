@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -73,9 +74,9 @@ var alarmMeaning = map[Kind]string{
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
 		"rather than dropping records; on every log that claims identity " +
-		"(Worklet's, Doclet's, the identity estate's, the artifacts " +
-		"log's, the artifact datastore's, Ask Crewlet's, Chatlet's and the " +
-		"executor log's) an eviction still lands in the gate reserve above that " +
+		"(Worklet's, Doclet's, the identity estate's, the artifacts log's, the " +
+		"artifact datastore's, Ask Crewlet's, Chatlet's, the executor log's and " +
+		"the code log's) an eviction still lands in the gate reserve above that " +
 		"ceiling.",
 	KindBackupAge: "No verified backup of a log has been recorded, or the " +
 		"newest one covering it is older than the policy asks for. The trim " +
@@ -94,22 +95,30 @@ var alarmMeaning = map[Kind]string{
 		"window yet.",
 	KindDeferredOld: "This node has been holding a record it cannot apply on " +
 		"a log for longer than the thirty-minute deferral grace. One alarm " +
-		"names every log that is, leading with the one held longest. Where a " +
-		"log judges this node's copy of the estate (Worklet's, Doclet's and " +
-		"Chatlet's do), the node no longer serves its copy, and its " +
-		"seats read the estate from the other data nodes.",
+		"names every log that is, leading with the one held longest. The " +
+		"node no longer serves its copy of each log named: what the estate " +
+		"routes to that log is answered by the other data nodes, and every " +
+		"other log's copy keeps serving here. The identity log is the one " +
+		"whose requests are not all routed: what this node answers from its " +
+		"own identity rows — the sign-ins, sessions and tokens of anybody the " +
+		"held record may be about, and every directory decision — has " +
+		"answered 503 here since the record was held, and goes on doing so " +
+		"until this node can read it.",
 	KindFloorUnknown: "This node has been unable to read a log's trim floor " +
 		"for four heartbeats, so every read of that log here refuses. One " +
 		"alarm names every such log, which is every log at once when " +
 		"coordination is what cannot be reached.",
-	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +
-		"turn on this node pays it before its first token.",
+	KindPrefetchSlow: "The knowledge scans this node runs for turns' prefetches " +
+		"are over their budget. Every turn whose prefetch it scans waits for " +
+		"the scan before its first token.",
 	KindSearchSlow: "Interactive search is over its target. The corpus has " +
 		"outgrown what one node's share of it can scan in the budget.",
 	KindSearchDegraded: "Searches are being answered without their semantic " +
-		"half: the embeddings provider or the vector domain is failing.",
+		"half: the embeddings provider or the vector domain is failing, or a " +
+		"node's copy of the vectors is out of service.",
 	KindSearchScoped: "Searches are being answered over part of the corpus " +
-		"because a node did not answer its bucket range.",
+		"because a node did not answer its bucket range, or its copy of what it " +
+		"scans is out of service.",
 	KindHistoryPartial: "Fleet history reads (turns, traces, the event log) " +
 		"are being answered without every data node, because one did not " +
 		"answer inside the fleet read budget.",
@@ -135,28 +144,36 @@ var alarmMeaning = map[Kind]string{
 		"publishes nothing. A window this node last read open and can't read " +
 		"now is judged as old as it was when it was read, and says so.",
 	KindVolumeLow: "A volume holding this node's databases has less free space " +
-		"than the next restore, vacuum or snapshot needs for a second copy, or " +
-		"could not be measured at all. The alarm names the volume.",
+		"than the next restore, vacuum or snapshot needs for a second copy and for " +
+		"the write-ahead log a copy holds back there while it runs, or could not " +
+		"be measured at all. The alarm names the volume.",
 	KindWALLarge: "The write-ahead log has grown past a gibibyte, which means " +
-		"a checkpoint is not happening.",
+		"a checkpoint is not happening: a backup's or a snapshot's copy holds it " +
+		"back for the copy's run, which the alarm names, and anything else " +
+		"holding it is a reader holding a snapshot open.",
 	KindPoolStarved: "Callers are queuing for a database connection before " +
 		"their query starts.",
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
 		"its census allows, so every sizing decision under it is stale. The " +
 		"census is the rate its domain declares for each agent seat, counting " +
 		"at least one seat, plus what the object store's collector reads on " +
-		"its own schedule. That rate is 125 a day for the tracker, the " +
-		"knowledge base, the artifacts and their datastore, 120 for chat, 60 " +
-		"for the executor log, and none for the identity estate and Ask Crewlet.",
+		"its own schedule, plus, on the code log whether or not the company " +
+		"hosts code now, the git reads its ceiling was sized for: a tenth of " +
+		"it in barriers over the trim's min_age. That rate is 125 a day for " +
+		"the tracker, the knowledge base, the code host, the artifacts and " +
+		"their datastore, 120 for chat, 60 for the executor log, and none for " +
+		"the identity estate and Ask Crewlet.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
 		"its byte ceiling holds less than the `min_age` window the trim " +
 		"keeps, so it will fill and refuse writes with every trim term " +
 		"satisfied.",
 	KindObjectsMissing: "Some of the company's files cannot be read: the " +
 		"collector's last audit asked the object store for every file's bytes, " +
-		"and some were not there, or were there at the wrong size or under the " +
-		"wrong digest. Those files cannot be downloaded or read until they are " +
-		"restored.",
+		"and some were not there, or were there at the wrong size, under the " +
+		"wrong digest or as nothing the store can read, or the store failed to " +
+		"answer for them twice while it answered for the rest. Those files " +
+		"cannot be downloaded or read until they are restored, or the store " +
+		"serves them again.",
 	KindObjectsBucketNearCeiling: "The fleet's own object bucket on the broker holds " +
 		"more than four fifths of the bytes it reserves. A full bucket refuses every " +
 		"upload, though nothing else on the broker is affected.",
@@ -180,6 +197,91 @@ var alarmMeaning = map[Kind]string{
 	KindLLMLimitWaiting: "A seat has been parked for fifteen minutes or more on a chain " +
 		"naming a model that sits out a limit, with nothing to fall back to. It replaces " +
 		"`llm_limit` for that model.",
+	KindClockSkew: "A clock stands further from the fleet's than the hour the object " +
+		"store's deletions assume: this node's own, or the clock of the broker member " +
+		"leading the coordination store's position register, and the alarm says which. " +
+		"The fleet's clock is the median of the data nodes' clocks, measured on this " +
+		"node's position heartbeat off the register: each node's row carries the instant " +
+		"the node stamped on it and the instant the broker stored it. A node whose own " +
+		"clock moved raises it about itself; a member whose clock moved is raised about " +
+		"by every node. The object collector's grace and the code host's retired-pack " +
+		"sweep each judge an instant one machine stamped by another machine's clock, and " +
+		"both hold only while every node and that member keep within that hour of the " +
+		"fleet's clock.",
+	KindCodeMaintenanceRefused: "This node's git cache cannot write the bitmap " +
+		"of some repositories, because a bitmap over each (about 600 bytes " +
+		"an object, with room for a clone of the repository beside it) needs " +
+		"more memory than the node can give its background work: its memory, " +
+		"or its cgroup's limit, less what it keeps for its git lanes, the " +
+		"store, the broker and the engine. Those repositories are indexed " +
+		"without a bitmap and served more slowly: a clone walks their history. " +
+		"A repository this node maintains whose next published layer it cannot " +
+		"write counts too — its layer's bitmap is 600 bytes an object of the " +
+		"repository — since no git node then publishes it, and every git node " +
+		"serves the packs pushed since its last publication outside every bitmap.",
+	KindCodeCompactionBehind: "Repositories this node maintains — the git node " +
+		"that merges their packs and publishes their layers, the first in each " +
+		"repository's order whose background budget holds its publication — " +
+		"hold the most live packs a repository may, so every push carrying " +
+		"objects into them is refused `compaction_behind` until a compaction of " +
+		"theirs lands. Raised by their maintainer alone, from the listing it " +
+		"polls every minute, for as long as any repository it maintains stays " +
+		"at the bound.",
+	KindCodeCommitBusy: "This node's committer — the data node a repository's " +
+		"pushes are decided on — refused proposals `busy` within the last trim " +
+		"tick because it could not hold them or reach them in time: a " +
+		"repository taking pushes faster than one committer commits them, its " +
+		"queue full or its proposals waiting in it until their asker could wait " +
+		"no longer, or this node committing for too many busy repositories at " +
+		"once, its whole bound held. Each was decided by nobody and is sent " +
+		"again. Raised by the committer's node alone, whichever node received " +
+		"the pushes, and only for a backlog: a proposal that arrived with its " +
+		"asker's attempt already spent, or one that lost every compare-and-set " +
+		"round, is counted and logged and raises nothing.",
+	KindCodeChecksBacklog: "Queued attempts of checks have waited for a runner " +
+		"longer than their own timeout — each judged at the timeout_seconds of " +
+		"the definition it was queued under, the time its author gave the check " +
+		"to run — so a change whose head they check waits on them past anything " +
+		"its checks file planned for. Measured from the code log's rows by every " +
+		"data node, in the order the attempts fell overdue, so it stands even " +
+		"where no git node runs checks at all; past a thousand it says there " +
+		"are more rather than how many. A deleted repository's queued attempts " +
+		"are not counted: no runner may claim them, and its purge removes them.",
+	KindCodeMergeRateOver: "Merge queues this node is home to — " +
+		"branches whose merges wait for checks — were asked to land more " +
+		"changes in the last hour than they can land in it: their " +
+		"enqueues within the hour, live or ended, past depth × batch " +
+		"changes a round at the mean round their trains took, the round " +
+		"timed by this node from a train's build to its landing (a train " +
+		"still testing counts at its age once it outlasts the mean). " +
+		"Raised by the repository's home git node alone, for as long as " +
+		"the hour's enqueues stay past the capacity; a node that has timed " +
+		"no round of a queue yet — a home new to it — judges it from its " +
+		"first train.",
+	KindCodeRefsNearLimit: "Active repositories set refs so fast that they reach " +
+		"the most live refs a repository may hold (100 000) within the ref " +
+		"lifecycle's window (14 days) unless refs are deleted: their live refs " +
+		"and the refs of those set within the window together reach the bound. " +
+		"The lifecycle deletes only a seat's branch nobody set for the whole " +
+		"window, so none of the refs that make the rate, and once the bound is " +
+		"reached every push creating a ref there is refused `repo_refs`. " +
+		"Measured from the code log's rows by every data node on the trim's " +
+		"quarter-hour tick, so every data node raises it for the same " +
+		"repositories; an archived repository, which takes no push, and a " +
+		"deleted ref are never counted.",
+	KindCodeMirrorFailing: "Mirrors of repositories this node is home to " +
+		"have not been brought level for longer than their own refresh: " +
+		"the 15 minutes a home brings a mirror level at, and 15 more of " +
+		"grace for an attempt in flight. A push mirror's target holds what " +
+		"the company published that long ago, or less (a protected branch " +
+		"there no newer than the last green commit the mirror pushed); a " +
+		"pull mirror holds what its source held that long ago. Raised by " +
+		"the home git node alone, from its own memory of its attempts: a " +
+		"node that stops being a repository's home stops counting its " +
+		"mirrors, and a node that restarts counts from the first pass that " +
+		"asks it for each mirror. A mirror whose attempt waits behind " +
+		"others for one of the node's two slots, or is still running, is " +
+		"not level either, and is counted all the same.",
 	KindMCPServerFailing: "No instance of an MCP server is serving, and one has been down " +
 		"for longer than the restart schedule's ceiling plus a heartbeat. No agent is " +
 		"offered the server's tools.",
@@ -216,14 +318,22 @@ const alarmHeader = `# Alarms
 Every condition the engine raises about itself, what it means, and what to do
 about it.
 
-An alarm reaches you three ways, and they are the same table evaluated once: a
+An alarm reaches you four ways, and they are the same table evaluated once: a
 ` + "`crewlet.alarm.active{kind}`" + ` gauge your collector scrapes, a named ` + "`WARN`" + `
 line when it starts and another when it clears, carrying how long it was up,
-and a count on the node's health envelope (` + "`GET /health`" + ` and the
+a count on the node's health envelope (` + "`GET /health`" + ` and the
 dashboard's health push carry ` + "`alarms: {count, worst}`" + `, where ` + "`worst`" + `
-is the alarm that has been firing longest). Nothing has to be polled for any
-of them: every node running a state log, which is every data node, evaluates
-the whole table on its own position heartbeat, every %s, and again the moment
+is the alarm that has been firing longest), and the node's row on the fleet
+view: each node's presence heartbeat carries every alarm firing on it with when
+it was raised, and ` + "`GET /fleet`" + ` lists them per node (` + "`alarms`" + `), so
+one read covers every node. And it wakes the agents that may read the
+deployment's health: each time an alarm fires or clears on a node, or a node's
+first evaluation since it started finds it firing, every agent seat whose role
+carries ` + "`health_tools`" + ` is notified once and pointed at ` + "`" + toolname.FleetHealth + "`" + ` for
+what is firing now (see [Alarm wakes](../concepts/event-system.md#alarm-wakes)).
+Nothing has to be polled for any of them: every node running a state log,
+which is every data node, evaluates the whole table on its own position
+heartbeat, every %s, and again the moment
 the measurements it takes every %s (each log's daily intake, the vector
 coverage, the store's connection-pool waits) land, so an alarm whose
 threshold is %s is raised within a beat of passing it.

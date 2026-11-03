@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // presenceEngine is the slice of an engine its presence wiring reads: its id,
@@ -21,7 +21,7 @@ func presenceEngine(t *testing.T, broker *memory.Broker, id string) *Engine {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	wire, err := newPresenceWire(statelog.OneKey("k1", "the engine presence suite's key material"))
+	wire, err := newPresenceWire(recordseal.OneKey("k1", "the engine presence suite's key material"))
 	if err != nil {
 		t.Fatal(err)
 	}

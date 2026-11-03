@@ -35,13 +35,15 @@ import (
 // went on acting as a removed seat.
 
 // errNoDirectory is what an engine holding no identity directory answers — a
-// nil one, or one with no core runtime.
+// nil one, a data node whose core runtime is not up yet, or one built by hand
+// with neither a core nor a router.
 //
-// AN ERROR AND NOT AN EMPTY ANSWER. Every running node applies the identity
-// log, so reaching this is an engine wired without one, and reading that
-// absence as "this token is bound to nothing" would have a bound credential act
-// as itself here and as its seat on every other node — one actor under two
-// names in one audit trail. It cannot tell, which is 503.
+// AN ERROR AND NOT AN EMPTY ANSWER. Every data node applies the identity log
+// and every node without `data` reads it through a data node, so reaching this
+// is an engine that can read neither yet, and reading that absence as "this
+// token is bound to nothing" would have a bound credential act as itself here
+// and as its seat on every other node — one actor under two names in one audit
+// trail. It cannot tell, which is 503.
 var errNoDirectory = errors.New("engine: this engine holds no identity " +
 	"directory, so it cannot say who holds what")
 
@@ -78,17 +80,31 @@ var errNoDirectory = errors.New("engine: this engine holds no identity " +
 // credential is the narrower surface — and it is the posture break-glass
 // depends on, since an operator's token is normally bound to nothing and must
 // still reach a node whose identity applier is the thing they came to fix.
+//
+// # This node's own rows, or a data node's
+//
+// A data node reads its own rows, bounded by [requestReadBudget]. A node
+// without `data` asks a data node through the estate's router — the binding
+// row narrowed to who holds the login and the seat it binds, and the vouch of
+// the node that read it (internal/estate's Binding) — and weighs that row and
+// that vouch by the very rule above ([boundRowOf]), so a stale node answering
+// is refused in the widening direction here exactly as it would be refusing
+// its own request. Routed, it is bounded by the router per data node it asks
+// and by the caller as a whole, for [Engine.HolderRecord]'s reason.
 func (e *Engine) BoundSeat(ctx context.Context, login string) (session.PersonRow, error) {
 	if e == nil {
 		return session.PersonRow{}, errNoDirectory
 	}
-	reader := e.IAM()
-	if reader == nil {
+	dir, ok := e.identityDirectory()
+	if !ok {
 		return session.PersonRow{}, errNoDirectory
 	}
-	ctx, cancel := context.WithTimeout(ctx, requestReadBudget)
-	defer cancel()
-	return boundRowOf(ctx, reader, login)
+	if _, routed := dir.(routedIdentity); !routed {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, requestReadBudget)
+		defer cancel()
+	}
+	return boundRowOf(ctx, dir, login)
 }
 
 // bindingDirectory is the part of the identity reader a token's binding reads.
@@ -142,8 +158,10 @@ func boundRowOf(ctx context.Context, dir bindingDirectory, login string) (
 }
 
 // requestReadBudget bounds what one identity read in front of a request may
-// cost: a Tier A token's binding ([Engine.BoundSeat]) and a machine token's
-// row ([Engine.MachineToken]).
+// cost on a node that holds the rows: a Tier A token's binding
+// ([Engine.BoundSeat]) and a machine token's row ([Engine.MachineToken]). A
+// node without `data` asks a data node for either, and the router bounds that
+// per node it asks ([Engine.HolderRecord]'s reason).
 //
 // TWO SECONDS: each is a keyed local read of a replicated table on this node's
 // own store, so anything approaching a second means the store is in trouble

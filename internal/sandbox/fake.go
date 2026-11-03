@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // The in-process test doubles.
@@ -30,23 +31,29 @@ import (
 
 // FakeSandbox is an in-memory box.
 type FakeSandbox struct {
-	// TimeoutCalls counts SetTimeout calls — the waiter's keepalive.
-	// Exported so a test can assert the heartbeat actually happened.
-	mu           sync.Mutex
-	id           string
-	home         string
-	files        map[string][]byte
-	timeoutCalls int
-	paused       bool
-	closed       bool
+	mu    sync.Mutex
+	id    string
+	home  string
+	files map[string][]byte
+	// timeouts is every refresh of the box's timer, with when it came: see
+	// [FakeSandbox.Timeouts].
+	timeouts []FakeTimeout
+	paused   bool
+	closed   bool
 	// reclaimed is a box its provider killed ([FakeProvider.Kill]), which
 	// nothing reads any more.
 	reclaimed  bool
 	commands   []string
 	background []string
+	// execs is every command the box was asked to run, foreground and
+	// detached, with the environment it was given: see [FakeSandbox.Execs].
+	execs []FakeExec
 	// readCap is the whole-read cap a suite gave the box, zero for
 	// [MaxFileBytes]: see [FakeSandbox.CapReads].
 	readCap int
+	// delivered is how many bytes its reads have handed out: see
+	// [FakeSandbox.Delivered].
+	delivered int64
 
 	// ExecFunc, when set, answers Exec instead of the default success.
 	ExecFunc func(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
@@ -108,9 +115,21 @@ func (s *FakeSandbox) ID() string { return s.id }
 // nothing on disk backs.
 func (s *FakeSandbox) Home() string { return s.home }
 
+// FakeExec is one command a [FakeSandbox] was asked to run, and the
+// environment and directory it was given.
+type FakeExec struct {
+	Command    string
+	Env        map[string]string
+	Cwd        string
+	Background bool
+}
+
 // Exec records the command and returns whatever the test queued for it,
 // or an empty success.
 func (s *FakeSandbox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
+	s.mu.Lock()
+	s.execs = append(s.execs, FakeExec{Command: cmd, Env: maps.Clone(opts.Env), Cwd: opts.Cwd})
+	s.mu.Unlock()
 	if s.ExecFunc != nil {
 		return s.ExecFunc(ctx, cmd, opts)
 	}
@@ -126,7 +145,19 @@ func (s *FakeSandbox) StartBackground(ctx context.Context, cmd string, opts Exec
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.background = append(s.background, cmd)
+	s.execs = append(s.execs, FakeExec{Command: cmd, Env: maps.Clone(opts.Env), Cwd: opts.Cwd, Background: true})
 	return strconv.Itoa(len(s.background)), nil
+}
+
+// Execs is every command the box was asked to run — foreground, a scripted
+// [FakeSandbox.ExecFunc]'s included, and detached — in order, each with the
+// environment and directory it was given: what a case about a run's
+// environment reaching its box reads, since nothing else of a fake box keeps
+// one.
+func (s *FakeSandbox) Execs() []FakeExec {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.execs)
 }
 
 // Job answers through [FakeSandbox.Exec], the way a remote box does, so a
@@ -215,7 +246,7 @@ func (s *FakeSandbox) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if err != nil || content == nil {
 		return nil, err
 	}
-	return readCapped(bytes.NewReader(content), p, s.ReadCap())
+	return readCapped(s.delivering(bytes.NewReader(content)), p, s.ReadCap())
 }
 
 // OpenFile streams the file whole, as every real backend does: a machine
@@ -225,7 +256,7 @@ func (s *FakeSandbox) OpenFile(ctx context.Context, p string) (io.ReadCloser, er
 	if err != nil {
 		return nil, err
 	}
-	return io.NopCloser(bytes.NewReader(content)), nil
+	return io.NopCloser(s.delivering(bytes.NewReader(content))), nil
 }
 
 // ReadTail answers the file's last n bytes and its whole size.
@@ -234,7 +265,49 @@ func (s *FakeSandbox) ReadTail(ctx context.Context, p string, n int) (FileTail, 
 	if err != nil {
 		return FileTail{}, err
 	}
-	return tailOf(content, n), nil
+	tail := tailOf(content, n)
+	s.mu.Lock()
+	s.delivered += int64(len(tail.Data))
+	s.mu.Unlock()
+	return tail, nil
+}
+
+// OpenTail streams the file's last n bytes, with its whole size.
+func (s *FakeSandbox) OpenTail(ctx context.Context, p string, n int64) (io.ReadCloser, int64, error) {
+	content, err := s.content(p)
+	if err != nil {
+		return nil, 0, err
+	}
+	size := int64(len(content))
+	start := max(size-max(n, 0), 0)
+	return io.NopCloser(s.delivering(bytes.NewReader(content[start:]))), size, nil
+}
+
+// Delivered is how many bytes of its files the box's reads have handed out —
+// each stream counted as far as its reader took it, a refused whole read as
+// far as the refusal read: what a remote box would have sent over the wire,
+// which a suite holds a reader's cost to.
+func (s *FakeSandbox) Delivered() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.delivered
+}
+
+// delivering is r counting what it hands out into [FakeSandbox.Delivered].
+func (s *FakeSandbox) delivering(r io.Reader) io.Reader { return deliveredReader{r: r, box: s} }
+
+// deliveredReader is a read of the box's file, counted as it is read.
+type deliveredReader struct {
+	r   io.Reader
+	box *FakeSandbox
+}
+
+func (d deliveredReader) Read(p []byte) (int, error) {
+	n, err := d.r.Read(p)
+	d.box.mu.Lock()
+	d.box.delivered += int64(n)
+	d.box.mu.Unlock()
+	return n, err
 }
 
 // content is one file's bytes, or the error a test scripted for reading it.
@@ -249,13 +322,29 @@ func (s *FakeSandbox) content(p string) ([]byte, error) {
 	return slices.Clone(s.files[path.Clean(p)]), nil
 }
 
-// SetTimeout is accepted and ignored: nothing in a fake box can outrun a
-// deadline.
+// SetTimeout records the refresh, and when it came, and ends nothing: a case
+// about a box its timer can end models the end itself, from
+// [FakeSandbox.Timeouts].
 func (s *FakeSandbox) SetTimeout(ctx context.Context, seconds float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.timeoutCalls++
+	s.timeouts = append(s.timeouts, FakeTimeout{At: time.Now(), Seconds: seconds})
 	return nil
+}
+
+// FakeTimeout is one refresh of a [FakeSandbox]'s timer: when it was asked for,
+// on the clock the case runs under, and the seconds it set the timer to.
+type FakeTimeout struct {
+	At      time.Time
+	Seconds float64
+}
+
+// Timeouts is every refresh of the box's timer, in order — the waiter's
+// keepalive and a launch's while it provisions the box alike.
+func (s *FakeSandbox) Timeouts() []FakeTimeout {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.timeouts)
 }
 
 // Pause marks the box snapshotted; [FakeSandbox.Paused] reports it.
@@ -274,11 +363,12 @@ func (s *FakeSandbox) Close(ctx context.Context) error {
 	return nil
 }
 
-// Keepalives is how many times the waiter refreshed this box's TTL.
+// Keepalives is how many times this box's TTL was refreshed: by the waiter's
+// keepalive, and by a launch while it provisioned the box.
 func (s *FakeSandbox) Keepalives() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.timeoutCalls
+	return len(s.timeouts)
 }
 
 // unreadable reports whether the box can no longer be read: paused, or

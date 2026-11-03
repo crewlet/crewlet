@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +21,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/executordomain"
@@ -97,11 +100,15 @@ providers:
         FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
         FAKE_AGENT_RELEASE: "${FAKE_AGENT_RELEASE}"
         FAKE_AGENT_VERSION: "${FAKE_AGENT_VERSION}"
-      # Only the cases that read the argv, hold the run or run an older
-      # release set these three. Declared optional, a case that sets none runs
-      # without them; undeclared, every such run starts without what it never
-      # needed and logs the gap.
-      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE, FAKE_AGENT_VERSION]
+        FAKE_AGENT_TOKEN: "${FAKE_AGENT_TOKEN}"
+        FAKE_AGENT_PUSH_LOG: "${FAKE_AGENT_PUSH_LOG}"
+      # Only the cases that read the argv, hold the run, run an older release
+      # or keep what a push run's git saw (its token, its log) set these
+      # five. Declared optional, a case that sets none runs without them;
+      # undeclared, every such run starts without what it never needed and
+      # logs the gap.
+      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE, FAKE_AGENT_VERSION, FAKE_AGENT_TOKEN,
+        FAKE_AGENT_PUSH_LOG]
   - name: Founder
     kind: human
     contact:
@@ -201,6 +208,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	withServingTierA(t, &boot)
 	boot.Store.Path = dbPath
 	brokertest.StoreIn(&boot.Stream, streamDir)
+	brokertest.CodeCacheIn(&boot.Git)
 	addr := ""
 	if host != nil {
 		host.ring.hold(&boot)
@@ -221,6 +229,9 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(env), SandboxPollInterval: runPollInterval,
 		BoxHostURL: listenerURL(ln),
+		// THIS TEST BINARY IS THE HOOK a node hosting code execs, as
+		// startNode hands it; a company hosting none never reads it.
+		GitHook: codetest.HookCommand(t),
 	})
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("engine.Start: %v", err)
@@ -431,7 +442,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 // asserted the last two and assumed the first — which was the one that was
 // false, for the whole life of the feature, so the answer ran as an unrelated
 // turn and the box waited out its pause TTL.
-func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
+func TestAnExecutorThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	t.Parallel()
 	n := startCoding(t, codingModeAsk)
 	waitFor(t, "the seat to be claimed", func() bool {
@@ -612,6 +623,182 @@ func (n *codingNode) settledOutcome(t *testing.T, turnID string) string {
 		return false
 	})
 	return outcome
+}
+
+// withBoxRepo is the coding company hosting code, as
+// [TestAnExecutorChecksOutPushesAndIsHeldToItsGrant] runs it: one repository,
+// `web`, the coding seat's own, and the seat's code access full, so a
+// checkout that names no access is given write.
+func withBoxRepo(doc string) string {
+	const seat = "    llm: [scripted, coder]\n"
+	if !strings.Contains(doc, seat) {
+		panic("the coding company names no executor chain to give code access beside")
+	}
+	doc = strings.Replace(doc, seat, seat+"    code: {access: full_access}\n", 1)
+	return doc + `code:
+  native: true
+  repos:
+    - name: web
+      owner: {seat: swe}
+`
+}
+
+// AN EXECUTOR CHECKS A REPOSITORY OUT, PUSHES IT AND IS HELD TO ITS GRANT
+// (ADR-0093), end to end: the run is launched with the box's git environment
+// and no repository; its model calls `code_checkout` for web over the bridge,
+// the row is granted web to write, and the stand-in harness runs the commands the
+// answer gave, commits one file and pushes its branch by git alone. The code
+// host records the push as the agent's, through this launch, on the seat's
+// branch for the run, its commit carrying the run's trailers; and once the
+// run has ended its token admits nothing.
+//
+// Mutations: a launch whose RunEnv sets no git variables → the clone has no
+// credential and the run fails, red; code_checkout granting nothing on the
+// row → the clone is refused not_granted, red; the run's token minted for
+// another launch → refused run_superseded, red.
+func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
+	t.Parallel()
+	// THE NODE'S OWN ADDRESS, KNOWN BEFORE IT BOOTS: CREWLET_BOX_GIT_URL is
+	// read once at boot, and the box dials it from the same host, so the
+	// API's listener is also the box's way to the code host.
+	reserve, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve the node's address: %v", err)
+	}
+	addr := reserve.Addr().String()
+	_ = reserve.Close()
+	stateDir := t.TempDir()
+	tokenPath := filepath.Join(stateDir, "git-token")
+	release := filepath.Join(stateDir, "release")
+	pushLog := filepath.Join(stateDir, "push.log")
+	base := "http://" + addr + "/box/git"
+	env := map[string]string{codingModeEnv: codingModePush, codingTokenEnv: tokenPath,
+		codingReleaseEnv: release, codingPushLogEnv: pushLog, sandbox.BoxGitURLVar: base}
+
+	model := newScriptedModel(t)
+	model.callOnExecute(builtin.CodeCheckoutTool, map[string]any{"repo": "web"})
+	doc := withBoxRepo(sandboxCompany(t, model, stateDir))
+	dir := t.TempDir()
+	n := &codingNode{node: bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"),
+		filepath.Join(dir, "stream"), env, &sameHost{addr: addr, ring: fleetRing(t)}), stateDir: stateDir}
+	repo := awaitRepo(t, "web", code.RepoStatusActive, n.node)
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(n.engine.Node().Host().Held(), "swe")
+	})
+	n.wakeInDirectThread(t, "swe", "the web test is failing, please fix it", codingConversation, codingThread)
+
+	// THE ROW, WHILE THE RUN HOLDS IT: the stand-in waits for the release
+	// once it has pushed.
+	var run sandbox.PendingRun
+	waitFor(t, "the run to check web out", func() bool {
+		runs := n.activeRuns(t)
+		if len(runs) != 1 || len(runs[0].Repos) != 1 {
+			return false
+		}
+		run = runs[0]
+		return true
+	}, n.diagnose)
+	if got := run.Repos[0]; got.Repo != "web" || got.RepoID != repo.ID || got.Access != sandbox.RepoWrite {
+		t.Fatalf("the run was given %+v; want web (%s) to write", got, repo.ID)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the run to settle", func() bool { return len(n.activeRuns(t)) == 0 }, n.diagnose)
+
+	// THE PUSH, AS THE CODE HOST RECORDED IT.
+	seam, ok := engine.OperatorCode(n.engine)
+	if !ok {
+		t.Fatal("the node serves no code operations")
+	}
+	answer, err := seam.Read(t.Context(), code.ReadQuery{Kind: code.ReadRunPushes, Limit: 10,
+		RunPushes: &code.RunPushesQuery{Run: run.LaunchID, Repos: []string{repo.ID}, After: repo.Position},
+		Fresh:     statelog.Freshness{Level: statelog.ReadLinearizable}})
+	if err != nil {
+		t.Fatalf("read the run's pushes: %v", err)
+	}
+	if len(answer.Pushes) != 1 {
+		// WHY, IN THE FAILURE ITSELF: the stand-in's own failure — a clone,
+		// a commit or a push the box's git refused — ends its run in its box,
+		// whose standard error is reclaimed with it, so a case that said
+		// only the count would leave the cause on a runner nobody can read.
+		// What its commands said is kept outside the box ([codingPushLogEnv]).
+		said, err := os.ReadFile(pushLog)
+		if err != nil {
+			said = []byte(fmt.Sprintf("(no log of the push: %v)", err))
+		}
+		t.Fatalf("the run is recorded as %d pushes, want its one: %+v\nthe stand-in's push said:\n%s\n"+
+			"the turn settled %q; %s", len(answer.Pushes), answer.Pushes, said,
+			n.settledOutcome(t, run.TurnID), n.diagnose())
+	}
+	push := answer.Pushes[0]
+	branch := "refs/heads/" + run.Repos[0].Branch
+	switch {
+	case !strings.HasPrefix(branch, "refs/heads/seats/swe/run-"):
+		t.Errorf("the run worked on %s; want the seat's branch for a run on no work item", branch)
+	case push.Via != code.ViaGit || push.ActorKind != string(code.PrincipalAgent) || push.ActorSeat != "swe":
+		t.Errorf("the push is recorded via %s by %s %q; want via git by the agent swe", push.Via,
+			push.ActorKind, push.ActorSeat)
+	case push.Run.RunID != run.LaunchID || push.Run.Harness != executor.ClaudeCodeName:
+		t.Errorf("the push is recorded as run %q by %q; want this launch, %s, by %s", push.Run.RunID,
+			push.Run.Harness, run.LaunchID, executor.ClaudeCodeName)
+	case len(push.Commands) != 1 || push.Commands[0].Ref != branch || push.Commands[0].Result != code.ResultOK:
+		t.Fatalf("the push moved %+v; want %s created", push.Commands, branch)
+	}
+
+	// AND THE REVIEWER WAS TOLD WHAT THE RUN PUSHED, from that record: the
+	// executor's report the resumed turn files (internal/sandbox's runReport)
+	// names the branch the row created, at its commit — read by the
+	// coordinator's collect through the engine's own reader of the run's push
+	// rows, the first page linearizable and every later one at session from
+	// its launch position — and the reviewer judges the run on that report.
+	// Never the box's own report, which says "Pushed the fix." whatever it did.
+	told := "Pushed to this company's code host (its push record):\n- web " + branch + " created at " +
+		push.Commands[0].New[:12]
+	if !n.model.sawText(told) {
+		t.Errorf("no model request carried the run's push as its record names it, %q; %s", told, n.diagnose())
+	}
+
+	// THE COMMIT, READ BACK FROM THE CODE HOST, CARRIES THE RUN'S TRAILERS:
+	// each asked as a literal of the pushed commit's whole message. The run
+	// is named by its turn, as the executors board names it, since a turn's
+	// launches are one executor's work.
+	for _, trailer := range []string{"Crewlet-Seat: swe", "Crewlet-Run: " + run.TurnID,
+		"Crewlet-Work-Item: none"} {
+		got, err := seam.GitRead(t.Context(), code.GitQuery{Kind: code.GitLog, RepoID: repo.ID,
+			Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "swe"},
+			Log:   &code.LogQuery{Rev: push.Commands[0].New, Grep: trailer, Limit: 1}})
+		if err != nil {
+			t.Fatalf("read the pushed commit's history: %v", err)
+		}
+		if got.Log == nil || len(got.Log.Commits) != 1 || got.Log.Commits[0].OID != push.Commands[0].New {
+			t.Errorf("the pushed commit %s does not carry %q", push.Commands[0].New, trailer)
+		}
+	}
+
+	// AND ITS TOKEN ADMITS NOTHING ONCE THE RUN HAS ENDED.
+	token, err := os.ReadFile(tokenPath)
+	if err != nil || len(token) == 0 {
+		t.Fatalf("the harness kept no git token (%v)", err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		base+"/web.git/info/refs?service=git-upload-pack", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("run", string(token))
+	// Through the client of the server this listener is, never
+	// http.DefaultClient: its pool is swept by every httptest.Server.Close in
+	// the binary (internal/httpx/httpxtest).
+	resp, err := n.server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("ask with the ended run's token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "ended") {
+		t.Errorf("an ended run's token is answered %d %q; want 403 saying the run ended", resp.StatusCode, body)
+	}
 }
 
 // ---------------------------------------------------------------------

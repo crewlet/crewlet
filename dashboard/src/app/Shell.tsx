@@ -55,7 +55,7 @@ import {
   DESTINATIONS,
   WORKSPACES,
   landingPath,
-  serviceShown,
+  workspaceShown,
   workspaceOf,
   workspaceRow,
 } from "./nav.ts";
@@ -603,13 +603,14 @@ function Frame({ children }: { children: ReactNode }) {
   // navigated away, and the sidebar's badge (`lib/useInboxCounts.ts`) is what
   // has to stay current. UNDER `owner` — the seat when bound, the login when
   // not — because that is the record the engine pushes about. The socket
-  // re-sends it on every reconnect. ONLY WITH WORKLET: `inbox_changed` is
-  // Worklet's push, and a watch from anybody else is a refusal on every
-  // reconnect.
-  // AND ONLY OF A COMPANY RUNNING WORKLET, whose push it is.
+  // re-sends it on every reconnect. NO APP: the engine decides a watch as the
+  // composed inbox's own read (`inbox`, own or lead), since its frames announce
+  // every native domain's notices — the code host's beside Worklet's.
+  // AND ONLY OF A COMPANY RUNNING A SOURCE OF NOTICES, Worklet or the code
+  // host, whose pushes these are.
   const runs = useServicesRun();
   const ask = useServicesAsk();
-  const watchesInbox = viewer.owner !== "" && viewer.worklet && ask.tracker;
+  const watchesInbox = viewer.owner !== "" && (ask.tracker || ask.code);
   useEffect(() => {
     if (!watchesInbox) return;
     socket.watch(viewer.owner);
@@ -632,11 +633,11 @@ function Frame({ children }: { children: ReactNode }) {
     },
     keys: () => setLegendOpen(true),
     // A JUMP TO A PLACE THE COMPANY DOES NOT RUN is bound to nothing, as its
-    // row is drawn nowhere (`nav.ts`'s `serviceShown`).
+    // row is drawn nowhere (`nav.ts`'s `workspaceShown`).
     ...Object.fromEntries(
       WORKSPACES.map((ws) => [
         `go.${ws.key}`,
-        { run: () => nav.to(landingPath(ws, held, runs)), when: serviceShown(ws, runs) },
+        { run: () => nav.to(landingPath(ws, held, runs)), when: workspaceShown(ws, runs) },
       ]),
     ),
     // READ AT THE PRESS, off the store, rather than through `useAgents`: the

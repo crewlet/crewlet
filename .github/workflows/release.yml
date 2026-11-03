@@ -30,12 +30,13 @@ on:
     tags: ["v*"]
   workflow_dispatch:
   pull_request:
-    # Only when the release surface itself changes. A full four-target build
-    # on every engine pull request would buy nothing: what breaks here is
-    # this config, the Dockerfile, the module's own toolchain, or the
-    # variable the -X flag stamps — internal/version is release surface
-    # because moving or renaming `value` is what makes the stamp apply to
-    # nothing, and running the built binary is what proves it still lands.
+    # Only when the release surface itself changes. A full build of the four
+    # targets and both images on every engine pull request would buy
+    # nothing: what breaks here is this config, the Dockerfile, the module's
+    # own toolchain, or the variable the -X flag stamps — internal/version is
+    # release surface because moving or renaming `value` is what makes the
+    # stamp apply to nothing, and running the built binary is what proves it
+    # still lands.
     paths:
       - ".goreleaser.yaml"
       - "Dockerfile"
@@ -46,6 +47,11 @@ on:
       # change to what it copies, fails the release rather than the pull
       # request unless the pipeline runs here too.
       - "scripts/notices/**"
+      # The git the image builds: a pin bump or a recipe change is checked by
+      # the image's own build — every platform, the arm64 one cross-compiled —
+      # on the pull request that makes it, not first on the tag.
+      - "scripts/git.sh"
+      - "scripts/git-pin.env"
 
 permissions:
   contents: read

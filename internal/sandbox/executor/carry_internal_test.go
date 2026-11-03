@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -137,7 +137,7 @@ func TestASessionRecordIsReadWhereItLies(t *testing.T) {
 // case goes red.
 func TestAReleasePastTheLogsBoundIsNone(t *testing.T) {
 	t.Parallel()
-	at := strings.Repeat("1", executordomain.HarnessVersionMaxBytes-len(".0.0")) + ".0.0"
+	at := strings.Repeat("1", executorkeep.HarnessVersionMaxBytes-len(".0.0")) + ".0.0"
 	line := strings.Repeat("2", 1<<20) + ".1.310 (Claude Code)"
 	for printed, want := range map[string]string{
 		"2.1.310 (Claude Code)": "2.1.310",

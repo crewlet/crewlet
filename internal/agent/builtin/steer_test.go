@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -34,11 +35,11 @@ import (
 // steerRing is the keyring every node of the tool's test fleet holds, and
 // steerWire the steer channel they sign on.
 var (
-	steerRing = statelog.OneKey("k1", "the steer_turn cases' fleet key material")
+	steerRing = recordseal.OneKey("k1", "the steer_turn cases' fleet key material")
 	steerWire = mustSteerWire(steerRing)
 )
 
-func mustSteerWire(ring statelog.Keyring) *signedask.Channel[steer.Request, steer.Reply] {
+func mustSteerWire(ring recordseal.Keyring) *signedask.Channel[steer.Request, steer.Reply] {
 	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel, ring)
 	if err != nil {
 		panic(err)
@@ -339,7 +340,7 @@ func TestNoReplyIsUnknownNotNotRunning(t *testing.T) {
 		// promises: one not signed by the fleet, and the fleet's own
 		// answer to another request.
 		"a reply the fleet did not sign": {raw: [][]byte{signedReply(t,
-			mustSteerWire(statelog.OneKey("k1", "not the fleet's material")), accepted)}},
+			mustSteerWire(recordseal.OneKey("k1", "not the fleet's material")), accepted)}},
 		"the fleet's reply to another request": {raw: [][]byte{signedReply(t, steerWire, elsewhere)}},
 		"another turn's reply": {replies: []steer.Reply{{TurnID: "run-2",
 			Status: steer.StatusClosed}}},

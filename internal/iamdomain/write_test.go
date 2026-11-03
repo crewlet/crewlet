@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -48,7 +49,7 @@ type writeRig struct {
 	writer   *iamdomain.Writer
 	applier  *iamdomain.Applier
 	waiter   *rigWaiter
-	verifier *statelog.Verifier
+	verifier *recordseal.Verifier
 	consumed uint64
 	events   *writerEvents
 
@@ -317,7 +318,7 @@ func (r *writeRig) drainTo() error {
 // node applying the SAME log into its OWN store is what a determinism case is
 // made of — and `now` is that node's batch clock, the one per-node instant an
 // apply is handed.
-func applyLog(t *testing.T, log *js.DomainLog, verifier *statelog.Verifier,
+func applyLog(t *testing.T, log *js.DomainLog, verifier *recordseal.Verifier,
 	db store.ReplicatedHandle, applier *iamdomain.Applier, from uint64, now time.Time,
 	reached func(statelog.Position)) (uint64, error) {
 
@@ -336,7 +337,7 @@ func applyLog(t *testing.T, log *js.DomainLog, verifier *statelog.Verifier,
 			continue
 		}
 		body, verdict := verifier.Open(payload)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			return consumed, fmt.Errorf("record %d did not verify: %s", seq, verdict)
 		}
 		env, err := iamdomain.DecodeEnvelope(body)
@@ -659,7 +660,7 @@ func (r *writeRig) reader(t *testing.T) *iamdomain.Reader {
 	// OVER A WAITER WHOSE POSITION MOVES as the rig drains, so the position
 	// a read reports is the one the rows it served were derived through.
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: r.db.Reader(), Committed: r.waiter.Committed,
+		DB: r.db.Reader(), Reached: r.waiter.Reached,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
@@ -710,6 +711,10 @@ func (w *rigWaiter) Committed() statelog.Position {
 	return w.at
 }
 
+// Reached is Committed: this rig moves its position when it applies a record,
+// in one step, so it reaches nothing its commit has not.
+func (w *rigWaiter) Reached() statelog.Position { return w.Committed() }
+
 // StreamIdentity and Truncated are the stream identity the publisher asks
 // before every append: the rig's log is the one its rows came from, always.
 func (w *rigWaiter) StreamIdentity() error { return nil }
@@ -719,7 +724,7 @@ func (w *rigWaiter) Truncated() error      { return nil }
 // generation is ever abandoned or overtaken under it.
 func (w *rigWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
-func (w *rigWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *rigWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
 		if w.Committed().Packed() >= p.Packed() {
 			return nil
@@ -732,13 +737,13 @@ func (w *rigWaiter) WaitCommitted(ctx context.Context, p statelog.Position) erro
 	}
 }
 
-// WaitApplied is WaitCommitted here, and the harness is why: this rig applies
+// WaitApplied is WaitReached here, and the harness is why: this rig applies
 // every record inline in its own drain, so "committed" and "applied" are one
 // position rather than two.
 func (w *rigWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
 	p statelog.Position) error {
 
-	return w.WaitCommitted(ctx, p)
+	return w.WaitReached(ctx, p)
 }
 
 // testKeyring is the fleet keyring this rig's node holds: the one key every
@@ -817,20 +822,20 @@ func openNodeEstate(t *testing.T, what string) store.ReplicatedHandle {
 	return db
 }
 
-func testSigner(t *testing.T) *statelog.Signer {
+func testSigner(t *testing.T) *recordseal.Signer {
 	t.Helper()
-	signer, err := statelog.NewSigner(iamdomain.Domain{}.Name(),
-		statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(iamdomain.Domain{}.Name(),
+		recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
 	return signer
 }
 
-func testVerifier(t *testing.T) *statelog.Verifier {
+func testVerifier(t *testing.T) *recordseal.Verifier {
 	t.Helper()
-	verifier, err := statelog.NewVerifier(iamdomain.Domain{}.Name(),
-		statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(iamdomain.Domain{}.Name(),
+		recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

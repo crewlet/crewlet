@@ -2,11 +2,8 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // HOW LONG THIS NODE HAS BEEN UNABLE TO READ THE TRIM FLOOR, for
@@ -29,13 +26,18 @@ import (
 //
 // # What a read is
 //
-// THE READ PATH'S OWN TWO STEPS — the published floors, then [floorFor] per
-// domain at the generation its applier is on — which is what the write fence,
-// the readiness gate and every read's health take. A floor this node cannot
-// use is therefore one of two things, and the alarm names which: coordination
-// could not be listed, or the fleet published at a generation this node has
-// not reached. One listing serves every domain, so a beat costs one
-// coordination read however many logs the node runs.
+// THE READ PATH'S OWN TWO STEPS — each domain's published floor read by its
+// own key ([readFloorsOf]), then [floorFor] at the generation its applier is
+// on — which is what the write fence, the readiness gate and every read's
+// health take. A floor this node cannot use is therefore one of two things,
+// and the alarm names which: that domain's key could not be read, or the fleet
+// published at a generation this node has not reached. EACH DOMAIN BY ITS KEY,
+// never a listing of the register, for the read path's reason: a listing is a
+// consumer created and deleted through the metadata group on a clustered
+// broker, and on a loaded fleet that create ran past the client's API timeout
+// with every key perfectly readable — a watch that listed would age an outage
+// no read was having. The keys are read at once, so a beat costs one round
+// trip however many logs the node runs.
 
 // floorSubject is one domain the watch asks about, at the generation its
 // applier is on.
@@ -46,9 +48,10 @@ type floorSubject struct {
 
 // floorWatch is how long each domain's floor has been unreadable on this node.
 type floorWatch struct {
-	// floors lists the published floors. Nil observes nothing, which is a
-	// node with no fleet store — and one with nothing to read either.
-	floors func(context.Context) ([]coord.TrimFloor, error)
+	// floors reads the published floor of each domain named, each by its
+	// key ([readFloorsOf]). Nil observes nothing, which is a node with no
+	// fleet store — and one with nothing to read either.
+	floors func(ctx context.Context, domains []string) publishedFloors
 
 	mu sync.Mutex
 	// first is when each domain's floor was first found unreadable, and
@@ -60,8 +63,8 @@ type floorWatch struct {
 	at time.Time
 }
 
-// newFloorWatch is a watch over one listing of the published floors.
-func newFloorWatch(floors func(context.Context) ([]coord.TrimFloor, error)) *floorWatch {
+// newFloorWatch is a watch over the published floors as floors reads them.
+func newFloorWatch(floors func(ctx context.Context, domains []string) publishedFloors) *floorWatch {
 	return &floorWatch{floors: floors, first: map[string]time.Time{},
 		cause: map[string]string{}}
 }
@@ -75,28 +78,25 @@ func (w *floorWatch) observe(ctx context.Context, now time.Time, subjects []floo
 	if w == nil || w.floors == nil {
 		return
 	}
-	floors, listErr := w.floors(ctx)
-	if listErr != nil && ctx.Err() != nil {
-		return
+	domains := make([]string, 0, len(subjects))
+	for _, s := range subjects {
+		domains = append(domains, s.domain)
 	}
-	if listErr != nil {
-		// IN THE READ PATH'S OWN WORDS ([stateLog.trimFloor]), so the
-		// cause names what could not be read: the transport's error alone
-		// — a timeout, a closed connection — reached the alarm as the
-		// whole of its cause, with nothing in it saying it was the fleet's
-		// floors that were asked for, while the refusal a read met on the
-		// same node named them.
-		listErr = fmt.Errorf("engine: read the fleet's published trim floors: %w", listErr)
+	read := w.floors(ctx, domains)
+	if read.unread() != nil && ctx.Err() != nil {
+		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	seen := make(map[string]bool, len(subjects))
 	for _, s := range subjects {
 		seen[s.domain] = true
-		err := listErr
-		if err == nil {
-			_, err = floorFor(floors, s.domain, s.generation)
-		}
+		// IN THE READ PATH'S OWN WORDS ([publishedFloors.floor]), so the
+		// cause names what could not be read — the domain's key, or a floor
+		// published at a generation this node has not reached — rather than
+		// a transport's error alone, a timeout or a closed connection with
+		// nothing in it saying it was a floor that was asked for.
+		_, err := read.floor(s.domain, s.generation)
 		if err == nil {
 			delete(w.first, s.domain)
 			delete(w.cause, s.domain)

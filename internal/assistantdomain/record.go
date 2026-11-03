@@ -123,6 +123,10 @@ const (
 
 	// OpBarrier is the read index's payload-free append.
 	OpBarrier OpKind = "barrier"
+
+	// OpTrimmed is the trim's payload-free record that removes the anchors
+	// below a floor (ADR-0080).
+	OpTrimmed OpKind = "trimmed"
 )
 
 // OpKinds are every op, in the order they are documented.
@@ -132,7 +136,7 @@ var OpKinds = []OpKind{
 	OpMessageRecorded, OpStepRecorded, OpCardRecorded, OpProposalCreated,
 	OpProposalApproved, OpProposalExecuting, OpProposalDeclined, OpProposalExpired,
 	OpProposalStale, OpProposalApplying, OpProposalSettled, OpProposalUnknown,
-	OpProposalRetried, OpOwnerErased, OpEviction, OpGeneration, OpBarrier,
+	OpProposalRetried, OpOwnerErased, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -145,7 +149,7 @@ func (o OpKind) installsGate() bool { return o == OpConversationPurged || o == O
 //
 // Its EIGHT keys are reserved at the top level of the format for its life: a
 // later version may add fields beside them and may never repurpose one. They
-// are internal/pages' and internal/artifactsdomain's eight, so an operator
+// are internal/doclet's and internal/artifactsdomain's eight, so an operator
 // reading two logs reads one shape.
 type RecordEnvelope struct {
 	// V is the record version.
@@ -184,10 +188,13 @@ func (e RecordEnvelope) InstallsGate() bool {
 	return e.Subject.Kind.InstallsGate() || e.Op.installsGate()
 }
 
-// readByEveryBuild reports a record every build must read: a gate, the barrier
-// and a reanchor's generation. None may carry a versioned field.
+// readByEveryBuild reports a record every build must read: a gate, the
+// barrier, the trim's trimmed record and a reanchor's generation. None may
+// carry a versioned field. An older node retains what it cannot read, and a
+// trimmed record it retained is every anchor it names kept on that node.
 func (e RecordEnvelope) readByEveryBuild() bool {
-	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpGeneration
+	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed ||
+		e.Op == OpGeneration
 }
 
 // MutationRecord is one committed mutation: the envelope, the typed payload as

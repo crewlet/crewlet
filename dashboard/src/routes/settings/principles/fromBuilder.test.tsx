@@ -15,6 +15,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 import { screenFor } from "~/app/App.tsx";
+import { ScreenBoundary } from "~/app/boundaries.tsx";
 import { loadChunk } from "~/app/lazyScreen.ts";
 import { Router, useRoute } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
@@ -62,10 +63,17 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-/** The screen the address resolves to, as the frame draws it, following every move. */
+/**
+ * The screen the address resolves to, as the frame draws it, following every
+ * move: inside the routed screen's boundary, keyed by the path, since a lazy
+ * screen is drawn in a boundary's region or refused (`app/lazyScreen.ts`).
+ */
 function Screens() {
-  const route = resolve(useRoute().path);
-  return route.resolved ? screenFor(route) : null;
+  const { path } = useRoute();
+  const route = resolve(path);
+  return route.resolved ? (
+    <ScreenBoundary resetKey={path.join("/")}>{screenFor(route)}</ScreenBoundary>
+  ) : null;
 }
 
 /** The builder's table view, for a reader holding `grants`. */

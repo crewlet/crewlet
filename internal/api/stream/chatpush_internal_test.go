@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -129,7 +130,7 @@ func presenceHub(t *testing.T, broker *memory.Broker, node string) *presence.Hub
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	wire, err := signedask.NewOneWay[presence.Frame](presence.Channel,
-		statelog.OneKey("k1", "the chat arm suite's fleet key material"))
+		recordseal.OneKey("k1", "the chat arm suite's fleet key material"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +265,7 @@ func TestACommittedFrameIsDecidedHereAtItsBatchsPosition(t *testing.T) {
 		t.Fatal("the batch was decided without a read")
 	}
 	for i, read := range reads {
-		if read != "here" || fresh[i].Level != statelog.ReadStale || fresh[i].MinPosition != want {
+		if read != "here" || fresh[i].Level != statelog.ReadStale || fresh[i].Floor(want.Stream) != want || len(fresh[i].Floors) != 1 {
 			t.Errorf("a committed frame was decided by %q at %+v, want this node's "+
 				"copy first at stale from %v", read, fresh[i], want)
 		}
@@ -277,7 +278,7 @@ func TestACommittedFrameIsDecidedHereAtItsBatchsPosition(t *testing.T) {
 		t.Fatal("the presence join decided nothing, so the presence half asserts nothing")
 	}
 	for i, read := range rooms.reads {
-		if read != "channel" || !rooms.fresh[i].MinPosition.IsZero() {
+		if read != "channel" || len(rooms.fresh[i].Floors) != 0 {
 			t.Errorf("a presence decision was made by %q at %+v, want the walk's "+
 				"own read at no floor", read, rooms.fresh[i])
 		}
@@ -546,14 +547,16 @@ func TestAHubWithNoRoomReaderSendsNothing(t *testing.T) {
 
 // EVERY OP IS EITHER A FRAME OR NAMED AS THE FRAMEWORK'S OWN.
 //
-// An eviction, a generation and a barrier change no room; a default arm that
-// pushed them would put a frame with no case on every open socket. And every
-// op that is about a conversation has a kind — over the domain's own list, so
-// an op added there is a decision made here rather than a gesture silently
-// invisible on every screen.
+// An eviction, a generation, a barrier and the trim's trimmed record change no
+// room; a default arm that pushed them would put a frame with no case on every
+// open socket. And every op that is about a conversation has a kind — over the
+// domain's own list, so an op added there is a decision made here rather than
+// a gesture silently invisible on every screen.
 func TestEveryChatOpIsAFrameOrTheFrameworksOwn(t *testing.T) {
 	t.Parallel()
-	machinery := []chatlet.OpKind{chatlet.OpEviction, chatlet.OpGeneration, chatlet.OpBarrier}
+	machinery := []chatlet.OpKind{
+		chatlet.OpEviction, chatlet.OpGeneration, chatlet.OpBarrier, chatlet.OpTrimmed,
+	}
 	for _, op := range chatlet.OpKinds {
 		kind, push := chatPushKind(op)
 		switch {

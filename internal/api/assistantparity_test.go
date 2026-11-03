@@ -45,6 +45,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -442,10 +443,10 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 	state := livestate.New(livestate.WithClock(func() time.Time { return clock }))
 	estate := apiArtifacts{}
 	return paritySources{state: state, config: configs, Sources: queries.Sources{
-		State: state, Events: eventfan.Solo("node-a", db.Events()), Usage: db.Replicated(),
+		State: state, Events: eventfan.Solo("node-a", db.Events()), Usage: usage.Reader{Estate: db.Replicated()},
 		Company: companySource(t, company), Coord: coordmemory.New(),
 		Work: stubWorkReader{}, Pages: posturePages{}, WorkSearch: noWorkHits{},
-		Sandbox: noCodingRuns{}, Config: configs,
+		Sandbox: noExecutors{}, Config: configs,
 		Artifacts: &queries.ArtifactsSource{Gate: artifactsGate(estate), Reads: estate},
 		Chat:      parityChat{}, ChatSearch: parityChat{},
 	}}
@@ -463,14 +464,18 @@ func (noWorkHits) Search(context.Context, worklet.SearchQuery) (worklet.SearchAn
 	return worklet.SearchAnswer{Hits: []worklet.Ranked{}}, nil
 }
 
-// noCodingRuns is a node running no executor.
-type noCodingRuns struct{}
+// noExecutors is a node running no executor.
+type noExecutors struct{}
 
-func (noCodingRuns) ListActive(context.Context) ([]sandbox.PendingRun, error) {
+func (noExecutors) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return []sandbox.PendingRun{}, nil
 }
 
-func (noCodingRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+func (noExecutors) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+	return sandbox.BridgeLog{}, nil
+}
+
+func (noExecutors) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	return sandbox.PendingRun{}, false, nil
 }
 

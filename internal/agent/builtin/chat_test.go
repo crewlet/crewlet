@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -2020,7 +2021,7 @@ func TestAChatSearchIsAskedAsTheSeatAndNarrowedAsNamed(t *testing.T) {
 	want := estate.ChatQuery{Viewer: "agent-cto", Text: "the backoff",
 		Channel: chatRoomID, Author: "agent-ceo", Limit: 7,
 		Fresh: statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)}}
-	if got := f.searched[len(f.searched)-1]; got != want {
+	if got := f.searched[len(f.searched)-1]; !reflect.DeepEqual(got, want) {
 		t.Errorf("the search asked %+v, want %+v", got, want)
 	}
 

@@ -8,14 +8,15 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/httprelay"
 	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // EVERY CHANNEL A NODE CARRIES OUT A REQUEST ON SIGNS IN DOMAINS OF ITS OWN —
 // the estate service, the fleet broker's membership, a note to a running turn,
 // a read of a box asked of its host, a box's tool call relayed to the process
-// holding its session, and the Dashboard Assistant's replays and stops — and
+// holding its session, the Dashboard Assistant's replays and stops, and a
+// code search — and
 // none of them in a state log's. So does a person's answer to a parked run,
 // sealed onto the run's row and handed to the resumed run as their words, and
 // a note to a turn whose executor is out, sealed onto the run's row with the
@@ -32,7 +33,7 @@ import (
 // here, where all of them are built.
 func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	t.Parallel()
-	ring := statelog.OneKey("k1", "the channel gate's fleet key material")
+	ring := recordseal.OneKey("k1", "the channel gate's fleet key material")
 	envelopes, err := estate.NewEnvelopes(ring)
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +59,10 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 		Owner: "node-a:1", Keyring: ring, Handler: http.NotFoundHandler(),
 		Admit: func(*http.Request) httprelay.Verdict { return httprelay.Refuse },
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	searchWire, err := newCodeSearchWire(ring)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +100,7 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 		"the assistant's replay":       pair(assistant.replays.Domains()),
 		"the assistant's stop":         pair(assistant.stops.Domains()),
 		"the live relay":               pair(liveWire.Domains()),
+		"a code search":                pair(searchWire.Domains()),
 	} {
 		claim(domains[0], name+"'s requests")
 		claim(domains[1], name+"'s replies")
@@ -108,7 +114,7 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	note, seat := notes.Domains()
 	claim(note, "a note on a run record")
 	claim(seat, "a run record's seat anchor")
-	if len(owner) != len(registeredDomains())+23 {
+	if len(owner) != len(registeredDomains())+25 {
 		t.Fatalf("%d domains claimed: %v", len(owner), owner)
 	}
 }

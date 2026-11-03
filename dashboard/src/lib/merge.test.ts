@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { MAX_EDITS } from "./lineDiff.ts";
 import { merge3, mergedText } from "./merge.ts";
 
 const doc = (...ls: string[]) => ls.join("\n") + "\n";
@@ -79,5 +80,34 @@ describe("merge3", () => {
   test("the draft's own trailing newline is kept", () => {
     const m = merge3("a\nb\nc", "A\nb\nc", "a\nb\nc\nd\n");
     expect(mergedText(m)).toBe("A\nb\nc\nd");
+  });
+
+  // A LONG PAGE MERGES AS A SHORT ONE DOES: past 2,000 lines the design
+  // system's line diff answered a whole replacement, so two edits far apart
+  // conflicted as the whole document while the diff beside them showed one
+  // line each.
+  test("edits far apart in a page past 2,000 lines merge cleanly", () => {
+    const base = Array.from({ length: 2_500 }, (_, i) => `- step ${i}`);
+    const mine = base.map((line, i) => (i === 10 ? `${line}, mine` : line));
+    const theirs = base.map((line, i) => (i === 2_400 ? `${line}, theirs` : line));
+    const m = merge3(doc(...base), doc(...mine), doc(...theirs));
+    expect(m.conflicts).toBe(0);
+    expect(mergedText(m)).toBe(
+      doc(...base.map((line, i) => (i === 10 ? mine[i]! : i === 2_400 ? theirs[i]! : line))),
+    );
+  });
+
+  // A SIDE THE LINE DIFF DID NOT COMPARE is a change of the whole document,
+  // so it meets any change of the other side as one conflict: the person
+  // decides, and the browser guesses at nothing.
+  test("a side the line diff did not compare conflicts as the whole document", () => {
+    const base = Array.from({ length: MAX_EDITS / 2 + 1 }, (_, i) => `old ${i}`);
+    const mine = Array.from({ length: MAX_EDITS / 2 + 1 }, (_, i) => `new ${i}`);
+    const theirs = base.map((line, i) => (i === 7 ? `${line}, theirs` : line));
+    const m = merge3(doc(...base), doc(...mine), doc(...theirs));
+    expect(m.conflicts).toBe(1);
+    expect(m.chunks).toEqual([{ kind: "conflict", base, mine, theirs }]);
+    // An edit of nothing, though, is no change at any length.
+    expect(mergedText(merge3(doc(...base), doc(...base), doc(...theirs)))).toBe(doc(...theirs));
   });
 });

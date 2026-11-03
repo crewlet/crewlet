@@ -51,7 +51,7 @@ func TestLinearizableRefusesWhenTheOldLeaderIsIsolated(t *testing.T) {
 		t.Fatalf("open the log on the member about to be cut: %v", err)
 	}
 	gen := func() uint32 { return 1 }
-	idx, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, gen, nil)
+	idx, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), log, log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, gen, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -107,7 +107,13 @@ func TestLinearizableKeepsWorkingOnTheSurvivingMajority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	idx, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode,
+	// THE COUNT AN UNCONFIRMED BARRIER IS JUDGED BY is the stream's own,
+	// read at open: three here, so one the cut leaves without a majority is
+	// a missed quorum and never a member's stalled write.
+	if got := log.Members(); got != 3 {
+		t.Fatalf("the log of a three-member cluster is stored by %d members, want 3", got)
+	}
+	idx, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), log, log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode,
 		func() uint32 { return 1 }, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)

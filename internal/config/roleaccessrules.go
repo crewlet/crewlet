@@ -73,7 +73,7 @@ func (c *Company) validateSeatBlocks() error {
 			if role.Kind == org.KindHuman {
 				// GitHub's, Slack's and Mattermost's are refused for a human
 				// seat already, each with its own remedy: the GitHub App by
-				// [Company.validateHumanSeatApps], the chat apps by the org
+				// [Company.validateHumanSeatCode], the chat apps by the org
 				// model's agent-only rule.
 				if slices.Contains([]string{"datadog", "gitlab", "jira", "confluence", "cloudflare", "expo"}, b.lane) {
 					p.add(here, ErrConflict, "%s: a person signs in as themselves. "+

@@ -3,11 +3,11 @@ package worklet_test
 import (
 	"context"
 	"database/sql"
-	"reflect"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -29,8 +29,8 @@ import (
 func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
-	var got [][]worklet.InboxMovement
-	h.applier = worklet.NewApplier("node-a", func(m []worklet.InboxMovement) {
+	var got [][]inbox.Movement
+	h.applier = worklet.NewApplier(func(m []inbox.Movement) {
 		got = append(got, m)
 	})
 
@@ -63,9 +63,9 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 	// EACH CARRIES THE BROKER'S INSTANT for the record that moved it, which
 	// the socket's push is timed from.
 	stored := time.Unix(1_700_000_200, 0).UTC()
-	want := []worklet.InboxMovement{
-		{Handle: "bo", UnreadDelta: 1, Subject: "t-1", Reason: worklet.ReasonAssignee, At: stored},
-		{Handle: "cy", UnreadDelta: 1, Subject: "t-1", Reason: worklet.ReasonWatcher, At: stored},
+	want := []inbox.Movement{
+		moved("bo", 1, "t-1", worklet.ReasonAssignee, stored),
+		moved("cy", 1, "t-1", worklet.ReasonWatcher, stored),
 	}
 	if len(got) != 1 || !slices.Equal(got[0], want) {
 		t.Fatalf("the loud commit announced %v, want %v", got, want)
@@ -120,11 +120,23 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 	if len(got) != 1 || len(got[0]) != 1 {
 		t.Fatalf("one batch for one person announced %v, want one movement", got)
 	}
-	if m := got[0][0]; m.Handle != "bo" || m.UnreadDelta != 2 || m.Subject != "t-3" ||
+	source := worklet.Domain{}.Name()
+	if m := got[0][0]; m.Source != source || m.Handle != "bo" ||
+		m.UnreadDelta != 2 || m.Subject != "t-3" ||
 		!m.At.Equal(time.Unix(1_700_000_300, 0)) {
 		t.Errorf("the batch announced %+v, want bo moved by 2 with t-3 newest, timed "+
 			"from t-2's instant", m)
 	}
+}
+
+// moved is one movement Worklet's applier announces: under its state log's
+// own name, which is what a node relays it by and what a screen reads as
+// which half of its inbox moved — timed from at, the broker's instant the
+// socket's push is timed from.
+func moved(handle string, unread int, subject string, reason worklet.Reason,
+	at time.Time) inbox.Movement {
+	return inbox.Movement{Source: worklet.Domain{}.Name(), Handle: handle,
+		UnreadDelta: unread, Subject: subject, Reason: string(reason), At: at}
 }
 
 // A PURGE SAYS WHOSE INBOX IT EMPTIED, as surely as a commit says whose it
@@ -141,8 +153,8 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 func TestAPurgeSaysWhoseInboxItEmptied(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
-	var got [][]worklet.InboxMovement
-	h.applier = worklet.NewApplier("node-a", func(m []worklet.InboxMovement) {
+	var got [][]inbox.Movement
+	h.applier = worklet.NewApplier(func(m []inbox.Movement) {
 		got = append(got, m)
 	})
 	create := taskRecord("t-1", worklet.OpCreate, newTask("t-1"), &worklet.Notify{
@@ -175,10 +187,10 @@ func TestAPurgeSaysWhoseInboxItEmptied(t *testing.T) {
 	// TIMED FROM THE PURGE, the record that moved every one of them — not
 	// from the create that wrote the notices it deleted.
 	purged := time.Unix(1_700_000_200, 0).UTC()
-	want := []worklet.InboxMovement{
-		{Handle: "bo", UnreadDelta: 0, Subject: "t-1", Reason: worklet.ReasonAssignee, At: purged},
-		{Handle: "cy", UnreadDelta: 0, Subject: "t-1", Reason: worklet.ReasonWatcher, At: purged},
-		{Handle: "lee", UnreadDelta: 1, Subject: "t-1", Reason: worklet.ReasonPurged, At: purged},
+	want := []inbox.Movement{
+		moved("bo", 0, "t-1", worklet.ReasonAssignee, purged),
+		moved("cy", 0, "t-1", worklet.ReasonWatcher, purged),
+		moved("lee", 1, "t-1", worklet.ReasonPurged, purged),
 	}
 	if len(got) != 1 || !slices.Equal(got[0], want) {
 		t.Fatalf("the purge announced %v, want %v — every inbox it emptied "+
@@ -195,38 +207,5 @@ func TestAPurgeSaysWhoseInboxItEmptied(t *testing.T) {
 	h.applier.Committed(context.Background())
 	if len(got) != 0 {
 		t.Errorf("a redelivered purge announced %v", got)
-	}
-}
-
-// AN INBOX MOVEMENT CARRIES NO CONTENT.
-//
-// It rides a socket frame to whoever watches that seat, and what it is for is
-// telling a screen to re-read the inbox through the SAME question, and the same
-// authority, as the poll it replaces. A field carrying an excerpt, a title or
-// an author would be a read path around that authority — so the set of fields
-// is held here, and adding one is a decision somebody has to make in this
-// file.
-func TestAnInboxMovementCarriesNoContent(t *testing.T) {
-	t.Parallel()
-	want := map[string]string{
-		"Handle": "handle", "UnreadDelta": "unread_delta",
-		"Subject": "subject", "Reason": "reason", "At": "at,omitzero",
-	}
-	typ := reflect.TypeFor[worklet.InboxMovement]()
-	if typ.NumField() != len(want) {
-		t.Fatalf("an inbox movement has %d fields, want exactly %d — four "+
-			"identifiers and the broker's instant", typ.NumField(), len(want))
-	}
-	for i := range typ.NumField() {
-		field := typ.Field(i)
-		tag, ok := want[field.Name]
-		if !ok {
-			t.Errorf("an inbox movement carries %s, which is not one of the four "+
-				"identifiers or the instant it may name", field.Name)
-			continue
-		}
-		if got := field.Tag.Get("json"); got != tag {
-			t.Errorf("%s is %q on the wire, want %q", field.Name, got, tag)
-		}
 	}
 }

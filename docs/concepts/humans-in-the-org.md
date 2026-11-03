@@ -141,16 +141,18 @@ human seat is never claimed, so there is no claim to constrain),
 `integrations.slack` and `integrations.mattermost` (a seat's own chat app),
 `project` and `space` (the tracker project and knowledge container a seat
 owns, written at the top of the seat rather than under `integrations:`),
-`mcp_env` and `behavioral_guidelines`. A seat's own GitHub App
-(`integrations.github`) is refused on a human seat as well, because a person
-acts on GitHub as their own `contact.github_login`. That refusal is an
-[admission rule](configuration.md#what-a-stored-revision-is-held-to): a
-revision being applied that carries the block still runs, and the next write
-that keeps it is refused. So is an `avatar` (an agent's Crewlet character
-and colour): a person is drawn as themself, the circle and their initials,
-and the block would read as a setting and change nothing. The reverse holds
-too: `contact` or `availability` on an agent seat is refused with a hint to
-set `kind: human`.
+`mcp_env` and `behavioral_guidelines`. What a seat holds on a code host is
+refused on a human seat as well, because a person acts on every code host as
+their own identity — their own token on the engine's own, their
+`contact.github_login` on GitHub: a seat's code access tier (`code`), which
+would cap nothing, and its own GitHub App (`integrations.github`). Those two
+refusals are [admission rules](configuration.md#what-a-stored-revision-is-held-to):
+nothing running reads either off a human seat, so a revision being applied
+that carries one still runs, and the next write that keeps it is refused. So
+is an `avatar` (an agent's Crewlet character and colour): a person is drawn as
+themself, the circle and their initials, and the block would read as a setting
+and change nothing. The reverse holds too: `contact` or `availability` on an
+agent seat is refused with a hint to set `kind: human`.
 
 A unit's `mcp_env` is shared with its direct **agent** members only. A
 human member inherits none of it, so a human seat can sit in, and lead, a
@@ -297,6 +299,26 @@ What the binding buys:
   written, as the seat you hold — with the `chatlet` app — because a room shows
   each speaker by seat and its members are seats. Your messages carry the
   seat's handle with author kind `human`, like every other write.
+- **Your git pushes are yours.** A company that hosts its repositories in the
+  engine ([`code.native`](code-host.md)) is cloned, fetched and pushed to over
+  HTTPS with a token as git's password — your own machine token (`crewlet iam
+  token -login` mints one for you), or a Tier A token the directory binds to a
+  seat. git is one more way a person acts, beside the dashboard's act route,
+  the `/worklet` and `/doclet/pages` routes and their assistant's MCP, and it follows the
+  same binding: a token acting as a
+  human seat pushes **as that person**, while a credential bound to no seat
+  fetches only, and a push with it is refused at its first request saying so.
+  Every push is recorded as one `operator_acted` event with transport `git`:
+  the caller exactly as every write names it — your seat, kind `human`, and the
+  credential beside it — the repository and what became of the push. A fetch is
+  a read and is not recorded. A person reads **every** repository: a
+  repository's `visibility` narrows which **seats** read it and never a person,
+  so nobody who runs the company is shut out of its code by a setting meant to
+  keep one team's seats out of another's
+  ([Visibility](code-host.md#visibility)). The [Code guide](../guides/code.md)
+  is how to set it up, and
+  [ADR-0085](https://github.com/crewlet/crewlet/blob/main/adr/0085-a-person-reaches-git-with-their-own-bound-token.md)
+  why there is no second credential for git.
 
 **A credential bound to no seat is ordinary.** A pipeline, an automation, the
 deployment's own break-glass token — each acts as itself under its own login,
@@ -481,10 +503,19 @@ on where the work lives:
 - **The engine's own inbox.** Every change to the
   [Worklet](task-engine.md) writes a notice to each person it concerns,
   under the one reason that routed it to them (`assignee`, `mention`,
-  `blocking`, …). It is the `work_inbox` question, and the dashboard's
-  Inbox, which is Worklet's, so reading it takes the `worklet` app. Somebody
-  without it still sees a question a colleague put to them on a work item,
-  among their decisions, and may open that item and post their answer to it
+  `blocking`, …), and so does every record about a change on the company's
+  [own code host](code-host.md) (`mention`, `review_requested`,
+  `changes_requested`, …). The two are **one inbox**: the `inbox` question
+  (`GET /inbox`) and the dashboard's Inbox interleave every native domain's
+  notices by when each happened, and open to **every signed-in person** —
+  whose inbox it is is the composed question's own rule, your own or a
+  report's you lead, with no app. Each domain's notices are then read under
+  that domain's own permission: Worklet's with the `worklet` app (the
+  `work_inbox` question, which stays Worklet's own), the code host's held
+  to your grant on each change's repository — which every person holds on
+  every repository. Somebody without Worklet still sees a question a
+  colleague put to them on a work item, among their decisions, and may open
+  that item and post their answer to it
   ([You may answer what you were asked](identity-and-access.md#what-each-app-opens));
   agents send everything else through Worklet, which is why the
   dashboard warns when Worklet is left unticked for a person. A mention in the
@@ -509,36 +540,55 @@ sequenceDiagram
     W->>L: assign ENG-12 to sarah-chen
     L->>N: the record, in log order
     N->>N: apply, write Sarah's notice, commit
-    N->>S: inbox_changed {handle, unread_delta, subject, reason}
+    N->>S: inbox_changed {source, handle, unread_delta, subject, reason}
     S->>D: only to the sockets watching sarah-chen
-    D->>S: work_inbox (within half a second)
+    D->>S: inbox (within half a second)
 ```
 
-- **Every data node applies every tracker record**, and every node that
+- **Every data node applies every tracker and code record**, and every node that
   serves sockets is a data node (`ingress` requires `data`), so each hears
   every movement from its own applier, after the batch commits,
   and tells the sockets it holds. A person's browser can be connected to any
-  of them.
+  of them. Each frame names the domain whose notices moved (`source`, the
+  tracker's being `tracker` and the code host's `code`), because the inbox's
+  rules — what a mark, a snooze and "read through here" mean — are one set
+  every domain that keeps a person's notices shares, while each keeps its
+  notices and marks on its own log. Whichever domain a frame names, the
+  dashboard re-reads the composed `inbox` question, the one that answers
+  every domain's notices: `work_inbox` answers the tracker's alone, and a
+  client re-reading it on a `code` frame never sees what moved.
 - **A node whose own copy is out of service keeps telling its sockets.** A
   copy that is wrong — an applier halted on a record it cannot read, rows
   below the log — goes out of service while the node stays in rotation, its
-  dashboards reading through a sound data node. Its own applier is then the
-  one thing on it nobody vouches for, so for as long as the copy is out the
-  node follows a sound data node's movements instead, relayed over the
-  broker, and withholds its own. Every ask and answer on that relay is signed
+  dashboards reading through a sound data node. A fault is one log's, so
+  this is judged per domain: for as long as the node's copy of a domain is
+  out, its applier for that domain is the one thing on it nobody vouches for,
+  and the node follows the movements of a data node whose copy of THAT domain
+  serves instead, relayed over the broker, and withholds its own — while
+  every other domain's movements still come from its own appliers. Every ask and answer on that relay is signed
   under the fleet keyring and bound to the ask it answers, so an answer the
-  fleet did not sign reaches no screen. Each switch — onto a peer, from one peer to
-  another, back to its own applier — sends every watched inbox one frame that
-  counts nothing, because what moved during the switch is not replayed: the
-  dashboard reads the inbox again, as it does on any frame.
+  fleet did not sign reaches no screen. Each
+  switch — onto a peer, from one peer to another, back to its own applier —
+  sends every watched inbox one frame naming the domain that switched and
+  counting nothing, because what moved during the switch is not replayed: the
+  dashboard reads the inbox again, as it does on any frame. So does falling
+  behind the peer: it keeps a domain's movements for the nodes that follow it
+  for one round trip (two seconds) past its latest answer to them, and never
+  more than one transaction's worth — 4 000 — so a node that asks again later
+  than that, or one transaction that moved more inboxes than that at once, is
+  a re-read too. A fleet with no copy out of service relays nothing and keeps
+  nothing for it.
 - **The dashboard watches your own seat** as soon as its socket opens, and
   again on every reconnect: the rail's inbox badge, the Inbox screen and My
   work re-ask within half a second of the frame. The frame carries identifiers
-  and a count — the seat, the task, the reason — and never what the notice
-  says, which is read through `work_inbox` as before.
+  and a count — the domain, the seat, the subject, the reason — and never what
+  the notice says, which is read through `inbox` as before.
 - **A watch is decided like the inbox itself.** You may watch your own seat;
-  a lead may watch a seat they lead; an administrator may watch any, each with
-  the `worklet` app, since the frames are about Worklet notices. A watch
+  a lead may watch a seat they lead; an administrator may watch any, with no
+  app, since a watch is decided as the composed inbox's own read, whose frames
+  announce the code host's notices beside Worklet's. The
+  frame itself asks nothing more: it reaches exactly the sockets whose watch
+  of the seat was allowed. A watch
   this node cannot decide — it runs no company yet — is not installed,
   and the dashboard asks again when the refusal's `retry_after` says it may
   have changed — never, on a timer, when that is `0` (a log waiting will not
@@ -551,6 +601,38 @@ A token or service account bound to no seat watches the record kept under its
 login: what it
 follows, and what names it. See [Acting as your
 seat](#acting-as-your-seat-on-the-dashboard-and-the-api).
+
+**Each domain keeps its own marks.** What you did about a notice — read it,
+put it off until an instant, or read everything up to here — is kept by the
+domain that told you, on its own log, beside the notices it marks: a position
+is a place on ONE log, so "read through here" on the tracker's says nothing
+about the code host's. The rules are one set every domain shares (a mark is
+one gesture, never the lists; a snooze is at most a year ahead; reading
+through a position never moves it backwards), and each domain has its tool:
+`mark_inbox` marks the tracker's notices, `code_mark_inbox` the code host's —
+your own record only, written as the person who holds the seat, and refused
+for anybody else whatever their authority, since marking somebody's mail read
+is a gesture nobody asked a lead to make. A code mark names the `record_id` a
+code notice carries — the record and the change it told you about, since one
+record can tell you about several changes — and is refused naming it when
+that notice is somebody else's; its `read_through` is a position on the code log
+(`CREWLET_CODE_LOG@<generation>:<sequence>`). The dashboard's **Mark all
+read** sends both, each reading its own domain through the newest of its
+notices on the page.
+
+A page of the composed inbox is fifty notices, newest first across both
+domains, and its `next_cursor` carries one position per domain — where that
+domain's notices on the page ended — so the next page resumes each exactly
+where it stopped. Each code notice carries what its change says at the read:
+its title and state and the work item it implements. A list you open a
+notice from asks for its card too (`cards`): the first kibibyte of the
+change's description, the findings seats raised that stand open on it, by
+severity, and — while it is open or a draft — where its merge stands: how
+many of its preconditions are met and the one sentence of the first that is
+not, judged for you exactly as the change's own page judges it, so a card
+never says "ready" past a review that has since asked for changes. The
+cards are read for the notices the page keeps, once it is composed; a count
+of what waits on you asks for none, and judges nothing.
 
 **The queue is whoever signed in.** `#/inbox`, one click from the landing
 screen (Home), is the queue of the principal the request resolved to — a person

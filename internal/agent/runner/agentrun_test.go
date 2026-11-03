@@ -708,6 +708,9 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 				Harness: "claude-code", SandboxID: "box-7",
 				ProviderKey: "fallback-plan", Model: "claude-sonnet-5",
 				DeliveredRefs: []string{"https://example.com/pr/9"},
+				Pushed: []types.PushedRefRecord{{Repo: "web", Ref: "refs/heads/seats/swe/ENG-9",
+					Old: zeroOID, New: "4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e", Pushes: 2}},
+				PushedElided: 3,
 			},
 		},
 	})
@@ -748,11 +751,21 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	if len(done.DeliveredRefs) != 1 {
 		t.Errorf("delivered_refs = %v, want what the run produced", done.DeliveredRefs)
 	}
+	// AND WHAT ITS PUSH RECORD SAYS IT PUSHED, beside the refs it named.
+	if len(done.PushedRefs) != 1 || done.PushedRefs[0].Ref != "refs/heads/seats/swe/ENG-9" ||
+		done.PushedRefs[0].Pushes != 2 || done.PushedRefsElided != 3 || done.PushedRefsUnread != "" {
+		t.Errorf("pushed_refs = %+v, %d more, unread %q; want the record's one ref and its 3 more",
+			done.PushedRefs, done.PushedRefsElided, done.PushedRefsUnread)
+	}
 	if done.ProviderKey != "fallback-plan" || done.Model != "claude-sonnet-5" {
 		t.Errorf("provider_key = %q model = %q, want the member the launch picked",
 			done.ProviderKey, done.Model)
 	}
 }
+
+// zeroOID is git's object id for no object: a ref a run created was this
+// before its first push.
+const zeroOID = "0000000000000000000000000000000000000000"
 
 // A COLLECTED RUN LISTS EVERY TOOL IT HELD, AND NOTHING LEFT TO DISCOVER. The
 // round's record states what the run held (tools_available): every tool its

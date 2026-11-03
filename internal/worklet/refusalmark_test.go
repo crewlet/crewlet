@@ -48,6 +48,8 @@ var unmarkedByDesign = map[string]string{
 	"worklet: op %q is not one this build writes":          "decoding a record off the log",
 	"worklet: %q is not a barrier envelope":                "decoding a record off the log",
 	"worklet: a barrier carries no op id":                  "decoding a record off the log",
+	"worklet: a %q envelope on %q is not a trimmed ":       "the trim's own record, which no caller sends",
+	"worklet: a trimmed record carries no op id":           "the trim's own record, which no caller sends",
 	"worklet: a thread read names no task":                 "the builtin always names the task it resolved",
 	"worklet: the %s record on %s must be readable ":       "a record version is the encoder's, never the caller's",
 	"worklet: the %s record on %s is stamped version ":     "a record version is the encoder's, never the caller's",

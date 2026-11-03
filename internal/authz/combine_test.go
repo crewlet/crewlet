@@ -114,7 +114,7 @@ func TestAReasonIsAnAdmissionOrARefusalOnAuthorityOneWay(t *testing.T) {
 		authz.ReasonNotShared, authz.ReasonRole}
 	admissions := []authz.Reason{authz.ReasonGrant, authz.ReasonSelf,
 		authz.ReasonAuthor, authz.ReasonLead, authz.ReasonEverybody, authz.ReasonAsked,
-		authz.ReasonShared}
+		authz.ReasonShared, authz.ReasonSeatGrant}
 	for _, r := range authz.Reasons {
 		if got, want := r.Authority(), slices.Contains(authority, r); got != want {
 			t.Errorf("%s.Authority() = %v, want %v", r, got, want)

@@ -61,7 +61,8 @@ func TestNoOtherPackageJudgesWhetherAnAddressIsPublic(t *testing.T) {
 	}
 	for _, h := range hits {
 		t.Errorf("%s judges whether an address is public with %s.\n"+
-			"\task httpx.Public, the one rule, or dial through httpx.Guarded; if this "+
+			"\task httpx.Public (an address and no dial), dial through httpx.Guarded, or take a "+
+			"host's addresses from httpx.ResolvePublic for another program to dial; if this "+
 			"is a method of another type that only shares the name, rename it", h.pos, h.what)
 	}
 	t.Logf("scanned %d production files importing an address package: %d judgement(s) outside httpx",

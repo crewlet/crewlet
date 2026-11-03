@@ -159,9 +159,10 @@ func (c *CSRF) Permits(origin string) bool {
 
 // THE PATHS THIS CHECK DOES NOT JUDGE ARE [Public]'s, and exactly those: the
 // ones a SERVER reaches rather than a browser — a vendor's webhook delivery and
-// the two per-run token paths a sandbox box calls. Each verifies a credential
-// of its own that no browser attaches — a signature over the body, a signed
-// token in the path — so a page on another site cannot make one travel, and
+// the three per-run token edges a sandbox box calls, its telemetry, its tool
+// bridge and a coding box's git. Each verifies a credential of its own that no
+// browser attaches — a signature over the body, a signed token in the path or
+// in git's Basic password — so a page on another site cannot make one travel, and
 // refusing a delivery for the `Origin` a server never sends would take every
 // integration off the air. One list rather than a copy here, so the edges this
 // check skips and the routes the public listener serves cannot drift apart.

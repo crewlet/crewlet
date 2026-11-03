@@ -3,6 +3,7 @@ package schedule
 import (
 	"cmp"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/cron"
@@ -117,6 +118,17 @@ func (e Entry) Runners(o *org.Organization) []string {
 	if o == nil {
 		return nil
 	}
+	return e.runners(o.EffectiveLead)
+}
+
+// runners is [Entry.Runners] with a unit's effective lead found by leadOf: the
+// chart's own [org.Organization.EffectiveLead] for the one entry a tick fires,
+// and an [org.Index]'s for every entry [Describe] lists — the chart's method
+// walks every seat for a lead the unit inherits, so asked of every
+// lead-targeted entry a listing cost entries × seats. One rule either way, and
+// the listing's runners are the tick's
+// (TestDescribeAndTheTickResolveRunnersIdentically).
+func (e Entry) runners(leadOf func(*org.Unit) *org.Role) []string {
 	if e.Scope == types.ScheduleScopeRole {
 		// ScopeName is the seat's own handle, and a human seat cannot
 		// declare a role schedule (the org model forbids it), so this is
@@ -128,7 +140,7 @@ func (e Entry) Runners(o *org.Organization) []string {
 		return nil
 	}
 	if e.Schedule.TargetsLead() {
-		lead := o.EffectiveLead(e.Unit)
+		lead := leadOf(e.Unit)
 		if lead == nil || lead.IsHuman() {
 			return nil
 		}
@@ -223,6 +235,11 @@ func Describe(o *org.Organization, opts DescribeOptions) []Row {
 	}
 
 	entries := Entries(o)
+	// EVERY ENTRY'S LEAD THROUGH ONE INDEX of the chart ([Entry.runners]),
+	// built at the first lead-targeted entry, so a listing with none pays
+	// nothing for it.
+	leads := sync.OnceValue(o.Index)
+	leadOf := func(u *org.Unit) *org.Role { return leads().EffectiveLead(u) }
 	out := make([]Row, 0, len(entries))
 	for _, e := range entries {
 		s := e.Schedule
@@ -245,7 +262,7 @@ func Describe(o *org.Organization, opts DescribeOptions) []Row {
 			Enabled:        s.IsEnabled(),
 			TimeoutSeconds: int(s.Timeout() / time.Second),
 			Catchup:        s.CatchesUp(),
-			Runners:        e.Runners(o),
+			Runners:        e.runners(leadOf),
 		}
 		if e.Scope == types.ScheduleScopeUnit {
 			target := s.Target

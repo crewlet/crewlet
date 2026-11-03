@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -44,7 +45,7 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		{"authority", fmt.Errorf("x: %w", worklet.ErrForbidden), tools.RefusalForbidden},
 		// A FULL INBOX LIST asks for a different gesture, not a smaller
 		// one — read_through — so it is not a content refusal either.
-		{"inbox full", fmt.Errorf("x: %w", worklet.ErrInboxFull), tools.RefusalInboxFull},
+		{"inbox full", fmt.Errorf("x: %w", inbox.ErrFull), tools.RefusalInboxFull},
 		// A SECOND ANSWER THAT LOST THE RACE is refused by the write's own
 		// snapshot, after the thread read passed it — typed, naming who
 		// answered. It is not the node's failure and not a retry.

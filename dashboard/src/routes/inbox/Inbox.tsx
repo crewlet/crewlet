@@ -22,12 +22,13 @@
  * keyboard. A task named on a row or in a byline opens beside the inbox, in
  * the frame's side panel.
  *
- * # Where the company runs no Worklet
+ * # Where the company runs no Worklet and hosts no code
  *
- * Updates, Snoozed and Earlier are Worklet's notices, and Mark all read
- * marks them, so where the company runs another tracker or none
- * (`lib/services.ts`) none of them is asked for or drawn: one line says where
- * asks and mentions go instead ([elsewhereLine]). Needs you stays, because
+ * Updates, Snoozed and Earlier are the native domains' notices — Worklet's
+ * and the code host's, composed by the engine (`inbox`) — and Mark all read
+ * marks them, so where the company runs another tracker or none and hosts no
+ * code (`lib/services.ts`) none of them is asked for or drawn: one line says
+ * where asks and mentions go instead ([elsewhereLine]). Needs you stays, because
  * what fills it without Worklet still arrives: the seats stopped on a
  * spent budget and the engine's conditions (the agents and budget pushes) and
  * the executors parked on a question (`decisions`, which answers them
@@ -103,7 +104,7 @@ import {
 } from "./InboxColumn.tsx";
 import type { AskAnswer } from "~/components/writes.tsx";
 import { InboxPane } from "./InboxPane.tsx";
-import { usePagedInbox } from "./pages.tsx";
+import { usePagedInbox } from "./pages.ts";
 import {
   answeredRows,
   earlierOf,
@@ -111,6 +112,7 @@ import {
   inboxResources,
   inboxSelection,
   inboxRows,
+  isNoticeRow,
   nextAfter,
   noticeRows,
   pairAnswered,
@@ -119,6 +121,7 @@ import {
   rowItem,
   rowKey,
   type InboxRow,
+  type ReadThrough,
 } from "./model.ts";
 
 /**
@@ -201,21 +204,42 @@ export function Inbox() {
   // reconnect is never sent again.
   const owner = viewer.owner;
   const bound = owner !== "";
-  // THE NOTICES ARE WORKLET'S, and asked only where the company runs it:
-  // elsewhere the engine refuses every one of these reads.
+  // THE NOTICES ARE EVERY NATIVE DOMAIN'S, composed by the engine (`inbox`):
+  // Worklet's where the company runs it and the reader holds Worklet, the
+  // code host's where it hosts code — each under its own
+  // permission, which the engine decides — so they are asked for every reader
+  // with a record, and a company running neither answers an empty list.
   const runs = useServicesRun();
   const backends = useBackends();
-  const notices = bound && runs.tracker;
+  const notices = bound && (runs.tracker || runs.code);
+  // EVERY LIST A ROW OPENS FROM ASKS FOR `cards`: what an opened code notice
+  // draws beyond the notice — the change's description, its open findings and
+  // where its merge stands — which the engine judges after it composes the
+  // page, for the notices the page keeps. A read that opens nothing (the
+  // Snoozed link's count below, the frame's badge, Home's Updates) asks for
+  // none, so it judges nothing.
   const updatesRead = useQuery(
-    "work_inbox",
-    notices ? { handle: owner, limit: INBOX_PAGE, unread: true, snoozed: "exclude" } : undefined,
+    "inbox",
+    notices
+      ? { handle: owner, limit: INBOX_PAGE, unread: true, snoozed: "exclude", cards: true }
+      : undefined,
     { enabled: notices, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
   );
   usePageCoverage(updatesRead.data);
   // THE SNOOZED COUNT IS READ WHETHER OR NOT THE LIST IS OPEN, because the link
-  // says it; `only` IS WHAT WAS PUT OFF, and nothing else.
-  const snoozed = usePagedInbox(
+  // says it; `only` IS WHAT WAS PUT OFF, and nothing else. It draws no row, so
+  // it is read bare.
+  const snoozedCount = useQuery(
+    "inbox",
     notices ? { handle: owner, limit: INBOX_PAGE, snoozed: "only" } : undefined,
+    { enabled: notices, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
+  );
+  // THE SNOOZED LIST IS READ ONLY ONCE IT IS OPENED, with the cards its rows
+  // open onto.
+  const snoozed = usePagedInbox(
+    notices && snoozedOpen
+      ? { handle: owner, limit: INBOX_PAGE, snoozed: "only", cards: true }
+      : undefined,
     INBOX_POLL_MS,
     owner,
   );
@@ -223,7 +247,7 @@ export function Inbox() {
   // the read ones are listed (`earlierOf`).
   const earlier = usePagedInbox(
     notices && earlierOpen
-      ? { handle: owner, limit: INBOX_PAGE, unread: false, snoozed: "exclude" }
+      ? { handle: owner, limit: INBOX_PAGE, unread: false, snoozed: "exclude", cards: true }
       : undefined,
     INBOX_POLL_MS,
     owner,
@@ -247,9 +271,11 @@ export function Inbox() {
     setAnsweredOpen(open);
     setArrived(undefined);
   }, []);
-  // THE SNOOZE BOUND, so a preset the engine would refuse is never offered.
-  const person = useQuery("work_person", notices ? { handle: owner } : undefined, {
-    enabled: notices,
+  // THE SNOOZE BOUND, so a preset the engine would refuse is never offered:
+  // Worklet's person record states it, and the code host keeps the same
+  // rule (internal/inbox's MaxSnoozeAhead).
+  const person = useQuery("work_person", bound && runs.tracker ? { handle: owner } : undefined, {
+    enabled: bound && runs.tracker,
   });
   const attention = useAttention();
   const unwatched = useUnwatched();
@@ -372,7 +398,7 @@ export function Inbox() {
             return next;
           }
           const at = live.current.order
-            .filter((r) => r.kind !== "notice" && r.kind !== "answered")
+            .filter((r) => !isNoticeRow(r) && r.kind !== "answered")
             .findIndex((r) => r.key === row.key);
           const given: Settled = { label, row, at: Math.max(0, at) };
           if (answer) given.answer = answer;
@@ -516,12 +542,12 @@ export function Inbox() {
 
   return (
     <div className="inbox-frame" data-phone-pane={single && named ? "true" : undefined}>
-      {/* MARK ALL READ IS WORKLET'S: hidden where the company runs none,
-          and otherwise drawn for every reader, held with its reason where
-          there is nothing of theirs to mark. */}
-      {runs.tracker && (
+      {/* MARK ALL READ IS EVERY SOURCE'S: hidden where the company runs no
+          source of notices, and otherwise drawn for every reader, held with
+          its reason where there is nothing of theirs to mark. */}
+      {(runs.tracker || runs.code) && (
         <PageActions>
-          <MarkAllRead through={notices ? readThrough(loaded) : null} />
+          <MarkAllRead through={notices ? readThrough(loaded) : NOTHING_TO_READ} />
         </PageActions>
       )}
 
@@ -541,8 +567,6 @@ export function Inbox() {
         </Callout>
       ) : null}
 
-      {snoozed.readers}
-      {earlier.readers}
       <div className="inbox-panes">
         {showList && (
           <InboxColumn
@@ -555,8 +579,11 @@ export function Inbox() {
               onOpenChange: setSnoozedOpen,
             }}
             snoozedCount={
-              snoozed.first
-                ? { count: snoozed.first.notices.length, floor: Boolean(snoozed.first.next_cursor) }
+              snoozedCount.data
+                ? {
+                    count: snoozedCount.data.notices.length,
+                    floor: Boolean(snoozedCount.data.next_cursor),
+                  }
                 : null
             }
             earlier={{
@@ -580,16 +607,17 @@ export function Inbox() {
             index={index}
             now={now}
             loading={notices && updatesRead.loading && !updatesRead.data}
-            quiet={runs.tracker ? quiet : null}
+            quiet={runs.tracker || runs.code ? quiet : null}
             more={Boolean(updatesRead.data?.next_cursor)}
             bound={notices}
-            elsewhere={runs.tracker ? null : elsewhereLine(backends?.tracker ?? null)}
+            elsewhere={runs.tracker || runs.code ? null : elsewhereLine(backends?.tracker ?? null)}
             refusal={
               // A READ THAT FAILED IS SAID, never drawn as a quiet list: each
               // read's own refusal, where the rows it would have given go.
               (updatesRead.error ||
                 decisions.error ||
                 answeredRead.error ||
+                snoozedCount.error ||
                 snoozed.error ||
                 earlier.error) && (
                 <>
@@ -618,6 +646,14 @@ export function Inbox() {
                     {null}
                   </QueryState>
                   <QueryState
+                    error={snoozedCount.error}
+                    refusal={snoozedCount.refusal}
+                    detail={snoozedCount.detail}
+                    loading={false}
+                  >
+                    {null}
+                  </QueryState>
+                  <QueryState
                     error={snoozed.error ?? earlier.error}
                     refusal={snoozed.error ? snoozed.refusal : earlier.refusal}
                     loading={false}
@@ -632,8 +668,8 @@ export function Inbox() {
         {showPane && (
           <InboxPane
             row={selected}
-            empty={runs.tracker ? undefined : paneElsewhere(backends?.tracker ?? null)}
-            listEmpty={Boolean(quiet) && runs.tracker}
+            empty={runs.tracker || runs.code ? undefined : paneElsewhere(backends?.tracker ?? null)}
+            listEmpty={Boolean(quiet) && (runs.tracker || runs.code)}
             index={index}
             now={now}
             zone={zone}
@@ -678,29 +714,56 @@ export function paneElsewhere(tracker: OrgServices["tracker"] | null): {
   return { title: "No asks or mentions arrive here", description };
 }
 
+/** A page with nothing unread on it, from either source. */
+const NOTHING_TO_READ: ReadThrough = { tracker: null, code: null };
+
 /**
- * "Mark all read", which reads through the NEWEST UPDATE LOADED and nothing
- * past it: an update that arrived after this page was drawn is one the person
- * has not seen.
+ * "Mark all read", which reads EACH SOURCE through the NEWEST UPDATE LOADED of
+ * its and nothing past it: an update that arrived after this page was drawn
+ * is one the person has not seen. Each domain keeps its own marks on its own
+ * log, so the gesture is one write to each source with anything unread here —
+ * `mark_inbox` for Worklet's notices, `code_mark_inbox` for the code
+ * host's — and the list is re-read past both.
  */
-function MarkAllRead({ through }: { through: string | null }) {
-  const write = useAct("mark_inbox");
+function MarkAllRead({ through }: { through: ReadThrough }) {
+  const tracker = useAct("mark_inbox");
+  const code = useAct("code_mark_inbox");
+  const nothing = !through.tracker && !through.code;
+  // THE BUTTON STANDS FOR WHICHEVER WRITE IT SENDS FIRST, so its access and
+  // its busy state are that write's; the other's refusal is shown beside it.
+  const lead = through.tracker || !through.code ? tracker : code;
   return (
     <>
       <WriteButton
-        write={write}
+        write={lead}
         size="small"
         variant="ghost"
         leadingIcon={<CheckGlyph size="sm" />}
         showRefusal={false}
-        blocked={through ? undefined : "Nothing on this page is unread."}
-        onPress={() =>
-          through && void write.run({ read_through: through }, { done: "Marked all read" })
-        }
+        blocked={nothing ? "Nothing on this page is unread." : undefined}
+        onPress={() => {
+          // EACH WRITE WAITS FOR WHAT IT READS THROUGH: the newest notice
+          // loaded from a domain is how far this page read that domain's
+          // log, so the node that decides the mark is held to having
+          // applied it.
+          if (through.tracker) {
+            void tracker.run(
+              { read_through: through.tracker, seen: through.tracker },
+              { done: "Marked all read" },
+            );
+          }
+          if (through.code) {
+            void code.run(
+              { read_through: through.code, seen: through.code },
+              { done: "Marked all read" },
+            );
+          }
+        }}
       >
         Mark all read
       </WriteButton>
-      <RefusalNote write={write} />
+      <RefusalNote write={tracker} />
+      <RefusalNote write={code} />
     </>
   );
 }

@@ -293,8 +293,12 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  // `seen` IS HOW FAR THIS PAGE READ THE DOMAIN'S LOG (the notice's own
+  // position, the furthest of those a mark names, or the newest loaded): the
+  // mark is decided by whichever data node is asked, and it waits for that
+  // position rather than refusing a notice the person was shown as unknown.
   mark_inbox: {
-    args: ["read", "unread", "snooze", "unsnooze", "read_through"],
+    args: ["read", "unread", "snooze", "unsnooze", "read_through", "seen"],
     domain: "tracker",
     apps: ["worklet"],
     refreshes: [],
@@ -463,6 +467,145 @@ export const ACTIONS = {
     ],
     domain: null,
     apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // THE CODE HOST'S HALF OF AN INBOX'S MARKS: each domain keeps the marks over
+  // its own notices on its own log, so a code notice is marked here and
+  // "Mark all read" sends both, each with its own `seen`.
+  code_mark_inbox: {
+    args: ["read", "unread", "snooze", "unsnooze", "read_through", "seen"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  // A REPOSITORY'S LIFE (`routes/code/repo/RepoWrites.tsx`,
+  // `routes/code/ImportRepo.tsx`). Each lands on the code log, whose position
+  // raises this tab's code floor, and the repository's row and the listing
+  // are both in that domain's session set. Settings › Search mode and the
+  // mirrors, each one settings change of its own; a mirror is a person's
+  // alone, which the deciding data node holds every asker to (U49 a).
+  code_update_repo: {
+    args: ["repo", "search", "mirror_from", "mirror_to"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  // PURGE UNREACHABLE HISTORY, asked of the repository's maintainer once the
+  // person has read who keeps copies (a ConfirmModal): human-only, step-up.
+  code_purge_unreachable: {
+    args: ["repo"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  // IMPORT A REPOSITORY from another host, or follow one as a pull mirror
+  // (`mirror`): human-only. `credential` is the variable's NAME.
+  code_import_repo: {
+    args: ["name", "url", "credential", "owner", "visibility", "default_branch", "mirror"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  // A CHANGE'S PAGE (`routes/code/change/`). Every one lands on the code log,
+  // whose position raises this tab's code floor, and every question a change
+  // page reads is in that domain's session set — its routing too — so none
+  // refreshes anything beyond it. Each names the change by its reference
+  // (`change`, web!42), which carries its repository, so `repo` is a
+  // property the tool takes and the page never needs to send.
+  code_review_change: {
+    // APPROVE, REQUEST CHANGES AND COMMENT: one review of one revision, with
+    // the findings the reader drafted on its lines (kept in the tab's
+    // session storage until this one press sends them all), and `carries`,
+    // the reader's own standing findings it keeps standing.
+    args: ["repo", "change", "revision", "verdict", "summary", "findings", "carries"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  code_comment_on_change: {
+    // THE CONVERSATION'S COMPOSER: a comment of its own; a reply to a thread
+    // or a finding; one on a line (`anchor`); and Resolve on a thread.
+    args: ["repo", "change", "body", "thread", "finding", "anchor", "resolve"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  code_request_review: {
+    // REQUEST REVIEW: ask reviewers, or take an ask back.
+    args: ["repo", "change", "reviewers", "withdraw", "note"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  code_close_change: {
+    // CLOSE AND REOPEN, against the version on screen (`expected_version`),
+    // so a close that raced a push is refused rather than closing what the
+    // reader did not see.
+    args: ["repo", "change", "expected_version", "reason", "reopen"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  code_open_change: {
+    // A COMPARISON'S OPEN CHANGE (`routes/code/commit/ComparePage.tsx`): the
+    // branch compared, proposed into the base branch, its title, description,
+    // work item (prefilled with the one the push that brought its head was
+    // charged to), reviewers to ask once it is open, and whether it opens as
+    // a draft. It names its repository, since no change exists yet to carry
+    // one.
+    args: ["repo", "branch", "target", "title", "body", "draft", "reviewers", "work_item"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  code_apply_suggestions: {
+    // APPLY SUGGESTION on a finding: a commit on the change's branch putting
+    // the suggested lines in place, against the head on screen
+    // (`expected_head`), its finding resolved as a step.
+    args: ["repo", "change", "findings", "expected_head", "message"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  code_merge_change: {
+    // MERGE, ADD TO QUEUE AND OVERRIDE (`routes/code/change/Merge.tsx`): the
+    // head on screen (`expected_head`), how it merges, whether its branch
+    // goes and its work item closes, and — Override's — a person's reason to
+    // merge past the gate. Its record lands on the code log; a work item it
+    // closes is a second write on Worklet's, which the change page does not
+    // read.
+    args: [
+      "repo",
+      "change",
+      "expected_head",
+      "method",
+      "delete_branch",
+      "close_task",
+      "override_reason",
+    ],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
+  code_rerun_checks: {
+    // RE-RUN CHECKS: every check of the change's head whose latest attempt
+    // did not pass, each at its next attempt (`all_failed`), on the checks
+    // log the change's checks tab reads.
+    args: ["repo", "change", "all_failed"],
+    domain: "code",
+    apps: [],
     refreshes: [],
     scope: "person",
   },

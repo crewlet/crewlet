@@ -19,6 +19,7 @@ import { managedSentence } from "~/protocol/configAnswer.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { healthFrame } from "~/test/health.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -79,12 +80,6 @@ function mount(remedy: Remedy | null, viewer: unknown = ADMIN) {
   );
 }
 
-async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-  });
-}
-
 // EACH CEILING OPENS ITS OWN SECTION OF BUDGETS, in the reader's words, at an
 // address the router resolves to that screen: a link that resolved elsewhere
 // would send the person to change a setting that does not refuse them.
@@ -96,7 +91,7 @@ test.each([
   "%o opens Budgets at its section for a reader who may raise it",
   async (remedy, label, section) => {
     mount(remedy);
-    await settle();
+    await afterMicrotasks();
     const link = screen.getByRole("link", { name: label });
     const to = link.getAttribute("href") ?? "";
     const [path, query = ""] = to.replace(/^#\//, "").split("?");
@@ -118,7 +113,7 @@ test.each([
   ],
 ])("%s is told who can raise it, with no link", async (_name, viewer, sentence) => {
   mount({ setting: "assistant_token_budget" }, viewer);
-  await settle();
+  await afterMicrotasks();
   expect(screen.queryByRole("link")).toBeNull();
   expect(screen.getByText(sentence)).toBeDefined();
 });
@@ -129,13 +124,13 @@ test.each([
 // Mutation: resolve model_providers to Budgets, and the screen is not models.
 test("a model's limit opens the company's models, and only for an admin", async () => {
   mount({ setting: "model_providers" });
-  await settle();
+  await afterMicrotasks();
   const to = screen.getByRole("link", { name: "Open models" }).getAttribute("href") ?? "";
   const [path] = to.replace(/^#\//, "").split("?");
   expect(resolve(path!.split("/"))).toMatchObject({ resolved: true, screen: "models" });
   cleanup();
   mount({ setting: "model_providers" }, MEMBER);
-  await settle();
+  await afterMicrotasks();
   expect(screen.queryByRole("link")).toBeNull();
   expect(screen.getByText(ADMIN_CHANGES_MODELS)).toBeDefined();
 });
@@ -155,7 +150,7 @@ test("a refusal no limit caused draws nothing, and asks no gate", () => {
 test("a press on the section already open arrives again, whatever else the address carries", async () => {
   location.hash = "#/company/budgets?section=company&sort=-month&peek=seat%3Apm";
   mount({ setting: "company_token_budget" });
-  await settle();
+  await afterMicrotasks();
   const section = screen.getByTestId("company-section");
   expect(document.activeElement).toBe(section);
   section.blur();

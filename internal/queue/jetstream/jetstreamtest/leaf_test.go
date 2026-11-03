@@ -22,7 +22,7 @@ func TestALeafJoinsAClusterStartedWithLeafListeners(t *testing.T) {
 	}
 
 	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: "leaf", LeafURLs: urls,
-		Replicas: 3})
+		Replicas: 3, FleetAuth: fleetAuth()})
 	if err != nil {
 		t.Fatalf("start a leaf of the cluster: %v", err)
 	}

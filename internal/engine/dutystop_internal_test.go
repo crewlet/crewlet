@@ -102,3 +102,43 @@ func held(t *testing.T, leases coord.Backend, resource string) *coord.Lease {
 	}
 	return lease
 }
+
+// A DECLINED DUTY'S LEASE IS GIVEN BACK, and only this incarnation's.
+//
+// A duty's lease is sized to outlive several of its ticks, so a holder that
+// declined it and merely stopped claiming kept it from every node for the whole
+// TTL. The give-back releases the lease this incarnation holds, so another
+// node's claim takes the duty at once; and it releases nothing it does not
+// hold, so a peer that has since taken the duty keeps it.
+func TestADeclinedDutysLeaseIsGivenBack(t *testing.T) {
+	t.Parallel()
+	e := newSandboxNode(t, parseCompany(t, companyWithoutSandboxDoc))
+	leases := e.backends.Coord
+	const duty = "declining"
+	resource := coord.WorkerResource(duty)
+	claim, giveBack := e.workerDuty(duty, time.Minute), e.workerGiveBack(duty)
+	if claim == nil || giveBack == nil {
+		t.Fatal("the premise: a worker in a fleet has no duty to claim or give back")
+	}
+	if mine, err := claim(t.Context()); err != nil || !mine {
+		t.Fatalf("the premise: the duty was not claimed (%v, %v)", mine, err)
+	}
+
+	released, err := giveBack(t.Context())
+	if err != nil || !released {
+		t.Fatalf("giving back the duty this node holds = (%v, %v), want released", released, err)
+	}
+	peer, _, err := leases.TryAcquire(t.Context(), resource, coord.AcquireOptions{
+		Owner: "peer-incarnation", TTL: time.Minute, Ungated: true})
+	if err != nil || peer == nil {
+		t.Fatalf("a peer could not take the duty at once after it was given back (%v, %v)", peer, err)
+	}
+
+	released, err = giveBack(t.Context())
+	if err != nil || released {
+		t.Fatalf("giving back a duty a peer holds = (%v, %v), want nothing released", released, err)
+	}
+	if lease := held(t, leases, resource); lease == nil || lease.Owner != "peer-incarnation" {
+		t.Fatalf("the peer's lease was touched by a give-back: %+v", lease)
+	}
+}

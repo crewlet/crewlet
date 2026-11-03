@@ -60,11 +60,18 @@ type Ceiling struct {
 // artifact can still message the agent that can, and ask it to summarise the
 // artifact or to tick its approval column. So every verb an agent takes in a
 // turn somebody woke is decided AGAIN FOR THAT REQUESTER on the same object,
-// and admitted only when both are: the agent never discloses an artifact to a
-// requester who could not open it, and never writes on a requester's behalf
-// what the requester could not write. The requester's authority is a ceiling
-// and never a source: whatever is admitted is the agent's own act, recorded as
-// the agent.
+// and admitted only when both are: in that turn the agent discloses no
+// artifact to a requester who could not open it, and writes nothing on a
+// requester's behalf that the requester could not write. The requester's
+// authority is a ceiling and never a source: whatever is admitted is the
+// agent's own act, recorded as the agent.
+//
+// THE CEILING IS THE TURN'S, and ends with it, because it is composed from
+// what woke that turn alone: a colleague the agent asks answers in a turn the
+// agent woke, and the answer wakes the agent in a turn of its own work, so
+// neither is decided for whoever woke the first. Nor does it reach what the
+// agent already knows. It bounds what a turn does for its requester, not what
+// an agent may go on to tell them.
 //
 // # Except the edits an agent makes to its own work
 //

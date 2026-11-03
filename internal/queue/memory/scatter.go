@@ -37,16 +37,22 @@ type serveSub struct {
 }
 
 // Serve makes this client one of subject's answerers.
-func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
+func (q *Queue) Serve(ctx context.Context, subject string, answers int,
+	h queue.AnswerFunc) (queue.Unsubscribe, error) {
+
 	if h == nil {
 		return nil, ErrNilHandler
 	}
 	if subject == "" {
 		return nil, ErrEmptySubject
 	}
+	gate, err := queue.NewAnswerGate(answers)
+	if err != nil {
+		return nil, fmt.Errorf("memory: serve %s: %w", subject, err)
+	}
 	serving, retire := context.WithCancel(context.WithoutCancel(ctx))
 	sub := &serveSub{owner: q, subject: subject, answer: h,
-		serving: serving, retire: retire, gate: queue.NewAnswerGate()}
+		serving: serving, retire: retire, gate: gate}
 	q.broker.mu.Lock()
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()

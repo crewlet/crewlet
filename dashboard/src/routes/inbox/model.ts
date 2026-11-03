@@ -18,6 +18,14 @@
  * but two quiet links at its end, Snoozed and Earlier, each read when it is
  * opened: a filter bar is read every time, and these are opened rarely.
  *
+ * EVERY NATIVE DOMAIN'S NOTICES, ONE LIST. The engine composes the inbox
+ * (`inbox`): Worklet's notices and the code host's, interleaved by when
+ * each happened, each source read under its own permission. A Worklet notice
+ * is a `notice` row as it always was, its own shape in the composed notice's
+ * `extra`; a code notice is a `change` row. Each domain keeps the marks over
+ * its own notices on its own log, so a row is marked through its own source's
+ * tool, and "Mark all read" reads each source through its own newest notice.
+ *
  * AN ASK IS ONE ROW, NOT TWO. The notice that told a person they were asked
  * and the decision the ask IS are the same question, so while the ask is in
  * Needs you its notices ride on it rather than being listed again under
@@ -30,9 +38,22 @@
  * you ([pairAnswered]).
  */
 
-import { firstLine, fmtDateCompact, toWall, zoneOffset } from "~/lib/format.ts";
+import {
+  firstLine,
+  fmtDateCompact,
+  fmtDuration,
+  plural,
+  toWall,
+  zoneOffset,
+} from "~/lib/format.ts";
+import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
+import { zone } from "~/lib/prefs.ts";
+import { companyZone } from "~/lib/range.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
+import { codeReasonPhrase, parseChangeRef, severityWord } from "~/lib/code.ts";
+import { FINDING_SEVERITIES } from "~/contract/code.ts";
+import { changeDiffHref } from "~/routes/code/paths.ts";
 import {
   ENGINE_SENTENCES,
   authorOf,
@@ -49,13 +70,27 @@ import type { AgentAvatar } from "~/lib/avatar.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
 import type { DecisionSubject } from "~/lib/decisions.ts";
+import {
+  checkStateWord,
+  classCount,
+  gatedByChecks,
+  humanPathsAsking,
+  measuredChecks,
+  type ClassCount,
+  type Measured,
+} from "~/lib/checks.ts";
 import type {
   AgentRow,
   AnsweredDecision,
   AnsweredDecisionsAnswer,
   AnsweredWorkAsk,
+  CodeChangeAnswer,
+  CodeCheckRow,
+  CodeInboxNotice,
+  InboxAnswer,
+  InboxNotice,
+  InboxPosition,
   WorkAskRow,
-  WorkInboxAnswer,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
 
@@ -70,6 +105,7 @@ export type InboxRow =
     }
   | { kind: "condition"; key: string; at?: string; item: Attention }
   | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice }
+  | { kind: "change"; key: string; at: string; notice: CodeInboxNotice }
   /**
    * An ask put to the reader and closed in the last week, or an executor's
    * question they answered in it, from `answered_decisions`. An ask is keyed
@@ -79,6 +115,22 @@ export type InboxRow =
    * again.
    */
   | { kind: "answered"; key: string; at: string; answered: AnsweredDecision };
+
+/** A row a reader marks: an update from either source. */
+export type NoticeRow = Extract<InboxRow, { kind: "notice" | "change" }>;
+
+/** Whether a row is an update a reader marks, from either source. */
+export function isNoticeRow(row: InboxRow): row is NoticeRow {
+  return row.kind === "notice" || row.kind === "change";
+}
+
+/**
+ * A code notice's row key: the record id behind a prefix of its own, so a
+ * code record and a Worklet record can never name one row in the URL.
+ */
+export function changeRowKey(recordId: string): string {
+  return `change:${recordId}`;
+}
 
 /** One record the Inbox shows, as the assistant's page context names it. */
 export interface InboxResource {
@@ -124,6 +176,10 @@ export function inboxSelection(row: InboxRow | null): InboxSelection | null {
       return null;
     case "notice":
       return of("task", taskId(noticeItem(row.notice)), "update");
+    case "change":
+      // A CODE NOTICE NAMES NO RECORD the page context reads: its change's
+      // own page is where what was said on it lives.
+      return null;
     case "answered":
       return "run" in row.answered
         ? of("run", row.answered.run.turn_id, "decision")
@@ -186,15 +242,16 @@ export interface InboxRows {
 export function inboxRows(input: {
   subjects: readonly DecisionSubject[];
   conditions: readonly Attention[];
-  /** The unread notices that are not snoozed: what Updates lists. */
-  notices: readonly WorkInboxNotice[];
+  /** The unread notices that are not snoozed, every source's: what Updates lists. */
+  notices: readonly InboxNotice[];
 }): InboxRows {
   const { subjects, conditions, notices } = input;
   const byAsk = new Map<string, WorkInboxNotice[]>();
   for (const n of notices) {
-    const ask = n.ask?.comment;
+    if (n.source !== "tracker") continue;
+    const ask = n.extra.ask?.comment;
     if (!ask) continue;
-    byAsk.set(ask, [...(byAsk.get(ask) ?? []), n]);
+    byAsk.set(ask, [...(byAsk.get(ask) ?? []), n.extra]);
   }
   const attached = new Set<string>();
   const needs: InboxRow[] = subjects.map((subject) => {
@@ -211,14 +268,17 @@ export function inboxRows(input: {
   };
 }
 
-/** Notices as rows, for Updates and for the Snoozed and Earlier links. */
-export function noticeRows(notices: readonly WorkInboxNotice[]): InboxRow[] {
-  return notices.map((notice) => ({
-    kind: "notice",
-    key: notice.record_id,
-    at: notice.at,
-    notice,
-  }));
+/**
+ * Notices as rows, for Updates and for the Snoozed and Earlier links, in the
+ * order the engine composed them: a Worklet notice as a `notice` row, a code
+ * notice as a `change` row.
+ */
+export function noticeRows(notices: readonly InboxNotice[]): InboxRow[] {
+  return notices.map((n): InboxRow =>
+    n.source === "code"
+      ? { kind: "change", key: changeRowKey(n.record_id), at: n.at, notice: n.extra }
+      : { kind: "notice", key: n.record_id, at: n.at, notice: n.extra },
+  );
 }
 
 /**
@@ -228,7 +288,7 @@ export function noticeRows(notices: readonly WorkInboxNotice[]): InboxRow[] {
  * that is not snoozed, read or not, so Earlier is that page with the unread
  * ones taken out (they are in Updates already).
  */
-export function earlierOf(notices: readonly WorkInboxNotice[]): WorkInboxNotice[] {
+export function earlierOf(notices: readonly InboxNotice[]): InboxNotice[] {
   return notices.filter((n) => n.read);
 }
 
@@ -254,28 +314,85 @@ export function nextAfter(
   return following ?? now.find(open) ?? null;
 }
 
+/** Where "Mark all read" reads each source through, where it has anything unread. */
+export interface ReadThrough {
+  tracker: string | null;
+  code: string | null;
+}
+
 /**
- * Where "Mark all read" reads through: the newest position among the notices
- * LOADED, as `<stream>@<generation>:<sequence>`.
+ * Where "Mark all read" reads through: for EACH SOURCE, the newest position
+ * among its notices LOADED, as `<stream>@<generation>:<sequence>`.
+ *
+ * ONE POSITION PER SOURCE, because each domain counts its own log: a
+ * position on Worklet's log says nothing about the code log's, so the
+ * gesture is two writes, each through its own source's newest notice.
  *
  * THE NEWEST LOADED, never "everything": a notice that arrived after this
  * page was drawn is one the person has not seen, and reading through it on
- * their behalf would mark it without them. Null when nothing loaded is
- * unread, since the gesture would change nothing.
+ * their behalf would mark it without them. Null for a source with nothing
+ * loaded unread, since its gesture would change nothing.
  */
-export function readThrough(notices: readonly WorkInboxNotice[]): string | null {
-  let newest: WorkInboxNotice | null = null;
+export function readThrough(notices: readonly InboxNotice[]): ReadThrough {
+  const newest: Record<"tracker" | "code", InboxNotice | null> = { tracker: null, code: null };
   for (const n of notices) {
     if (n.read) continue;
+    const held = newest[n.source];
+    const at = n.position;
     if (
-      !newest ||
-      n.log_generation > newest.log_generation ||
-      (n.log_generation === newest.log_generation && n.log_seq > newest.log_seq)
+      !held ||
+      (at.generation ?? 0) > (held.position.generation ?? 0) ||
+      ((at.generation ?? 0) === (held.position.generation ?? 0) && at.seq > held.position.seq)
     ) {
-      newest = n;
+      newest[n.source] = n;
     }
   }
-  return newest ? `${newest.log_stream}@${newest.log_generation}:${newest.log_seq}` : null;
+  const spelled = (n: InboxNotice | null) => (n ? spelledPosition(n.position) : null);
+  return { tracker: spelled(newest.tracker), code: spelled(newest.code) };
+}
+
+/**
+ * A notice's position as a write's argument spells one,
+ * `<stream>@<generation>:<sequence>` — what `read_through` reads through and
+ * a mark's `seen` waits for (`mark_inbox`, `code_mark_inbox`).
+ */
+export function spelledPosition(p: InboxPosition): string {
+  return `${p.stream}@${p.generation ?? 0}:${p.seq}`;
+}
+
+/** Where a notice sits on its domain's log, as its own fields carry it. */
+export interface NoticeLogPosition {
+  log_stream: string;
+  log_generation: number;
+  log_seq: number;
+}
+
+/**
+ * The floor a mark of these notices waits for — the furthest of their own
+ * positions, spelled as `seen` takes it — or undefined for none. A mark is
+ * decided by whichever data node is asked, which may not have reached a notice
+ * this page was read with elsewhere; held to the furthest, it waits for every
+ * one it names. One log's notices only: a position on one log says nothing of
+ * another's, and each mark tool refuses a floor on a log that is not its own.
+ */
+export function noticeFloor(notices: readonly NoticeLogPosition[]): string | undefined {
+  let furthest: NoticeLogPosition | undefined;
+  for (const n of notices) {
+    if (
+      !furthest ||
+      n.log_generation > furthest.log_generation ||
+      (n.log_generation === furthest.log_generation && n.log_seq > furthest.log_seq)
+    ) {
+      furthest = n;
+    }
+  }
+  return furthest
+    ? spelledPosition({
+        stream: furthest.log_stream,
+        generation: furthest.log_generation,
+        seq: furthest.log_seq,
+      })
+    : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +465,10 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
       if (n.actor_kind === "system") return null;
       return whoOf(index, n.actor, n.actor_kind);
     }
+    case "change":
+      // A CODE NOTICE NAMES NOBODY: the code host keeps who it reached and
+      // why, and the change's own page says who said what.
+      return null;
   }
   return null;
 }
@@ -359,6 +480,7 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
  */
 export function rowName(row: InboxRow, who: Who | null): string {
   if (who) return who.name;
+  if (row.kind === "change") return row.notice.change_ref;
   return row.kind === "condition" ? "The company" : "The engine";
 }
 
@@ -398,8 +520,18 @@ export function rowItem(row: InboxRow): ItemRef | null {
       const item = noticeItem(row.notice);
       return item.id || item.key ? item : null;
     }
+    case "change":
+      // THE WORK ITEM THE CHANGE IMPLEMENTS is the row's task, as a turn's is
+      // a run's: the intent the change serves, one click from the card.
+      return changeItem(row.notice);
   }
   return null;
+}
+
+/** The work item a code notice's change implements, to address it, or null. */
+function changeItem(notice: CodeInboxNotice): ItemRef | null {
+  const work = notice.change?.work_item;
+  return work ? turnItem({ ...work, project: work.project ?? "" }) : null;
 }
 
 /** The work item a row is on, by the key a reader reads, or "". */
@@ -423,8 +555,172 @@ export function rowKey(row: InboxRow): string {
       return "run" in row.answered ? (row.answered.run.work_item?.key ?? "") : row.answered.ask.key;
     case "notice":
       return row.notice.subject_key ?? "";
+    case "change":
+      return row.notice.change?.work_item?.key ?? "";
   }
   return "";
+}
+
+/**
+ * What a code notice says: the change's title as its row's line, and what the
+ * record said — a comment, a review's summary, the description it opened with
+ * — as the quieter words after it.
+ */
+export function changeWords(notice: CodeInboxNotice): { text: string; excerpt?: string } {
+  const text = notice.change?.title || notice.change_ref;
+  const said = plainText(notice.excerpt ?? "");
+  return said ? { text, excerpt: said } : { text };
+}
+
+/** How many open agent findings stand on a change at one weight. */
+export interface FindingCount {
+  severity: string;
+  count: number;
+}
+
+/**
+ * A code notice's card, INTENT FIRST: what the change is for before what it
+ * did — the work item it implements and the description its author wrote —
+ * then what stands in its way: the findings seats raised that still stand
+ * open, the heaviest first, and the one sentence of where its merge stands.
+ * Its diff is one click away, on the change's own page.
+ *
+ * DRAWN FROM THE NOTICE ALONE, with no question per card: the engine reads
+ * all of it with the inbox page, in the page's one snapshot
+ * (`code.NoticeChange`), so a page of fifty cards is one read and a card
+ * never says something the row beside it contradicts.
+ */
+export interface ChangeCard {
+  /** The change's repository and number, from its reference (`web!42`); null
+   *  for a reference this build cannot read, which then links nowhere. */
+  named: { repo: string; number: number } | null;
+  /** Why it reached the reader, in their own voice ("asked for your review"). */
+  why: string;
+  /** The work item it implements, to open, and the key it is named by. */
+  item: ItemRef | null;
+  itemKey: string;
+  /** Its description's opening, ending in "…" where the engine cut it; "" for none. */
+  intent: string;
+  /** Its open agent findings by weight, the heaviest first; none at zero. */
+  findings: FindingCount[];
+  /** Where a live change's merge stands, the engine's sentence; null for a change
+   *  no longer live, or one whose change no row holds any more. */
+  readiness: string | null;
+  /** The change's page on its diff; null where the reference names no change. */
+  diff: string | null;
+}
+
+/** A code notice as its card draws it — [ChangeCard]. */
+export function changeCard(notice: CodeInboxNotice): ChangeCard {
+  const named = parseChangeRef(notice.change_ref);
+  const change = notice.change;
+  const body = change?.body ?? "";
+  return {
+    named,
+    why: codeReasonPhrase(notice.reason, "short"),
+    item: changeItem(notice),
+    itemKey: change?.work_item?.key ?? "",
+    intent: body && change?.body_cut ? `${body}…` : body,
+    findings: findingCounts(change?.agent_findings),
+    readiness: change?.readiness?.first || null,
+    diff: named ? changeDiffHref(named.repo, named.number) : null,
+  };
+}
+
+/**
+ * What a change's merge gate says on its card (M5), read for the ONE card
+ * the reader has open — never a question per listed row, which keeps a page
+ * of fifty cards one read ([ChangeCard]):
+ *
+ * - `measured`: what the head revision's REQUIRED checks measured, each
+ *   one's state and how long it ran — durations, never tokens: a check runs
+ *   no model. Null where the target holds the change to no check (its
+ *   readiness judges no `check` precondition), so a change into an ungated
+ *   branch says nothing of checks rather than "none measured".
+ * - `classes`: the head revision's change classes in a line — how many of
+ *   its touched paths change only whitespace or only comments — or "" where
+ *   no lexer classed anything.
+ * - `humanPaths`: the engine's sentence of the human paths that asked for
+ *   THIS reader — the gate's human_approval precondition, unmet and waiting
+ *   on them — or "" where none does.
+ *
+ * Every field is read from the change's own answers (`code_change`'s
+ * readiness and revisions, `code_checks` of the change at each check's latest
+ * attempt, every page of it), so the card needs nothing of the engine besides.
+ */
+export interface ChangeGate {
+  measured: Measured[] | null;
+  classes: string;
+  humanPaths: string;
+}
+
+/** A change's gate as its open card draws it — [ChangeGate]. */
+export function changeGate(
+  answer: CodeChangeAnswer | undefined,
+  checks: readonly CodeCheckRow[],
+  handle: string,
+): ChangeGate {
+  const change = answer?.change;
+  const readiness = change?.readiness;
+  const head = (answer?.revisions ?? []).find((r) => r.n === change?.revision);
+  return {
+    measured: change && gatedByChecks(readiness) ? measuredChecks(checks, change.head) : null,
+    classes: classesLine(classCount(head?.facts)),
+    humanPaths: humanPathsAsking(readiness, handle) ?? "",
+  };
+}
+
+/**
+ * A revision's change classes in a line: "Of the 5 paths it touches, 2
+ * change only whitespace, 1 only comments; the rest change code" — the rest
+ * said only where every path was classified, since a path no lexer reached
+ * is in neither list without being code. "" where nothing was classed.
+ */
+export function classesLine(count: ClassCount | null): string {
+  if (!count) return "";
+  const parts: string[] = [];
+  if (count.whitespaceOnly > 0) parts.push(`${count.whitespaceOnly} change only whitespace`);
+  if (count.commentOnly > 0) parts.push(`${count.commentOnly} only comments`);
+  if (parts.length === 0) return count.complete ? "Every path it touches changes code" : "";
+  const lead =
+    count.touched === null
+      ? "Of the paths it touches"
+      : `Of the ${plural(count.touched, "path")} it touches`;
+  return `${lead}, ${parts.join(", ")}${count.complete ? "; the rest change code" : ""}`;
+}
+
+/** One line of what a check measured: "unit passed in 1m 4s", "e2e running". */
+export function measuredLine(m: Measured): string {
+  const word = checkStateWord(m.state);
+  return m.durationMs === null
+    ? `${m.name} ${word}`
+    : `${m.name} ${word} in ${fmtDuration(m.durationMs)}`;
+}
+
+/**
+ * A card's open agent findings as one line, the heaviest first: "Blocker 1 ·
+ * Nit 3". Weight then count, never "3 nit": a weight is an adjective ("Major"),
+ * and no plural reads right after a number for all four. "" for none.
+ */
+export function findingsLine(findings: readonly FindingCount[]): string {
+  return findings.map((f) => `${severityWord(f.severity)} ${f.count}`).join(" · ");
+}
+
+/**
+ * Counts by weight, in the contract's order, the heaviest first — a blocker
+ * before a nit — and a weight a newer engine names after every one this build
+ * knows, by name, rather than dropped.
+ */
+function findingCounts(counts: Readonly<Record<string, number>> | undefined): FindingCount[] {
+  const known: readonly string[] = FINDING_SEVERITIES;
+  const rank = (severity: string) => {
+    const at = known.indexOf(severity);
+    return at < 0 ? known.length : at;
+  };
+  return Object.entries(counts ?? {})
+    .filter(([, count]) => count > 0)
+    .map(([severity, count]) => ({ severity, count }))
+    .sort((a, b) => rank(a.severity) - rank(b.severity) || a.severity.localeCompare(b.severity));
 }
 
 /**
@@ -591,9 +887,14 @@ export function shortWhen(at: string | undefined, now: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h`;
-  if (hours < 24 * 7) return new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(t);
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(t);
+  // IN THE READER'S ZONE, as every other time on the screen: a formatter with
+  // no zone writes in the runtime's, which a suite pinning one does not move.
+  if (hours < 24 * 7) return dateTimeFormat(undefined, zone(), WEEKDAY).format(t);
+  return dateTimeFormat(undefined, zone(), MONTH_DAY).format(t);
 }
+
+const WEEKDAY: DateShape = Object.freeze({ weekday: "short" });
+const MONTH_DAY: DateShape = Object.freeze({ month: "short", day: "numeric" });
 
 /**
  * A moment on the READER's own clock, to the minute: the time alone today and
@@ -628,7 +929,7 @@ export function moment(at: string, now: number): string {
  */
 export function inboxQuiet(input: {
   /** The Updates answer, or null where there is none (unanswered, or nobody signed in). */
-  answer: WorkInboxAnswer | null;
+  answer: InboxAnswer | null;
   /** The notices are part of this view: a reader with a record of their own. */
   bound: boolean;
   error: boolean;
@@ -641,7 +942,7 @@ export function inboxQuiet(input: {
   if (error || shown > 0) return null;
   if (!bound) return { title: "Nothing needs a decision", hint: `Checked and clear: ${watched}.` };
   if (!answer) return null;
-  return (answer.seen_through?.seq ?? 0) > 0
+  return answer.sources.some((s) => (s.seen_through?.seq ?? 0) > 0)
     ? {
         title: "You are caught up",
         hint: "Read updates are under Earlier updates.",
@@ -686,7 +987,9 @@ export function snoozePresets(
   zone: string | undefined,
   maxAheadSeconds: number | undefined,
 ): SnoozePreset[] {
-  const tz = zone || "UTC";
+  // ONE CLOCK FOR THE WHOLE MENU, the company's as this runtime reads it, so
+  // the day a preset lands on and the instant it names are read on one.
+  const tz = companyZone(zone);
   const civil = civilDate(now, tz);
   const tomorrow = addDays(civil, 1);
   // Monday is 1; a reader on a Monday means the one after.
@@ -714,36 +1017,21 @@ interface Civil {
   d: number;
 }
 
+const CIVIL: DateShape = Object.freeze({ year: "numeric", month: "2-digit", day: "2-digit" });
+
+/** The civil date an instant falls on in `tz`, a zone this runtime reads ([companyZone]). */
 function civilDate(at: number, tz: string): Civil {
-  let parts: Intl.DateTimeFormatPart[];
-  try {
-    parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(at);
-  } catch {
-    parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "UTC",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(at);
-  }
+  const parts = dateTimeFormat("en-CA", tz, CIVIL).formatToParts(at);
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
   return { y: get("year"), m: get("month"), d: get("day") };
 }
 
 /** A civil date as a reader names it: "Mon, Sep 28". */
 function dayIn(c: Civil): string {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(Date.UTC(c.y, c.m - 1, c.d));
+  return dateTimeFormat("en-US", "UTC", DAY).format(Date.UTC(c.y, c.m - 1, c.d));
 }
+
+const DAY: DateShape = Object.freeze({ weekday: "short", month: "short", day: "numeric" });
 
 function addDays(c: Civil, days: number): Civil {
   const t = new Date(Date.UTC(c.y, c.m - 1, c.d + days));
@@ -751,20 +1039,14 @@ function addDays(c: Civil, days: number): Civil {
 }
 
 /**
- * 09:00 on a civil date in a zone, as an instant. The zone's offset is read at
- * the guess and again at the answer, because the two differ exactly on the
- * day a clock moves.
+ * 09:00 on a civil date in `tz`, a zone this runtime reads ([companyZone]),
+ * as an instant. The zone's offset is read at the guess and again at the
+ * answer, because the two differ exactly on the day a clock moves.
  */
 function atNine(c: Civil, tz: string): string {
   const wall = Date.UTC(c.y, c.m - 1, c.d, 9, 0, 0);
-  let offset: number;
-  try {
-    offset = zoneOffset(wall, tz);
-    offset = zoneOffset(wall - offset, tz);
-  } catch {
-    offset = 0;
-  }
-  return new Date(wall - offset).toISOString();
+  const guess = zoneOffset(wall, tz);
+  return new Date(wall - zoneOffset(wall - guess, tz)).toISOString();
 }
 
 // ---------------------------------------------------------------------------

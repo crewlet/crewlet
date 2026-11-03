@@ -324,6 +324,10 @@ func (e *Engine) NewReconciler(ctx context.Context, opts ReconcilerOptions) (*Re
 			"boots on from its own database: %w", err)
 	}
 	r.boots(boot.ID)
+	// RECORDED ON THE ENGINE once it can answer, because what answers for
+	// the activated epoch rather than the applied one reads its progress:
+	// [Engine.CodeUnserved] and [Engine.servedFleetRevision].
+	e.reconciler.Store(r)
 	return r, nil
 }
 
@@ -375,6 +379,14 @@ type applyProgress struct {
 	// stays confirmed lag across every activation made while it hangs,
 	// and a quick one is ordinary propagation.
 	attemptStarted time.Time
+
+	// targetRead is whether this node has read target's revision, and
+	// targetCode whether that revision sets code.native: what tells a node
+	// that serves no code host because the company does not host code from
+	// one that serves none of the code host the fleet just turned on
+	// ([Engine.CodeUnserved]). Reset with target, set once an attempt at it
+	// has decoded the revision — before the apply that may fail.
+	targetRead, targetCode bool
 }
 
 // behindFor is how long the progress has been behind on the target epoch,
@@ -424,6 +436,19 @@ func (r *Reconciler) snapshot() applyProgress {
 // publish replaces the progress. Callers are the tick alone, which is why a
 // plain load-modify-store needs no compare-and-swap.
 func (r *Reconciler) publish(p applyProgress) { r.progress.Store(&p) }
+
+// noteTargetCode records whether the revision of epoch — the target the tick
+// is applying — sets code.native. The tick alone calls it, like every
+// writer of the progress; an epoch the progress has moved past is not
+// recorded.
+func (r *Reconciler) noteTargetCode(epoch int64, hosts bool) {
+	p := r.snapshot()
+	if p.target != epoch {
+		return
+	}
+	p.targetRead, p.targetCode = true, hosts
+	r.publish(p)
+}
 
 // Applied is the epoch this node is serving, or 0 before its first apply.
 func (r *Reconciler) Applied() int64 { return r.snapshot().applied }
@@ -607,21 +632,36 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 	if err != nil {
 		return configplane.FleetView{}, err
 	}
-	attempts := progress.failedAttempts(target.Epoch)
+	view := progress.selfView(target.Epoch, r.now())
+	view.PeersOK, view.PeersReported = ok, reported
+	return view, nil
+}
+
+// selfView is this node's half of the fleet view against the epoch target, as
+// of now: the epoch it has applied, its own outcome, how long it has been
+// behind and how many attempts at target concluded in failure — every field
+// read from this one progress, so they describe one moment. The peers are the
+// other half, which only the posture reads ([Reconciler.view]).
+//
+// ONE CONSTRUCTION for the posture and for the engine's irreversible
+// judgements ([Engine.servedFleetRevision]), which tell a node merely applying
+// the pointer's epoch from one that failed it by the same rule
+// ([configplane.FleetView.LagConfirmed]) — so the two can never disagree about
+// which of those this node is.
+func (p applyProgress) selfView(target int64, now time.Time) configplane.FleetView {
+	attempts := p.failedAttempts(target)
 	return configplane.FleetView{
-		TargetEpoch:  target.Epoch,
-		AppliedEpoch: applied,
+		TargetEpoch:  target,
+		AppliedEpoch: p.applied,
 		SelfStatus:   selfStatus(attempts),
 		// MEASURED, because the tick is synchronous and the readers are
 		// not. A posture is asked for by the probes and the heartbeat
 		// WHILE an apply runs, when this node has neither reached the
 		// epoch nor failed it — which is propagation, and reads wait,
 		// until it has lasted longer than propagation could explain.
-		BehindFor:     progress.behindFor(target.Epoch, r.now()),
-		Attempts:      attempts,
-		PeersOK:       ok,
-		PeersReported: reported,
-	}, nil
+		BehindFor: p.behindFor(target, now),
+		Attempts:  attempts,
+	}
 }
 
 // selfStatus is this node's own outcome for the current target.
@@ -671,6 +711,7 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		// because it holds the tick that would get here; what it is late
 		// by meanwhile is [applyProgress.attemptStarted].
 		progress.target, progress.attempts, progress.behindSince = target.Epoch, 0, time.Time{}
+		progress.targetRead, progress.targetCode = false, false
 		if progress.applied != target.Epoch {
 			progress.behindSince = r.now()
 		}
@@ -954,6 +995,11 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		return configplane.StatusError, store.Revision{}, nil,
 			fmt.Errorf("engine: parse revision %s: %w", target.RevisionID, err)
 	}
+	// WHAT THE TARGET SAYS OF THE CODE HOST, noted before anything below can
+	// refuse it: a node whose apply of a revision that turns code.native on
+	// fails serves none of the code host, and must say so rather than tell
+	// a person the company hosts no code ([Engine.CodeUnserved]).
+	r.noteTargetCode(target.Epoch, cfg.Code.Native)
 	if invalid := cfg.ValidateRunnable(); invalid != nil {
 		return configplane.StatusError, store.Revision{}, nil,
 			fmt.Errorf("engine: revision %s is not a runnable company; activate a "+
@@ -969,6 +1015,8 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		r.warnAdmission(ctx, target, cfg)
 		reportDanglingRefs(ctx, r.log, target, cfg)
 		reportCompanyAdvisories(ctx, r.log, target, cfg)
+		warnTiers(ctx, r.log, r.engine.boot, cfg, r.engine.codeCacheBudget(),
+			"revision", target.RevisionID, "epoch", target.Epoch)
 		r.engine.reportBridgeGaps(ctx, r.log, target, cfg)
 		reportContainerReach(ctx, r.log, target, r.engine.boot, cfg)
 	}
@@ -1046,11 +1094,12 @@ func violations(warnings []config.Warning) []violation {
 // such revision" once per tick for the life of the deployment.
 //
 // It writes nothing. The body is whatever the coordination bucket holds, and
-// anything that can reach the broker can write it; the seal under the fleet's
-// keyring is what says a node of this fleet wrote it, so the caller opens it
-// before any of it is kept ([Reconciler.keep]) — a body that does not open is
-// refused before it becomes a revision this node's operator surface would
-// show and offer to revert to.
+// anything the broker admits can write it — its admission vouches for a
+// connection, never a value (ADR-0094); the seal under the fleet's keyring is
+// what says a node of this fleet wrote it, so the caller opens it before any of
+// it is kept ([Reconciler.keep]) — a body that does not open is refused before
+// it becomes a revision this node's operator surface would show and offer to
+// revert to.
 //
 // THE POINTER'S RECORD of the revision either way: its origin and its instant
 // are what every node keeps, so a revision reads the same on all of them.

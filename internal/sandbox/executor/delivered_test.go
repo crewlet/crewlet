@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -99,10 +100,11 @@ func TestTheReportsDeliveredLinesAreItsRefs(t *testing.T) {
 
 // A `Delivered:` line is read however a report lays it out — a list marker,
 // emphasis, a ref in backticks — and one that does not hold a ref alone is not
-// a ref line: prose after the label, nothing after it, or a URL that carries
-// a credential.
+// a ref line: prose after the label, nothing after it, a branch longer than a
+// ref can be, or a URL that carries a credential.
 func TestADeliveredLineIsReadWhateverItsMarkup(t *testing.T) {
 	t.Parallel()
+	longest := strings.Repeat("b", gitref.MaxBranchBytes)
 	for line, want := range map[string]string{
 		"Delivered: wip/t1":                     "wip/t1",
 		"- Delivered: wip/t1":                   "wip/t1",
@@ -110,6 +112,8 @@ func TestADeliveredLineIsReadWhateverItsMarkup(t *testing.T) {
 		"**Delivered**: <https://h/a/b/pull/1>": "https://h/a/b/pull/1",
 		"2. delivered: feature/retry.":          "feature/retry",
 		"  DELIVERED:   wip/t1  ":               "wip/t1",
+		"Delivered: " + longest:                 longest,
+		"Delivered: " + longest + "b":           "",
 		"Delivered: the fix for the flake":      "",
 		"Delivered:":                            "",
 		"Delivered: wip..t1":                    "",
@@ -124,6 +128,41 @@ func TestADeliveredLineIsReadWhateverItsMarkup(t *testing.T) {
 		if got := (executor.ClaudeCode{}).Parse(`{"type":"result","subtype":"success","result":` +
 			quote(t, line) + `}`).DeliveredRefs; !slices.Equal(got, expected) {
 			t.Errorf("%q: refs = %q, want %q", line, got, expected)
+		}
+	}
+}
+
+// A REF IS HANDED ON AS THE ACCOUNT WROTE IT, a URL that is not UTF-8
+// included — on a `Delivered:` line, or in the host a scrape reads — because
+// whether the run's record can carry a ref is the coordinator's to judge, for
+// every runner alike, and it can judge only the bytes it is handed: mended
+// into UTF-8 here, as a decode mends one, the ref would reach the record as a
+// URL nobody delivered, with nothing left to tell it from one somebody did.
+//
+// The two paths that read an account raw: the report, and OpenCode's plain
+// output. Claude Code's result and OpenCode's event stream are JSON decoded
+// before any ref is read from them, and JSON is UTF-8 throughout.
+func TestADeliveredRefIsHandedOnAsTheAccountWroteIt(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]string{
+		"Delivered: https://h/a/b/pull/1\xff":         "https://h/a/b/pull/1\xff",
+		"Opened https://h\xff/a/b/pull/2 for review.": "https://h\xff/a/b/pull/2",
+	} {
+		runner := executor.NewClaudeCode()
+		b := box(t, runner)
+		b.Put(paths(b).Findings(), "Outcome: succeeded\n"+text)
+		b.Put(paths(b).ExitCode(), "0")
+		collected, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		for path, got := range map[string][]string{
+			"the report":              collected.DeliveredRefs,
+			"opencode's plain output": executor.OpenCode{}.Parse(text).DeliveredRefs,
+		} {
+			if !slices.Equal(got, []string{want}) {
+				t.Errorf("%s: %q: refs = %q, want %q", path, text, got, []string{want})
+			}
 		}
 	}
 }
@@ -185,25 +224,67 @@ func TestACollectionPrefersANamedRefWhereverItIs(t *testing.T) {
 // nothing.
 func TestTheReportInstructionsExamplesAreReadAsTheirRefs(t *testing.T) {
 	t.Parallel()
-	instruction := executor.FindingsInstruction("/tmp/findings.md")
-	var lines, want []string
-	for i, span := range strings.Split(instruction, "`") {
-		ref, ok := strings.CutPrefix(span, "Delivered: ")
-		if i%2 == 0 || !ok || strings.HasPrefix(ref, "<") {
-			continue
+	// With and without the native half, whose own words about the line must
+	// read as no example of one.
+	for _, native := range [][]string{nil, {"web", "api"}} {
+		instruction := executor.FindingsInstruction("/tmp/findings.md", native)
+		var lines, want []string
+		for i, span := range strings.Split(instruction, "`") {
+			ref, ok := strings.CutPrefix(span, "Delivered: ")
+			if i%2 == 0 || !ok || strings.HasPrefix(ref, "<") {
+				continue
+			}
+			lines = append(lines, span)
+			want = append(want, ref)
 		}
-		lines = append(lines, span)
-		want = append(want, ref)
-	}
-	if len(want) < 2 {
-		t.Fatalf("the instruction shows %d examples of a Delivered line, want a branch and a URL:\n%s",
-			len(want), instruction)
-	}
-	refs := refsThroughEveryPath(t, strings.Join(lines, "\n"))
-	for path, got := range refs {
-		if !slices.Equal(got, want) {
-			t.Errorf("%s: the instruction's examples read as %q, want %q", path, got, want)
+		if len(want) != 2 {
+			t.Fatalf("native %q: the instruction shows %d examples of a Delivered line, want a branch and "+
+				"a URL:\n%s", native, len(want), instruction)
 		}
+		refs := refsThroughEveryPath(t, strings.Join(lines, "\n"))
+		for path, got := range refs {
+			if !slices.Equal(got, want) {
+				t.Errorf("native %q, %s: the instruction's examples read as %q, want %q", native, path, got,
+					want)
+			}
+		}
+	}
+}
+
+// WHAT THE ENGINE REPORTS FOR A RUN, THE RUN IS TOLD: its pushes to the
+// repositories it was given on the engine's own code host are read from the
+// push record and handed to the executor, so the report is asked for lines
+// only for what it delivered elsewhere — a line for each such push is the
+// same delivery said twice, once by the record and once by the box. A run
+// given none of them is told nothing of it.
+func TestTheFindingsInstructionSaysWhatIsReported(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		native []string
+		names  string
+	}{
+		{[]string{"web"}, `Your pushes to "web" on this company's code host`},
+		{[]string{"web", "api"}, `Your pushes to "web" and "api" on this company's code host`},
+		{[]string{"web", "api", "docs"}, `Your pushes to "web", "api" and "docs" on this company's code host`},
+	} {
+		instruction := executor.FindingsInstruction("/tmp/findings.md", tc.native)
+		if !strings.Contains(instruction, tc.names+" are recorded and reported for you: write a "+
+			"`Delivered:` line only for what you delivered somewhere else.") {
+			t.Errorf("native %q: the instruction does not say the pushes are reported:\n%s", tc.native,
+				instruction)
+		}
+	}
+	if none := executor.FindingsInstruction("/tmp/findings.md", nil); strings.Contains(none, "code host") {
+		t.Errorf("a run given no repository on the code host is told of its pushes there:\n%s", none)
+	}
+
+	// AND A RUNNER PUTS IT IN THE TEXT ITS BOX IS GIVEN, from the run's own
+	// request. Mutation: finalSystem passing no repositories — red.
+	_, system, _ := systemOfRun(t, executor.NewClaudeCode(), sandbox.RunRequest{
+		Brief: "fix the flake", ReportedRepos: []string{"web", "api"},
+	})
+	if !strings.Contains(system, `Your pushes to "web" and "api" on this company's code host are recorded`) {
+		t.Errorf("the run's standing instructions do not say its pushes are reported:\n%s", system)
 	}
 }
 

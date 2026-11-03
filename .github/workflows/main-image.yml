@@ -10,9 +10,10 @@ name: main image
 # (internal/version), which no release version can be.
 #
 # A PUSH TO MAIN IS ITS ONLY TRIGGER. A pull request has nothing to publish.
-# One touching the Dockerfile, go.mod, internal/version or scripts/notices
-# runs release.yml's snapshot job, which builds the release image from this
-# same Dockerfile and checks its binary's version; nothing runs this file's
+# One touching the Dockerfile, go.mod, internal/version, scripts/notices or
+# the git pin and its recipe (scripts/git-pin.env, scripts/git.sh) runs
+# release.yml's snapshot job, which builds the release image from this same
+# Dockerfile and checks its binary's version; nothing runs this file's
 # own build before a merge, so a change here is first exercised on main. The
 # job has no event condition, so any other trigger would hand the registry
 # and a signing identity to a run no merge started.

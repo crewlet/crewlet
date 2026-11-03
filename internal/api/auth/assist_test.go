@@ -768,3 +768,26 @@ func TestAnExecGrantReadsEveryBodyTheActRouteAccepts(t *testing.T) {
 		t.Errorf("the guard does not refuse %s", operator.MCPPath)
 	}
 }
+
+// TestAGrantReachesNoGitTransport: the code host's git transports are driven by
+// git itself, with a person's own bound token (ADR-0085), or by a coding box,
+// admitted by its run's credential (ADR-0093) — never by an assistant grant —
+// and, like the MCP surfaces, they are transports with no row of their own to
+// be admitted by. The code host's REST reads are rows, and stay the
+// assistant's to read as its person does. Mutation: drop a git prefix from the
+// refused list and its path is answered; add /code/ and the reads are refused.
+func TestAGrantReachesNoGitTransport(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{
+		auth.GitPrefix + "api.git/info/refs", "/git",
+		auth.BoxGitPrefix + "api.git/git-receive-pack", "/box/git",
+		auth.BoxCodePrefix + "api/tree", "/box/code",
+	} {
+		if !auth.AssistRefusedPath(path) {
+			t.Errorf("a grant reaches %s, a git transport no grant may drive", path)
+		}
+	}
+	if auth.AssistRefusedPath(auth.CodePrefix + "repos") {
+		t.Errorf("a grant is refused %srepos, a read its person may make", auth.CodePrefix)
+	}
+}

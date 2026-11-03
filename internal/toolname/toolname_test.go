@@ -70,7 +70,34 @@ var spelledElsewhere = map[string]map[string]string{
 		"work_inbox": "the inbox question's name in the query registry",
 	},
 	"internal/api/rest.go": {
-		"work_inbox": "the inbox question's name in the query registry",
+		"work_inbox":        "the inbox question's name in the query registry",
+		"code_repo_readers": "a code question's name in the query registry",
+		"code_log":          "a code question's name in the query registry",
+		"code_blame":        "a code question's name in the query registry",
+		"code_diff":         "a code question's name in the query registry",
+		"code_compare":      "a code question's name in the query registry",
+		"code_search":       "a code question's name in the query registry",
+	},
+	// THE CODE HOST'S QUESTIONS share their words with the code tools that
+	// answer a seat the same reads: the dashboard's Code screens ask them by
+	// these names (its contract's domains and protocol types), so a tool's
+	// rename must not move the question.
+	"internal/api/queries/code.go": {
+		"code_repo_readers": "a code question's name in the query registry",
+		"code_log":          "a code question's name in the query registry",
+		"code_blame":        "a code question's name in the query registry",
+		"code_diff":         "a code question's name in the query registry",
+		"code_compare":      "a code question's name in the query registry",
+		"code_search":       "a code question's name in the query registry",
+	},
+	"internal/api/queries/codesearch.go": {
+		"code_search": "a code question's name in the query registry",
+	},
+	"internal/api/queries/codegit.go": {
+		"code_log":     "a code question's name in the query registry",
+		"code_blame":   "a code question's name in the query registry",
+		"code_diff":    "a code question's name in the query registry",
+		"code_compare": "a code question's name in the query registry",
 	},
 	"internal/assistant/catalog/exposure.go": {
 		"work_inbox": "the inbox question's name in the query registry",

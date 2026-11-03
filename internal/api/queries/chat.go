@@ -300,7 +300,7 @@ func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -393,7 +393,7 @@ func (s Sources) chatRooms(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +422,7 @@ func (s Sources) chatRoomNames(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +458,7 @@ func (s Sources) chatChannel(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -492,7 +492,7 @@ func (s Sources) chatMessages(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +526,7 @@ func (s Sources) chatThread(ctx context.Context, p Params) (any, error) {
 	if root == "" {
 		return nil, badParams("root_id", "", nil)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -640,7 +640,7 @@ func (s Sources) chatSearch(ctx context.Context, p Params) (any, error) {
 	if refused := searchTextRefusal(text); refused != nil {
 		return nil, refused
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
