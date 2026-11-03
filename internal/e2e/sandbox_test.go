@@ -204,6 +204,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	withServingTierA(t, &boot)
 	boot.Store.Path = dbPath
 	brokertest.StoreIn(&boot.Stream, streamDir)
+	brokertest.CodeCacheIn(&boot.Git)
 	addr := ""
 	if host != nil {
 		host.ring.hold(&boot)

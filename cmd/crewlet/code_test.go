@@ -35,6 +35,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -117,10 +118,10 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 	const token = cliFixtureToken
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
 		// THE CASE'S OWN, never the machine's: an explicit cache budget
-		// and a pinned transfer lane, so the room this machine's disk has
-		// and the cores it runs on decide nothing about what it serves.
-		b.Git.CacheMaxBytes = config.GitCacheMaxBytesFloor
-		b.Git.MaxTransfers = 4
+		// and a pinned transfer lane ([brokertest.CodeCacheIn]), so the
+		// room this machine's disk has beside the declared broker and the
+		// cores it runs on decide nothing about what it serves.
+		brokertest.CodeCacheIn(&b.Git)
 		for _, id := range slices.Sorted(maps.Keys(tokens)) {
 			// A TOKEN STATES WHAT IT MAY DO — Tier A refuses one that
 			// lists nothing — and no app is a code permission: what a

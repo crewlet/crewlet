@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -365,6 +366,72 @@ func TestTheReferenceLayoutConverges(t *testing.T) {
 	if budget < volume/6 || budget > volume/4 {
 		t.Errorf("the cache settled at %d of a %d volume, want the fifth the arithmetic gives",
 			budget, volume)
+	}
+}
+
+// A TEST NODE WHOSE BROKER IS DECLARED HOSTS CODE ON ANY DISK. A broker
+// [brokertest.StoreIn] sizes claims a fixed sixteen gibibytes of the room its
+// cache's budget is derived from. So a fixture that left the budget to the
+// derivation hosted code only on a runner with more than about seventeen and a
+// half gibibytes free. The end-to-end gates' runner had 9.2 GB, and every one
+// of their five code-hosting cases failed at engine.New with this refusal (CI
+// run 41669250876). Declared beside the broker ([brokertest.CodeCacheIn]), the
+// budget and the transfer lane are the same whatever the disk, that runner's
+// included. Left to the derivation on that runner's disk, the node is refused,
+// which is the failure the declaration exists to keep out of every suite.
+//
+// Mutation: drop the budget from CodeCacheIn, and the small disks refuse; drop
+// the lane, and every disk's spools follow the machine.
+func TestADeclaredBrokersNodeHostsCodeOnAnyDisk(t *testing.T) {
+	t.Parallel()
+	const (
+		gib = int64(1) << 30
+		// runner is what the end-to-end gates' runner had free.
+		runner = int64(9225187328)
+		// cores is the lane that runner's cores derived, sixteen transfers.
+		cores = 16
+	)
+	b := config.DefaultBootstrap()
+	base := t.TempDir()
+	b.Store.Path = filepath.Join(base, "crewlet.db")
+	brokertest.StoreIn(&b.Stream, filepath.Join(base, "stream"))
+	layout := prepareCache(t, filepath.Join(base, "git"))
+	defer layout.Release()
+	disk := func(free int64) cacheVolume {
+		return cacheVolume{
+			free: func(string) (int64, error) { return free, nil },
+			same: func(string, string) bool { return true },
+			broker: func() (jetstream.VolumeClaim, bool, error) {
+				return jetstream.VolumeClaim{Dir: b.Stream.StoreDir, Limit: b.Stream.StoreMaxBytes}, true, nil
+			},
+		}
+	}
+
+	undeclared := b
+	if size, err := codeCacheBudget(&undeclared, layout, cores, disk(runner)); err == nil {
+		t.Fatalf("a node whose broker is declared, its cache left to the derivation, was sized "+
+			"%+v on the gates' runner, so this case does not model the refusal it guards against", size)
+	}
+
+	brokertest.CodeCacheIn(&b.Git)
+	for _, free := range []int64{gib, runner, 100 * gib} {
+		size, err := codeCacheBudget(&b, layout, b.Git.MaxTransfers, disk(free))
+		if err != nil {
+			t.Errorf("a node whose broker and cache are declared was refused its code host on a "+
+				"volume with %d free: %v", free, err)
+			continue
+		}
+		if size.derived || size.budget != brokertest.CodeCacheMaxBytes {
+			t.Errorf("on a volume with %d free the cache's budget is %d (derived %t), want the "+
+				"declared %d whatever the disk", free, size.budget, size.derived,
+				brokertest.CodeCacheMaxBytes)
+		}
+		if size.transfers != brokertest.GitTransfers ||
+			size.spools != host.SpoolAllowance(brokertest.GitTransfers) {
+			t.Errorf("on a volume with %d free the lane is %d transfers spooling %d, want the "+
+				"declared %d whatever the machine", free, size.transfers, size.spools,
+				brokertest.GitTransfers)
+		}
 	}
 }
 
