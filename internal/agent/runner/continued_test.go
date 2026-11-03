@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -489,10 +488,12 @@ func TestARunWhoseBoxStartsASessionOfItsOwnIsHeldToAFreshGuard(t *testing.T) {
 // then started a session of its own on the fresh brief instead, and says so
 // before the run's first call — so the round's record then states the fresh
 // brief, the prompt the run did read, published off the path of the request
-// that said it. A box that took the session up publishes nothing more.
+// that said it, on the runner's own goroutine, which each case waits for
+// ([runner.Runner.Sent]) before it counts. A box that took the session up
+// publishes nothing more.
 //
 // Mutation: publish nothing on the box's word, or publish on either word, and a
-// case goes red.
+// case goes red, whichever order the goroutine runs in.
 func TestARunThatFellBackIsRecordedReadingTheFreshBrief(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -524,13 +525,10 @@ func TestARunThatFellBackIsRecordedReadingTheFreshBrief(t *testing.T) {
 			}
 			again := relauncher.last(t)
 			// THE FALL BACK'S FRAME GOES OUT ON ITS OWN, off the request that
-			// said it, so it is waited for; a box that took the session up
-			// sends nothing to wait for.
+			// said it, so it is waited for — in both cases, so a frame a box
+			// that took the session up should never have sent is counted too.
+			collector.Sent()
 			published := pub.promptsFor("execute")
-			for deadline := time.Now().Add(10 * time.Second); len(published) < tc.published &&
-				time.Now().Before(deadline); published = pub.promptsFor("execute") {
-				time.Sleep(10 * time.Millisecond)
-			}
 			if len(published) != tc.published {
 				t.Fatalf("the relaunch published %d prompts, want %d", len(published), tc.published)
 			}

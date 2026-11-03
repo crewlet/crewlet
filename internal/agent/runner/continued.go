@@ -273,11 +273,12 @@ func (r *Runner) sessionStarted(ctx context.Context, emit emitter, round int, sy
 			return
 		}
 		r.armSession(surface, nil, nil)
-		go func() {
+		// THE RUNNER'S OWN GOROUTINE ([Runner.Sent]), which its budget ends.
+		r.sent.Go(func() {
 			ctx, cancel := context.WithTimeout(base, startedFrameBudget)
 			defer cancel()
 			emit.prompted(ctx, phase.Execute, round, system, b.fresh, caps)
-		}()
+		})
 	}
 }
 

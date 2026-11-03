@@ -519,7 +519,20 @@ type Runner struct {
 	// ([Resume.Steered]), which is every note the turn read before it — the
 	// record is where every read is written. Guarded by mu.
 	steered []steer.Read
+
+	// sent is every record this runner publishes off the path of the request
+	// that occasioned it — the frame stating the fresh brief a run whose box
+	// started a session of its own read ([Runner.sessionStarted]) — each
+	// bounded by its own budget: the runner's goroutines, which [Runner.Sent]
+	// waits for.
+	sent sync.WaitGroup
 }
+
+// Sent waits until every record this runner publishes off a request's path has
+// gone out, or given up within its budget ([Runner.sessionStarted]). The
+// goroutines are the runner's, and whatever reads the round's record after
+// them waits for them here rather than racing them.
+func (r *Runner) Sent() { r.sent.Wait() }
 
 var _ turn.Phases = (*Runner)(nil)
 
