@@ -1122,6 +1122,65 @@
         "null"
       ]
     },
+    "GoogleCloud": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "provisioning": {
+          "$ref": "#/$defs/GoogleCloudProvisioning",
+          "description": "The provisioner service account, the Workload Identity Federation provider and the engine's federation key the agents' service accounts are made with. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GoogleCloudProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "federation_key": {
+          "description": "The engine's ES256 private key (PKCS#8 PEM) whose public half the federation provider holds. Minted by the connect form and never shown; it can act as the provisioner, which can create service accounts in the identity project and grant the agent levels.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "provider": {
+          "description": "Full resource name of the Workload Identity Federation provider holding the engine's public key: projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>. Until it is set, no agent's account can be made.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "provisioner": {
+          "description": "Email of the provisioner service account, <id>@<identity project>.iam.gserviceaccount.com. The agents' service accounts are created in its project.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "HarnessAuth": {
       "additionalProperties": false,
       "properties": {
@@ -1267,6 +1326,10 @@
         "gitlab": {
           "$ref": "#/$defs/GitLab",
           "description": "GitLab instance, webhook signing and provisioning. Absent = disabled."
+        },
+        "google_cloud": {
+          "$ref": "#/$defs/GoogleCloud",
+          "description": "Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."
         },
         "jira": {
           "$ref": "#/$defs/Jira",
@@ -3150,6 +3213,49 @@
         "null"
       ]
     },
+    "RoleGoogleCloud": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has its own Google Cloud service account. Off disables it and removes its roles; the account and its audit history stay.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "viewer (the default): read the project, Compute, GKE, Cloud Run, Cloud SQL, DNS, buckets, metrics and logs, and call Google's MCP tools. operator: viewer plus restarting and scaling VMs, pods and Cloud SQL, running Cloud Run jobs, editing alerting and reading and writing Cloud Storage objects. administer: operator plus managing VMs, networks, firewalls, clusters, Cloud SQL, DNS and buckets, which can leave access behind; granting it needs a fresh sign-in.",
+          "enum": [
+            "viewer",
+            "operator",
+            "administer",
+            "",
+            null
+          ]
+        },
+        "projects": {
+          "description": "Google Cloud project IDs this agent's level is granted on, each prepared for Crewlet. Required when enabled: an agent in no project can reach nothing.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
@@ -3176,6 +3282,10 @@
         "gitlab": {
           "$ref": "#/$defs/RoleGitLab",
           "description": "This seat's GitLab service account: whether it is on, its role and its projects."
+        },
+        "google_cloud": {
+          "$ref": "#/$defs/RoleGoogleCloud",
+          "description": "This seat's own Google Cloud service account: whether it is on, its level and its projects."
         },
         "jira": {
           "$ref": "#/$defs/RoleJira",
@@ -3826,6 +3936,7 @@
             "expo",
             "github",
             "gitlab",
+            "google_cloud",
             "mattermost",
             "slack",
             "",

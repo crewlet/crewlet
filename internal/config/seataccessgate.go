@@ -72,6 +72,8 @@ func (c *Company) SeatAccessConnected(kind string) bool {
 		return in.Cloudflare != nil
 	case "expo":
 		return in.Expo != nil
+	case "google_cloud":
+		return in.GoogleCloud != nil
 	}
 	return false
 }

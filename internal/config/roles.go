@@ -400,22 +400,23 @@ func (s *RoleSandbox) EnvValue(key string) (string, bool) {
 // the server that consumes them. Nothing in this block scopes knowledge
 // reads either; read scope is the org-wide knowledge block only.
 type RoleIntegrations struct {
-	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: whether it is on, its permissions, and where."`
-	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: whether it is on."`
-	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: whether it is on, its roles and its channels."`
-	Datadog    *RoleDatadog    `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"This seat's Datadog service account: whether it is on and its role."`
-	GitLab     *RoleGitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
-	Jira       *RoleJira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
-	Confluence *RoleConfluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
-	Cloudflare *RoleCloudflare `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"This seat's own Cloudflare account API token: whether it is on and its level."`
-	Expo       *RoleExpo       `yaml:"expo,omitempty" json:"expo,omitempty" desc:"This seat's own Expo robot user: whether it is on and its level."`
+	GitHub      *RoleGitHub      `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: whether it is on, its permissions, and where."`
+	Slack       *RoleSlack       `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: whether it is on."`
+	Mattermost  *RoleMattermost  `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: whether it is on, its roles and its channels."`
+	Datadog     *RoleDatadog     `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"This seat's Datadog service account: whether it is on and its role."`
+	GitLab      *RoleGitLab      `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
+	Jira        *RoleJira        `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
+	Confluence  *RoleConfluence  `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
+	Cloudflare  *RoleCloudflare  `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"This seat's own Cloudflare account API token: whether it is on and its level."`
+	Expo        *RoleExpo        `yaml:"expo,omitempty" json:"expo,omitempty" desc:"This seat's own Expo robot user: whether it is on and its level."`
+	GoogleCloud *RoleGoogleCloud `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"This seat's own Google Cloud service account: whether it is on, its level and its projects."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
 	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
 		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil &&
-		r.Cloudflare == nil && r.Expo == nil
+		r.Cloudflare == nil && r.Expo == nil && r.GoogleCloud == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.
