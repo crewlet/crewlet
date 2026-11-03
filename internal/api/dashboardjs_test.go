@@ -1572,6 +1572,11 @@ const (
 	// took it from 5436.1 KiB to 5436.8 KiB (+0.7 KiB, 700 bytes), all of it
 	// the agents chunk the view loads in (+252 bytes gzipped), under 5437
 	// KiB. The initial load did not grow. 5437 KiB.
+	// That sentence keyed by the engine's set of places a relaunch continues
+	// a session in (SessionContinuesIn), so a place the engine adds is a
+	// typecheck failure in the view, took it from 5436.8 KiB to 5436.8 KiB
+	// (+60 bytes), all of it the agents chunk (+38 bytes gzipped). The
+	// initial load did not grow. 5437 KiB.
 	treeBudget = 5<<20 + 317<<10
 )
 
