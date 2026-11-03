@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -623,6 +624,23 @@ func newFleet(t *testing.T, names ...string) *fleet {
 	return f
 }
 
+// inBubble runs f in a synctest bubble, where a timer fires at exactly its time
+// and time moves only once every goroutine of the case is blocked.
+//
+// FOR THE CASES THAT HOLD A NODE'S ANSWER INSIDE ITS ASKER'S ATTEMPT BY THE
+// REPLY'S MARGIN: a serving node ends its waits code.ReplyMargin before the
+// deadline its router stamped, and the answer then has that margin to be
+// sealed, carried over the twin broker and opened. On the machine's clock
+// that is a claim about how late a loaded race-detector run wakes the
+// goroutines doing it, which the margin was never sized for — and one such
+// run spent the whole second (CI run 41694160997). In the bubble the attempt
+// and the margin are exact and the trip takes no time, so a case fails on
+// the arithmetic of the deadline and the margin and on nothing else.
+func inBubble(t *testing.T, f func(*testing.T)) {
+	t.Helper()
+	synctest.Test(t, f)
+}
+
 // start is one more client of the fleet's broker.
 func (f *fleet) start(t *testing.T) *memory.Queue {
 	t.Helper()
@@ -1048,8 +1066,17 @@ func TestARouterRefusesAZeroTiming(t *testing.T) {
 // HONEST node last for suspectFor and told the placement it was gone. The
 // bound is spelled from code.ReplyMargin itself, never from the router's own
 // constant, so a floor that drifted from the margin fails.
+//
+// IN A SYNCTEST BUBBLE ([inBubble]), for
+// [TestANodeThatLagsItsReadsBarrierIsHeardSayingSo]'s reason: the node's
+// answer has the margin's second to reach its router, and on the machine's
+// clock a loaded runner may spend it.
 func TestAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 	t.Parallel()
+	inBubble(t, testAReadAttemptLongerThanTheReplysMarginIsAnsweredInside)
+}
+
+func testAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 	f := newFleet(t, "data-a")
 	timing := Production()
 	timing.ReadAttempt = code.ReplyMargin
@@ -1065,11 +1092,19 @@ func TestAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 
 	r.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
 	f.nodes["data-a"].set(func(n *fakeNode) { n.behind = true })
+	begun := time.Now()
 	_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
+	waited := time.Since(begun)
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "data-a: data-a has not applied") {
 		t.Fatalf("a read of a node behind its floor, at the shortest read attempt a router "+
 			"takes (%v), answered %v — want the node heard saying it is behind", timing.ReadAttempt, err)
+	}
+	// INSIDE THE ATTEMPT, never at its end: the node had a nanosecond to wait,
+	// and an answer the router heard only as its attempt ended was one sent
+	// without the margin.
+	if waited >= timing.ReadAttempt {
+		t.Errorf("the node was heard %v in, the router's whole %v attempt", waited, timing.ReadAttempt)
 	}
 	f.placement.mu.Lock()
 	told := slices.Clone(f.placement.unanswered)
@@ -1090,36 +1125,49 @@ func TestAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 // still listens, and the node is not reported unanswered. Waited out at its own
 // budget (statelog.ReadBudget) — on a seat's read, every tool's — that refusal
 // reached nobody, and an honest node was suspected.
+//
+// IN A SYNCTEST BUBBLE ([inBubble]), so the refusal is held to the instant
+// the margin puts it at: a reply's margin before the attempt ends, the
+// attempt less code.ReplyMargin to the nanosecond. On the machine's clock the
+// refusal had the margin's one second to be sealed, carried and opened, and
+// a loaded race-detector run spent it before the router heard (CI run
+// 41694160997): the router gave up on an honest node, as the case exists to
+// prove it does not. How late a busy runner wakes a goroutine is the
+// scheduler's latency, which the margin is not sized for — it is the wire's
+// trip and the clocks' skew.
 func TestANodeThatLagsItsReadsBarrierIsHeardSayingSo(t *testing.T) {
 	t.Parallel()
-	f := newFleet(t, "data-a")
-	timing := Production()
-	timing.ReadAttempt = minReadAttempt + time.Second
-	if timing.ReadAttempt >= statelog.ReadBudget+code.ReplyMargin {
-		t.Fatalf("the premise: a %v attempt must end before the read's own wait would",
-			timing.ReadAttempt)
-	}
-	r := f.routerTimed(t, "agent-2", nil, timing)
-	r.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
-	f.nodes["data-a"].set(func(n *fakeNode) { n.levelRead = laggingLinearizableRead(t) })
+	inBubble(t, func(t *testing.T) {
+		f := newFleet(t, "data-a")
+		timing := Production()
+		timing.ReadAttempt = minReadAttempt + time.Second
+		if timing.ReadAttempt >= statelog.ReadBudget+code.ReplyMargin {
+			t.Fatalf("the premise: a %v attempt must end before the read's own wait would",
+				timing.ReadAttempt)
+		}
+		r := f.routerTimed(t, "agent-2", nil, timing)
+		r.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
+		f.nodes["data-a"].set(func(n *fakeNode) { n.levelRead = laggingLinearizableRead(t) })
 
-	begun := time.Now()
-	_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
-	waited := time.Since(begun)
-	var refusal *statelog.Refused
-	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBehind {
-		t.Fatalf("a read of a node lagging its barrier, at a %v attempt, answered %v — want "+
-			"the node heard refusing it %q", timing.ReadAttempt, err, statelog.RefuseBehind)
-	}
-	if waited >= timing.ReadAttempt {
-		t.Errorf("the refusal took %v, the router's whole %v attempt", waited, timing.ReadAttempt)
-	}
-	f.placement.mu.Lock()
-	told := slices.Clone(f.placement.unanswered)
-	f.placement.mu.Unlock()
-	if slices.Contains(told, "data-a") {
-		t.Errorf("a node that answered it was behind its barrier was reported unanswered (%v)", told)
-	}
+		begun := time.Now()
+		_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
+		waited := time.Since(begun)
+		var refusal *statelog.Refused
+		if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBehind {
+			t.Fatalf("a read of a node lagging its barrier, at a %v attempt, answered %v — want "+
+				"the node heard refusing it %q", timing.ReadAttempt, err, statelog.RefuseBehind)
+		}
+		if want := timing.ReadAttempt - code.ReplyMargin; waited != want {
+			t.Errorf("the refusal came %v into the router's %v attempt, want %v: a reply's %v "+
+				"margin before it ends", waited, timing.ReadAttempt, want, code.ReplyMargin)
+		}
+		f.placement.mu.Lock()
+		told := slices.Clone(f.placement.unanswered)
+		f.placement.mu.Unlock()
+		if slices.Contains(told, "data-a") {
+			t.Errorf("a node that answered it was behind its barrier was reported unanswered (%v)", told)
+		}
+	})
 }
 
 // PRODUCTION'S READ ATTEMPT HOLDS A LINEARIZABLE READ'S WAITS at their whole

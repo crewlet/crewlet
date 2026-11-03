@@ -1453,8 +1453,17 @@ func TestTheWireCarriesNoUnreadyGitError(t *testing.T) {
 //
 // Mutation: serve the git arm until the request's deadline — the placements
 // told the node went unanswered, red.
+//
+// IN A SYNCTEST BUBBLE ([inBubble]), for
+// [TestANodeThatLagsItsReadsBarrierIsHeardSayingSo]'s reason: the node's
+// answer has the margin's second to reach its router, and on the machine's
+// clock a loaded runner may spend it.
 func TestAGitNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
 	t.Parallel()
+	inBubble(t, testAGitNodeAtItsShareIsHeardInsideItsAskersAttempt)
+}
+
+func testAGitNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
 	f := newFleet(t)
 	halves := f.gitNodes(t, []string{"git-a"})
 	share := code.NewGitShare("git-a", 2, nil)
