@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -101,6 +102,14 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 		refs = append(refs, fmt.Sprintf("https://github.com/acme/api/pull/%d?x=%s", i, strings.Repeat("<", 400)))
 	}
 	asking := PendingRun{Question: strings.Repeat("<", decision.MaxQuestion)}
+	// THE TWO REASONS FAR PAST THEIR KiB: one line of control bytes a MiB
+	// long, as a box's own agent can make the session record's line the
+	// fall-back reason is read from — and as a runner, or a host of another
+	// build, that did not hold it would hand it over. Held as the record is
+	// published, each is at its widest whatever it came as; carried whole,
+	// either one puts the record past the ceiling.
+	reason := strings.Repeat("\x01", 1<<20)
+	kept := &SessionKept{NotKept: reason}
 	c := &Coordinator{condense: &fakeCondenser{answer: func(RunPart, string, int) (string, error) {
 		return "", errors.New("no model")
 	}}}
@@ -108,11 +117,19 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 		run    PendingRun
 		result Result
 	}{
-		"a failed run":    {PendingRun{}, Result{Text: twice, Error: failure, Transcript: twice, DeliveredRefs: refs}},
-		"a run that asks": {asking, Result{Text: twice, Transcript: twice, DeliveredRefs: refs}},
+		"a failed run": {PendingRun{}, Result{Text: twice, Error: failure, Transcript: twice, DeliveredRefs: refs,
+			FellBack: reason, Kept: kept}},
+		"a run that asks": {asking, Result{Text: twice, Transcript: twice, DeliveredRefs: refs,
+			FellBack: reason, Kept: kept}},
 	} {
 		fitted := c.fitResult(t.Context(), tc.run, tc.result)
-		raw, err := json.Marshal(collectedRecord(tc.run, LaunchRecord{}, fitted, time.Now()))
+		rec := collectedRecord(tc.run, LaunchRecord{}, fitted, time.Now())
+		if len(rec.HarnessSessionFellBack) > MaxFellBackBytes ||
+			len(rec.SessionNotKept) > executordomain.UnkeptReasonMaxBytes {
+			t.Errorf("%s: the record's reasons are %d and %d bytes, past the KiB each is held to", name,
+				len(rec.HarnessSessionFellBack), len(rec.SessionNotKept))
+		}
+		raw, err := json.Marshal(rec)
 		if err != nil {
 			t.Fatal(err)
 		}

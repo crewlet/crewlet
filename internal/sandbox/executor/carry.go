@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -62,8 +63,8 @@ type sessionRecord struct {
 	// continued says it is the session the run was asked to continue.
 	continued bool
 	// why is why a run asked to continue a session started a new one in its
-	// place, as its script said it ([sandbox.Result.FellBack]); "" for every
-	// other run.
+	// place, as its script said it ([sandbox.Result.FellBack]), redacted and
+	// held to [sandbox.MaxFellBackBytes]; "" for every other run.
 	why string
 	// release is the harness's `--version`, as it printed it.
 	release string
@@ -78,6 +79,12 @@ type sessionRecord struct {
 // on into lines of its own — an `id` there is the harness's text, never the
 // script's. The script writes `why` on one line, whatever the words it
 // quotes held. An id that is not one a harness mints ([validSessionID]) is no id.
+//
+// AND A REASON IS A SENTENCE: `why` is redacted whole and cut to
+// [sandbox.MaxFellBackBytes] as it is read ([sandbox.BoundFellBack]). The
+// line quotes whatever OpenCode answered, and the record is a file the run's
+// own agent can write, so the line was as long as the file, and the run's
+// result carried it whole to its record and to a node that asked for the read.
 func parseSessionRecord(text string) sessionRecord {
 	var rec sessionRecord
 	seen := map[string]bool{}
@@ -96,7 +103,7 @@ func parseSessionRecord(text string) sessionRecord {
 		case "continued":
 			rec.continued = value == "yes"
 		case "why":
-			rec.why = value
+			rec.why = sandbox.BoundFellBack(value)
 		case "release":
 			rec.release = value
 		}
@@ -121,8 +128,25 @@ func validSessionID(id string) bool {
 var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
 // releaseOf is the release a harness's `--version` printed, "2.1.310", or "" where
-// it printed none this code can read.
-func releaseOf(printed string) string { return releasePattern.FindString(printed) }
+// it printed none this code can read — one longer than the executor log
+// records a release at ([executordomain.HarnessVersionMaxBytes]) among them.
+//
+// A RELEASE HAS A LENGTH, AND THE PATTERN DOES NOT: its numbers are runs of
+// digits, and what it reads was printed in the box — the session record's
+// `release` line is a file the run's own agent can write, and `--version` is
+// whatever the box's PATH finds — so a run of digits as long as the file read
+// as a release, which the launch's record carried whole and a capture of the
+// session named, for the log to refuse. Past the log's bound it is refused,
+// never cut, because a shortened release names another one; and read as
+// none, it is what every reader takes a release it cannot read for: a
+// current one.
+func releaseOf(printed string) string {
+	release := releasePattern.FindString(printed)
+	if len(release) > executordomain.HarnessVersionMaxBytes {
+		return ""
+	}
+	return release
+}
 
 // captured describes the session archive the box's last run packed
 // ([Paths.SessionCapture]), for the session rec names, or nil where there is

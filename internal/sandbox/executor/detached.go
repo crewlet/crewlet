@@ -1060,9 +1060,10 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 	// WHICH SESSION THE RUN TOOK UP, as its script recorded before its harness
 	// started ([Paths.SessionRecord]): the session a harness that reported none
-	// ran in, whether it was the one the run was asked to continue, and the
-	// harness's release. A record the box refused is a piece the run did not
-	// report, as any other is.
+	// ran in, whether it was the one the run was asked to continue, why it
+	// started anew where it did — a sentence, held to its bound as it is read
+	// ([parseSessionRecord]) — and the harness's release. A record the box
+	// refused is a piece the run did not report, as any other is.
 	recorded, recordRefusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
 	if err != nil {
 		return sandbox.Result{}, err
@@ -1071,7 +1072,13 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		refused = append(refused, recordRefusal)
 	}
 	rec := parseSessionRecord(recorded)
-	if result.SessionID == "" {
+	// THE HARNESS'S OWN WORD for its session only where it is an id a harness
+	// mints ([validSessionID]), the record's otherwise: what the harness
+	// printed is a file in the box as much as the record is, and the id rides
+	// the launch's record and is handed to a later run's script (the
+	// assistant's deep work resumes its run by it), so one that is no id is
+	// none, as the record's is.
+	if !validSessionID(result.SessionID) {
 		result.SessionID = rec.id
 	}
 	result.Continued, result.FellBack, result.HarnessVersion = rec.continued, rec.why, releaseOf(rec.release)

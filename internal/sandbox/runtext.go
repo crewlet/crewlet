@@ -31,14 +31,17 @@ import (
 // THE WHOLE RECORD FITS, and this is its arithmetic. The record's variable
 // text is the report, the failure detail and the transcript (each at most
 // this), the question in its notes (one sentence, [decision.MaxQuestion]
-// bytes) and the delivered refs ([MaxDeliveredRefBytes]); everything else on
-// it is identifiers and counts, a few KiB. JSON can grow text six-fold (a
-// control byte becomes \u00XX, `<`, `>` and `&` become \u003c and its kin,
-// an invalid byte becomes \ufffd), so the worst case is (3 × 256 + 16 + 1)
-// KiB × 6, about 4.6 MiB,
-// with the ceiling's other 3 MiB to spare. A field added to the record that
-// carries text a box wrote needs its own bound and a line here, or this
-// promise is no longer one.
+// bytes), the delivered refs ([MaxDeliveredRefBytes]) and two reasons of a
+// KiB each, why the run started a session of its own ([MaxFellBackBytes])
+// and why its session was not kept ([boundReason]); everything else on it is
+// identifiers and counts, a few KiB, the two a box names among them held to
+// the shapes a harness gives them where its runner reads them — the session
+// it ran, at most 128 bytes, and its harness's release, at most 64. JSON can
+// grow text six-fold (a control byte becomes \u00XX, `<`, `>` and `&` become
+// \u003c and its kin, an invalid byte becomes \ufffd), so the worst case is
+// (3 × 256 + 16 + 1 + 2) KiB × 6, about 4.6 MiB, with the ceiling's other
+// 3 MiB to spare. A field added to the record that carries text a box wrote
+// needs its own bound and a line here, or this promise is no longer one.
 //
 // WHAT HAPPENS PAST IT DEPENDS ON WHO READS THE PIECE. The report and the
 // failure detail are what the run's reviewer judges the round on — what it
@@ -249,6 +252,57 @@ func (p RunPart) Valid() bool { return slices.Contains(RunParts, p) }
 // on the record and in the run's report its reviewer reads ([runReport])
 // rather than dropped unsaid.
 const MaxDeliveredRefBytes = 16 << 10
+
+// MaxFellBackBytes bounds why a run asked to continue a session started one of
+// its own ([Result.FellBack]), as its runner reads it and as the launch's
+// record carries it.
+//
+// A REASON IS ONE SENTENCE, written by the run's script on one line of its
+// session record: one of the engine's own — the session was not in the box,
+// the box's harness is older than the release that continues a carried one,
+// the archive would not unpack — at most a couple of hundred bytes, the
+// longest naming the box's release; or, for OpenCode, a few words of the
+// engine's and then whatever OpenCode answered the import or the delete with,
+// put on one line, as long as OpenCode made it. A KiB holds each of the
+// engine's sentences whole and the opening of what OpenCode said, where it
+// names its error; the whole of it is on the run's error stream, where the
+// script prints it too. It is the bound the executor log holds a sentence of
+// the same kind to (executordomain.FailureMaxBytes, UnkeptReasonMaxBytes), and
+// on the record, escaped at JSON's worst, it is 6 KiB of the ceiling's 8 MiB.
+//
+// HELD, BECAUSE THE RECORD IS A FILE IN THE BOX: the run's own agent can
+// write it, so the one line was as long as the file the engine reads whole
+// ([MaxFileBytes]) and the launch's record carried all of it — and a record
+// past the queue's ceiling is refused whole, the launch's spend, report and
+// refs with it.
+const MaxFellBackBytes = 1 << 10
+
+// BoundFellBack is why a run started a session of its own ([Result.FellBack])
+// as everything past its box carries it: redacted whole, then cut to
+// [MaxFellBackBytes] ([boundReason]). Applied where the runner reads the
+// reason out of its box, so the result it hands back — to a node that asked
+// for the read too — carries no more, and again as the launch's record is
+// published ([collectedRecord]), which trusts no runner, nor a host of another
+// build, to have bounded what it hands back.
+func BoundFellBack(why string) string { return boundReason(why, MaxFellBackBytes) }
+
+// boundReason is a reason the launch's record carries in a sentence, REDACTED
+// WHOLE AND THEN CUT to bound bytes on a character, marked where it was cut,
+// the mark inside the bound ([textcut.Within]) — the opening kept, which is
+// where a sentence says what happened. The record's two reasons are held by
+// it: why the run started a session of its own ([MaxFellBackBytes]) and why
+// its session was not kept, at the bound the executor log holds that same
+// reason to (executordomain.UnkeptReasonMaxBytes, a KiB).
+//
+// REDACTED BEFORE THE CUT, because a reason quotes what a process in the box
+// answered, and the box's environment holds the seat's credentials: a token
+// whose start fell just before the cut would survive as a fragment no pattern
+// recognises. AND CUT AFTER EVERY REDACTION, never before one, because a
+// redaction's marker can be longer than what it replaces, and a cut text
+// redacted again can read a partial marker as a value: so a reader that
+// redacts a reason again holds it to its bound by this whole rule, as the
+// record's publish does.
+func boundReason(why string, bound int) string { return textcut.Within(redact.Secrets(why), bound) }
 
 // MaxBranchBytes bounds the branch a run names with its question
 // ([Ask.Branch], [PendingRun.Branch]).

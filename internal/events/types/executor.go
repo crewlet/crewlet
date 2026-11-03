@@ -262,8 +262,10 @@ type ExecutorCollected struct {
 	// HarnessSession is the harness's own session the launch RAN, as the
 	// run's script recorded it — which, for a launch asked to continue a
 	// session its box could not, is the new one it started instead — and
-	// HarnessVersion the harness's release, as its `--version` gave it.
-	// Absent where the launch recorded none.
+	// HarnessVersion the harness's release, as its `--version` gave it. Both
+	// are read in the box and held to the shapes a harness gives them: an id
+	// of letters, digits, `-` and `_`, at most 128 of them, and a release of
+	// at most 64 bytes. Absent where the launch recorded none of that shape.
 	HarnessSession string `json:"harness_session,omitempty"`
 	HarnessVersion string `json:"harness_version,omitempty"`
 	// SessionTakenBytes is the size of the sealed session the read that
@@ -273,9 +275,10 @@ type ExecutorCollected struct {
 	// (executor_session_kept, executor_session_not_kept). SessionNotKept is
 	// why the read took none, or refused the one it took — a pack that
 	// failed, a session past its bounds, secrets the box was handed that
-	// could not be read back. Both absent where nothing was taken: a harness
-	// that carries no session, a box that held none, or the company's
-	// `turn_engine.conversation_session.enabled` off.
+	// could not be read back — redacted, and cut to a KiB, marked `…`, as
+	// the executor log holds the same reason. Both absent where nothing was
+	// taken: a harness that carries no session, a box that held none, or the
+	// company's `turn_engine.conversation_session.enabled` off.
 	SessionTakenBytes int64  `json:"session_taken_bytes,omitempty"`
 	SessionNotKept    string `json:"session_not_kept,omitempty"`
 	// Brief is which of the three briefs the launch handed its run:
@@ -289,7 +292,10 @@ type ExecutorCollected struct {
 	// HarnessSessionFellBack why a run asked to continue one started a
 	// session of its own in its place, as its script said it: such a run is
 	// handed the fresh brief by its script, so a `continued` brief beside
-	// HarnessSessionContinued false is a run that read the fresh one.
+	// HarnessSessionContinued false is a run that read the fresh one. The
+	// reason is one sentence, redacted and cut to a KiB, marked `…`
+	// (internal/sandbox's MaxFellBackBytes): its whole is on the run's error
+	// stream, where its script prints it too.
 	Brief                   string `json:"brief,omitempty"`
 	HarnessSessionContinued bool   `json:"harness_session_continued,omitempty"`
 	HarnessSessionFellBack  string `json:"harness_session_fell_back,omitempty"`

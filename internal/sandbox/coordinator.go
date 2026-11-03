@@ -2123,13 +2123,21 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		// its script started one of its own and handed it the fresh brief:
 		// the started phase record carries the fresh brief, which a run that
 		// continued its session never read.
+		//
+		// THE REASON HELD TO ITS BOUND HERE, redacted and then cut
+		// ([BoundFellBack]), whatever the runner or the host that read the
+		// box made of it: it is a line of a file in the box, which the run's
+		// own agent can write as long as the file the engine reads whole.
 		Brief:                   string(facts.Brief),
 		HarnessSessionContinued: result.Continued,
-		HarnessSessionFellBack:  redact.Secrets(result.FellBack),
+		HarnessSessionFellBack:  BoundFellBack(result.FellBack),
 	}
 	if kept := result.Kept; kept != nil {
 		rec.SessionTakenBytes = kept.Bytes
-		rec.SessionNotKept = redact.Secrets(kept.NotKept)
+		// AND WHY THE SESSION WAS NOT KEPT, at the bound the executor log
+		// holds the same reason to: it quotes the refusal the take met,
+		// which can quote what the box's archive holds.
+		rec.SessionNotKept = boundReason(kept.NotKept, executordomain.UnkeptReasonMaxBytes)
 	}
 	rec.StartedAt = facts.StartedAt.UTC()
 	if took := collected.Sub(facts.StartedAt); took > 0 {

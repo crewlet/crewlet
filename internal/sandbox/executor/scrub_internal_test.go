@@ -219,6 +219,31 @@ func TestATarIsWrittenWithEachMembersSizeAsRewritten(t *testing.T) {
 	}
 }
 
+// AN ARCHIVE THAT CHANGED NAMES ITS MEMBER SHORT. The name is the archive's,
+// which the box wrote, at up to a MiB a member, and the failure becomes the
+// reason the run's session was not kept, which the run's row, the launch's
+// record and a box host's reply to the node that asked for the read carry: so
+// it quotes the name's opening, held to what a transcript line quotes of a
+// path.
+//
+// Mutation: quote the member's name whole, and the case goes red.
+func TestAChangedArchiveNamesItsMemberShort(t *testing.T) {
+	t.Parallel()
+	name := "projects/p/" + strings.Repeat("n", 64<<10) + ".txt"
+	// SHORTER the second time, so the rewrite ends before the size the first
+	// reading counted, which is the change the check names the member for.
+	archive := tarOf(t, map[string]string{name: "out opaque-engine-value and the rest of it\n"})
+	changed := tarOf(t, map[string]string{name: "out\n"})
+	s := newScrubber([]string{"opaque-engine-value"})
+	err := scrubTar(bytes.NewReader(archive), reopenOf(changed), io.Discard, s, testBounds)
+	if err == nil {
+		t.Fatal("an archive that changed between its two readings was written")
+	}
+	if said := err.Error(); len(said) > 2*transcriptDetailLimit || !strings.Contains(said, "projects/p/nnn") {
+		t.Errorf("the failure is %d bytes and says %.160q; want the member's opening, held short", len(said), said)
+	}
+}
+
 // tarOf is a gzipped tar of files, in name order.
 func tarOf(t *testing.T, files map[string]string) []byte {
 	t.Helper()
