@@ -32,8 +32,8 @@ import (
 // counts objects from the bitmap rather than walking history, and a walk
 // reads commits from the graph rather than parsing each one. One goroutine,
 // owned by Start, woken every MidxDebounce, kicked after a full round, by every
-// run that ends and by the round or adoption that held a pass back from a
-// repository due (oweWake); a pass STARTS a run for every due repository, most
+// run that ends and by the adoption that held a pass back from a repository due
+// (oweWake); a pass STARTS a run for every due repository, most
 // packs left uncovered first, each in a slot of its own in the pool's
 // MAINTENANCE lane — half the node's cores, a free slot or none, never
 // waiting — in every slot of it but one, which is kept for a person's
@@ -100,12 +100,12 @@ import (
 // (graphFailed), so a step that keeps failing is not asked again every pass.
 //
 // AT ONCE IS THE NEXT PASS, and what wakes one is: a full round that leaves such
-// a copy, as it lets the repository go (Cache.run); and a round or an adoption
-// that held a pass back from it, as the last of them lets go (oweWake). A copy
-// that held no pack when it was read whole — a repository created empty — takes
-// its first by a delta or an adoption, and neither wakes the maintainer: the next
-// tick takes it up, at most MidxDebounce later, which is all a history's first
-// push waits.
+// a copy, as it lets the repository go (Cache.run); and an adoption that held a
+// pass back from it, as the last of them lets go (oweWake). A round that held a
+// pass back starts the run itself as it ends (startOwed). A copy that held no
+// pack when it was read whole — a repository created empty — takes its first by
+// a delta or an adoption, and neither wakes the maintainer: the next tick takes
+// it up, at most MidxDebounce later, which is all a history's first push waits.
 //
 // INDEX REPAIR. A multi-pack-index a full round dropped as DAMAGED — its
 // check found a file of it failing its trailer, or one the index may have
@@ -211,7 +211,9 @@ import (
 // sweep moves a running writer's lock and temporary files, and an index
 // naming a pack the sweep removes fails every read of the repository. A run
 // stopped so, or by Stop or a retire, is no run: what it costs the repository
-// is the next run, never an interval.
+// is the next run, never an interval. A repository whose rounds never leave a
+// gap for a pass is still maintained: the run a pass found it due for starts
+// between two of them, neither waiting for the other (startOwed).
 //
 // A FULL ROUND THAT LEAVES MANY PACKS INDEXES THEM BEFORE IT ANSWERS. One push
 // is one pack until the repository's maintainer merges them
@@ -494,6 +496,13 @@ func (c *Cache) kickMaintainer() {
 // compaction's build is a run admitted between passes (Cache.AdmitCompaction)
 // and would otherwise refill it the same way.
 //
+// A repository due that only a ROUND holds is held the same way, in its place
+// in the order: no pass may start its run, and that round's end does (startOwed)
+// in the room kept for it. Left out of the order it would be last in line for
+// as long as its rounds ran back to back, behind every repository a pass can
+// start: the one read hardest, its packs gathering unindexed for as long as
+// anything else was due.
+//
 // The lane never waits: a run refused a slot at its first step — some other
 // process holds it — never started, records nothing and kicks nothing, and
 // the next tick asks again. The cache's own runs never refuse one another:
@@ -528,10 +537,10 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 				charges[stepPublish] = inc.publishRefused
 			}
 			walk.note(&c.mw, e.id, inc, refused, charges)
-			if p.steps() && !c.runnable(e) {
+			if p.steps() && !c.runnableButForARound(e) {
 				c.oweWake(e)
 			}
-			if p.steps() && c.runnable(e) {
+			if p.steps() && c.runnableButForARound(e) {
 				uncovered := inc.packs
 				switch {
 				case len(inc.installed) > 0:
@@ -588,7 +597,7 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 			return started
 		case heldBack:
 			if !held.on {
-				held = reservation{on: true, memory: mem}
+				held = reservation{on: true, memory: mem, of: cand.e}
 			}
 		}
 	}
@@ -653,10 +662,13 @@ const (
 )
 
 // reservation is the room one pass keeps for the first repository it held
-// back for memory: its charge, and a slot.
+// back, for memory or for a round: its charge, and a slot. of is that
+// repository, whose own run is admitted in the room rather than beside it
+// (maintFlight.standingBeside).
 type reservation struct {
 	on     bool
 	memory int64
+	of     *entry
 }
 
 // setBudget sets what everything in flight is held to.
@@ -708,6 +720,20 @@ func (f *maintFlight) setStanding(held reservation) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.standing = held
+}
+
+// standingBeside is the room the latest pass kept standing, as a run of e is
+// admitted between passes (startOwed): none where it was kept for e, whose run
+// is what it was kept for and would otherwise be refused for its own room. That
+// room goes here, whatever the answer: the next pass keeps it again if e still
+// needs it.
+func (f *maintFlight) standingBeside(e *entry) reservation {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.standing.of == e {
+		f.standing = reservation{}
+	}
+	return f.standing
 }
 
 // admitLocked is admit's rule; f.mu is held.
@@ -832,42 +858,93 @@ func (f *maintFlight) count() int {
 // ordinary run is due is due's to say, and WHAT a run takes, and whether the
 // node's memory holds it, plan's and admit's.
 func (c *Cache) runnable(e *entry) bool {
-	return c.wantsRun(e) && e.running == nil && e.adopting == 0 && e.maint == nil && e.verifying == 0
+	return e.running == nil && c.runnableButForARound(e)
 }
 
-// oweWake records that a pass was held back from e, due, if a round or an
-// adoption is what holds it: whichever lets go last wakes the maintainer
-// (owedWake), so a run due at once — a graph, an index repair — is not left to
-// the next tick; e.mu is held. A run in flight owes nothing here (its end
-// kicks), and neither does a check (its release does).
-//
-// THE NEXT TICK IS NO PROMISE OF A GAP. Every linearizable read of a repository
-// is a round, so a repository read steadily is in one for much of its time and
-// a tick lands in one about that often. With nothing owed, each landing cost
-// another MidxDebounce, so a graph a walk of the commits writes in milliseconds
-// waited on the odds. Measured on the code host's suite, which reads a copy every
-// 20 ms while it waits for the copy's graph: with its rounds slowed to 300 ms,
-// four ticks in a row landed in one and the graph came 39 s after the last push;
-// at a second a round no tick of the minute the suite gives it found a gap, and
-// the graph was never written — as a loaded runner's CI once met with no slowing
-// at all. With the wake, the same second-long rounds have it written as the
-// round the first tick met lets go.
+// runnableButForARound reports whether all that may keep a run from starting
+// on e now is a round in flight: what makes it a repository a pass holds a place
+// for in its order (maintainerPass); e.mu is held.
+func (c *Cache) runnableButForARound(e *entry) bool {
+	return c.wantsRun(e) && e.adopting == 0 && e.maint == nil && e.verifying == 0
+}
+
+// oweWake records that a pass was held back from e, due, if an adoption is what
+// holds it: the last to let go wakes the maintainer (owedWake), so a run due at
+// once — a graph, an index repair — is not left to the next tick; e.mu is held.
+// A run in flight owes nothing here (its end kicks), and neither does a check
+// (its release does). A round's debt is the run itself (startOwed).
 func (c *Cache) oweWake(e *entry) {
-	if e.running != nil || e.adopting > 0 {
+	if e.adopting > 0 {
 		e.maintainerOwed = true
 	}
 }
 
 // owedWake reports whether the maintainer is owed a wake on e now — a pass
-// was held back from it (oweWake) by a round or an adoption, or a full round
-// converged it, and neither holds it any more — and takes the debt; e.mu is
-// held.
+// was held back from it by an adoption (oweWake), or a full round converged it,
+// and neither a round nor an adoption holds it any more — and takes the debt;
+// e.mu is held.
 func (c *Cache) owedWake(e *entry) bool {
 	if !e.maintainerOwed || e.running != nil || e.adopting > 0 {
 		return false
 	}
 	e.maintainerOwed = false
 	return true
+}
+
+// startOwed starts the run a pass found e due for and a round held back
+// (entry.runOwed), as that round ends and before the round queued behind it
+// starts; e.mu is held. Every run but these is a pass's.
+//
+// NEITHER A TICK NOR A WAKE IS ENOUGH. A pass starts no run on a repository a
+// round holds (runnable), and every linearizable read is a round. So a
+// repository read slowly has gaps a tick may miss, which cost another
+// MidxDebounce each: measured on the code host's suite, which reads a copy every
+// 20 ms while it waits for the copy's graph, with its rounds slowed to 300 ms
+// four ticks in a row landed in one and the graph came 39 s after the last push;
+// at a second a round no tick of the suite's minute found a gap, and the graph
+// was never written, as a loaded runner's CI once met with no slowing at all. A
+// repository read faster than its rounds take has no gap: a caller that arrives
+// during one is queued behind it, and the next starts under the same lock this
+// one ends under, so for as long as the reads keep coming no pass finds it free,
+// woken or not, and its graph and its index wait out its traffic — on the copy
+// that most needs them. And one read nearly that fast has gaps a woken pass is
+// too slow for. Measured on that same wait with four readers in a tight loop
+// beside it, nothing slowed: a pass woken as the round let go never wrote the
+// graph in the minute, and starting the run here wrote it 8.8 s in, at the first
+// tick. Here is the one moment such a repository is sure to offer.
+//
+// THE CALLERS PAY NOTHING FOR IT, so it has no bound of its own to tune. Nothing
+// here waits: the plan and the admission are arithmetic under e.mu, as they are
+// in a pass; the run holds a pin and never the repository's round, so the queued
+// round starts at the next line and goes on beside it; and a debt is at most one
+// a pass, for a run the pass's plan found due, so the duty cycle holds what
+// starts here as it holds the rest.
+//
+// EXCEPT WHERE THE QUEUED ROUND WOULD STOP IT, which its callers would wait for
+// (queuedRoundStops). The debt stands for that round's end.
+//
+// ONE TRY A DEBT. A run refused a slot or room here owes nothing further: what
+// holds them kicks the maintainer as it ends, and the pass that follows, or the
+// next tick's, finds the repository due and holds its place again.
+func (c *Cache) startOwed(e *entry) {
+	if !e.runOwed || e.running != nil || c.queuedRoundStops(e) {
+		return
+	}
+	e.runOwed = false
+	lane := c.git.Slots(gitproc.ClassMaintenance)
+	c.startRun(c.life, e, maintenanceRuns(lane), lane, c.maint.budgetNow(), c.maint.standingBeside(e))
+}
+
+// queuedRoundStops reports whether the round queued on e would end a run
+// started now: a rebuild, which replaces the copy the run writes, or one the
+// copy's marks make full, whose sweep stops every run on it and waits for it to
+// end (apply). Its callers would wait for a git that had only just begun, to
+// write what the next run writes again. A full answer no mark asked for — the log
+// recreated under the copy — is the round's own to find, and stops the run as it
+// stops any; e.mu is held.
+func (c *Cache) queuedRoundStops(e *entry) bool {
+	r := e.next
+	return r != nil && (r.rebuild != "" || c.roundIsFull(e, e.current))
 }
 
 // due reports whether e's current incarnation's ORDINARY run is due now; e.mu
@@ -1059,24 +1136,34 @@ func (c *Cache) plan(inc *incarnation, budget int64, due bool) (p runPlan, refus
 func (c *Cache) startMaintenance(ctx context.Context, e *entry, most, lane int, budget int64,
 	held reservation) (*maintRun, verdict, int64) {
 
-	if !c.enter() {
-		return nil, notDue, 0
-	}
 	e.mu.Lock()
-	if !c.runnable(e) {
-		// HELD BACK SINCE THE PASS READ IT RUNNABLE, by a round or an adoption
-		// that began after its walk: the same debt as one the walk finds.
+	defer e.mu.Unlock()
+	return c.startRun(ctx, e, most, lane, budget, held)
+}
+
+// startRun is startMaintenance with e.mu held, for a pass and for the end of a
+// round (startOwed), which holds it already.
+//
+// A REPOSITORY A ROUND HOLDS is answered heldBack with its plan's charge, the
+// run owed to that round's end (entry.runOwed): the pass that asked keeps its
+// place (maintainerPass).
+func (c *Cache) startRun(ctx context.Context, e *entry, most, lane int, budget int64,
+	held reservation) (*maintRun, verdict, int64) {
+
+	if !c.runnableButForARound(e) {
+		// HELD BACK SINCE THE PASS READ IT RUNNABLE, by an adoption that began
+		// after its walk: the same debt as one the walk finds.
 		c.oweWake(e)
-		e.mu.Unlock()
-		c.leave()
 		return nil, notDue, 0
 	}
 	inc := e.current
 	plan, _, _ := c.plan(inc, budget, c.due(e, c.now()))
 	if !plan.steps() {
-		e.mu.Unlock()
-		c.leave()
 		return nil, notDue, 0
+	}
+	if !c.runnable(e) {
+		e.runOwed = true
+		return nil, heldBack, plan.memory
 	}
 	// THE SLOT KEPT FOR A PERSON'S VERIFY is lent to a GRAPH ALONE — a walk
 	// of the commits, seconds where a bitmap is hours, so a check waits at
@@ -1101,9 +1188,11 @@ func (c *Cache) startMaintenance(ctx context.Context, e *entry, most, lane int, 
 		v = c.maint.admit(plan.memory, lane, c.maintMemory, held)
 	}
 	if v != admitted {
-		e.mu.Unlock()
-		c.leave()
 		return nil, v, plan.memory
+	}
+	if !c.enter() {
+		c.maint.done(plan.memory)
+		return nil, notDue, 0
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	//nolint:contextcheck // The cache's lifetime ends the run too: Stop must end the git it started however long the pass's ctx lives.
@@ -1112,7 +1201,6 @@ func (c *Cache) startMaintenance(ctx context.Context, e *entry, most, lane int, 
 		writes: c.mw.written(c.image, c.mw.steps(plan)), began: time.Now(), duty: plan.duty()}
 	e.maint = m
 	inc.pins++
-	e.mu.Unlock()
 	go func() {
 		defer c.leave()
 		defer stop()

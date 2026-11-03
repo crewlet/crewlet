@@ -3333,7 +3333,9 @@ take at most half the node's cores, one each,
 in a slot that is free or not at all, so they never make a push or a fetch
 wait; and only as many run at once as a quarter of a gibibyte a core holds
 beside the largest, so a node that has just joined does not index all its
-largest repositories at once.
+largest repositories at once. A repository read so steadily that one read's
+sync starts as the last ends is indexed all the same, in its turn: the run starts
+between the two, and neither waits for the other.
 
 **The commit-graph first.** A copy the node has just read whole — after a cold
 sync or a rebuild, or on a node that has just joined — gets its commit-graph at

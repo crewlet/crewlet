@@ -601,15 +601,16 @@ func (c *Cache) run(e *entry, r *round) {
 	if e.running == r {
 		e.running = nil
 	}
+	// BETWEEN TWO ROUNDS, the one moment a repository read without a pause is
+	// sure to offer: the run a pass found it due for and a round held back.
+	c.startOwed(e)
 	c.start(e)
 	// THE MAINTAINER IS WOKEN ONCE NO ROUND HOLDS THE REPOSITORY. A pass
 	// starts no run on a repository whose round runs (runnable), so the kick
 	// a full round once sent from inside itself met that round still running
 	// and left the repository to the next tick, MidxDebounce later: a
 	// graph-first run, an index repair and a copy's first index, each due
-	// at once, waited for it. So does a pass that met this round on its own,
-	// which owes it the same wake (oweWake). A round queued behind this one
-	// owes it on.
+	// at once, waited for it. A round queued behind this one owes it on.
 	wake := c.owedWake(e)
 	e.mu.Unlock()
 	if wake {
@@ -923,6 +924,14 @@ func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
 	return c.converge(e, r.fresh, r.rebuild, r.of, r.whole, &r.found, &r.did, &r.reader)
 }
 
+// roundIsFull reports whether a round begun now over inc, e's current
+// incarnation, reads it whole; e.mu is held. See converge's step 1. A REPAIR MARK
+// asks a full round too (report.go) — unless a check of the repository is
+// admitted, whose release asks it again.
+func (c *Cache) roundIsFull(e *entry, inc *incarnation) bool {
+	return inc == nil || inc.state == nil || !inc.converged || (inc.repair.due(c.now()) && e.verifying == 0)
+}
+
 // converge is one round's body, in order — every step's name is the field
 // its log line and its error carry:
 //
@@ -1027,9 +1036,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 
 	e.mu.Lock()
 	inc := e.current
-	// A REPAIR MARK asks a full round too (report.go) — unless a check of
-	// the repository is admitted, whose release asks it again.
-	full := inc == nil || inc.state == nil || !inc.converged || (inc.repair.due(c.now()) && e.verifying == 0)
+	full := c.roundIsFull(e, inc)
 	// marks is the in-place marks this round's convergence must still find
 	// (markWhole), as epoch is the cache's.
 	var marks uint64
