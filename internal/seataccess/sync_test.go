@@ -385,6 +385,27 @@ func TestSyncReportsALevelTheVendorDoesNotOffer(t *testing.T) {
 	}
 }
 
+// AN AGENT ON A LANE THAT REQUIRES A SCOPE, WITH NONE CHOSEN, IS REFUSED before
+// the vendor is asked anything, and reported for a person to choose one.
+func TestSyncRefusesAnEmptyScopeWhereTheLaneRequiresOne(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.v.ScopeRequired = map[seataccess.Lane]bool{seataccess.LaneDatadog: true}
+	report := h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "a"}), nil)
+	if len(h.v.Applied) != 0 {
+		t.Fatalf("applied %v, want nothing", h.v.Applied)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Kind != integration.FindingUnknownTier ||
+		!strings.Contains(report.Findings[0].Detail, "can reach nothing") {
+		t.Fatalf("findings = %+v, want one saying the agent can reach nothing", report.Findings)
+	}
+	off := newHarness()
+	off.v.ScopeRequired = map[seataccess.Lane]bool{seataccess.LaneDatadog: true}
+	if report := off.sync(t, company(&config.RoleDatadog{Enabled: no()}), nil); len(report.Findings) != 0 {
+		t.Errorf("an agent that is off was refused: %+v", report.Findings)
+	}
+}
+
 // A VENDOR'S REFUSAL NAMES THE STEP, ITS REASON, THE REMEDY AND WHO ACTS.
 func TestSyncReportsAVendorRefusal(t *testing.T) {
 	t.Parallel()

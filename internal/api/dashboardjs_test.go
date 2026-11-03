@@ -1745,7 +1745,18 @@ const (
 	// came to 1,022 bytes here, 55 more, taking it
 	// from 5475.6 KiB (5,607,003 bytes) to 5476.6 KiB (5,608,025 bytes). It
 	// moved by main's own 1 KiB, from 5476 KiB: 5477 KiB.
-	treeBudget = 5<<20 + 357<<10
+	//
+	// The Agents tab's generic scope and tool mechanics (scope names, a list
+	// that could not be read, a required scope and its single-entry pre-fill,
+	// an open connection's typed entries, a refusal drawn beside its control,
+	// each seat's box lines from the engine and a lane's two tool routes) took
+	// main's from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, 3165 bytes): the
+	// integrations model chunk +3096 bytes, its sheet +61 bytes and 8 bytes
+	// elsewhere. Merged again with it, main's +3165 bytes came to 3,163 bytes
+	// on the merged tree, taking it from 5476.6 KiB (5,608,025 bytes) to
+	// 5479.7 KiB (5,611,188 bytes). It moved by main's own 3 KiB, from
+	// 5477 KiB: 5480 KiB.
+	treeBudget = 5<<20 + 360<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

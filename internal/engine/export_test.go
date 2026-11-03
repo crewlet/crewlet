@@ -311,7 +311,7 @@ func SeedStore(t testing.TB, b *config.Bootstrap) {
 // case about how a file reaches the box is about.
 func SeatBoxSetupForTest(e *Engine, defaults []sandbox.SetupStep, handle string) []sandbox.SetupStep {
 	c := e.Company()
-	return e.runEnvironment(context.Background(), c, c.Org.AgentSeatByHandle(handle), seatSandbox(c, handle), defaults).setup
+	return e.runEnvironment(context.Background(), c, c.Org.AgentSeatByHandle(handle), seatSandbox(c, handle), defaults, nil).setup
 }
 
 // ForgetPersonBlinderForTest drops this node's resolved blinder, so the next

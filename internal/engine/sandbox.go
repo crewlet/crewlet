@@ -46,6 +46,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/words"
@@ -377,14 +378,18 @@ type runEnv struct {
 //
 // # The environment
 //
-// THE ENGINE CONTRIBUTES ONLY TOOL-AGNOSTIC FACTS: the agent's identity, as
-// CREWLET_AGENT_HANDLE and CREWLET_AGENT_EMAIL — per-launch values static
-// config cannot know, which a setup recipe maps into whatever shape its tool
-// needs. Every tool-specific variable comes from config: an external token is
-// DECLARED in role.sandbox.env or a setup step's env, and the engine never
-// names one of its own. Precedence, later winning: identity, then the setup
-// steps' contributions, then the seat's own env — so an operator's explicit
-// value always beats a step's default.
+// THE ENGINE CONTRIBUTES TWO KINDS OF VALUE, NEITHER A CREDENTIAL. The agent's
+// identity, as CREWLET_AGENT_HANDLE and CREWLET_AGENT_EMAIL: per-launch values
+// static config cannot know, which a setup recipe maps into whatever shape its
+// tool needs. And boxDefaults: the non-secret settings an integration's box
+// CLI reads beside the seat's credentials, for a lane the seat has on
+// ([seataccess.BoxDefaults]), such as an organization a person would
+// otherwise copy into every seat. Every credential comes from config: an
+// external token is DECLARED in role.sandbox.env or a setup step's env, and
+// the engine never names one of its own. Precedence, later winning: the
+// integrations' defaults, then identity, then the setup steps' contributions,
+// then the seat's own env, so an operator's explicit value always beats a
+// step's default, and every layer a person writes beats an integration's.
 //
 // BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0093): a run given repositories on
 // it is given ACCESS TO THAT SURFACE — the run's own credential and the box's
@@ -436,7 +441,7 @@ type runEnv struct {
 // shared by every launch on this node, and a body resolved into them would be
 // a credential cached past the snapshot it came from.
 func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
-	settings *org.RoleSandbox, defaults []sandbox.SetupStep) runEnv {
+	settings *org.RoleSandbox, defaults []sandbox.SetupStep, boxDefaults []seataccess.BoxDefault) runEnv {
 
 	// THE SEAT'S OWN RESOLUTION, so its GitHub App token is answered here
 	// and nowhere else, issued good for [github.RunTokenLife]: a run's
@@ -450,6 +455,11 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		optional, fact     bool
 	}
 	merged := map[string]layered{}
+	for _, d := range boxDefaults {
+		// A FACT, never a gap: no layer a person writes declares it, and one
+		// that does not resolve is left out and said like an identity fact.
+		merged[d.Env] = layered{value: d.Value, path: "integrations." + string(d.Kind), fact: true}
+	}
 	if handle := seat.Handle(); handle != "" {
 		merged["CREWLET_AGENT_HANDLE"] = layered{value: handle, path: "role.handle", fact: true}
 	}

@@ -285,6 +285,12 @@ type LaneSpec struct {
 	// Scoped is whether the lane narrows by scope.
 	Scoped bool
 
+	// ScopeRequired is a Scoped lane whose agent, once on, must name at least
+	// one scope entry: one with none would reach nothing. The access routes,
+	// the sync and the document's rules refuse it alike
+	// (config.SeatScopeRequired restates it, held equal by a test).
+	ScopeRequired bool
+
 	// CreatedBy and EnabledBy are who makes the account and who turns it
 	// back on: [ByYou] for a GitHub App's creation and a Slack install.
 	CreatedBy StepActor
@@ -296,10 +302,66 @@ type LaneSpec struct {
 	// reinstall.
 	Rotatable bool
 
-	// BoxEnv is the variable a CLI in the seat's executor box reads the
-	// lane's credential from (Expo's EXPO_TOKEN); empty where its tool is a
-	// server. The seat's own box settings set it to the sealed name.
-	BoxEnv string
+	// BoxEnv is each variable a CLI in the seat's executor box reads one of
+	// the lane's credentials from, by its sealed field (Expo's EXPO_TOKEN from
+	// TOKEN); empty where its tool is a server. The seat's own box settings
+	// set each to its sealed name ([BoxLines]).
+	BoxEnv []BoxVar
+}
+
+// BoxVar is one variable a box CLI reads a seat credential from: Env, set to
+// the seat's sealed Field, one of [Catalog.Credentials].
+type BoxVar struct {
+	Field string
+	Env   string
+}
+
+// BoxDefaulter is a [Vendor] whose box CLI reads non-secret settings beside
+// the seat's credentials (an organization, a default project). The engine puts
+// them in the box of every seat whose box-CLI lane is on, below every layer a
+// person writes ([BoxDefaults]).
+type BoxDefaulter interface {
+	// BoxDefaults is what the engine puts in the box of the seat whose role
+	// is role.
+	BoxDefaults(c *config.Company, role *config.Role) BoxSet
+}
+
+// DocumentReach is a [Vendor] whose lanes' reach is written in the company
+// document rather than read from the vendor, so it is known whether or not the
+// vendor answers ([WithReach]). Its session's Options answers the same reach.
+type DocumentReach interface {
+	// Reach is what the company's connection reaches on lane, as the
+	// document and its roster write it.
+	Reach(c *config.Company, roster *org.Organization, lane Lane) Reach
+}
+
+// Reach is a lane's reach as the company document writes it: the entries a
+// seat's scope must be within, or Open where it lists none and so reaches
+// whatever the vendor accepts.
+type Reach struct {
+	Scope []string
+	Open  bool
+}
+
+// WithReach is o with its reach from the document where v writes it there
+// ([DocumentReach]), marked as read: a list the document holds is known even
+// while the vendor cannot be asked. o unchanged for any other vendor.
+func WithReach(o Options, v Vendor, c *config.Company, roster *org.Organization) Options {
+	doc, ok := v.(DocumentReach)
+	if !ok || !o.Scoped {
+		return o
+	}
+	r := doc.Reach(c, roster, o.Lane)
+	o.Scope, o.ScopeOpen, o.ScopeLive = slices.Clone(r.Scope), r.Open, true
+	return o
+}
+
+// BoxSet is what a [BoxDefaulter] supplies to one seat's box.
+type BoxSet struct {
+	// Env is each variable and its value: a literal, or a `${VAR}` reference
+	// the launch resolves. Never a secret, since a default is not scrubbed
+	// from the run's output.
+	Env map[string]string
 }
 
 // PermissionSpec is one permission a GitHub App can hold.
@@ -336,6 +398,27 @@ type Options struct {
 	// no project list), where any entry the vendor accepts is within it.
 	Scope     []string `json:"scope,omitempty"`
 	ScopeOpen bool     `json:"scope_open,omitempty"`
+
+	// Scoped is [LaneSpec.Scoped], set whatever Scope holds, so a lane whose
+	// scope is open or unread is still a scoped lane.
+	Scoped bool `json:"scoped,omitempty"`
+
+	// ScopeNames is each Scope entry's name where the vendor names one apart
+	// from its id, for the pickers; nil where the entry is its own name.
+	ScopeNames map[string]string `json:"scope_names,omitempty"`
+
+	// ScopeLive is whether Scope and ScopeOpen were answered by the vendor's
+	// session just now; false where it could not be read, so an empty Scope
+	// then says nothing about the company's reach.
+	ScopeLive bool `json:"scope_live,omitempty"`
+
+	// ScopeRequired is [LaneSpec.ScopeRequired].
+	ScopeRequired bool `json:"scope_required,omitempty"`
+
+	// ToolServer is the mcp_servers entry a per-seat tool server for the lane
+	// is started from ([ToolServerOf]), so a remedy can name it; empty where
+	// no server reads the lane's credential.
+	ToolServer string `json:"tool_server,omitempty"`
 
 	// Rotatable is whether a person can ask for a seat's credential on this
 	// lane to be rotated ([LaneSpec.Rotatable]).

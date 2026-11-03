@@ -56,7 +56,7 @@ roles:
 		"HTTPS_PROXY": "http://agent:${PROXY_PASS}@proxy.example.com",
 		"NPM_TOKEN":   "npm-token-written-in-the-document",
 		"NODE_ENV":    "production-settings",
-	}}, steps)
+	}}, steps, nil)
 	member, err := c.Models.Head(seat, phase.Execute)
 	if err != nil {
 		t.Fatalf("the executor chain: %v", err)

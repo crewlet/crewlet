@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // An executor run's own environment, held to the rule a tool server's values
@@ -112,7 +114,7 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 	e := &Engine{}
 
 	run := e.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
-		Env: map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"}}, nil)
+		Env: map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"}}, nil, nil)
 	if run.gap == nil || !run.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run waiting for the gitlab integration", run.gap)
 	}
@@ -126,7 +128,7 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 	}
 
 	nobody := e.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
-		Env: map[string]string{"OTHER_TOKEN": "${SWE_NOBODY_SETS}"}}, nil)
+		Env: map[string]string{"OTHER_TOKEN": "${SWE_NOBODY_SETS}"}}, nil, nil)
 	nobody.logGap(t.Context(), seat.Handle(), "the run starts without them")
 	if lines := logs.records("sandbox_env_unresolved", "swe"); len(lines) != 2 ||
 		lines[1]["level"] != "WARN" ||
@@ -148,7 +150,7 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	stopped := blocked.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
-		Env: map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"}}, nil)
+		Env: map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"}}, nil, nil)
 	if stopped.gap == nil || stopped.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run the blocked gitlab pass will not mint for", stopped.gap)
 	}
@@ -165,7 +167,7 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 	// the run would spend its box cloning nothing.
 	declared := e.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
 		Env:          map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"},
-		OptionalKeys: []string{"GITLAB_TOKEN"}}, nil)
+		OptionalKeys: []string{"GITLAB_TOKEN"}}, nil, nil)
 	if declared.gap == nil || !declared.gap.waiting() {
 		t.Errorf("gap = %+v: a key a pass mints, declared optional, must still wait for it",
 			declared.gap)
@@ -224,7 +226,7 @@ func TestAMintGitHubDidNotAnswerIsAWaitAndOneItRefusedIsAPersons(t *testing.T) {
 		env := map[string]string{"GITHUB_TOKEN": "${GITHUB_APP_TOKEN_BUILDER}"}
 		maps.Copy(env, c.also)
 		run := appEngine(t, co).runEnvironment(t.Context(), co, builder,
-			&org.RoleSandbox{Env: env}, nil)
+			&org.RoleSandbox{Env: env}, nil, nil)
 		if run.gap == nil {
 			t.Errorf("%s: the run was given a token GitHub did not issue", name)
 			continue
@@ -283,7 +285,7 @@ roles:
 	e := &Engine{}
 	seat := c.Org.AgentSeatByHandle("swe")
 	defaults := setupSteps(c.Config.Providers.Sandbox.Setup)
-	run := e.runEnvironment(t.Context(), c, seat, seat.Sandbox, defaults)
+	run := e.runEnvironment(t.Context(), c, seat, seat.Sandbox, defaults, nil)
 	if run.gap != nil {
 		t.Fatalf("a run whose every unresolved value the document declares optional has a "+
 			"gap: %s", run.gap.reason())
@@ -292,7 +294,7 @@ roles:
 	undeclared := *seat.Sandbox
 	undeclared.Setup = []org.SandboxSetupStep{seat.Sandbox.Setup[0]}
 	undeclared.Setup[0].OptionalKeys = []string{"PIP_INDEX_URL"}
-	run = e.runEnvironment(t.Context(), c, seat, &undeclared, defaults)
+	run = e.runEnvironment(t.Context(), c, seat, &undeclared, defaults, nil)
 	if want := `ca.pem under the optional_keys of role.sandbox.setup step "certs"`; run.gap == nil ||
 		!strings.Contains(run.gap.reason(), want) {
 		t.Errorf("gap = %v: want it to say %q", run.gap, want)
@@ -358,7 +360,7 @@ func TestARunsOptionalValuesAreLeftOutByTheLayerThatWroteThem(t *testing.T) {
 	}}
 	gate := &org.RoleSandbox{Env: map[string]string{"NPM_TOKEN": "${SWE_NPM_TOKEN}"}}
 
-	run := e.runEnvironment(t.Context(), c, seat, gate, defaults)
+	run := e.runEnvironment(t.Context(), c, seat, gate, defaults, nil)
 	if run.gap == nil {
 		t.Fatal("no gap: the seat's own unset NPM_TOKEN and the step's unset ca.pem")
 	}
@@ -447,7 +449,7 @@ func TestASetupFileWhoseSecretIsEmptyIsTheRunsGap(t *testing.T) {
 		Name: "certs", Files: map[string]string{"certs/ca.pem": "${CA_PEM}"},
 	}}
 
-	run := e.runEnvironment(t.Context(), c, seat, nil, steps)
+	run := e.runEnvironment(t.Context(), c, seat, nil, steps, nil)
 	if run.gap == nil || !strings.Contains(run.gap.reason(), "${CA_PEM} is set to an empty value") {
 		t.Fatalf("gap = %+v: want ${CA_PEM} named as set to an empty value", run.gap)
 	}
@@ -456,5 +458,45 @@ func TestASetupFileWhoseSecretIsEmptyIsTheRunsGap(t *testing.T) {
 	}
 	if len(run.files) != 1 || run.files[0] != "certs:certs/ca.pem" {
 		t.Errorf("files = %v, want the step and path named", run.files)
+	}
+}
+
+// AN INTEGRATION'S BOX DEFAULTS SIT BELOW EVERY LAYER A PERSON WRITES: a setup
+// step and the seat's own env each replace one, the agent's identity is never
+// replaced by one, and one whose reference does not resolve is left out and
+// said, never holding the run.
+func TestBoxDefaultsSitBelowEveryLayerAPersonWrites(t *testing.T) {
+	t.Parallel()
+	c := specCompany(t, expoRunDoc)
+	seat := c.Org.AgentSeatByHandle("qa")
+	e := &Engine{}
+	defaults := []seataccess.BoxDefault{
+		{Kind: integration.KindExpo, Env: "CLI_ORG", Value: "org-1"},
+		{Kind: integration.KindExpo, Env: "CLI_PROJECT", Value: "project-1"},
+		{Kind: integration.KindExpo, Env: "CLI_ZONE", Value: "fr-par-1"},
+		{Kind: integration.KindExpo, Env: "CREWLET_AGENT_HANDLE", Value: "impostor"},
+		{Kind: integration.KindExpo, Env: "CLI_UNSET", Value: "${NOBODY_SETS_THIS}"},
+	}
+	step := []sandbox.SetupStep{{Name: "tools", Env: map[string]string{"CLI_PROJECT": "from-step"}}}
+	run := e.runEnvironment(t.Context(), c, seat,
+		&org.RoleSandbox{Env: map[string]string{"CLI_ZONE": "nl-ams-1"}}, step, defaults)
+	for key, want := range map[string]string{
+		"CLI_ORG": "org-1", "CLI_PROJECT": "from-step", "CLI_ZONE": "nl-ams-1", "CREWLET_AGENT_HANDLE": "qa",
+	} {
+		if got := run.env[key]; got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if value, present := run.env["CLI_UNSET"]; present {
+		t.Errorf("an unresolved default reached the run as %q", value)
+	}
+	if run.gap != nil {
+		t.Errorf("an unresolved default held the run: %+v", run.gap)
+	}
+	if !slices.Contains(run.facted, "integrations.expo") {
+		t.Errorf("the unresolved default is not said: facted = %v", run.facted)
+	}
+	if slices.Contains(run.secrets, "org-1") {
+		t.Error("a non-secret default was scrubbed as a secret")
 	}
 }

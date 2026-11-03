@@ -87,12 +87,30 @@ export interface AccessOptions {
   live: boolean;
   /** GitHub only: the permissions a seat's app can hold. */
   permissions?: AccessPermission[];
+  /** Whether the lane narrows a seat by scope at all, whatever `scope` lists now. */
+  scoped?: boolean;
   /** What a seat may be scoped to (repositories, projects, spaces, channels), from the company's connection. */
   scope?: string[];
+  /**
+   * A person's name for each `scope` entry, keyed by the identifier stored,
+   * where the two differ (a Scaleway project's ID). Absent where the
+   * identifier is the name.
+   */
+  scope_names?: Record<string, string>;
+  /** Whether `scope` was read just now, so an empty one means the vendor has none to offer. */
+  scope_live?: boolean;
   /** Whether a scope entry outside `scope` may be typed. */
   scope_open?: boolean;
+  /** Whether a seat that is on must name at least one entry: an empty scope reaches nothing. */
+  scope_required?: boolean;
   /** Whether a person can ask Crewlet to rotate a seat's credential on this lane. */
   rotatable?: boolean;
+  /**
+   * The `mcp_servers` entry a per-seat tool server for this lane is started
+   * from, where one takes the seat's credential; absent where none does
+   * (Expo, whose CLI in the agent's box is its only tool).
+   */
+  tool_server?: string;
   /**
    * The lane's access is a SET of levels rather than one (Confluence's space
    * permissions by operation, on a site without space roles): a seat's level
@@ -212,6 +230,23 @@ interface AccessSync {
  *  `server_off`: every tool server reading the credential is turned off. */
 type AccessToolState = "live" | "builtin" | "waiting" | "no_server" | "server_off" | "off";
 
+/**
+ * One variable in a seat's executor box: a line a person adds, set to the
+ * seat's own sealed name (`${EXPO_TOKEN_QA}`), or a non-secret setting the
+ * engine supplies itself.
+ */
+export interface AccessBoxLine {
+  name: string;
+  value: string;
+  by: AccessActor;
+}
+
+/** What a seat's executor box holds for a CLI there to use the lane. */
+export interface AccessBox {
+  /** A person's lines first, then the engine's. */
+  env: AccessBoxLine[];
+}
+
 export interface AccessSeatLane {
   desired: AccessDesired;
   observed: AccessObserved;
@@ -221,6 +256,8 @@ export interface AccessSeatLane {
   tool: AccessToolState;
   /** The desired setting is an administration grant. */
   administers?: boolean;
+  /** Where the lane's tool is a CLI in the seat's own box (Expo's EAS CLI), what that box holds for it. */
+  box?: AccessBox;
 }
 
 export interface AccessSeat {
@@ -282,6 +319,25 @@ export interface AccessPlanAnswer {
   plans: AccessSeatPlan[];
   /** Saving this draft asks for a fresh step-up (D10). */
   step_up?: boolean;
+}
+
+/** The control of one seat's lane an `access_not_offered` refusal is about. */
+export type AccessRefusalField = "level" | "permissions" | "scope";
+
+/**
+ * An `access_not_offered` refusal's body, beside the envelope's `error` and
+ * `message`: the first seat whose draft asks for what the vendor does not
+ * offer, on which lane and control, and why.
+ */
+export interface AccessRefusal {
+  seat: string;
+  lane: AccessLaneKey;
+  field: AccessRefusalField;
+  detail: string;
+  /** What the lane offers instead, where it lists them. */
+  offered?: string[];
+  /** The level every other level in a set needs, where the refusal is its absence. */
+  required?: string;
 }
 
 /** `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`. */
