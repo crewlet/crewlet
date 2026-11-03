@@ -7,7 +7,7 @@
  * EXACTLY WHAT `internal/api/queries` SENDS, held there by
  * `TestTheSessionsScreenReadsWhatTheAnswersSend` in both directions: every
  * member declared here is a key an answer carries, every key an answer carries
- * is declared, and the four unions are the engine's own closed sets — so a
+ * is declared, and the five unions are the engine's own closed sets — so a
  * screen keyed by them (`routes/agents/seat/Sessions.tsx`) has a word for
  * every value the engine sends.
  *
@@ -20,6 +20,13 @@ import type { LogPosition } from "./positions.ts";
 
 /** How a turn ended, in the engine's four words (`executorkeep.Outcomes`). */
 export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";
+
+/**
+ * Where a relaunch of a turn would continue its session (`sandbox.ContinuesIns`):
+ * from the turn's kept capture, in whichever box the relaunch gets; or only in
+ * the box the turn's run parked in, while that box is held.
+ */
+export type SessionContinuesIn = "any_box" | "parked_box";
 
 /**
  * The engine's account of how a turn ended (`executorkeep.Ending`): what a
@@ -65,6 +72,29 @@ export interface ExecutorSessionRow {
   /** The row still names a session's object, of `object_bytes` sealed. */
   kept: boolean;
   object_bytes: number;
+  /**
+   * Whether a relaunch of the turn would continue this session, as far as the
+   * engine can know before a box is chosen: decided as a relaunch decides it,
+   * for the member the node holding the seat would launch it on now, and never
+   * for an ended turn, whose session no later turn continues yet. Whether the
+   * box a relaunch gets takes the session up, and whether the seat's budget can
+   * carry it, are the launch's to find out. Null where it cannot be decided now
+   * — a run record or a log row that could not be read, a job still working or
+   * being collected, a capture still being kept, what a relaunch is launched on
+   * not to be said (every member of the seat's chain sitting out its plan, no
+   * node holding the seat, the node holding it not answering), a relaunch only
+   * the resume of its job's collection decides — which `not_continuable` then
+   * says: an unknown is never sent as a no. A transcript's later page leaves it
+   * null, its first page having said it.
+   */
+  continuable: boolean | null;
+  /** Where a relaunch would continue it; present only where it would. */
+  continues_in?: SessionContinuesIn;
+  /** Why a relaunch would not continue it, why that cannot be said now, or —
+   *  where it would only in the box the run parked in — why no other box
+   *  would: the engine's own sentence, redacted. Absent where a relaunch would
+   *  continue it in any box. */
+  not_continuable?: string;
 }
 
 /** A page of a seat's executor sessions, the latest begun first. */

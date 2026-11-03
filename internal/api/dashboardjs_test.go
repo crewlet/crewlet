@@ -1698,7 +1698,24 @@ const (
 	// rather than the package's diffs (151 bytes of the settings chunk) and
 	// 7 bytes of minified names. Measured 5469.1 KiB (5,600,389 bytes). It
 	// moved by main's own 53 KiB, from the code host's 5417 KiB: 5470 KiB.
-	treeBudget = 5<<20 + 350<<10
+	// The Cloudflare integration (its catalogue entry, story and Agents tab
+	// lane words, and the org builder reading a seat's vendor accounts from
+	// its access blocks) took it from 5437.3 KiB to 5438.6 KiB (+1.3 KiB,
+	// 1300 bytes): the integrations model chunk +1.0 KiB, the catalogue chunk
+	// +0.2 KiB and the settings chunk 72 bytes. 5439 KiB.
+	// A session's row saying whether, and where, a relaunch would continue it
+	// (the sentence under its account for a session continued in any box,
+	// only in the box its run parked in, not at all, or not decidable now,
+	// keyed by the engine's set of places a relaunch continues a session in,
+	// SessionContinuesIn, so a place the engine adds is a typecheck failure in
+	// the view) took it from 5438.6 KiB to 5439.3 KiB (+0.7 KiB, 760 bytes),
+	// all of it the agents chunk the view loads in (+281 bytes gzipped): 339
+	// bytes past 5439 KiB. The initial load did not grow. 5440 KiB.
+	// Merged again with those two, measured on the merged tree: main's
+	// +2.0 KiB (2,060 bytes, the 1,300 and the 760 above) took it from
+	// 5469.3 KiB (5,600,519 bytes) to 5471.3 KiB (5,602,579 bytes). It moved
+	// by main's own 2 KiB, from 5470 KiB: 5472 KiB.
+	treeBudget = 5<<20 + 352<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

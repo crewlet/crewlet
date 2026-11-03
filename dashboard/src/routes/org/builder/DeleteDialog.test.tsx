@@ -168,12 +168,11 @@ describe("outside the chart", () => {
       integrations: {
         github: { app_slug: "acme-dev", private_key: "${DEV_GITHUB_KEY}" },
         mattermost: { bot_token: "${DEV_MM_TOKEN}", username: "dev-bot" },
+        gitlab: { enabled: true, access_level: 30 },
+        datadog: { enabled: true, role: "r-ro" },
+        jira: { enabled: true },
       },
-      mcp_env: {
-        gitlab: { GITLAB_TOKEN: "${DEV_GITLAB_TOKEN}" },
-        datadog: { DD_APP_KEY: "${DEV_DD_KEY}" },
-        jira: { JIRA_API_TOKEN: "__redacted__" },
-      },
+      mcp_env: { jira: { JIRA_API_TOKEN: "__redacted__" } },
     };
     const view = open(keyedState(doc), "seat:dev");
     expect(screen.getByText(/These stay until you decommission them./)).toBeDefined();
@@ -191,10 +190,10 @@ describe("outside the chart", () => {
     );
   });
 
-  // The provisioners make an account only for a seat enrolled with the vendor
-  // (a credential for its mcp_env server), so a connected tool is not an
-  // account for every seat, and nothing was ever made for a seat this draft
-  // created.
+  // The engine makes an account only for a seat that is on at the vendor in
+  // its own `roles[].integrations` block, so a connected tool is not an
+  // account for every seat, a unit's mcp_env credential enrols nobody, and
+  // nothing was ever made for a seat this draft created.
   test("an account is named only where the seat is enrolled for it, and never for a new seat", () => {
     const doc = fixtureCompany();
     doc.integrations = {
@@ -208,9 +207,13 @@ describe("outside the chart", () => {
     expect(screen.queryByText(/service account|Atlassian account/)).toBeNull();
     cleanup();
 
-    // Enrolled through its unit's mcp_env, which every direct member receives.
     const unitDoc = fixtureCompany();
     unitDoc.units![1]!.mcp_env = { gitlab: { GITLAB_TOKEN: "${SALES_GITLAB}" } };
+    open(keyedState(unitDoc), "seat:account-executive");
+    expect(screen.queryByText(/its GitLab service account/)).toBeNull();
+    cleanup();
+
+    unitDoc.units![1]!.roles![0]!.integrations = { gitlab: { enabled: true, access_level: 30 } };
     open(keyedState(unitDoc), "seat:account-executive");
     expect(screen.getByText(/its GitLab service account/)).toBeDefined();
     cleanup();
@@ -224,7 +227,7 @@ describe("outside the chart", () => {
         data: {
           name: "Closer",
           handle: "closer",
-          mcp_env: { gitlab: { GITLAB_TOKEN: "${CLOSER_GITLAB}" } },
+          integrations: { gitlab: { enabled: true, access_level: 30 } },
         },
       },
     });

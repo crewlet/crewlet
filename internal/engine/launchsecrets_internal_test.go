@@ -91,7 +91,9 @@ roles:
 // AN MCP SERVER'S URL HOLDS WHAT ITS REFERENCES RESOLVED TO, AND THE BOX'S SCRUB
 // IS TOLD SO: a secret an operator keeps in a URL's path rather than a header is
 // in the box's MCP configuration as surely as a header is, and with none of
-// redact's shapes it survived every capture.
+// redact's shapes it survived every capture. Both servers let every tool run
+// unasked, which is what a box is handed a server under (a box reaches a server
+// whole), so both reach the box and the check of each reads what it was handed.
 //
 // Mutation: leave the url's references off the server the box is handed, or
 // render a server's url secret into a stdio server's fields, and a check below
@@ -148,7 +150,11 @@ roles:
 		t.Errorf("the box's zapier server hands the scrub %q, want what its url's reference resolved to",
 			secrets)
 	}
-	if secrets := got["search"].Secrets; len(secrets) != 0 {
-		t.Errorf("a stdio server with no url hands the scrub %q from a url it has not got", secrets)
+	search, given := got["search"]
+	switch {
+	case !given:
+		t.Fatalf("the box was not handed the search server, so its scrub is not checked: %+v", got)
+	case len(search.Secrets) != 0:
+		t.Errorf("a stdio server with no url hands the scrub %q from a url it has not got", search.Secrets)
 	}
 }

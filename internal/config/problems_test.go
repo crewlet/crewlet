@@ -228,6 +228,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"integrations.gitlab", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.jira", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.confluence", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.cloudflare", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 

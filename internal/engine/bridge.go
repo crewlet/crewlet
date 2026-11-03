@@ -207,6 +207,86 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 	return err
 }
 
+// sessionStartRecordBudget bounds the write that records which session a job's
+// box said it started ([bridgeLedger.started]): FIVE SECONDS, as a note's pull
+// mark is given ([steerPublishBudget]), and for its reason — one compare-and-swap
+// of one row, which a healthy coordination store answers in milliseconds, and a
+// store that has not answered in five is in an outage this write waits out no
+// better. A record that missed it is read as a session of the job's own by
+// every later rebuild of the run's guard: the safe direction.
+const sessionStartRecordBudget = 5 * time.Second
+
+// started records which session the job's box said it started
+// ([sandbox.PendingStore.MarkSessionStart]), for every later rebuild of the
+// run's skill guard — a collection, a relaunch carrying the round on, a node
+// taking the run over — to read off the job's record.
+//
+// OFF THE PATH OF THE REQUEST THAT SAID IT, under ctx stripped of its
+// cancellation, as a note's pull mark is written ([runInbox.markPulled]): that
+// request is the run's first to its bridge, its MCP handshake as likely as not,
+// which a harness holds to a short connect timeout, and the guard it waits on is
+// already held to the session in this process. A record not yet written reads
+// as a session of the job's own, which is what a collection racing it then
+// rebuilds: the safe direction.
+func (l *bridgeLedger) started(ctx context.Context, runID string, start sandbox.SessionStart) {
+	if l == nil || l.store == nil {
+		return
+	}
+	l.mu.Lock()
+	launch := l.launch
+	l.mu.Unlock()
+	if launch == "" {
+		return
+	}
+	base := context.WithoutCancel(ctx)
+	go func() {
+		ctx, cancel := context.WithTimeout(base, sessionStartRecordBudget)
+		defer cancel()
+		if _, err := l.store.MarkSessionStart(ctx, runID, launch, start); err != nil {
+			log.WarnContext(ctx, "executor_session_start_unrecorded", "run_id", runID,
+				"launch_id", launch, "session_start", string(start), "error", err.Error(),
+				"detail", "the run's tools are held to the session its box started; a later "+
+					"rebuild of its skill guard takes that session for one of its own")
+		}
+	}()
+}
+
+// boxStarted is what a job's bridge session does once the job's box says which
+// session it started ([mcpbridge.Session.Started]: on the box's first request,
+// before any call of the run is served there): it holds the run's skill guard
+// to that session through arm — the runner's ([runner.AgentRunRequest.Started]
+// for a launch, [runner.ReopenedRun.Started] for a run taken over), told whether
+// the box continued the session its launch chose — and records which session
+// the box started on the job's record ([bridgeLedger.started]). continuing is
+// whether the job's launch continued a session, asked as the box speaks: a
+// launch decides it once it has its box, before its run starts.
+//
+// A JOB WHOSE LAUNCH CONTINUED NO SESSION records nothing: its box was handed
+// one token and started a session of its own, as it was told to, and a record
+// that says nothing reads as exactly that.
+func boxStarted(ledger *bridgeLedger, runID string, continuing func() bool,
+	arm func(continued bool)) func(context.Context, bool) {
+
+	return func(ctx context.Context, fellBack bool) {
+		continues := continuing()
+		if arm != nil {
+			arm(continues && !fellBack)
+		}
+		if !continues {
+			return
+		}
+		start := sandbox.SessionStartContinued
+		if fellBack {
+			start = sandbox.SessionStartFresh
+			log.InfoContext(ctx, "executor_session_fell_back", "run_id", runID,
+				"detail", "the job's box could not take up the session its launch continued and "+
+					"started one of its own; the run's skill guard is held to that session, which "+
+					"has read no skill")
+		}
+		ledger.started(ctx, runID, start)
+	}
+}
+
 // spent is the meter's running total in the shape a run's row carries, and
 // nothing where the run has no meter.
 func (l *bridgeLedger) spent() sandbox.EngineSpend {

@@ -209,8 +209,11 @@ func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingR
 	if _, err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
+	// THE SESSION THE LAUNCH NAMED, as a runner names it before its harness
+	// starts: what a run carried on in its box continues
+	// ([PendingRun.SessionRan]).
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
-		SandboxID: box.ID(), CommandID: "cmd-1",
+		SandboxID: box.ID(), CommandID: "cmd-1", SessionID: "sess-" + turnID,
 		Harness: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, lease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)

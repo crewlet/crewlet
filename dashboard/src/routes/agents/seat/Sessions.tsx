@@ -73,6 +73,7 @@ import type {
   ExecutorSessionAnswer,
   ExecutorSessionRow,
   ExecutorSessionsAnswer,
+  SessionContinuesIn,
   SessionOutcome,
   TranscriptEntry,
   TranscriptEntryKind,
@@ -571,8 +572,53 @@ export function readCutWords(readBytes: number, shown: number): string {
 }
 
 /**
+ * What a relaunch would continue a session in, as the sentence that says it
+ * leads. Keyed by the engine's own set, so a place the engine adds is a
+ * typecheck failure here before it is a raw word on a reader's screen.
+ */
+const CONTINUES_IN: Record<SessionContinuesIn, string> = {
+  any_box:
+    "A relaunch of this turn would continue this session in whichever box it gets, " +
+    "where that box can take it up and the seat's budget can carry it",
+  parked_box:
+    "A relaunch of this turn would continue this session only in the box its run " +
+    "parked in, while that box is held and where the seat's budget can carry it",
+};
+
+/**
+ * Whether a relaunch of the session's turn would continue it, as a sentence:
+ * the engine's decision (`continuable`) and where (`continues_in`), with its
+ * own reason (`not_continuable`) where it would not, where it would only in the
+ * box the turn's run parked in, and where it cannot be said now.
+ *
+ * NO MORE THAN THE ENGINE DECIDED: a relaunch WOULD continue the session where
+ * the box it gets can take it up and the seat's budget can carry it, which only
+ * the launch finds out — so the sentence says so rather than that it does.
+ *
+ * AN UNKNOWN IS NEVER DRAWN AS A NO: a session the engine could not decide may
+ * well be continued, and "would not" would send a reader after a fresh start
+ * that need not happen.
+ */
+export function continuableWords(row: ExecutorSessionRow): string {
+  const why = (row.not_continuable ?? "").replace(/\.\s*$/, "");
+  if (row.continuable) {
+    const lead = CONTINUES_IN[row.continues_in ?? "any_box"] ?? CONTINUES_IN.any_box;
+    if (row.continues_in === "parked_box") {
+      return why ? `${lead}; no other box would: ${why}.` : `${lead}.`;
+    }
+    return `${lead}.`;
+  }
+  const lead =
+    row.continuable === null
+      ? "Whether a relaunch continues this session cannot be said now"
+      : "A relaunch would not continue this session";
+  return why ? `${lead}: ${why}.` : `${lead}.`;
+}
+
+/**
  * How the session's turn ended, as the engine recorded it — what its
- * harness's own transcript cannot know — beside what is kept of it.
+ * harness's own transcript cannot know — beside what is kept of it, and
+ * whether a relaunch would continue it (`continuableWords`).
  *
  * EVERY FACT IS DRAWN ONLY WHERE THE ENDING CARRIES IT: an ending says what
  * the way its turn ended established, and a blank "Stopped by" on a turn
@@ -601,6 +647,7 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         {row.ended_at ? ` · ended ${fmtDateTime(row.ended_at)}` : ""}
         {row.kept ? ` · ${fmtBytes(row.object_bytes)} kept` : ""}
       </p>
+      <p className="t-caption">{continuableWords(row)}</p>
       {ending?.delivered && (
         <p className="t-caption">
           Its reply was delivered{ending.delivered_to ? ` on ${ending.delivered_to}` : ""}.

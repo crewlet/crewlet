@@ -106,7 +106,8 @@ func (t *AskAndWait) Description() string {
 		"`recommended` and your `rationale`, never options written into the " +
 		"context. After it is recorded, END YOUR TURN at once: do not call " +
 		"`" + toolname.SubmitWork + "`. Their answer arrives as your next prompt in this session, " +
-		"or, if this machine is gone by then, a fresh run starts from your branch " +
+		"on this machine or, if it is gone by then, on a fresh one from your branch; only " +
+		"where this session cannot be continued does a fresh run start from your branch " +
 		"with your question and their answer."
 }
 
@@ -206,8 +207,9 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	return tools.Result{Output: "Your question is recorded and has been put to a person. " +
 		"END YOUR TURN NOW: stop working and do not call `" + toolname.SubmitWork + "`. Their " +
-		"answer arrives as your next prompt in this session, or, if this machine is gone " +
-		"by then, a fresh run starts from your branch with your question and their answer."}, nil
+		"answer arrives as your next prompt in this session, on this machine or, if it is " +
+		"gone by then, on a fresh one from your branch; only where this session cannot be " +
+		"continued does a fresh run start from your branch with your question and their answer."}, nil
 }
 
 // readAsk reads and checks the arguments into the ask to record, or returns

@@ -177,10 +177,10 @@ func TestEveryWakeSurfaceFencesWhatSomebodyWrote(t *testing.T) {
 		want[source] = true
 	}
 	for _, kind := range integration.Kinds {
-		if kind == integration.KindAtlassian {
-			// NO SOURCE OF ITS OWN: the Forge relay delivers Jira's and
-			// Confluence's events under their own sources, so its wakes
-			// are theirs and are fenced by their prompts.
+		if !kind.Ingests() {
+			// NO SOURCE OF ITS OWN ([integration.Kind.Ingests]): Atlassian's
+			// events arrive as Jira's and Confluence's, fenced by their
+			// prompts, and Cloudflare delivers none in this build.
 			continue
 		}
 		want[string(kind)] = true

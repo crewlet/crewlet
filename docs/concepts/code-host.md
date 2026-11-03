@@ -4483,9 +4483,13 @@ the job's box was handed, each kept beside it under a key of its own
 Measured on three members with every bucket at three replicas, from a member
 not leading the runs' bucket, for a job parked with a 32 KiB frozen context
 and a full bridge log of 200 calls, its launch numbered on the record and no
-capture of its session stamped there yet: the record is 37 941 bytes, the
-frozen context and the 2 KiB brief among them, and a read takes 0.38 ms and a
-raise 0.90 ms at the median (0.61 and 2.40 at the 99th percentile). The log
+capture of its session stamped there yet: the record is 37 957 bytes, the
+frozen context and the 2 KiB brief among them, and the 16 of them the
+attach of its box adds to say which brief the job was handed (`"brief":
+"fresh"`; a job whose launch continues no session records no
+`session_start`). A read takes 0.38 ms and a raise 0.90 ms at the median
+(0.61 and 2.40 at the 99th percentile), measured on the benchmark's record,
+which names no box and so was 37 941 bytes. The log
 beside it is 478 374 bytes, and only the calls that use it move it: an append
 of the box's next call takes 10.6 ms (15.6), and 10.8 ms (15.3) for a call
 that moved what the job's bridged calls cost, which also writes the new total

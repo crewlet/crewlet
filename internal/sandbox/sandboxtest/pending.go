@@ -73,6 +73,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
 		{"ALaunchAnswersTheJobItOpened", testALaunchAnswersTheJobItOpened},
+		{"ABoxsSessionStartIsRecordedOnceForItsOwnJob", testABoxsSessionStartIsRecordedOnceForItsOwnJob},
+		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
 		{"ALaunchARowsNewerLeaseOutranksIsRefused", testALaunchARowsNewerLeaseOutranksIsRefused},
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
 		{"SuspendingOpensTheRunToTheTail", testSuspendingOpensTheRunToTheTail},
@@ -351,6 +353,101 @@ func decide(t *testing.T, s sandbox.PendingStore, turnID string, license sandbox
 		t.Fatalf("DecideEnding = %+v, %v, %v, want the ending recorded", decided.Ending, ok, err)
 	}
 	return decided
+}
+
+// A JOB'S BOX SAYS ONCE WHICH SESSION IT STARTED, AND ONLY FOR ITS OWN JOB.
+// The first record stands — a job's box starts one session, and a second word,
+// either way, is no truer than the first — a record naming a job the row has
+// moved on from is nothing, as is one for a run with no record, a start that is
+// no session is refused, and the next launch's job starts with nothing said:
+// what one job's box started is not the next's.
+//
+// Mutation: let a second record write over the first, record it on another
+// job's row, or carry it across a relaunch, and a check goes red.
+func testABoxsSessionStartIsRecordedOnceForItsOwnJob(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-start"))
+	if ok, err := s.MarkSessionStart(ctx, "t-start", "another-job", sandbox.SessionStartFresh); err != nil || ok {
+		t.Errorf("a start for a job the record does not hold = %v, %v", ok, err)
+	}
+	if _, err := s.MarkSessionStart(ctx, "t-start", launch, "resumed"); err == nil {
+		t.Error("a start that is no session was taken")
+	}
+	if ok, err := s.MarkSessionStart(ctx, "t-start", launch, sandbox.SessionStartFresh); err != nil || !ok {
+		t.Fatalf("MarkSessionStart = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkSessionStart(ctx, "t-start", launch, sandbox.SessionStartContinued); err != nil || ok {
+		t.Errorf("a second start wrote over the first: %v, %v", ok, err)
+	}
+	if got := mustGet(t, s, "t-start").Launch.SessionStart; got != sandbox.SessionStartFresh {
+		t.Errorf("the record says %q, want the first word, %q", got, sandbox.SessionStartFresh)
+	}
+	mustBeginLaunch(t, s, run("t-start"))
+	if got := mustGet(t, s, "t-start").Launch.SessionStart; got != "" {
+		t.Errorf("the next job's record says %q, want nothing said", got)
+	}
+	if ok, err := s.MarkSessionStart(ctx, "t-none", "job-1", sandbox.SessionStartContinued); err != nil || ok {
+		t.Errorf("a start for a run with no record = %v, %v", ok, err)
+	}
+}
+
+// A RESUMED TURN'S CARRY IS ITS CLAIM'S OWN. What the turn resuming from a
+// collected job does with the job's round — collects it, or carries it on — is
+// recorded on the claim of that job as the turn begins, and only there: never on
+// a row that is not claimed, nor for another job, nor under a lease a newer one
+// outranks, nor once the run's ending is decided; a carry that is none is
+// refused. The release that hands the claim back takes it with it — the next
+// claim's turn says it again — and the next launch's job starts with nothing
+// said.
+//
+// Mutation: write the carry on a row that is not the claim, keep it across a
+// release or a relaunch, or take it under an outranked fence, and a check goes
+// red.
+func testAResumedTurnsCarryIsItsClaimsOwn(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-carry"))
+	fence := sandbox.Fence{}
+	if ok, err := s.MarkResumeBegun(ctx, "t-carry", launch, fence, sandbox.ResumeCollects); err != nil || ok {
+		t.Errorf("a carry on a running row nobody claimed = %v, %v, want nothing written", ok, err)
+	}
+	claimed := mustClaim(t, s, "t-carry")
+	if _, err := s.MarkResumeBegun(ctx, "t-carry", launch, fence, "collected"); err == nil {
+		t.Error("a carry that is none was taken")
+	}
+	if ok, err := s.MarkResumeBegun(ctx, "t-carry", "another-job", fence, sandbox.ResumeCollects); err != nil || ok {
+		t.Errorf("a carry for a job the claim does not hold = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkResumeBegun(ctx, "t-carry", launch, sandbox.Fence{Owner: "node-x", Epoch: 7},
+		sandbox.ResumeCollects); err != nil || !ok {
+		t.Fatalf("MarkResumeBegun under the claim = %v, %v", ok, err)
+	}
+	if got := mustGet(t, s, "t-carry").Launch.ResumeCarry; got != sandbox.ResumeCollects {
+		t.Fatalf("the claim's job says %q, want %q", got, sandbox.ResumeCollects)
+	}
+	if _, err := s.ClaimOwnership(ctx, "t-carry", "node-y", 9); err != nil {
+		t.Fatalf("ClaimOwnership: %v", err)
+	}
+	if ok, err := s.MarkResumeBegun(ctx, "t-carry", launch, sandbox.Fence{Owner: "node-x", Epoch: 7},
+		sandbox.ResumeCarriesOn); err != nil || ok {
+		t.Errorf("a carry under a lease the row's newer one outranks = %v, %v", ok, err)
+	}
+	claimed.Owner, claimed.OwnerEpoch = "node-y", 9
+	mustRelease(t, s, claimed)
+	if got := mustGet(t, s, "t-carry").Launch.ResumeCarry; got != "" {
+		t.Errorf("the released claim's job still says %q, want its next claim's turn to say it again", got)
+	}
+	mustClaim(t, s, "t-carry")
+	if ok, err := s.MarkResumeBegun(ctx, "t-carry", launch, sandbox.Fence{Owner: "node-y", Epoch: 9},
+		sandbox.ResumeCarriesOn); err != nil || !ok {
+		t.Fatalf("MarkResumeBegun under the next claim = %v, %v", ok, err)
+	}
+	mustBeginLaunch(t, s, run("t-carry"))
+	if got := mustGet(t, s, "t-carry").Launch.ResumeCarry; got != "" {
+		t.Errorf("the next job's record says %q, want nothing said", got)
+	}
+	if ok, err := s.MarkResumeBegun(ctx, "t-none", "job-1", fence, sandbox.ResumeCollects); err != nil || ok {
+		t.Errorf("a carry for a run with no record = %v, %v", ok, err)
+	}
 }
 
 func mustGet(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.PendingRun {
@@ -2039,8 +2136,7 @@ func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
 	Ask(t, s, "t1", sandbox.Ask{Question: "which base branch?", To: sandbox.AskToRequester,
 		Branch: "wip/swe/t1"})
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		SessionID: "sess-1",
-		AskedAt:   time.Now().UTC(),
+		AskedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("park: %v", err)
 	}

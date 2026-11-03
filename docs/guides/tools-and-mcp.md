@@ -1290,23 +1290,33 @@ answers it ([ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-
 - **The call is made at most once.** The node holding the seat records the
   first answer it takes, refuses a second (`409 stale_version` at the route),
   marks the call on the run's record before it makes it, and records what it
-  returned. A later attempt at the same answer, after a node restart, hands
-  the run that result, or says the call may or may not have taken effect; it
-  never makes it again. A tool blocked or changed since the call was held is
-  not called, and the run is told why. Once its result is recorded, the call
-  is added to the run's calls (the bridged tool log kept beside its record) as
-  the tool answered it and without its arguments or result, once. The result
-  and the log are two writes, so the record keeps the call's entry with the
-  result: where the second write never lands, because it failed or its node
-  stopped, a stopped or lost turn's account reads the call off the record,
-  and the relaunch that carries the run on adds it to the log, at most once.
-  A reply the approved call made counts as the turn's reply wherever the
-  engine reads whether the turn replied, its delivery check and a stopped or
-  lost turn's account among them.
-- **The run carries on where it stopped**, in its own session in the box it
-  left where the box was kept, told the answer and the call's result (the
-  first 16 KiB of it); otherwise a fresh run starts and is told the call, the
-  answer and the result.
+  returned. A later attempt at the same answer — after a node restart, or
+  after the run's relaunch was refused once the call was made, by the seat's
+  budget, say — hands the run that result, or says the call may or may not
+  have taken effect; it never makes it again, whatever changed since. Before
+  an attempt begins making it, a tool blocked or changed since the call was
+  held is not called, and the run is told why; so is one a required tool
+  skill covers that the session carrying the run on has not loaded — a skill
+  made required while the call waited, say — which leaves the answer unused:
+  the run can load the skill and call again, which asks afresh. Once its
+  result is recorded, the call is added to the run's calls (the bridged tool
+  log kept beside its record) as the tool answered it and without its
+  arguments or result, once. The result and the log are two writes, so the
+  record keeps the call's entry with the result: where the second write never
+  lands, because it failed or its node stopped, a stopped or lost turn's
+  account and a later attempt's run read the call off the record, and the
+  relaunch that carries the run on adds it to the log, at most once. A reply
+  the approved call made counts as the turn's reply wherever the engine reads
+  whether the turn replied, its delivery check and a stopped or lost turn's
+  account among them.
+- **The run carries on where it stopped**, in its own session, told the
+  answer and the call's result (the first 16 KiB of it): continued from the
+  session the turn kept of it, in whichever box the relaunch gets — its own,
+  or a new one, told what a new box changes — or, where nothing of it was
+  kept, as the box it left holds it while that box is kept. Only where
+  neither can be continued does a fresh run start, told the call, the answer
+  and the result ([A relaunch continues the turn's
+  session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)).
 - **A call that waits raises an alarm.** One that has waited ten minutes, a
   third of the default pause TTL a parked run's box is kept for, raises
   `mcp_approval_waiting` on its server ([A server's alarms](#a-servers-alarms)),
@@ -1691,7 +1701,7 @@ or without egress. `GET /mcp-catalogue` serves it (see the
 | `notion` | Notion's remote server | OAuth |
 | `sentry` | Sentry's remote server | OAuth |
 | `stripe` | Stripe's remote server | OAuth, or an agent API key header |
-| `cloudflare` | The Cloudflare API server | OAuth, or an API token header |
+| `cloudflare` | The Cloudflare API server | the Cloudflare integration (each agent's own scoped token), OAuth, or an API token header |
 | `gitlab` | `glab mcp serve`, one per agent | the GitLab integration |
 | `slack` | `slack-mcp-server` 1.3.0, one per agent | the Slack integration |
 | `mattermost` | `mcp-server-mattermost` 0.6.1, one per agent | the Mattermost integration |
@@ -1910,12 +1920,13 @@ Two things MCP does not cover, and what to do instead:
   a parser, and that is an in-tree Go interface — the
   [notification spine](../concepts/event-system.md) is backend-neutral by
   design, but a third-party app contributes a client, a parser and a transport as code.
-  That is a pull request, not a config entry. The eight this build serves are
+  That is a pull request, not a config entry. The eight this build routes are
   [Mattermost](../integrations/mattermost.md), [Slack](../integrations/slack.md),
   [Jira](../integrations/jira.md), [Confluence](../integrations/confluence.md),
   [GitLab](../integrations/gitlab.md), [GitHub](../integrations/github.md) and
-  [Datadog](../integrations/datadog.md), plus Atlassian's own Forge relay —
-  every one of them routes end to end. A config block the engine cannot honour
+  [Datadog](../integrations/datadog.md), plus Atlassian's own Forge relay, and
+  every one of them routes end to end. [Cloudflare](../integrations/cloudflare.md)
+  receives nothing yet: it provisions each agent's token and its tool only. A config block the engine cannot honour
   is refused rather than ignored, because a silently dropped integration block
   looks exactly like one that is working until somebody notices the messages
   never arrived.
@@ -2475,8 +2486,9 @@ When the engine launches a per-role MCP server instance, it merges the base serv
 
 ### Seat credentials the engine binds
 
-For an integration the engine manages an account on (Atlassian, Datadog,
-GitHub, GitLab, Mattermost, Slack), a seat's own credential is never named in
+For an integration the engine manages an account or a credential on
+(Atlassian, Cloudflare, Datadog, GitHub, GitLab, Mattermost, Slack), a seat's
+own credential is never named in
 `mcp_env`. The engine seals it under a name it derives from the handle and
 binds it to every per-seat server (`shared: false`) that reads that
 integration's credential, whatever the server is called, for each seat that is
@@ -2493,7 +2505,7 @@ mcp_servers:
     shared: false
     url: "https://mcp.example.com/"
     seat_credentials:
-      - kind: atlassian          # atlassian | datadog | github | gitlab | mattermost | slack
+      - kind: atlassian          # atlassian | cloudflare | datadog | github | gitlab | mattermost | slack
         field: EMAIL             # optional: Atlassian's TOKEN or EMAIL; empty is the credential itself
         key: X-Atlassian-User    # the variable (stdio) or header (http) the server reads
       - kind: atlassian
@@ -2510,6 +2522,7 @@ recognition:
 | Server | Recognised by | Reads |
 |---|---|---|
 | Datadog's remote server | a `datadoghq.` or `ddog-gov.` host | `DD_APPLICATION_KEY` |
+| The Cloudflare API server | `mcp.cloudflare.com` | `Authorization: Bearer <seat token>` |
 | GitHub's remote server | `api.githubcopilot.com` | `Authorization: Bearer <installation token>` |
 | GitHub's local server | a `github-mcp-server` command or image | `GITHUB_PERSONAL_ACCESS_TOKEN` |
 | `glab mcp serve` | the `glab` command with `mcp` | `GITLAB_TOKEN` |
@@ -2616,7 +2629,7 @@ What the engine does depends on whether anything will fill the variable:
 
 | The variable | The server | Where it shows |
 |---|---|---|
-| Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat, a GitLab or Datadog account's token, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set, and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; on **Settings › MCP & tools** the server's row counts it as *waiting*, the server reads *Waiting* where nothing else is wrong, and its page lists each waiting instance |
+| Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat, a GitLab or Datadog account's token, a Cloudflare seat's API token, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set, and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; on **Settings › MCP & tools** the server's row counts it as *waiting*, the server reads *Waiting* where nothing else is wrong, and its page lists each waiting instance |
 | Is one such a pass mints, and its last report says it cannot until a person acts — its own credential is missing or refused, an administrator has an app or a setting to switch on, or this seat's account could not be made or was switched off by somebody else — or the integration is being disconnected | **Failed**, with the finding that pass recorded: the same finding the integration's card shows. It is a wait with no end until somebody acts, so it is not reported as one | `mcp_server_credential_missing` (error) when the seat's pass meets it; the server's row counts it as failed from the first heartbeat after the integration reports it, whenever that is, and as waiting again from the first after it clears |
 | Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value; for a shared server, every variable is this | **Failed**, naming the variable and the remedies: seal it (`crewlet secrets set`, or for a seat's credential the integration's own `provision` command where it has one), which a running node re-activates the company for as it stores it (`POST /config/reload` for a value stored with the engine stopped), or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value, which a running node re-activates the company for; and, where the server can run without it, list the key holding it under the server's `optional_keys` — offered for the server's own settings, and never for a seat's own credential, which is the identity its child acts as, or for a variable the `url` needs, since a server is dialled at its `url` | `mcp_server_credential_missing` (error); the server's row counts it as failed, with the same sentence |
 

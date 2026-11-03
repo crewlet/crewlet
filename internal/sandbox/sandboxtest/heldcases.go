@@ -108,21 +108,39 @@ func testAHeldCallIsRecordedWithItsQuestionAndPinnedToItsJob(t *testing.T, s san
 // back, finds it marked and does not; the result is recorded once and read by
 // every later mark.
 //
+// AND THE CLAIM TAKEN AGAIN READS THEM: the row it returns holds the mark, and
+// the result once one is recorded. The resume it drives answers a call an
+// earlier attempt marked from that read, before it asks whether the call may
+// be made at all (internal/agent/runner's makeHeld).
+//
 // Mutation: let ReleaseClaim clear the mark, or the mark write a call already
-// marked, and the call is made twice.
+// marked, and the call is made twice; return the claimed row without the held
+// call's mark or result, and a later attempt reads a call it made as one
+// nobody made.
 func testAHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := heldParked(t, s, "t1")
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "once"), sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
-	claim := func() {
+	claim := func() sandbox.HeldCall {
 		t.Helper()
-		if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{}); err != nil || !ok {
-			t.Fatalf("ClaimForResume = %v, %v", ok, err)
+		claimed, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{})
+		if err != nil || !ok || claimed.HeldCall == nil {
+			t.Fatalf("ClaimForResume = %v, %v, holding %+v, want the claim with its held call", ok, err,
+				claimed.HeldCall)
+		}
+		return *claimed.HeldCall
+	}
+	release := func() {
+		t.Helper()
+		if ok, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{Launch: launch, To: sandbox.StatusAnswered}); err != nil || !ok {
+			t.Fatalf("ReleaseClaim = %v, %v", ok, err)
 		}
 	}
-	claim()
+	if read := claim(); read.Calling() || read.Made() {
+		t.Fatalf("the first claim reads %+v, want the call unmarked", read)
+	}
 	held, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
 	if err != nil || !first || !held.Calling() || held.Made() {
 		t.Fatalf("the first mark = %+v, %v, %v, want this mark the first", held, first, err)
@@ -131,16 +149,16 @@ func testAHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack(t *testing.T, s 
 	if err != nil || first || !again.CallingAt.Equal(held.CallingAt) {
 		t.Fatalf("a second mark = %+v, %v, %v, want it found marked", again, first, err)
 	}
-	ok, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{Launch: launch, To: sandbox.StatusAnswered})
-	if err != nil || !ok {
-		t.Fatalf("ReleaseClaim = %v, %v", ok, err)
+	release()
+	if read := claim(); !read.Calling() || !read.CallingAt.Equal(held.CallingAt) || read.Made() {
+		t.Fatalf("the claim taken again reads %+v, want the call marked as the first mark left it", read)
 	}
-	claim()
 	again, first, err = s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
 	if err != nil || first {
 		t.Fatalf("a mark after the claim came back = %+v, %v, %v, want it found marked", again, first, err)
 	}
-	if ok, err = s.RecordHeldResult(ctx, "t1", launch, heldMade("sealed-result"), sandbox.Fence{}); err != nil || !ok {
+	ok, err := s.RecordHeldResult(ctx, "t1", launch, heldMade("sealed-result"), sandbox.Fence{})
+	if err != nil || !ok {
 		t.Fatalf("RecordHeldResult = %v, %v", ok, err)
 	}
 	if ok, err = s.RecordHeldResult(ctx, "t1", launch, heldMade("another"), sandbox.Fence{}); err != nil || !ok {
@@ -149,6 +167,11 @@ func testAHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack(t *testing.T, s 
 	made, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
 	if err != nil || first || !made.Made() || made.Result != "sealed-result" {
 		t.Fatalf("a mark after the result = %+v, %v, %v, want the first result", made, first, err)
+	}
+	release()
+	if read := claim(); !read.Calling() || !read.Made() || read.Result != "sealed-result" {
+		t.Fatalf("the claim taken again after the result reads %+v, want the call marked and the first "+
+			"result recorded", read)
 	}
 }
 

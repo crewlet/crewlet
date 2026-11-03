@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -224,5 +225,322 @@ func TestALoginTheBoxGrewPastItsBoundRefusesTheCapture(t *testing.T) {
 	if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused ||
 		!strings.Contains(c.Reason, "a whole launch may hand") {
 		t.Fatalf("the record holds %+v, want the capture refused for the login's bound", c)
+	}
+}
+
+// timedStamps is a run store that records the deadline every stamp of a
+// capture is asked under, by the state it stamps; and, where late is set,
+// applies a place's reservation and answers it only once its caller has given
+// up — a coordination store that took the write and whose answer came too late
+// — stamping it, where steal is set, as another read racing this one reserved
+// the same place: at another instant.
+type timedStamps struct {
+	PendingStore
+	late, steal bool
+
+	mu        sync.Mutex
+	deadlines map[CaptureState][]time.Time
+}
+
+func (s *timedStamps) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	deadline, _ := ctx.Deadline()
+	s.mu.Lock()
+	if s.deadlines == nil {
+		s.deadlines = map[CaptureState][]time.Time{}
+	}
+	s.deadlines[stamp.State] = append(s.deadlines[stamp.State], deadline)
+	s.mu.Unlock()
+	if !s.late || stamp.State != CaptureBegun {
+		return s.PendingStore.StampCapture(ctx, turnID, stamp)
+	}
+	applied := stamp
+	if s.steal {
+		applied.At = applied.At.Add(-time.Second)
+	}
+	if _, err := s.PendingStore.StampCapture(context.WithoutCancel(ctx), turnID, applied); err != nil {
+		return false, err
+	}
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+// askedUnder is every deadline a stamp of state was asked under.
+func (s *timedStamps) askedUnder(state CaptureState) []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.deadlines[state])
+}
+
+// readUntil is a read of a box whose deadline leaves its take two seconds — its
+// own deadline, T — and, after that, the room the read keeps for the take's
+// outcome stamp, up to by, and for its box's pause ([Coordinator.takeContext]).
+func readUntil(t *testing.T) (read context.Context, by time.Time) {
+	t.Helper()
+	read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
+	t.Cleanup(cancel)
+	deadline, _ := read.Deadline()
+	return read, deadline.Add(-discardGrace)
+}
+
+// A CAPTURE'S OUTCOME IS STAMPED IN THE ROOM THE READ LEAVES IT. A take whose
+// place was reserved and whose spool then failed is stamped refused under a
+// context of its own that ends at the read's by — never at the take's own
+// deadline, which may be what ended the spool and would leave the stamp no
+// time, and never past by, where the read needs the rest of its time for the
+// box's pause.
+//
+// Mutation: bound the refusal's stamp by the take's own deadline, or by the
+// record's budget alone, and its deadline is not the read's by.
+func TestACapturesOutcomeIsStampedInTheRoomTheReadLeavesIt(t *testing.T) {
+	t.Parallel()
+	rig, _, keep := keepingRig(t)
+	keep.sealErr = errors.New("the keyring would not seal")
+	run := rig.launchKept(t, "t1")
+	stamps := &timedStamps{PendingStore: rig.coordinator.pending}
+	rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
+	read, by := readUntil(t)
+	spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+		readCapture(BoxReadCollect, Result{}, false))
+	if spooled != nil {
+		t.Fatalf("a take whose seal failed spooled %+v", spooled)
+	}
+	refused := stamps.askedUnder(CaptureRefused)
+	if len(refused) == 0 {
+		t.Fatal("the take's refusal was never stamped")
+	}
+	for _, deadline := range refused {
+		if !deadline.Equal(by) {
+			t.Errorf("the refusal was stamped under a deadline %s off the read's by, want it at by",
+				deadline.Sub(by))
+		}
+	}
+	if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
+		t.Fatalf("the capture whose seal failed stands %+v, want it refused", c)
+	}
+}
+
+// A PLACE RESERVED AS THE TAKE'S TIME RAN OUT IS SETTLED. The coordination store
+// took the reservation of the take's place and answered after the take's own
+// deadline, so the take never spooled — and the place stood begun on the run's
+// row, read as a keep under way for as long as a capture can take, the turn's
+// end waiting on it, with nobody left to settle it. The take stamps its place
+// refused in the room the read leaves its outcome stamp, decided on the row as
+// it stands: its own begun place is advanced, and a place another read reserved
+// in its stead is left as it stands.
+//
+// Mutation: leave a reservation that ended unanswered as it is, or settle the
+// place whoever reserved it, and a case goes red.
+func TestAPlaceReservedAsTheTakesTimeRanOutIsSettled(t *testing.T) {
+	t.Parallel()
+	for name, steal := range map[string]bool{
+		"the take's own place":          false,
+		"a place another read reserved": true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig, _, _ := keepingRig(t)
+			run := rig.launchKept(t, "t1")
+			stamps := &timedStamps{PendingStore: rig.coordinator.pending, late: true, steal: steal}
+			rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
+			read, by := readUntil(t)
+			spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+				readCapture(BoxReadCollect, Result{}, false))
+			if spooled != nil {
+				t.Fatalf("a take whose place was never answered spooled %+v", spooled)
+			}
+			c := rig.get("t1").Capture
+			switch {
+			case c == nil:
+				t.Fatal("the place the store took is gone from the row")
+			case steal && c.State != CaptureBegun:
+				t.Fatalf("another read's place stands %s (%q), want it begun as that read left it",
+					c.State, c.Reason)
+			case !steal && (c.State != CaptureRefused || !strings.Contains(c.Reason, "time ran out")):
+				t.Fatalf("the take's own place stands %s (%q), want it refused, saying why", c.State, c.Reason)
+			}
+			for _, deadline := range stamps.askedUnder(CaptureRefused) {
+				if deadline.After(by) {
+					t.Errorf("the place was settled under a deadline %s past the read's by", deadline.Sub(by))
+				}
+			}
+		})
+	}
+}
+
+// lateStore is a run store whose answer to a take's reservation of its place
+// never reaches the take in time, as a coordination store's does when the
+// leader of the stream under it stalls or steps down: the reservation is
+// applied — before its asker gives up, or, where afterwards is set, only once
+// the row has been read or written again after its asker gave up, a write
+// already on its way that lands late — and its asker hears nothing before it
+// gives up; and the first fails reads and stamps of the row after the
+// reservation are answered with no leader, as a store electing one answers
+// every request meanwhile.
+type lateStore struct {
+	PendingStore
+	afterwards bool
+	fails      int
+
+	mu       sync.Mutex
+	reserved bool
+	failed   int
+	// pending is a reservation the store has taken and not yet applied.
+	pending *SessionCapture
+}
+
+// errNoLeader is a store answering while its stream has no leader.
+var errNoLeader = errors.New("the stream has no leader")
+
+// leaderless reports whether the store answers this read or stamp with no
+// leader: one of the first fails after the reservation.
+func (s *lateStore) leaderless() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.reserved || s.failed >= s.fails {
+		return false
+	}
+	s.failed++
+	return true
+}
+
+// land applies a reservation still on its way, as made against the row before
+// whatever was read or written since: asked again on the row as it stands now.
+// Under ctx's values and never its cancellation, as the late write is already
+// the store's: whatever became of the request that carried it in, nothing
+// takes it back.
+func (s *lateStore) land(ctx context.Context, turnID string) {
+	s.mu.Lock()
+	pending := s.pending
+	s.pending = nil
+	s.mu.Unlock()
+	if pending != nil {
+		_, _ = s.PendingStore.StampCapture(context.WithoutCancel(ctx), turnID, *pending)
+	}
+}
+
+func (s *lateStore) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	if stamp.State == CaptureBegun {
+		s.mu.Lock()
+		s.reserved = true
+		if s.afterwards {
+			held := stamp
+			s.pending = &held
+		}
+		s.mu.Unlock()
+		if !s.afterwards {
+			if _, err := s.PendingStore.StampCapture(context.WithoutCancel(ctx), turnID, stamp); err != nil {
+				return false, err
+			}
+		}
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+	if s.leaderless() {
+		return false, errNoLeader
+	}
+	defer s.land(ctx, turnID)
+	return s.PendingStore.StampCapture(ctx, turnID, stamp)
+}
+
+func (s *lateStore) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	if s.leaderless() {
+		return PendingRun{}, false, errNoLeader
+	}
+	defer s.land(ctx, turnID)
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+// A RESERVATION THE STORE TAKES LATE IS SETTLED WHICHEVER WAY IT LANDS. A take
+// that hears nothing of its reservation by its own deadline settles its place
+// refused, as one stamp decided on the row as it stands when the store writes
+// it: where the store applies the reservation only after its asker gave up, the
+// settle lands first and the reservation, arriving after it, finds the place
+// answered and takes nothing; and where the store, its stream's leader stepping
+// down after it took the reservation, answers nothing for a while, the settle is
+// asked again until it lands, within the read's time. Either way the place is
+// refused on the row, never left begun.
+//
+// Mutation: decide the settle off one read of the row, or give up on a read or
+// stamp the store did not answer, and a case leaves the place begun.
+func TestAReservationTheStoreTakesLateIsSettledWhicheverWayItLands(t *testing.T) {
+	t.Parallel()
+	for name, store := range map[string]*lateStore{
+		"applied once its asker gave up":   {afterwards: true},
+		"answered by no leader for a time": {fails: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig, _, _ := keepingRig(t)
+			run := rig.launchKept(t, "t1")
+			store.PendingStore = rig.coordinator.pending
+			rig.coordinator.pending, rig.coordinator.recordBudget = store, 10*time.Minute
+			read, _ := readUntil(t)
+			spooled, kept := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+				readCapture(BoxReadCollect, Result{}, false))
+			if spooled != nil {
+				t.Fatalf("a take whose place was never answered spooled %+v", spooled)
+			}
+			// AND ANY RESERVATION STILL ON ITS WAY, landed now.
+			store.land(t.Context(), "t1")
+			c := rig.get("t1").Capture
+			switch {
+			case c == nil:
+				t.Fatal("the row holds no capture of the take, want its place refused")
+			case c.State != CaptureRefused || !strings.Contains(c.Reason, "time ran out"):
+				t.Fatalf("the take's place stands %s (%q), want it refused, saying why", c.State, c.Reason)
+			case kept == nil || kept.NotKept == "":
+				t.Errorf("the read reports %+v of the session, want it not kept, saying why", kept)
+			}
+		})
+	}
+}
+
+// lostAnswers is a run store that applies a take's first reservation of its
+// place and loses its answer, as a store whose reply never reached its asker
+// does: the asker hears an error, and asks again.
+type lostAnswers struct {
+	PendingStore
+	mu   sync.Mutex
+	lost bool
+}
+
+func (s *lostAnswers) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	s.mu.Lock()
+	lose := stamp.State == CaptureBegun && !s.lost
+	s.lost = s.lost || lose
+	s.mu.Unlock()
+	if !lose {
+		return s.PendingStore.StampCapture(ctx, turnID, stamp)
+	}
+	if _, err := s.PendingStore.StampCapture(ctx, turnID, stamp); err != nil {
+		return false, err
+	}
+	return false, errors.New("the store's answer never reached its asker")
+}
+
+// A TAKE'S OWN RESERVATION, ITS ANSWER LOST, IS ITS OWN. The store applied the
+// take's reservation and its answer never came back, so the take asked again —
+// and the place it asks for is the one its first ask already holds. Answered as
+// another read's, the take walked away from it, begun, with nobody to settle it
+// and nothing kept. So the store answers a stamp the row already holds as
+// taken: the take goes on under its own place, and its session is kept.
+//
+// Mutation: answer a reservation the row already holds as not taken, and the
+// take keeps nothing and leaves its place begun.
+func TestATakesOwnReservationItsAnswerLostIsItsOwn(t *testing.T) {
+	t.Parallel()
+	rig, _, _ := keepingRig(t)
+	run := rig.launchKept(t, "t1")
+	rig.coordinator.pending = &lostAnswers{PendingStore: rig.coordinator.pending}
+	spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID), rig.runner,
+		readCapture(BoxReadCollect, Result{}, false))
+	if spooled == nil {
+		t.Fatal("a take whose reservation the store applied and whose answer was lost spooled nothing, " +
+			"want it gone on under its own place")
+	}
+	rig.coordinator.keepLater(spooled)
+	rig.awaitKeeps()
+	if c := rig.get("t1").Capture; c == nil || c.State != CaptureLanded || c.CaptureSeq != spooled.stamp.CaptureSeq {
+		t.Fatalf("the take's place stands %+v, want its capture landed", c)
 	}
 }

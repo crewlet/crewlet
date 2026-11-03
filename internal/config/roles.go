@@ -427,12 +427,14 @@ type RoleIntegrations struct {
 	GitLab     *RoleGitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
 	Jira       *RoleJira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
 	Confluence *RoleConfluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
+	Cloudflare *RoleCloudflare `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"This seat's own Cloudflare account API token: whether it is on and its level."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
 	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
-		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil
+		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil &&
+		r.Cloudflare == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.

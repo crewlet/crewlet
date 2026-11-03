@@ -155,9 +155,11 @@ type ResumeRequest struct {
 	Run PendingRun
 
 	// Bridged is the run's bridged tool log as its job left it
-	// ([PendingStore.BridgeLog]): the calls the resumed phase is judged on,
-	// and where a person's answer cut the round. Read by the coordinator
-	// once the job is collected, beside the row rather than off it.
+	// ([PendingStore.BridgeLog]), with the call a person approved in the job
+	// that the log is still owed ([BridgeLog.withHeld]): the calls the resumed
+	// phase is judged on, and where a person's answer cut the round. Read by
+	// the coordinator once the job is collected, beside the row rather than
+	// off it.
 	Bridged BridgeLog
 
 	// Answer is what the resumed turn files as its executor's report: the
@@ -272,7 +274,15 @@ type ResumeRequest struct {
 	// In this process it is also what tells a resume that broke before its
 	// turn from one that broke while running it ([ErrResumeAbandoned]): the
 	// first destroyed nothing a person sent.
-	Begin func(ctx context.Context) error
+	//
+	// AND WHAT THE TURN DOES WITH THE ROUND OF THE JOB IT RESUMES FROM, carry
+	// — collects it, or carries it on — which only the resumer decides, as
+	// it reads how the job ended. On a claim of a collected job the
+	// coordinator records it on the job's record ([LaunchRecord.ResumeCarry]),
+	// for every reader of whether a relaunch would continue the job's session
+	// while the turn runs; best effort, since nothing the turn does reads it,
+	// and a record that missed it reads as a turn that has not said.
+	Begin func(ctx context.Context, carry ResumeCarry) error
 
 	// Engine is what the ENGINE spent on the job outside every segment of
 	// the turn — its bridged calls ([LaunchRecord.Bridged]) and the
@@ -749,12 +759,20 @@ type CoordinatorOptions struct {
 	Sessions SessionWrites
 	Keep     SessionKeep
 
-	// SpoolDir is the directory a capture's sealed session waits in between
-	// its take and its keep ([Coordinator.spool]), and the one whose leftover
-	// spools a take sweeps ([Coordinator.sweepSpools]). Empty is the node's
-	// temporary directory (os.TempDir), which is where the engine keeps them;
-	// a test names a directory of its own, so what is left in it is the
-	// case's to see.
+	// Restore is what a relaunch continues its turn's kept session from — the
+	// executor log's read of the turn's row, through THE ESTATE ROUTER'S reads
+	// for the reason Sessions writes through its writes, and the session's
+	// sealed object — see restore.go. Nil continues no kept session: every
+	// relaunch then continues at most the session its own box holds.
+	Restore SessionRestore
+	// SpoolDir is the directory this node spools sealed sessions in: a
+	// capture's, between its take and its keep ([Coordinator.spool]), and a
+	// relaunch's, the kept session it fetched to carry into its box, between
+	// the fetch and the run's start ([Coordinator.fetchSession]) — and the one
+	// whose leftover spools of either kind every take and every fetch sweeps
+	// ([Coordinator.sweepSpools]). Empty is the node's temporary directory
+	// (os.TempDir), which is where the engine keeps them; a test names a
+	// directory of its own, so what is left in it is the case's to see.
 	SpoolDir string
 
 	// Now is the clock, injectable for tests.
@@ -841,6 +859,11 @@ type Coordinator struct {
 	sessionRetry time.Duration
 	recordBudget time.Duration
 	captureTick  time.Duration
+	// restore is [CoordinatorOptions.Restore], and relaunchWait how long a
+	// relaunch waits for the capture of the job it follows to be kept
+	// ([relaunchCaptureWait]) — a test's shorter.
+	restore      SessionRestore
+	relaunchWait time.Duration
 	now          func() time.Time
 
 	// keepLife is the lifetime every keep runs under, off the read that took
@@ -1016,6 +1039,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		refresh:       opts.Refresh,
 		sessions:      opts.Sessions,
 		keep:          opts.Keep,
+		restore:       opts.Restore,
+		relaunchWait:  relaunchCaptureWait,
 		spoolDir:      opts.SpoolDir,
 		sessionRetry:  sessionRetryBase,
 		recordBudget:  sessionRecordBudget,
@@ -2219,6 +2244,14 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		// and the log's: they are made off the read.
 		HarnessSession: result.SessionID,
 		HarnessVersion: result.HarnessVersion,
+		// AND WHICH BRIEF THE LAUNCH HANDED IT, beside whether the run did
+		// continue the session it was asked to and, where it did not, why
+		// its script started one of its own and handed it the fresh brief:
+		// the started phase record carries the fresh brief, which a run that
+		// continued its session never read.
+		Brief:                   string(facts.Brief),
+		HarnessSessionContinued: result.Continued,
+		HarnessSessionFellBack:  redact.Secrets(result.FellBack),
 	}
 	if kept := result.Kept; kept != nil {
 		rec.SessionTakenBytes = kept.Bytes
@@ -2322,7 +2355,6 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	}
 
 	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
-		SessionID:   result.SessionID,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		// And what condensing this collection cost, paid by the same resume.
@@ -3111,7 +3143,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			panic(p)
 		}
 	}(ctx)
-	begin := func(ctx context.Context) error {
+	begin := func(ctx context.Context, carry ResumeCarry) error {
 		if claimedAnswer(run) {
 			// THE TURN TAKES THE ANSWER, on the row, or it does not run —
 			// under the CLAIMANT's lease, which the claim stamped on the
@@ -3135,6 +3167,8 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// by. Spent only once the turn returned, it ran as a second
 			// turn. See [CoordinatorOptions.Spent].
 			c.spend(ctx, run.AgentHandle, *run.Answer)
+		} else {
+			c.markResumeBegun(ctx, run, carry)
 		}
 		began.Store(true)
 		return nil
@@ -3150,10 +3184,15 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// in them — and never "no calls" for a log the store could not read:
 	// that read failing is a resume that failed, handed back like any other.
 	// Read INSIDE the frame, so an ending decided while it is read waits for
-	// the frame as it would for the resumer ([Coordinator.framing]).
+	// the frame as it would for the resumer ([Coordinator.framing]). WITH THE
+	// CALL A PERSON APPROVED that the log is still owed ([BridgeLog.withHeld]):
+	// a later attempt at a resume whose relaunch was refused once the call was
+	// made finds it on the row alone, and the run that carries the round on is
+	// judged on it, guarded by it and told it as the session's own call.
 	c.frameBegins(run.TurnID)
 	calls, err := c.pending.BridgeLog(ctx, run)
 	if err == nil {
+		calls = calls.withHeld(run)
 		err = c.resume.Resume(ctx, ResumeRequest{
 			Run: run, Bridged: calls, Answer: answer, Success: success, Trigger: trigger,
 			DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
@@ -3391,6 +3430,39 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// whatever drove the resume did its whole job.
 	return AnswerConsumed, nil
 }
+
+// markResumeBegun records on a claim of a collected job what the turn resuming
+// from it does with the job's round ([LaunchRecord.ResumeCarry]), as the turn
+// begins ([ResumeRequest.Begin]), under the claimant's lease, which the claim
+// stamped on the row. A carry the resumer did not say is none to record.
+//
+// BEST EFFORT, AND BOUNDED ([resumeCarryRecordBudget]): nothing the turn does
+// reads it — it is every reader's of whether a relaunch would continue the
+// job's session — so a record the store does not take is logged and the turn
+// goes on, read as one that has not said, which is undecided, never either way.
+func (c *Coordinator) markResumeBegun(ctx context.Context, run PendingRun, carry ResumeCarry) {
+	if !carry.Valid() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, resumeCarryRecordBudget)
+	defer cancel()
+	if _, err := c.pending.MarkResumeBegun(ctx, run.TurnID, run.LaunchID, fenceOf(run), carry); err != nil {
+		log.WarnContext(ctx, "sandbox_resume_carry_unrecorded", "turn_id", run.TurnID,
+			"carry", string(carry), "error", err.Error(),
+			"detail", "what the resumed turn does with its job's round was not recorded on the run; while "+
+				"the turn runs, whether a relaunch continues the job's session reads as not said")
+	}
+}
+
+// resumeCarryRecordBudget bounds the write that records what a resumed turn
+// does with its job's round ([Coordinator.markResumeBegun]): FIVE SECONDS, as
+// the write recording which session a job's box started is given
+// (internal/engine's sessionStartRecordBudget), and for its reason — one
+// compare-and-swap of one row, which a healthy coordination store answers in
+// milliseconds, and a store that has not answered in five is in an outage this
+// write waits out no better. It is on the resume's path, before its turn runs,
+// so a store's slow moment holds the turn back by no more than that.
+const resumeCarryRecordBudget = 5 * time.Second
 
 // claimedAnswer reports whether a claimed run carries a RECORDED answer its
 // claim was taken for — the chat route's, which lives on the row rather than
@@ -4403,7 +4475,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			if !mayAsk && c.keepsSessions() {
 				return errAskAway
 			}
-			waited, found, err := c.awaitCapture(ctx, run)
+			waited, found, err := c.awaitCapture(ctx, run, SessionCaptureBudget)
 			switch {
 			case err != nil:
 				return fmt.Errorf("sandbox: ending run %s, whose turn's end waits for its capture: %w",
@@ -5530,7 +5602,9 @@ type AskedRun struct {
 	Branch string
 
 	// SessionID is the asking job's harness session, which the relaunch
-	// continues where it runs in the asking job's box ([Continuation]).
+	// continues where it runs in the asking job's box ([Continuation]): the
+	// one its box ran ([PendingRun.SessionRan]), "" where the row cannot say
+	// which, which continues none there.
 	SessionID string
 
 	// BoxKept is whether that box is still there. False once it was
@@ -5568,7 +5642,7 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 	}
 	return &AskedRun{
 		Question: redact.Secrets(run.Question), Answer: redact.Secrets(text),
-		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionID,
+		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionRan(),
 		BoxKept: run.SandboxID != "",
 		Label:   answer.Label,
 	}

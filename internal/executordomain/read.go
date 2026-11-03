@@ -112,6 +112,27 @@ func (s Session) Ended() bool { return s.Ending != nil }
 // HasObject reports a row that names a session's object.
 func (s Session) HasObject() bool { return !s.Object.Key.IsZero() }
 
+// Kept is the row as continuing its turn's kept session reads it
+// ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
+// view of it, which the engine's restore and the read surface both make, so a
+// reader of whether a relaunch would continue the session decides on the
+// fields the relaunch does.
+func (s Session) Kept() executorkeep.TurnRow {
+	return executorkeep.TurnRow{
+		Handle: s.Handle, Turn: s.Turn,
+		Harness: s.Harness, HarnessVersion: s.HarnessVersion, SessionID: s.SessionID,
+		ArchiveFormat: s.ArchiveFormat, LaunchSeq: s.LaunchSeq, CaptureSeq: s.CaptureSeq,
+		Object: s.Object, Ended: s.Ended(),
+	}
+}
+
+// RelaunchRead is the level a relaunch reads its turn's row at, and so the
+// level every reader of whether a relaunch would continue the turn's session
+// decides on (internal/sandbox's ReadContinuityOf): the capture it continues
+// may have been recorded by another node's keep, which this node's copy may
+// not have applied yet.
+func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
+
 // rowScanner is one row, from a query or a query row.
 type rowScanner interface{ Scan(dest ...any) error }
 

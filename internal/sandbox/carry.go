@@ -58,6 +58,16 @@ type SessionArchive struct {
 type CarriedSession struct {
 	Archive SessionArchive
 	Body    io.Reader
+
+	// Replace says the archive replaces the box's own copy of the session
+	// even where that copy already holds it (carry.go's digest rule): set for
+	// a session captured from a harness that was CUT OFF ([SessionCapture.Interrupted]),
+	// whose copy in the box it ran in may hold a record its harness never
+	// finished — a half-written transcript line, an OpenCode step that never
+	// settled — which the archive leaves out, or calls made after the capture,
+	// which the brief that continues it lists instead. False keeps a copy that
+	// holds the archive, which is the archive or newer.
+	Replace bool
 }
 
 // CarryCheck is a box's answer to whether a session carried from another box
@@ -74,6 +84,29 @@ type CarryCheck struct {
 
 	// Why says, in a person's words, why it cannot; "" where it can.
 	Why string
+}
+
+// SessionRestorer is a [Runner] that continues a session carried from another
+// box (internal/sandbox/executor's Runner, for a harness it packs and
+// restores): what the launch asks of it before it hands a run a carried session,
+// and what every reader asks that says whether a turn's session can be
+// continued at all ([ContinuityOf]).
+//
+// OPTIONAL, as [SessionTaker] is: a runner that carries no session continues
+// none, and a launch on it starts every relaunch fresh.
+type SessionRestorer interface {
+	// Restores reports whether this runner restores archive at all — written
+	// by its harness, in the one archive format it packs, by a release whose
+	// sessions another box continues — and, where it does not, why: what can
+	// be known of a carried session before any box is asked, the box's own
+	// release aside.
+	Restores(archive SessionArchive) (bool, string)
+
+	// CheckCarry asks box whether its harness can continue archive, a session
+	// packed in another box: [Runner.CheckCarry] in internal/sandbox/executor,
+	// which reads the box harness's release. Three answers: it can, it cannot
+	// (and why), and the box could not be asked, an error.
+	CheckCarry(ctx context.Context, box Sandbox, archive SessionArchive) (CarryCheck, error)
 }
 
 // SessionTaker is a [Runner] whose harness's session a capture takes out of a
@@ -143,6 +176,17 @@ type TakenSession struct {
 	// the copy that box went on with. It refuses a Body not read to its end,
 	// whose digest is no archive's.
 	Keep func(ctx context.Context) error
+
+	// Context is the WHOLE INPUT of the last request the session's harness
+	// sent its model, cache included, as the archive's own transcript
+	// recorded it — Claude Code's last assistant message's usage, OpenCode's
+	// last settled assistant message's tokens — once Body has been read to
+	// its end: the context a launch that continues the session sends again on
+	// its first request, which that launch's budget floor reads
+	// ([SessionCapture.ContextTokens]). Zero where the transcript recorded
+	// none this build reads, and where Body was not read whole. Nil from a
+	// taker that measures nothing.
+	Context func() int64
 }
 
 // SessionPackWait bounds a runner's on-demand pack of a session in its box

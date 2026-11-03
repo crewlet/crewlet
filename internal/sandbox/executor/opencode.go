@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -245,7 +246,8 @@ func newOpenCodeSession() string {
 func (OpenCode) Session(req sandbox.RunRequest) Session {
 	if req.Resume != "" {
 		return Session{ID: "ses_" + strings.TrimPrefix(req.Resume, "ses_"), Continues: true,
-			Fresh: "ses_" + newOpenCodeSession()}
+			Fresh:    "ses_" + newOpenCodeSession(),
+			Replaces: req.Carried != nil && req.Carried.Replace}
 	}
 	return Session{ID: "ses_" + newOpenCodeSession()}
 }
@@ -414,7 +416,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`  opencode auth import --standalone < %s > /dev/null || { echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; }`, doc)
 	line(`  imported=1`)
 	line(`fi`)
-	b.WriteString(openCodeSessionGate(session, paths))
+	b.WriteString(openCodeSessionGate(session, paths, req.FreshWiring != nil))
 
 	// ON THE SERVER ALONE: it runs the session, so it is the one process
 	// that reads the run's configuration — and, for a run wired to its notes,
@@ -550,7 +552,19 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 // needs its parent first (transfer.ts), and a continued run starts its own
 // tasks; a task that would take up a child the box no longer holds starts
 // another.
-func openCodeSessionGate(session Session, paths Paths) string {
+//
+// AND THE RUN IS WIRED TO THE SESSION IT STARTS, where it was handed a wiring
+// for each (rewired, [sandbox.RunRequest.FreshWiring]): the configuration's
+// values under the continued session's bridge token where it takes that
+// session up, and those under the token of a session of its own moved over them
+// where it starts one ([Paths.OpenCodeValuesFresh]) — the other set removed from
+// the box either way, before the run's server starts, which is what reads them.
+// So the token the run dials is the box's word to the bridge on which session it
+// started (internal/api/mcpbridge), one the run's model can neither forge nor
+// take back. Values that cannot be moved into place end the run before its
+// server starts, rather than start a session of its own on the continued one's
+// token, whose skill guard it would be held to.
+func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
@@ -569,7 +583,14 @@ func openCodeSessionGate(session Session, paths Paths) string {
 	// the box's copy is kept unless the export is one it does not hold, which
 	// then replaces it.
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
-	line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$sid $d" %s 2> /dev/null; then h= own=1; fi`, digests)
+	if session.Replaces {
+		// A COPY ITS RUN WAS CUT OFF IN is replaced by the export whatever it
+		// holds: it may hold a step that never settled, which an export
+		// leaves out (only settled messages are exported, transfer.ts).
+		line(`if [ -n "$h" ] && [ -s %s ]; then h= own=1; fi`, carried)
+	} else {
+		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$sid $d" %s 2> /dev/null; then h= own=1; fi`, digests)
+	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no export of it was carried here'`, carried)
 	line(`  elif ! command -v gzip > /dev/null 2>&1; then w='this box has no gzip to unpack its export with'`)
@@ -587,9 +608,26 @@ func openCodeSessionGate(session Session, paths Paths) string {
 	line(`  fi`)
 	line(`fi`)
 	line(`rm -f %s`, carried)
-	line(`if [ -n "$w" ]; then sid=%s k=no; printf '%%s%%s\n' %s "$w" >&2; fi`, q(session.Fresh),
+	// A NEW SESSION IS HANDED THE BRIEF WRITTEN FOR ONE, where the run was
+	// given it: the brief on the script's stdin, which `opencode run` reads,
+	// continues a session OpenCode does not hold ([sandbox.RunRequest.FreshBrief]).
+	line(`if [ -n "$w" ]; then sid=%s k=no; printf '%%s%%s\n' %s "$w" >&2; [ ! -s %s ] || exec < %s; fi`,
+		q(session.Fresh),
 		q("crewlet: this run was asked to continue the OpenCode session "+session.ID+
-			", and starts a new session, "+session.Fresh+", instead: "))
+			", and starts a new session, "+session.Fresh+", instead: "),
+		q(paths.FreshBrief()), q(paths.FreshBrief()))
+	if rewired {
+		// A RUN WHOSE CONFIGURATION NAMES NO VALUE has neither set to swap,
+		// and starts on the configuration as it is; every other has both,
+		// file for file ([OpenCode.WriteConfig]). So a set of values with no
+		// other beside it is a start that did not finish writing them, and
+		// the run does not start on the continued session's values for a
+		// session of its own — nor with the values deleted and none in their
+		// place, a server reaching none of the seat's tools.
+		values, fresh := q(paths.OpenCodeValues()), q(paths.OpenCodeValuesFresh())
+		line(`if [ -n "$w" ]; then { [ -e %s ] || [ ! -e %s ]; } && rm -rf %s && { [ ! -e %s ] || mv %s %s; } || { echo 'crewlet: the new session could not be wired to the tools of its seat, so the run does not start' >&2; exit 1; }; else rm -rf %s; fi`,
+			fresh, values, values, fresh, fresh, values, fresh)
+	}
 	return b.String()
 }
 
@@ -974,8 +1012,29 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		}
 	}
 	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
-	if len(req.MCPServers) > 0 {
-		cfg["mcp"] = map[string]any{"servers": openCodeMCP(req.MCPServers, values)}
+	wired := openCodeWiring(sandbox.Wiring{MCPServers: req.MCPServers, Steer: req.Steer,
+		SkillLoads: req.SkillLoads}, req.Steer.Set(), len(req.Skills) > 0, values)
+	// AND THE SAME VALUES UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the
+	// run's script starts of its own in place of the one it continues
+	// ([sandbox.RunRequest.FreshWiring]): named by the SAME references, in the
+	// configuration's one order, and written beside the first set, which the
+	// script replaces with them where it starts one ([openCodeSessionGate]).
+	// So the configuration is one document for either session, and a wiring
+	// that would make it two is refused rather than started on the wrong
+	// values.
+	var fresh *openCodeValueFiles
+	if f := req.FreshWiring; f != nil {
+		fresh = &openCodeValueFiles{dir: paths.OpenCodeValues()}
+		rewired := openCodeWiring(*f, req.Steer.Set(), len(req.Skills) > 0, fresh)
+		if !reflect.DeepEqual(rewired, wired) || len(fresh.files) != len(values.files) ||
+			f.Steer.Set() != req.Steer.Set() || f.SkillLoads.Set() != req.SkillLoads.Set() {
+			return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
+				"one of its own, are not the same configuration, so the run cannot be wired to whichever " +
+				"session its box starts")
+		}
+	}
+	if wired.servers != nil {
+		cfg["mcp"] = map[string]any{"servers": wired.servers}
 	}
 	var plugins []map[string]any
 	if req.Steer.Set() {
@@ -984,7 +1043,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		}
 		plugins = append(plugins, map[string]any{
 			"package": paths.OpenCodeSteerPlugin(),
-			"options": map[string]string{"url": values.ref(req.Steer.URL)},
+			"options": map[string]string{"url": wired.steer},
 		})
 	}
 	// THE RUN'S OWN SKILLS, in a directory its `skills` names — an entry
@@ -1002,7 +1061,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		}
 		plugins = append(plugins, map[string]any{
 			"package": paths.OpenCodeSkillsPlugin(),
-			"options": map[string]string{"url": values.ref(req.SkillLoads.URL)},
+			"options": map[string]string{"url": wired.skills},
 		})
 	}
 	if len(plugins) > 0 {
@@ -1011,6 +1070,15 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	for _, v := range values.files {
 		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
 			return "", fmt.Errorf("executor: writing a value of OpenCode's configuration: %w", err)
+		}
+	}
+	if fresh != nil {
+		for _, v := range fresh.files {
+			at := paths.OpenCodeValuesFresh() + strings.TrimPrefix(v.path, paths.OpenCodeValues())
+			if err := box.WriteFile(ctx, at, []byte(v.value)); err != nil {
+				return "", fmt.Errorf("executor: writing a value of OpenCode's configuration for a "+
+					"session of the run's own: %w", err)
+			}
 		}
 	}
 	// THE SYSTEM TEXT AS AN INSTRUCTION FILE, named by its absolute path.
@@ -1107,6 +1175,36 @@ func (v *openCodeValueFiles) ref(value string) string {
 	path := v.dir + "/v" + strconv.Itoa(len(v.files)+1)
 	v.files = append(v.files, openCodeValueFile{path: path, value: value})
 	return "{file:" + path + "}"
+}
+
+// openCodeWired is the part of a run's configuration that names the job's bridge
+// endpoint, every value a reference into its value files: its MCP servers
+// ([openCodeMCP]), nil for none, and the references to the notes route and the
+// skill-load route its two plugins post to, "" for a plugin it has not.
+type openCodeWired struct {
+	servers       map[string]any
+	steer, skills string
+}
+
+// openCodeWiring is w as a run's configuration names it ([openCodeWired]), its
+// values recorded in values in the configuration's one order — servers by name,
+// then the notes plugin's route where steer, then the skill-load plugin's where
+// skills — so the same request names the same files. THE ONE ORDER, for the
+// run's own wiring and for the one under the job's other bridge token alike
+// ([sandbox.RunRequest.FreshWiring]): a reference of either names the same file,
+// which is what lets the run's script hand either set to the one configuration.
+func openCodeWiring(w sandbox.Wiring, steer, skills bool, values *openCodeValueFiles) openCodeWired {
+	var out openCodeWired
+	if len(w.MCPServers) > 0 {
+		out.servers = openCodeMCP(w.MCPServers, values)
+	}
+	if steer {
+		out.steer = values.ref(w.Steer.URL)
+	}
+	if skills {
+		out.skills = values.ref(w.SkillLoads.URL)
+	}
+	return out
 }
 
 // openCodeReferable is nil where `{file:<path>}` names path to OpenCode — and

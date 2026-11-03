@@ -91,6 +91,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -891,6 +892,18 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		seats = credentialSeats(roster, s.resolve, at, "Datadog", s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
+	case integration.KindCloudflare:
+		block := company.Integrations.Cloudflare
+		summary = cloudflare.Summary()
+		reqs = cloudflare.Requirements(block, s.resolve)
+		at := cloudflareAt()
+		at.Identity = derivedIdentity(func(handle string) string {
+			return cloudflare.TokenName(company.Name, handle)
+		})
+		at.Configured = block != nil
+		seats = credentialSeats(roster, s.resolve, at, "Cloudflare", s.passes.Serves(kind))
+		configured = block != nil
+		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:
 		block := company.Integrations.GitHub
 		summary = github.Summary()
@@ -1595,6 +1608,23 @@ func derivedIdentity(name func(handle string) string) func(*org.Role) string {
 	return func(role *org.Role) string {
 		return name(role.Handle())
 	}
+}
+
+// cloudflareAt is a seat's Cloudflare token where the engine binds it, the
+// header Cloudflare's server reads, with the binding's prefix taken off so the
+// sealed reference resolves as the reference it is.
+func cloudflareAt() seatCredentialAt {
+	at := mcpEnvAt([]string{cloudflare.SeatEnv}, cloudflare.CredentialKeys)
+	prefix := ""
+	if b, ok := config.SeatToolBindingFor(cloudflare.Backend); ok && len(b.Keys) > 0 {
+		prefix = b.Keys[0].Prefix
+	}
+	find := at.Find
+	at.Find = func(role *org.Role) (string, string) {
+		stored, where := find(role)
+		return strings.TrimSpace(strings.TrimPrefix(stored, prefix)), where
+	}
+	return at
 }
 
 // mattermostAt is the seat credential of a Mattermost bot, which lives on the

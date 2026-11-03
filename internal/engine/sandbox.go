@@ -744,8 +744,8 @@ func (e *Engine) resumeGuarded(ctx context.Context, req sandbox.ResumeRequest,
 
 	var began atomic.Bool
 	if begin := req.Begin; begin != nil {
-		req.Begin = func(ctx context.Context) error {
-			if err := begin(ctx); err != nil {
+		req.Begin = func(ctx context.Context, carry sandbox.ResumeCarry) error {
+			if err := begin(ctx, carry); err != nil {
 				return err
 			}
 			began.Store(true)
@@ -996,9 +996,10 @@ type resumeInput struct {
 	CacheWrite int
 
 	// Begin is the coordinator's commit, called once the segment is certain
-	// to run and before any of it does — see [sandbox.ResumeRequest.Begin].
+	// to run and before any of it does, with what the segment does with the
+	// round of the job it resumes from — see [sandbox.ResumeRequest.Begin].
 	// Nil commits nothing.
-	Begin func(ctx context.Context) error
+	Begin func(ctx context.Context, carry sandbox.ResumeCarry) error
 
 	// Engine is what the engine spent on the job between segments — its
 	// bridged calls and the condensation of its collection — which this
@@ -1126,6 +1127,12 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		return fmt.Errorf("%w: run %s was handed to resumeTurn without the "+
 			"company its seat was resolved in", sandbox.ErrResumeUnavailable, in.Run.TurnID)
 	}
+	// THE REVISION THIS SEGMENT RELAUNCHES ON, for as long as it runs: a
+	// reader asking this node what a relaunch of the turn is launched on is
+	// answered from it, not from the revision an apply since put live
+	// ([Engine.relaunchCompany]).
+	e.resumedSegments.Store(in.Run.TurnID, company)
+	defer e.resumedSegments.CompareAndDelete(in.Run.TurnID, company)
 	// BEFORE ANYTHING THIS SEGMENT LAUNCHES: a run that ended on its
 	// vendor's spent plan sits its entry out here, on the node whose launch
 	// the turn's next run is — see [Engine.noteRunEnded].
@@ -1189,7 +1196,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// it would be read after a crash as one that never got the answer — and
 	// the reply handed back to the seat a second time.
 	if in.Begin != nil {
-		if beginErr := in.Begin(ctx); beginErr != nil {
+		// AND WHAT THE TURN DOES WITH THE ROUND OF THE JOB IT RESUMES FROM, as
+		// its runner decides it ([runner.Resume.CarriesOn]): for every reader
+		// of whether a relaunch would continue the job's session while the
+		// turn runs ([sandbox.LaunchRecord.ResumeCarry]).
+		carry := sandbox.ResumeCollects
+		if input.Resume.CarriesOn() {
+			carry = sandbox.ResumeCarriesOn
+		}
+		if beginErr := in.Begin(ctx, carry); beginErr != nil {
 			return beginErr
 		}
 	}
@@ -1506,11 +1521,16 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 // still refusing or starved ([Engine.budgetHold]) — nil for every other error,
 // and for a refusal whose window has turned over since, which an ordinary
 // retry now runs.
+//
+// HELD AGAINST THE FLOOR THE LAUNCH WAS REFUSED BELOW ([floorOf]): a relaunch
+// that continues its turn's session needs more than the static floor, and a
+// window with room for the static one alone would release the resume into the
+// same refusal.
 func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle string, err error) *sandbox.HeldError {
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		return nil
 	}
-	refusal, held := e.budgetHold(ctx, company, handle)
+	refusal, held := e.budgetHold(ctx, company, handle, floorOf(company, err))
 	if !held {
 		return nil
 	}
@@ -1527,6 +1547,12 @@ func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle stri
 func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) *runner.Resume {
 	return &runner.Resume{
 		State: in.State, Answer: in.Answer,
+		// WHICH SESSION THE JOB'S BOX SAID IT STARTED, off the job's own
+		// record: every guard the resume rebuilds from State — the
+		// collection's, a relaunch carrying the round on, a send-back that
+		// continues the job's session — holds the skills its launch armed only
+		// where the box took that session up ([runner.Resume.Continued]).
+		Continued: in.Run.Launch.SessionStart == sandbox.SessionStartContinued,
 		// WHICH BOX DID THE WORK, and what it delivered — see
 		// [runRecordOf].
 		Run: runRecordOf(in.Run, in.Account),
@@ -1554,8 +1580,8 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 
 // runnerAsked is the coordinator's account of an answered question in the
 // runner's terms, nil for a resume no answer drove: a held call's arguments
-// opened from their seal, and its mark and result written through the claim
-// ([heldCommit]).
+// opened from their seal where no attempt has marked it yet, and its mark and
+// result read and written through the claim ([heldCommit]).
 func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked {
 	if asked == nil {
 		return nil
@@ -1569,7 +1595,12 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 		call := held.Call
 		out.Held = &runner.HeldCall{Tool: call.Tool, Server: call.Server, Digest: call.Digest,
 			Choice: held.Choice, Commit: heldCommit{held: held, seal: seal}}
-		if sandbox.HeldMakes(held.Choice) {
+		// A CALL AN EARLIER ATTEMPT MARKED KEEPS ITS ARGUMENTS SEALED: it is
+		// answered from its mark and never made again
+		// ([runner.HeldCommit.Marked]), so nothing would run them, and a seal
+		// this node cannot open is no reason to say anything about a call it
+		// will not make.
+		if sandbox.HeldMakes(held.Choice) && !call.Calling() {
 			args, err := seal.OpenArguments(held.TurnID, call)
 			if err != nil {
 				// NEVER MADE WITH ARGUMENTS NOBODY APPROVED: a seal this
@@ -1587,12 +1618,22 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 	return out
 }
 
-// heldCommit is [runner.HeldCommit] over the claim's writes
-// ([sandbox.HeldResume]) and the fleet keyring's seal, which the result is
-// sealed under on the row and opened from for a later attempt.
+// heldCommit is [runner.HeldCommit] over the claim's read of the held call and
+// its writes ([sandbox.HeldResume]), and the fleet keyring's seal, which the
+// result is sealed under on the row and opened from for a later attempt.
 type heldCommit struct {
 	held *sandbox.HeldResume
 	seal *sandbox.CallSeal
+}
+
+// Marked answers a held call an earlier attempt at the same answer marked, off
+// the row as the claim read it ([sandbox.HeldResume.Call]); see
+// [runner.HeldCommit].
+func (h heldCommit) Marked(ctx context.Context) (runner.HeldPrior, bool) {
+	if !h.held.Call.Calling() {
+		return runner.HeldPrior{}, false
+	}
+	return h.prior(ctx, h.held.Call), true
 }
 
 // Begin marks the held call; see [runner.HeldCommit].
@@ -1603,8 +1644,15 @@ func (h heldCommit) Begin(ctx context.Context) (runner.HeldPrior, error) {
 		return runner.HeldPrior{}, err
 	case first:
 		return runner.HeldPrior{First: true}, nil
-	case !call.Made():
-		return runner.HeldPrior{}, nil
+	}
+	return h.prior(ctx, call), nil
+}
+
+// prior is how call stood, some earlier attempt having marked it: what it
+// returned, opened from its seal, where that attempt recorded it.
+func (h heldCommit) prior(ctx context.Context, call sandbox.HeldCall) runner.HeldPrior {
+	if !call.Made() {
+		return runner.HeldPrior{}
 	}
 	result, err := h.seal.OpenResult(h.held.TurnID, call)
 	if err != nil {
@@ -1613,9 +1661,9 @@ func (h heldCommit) Begin(ctx context.Context) (runner.HeldPrior, error) {
 		// whose result is unknown. Never made again.
 		log.ErrorContext(ctx, "held_call_result_unopened", "turn_id", h.held.TurnID,
 			"held_call", call.ID, "tool", call.Tool, "error", err.Error())
-		return runner.HeldPrior{}, nil
+		return runner.HeldPrior{}
 	}
-	return runner.HeldPrior{Made: true, Result: result}, nil
+	return runner.HeldPrior{Made: true, Result: result}
 }
 
 // Record seals and records what the held call returned, and the call itself as
@@ -2561,6 +2609,10 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// minting and sealed upload beside them. See executorsession.go.
 		Sessions: executorRecordsOf(e.executorLog),
 		Keep:     executorKeep{engine: e},
+		// AND A RELAUNCH CONTINUES THE TURN'S KEPT SESSION in whatever box it
+		// gets, its row read through the same router's reads and its object
+		// fetched through the same store. See executorrestore.go.
+		Restore: executorRestore{engine: e},
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
@@ -3030,7 +3082,12 @@ func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox
 	}
 	c := e.Company()
 	if route == sandbox.ResumeAnswer {
-		if refusal, held := e.budgetHold(ctx, c, handle); held {
+		// THE STATIC FLOOR: the gate is asked before the claim and names no
+		// run, so it cannot know the session the answer's relaunch continues.
+		// A relaunch whose own floor is above it is refused at its launch and
+		// held on its window there ([Engine.heldByBudget]), so the answer
+		// waits either way rather than circling.
+		if refusal, held := e.budgetHold(ctx, c, handle, staticFloor(c)); held {
 			return refusal, true
 		}
 	}
@@ -4155,5 +4212,9 @@ func (e *Engine) signInReplaced(ctx context.Context, c *Company, in resumeInput)
 		"provider_key", run.Launch.ProviderKey, "launch_id", run.LaunchID,
 		"detail", "the run was refused on a sign-in that was replaced while it ran; its round "+
 			"is carried on once, in its box, on the entry's new sign-in")
-	return &runner.Rotated{SessionID: run.SessionID, BoxKept: run.SandboxID != ""}
+	// THE SESSION THE JOB'S BOX RAN, never the one its launch chose: a box
+	// that could not take that one up ran one of its own, and the round is
+	// carried on in that — and in none in its box where the box's word never
+	// reached the job's record ([sandbox.PendingRun.SessionRan]).
+	return &runner.Rotated{SessionID: run.SessionRan(), BoxKept: run.SandboxID != ""}
 }

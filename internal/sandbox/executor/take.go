@@ -72,6 +72,9 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		_ = body.Close()
 	}
 	sum := &cksum{}
+	// WHAT THE SESSION'S LAST REQUEST CARRIED, read off the archive as it is
+	// kept (measure.go), beside the take and never holding it up.
+	meter := newContextMeter(carries.layout(), archive.SessionID)
 	go func() {
 		defer close(out.done)
 		reopen := func() (io.ReadCloser, error) {
@@ -85,8 +88,12 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			}
 			return again, nil
 		}
-		scrubErr := scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum), scrub, bounds)
+		scrubErr := scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
 		out.finished(scrubErr, sum.String())
+		// THE METER ENDS BEFORE THE READER DOES, so a caller that has read the
+		// take to its end and asks what it measured waits on nothing but the
+		// meter's last line.
+		meter.finish(scrubErr)
 		_ = write.CloseWithError(scrubErr)
 	}()
 	paths := PathsFor(box)
@@ -97,7 +104,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		}
 		return keepDigest(ctx, box, paths, archive.SessionID, digest)
 	}
-	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep}, nil
+	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context}, nil
 }
 
 // errTakeClosed is a scrub whose reader was closed before it reopened the

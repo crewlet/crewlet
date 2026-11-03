@@ -63,6 +63,14 @@ import (
 // marked and no result says so, and the call is never made again, since it may
 // or may not have taken effect.
 //
+// IT FINDS THE MARK ON THE ROW ITS CLAIM READ ([HeldResume.Call]), and answers
+// from it before it holds the call to the tools and skills it carries the run
+// on with: those decide whether a call nobody has made may be made now, and a
+// call an earlier attempt made — its relaunch refused after it, say, by the
+// floor of the session it continued — is past deciding. A tool blocked or
+// changed, or a skill made required, while that attempt's answer waited to be
+// tried again must not tell the run a call it made was never made.
+//
 // # The call it makes is a call of its round
 //
 // The resume makes the call on the engine host, not the job over its bridge,
@@ -119,7 +127,10 @@ func heldMismatch(run PendingRun, given types.ExecutorAnswerGiven) bool {
 type HeldResume struct {
 	// TurnID is the run, which every seal of the call is bound to.
 	TurnID string
-	// Call is the held call as the claim read it.
+	// Call is the held call as the claim read it: marked, and its result
+	// recorded, where an earlier attempt at the same answer got that far,
+	// which the resume answers from before it asks anything else of the
+	// call, since nothing clears a mark while the claim holds the row.
 	Call HeldCall
 	// Choice is the answer: [HeldOnce], [HeldAlways] or [HeldDeny].
 	Choice string

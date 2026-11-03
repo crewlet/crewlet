@@ -218,7 +218,9 @@ const (
 	// HeldPrefix prefixes the subjects a question only a seat's HOLDER can
 	// answer truthfully crosses — a seat's memory and its conversation
 	// ledger, which every node keeps a copy of and only the holder keeps
-	// current (internal/learning/memread).
+	// current (internal/learning/memread), and what a relaunch of its turns
+	// would be launched on, which the holder's own bench of spent plans
+	// decides (internal/engine, relaunchtarget.go).
 	//
 	// NOT EVENTS, for SearchPrefix's reason: a read is the ephemeral
 	// request and reply of [queue.EventQueue.Ask]. And NOT under
@@ -228,6 +230,10 @@ const (
 	// HeldRead is where one such read is scattered. Every node serves it
 	// and only the incarnation the seat's lease names answers.
 	HeldRead = HeldPrefix + "read"
+	// HeldRelaunch is where a reader of a seat's executor sessions asks what
+	// a relaunch of the seat's turns would be launched on now. Every node
+	// serves it and only the incarnation the seat's lease names answers.
+	HeldRelaunch = HeldPrefix + "relaunch"
 
 	// RelayPrefix prefixes the subjects a data node RELAYS what its own
 	// appliers announced on, to a peer whose own copy is out of service
