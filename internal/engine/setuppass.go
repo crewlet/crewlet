@@ -606,6 +606,7 @@ func (p *cloudflarePass) run(ctx context.Context, _ setup.PassInput) ([]integrat
 	if err != nil {
 		// THE ACCOUNT ID, the one input left that NewClient refuses: a
 		// fact about the document, not a pass that failed to look.
+		//nolint:nilerr // Deliberate: reported as a finding on the document.
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing, Subject: "integrations.cloudflare.provisioning.account_id",
 			Detail: "integrations.cloudflare.provisioning.account_id does not resolve to a Cloudflare account ID",

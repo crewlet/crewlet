@@ -299,8 +299,8 @@ func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (s
 	// THE TOKEN A CLOSED RECORD NAMES goes first: it is one this engine
 	// minted that has expired, and a seat holds one token.
 	if rec := in.Record; rec != nil && rec.Account != nil && !rec.Held() && rec.Account.ID != "" {
-		if err := s.client.DeleteToken(ctx, rec.Account.ID); err != nil {
-			return seataccess.StepResult{}, s.refused(in, err)
+		if derr := s.client.DeleteToken(ctx, rec.Account.ID); derr != nil {
+			return seataccess.StepResult{}, s.refused(in, derr)
 		}
 	}
 	name := TokenName(s.company, in.Seat.Handle)

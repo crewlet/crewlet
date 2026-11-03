@@ -112,15 +112,14 @@ func inspect(
 	}
 	err := call(stageOwn, func(ctx context.Context) error {
 		own, found, err := c.Token(ctx, in.status.ID)
-		switch {
-		case err != nil && Status(err) != http.StatusForbidden:
+		if err != nil && Status(err) != http.StatusForbidden {
 			return err
-		case err != nil || !found:
-			// Its own policy is unreadable, which says nothing about what
-			// it holds: the check is skipped rather than guessed at.
-			return nil
 		}
-		in.unheld = in.cat.unheld(own.Policies)
+		// An unreadable own policy says nothing about what it holds, so the
+		// check is skipped rather than guessed at.
+		if err == nil && found {
+			in.unheld = in.cat.unheld(own.Policies)
+		}
 		return nil
 	})
 	return in, err
