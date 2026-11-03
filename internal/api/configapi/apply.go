@@ -559,7 +559,11 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if err := s.checkHeldSeats(ctx, b, company); err != nil {
 		return nil, err
 	}
-	warnings := company.Warnings()
+	// AND WHAT IT DOES BESIDE THIS NODE'S TIER A ([Options.TierWarnings]),
+	// in the answer that applies it: a person turning code.native on reads
+	// the cross-tier consequence where they made the change, rather than in
+	// a node's log.
+	warnings := s.warnings(company)
 	if d.warnings != nil {
 		warnings = append(warnings, d.warnings(company, b.prior)...)
 	}
@@ -567,12 +571,23 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		company: company, prior: b.prior,
 		document: document, warnings: warnings, derived: derived, by: d.by,
 		source: cmp.Or(d.source, revisionSource), pointed: cur.pointed,
-		held: heldWarnings(b.prior), stated: d.stated,
+		held: s.heldWarnings(b.prior), stated: d.stated,
 	}
 	if found {
 		p.base, p.baseUnsealed, p.baseFleet = active, b.unsealed, cur.fleet
 	}
 	return p, nil
+}
+
+// warnings is everything a write's answer reports as VALID and worth knowing:
+// the company's own ([config.Company.Warnings]) and what it does beside this
+// node's Tier A ([Options.TierWarnings]).
+func (s *Service) warnings(company *config.Company) []config.Warning {
+	out := company.Warnings()
+	if s.tierWarnings != nil {
+		out = append(out, s.tierWarnings(company)...)
+	}
+	return out
 }
 
 // unrestorableMasks refuses the credentials of a document that still hold the
@@ -1034,12 +1049,16 @@ func keyOf(w config.Warning) warningKey {
 
 // heldWarnings are the warnings the active document carries, nil when nothing
 // is active (every warning of a first write is its own).
-func heldWarnings(prior *config.Company) map[warningKey]bool {
+//
+// READ AS A WRITE'S OWN ARE ([Service.warnings]), the cross-tier ones
+// included: read off the document alone, a cross-tier warning the active
+// revision already carries would be answered as one every write introduces.
+func (s *Service) heldWarnings(prior *config.Company) map[warningKey]bool {
 	if prior == nil {
 		return nil
 	}
 	held := map[warningKey]bool{}
-	for _, w := range prior.Warnings() {
+	for _, w := range s.warnings(prior) {
 		held[keyOf(w)] = true
 	}
 	return held

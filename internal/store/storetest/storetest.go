@@ -19,6 +19,9 @@
 // migrating every file from nothing — image.go says why that is safe, and
 // what stays fresh because migrating is its subject.
 //
+// And it is where a case reaches into what a store copy does while it runs:
+// [CopyHold] stops a copy at its VACUUM INTO, its connection drawn and its view
+// held, so several copies can be stood at one point at once.
 // # The plan gates' vocabulary
 //
 // A domain that holds its tables to their indexes (internal/worklet's

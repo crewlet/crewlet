@@ -41,23 +41,24 @@ import (
 //
 // # The order each figure grows in
 //
-// Every counter (a spend cell's six figures, a seat's turns, failures,
+// Every counter — a spend cell's six figures, a seat's turns, failures,
 // reviewed turns, send-backs, a read entry's count, a tool's calls in each
-// outcome and their time) grows by addition, so it joins by MAX. A seat's first-pass turns do NOT grow (a review that sends a
-// turn back takes it out of them), and what does is its turns with an
-// unaccepted review, so it is that count that joins by max and the first-pass
-// figure is read back from it ([joinTurns]). A turn duration can move UP a bin
-// — an untallied turn that gains a segment — so per-bin counts do not grow but
-// the count AT OR ABOVE every bin does, and the histograms join on those
-// ([Hist.Join]). A newest instant joins by the later one, and a fire, a
+// outcome and their time, a repository reader's reads and the bytes they were
+// sent, a seat's changes opened, reviews given and findings received — grows by
+// addition, so it joins by MAX. A seat's first-pass turns do NOT grow (a review
+// that sends a turn back takes it out of them), and what does is its turns with
+// an unaccepted review, so it is that count that joins by max and the
+// first-pass figure is read back from it ([joinTurns]). A turn duration can
+// move UP a bin — an untallied turn that gains a segment — so per-bin counts do
+// not grow but the count AT OR ABOVE every bin does, and the histograms join on
+// those ([Hist.Join]). A newest instant joins by the later one, and a fire, a
 // superseded fire or a read entry the fleet holds that the derivation lacks is
 // kept, under its own identity. A label (a seat's handle and role, a fire's
 // outcome and turn, a read's newest context) is the derivation's wherever the
-// derivation STATES
-// one for the thing it labels, because labels are not counts and a newer one
-// is the truer. A handle or a role the derivation leaves EMPTY keeps the
-// fleet's: an empty one is not a newer label but a seat the chart no longer
-// holds whose day's rows on this node name nobody — spend rows carry no
+// derivation STATES one for the thing it labels, because labels are not counts
+// and a newer one is the truer. A handle or a role the derivation leaves EMPTY
+// keeps the fleet's: an empty one is not a newer label but a seat the chart no
+// longer holds whose day's rows on this node name nobody — spend rows carry no
 // handle, so a day with spend and no ended turn or read derives none — and a
 // handle never changes (ADR-0013), a different one being a different seat, so
 // the fleet's can never name the wrong one. Taken as the derivation's, every
@@ -93,7 +94,8 @@ import (
 const (
 	appliedSeatHeadSQL = `
 		SELECT handle, role, turns, failed, reviewed, first_pass, sent_back,
-		       duration_hist, last_ended_at, reads_elided, tools_elided
+		       duration_hist, last_ended_at, reads_elided, tools_elided,
+		       changes_opened, reviews_given, findings_received, checks_failed, ejections
 		  FROM usage_turns
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedSeatTokensSQL = `
@@ -123,6 +125,19 @@ const (
 		SELECT trace_id, at
 		  FROM usage_schedule_superseded
 		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
+	// A REPOSITORY'S READERS name the key for the reason the spend reads do:
+	// the reader index (usage_repo_reads_repo_idx) COVERS every column read
+	// here and leads with the repository, so taken on its own it walks the
+	// repository's every reader on every node and day to read one day of one
+	// node's.
+	appliedRepoReadHeadSQL = `
+		SELECT repo_name, readers_elided
+		  FROM usage_repo_read_days INDEXED BY sqlite_autoindex_usage_repo_read_days_1
+		 WHERE day = ? AND node = ? AND repo_id = ?`
+	appliedRepoReadsSQL = `
+		SELECT principal_kind, principal, via, seat, reads, bytes, last_at
+		  FROM usage_repo_reads INDEXED BY sqlite_autoindex_usage_repo_reads_1
+		 WHERE day = ? AND node = ? AND repo_id = ?`
 )
 
 // Applied reads the record the rows `estate` holds for one subject — what the
@@ -145,17 +160,20 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 				turns   Turns
 				hist    string
 				lastEnd int64
+				code    CodeDay
 			)
 			switch err := tx.QueryRowContext(ctx, appliedSeatHeadSQL, s.Day, s.Node, s.Seat).Scan(
 				&rec.Handle, &rec.Role, &turns.Count, &turns.Failed, &turns.Reviewed,
 				&turns.FirstPass, &turns.SentBack, &hist, &lastEnd, &rec.ReadsElided,
-				&rec.ToolsElided); {
+				&rec.ToolsElided, &code.ChangesOpened, &code.ReviewsGiven, &code.FindingsReceived,
+				&code.ChecksFailed, &code.Ejections); {
 			case errors.Is(err, sql.ErrNoRows):
 				return nil
 			case err != nil:
 				return err
 			}
 			held = true
+			rec.Code = codeDayOf(code)
 			if err := turns.Durations.UnmarshalJSON([]byte(hist)); err != nil {
 				return err
 			}
@@ -186,6 +204,18 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 			}
 			rec.Superseded, err = appliedSuperseded(ctx, tx, s)
 			held = len(rec.Fires) > 0 || len(rec.Superseded) > 0
+			return err
+		case KindRepoRead:
+			switch err := tx.QueryRowContext(ctx, appliedRepoReadHeadSQL, s.Day, s.Node, s.Repo).Scan(
+				&rec.RepoName, &rec.RepoReadersElided); {
+			case errors.Is(err, sql.ErrNoRows):
+				return nil
+			case err != nil:
+				return err
+			}
+			held = true
+			var err error
+			rec.RepoReads, err = appliedRepoReads(ctx, tx, s)
 			return err
 		}
 		return fmt.Errorf("%s is a kind this build holds no rows of", s)
@@ -250,6 +280,32 @@ func appliedReads(ctx context.Context, tx *sql.Tx, s Subject) ([]Read, error) {
 		out = append(out, r)
 	}
 	slices.SortFunc(out, compareReadKey)
+	return out, rows.Err()
+}
+
+// appliedRepoReads reads a repository-day's readers, in reader order.
+func appliedRepoReads(ctx context.Context, tx *sql.Tx, s Subject) ([]RepoRead, error) {
+	rows, err := tx.QueryContext(ctx, appliedRepoReadsSQL, s.Day, s.Node, s.Repo)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RepoRead
+	for rows.Next() {
+		var (
+			r    RepoRead
+			last int64
+		)
+		if err := rows.Scan(&r.PrincipalKind, &r.Principal, &r.Via, &r.Seat, &r.Reads, &r.Bytes,
+			&last); err != nil {
+			return nil, err
+		}
+		if last != 0 {
+			r.LastAt = store.DecodeTime(last)
+		}
+		out = append(out, r)
+	}
+	slices.SortFunc(out, compareRepoReader)
 	return out, rows.Err()
 }
 
@@ -351,6 +407,7 @@ func Join(derived, applied Record) Record {
 		out.Tokens = joinCells(derived.Tokens, applied.Tokens)
 		out.Reads, out.ReadsElided = joinReads(derived.Reads, derived.ReadsElided,
 			applied.Reads, applied.ReadsElided)
+		out.Code = joinCode(derived.Code, applied.Code)
 		out.Tools, out.ToolsElided = joinTools(derived.Tools, derived.ToolsElided,
 			applied.Tools, applied.ToolsElided)
 	case KindPerson:
@@ -358,8 +415,65 @@ func Join(derived, applied Record) Record {
 	case KindSchedule:
 		out.Fires = joinFires(derived.Fires, applied.Fires)
 		out.Superseded = joinSuperseded(derived.Superseded, applied.Superseded)
+	case KindRepoRead:
+		// THE NAME IS A LABEL, the derivation's where it states one — the
+		// newest read's — and the fleet's where it states none.
+		out.RepoName = cmp.Or(derived.RepoName, applied.RepoName)
+		out.RepoReads, out.RepoReadersElided = joinRepoReads(derived.RepoReads,
+			derived.RepoReadersElided, applied.RepoReads, applied.RepoReadersElided)
 	}
 	return out
+}
+
+// joinRepoReads joins two repository-days' readers and what each cap dropped,
+// as [joinReads] joins a seat's page reads: the union keyed by reader, each
+// reader's reads and bytes the larger of the two and its newest read the
+// later, capped again by the rule the derivation is ([capRepoReads]), and the
+// elided count what the larger side says the day held less what survives the
+// cap. On the ordinary day the fleet's record is an earlier derivation of the
+// same rows, every reader of it at or below the new one's, and the join is the
+// derivation.
+func joinRepoReads(d []RepoRead, dElided int, a []RepoRead, aElided int) ([]RepoRead, int) {
+	if len(a) == 0 && aElided == 0 {
+		return d, dElided
+	}
+	all := slices.Clone(d)
+	at := make(map[RepoReaderKey]int, len(all))
+	for i, r := range all {
+		at[r.Key()] = i
+	}
+	for _, r := range a {
+		i, ok := at[r.Key()]
+		if !ok {
+			all = append(all, r)
+			continue
+		}
+		c := &all[i]
+		c.Reads, c.Bytes = max(c.Reads, r.Reads), max(c.Bytes, r.Bytes)
+		if r.LastAt.After(c.LastAt) {
+			c.LastAt = r.LastAt
+		}
+	}
+	held := max(len(d)+dElided, len(a)+aElided, len(all))
+	kept, _ := capRepoReads(all)
+	return kept, held - len(kept)
+}
+
+// joinCode joins a seat's code days: each figure counts openings, reviews or
+// findings that only accrue within a day, so each joins by max — nil for a
+// day neither side counted any of.
+func joinCode(d, a *CodeDay) *CodeDay {
+	var dc, ac CodeDay
+	if d != nil {
+		dc = *d
+	}
+	if a != nil {
+		ac = *a
+	}
+	return codeDayOf(CodeDay{ChangesOpened: max(dc.ChangesOpened, ac.ChangesOpened),
+		ReviewsGiven: max(dc.ReviewsGiven, ac.ReviewsGiven), FindingsReceived: max(dc.FindingsReceived,
+			ac.FindingsReceived), ChecksFailed: max(dc.ChecksFailed, ac.ChecksFailed),
+		Ejections: max(dc.Ejections, ac.Ejections)})
 }
 
 // joinTurns joins a seat's turn figures.

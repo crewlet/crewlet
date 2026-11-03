@@ -41,11 +41,15 @@ func (j *judged) take() []judgedEvent {
 
 // EVERY CREATE AND PUBLISH IS ONE PUBLISH SUCCESS EVENT, a client's own refusal
 // answered; only a publish that moves no new bytes is a latency event, and a
-// refusal is none. Mutation: count a refusal as unanswered, or time a publish
-// that uploaded bytes, and a case fails.
+// refusal is none. A publish the object store had no room for is refused too,
+// but for the deployment's reason rather than the client's: its answer is a
+// 5xx (507), and a bucket left full is exactly what the objective's budget is
+// there to burn, so it is judged unanswered. Mutation: count a refusal as
+// unanswered, count a full store as answered, or time a publish that uploaded
+// bytes, and a case fails.
 func TestEveryPublishIsOneObjectiveEvent(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, options{})
+	h := newHarness(t, options{fillable: true})
 	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": page})
 	success := judgedEvent{objectives.PublishSuccess, true}
 	applied := judgedEvent{objectives.PublishApplied, true}
@@ -95,4 +99,15 @@ func TestEveryPublishIsOneObjectiveEvent(t *testing.T) {
 		t.Fatalf("the publish on a moved head answered %v", err)
 	}
 	expect("a publish on a moved head", success)
+
+	h.fill(true)
+	_, _, err = h.svc.Publish(t.Context(), h.person("ada", h.opKey("full")), artifactupload.PublishRequest{
+		Artifact: created.Artifact, Base: 4, Mode: manifest.ModePatch,
+		Files: []artifactupload.FileSpec{{Path: "b.txt", Inline: []byte("b")}},
+	})
+	var full *artifactupload.StoreFull
+	if !errors.As(err, &full) {
+		t.Fatalf("the publish the store had no room for answered %v", err)
+	}
+	expect("a publish the store had no room for", judgedEvent{objectives.PublishSuccess, false})
 }

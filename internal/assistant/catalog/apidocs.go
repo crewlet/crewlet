@@ -44,10 +44,18 @@ type routeDoc struct {
 var (
 	tableRow = regexp.MustCompile("^\\|\\s*`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS)`\\s*\\|" +
 		"\\s*`([^`]+)`\\s*\\|(.*)\\|\\s*$")
-	headingRoute = regexp.MustCompile("^(#{2,4})\\s.*?`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS) " +
-		"(/[^`]*)`")
-	headingLine = regexp.MustCompile(`^(#{1,6})\s`)
-	wildcard    = regexp.MustCompile(`\{[^}]*\}`)
+	// Compiled at first use, not at init: the code host's push hook is this
+	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	headingRoute = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile("^(#{2,4})\\s.*?`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS) " +
+			"(/[^`]*)`")
+	})
+	// Compiled at first use, not at init: the code host's push hook is this
+	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	headingLine = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^(#{1,6})\s`)
+	})
+	wildcard = regexp.MustCompile(`\{[^}]*\}`)
 	// mention is a route named in backticks anywhere in a line, with the
 	// methods that share its path ahead of it (`PUT`, `DELETE /path`).
 	mention = regexp.MustCompile("((?:`(?:GET|HEAD|POST|PUT|PATCH|DELETE)`,\\s*)*)" +
@@ -98,7 +106,7 @@ func indexReference(md string) map[string]routeDoc {
 			note(docKey(m[1]+" "+m[2]), strings.TrimSpace(m[3]), true)
 			continue
 		}
-		if m := headingRoute.FindStringSubmatch(line); m != nil {
+		if m := headingRoute().FindStringSubmatch(line); m != nil {
 			key := docKey(m[2] + " " + strings.TrimSpace(m[3]))
 			doc := out[key]
 			if doc.Heading == "" {
@@ -137,7 +145,7 @@ func section(lines []string, level int) string {
 		if strings.HasPrefix(strings.TrimSpace(line), "```") {
 			fenced = !fenced
 		}
-		if m := headingLine.FindStringSubmatch(line); !fenced && m != nil && len(m[1]) <= level {
+		if m := headingLine().FindStringSubmatch(line); !fenced && m != nil && len(m[1]) <= level {
 			break
 		}
 		b.WriteString(line)

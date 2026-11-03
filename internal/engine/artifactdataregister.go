@@ -50,6 +50,7 @@ func artifactDataRegistrations() []registration {
 		// seat's datastore tools read at `linearizable`
 		// (statelog.ReadLevelDefaults), and the census does not say how a
 		// company's reads split between the logs a seat reads.
+		Trimmed:    artifactdata.EncodeTrimmed,
 		Reads:      &statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay},
 		Generation: artifactdata.GenerationRecord{},
 		NewGate: func(s *stateLog, _ *runningLog,

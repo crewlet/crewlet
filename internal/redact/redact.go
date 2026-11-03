@@ -165,7 +165,7 @@ func (r rule) in(text string) bool {
 // into a fresh buffer and then converts that buffer to a string. Ten rules over a
 // clean transcript would be twenty full copies of it — and a clean transcript
 // is the overwhelming case, since this runs on every sandbox result and every
-// coding-run transcript whether or not a credential is in it.
+// executor's transcript whether or not a credential is in it.
 func (r rule) apply(text string) string {
 	if r.keyed == nil && !r.pattern.MatchString(text) {
 		return text

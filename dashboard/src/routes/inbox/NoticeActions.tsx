@@ -1,7 +1,9 @@
 /**
  * What a reader does with an update: mark it read (or unread again), put it
- * off, or bring it back. Each is ONE gesture on this person's own inbox
- * (`mark_inbox`), naming exactly the one notice that is open.
+ * off, or bring it back. Each is ONE gesture on this person's own inbox,
+ * naming exactly the one notice that is open, through ITS SOURCE'S tool —
+ * `mark_inbox` for a tracker notice, `code_mark_inbox` for the code host's —
+ * since each domain keeps the marks over its own notices on its own log.
  *
  * A GESTURE, NEVER THE DOCUMENT. Marking read marks this record and nothing
  * else: every other mark, every snooze and the read position stay where they
@@ -20,16 +22,31 @@ import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { fmtMinute, fromWall, toWall } from "~/lib/format.ts";
 import { snoozePresets } from "./model.ts";
-import type { WorkInboxNotice } from "~/protocol/index.ts";
+/** What a mark needs of a notice, whichever source it came from. */
+export interface Markable {
+  record_id: string;
+  read: boolean;
+  snoozed?: boolean;
+}
 
 export function NoticeActions({
   notice,
+  source,
+  seen,
   now,
   zone,
   maxSnoozeAhead,
   onSettled,
 }: {
-  notice: WorkInboxNotice;
+  notice: Markable;
+  /** The domain the notice is kept by, whose tool marks it. */
+  source: "tracker" | "code";
+  /**
+   * The notice's own position on its domain's log,
+   * `<stream>@<generation>:<sequence>`: the floor its mark waits for (the
+   * `seen` of `mark_inbox` or `code_mark_inbox`).
+   */
+  seen?: string;
   now: number;
   /** The company's clock, which "tomorrow at nine" is read on. */
   zone: string | undefined;
@@ -38,16 +55,24 @@ export function NoticeActions({
   /** The notice was read or put off here, so it leaves the group it was in. */
   onSettled: () => void;
 }) {
-  const write = useAct("mark_inbox");
+  // BOTH TOOLS, NAMED AS LITERALS, and the notice's source's used: each is a
+  // write on its own log, read back at that log's floor.
+  const tracker = useAct("mark_inbox");
+  const code = useAct("code_mark_inbox");
+  const write = source === "code" ? code : tracker;
   const [picking, setPicking] = useState(false);
   // WHAT THIS PANE DID, until the next read says it too: the button turns into
   // its opposite the moment the write lands, rather than a poll later.
   const [read, setRead] = useState(notice.read);
   const [snoozed, setSnoozed] = useState(Boolean(notice.snoozed));
   const id = notice.record_id;
-
+  // A MARK CARRIES THE NOTICE'S OWN POSITION as its floor (`seen`), whichever
+  // domain keeps it: it is decided by whichever data node is asked, which may
+  // not have reached the notice this page was read with, and it waits for it
+  // there rather than refusing a notice the person is looking at as none of
+  // theirs.
   const mark = async (args: Parameters<typeof write.run>[0], done: string): Promise<boolean> => {
-    const result = await write.run(args, { done });
+    const result = await write.run(seen ? { ...args, seen } : args, { done });
     return Boolean(result && (result.kind === "applied" || result.kind === "pending"));
   };
   const snooze = async (until: string) => {

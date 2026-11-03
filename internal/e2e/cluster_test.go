@@ -21,6 +21,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -31,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -114,6 +117,13 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 	// ceiling before the loop looked at it. A budget the work cannot
 	// observe is a comment rather than a bound.
 	deadline := time.Now().Add(jetstreamtest.ClusterStartBudget)
+	// THE HOOK'S ARGV IS THE SAME FOR EVERY MEMBER OF EVERY ATTEMPT, and
+	// finding this test binary can fail the test — which only this
+	// goroutine may do, never a member's ([startMeshOnce]). So is the git
+	// every member's code host runs, held here to the node floor: the
+	// fleet's company hosts code ([fleetCompanyDoc]).
+	hook := codetest.HookCommand(t)
+	gittest.RequireNode(t)
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
 		// THE MESH IS BUILT INSIDE THE ATTEMPT, because reserving its
 		// ports and starting its relays is part of what the ceiling
@@ -131,7 +141,7 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(),
 			jetstreamtest.StartAttemptEnd(time.Now(), deadline))
 		relays := mesh(attemptCtx, t, n)
-		c, err := startMeshOnce(attemptCtx, t, relays, n, tune...)
+		c, err := startMeshOnce(attemptCtx, t, relays, n, hook, tune...)
 		cancelAttempt()
 		if err == nil {
 			return c
@@ -192,9 +202,10 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 var errNotRetryable = errors.New("not fixable by another attempt")
 
 // ctx BOUNDS THIS ATTEMPT, and is not the test's own: see [startMesh] for why
-// a ceiling the member starts cannot observe bounds nothing.
+// a ceiling the member starts cannot observe bounds nothing. hook is every
+// member's proc-receive hook ([buildMember]).
 func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, n int,
-	tune ...func(*config.Bootstrap)) (*cluster, error) {
+	hook []string, tune ...func(*config.Bootstrap)) (*cluster, error) {
 
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
@@ -237,7 +248,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 			// failure is carried back rather than raised here — a
 			// FailNow from another goroutine ends that goroutine and
 			// leaves the test running with a nil member.
-			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, &boots[i], i)
+			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, &boots[i], i, hook)
 		}()
 	}
 	wg.Wait()
@@ -381,6 +392,7 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int,
 	withSignIn(&boot)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.CodeCacheIn(&boot.Git)
 	boot.Stream.Cluster.Name = relays.ClusterName()
 	boot.Stream.Cluster.Port = port
 	// THE OTHER MEMBERS, which is what Tier A says the field holds and what
@@ -412,6 +424,10 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int,
 	// harness can only stand up a fleet an operator could run — which is
 	// also why [fleetSize] is three.
 	boot.Coordination.Type = config.CoordinationEmbeddedKV
+	// AND A PERSON'S TOKEN: a git push is a person's own, under a token the
+	// identity directory binds to their human seat ([bindDev] binds this
+	// one to the developer), and one bound to nobody fetches only.
+	withDevCredential(&boot)
 	// LAST, so a case can amend anything above it — and before anything
 	// reads it: the store is seeded from it ([startMeshOnce]) and the
 	// broker and the engine are opened from it ([buildMember]), which is
@@ -423,11 +439,16 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int,
 }
 
 // buildMember brings up member i of the fleet on the bootstrap
-// [memberBootstrap] assembled for it.
+// [memberBootstrap] assembled for it, its code cache execing hook as its
+// proc-receive hook.
 //
 // ctx is the ATTEMPT's, so the retry loop's wall-clock ceiling can interrupt a
 // bring-up rather than only refuse the next one — see [startMesh].
-func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i int) (
+//
+// It runs on a member's own goroutine ([startMeshOnce]), so nothing in it may
+// fail the test: whatever could is done before, on the test's goroutine, and
+// handed in.
+func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i int, hook []string) (
 	*node, teardown, error) {
 
 	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
@@ -448,7 +469,11 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	// otherwise leave one live server per member per failed attempt running
 	// until the case ends. Close is idempotent, so both fire safely.
 	stops.backends = append(stops.backends, model.close)
-	cfg, err := config.ParseCompany([]byte(goldenCompany(model)))
+	// THE FLEET'S COMPANY HOSTS CODE, for its code claim. A single-node case
+	// keeps companyDoc unless it opts in with [withCode], as the restore
+	// case does: a code host is a git pool and a cache on every node, which
+	// a case that pushes nothing would pay for nothing.
+	cfg, err := config.ParseCompany([]byte(fleetCompanyDoc(model)))
 	if err != nil {
 		// THE SAME FILE PARSES THE SAME WAY on every attempt.
 		return fail(fmt.Errorf("%w: company config: %w", errNotRetryable, err))
@@ -495,7 +520,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	// only once every member's engine has stopped — see [stopAll]. Opened by
 	// the call engine.New makes for an engine that owns them, so the member
 	// runs on what `crewlet run` would have opened.
-	backends, err := engine.OpenBackends(ctx, boot, cfg)
+	backends, err := engine.OpenBackends(ctx, boot, cfg, nil)
 	if err != nil {
 		return fail(refusal("open backends", err))
 	}
@@ -513,13 +538,25 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 		return fail(err)
 	}
 	stops.api = append(stops.api, func() { _ = ln.Close() })
+	// A RECORDER OF ITS OWN, as `crewlet run` hands every engine one: what
+	// only the member that did something measures — which member committed
+	// a push — is read off it ([node.metrics]).
+	recorder, err := metrics.New()
+	if err != nil {
+		// THE SAME CATALOGUE VALIDATES THE SAME WAY on every attempt.
+		return fail(fmt.Errorf("%w: metrics recorder: %w", errNotRetryable, err))
+	}
 	// THE ENGINE AND ITS CHAT HUB, as on every node ([newEngine]) — the hub
 	// stopped in the engine's own phase and before it, since the hub answers
 	// on the broker the engine stops with.
 	e, chatLive, engineStops, err := newEngine(ctx, engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
-		Environment: nodeEnvironment(nil), Backends: backends,
+		Environment: nodeEnvironment(nil), Backends: backends, Metrics: recorder,
 		SandboxPollInterval: runPollInterval, BoxHostURL: listenerURL(ln),
+		// The proc-receive hook every member's cache execs: this test
+		// binary, for [startNode]'s reason — computed once, on the test's
+		// own goroutine ([startMesh]), never here.
+		GitHook: hook,
 	})
 	stops.engine = append(stops.engine, engineStops...)
 	if err != nil {
@@ -557,6 +594,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 		id:          e.Node().ID(),
 		snapshotDir: boot.Store.SnapshotDirFor(),
 		chat:        chatLive,
+		metrics:     recorder,
 	}, stops, nil
 }
 
@@ -724,14 +762,18 @@ func (c *cluster) whole(t *testing.T, n *node) func() bool {
 //     one any of them caused;
 //   - the agreement claim is LAST, because it compares every replicated row
 //     of every member, and placed last that is every row every claim before
-//     it wrote — tasks, keys minted three ways at once, pages, a file —
-//     rather than only its own (which is why it waits on every log's end:
-//     [cluster.digestsAtOneEnd]);
-//   - the rest read only what they wrote, under op ids, titles and paths no
-//     other claim uses, so another claim's rows only add to what they read:
-//     the search's coverage is computed from its own pages and every match
-//     another page adds is still a match, and the chat claim reads and prunes
-//     the one room it made.
+//     it wrote — tasks, keys minted three ways at once, pages, a file, a
+//     repository's pushes — rather than only its own (which is why it waits
+//     on every log's end: [cluster.digestsAtOneEnd]);
+//   - the code claim is the one before it, because it is the one claim that
+//     WRITES THE COMPANY'S CONFIGURATION — it archives its repository through
+//     PUT /config and gives the document back — so every claim it could
+//     disturb has run, and the one after it compares rows and runs no turn;
+//   - the rest read only what they wrote, under op ids, titles, paths and a
+//     repository no other claim uses, so another claim's rows only add to
+//     what they read: the search's coverage is computed from its own pages
+//     and every match another page adds is still a match, and the chat claim
+//     reads and prunes the one room it made.
 var fleetClaims = []struct {
 	name string
 	run  func(*testing.T, *cluster)
@@ -744,6 +786,7 @@ var fleetClaims = []struct {
 	{"TheCollectorsReportReadsOnEveryNode", claimTheCollectorsReportReadsOnEveryNode},
 	{"AMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees",
 		claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees},
+	{"PersonsPushAndFetchAcrossTheFleet", claimPersonsPushAndFetchAcrossTheFleet},
 	{"AFleetAgreesAboutOneCompany", claimAFleetAgreesAboutOneCompany},
 }
 
@@ -1234,7 +1277,7 @@ func claimTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T, c *cluster) {
 		}
 	}
 	for i, n := range c.nodes {
-		if err := n.engine.WaitCommitted(t.Context(), last); err != nil {
+		if err := n.engine.WaitReached(t.Context(), last); err != nil {
 			t.Fatalf("member %d never applied the corpus: %v", i, err)
 		}
 		searcher := n.engine.DocletSearcher()
@@ -1381,7 +1424,7 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 	// this node has not applied yet is not an acknowledged one, and the
 	// arm below is about what a PEER can see of a write that HAS been —
 	// so the wait belongs here rather than around the reads.
-	if err := c.nodes[0].engine.WaitCommitted(t.Context(), written.Position); err != nil {
+	if err := c.nodes[0].engine.WaitReached(t.Context(), written.Position); err != nil {
 		t.Fatalf("member 0 never applied its own create: %v", err)
 	}
 
@@ -1433,7 +1476,7 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 	// from whatever each node happened to hold would be exactly the
 	// half-adopted domain this arm exists to catch.
 	for i, n := range c.nodes {
-		if err := n.engine.WaitCommitted(t.Context(), page.Outcome.Position); err != nil {
+		if err := n.engine.WaitReached(t.Context(), page.Outcome.Position); err != nil {
 			t.Fatalf("member %d never applied the page: %v", i, err)
 		}
 		got, err := n.engine.Pages().Get(t.Context(), page.Page.ID,
@@ -1527,7 +1570,7 @@ func (c *cluster) digestsAtOneEnd(t *testing.T) []map[string]string {
 		for i, n := range c.nodes {
 			for _, end := range ends {
 				ctx, cancel := context.WithTimeout(t.Context(), waitBudget)
-				err := n.engine.WaitCommitted(ctx, end)
+				err := n.engine.WaitReached(ctx, end)
 				cancel()
 				if err != nil {
 					t.Fatalf("member %d never applied %s to its end %s: %v",

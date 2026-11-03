@@ -60,14 +60,22 @@ func TestASubjectWithNoKindIsRefusedRatherThanBuilt(t *testing.T) {
 // there.
 func TestTheTrackerPathRefusesWhatItDidNotBuild(t *testing.T) {
 	t.Parallel()
-	for _, subject := range []string{
+	subjects := []string{
 		"",
 		"crewlet.agent.alice.inbox",
 		topics.TrackerLogPrefix,
 		topics.TrackerLogPrefix + ".",
 		topics.TrackerLogPrefix + ".task.",
-		topics.TrackerVectorsPrefix + ".source.1",
-	} {
+	}
+	// Every other log, read off the one list of them rather than written out
+	// again, under the kind this log's own records carry — the vectors'
+	// changelog among them, whose prefix shares this log's leading tokens.
+	for _, prefix := range everyLogPrefix() {
+		if prefix != topics.TrackerLogPrefix {
+			subjects = append(subjects, topics.LogSubject(prefix, "task", "1"))
+		}
+	}
+	for _, subject := range subjects {
 		if kind, id, ok := topics.TrackerLogPath(subject); ok {
 			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+
 				"mutation log", subject, kind, id)

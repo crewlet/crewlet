@@ -72,8 +72,18 @@ type Company struct {
 	// Chat is which chat surface this company talks on.
 	Chat Chat `yaml:"chat,omitempty" json:"chat,omitempty"`
 
+	// Code is the engine's own git host: whether this company hosts its
+	// repositories in the engine, and the limits a push is held to. See
+	// [Code].
+	Code Code `yaml:"code,omitempty" json:"code,omitzero"`
+
 	// Artifacts is the company's artifacts policy. See [CompanyArtifacts].
 	Artifacts CompanyArtifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
+
+	// Inbox is the company's policy over a person's inbox — the notices
+	// every domain that keeps one writes to the people its changes
+	// concern. See [Inbox].
+	Inbox Inbox `yaml:"inbox,omitempty" json:"inbox,omitzero"`
 
 	// Assistant is whether the Dashboard Assistant runs for this company,
 	// on which models, and the bounds of one turn. See [Assistant].
@@ -278,18 +288,22 @@ func (c *Company) ValidateRunnable() error {
 // declared inside a unit of a different key and a schedule's cron the grammar
 // refuses (see [org.Organization.ValidateAdmission], which also says why no
 // NAME is held unique), a unit with no id, duplicate sandbox setup step names
-// within one list, a GitHub App on a human seat, an avatar the dashboard
-// cannot draw or one on a human seat ([Company.validateAvatars]), a
-// providers.llm key outside its grammar or sharing another's credential bundle
-// variable ([Company.validateLLMKeys]), a
-// providers.llm entry's credential configured where its harness never reads it or
-// handed over under a variable name no store can hold
+// within one list, a code access tier or a GitHub App on a human seat
+// ([Company.validateHumanSeatCode]), the health grant on a human seat
+// ([Company.validateHumanSeatGrants]), an avatar the dashboard cannot draw or
+// one on a human seat ([Company.validateAvatars]), a providers.llm key outside
+// its grammar or sharing another's credential bundle variable
+// ([Company.validateLLMKeys]), a providers.llm entry's credential configured
+// where its harness never reads it or handed over under a variable name no
+// store can hold
 // ([LLMProvider.validateCredentials]), a model with no provider segment on a
 // harness that reads one ([LLMProvider.validateModel]), a setup step writing a
 // file a box it reaches refuses ([Company.validateSetupFileHomes]), an
 // executor box's `optional_keys` entry leaving nothing out
-// ([Company.validateRunOptionalKeys]),
-// two units declaring one channel on Chatlet ([Company.validateUnitRooms]),
+// ([Company.validateRunOptionalKeys]), a variable the engine sets in a box
+// itself written into one of the envs a box's is made of, a check's secrets
+// among them ([Company.validateReservedSandboxEnv]), two units declaring one
+// channel on Chatlet ([Company.validateUnitRooms]),
 // and the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
 // `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
 // out, one http header spelled two ways where nothing says which is sent, two
@@ -300,13 +314,17 @@ func (c *Company) ValidateRunnable() error {
 // whose chain is held to its rules again wherever it is handed out, and the
 // per-seat access rules ([Company.validateSeatAccess]): every seat block says
 // whether it is on, holds access the vendor offers within the company's reach,
-// and writes no credential the engine manages. And the community MCP
-// registry's address ([Company.validateMCPRegistry]), which only a search
-// reads. And an executor box's listing of an MCP server any tool of which is
-// held back from the agents ([Company.validateBoxToolLevels]), which the box
-// would reach past the engine. And every `mcp_limits` block that holds nothing
-// back or names a level a limit cannot hold a tool at, and a box listing of a
-// server a seat's limits hold a tool of back ([Company.validateMCPLimits]).
+// and writes no credential the engine manages. And the code host's policy
+// bounds: at most [CodeMaxRepos] repositories, a retention of at most
+// [CodeMaxDeletedRetentionDays], and at most [CodeMaxRemoteCredentials]
+// declared remote credentials of at most [CodeMaxRemoteCredentialHosts] hosts
+// each (see [Code.validateAdmission]). And the community MCP registry's
+// address ([Company.validateMCPRegistry]), which only a search reads. And an
+// executor box's listing of an MCP server any tool of which is held back from
+// the agents ([Company.validateBoxToolLevels]), which the box would reach
+// past the engine. And every `mcp_limits` block that holds nothing back or
+// names a level a limit cannot hold a tool at, and a box listing of a server a
+// seat's limits hold a tool of back ([Company.validateMCPLimits]).
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -316,11 +334,13 @@ func (c *Company) ValidateAdmission() error {
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
-		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
+		c.validateSetupStepNames(), c.validateHumanSeatCode(), c.validateHumanSeatGrants(),
+		c.validateAvatars(),
 		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
-		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateMCPNames(),
-		c.validateAssistant(), c.validateSeatAccess(), c.validateMCPRegistry(), c.validateMCPAccess(o),
-		c.validateBoxToolLevels(), c.validateMCPLimits(o))
+		c.validateRunOptionalKeys(), c.validateReservedSandboxEnv(), c.validateUnitRooms(),
+		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateSeatAccess(),
+		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateBoxToolLevels(),
+		c.validateMCPLimits(o), c.Code.validateAdmission(field("code")))
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
@@ -334,31 +354,77 @@ func (c *Company) validateUnitIDs() error {
 	return p.err()
 }
 
-// validateHumanSeatApps refuses a per-seat GitHub App on a human seat.
+// validateHumanSeatCode refuses on a human seat what a seat holds on a code
+// host: its code access tier (`code`) and its own GitHub App
+// (`integrations.github`).
 //
-// A seat's `integrations.github` is the seat's OWN app: the bot identity an
-// agent acts as on GitHub. A person acts as their own login, which is
-// `contact.github_login`, and every engine path that creates, installs or
-// reconciles an app skips a human seat. The block therefore reads as a
-// working setting and does nothing, which is the silence the org model's
-// human-seat rule exists to end for every other agent-only field.
+// A person acts on every code host as their own identity — a bound token on
+// the engine's own, their login, `contact.github_login`, on GitHub — so both
+// are agent settings. A seat's `code.access` is how much of a repository the
+// seat may do on the native host, which caps nothing for a person: the native
+// grant gives a person maintain through their token. A seat's `integrations.github` is the bot identity an
+// agent acts as, and every engine path that creates, installs or reconciles
+// an app skips a human seat. Either block therefore reads as a working
+// setting and does nothing, which is the silence the org model's human-seat
+// rule exists to end for every other agent-only field.
 //
 // CHECKED HERE rather than beside that rule in [org.Role.Validate], although
-// the runtime seat carries the app too ([org.Role.GitHub]): that rule is a
-// RUNNABLE one, and this is an ADMISSION rule, because nothing about running
-// depends on it — every path that would act on the block skips a human seat,
-// so a stored revision carrying one runs as it did.
-func (c *Company) validateHumanSeatApps() error {
+// the runtime seat carries both ([org.Role.CodeAccess], [org.Role.GitHub]):
+// that rule is a RUNNABLE one, and this is an ADMISSION rule, because nothing
+// about running depends on either — nothing running reads a tier off a human
+// seat, and every path that would act on an app skips one — so a stored
+// revision carrying one runs as it did. That is also what lets a later build
+// relax one — a tier that caps a person is the plausible relaxation — while
+// this build, applying the revision its newer peer admitted during a rolling
+// upgrade, runs it rather than refusing it and splitting the fleet's epoch.
+func (c *Company) validateHumanSeatCode() error {
 	var p problems
 	for role, path := range c.EachRole() {
-		if role.Kind != org.KindHuman || role.Integrations.GitHub == nil {
+		if role.Kind != org.KindHuman {
 			continue
 		}
-		p.add(at(path, "integrations.github"), ErrConflict,
-			"a human seat has no GitHub App of its own: an app is the identity "+
-				"an agent acts as, and a person acts as their own login, "+
-				"contact.github_login. Remove this block, or make the seat an "+
-				"agent seat")
+		if !role.Code.IsZero() {
+			p.add(at(path, "code"), ErrConflict,
+				"a human seat has no code access tier: a person acts on every "+
+					"code host as their own identity (their bound token on "+
+					"the engine's own, contact.github_login on GitHub), so a "+
+					"tier here would cap nothing. Remove this block, or make "+
+					"the seat an agent seat")
+		}
+		if role.Integrations.GitHub != nil {
+			p.add(at(path, "integrations.github"), ErrConflict,
+				"a human seat has no GitHub App of its own: an app is the identity "+
+					"an agent acts as, and a person acts as their own login, "+
+					"contact.github_login. Remove this block, or make the seat an "+
+					"agent seat")
+		}
+	}
+	return p.err()
+}
+
+// validateHumanSeatGrants refuses on a human seat what only an agent's role
+// carries: the health grant (`health_tools`).
+//
+// The grant decides an AGENT on the verbs that name it, in place of their
+// class (internal/authz); a person is decided by their own permissions — the
+// health tools are admin's — and is never woken by an engine wake. So the
+// field on a human seat reads as a working setting and does nothing, which is
+// the silence the human-seat rules exist to end.
+//
+// AN ADMISSION RULE, for [Company.validateHumanSeatCode]'s reason: nothing
+// about running reads a grant off a human seat — the chart answers it for an
+// agent only — so a stored revision carrying one runs as it did, and this
+// build applies whatever its newer peer admitted.
+func (c *Company) validateHumanSeatGrants() error {
+	var p problems
+	for role, path := range c.EachRole() {
+		if role.Kind == org.KindHuman && role.HealthTools {
+			p.add(at(path, "health_tools"), ErrConflict,
+				"a human seat carries no health grant: a person reads the "+
+					"deployment's health as an administrator, through their own "+
+					"permissions, and is never woken for it. Remove the field, or "+
+					"make the seat an agent seat")
+		}
 	}
 	return p.err()
 }
@@ -585,6 +651,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Scheduling.validate(field("scheduling")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
+	p.wrap(c.Code.validate(field("code"), o))
 	p.wrap(c.validateChat())
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
@@ -628,21 +695,8 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	for i := range c.Units {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
-	p.wrap(c.Tracker.Worklet.validate(field("tracker.worklet")))
+	p.wrap(c.Inbox.validate(field("inbox")))
 	p.wrap(c.Chat.Chatlet.validate(field("chat.chatlet")))
-	// A WORKLET BLOCK ON A COMPANY THAT DOES NOT RUN WORKLET describes
-	// nothing, and the failure that produces is silence: an operator sets an
-	// inbox horizon for inbox rows somebody else's tracker will never write.
-	//
-	// The check is against the DERIVED backend rather than the literal
-	// field, because an empty `backend` with no Jira integration IS
-	// Worklet, and refusing the default configuration would be the opposite
-	// of the intent.
-	if c.Tracker.Worklet != nil && c.TrackerBackendFor() != TrackerWorklet {
-		p.add(field("tracker.worklet"), ErrConflict,
-			"this company's tracker is %q, so nothing reads `tracker.worklet`. "+
-				"Remove the block, or use Worklet", c.TrackerBackendFor())
-	}
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying
 	// runtime fields, schedules with no runner) are the org model's, and
@@ -843,39 +897,34 @@ type Tracker struct {
 	// Backend is which tracker this company runs. Empty derives: `jira`
 	// when integrations.jira is declared, `worklet` otherwise.
 	Backend TrackerBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=worklet|jira|none" desc:"Which work tracker: worklet, jira, or none. Empty derives from integrations.jira."`
-
-	// Worklet is Worklet's policy: the settings that exist because the
-	// company owns the tracker rather than renting one.
-	//
-	// PRESENT ONLY ON A COMPANY RUNNING WORKLET, and refused otherwise: an
-	// inbox horizon on a company running Jira is config that describes
-	// nothing, and the failure it produces is silence.
-	Worklet *WorkletConfig `yaml:"worklet,omitempty" json:"worklet,omitempty"`
 }
 
-// WorkletConfig is the founder's policy over Worklet.
+// Inbox is the founder's policy over a person's inbox: the notices every
+// domain that keeps one (Worklet and the code host) writes to each person its
+// changes concern.
 //
-// # Why this and nothing else
+// # Why at the top of the company, and not under the tracker
 //
-// Everything else a tracker could be told is either a fact about the operator
-// (which is Tier A, under `stream.`), a fact about the whole company rather
-// than its tracker, or a decision the engine makes once for everybody. What is
-// left is genuinely Worklet's own: how long a person's inbox keeps a row.
-//
-// The clock its dates mean USED to be here, and it is the company's top-level
-// `timezone` now (ADR-0018): Worklet's "today" and the scheduler's 09:00
-// are one company's calendar, and a clock held by one subsystem left every
-// other day boundary cut on UTC.
-type WorkletConfig struct {
-	// InboxRetentionDays is how long a person's inbox keeps a row.
+// A person's inbox is not one domain's. Worklet's notices are one source
+// of it, and every domain whose changes are a person's news keeps its own
+// under the same rules (internal/inbox) — so a horizon held by one domain's
+// block left every other source's notices with a horizon of their own, or of
+// nobody's, and one person's inbox aging out on as many clocks as it has
+// sources. It is the split ADR-0018 ended for the company's clock, which also
+// started as the tracker's own setting; the `tracker:` block keeps nothing of
+// a person's inbox at all.
+type Inbox struct {
+	// RetentionDays is how long a person's inbox keeps a notice.
 	//
 	// THE ONE HORIZON HERE THAT DELETES ANYTHING, and it deletes a row
 	// DERIVED from a record rather than the record: the history those rows
 	// point at is untouched and answers for ever. A year because it is a
 	// MAILBOX rather than an archive — the vendors' own defaults are a
 	// quarter of that — and because the question "what was I told about in
-	// 2024" is answered by the history, not by the inbox.
-	InboxRetentionDays int `yaml:"inbox_retention_days,omitempty" json:"inbox_retention_days,omitempty" js:"min=0;max=3650" desc:"How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched."`
+	// 2024" is answered by the history, not by the inbox. ZERO IS UNSET,
+	// which [Inbox.Retention] reads as the default: no retention below a
+	// month is one, so the zero value says nothing a setting could mean.
+	RetentionDays int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0;max=3650" desc:"How long a person's inbox keeps a notice (default 365, 30..3650). The history it points at is untouched."`
 }
 
 // The inbox horizon's default and bounds.
@@ -892,22 +941,24 @@ const (
 	MaxInboxRetentionDays = 3650
 )
 
-// InboxRetention is how long an inbox row lives, with the default applied.
-func (t *WorkletConfig) InboxRetention() time.Duration {
-	days := DefaultInboxRetentionDays
-	if t != nil && t.InboxRetentionDays > 0 {
-		days = t.InboxRetentionDays
+// Days is how many days an inbox notice lives, with the default applied: what
+// the company states, and the epoch every applier writing a notice reads.
+func (i Inbox) Days() int {
+	if i.RetentionDays > 0 {
+		return i.RetentionDays
 	}
-	return time.Duration(days) * 24 * time.Hour
+	return DefaultInboxRetentionDays
 }
 
-func (t *WorkletConfig) validate(path Path) error {
+// Retention is how long an inbox notice lives, with the default applied.
+func (i Inbox) Retention() time.Duration {
+	return time.Duration(i.Days()) * 24 * time.Hour
+}
+
+func (i Inbox) validate(path Path) error {
 	var p problems
-	if t == nil {
-		return nil
-	}
-	if d := t.InboxRetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
-		p.add(at(path, "inbox_retention_days"), ErrOutOfRange,
+	if d := i.RetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
+		p.add(at(path, "retention_days"), ErrOutOfRange,
 			"%d is outside %d..%d. Under a month, notices are gone before "+
 				"people see them, and past ten years they only repeat the "+
 				"history they point at", d, MinInboxRetentionDays,
@@ -1229,21 +1280,31 @@ func (c *Company) EachRole() iter.Seq2[*Role, Path] {
 // run on an entry that names no cell goes, including an entry a founder
 // points a seat at later, editing Tier B live, so a company must be able to
 // run it before one does.
+//
+// AND EVERY CELL A CHECK MAY RUN IN, on a company hosting code
+// ([Company.checkPlacements]): a check's box is made from this same catalogue,
+// on a git node, so its cell needs its backend built as a seat's does.
 func (c *Company) SandboxPlacements() map[Placement]string {
+	reached := c.seatPlacements()
+	for _, placed := range c.checkPlacements() {
+		if _, seen := reached[placed.cell]; !seen {
+			reached[placed.cell] = placed.at
+		}
+	}
+	return reached
+}
+
+// seatPlacements is [Company.SandboxPlacements] of the seats alone: the
+// catalogue's default and every cell a seat's box is placed in, each mapped to
+// the path of the first thing that named it.
+func (c *Company) seatPlacements() map[Placement]string {
 	reached := make(map[Placement]string)
 	catalogue := c.Providers.Sandbox
 	if !catalogue.Enabled() {
 		return reached
 	}
 	if run := catalogue.RunIn(); run != "" {
-		where := "providers.sandbox.default_run_in"
-		if catalogue.DefaultRunIn == "" {
-			// Resolved from the catalogue's own shape rather than
-			// written, so the message points at the block, not at a
-			// field the operator will not find.
-			where = "providers.sandbox"
-		}
-		reached[run] = where
+		reached[run] = catalogue.runInAt()
 	}
 	// EVERY BOX AN EXECUTOR CAN LAUNCH IN, placed as the engine places it
 	// ([Company.SeatBoxes]): one per cell among the runner-capable members
@@ -1275,6 +1336,107 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 		}
 	}
 	return reached
+}
+
+// CheckRunIn is the cell a check whose checks file names none runs in:
+// code.checks.run_in, else providers.sandbox's own default where that is a
+// cell a check runs in ([CodeCheckCells]), else "" — no cell, so such a check
+// runs in no box. "" as well for a company hosting no code, whose
+// repositories define no check to run, and for a run_in no check runs in,
+// which is validation's refusal and reaches nothing.
+//
+// THE ONE RESOLUTION of a check's default cell, read by validation, by the
+// cells a backend is built for ([Company.SandboxPlacements]) and by whatever
+// makes a check's box, so the three cannot disagree about where a check goes.
+func (c *Company) CheckRunIn() Placement {
+	if c == nil || !c.Code.Native {
+		return ""
+	}
+	if run := c.Code.Checks.RunIn; run != "" {
+		if slices.Contains(CodeCheckCells, run) {
+			return run
+		}
+		return ""
+	}
+	if run := c.Providers.Sandbox.RunIn(); slices.Contains(CodeCheckCells, run) {
+		return run
+	}
+	return ""
+}
+
+// CheckCell is the cell a check runs in whose checks file names named for it
+// ("" for none), and "" with why where it runs in none: a cell named that the
+// company does not allow (code.checks.allow_run_in, else the one cell
+// [Company.CheckRunIn] resolves to), or — naming none — a company that
+// resolves no cell for a check at all.
+//
+// THE ONE RESOLUTION of where a check's box is made, read by the check runner
+// (internal/code/checkrun) at each attempt against the epoch it runs under: a
+// repository's file is read at its target's tip, which no validation of the
+// company's sees, so a file naming a cell the company stopped allowing is
+// answered here, when its check would run, rather than refused anywhere
+// earlier.
+func (c *Company) CheckCell(named Placement) (Placement, string) {
+	if c == nil || !c.Code.Native {
+		return "", "this company hosts no code (code.native is not set), so none of its checks runs"
+	}
+	allowed := c.checkPlacements()
+	if named == "" {
+		if run := c.CheckRunIn(); run != "" {
+			return run, ""
+		}
+		return "", "the check names no run_in, and the company names no cell a check runs in: set " +
+			"code.checks.run_in, or a providers.sandbox.default_run_in of container or e2b"
+	}
+	for _, p := range allowed {
+		if p.cell == named {
+			return named, ""
+		}
+	}
+	cells := make([]Placement, len(allowed))
+	for i, p := range allowed {
+		cells[i] = p.cell
+	}
+	return "", fmt.Sprintf("the check names run_in %s, which the company does not allow a check (it allows "+
+		"%s: code.checks.allow_run_in, else the one cell code.checks.run_in resolves to)", named, words.And(cells))
+}
+
+// checkPlacement is one cell a check may run in, with the path of the first
+// thing that named it.
+type checkPlacement struct {
+	cell Placement
+	at   string
+}
+
+// checkPlacements are the cells a check may run in, in the order named: each
+// of code.checks.allow_run_in that is a cell a check runs in, or, where it
+// allows none, the one [Company.CheckRunIn] resolves to — a company hosting no
+// code reaches none.
+func (c *Company) checkPlacements() []checkPlacement {
+	if c == nil || !c.Code.Native {
+		return nil
+	}
+	checks := c.Code.Checks
+	if len(checks.AllowRunIn) > 0 {
+		var out []checkPlacement
+		for i, cell := range checks.AllowRunIn {
+			if !slices.Contains(CodeCheckCells, cell) ||
+				slices.ContainsFunc(out, func(p checkPlacement) bool { return p.cell == cell }) {
+				continue
+			}
+			out = append(out, checkPlacement{cell: cell, at: idx(field("code.checks.allow_run_in"), i).String()})
+		}
+		return out
+	}
+	run := c.CheckRunIn()
+	if run == "" {
+		return nil
+	}
+	at := "code.checks.run_in"
+	if checks.RunIn == "" {
+		at = c.Providers.Sandbox.runInAt()
+	}
+	return []checkPlacement{{cell: run, at: at}}
 }
 
 // executorSeat is one agent seat with an executor to run, and the chain that
@@ -1531,6 +1693,12 @@ func (c *Company) validateSandboxPlacement() error {
 	var p problems
 	catalogue := c.Providers.Sandbox
 
+	// A CHECK'S CELLS FIRST, because they are asked of every catalogue,
+	// an absent one included: a company hosting code with checks and no
+	// agent seat returns below before a seat's questions, and its checks
+	// would otherwise name a box that can never be made and say nothing.
+	p.wrap(c.validateCheckPlacement())
+
 	if catalogue == nil {
 		// EVERY AGENT SEAT'S EXECUTOR RUNS IN A BOX, so a company with
 		// one to run and a model to run it on cannot run without the
@@ -1632,10 +1800,15 @@ func (c *Company) validateSandboxPlacement() error {
 		// only the walk above knows that. Required unconditionally it would
 		// refuse a perfectly good direct-only company; unchecked, a seat's
 		// first launch fails at container create, minutes into a turn.
+		// What it must hold is what runs in it: a seat's box runs its
+		// harness, a check's box the repository's own command with git.
 		if named, wanted := reached[PlacementContainer]; wanted && strings.TrimSpace(local.Image) == "" {
+			holding := "with the harness installed"
+			if _, bySeat := c.seatPlacements()[PlacementContainer]; !bySeat {
+				holding = "holding git 2.40 or newer and what its checks build with"
+			}
 			p.add(field("providers.sandbox.local.image"), ErrMissing,
-				"%s runs in a container, so the local backend needs an image "+
-					"with the harness installed", named)
+				"%s runs in a container, so the local backend needs an image %s", named, holding)
 		}
 		if _, wanted := reached[PlacementContainer]; !wanted {
 			for _, unread := range local.containerOnly() {
@@ -1643,11 +1816,67 @@ func (c *Company) validateSandboxPlacement() error {
 					continue
 				}
 				p.add(at(field("providers.sandbox.local"), unread.field), ErrConflict,
-					"only a container box reads this, and no executor runs in one. "+
+					"only a container box reads this, and no executor or check runs in one. "+
 						"Give an entry a seat runs on `run_in: container` (or make it "+
-						"providers.sandbox.default_run_in), or remove the field")
+						"providers.sandbox.default_run_in), let code.checks run in one, "+
+						"or remove the field")
 			}
 		}
+	}
+	return p.err()
+}
+
+// validateCheckPlacement holds code.checks against the catalogue, on a company
+// hosting code: a check's box is made from providers.sandbox as a seat's is,
+// on a git node, so each cell code.checks names — run_in, and each of
+// allow_run_in — needs its backend configured there; and where it allows
+// cells, they hold the one a check naming none runs in ([Company.CheckRunIn]),
+// or a file naming that cell would be refused where one naming none runs
+// there — two spellings of one placement, answered two ways.
+//
+// RUNNABLE, as a seat's cell is: a cell with no backend is a check whose box
+// can never be made, and nothing short of a box measures it. A cell no check
+// runs in, and code.checks on a company hosting no code, are code.checks' own
+// refusals ([CodeChecks.validate], [Code.validate]), each read first.
+func (c *Company) validateCheckPlacement() error {
+	if !c.Code.Native {
+		return nil
+	}
+	var p problems
+	catalogue := c.Providers.Sandbox
+	checks := c.Code.Checks
+	configured := func(where Path, cell Placement) {
+		switch {
+		case !slices.Contains(CodeCheckCells, cell):
+		case !catalogue.Enabled():
+			p.add(where, ErrMissing,
+				"a check runs in a box, and this company configures no sandbox: add providers.sandbox "+
+					"with the %s backend, or remove the cell", cell.backend())
+		case !catalogue.Configured(cell):
+			p.add(where, ErrConflict,
+				"%q needs the %s backend configured under providers.sandbox (this catalogue has %s)",
+				cell, cell.backend(), words.Or(catalogue.available()))
+		}
+	}
+	if checks.RunIn != "" {
+		configured(field("code.checks.run_in"), checks.RunIn)
+	}
+	for i, cell := range checks.AllowRunIn {
+		// A cell allowed twice is one mistake, its own rule's, read at the
+		// later entry: its backend is asked of the first alone.
+		if !slices.Contains(checks.AllowRunIn[:i], cell) {
+			configured(idx(field("code.checks.allow_run_in"), i), cell)
+		}
+	}
+	if run := c.CheckRunIn(); run != "" && len(checks.AllowRunIn) > 0 && !slices.Contains(checks.AllowRunIn, run) {
+		from := "code.checks.run_in"
+		if checks.RunIn == "" {
+			from = "providers.sandbox's default"
+		}
+		p.add(field("code.checks.allow_run_in"), ErrConflict,
+			"a check whose checks file names no cell runs in %s (%s), which this list leaves out, so a file "+
+				"naming that cell would be refused where one naming none runs there: add %s, or set "+
+				"code.checks.run_in to one of these", run, from, run)
 	}
 	return p.err()
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -17,6 +18,14 @@ import (
 // catalogue does not show, so a reader auditing what agents hold sees less
 // than they hold; a filing for a tool nobody registers any more is a row
 // describing a tool that does not exist.
+//
+// LESS WHAT NO AGENT IS EVER OFFERED: a registered tool whose row bars every
+// agent (the code host's report, purge and import, each a person's alone) is
+// withheld from every seat's surfaces by the authority table
+// ([builtin.Withheld]), so the registry holding it offers it to nobody, and
+// the catalogue of what agents hold files it nowhere. Asked of the table
+// itself, so a row that starts admitting agents puts its tool back in this
+// set and turns the case red until it is filed.
 func TestEveryToolASeatIsOfferedIsFiledOnce(t *testing.T) {
 	t.Parallel()
 	reg := tools.NewRegistry()
@@ -24,6 +33,10 @@ func TestEveryToolASeatIsOfferedIsFiledOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
+	registered = slices.DeleteFunc(registered, func(name string) bool {
+		humanOnly, _ := authz.HumanOnlyOf(authz.Action(name))
+		return humanOnly
+	})
 	offered := slices.Concat(registered, toolname.Discovery())
 	catalogued := builtin.Catalogued()
 

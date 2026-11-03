@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,7 +15,7 @@ import (
 
 // A VALVE UNDER CONTENTION ALWAYS ANSWERS.
 //
-// Every race a caller of the valve loses is another caller's increment, so it
+// Every attempt a write to the valve loses is another node's increment, so it
 // either wins room or reads the window full — the two answers the valve
 // exists to give. Sixteen attempts answered "could not say" instead once more
 // than sixteen increments overlapped a caller's attempts, and the
@@ -47,7 +45,7 @@ func TestAValveUnderContentionAlwaysAnswers(t *testing.T) {
 			if ok, err := store.Allow(t.Context(), "seat:hot", tc.limit, time.Second, at); err != nil || !ok {
 				t.Fatalf("seeding the window = (%v, %v)", ok, err)
 			}
-			key := encodeKey("seat:hot|" + windowNanos(at, time.Second))
+			key := counterKey("seat:hot", time.Second, at)
 			peers := &peerIncrements{KeyValue: store.rate, key: key}
 			peers.remaining.Store(20)
 			store.rate = peers
@@ -73,13 +71,14 @@ func TestAValveUnderContentionAlwaysAnswers(t *testing.T) {
 // THE FLEET STORE'S OTHER RACES OUTLAST MORE LOSSES THAN SIXTEEN.
 //
 // Each lost race is a store that answered, so none of these is an outage
-// until the store's patience says it is: a channel's count, a follow, and a person's chat read
-// record flushed and forgotten behind every other tab of theirs,
-// each made to
-// lose twenty in a row. The custody claim and the object backend's record
-// lose a race only to a key removed between a refused create and the leader's
-// read of it, which no bucket in front of the leader can stage; they take the
-// same [FleetStore.retryRaces].
+// until the shared bound says it is ([fleetCASAttempts]), sized for the nodes
+// writing a key rather than for the calls: a channel's count, coalesced on its
+// line ([writeLines]), and a follow and a person's chat read record flushed
+// and forgotten behind every other tab of theirs ([casRetry]), each made to
+// lose twenty in a row. The custody claim and the object backend's record lose
+// a race only to a key removed between a refused create and the leader's read
+// of it, which no bucket in front of the leader can stage; they take the same
+// [casRetry].
 func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 	t.Parallel()
 	const losses = 20
@@ -169,7 +168,6 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			store := openFleet(t, embeddedNATS(t))
-			store.patience = time.Minute
 			if tc.setup != nil {
 				tc.setup(t, store)
 			}
@@ -186,75 +184,47 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 	}
 }
 
-// A RACE STILL LOST WHEN THE PATIENCE RUNS OUT IS AN OUTAGE, AND ONE WHOSE
-// CALLER HANGS UP IS TOLD SO — AND NEITHER WRITES ANYTHING.
-func TestARaceEndsAtThePatienceOrTheCallersHangUp(t *testing.T) {
+// A RACE WHOSE CALLER HANGS UP IS TOLD SO, AND WRITES NOTHING.
+//
+// Between a lost attempt and the next nothing of a write has landed, so a
+// caller that stops listening there is withdrawn rather than raced on for: told
+// its own context's error, and the record left as it was. A write that loses
+// every attempt is the other end of the same rule, and fails closed after
+// exactly [fleetCASAttempts] of them
+// (TestAWriteThatNeverSettlesFailsClosedAsAnOutage).
+func TestARaceEndsAtTheCallersHangUp(t *testing.T) {
 	t.Parallel()
-	t.Run("the patience", func(t *testing.T) {
-		t.Parallel()
-		store := openFleet(t, embeddedNATS(t))
-		const patience = 200 * time.Millisecond
-		store.patience = patience
-		openCountedChannel(t, store, "k")
-		losing := &loseWrites{KeyValue: store.channels, key: encodeKey("k"), forever: true}
-		store.channels = losing
+	store := openFleet(t, embeddedNATS(t))
+	openCountedChannel(t, store, "k")
+	losing := &loseWrites{KeyValue: store.channels, key: encodeKey("k"), forever: true}
+	store.channels = losing
 
-		began := time.Now()
-		answered := make(chan error, 1)
-		go func() {
-			_, _, err := store.CountChannelMessage(t.Context(), "k", time.Now())
-			answered <- err
-		}()
-		var err error
-		select {
-		case err = <-answered:
-		case <-time.After(30 * time.Second):
-			t.Fatal("a race that lost every attempt was still racing after 30s: nothing bounds it")
+	ctx, cancel := context.WithCancel(t.Context())
+	answered := make(chan error, 1)
+	go func() {
+		_, _, err := store.CountChannelMessage(ctx, "k", time.Now())
+		answered <- err
+	}()
+	deadline := time.Now().Add(30 * time.Second)
+	for losing.lost.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the race did not lose twice within 30s")
 		}
-		if !errors.Is(err, coord.ErrUnavailable) || !strings.Contains(err.Error(), "did not land within") {
-			t.Fatalf("CountChannelMessage = %v, want an unavailable store naming the contention", err)
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-answered:
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, coord.ErrUnavailable) {
+			t.Fatalf("CountChannelMessage = %v, want the store unavailable for the cancelled context", err)
 		}
-		if took := time.Since(began); took < patience {
-			t.Fatalf("the race gave up after %v, before its %v patience", took, patience)
-		}
-		if losing.lost.Load() < 2 {
-			t.Fatalf("the race lost %d times, want it to have retried", losing.lost.Load())
-		}
-		if ch, found, err := store.Channel(t.Context(), "k"); err != nil || !found || ch.Messages != 1 {
-			t.Fatalf("Channel = (%+v, %v, %v), want only the message counted before", ch, found, err)
-		}
-	})
-	t.Run("the caller's hang-up", func(t *testing.T) {
-		t.Parallel()
-		store := openFleet(t, embeddedNATS(t))
-		store.patience = time.Minute
-		openCountedChannel(t, store, "k")
-		losing := &loseWrites{KeyValue: store.channels, key: encodeKey("k"), forever: true}
-		store.channels = losing
-
-		ctx, cancel := context.WithCancel(t.Context())
-		answered := make(chan error, 1)
-		go func() {
-			_, _, err := store.CountChannelMessage(ctx, "k", time.Now())
-			answered <- err
-		}()
-		deadline := time.Now().Add(30 * time.Second)
-		for losing.lost.Load() < 2 {
-			if time.Now().After(deadline) {
-				t.Fatal("the race did not lose twice within 30s")
-			}
-			time.Sleep(time.Millisecond)
-		}
-		cancel()
-		select {
-		case err := <-answered:
-			if !errors.Is(err, context.Canceled) || !errors.Is(err, coord.ErrUnavailable) {
-				t.Fatalf("CountChannelMessage = %v, want the store unavailable for the cancelled context", err)
-			}
-		case <-time.After(30 * time.Second):
-			t.Fatal("the race went on for a caller no longer listening")
-		}
-	})
+	case <-time.After(30 * time.Second):
+		t.Fatal("the race went on for a caller no longer listening")
+	}
+	store.channels = losing.KeyValue
+	if ch, found, err := store.Channel(t.Context(), "k"); err != nil || !found || ch.Messages != 1 {
+		t.Fatalf("Channel = (%+v, %v, %v), want only the message counted before", ch, found, err)
+	}
 }
 
 // openCountedChannel opens channel id on store with one message already
@@ -269,11 +239,6 @@ func openCountedChannel(t *testing.T, store *FleetStore, id string) {
 	if _, _, err := store.CountChannelMessage(t.Context(), id, time.Now()); err != nil {
 		t.Fatalf("CountChannelMessage: %v", err)
 	}
-}
-
-// windowNanos is a rate window's instant as its key spells it.
-func windowNanos(at time.Time, window time.Duration) string {
-	return strconv.FormatInt(at.Truncate(window).UnixNano(), 10)
 }
 
 // rateCount reads one window's count.
@@ -312,7 +277,11 @@ func (k *peerIncrements) Update(ctx context.Context, key string, value []byte, r
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
 		return 0, err
 	}
-	if _, err := k.KeyValue.Update(ctx, key, mustEncodeRate(record.Count+1), entry.Revision()); err != nil {
+	raw, err := encodeRate(rateRecord{Count: record.Count + 1})
+	if err != nil {
+		return 0, err
+	}
+	if _, err := k.KeyValue.Update(ctx, key, raw, entry.Revision()); err != nil {
 		return 0, err
 	}
 	k.lost.Add(1)

@@ -135,7 +135,7 @@ a person writes **as the seat they hold** — every person holds one — and so
 does a token the identity directory binds to a seat, with kind `human`, while a
 credential nobody is bound through writes under its own login (`token:<id>`),
 with kind `operator` — the credential
-itself is recorded beside either as the write's `operator_id`. Five more are a
+itself is recorded beside either as the write's `operator_id`. Seven more are a
 person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
 running turn, decided on the seat its executor's record names once the executor
@@ -146,7 +146,10 @@ executor asks about, or a lead of its seat; and `answer_knowledge`, which
 asks the company's knowledge a question on the auxiliary model of the asker's
 seat, so it needs either app (it searches the pages only for a `doclet`
 holder and the board only for a `worklet` holder) **and** a credential bound
-to a seat. That set
+to a seat; and, where the company hosts its code, `code_repo_readers`, who
+read a `visibility: unit` repository, an administrator's audit, and
+`code_mark_inbox`, a person's marks over their own code notices, served beside
+the code writes (a seat is woken, never shown an inbox). That set
 is ONE operator catalogue, built for every call from what the node runs now,
 and every operator transport serves it — MCP at `/operator/mcp` and the
 dashboard's [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)
@@ -156,11 +159,13 @@ the request carrying it, never by the one that opened a session, so a grant
 withdrawn mid-conversation stops the next call and an `Mcp-Session-Id` is a
 handle rather than a proof.
 
-Over MCP, each tracker write's answer also carries the **`op_id`** of the
-operation the call was, and the write tools take it back as an argument: an
-assistant has no turn to repeat, so sending the same call with that `op_id` is
-how it finishes a write that came back `unknown` or stopped part of the way
-through, instead of filing it twice. An `op_id` is that one call and no other:
+Over MCP, each tracker write's answer — and each [artifact and
+datastore](#artifacts) write's, by the same rule — also carries the
+**`op_id`** of the operation the call was, and the write tools take it back as
+an argument: an assistant has no turn to repeat, so sending the same call with
+that `op_id` is how it finishes a write that came back `unknown` or stopped
+part of the way through, instead of filing it twice. An `op_id` is that one
+call and no other:
 it carries a digest of the call's arguments, and brought back with any other
 argument, or to another tool, it is refused before anything is written. A seat
 is never offered the argument — its turn is its identity — and a seat's call
@@ -211,12 +216,15 @@ exactly as a seat does.
 
 **Every verb is decided twice inside a turn somebody woke.** The tool reads the
 stored artifact and asks the authority table for the seat, then for whoever the
-turn is acting for (the **requester ceiling**): an agent never shows an
-artifact to a requester who could not open it, and never writes for one what
-they could not write. The exception is an artifact the agent owns, which
-anybody who can message the agent may ask it to edit, as with all other agent
-work; reading and sharing are never exempt. A turn woken by somebody the
-company does not know opens no artifact at all. A caller with no relation to an
+turn is acting for (the **requester ceiling**): in that turn no tool shows an
+artifact to a requester who could not open it, or writes for one what they
+could not write. The exception is an artifact the agent owns, which anybody who
+can message the agent may ask it to edit, as with all other agent work; reading
+and sharing are never exempt. A turn woken by somebody the company does not
+know opens no artifact at all. The bound is the turn's, not the agent's: a
+colleague it asks reads for the agent, the turn the answer wakes is the agent's
+own, and what the agent already knows is no read
+([Sharing](../concepts/artifacts.md#sharing)). A caller with no relation to an
 artifact is told it does not exist, in exactly the words an id nothing holds is
 answered with. An agent is held to `contributor` on artifacts it does not own
 unless `artifacts.agents_manage_others` lifts it.
@@ -309,7 +317,10 @@ before it finishes.
 
 **Per turn**, an agent makes at most 20 publishes, 10 of them on one artifact,
 and writes at most 128 MiB; past either the call is refused `turn_quota` and
-told to stop and report. A version outside its policy or its format is refused
+told to stop and report. A file whose bytes the object store has no room for
+is refused [`store_full`](#when-a-tool-refuses), naming the file: nothing is
+published, and the same call is refused the same until an operator makes
+room. A version outside its policy or its format is refused
 with every finding at once, the first 20 listed and the rest counted, and a
 closed format's refusal points at `get_artifact_format`. Any write tool (an
 artifact's or another) that answers a policy refusal (`invalid`) four times in
@@ -401,6 +412,322 @@ all, the reads included.
 See [Chatlet](../concepts/chatlet.md) for who a message wakes, which of them owes a
 reply, and the two things the axis deliberately does not do.
 
+### The company's code
+
+Thirty-nine more — thirteen that read, two of them a repository's changes,
+one a commit's checks and one a search across every repository, and
+twenty-six that change a branch, a repository, a change or a commit's checks,
+purge a repository or import one — registered wherever
+the company hosts its git repositories in the engine (`code.native`; see [Code
+Host](../concepts/code-host.md)) — on every
+node, whatever its roles, since a node holding no copy of the code log and no
+`git` role reaches both through the nodes that do. They are offered on the
+terms the node's `/code/` reads are: a node whose runtime was already running
+when `code.native` was turned on offers them once it restarts into it, and one
+that turned it off keeps them until that restart ([Turn it
+on](code.md#turn-it-on)). A company that hosts no code is given none of them,
+and the operator catalogue serves the same thirty-nine, so an operator's own
+assistant reads and changes the company's code exactly as a seat does — the
+person as the human seat they hold — and reports their own CI's checks,
+purges a repository's unreachable objects and imports a repository from
+another host, which no seat does. The thirteen reads are reads: none counts as
+a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
+them, and the operator catalogue records no call to one. The twenty-six
+writes each deliver to the code host, so a turn woken about work on a repository that
+answered by moving a branch, opening a change or reviewing one delivered; no
+worker is ever handed one, since it
+would write with its parent's grant; and every call to one on the operator
+catalogue is recorded as any write is. A seat is offered twenty-three of them —
+every write but `code_report_check`, `code_purge_unreachable` and
+`code_import_repo`, each a person's alone — where
+its `role.code.access` is `full_access`. Below it, no repository's grant lets
+the seat change anything ([Who may read and
+push](../concepts/code-host.md#who-may-read-and-push)), so it is offered only
+what its tier reaches of a change's conversation beside the thirteen reads,
+and its prompt says nothing about changing code, rather than carrying tools it
+would be refused on every repository on every round: a `read_only` seat —
+what a seat that sets none runs at — comments on a change
+(`code_comment_on_change`), and a `review` seat also asks for reviews
+(`code_request_review`), reviews (`code_review_change`) and dismisses the
+findings it raised (`code_resolve_finding`).
+
+| Tool | Description |
+|------|-------------|
+| `code_list_repos` | The repositories the caller may read, by name, a page at a time (`limit` 1 to 100, 25 by default; `next` back as `cursor`), each with its owner, visibility, search mode, default branch and the commit it points at, the caller's access, its last push and its protection rules without their merge gates, filtered by `status` (`importing`, `active` or `archived`; all three when left out). A repository the caller may not read — or, in a turn a colleague seat woke, the colleague may not — is not listed, so a page can hold fewer rows than `limit`, or none, and still name a `next`. A repository whose rules alone are past one answer is listed without them, `protections_left_out` saying so, and the page ends at it |
+| `code_get_repo` | One repository in detail — its rules, each with its merge gate and who last set it and when (`set_by`, `set_by_kind`: `agent`, `operator`, or `config` for a rule the company document declares, which names nobody; `set_at`), its size, live packs, branch and tag counts, the caller's access and last push, where its expunges stand (`expunge`: a purge asked and not yet served, the last one committed), and where it stands with other hosts (`remotes`: its mirrors, by address and variable name, and the import its create filled it from, with its chunks and the sentence it ended short on) — and a page of its branches with the commit each points at, 100 a page, narrowed to a namespace with `branches_prefix` (`seats/<handle>/`, `release/`). Rules past one answer beside the detail end at `protections_next`, which comes back as `protections_cursor` for the rest of them, a page at a time and alone, so a repository with every rule at its bounds is read whole. Asked by a person or a token, the answer carries the URL their git clones the repository from, on `api.external_url`; a seat is given none, because it reads through these tools |
+| `code_resolve` | A branch, a tag, a whole ref or `HEAD` (the default branch) to the commit it points at now, so the calls after it can name that commit by its id: a call naming a commit by id resolves no ref, and reads the same commit however the branch moves meanwhile |
+| `code_read` | A file's lines at a commit, a page at a time (`start_line`, `end_line`, `cursor`), or a directory's listing (`recursive` for every file below it); a binary file is answered by its size. A path that is not valid UTF-8 is named, and asked for, as `path_b64` |
+| `code_diff` | What changed between two commits: the per-file stat, filtered by up to 64 `paths`, or one `file`'s patch, a page at a time, with renames detected unless `renames` is false |
+| `code_compare` | How two commits relate: their merge base, whether either contains the other, how many commits each has that the other lacks, and the first page of what `head` changed since the merge base |
+| `code_landed_in` | Whether a commit reached a branch (`target`, resolved to its tip now and never a commit id), the push that landed it there and kept it there, the push that introduced the commit, and what the git node's index of pushes covers ([Which push landed a commit](../concepts/code-host.md#which-push-landed-a-commit)) |
+| `code_log` | The commits that changed a file or a directory (`path`), or every commit, newest first from a commit (`rev`): each with its parents, its author and address as the commit states them, its two dates, its subject and the push that introduced it, `limit` a page (1 to 100, 25 by default; `next` back as `cursor`). `grep` keeps the commits whose message holds its words — a literal, in any case, never a pattern — and `since` (RFC 3339) those committed from then on. A page ends sooner where its subjects fill it, and one the git node's time ended says so: it lists what it found and names where the next page begins ([A path's history](../concepts/code-host.md#a-paths-history)) |
+| `code_blame` | Which commit last changed each line of a file (`path`) at a commit (`rev`): every line with its commit, the line it was in that commit and its old path where the file was renamed since, and each commit once with its author, date, subject and the push behind it — at most 500 lines a call (`start_line`, `end_line`), a page at a time (`next` back as `cursor`) ([Who changed a line](../concepts/code-host.md#who-changed-a-line)) |
+| `code_list_changes` | Changes — a branch proposed into another, named like `web!42` — newest first, `limit` a page (1 to 50, 20 by default; `next` back as `cursor`): each with its title, state, branches, head and revision, owner, work item, version and, while it is live, its [merge readiness](../concepts/code-host.md#merge-readiness) in a line. A call names what to list — a `repo`, a `work` item (named as `code_open_change` names one: a Worklet item's key, `ENG-42`, or its id, or any tracker's identity, `<backend>:<id>` — never `none`, since a change carrying no item is listed by its repository, owner or state; a key is resolved to the item's identity through the tracker, and an identity, a Worklet id bare or as `native:<id>` included, is listed as named, so a change still lists its siblings by the item it carries after that item's task is purged), a `state`, a `reviewer`, or `needs`: `review` or `fix` (a reviewer's or an owner's, the caller's own by default), `me` (both of the caller's) or `person` — and narrows it by the rest and an `owner` ([Reading changes](../concepts/code-host.md#reading-changes)). A change of a repository the caller may not read — or, in a turn a colleague seat woke, the colleague may not — is not listed, so a page can hold fewer than `limit`, or none, and still name a `next` |
+| `code_get_change` | One change, named by `change` — its number on `repo`, or its reference, `web!42` — a `part` at a time: `summary` (its row, description, authors, conversation counts and revisions, newest first, a page at a time), `merge_readiness` (each precondition, whom an unmet one waits on, who clears each standing blocker, and its head's recorded merge into its target), `files` and `diff` (a `revision`'s files from the base its facts record — its latest by default — and one `file`'s patch; with `since_revision`, what changed from that revision to it, kept to the files either touches: what to re-review), `findings` (each with `at`, where its lines are in the `revision` asked about — moved, outdated or gone), `reviews` and `comments`, each a page at a time (`next` back as `cursor`) ([A revision's facts](../concepts/code-host.md#a-revisions-facts)) |
+| `code_get_check_failures` | What a check of a commit said, named by `change` (its head, checked for its target) or `sha` (with `checked_for` where it was checked for more than one branch) and by `name`, its latest attempt unless `attempt` names another: its state and why it ended, its summary, the tail of its output and the failures its reports named, a page at a time (`next` back as `cursor`), and — where a failed run kept one — its log's size and `log.cursor`, which reads the log 32 KiB a page. Each cursor names the attempt it pages, so the pages stay on it while a later attempt ends or the change's head moves ([Reading a failed check](code.md#reading-a-failed-check)) |
+| `code_search` | The lines matching a search across every repository the caller may read that keeps a search index (`search: indexed`), or those its `repo:` filters name — a `search: grep` one only when named, at most eight. `query` is the filters, `repo:<name>`, `path:<glob>` and `ref:<ref>` (the default branch otherwise), then the text, at most 400 bytes: the one grammar a person's [search](code.md#finding-code) reads. `mode` (`literal`, the default; `regex`, RE2 within a line; or `word`), `ignore_case`, and one `repo`, `path` and `ref` beside the text, joined to its filters. Each hit is a repository, a path, a line, its text and the file's blob id, read at the commit `tips` names; `coverage` names every repository that was not searched and why, and `truncated` with no `next` that lines went unread — narrow it with `repo:` or `path:`. A page at a time (`next` back as `cursor` with the same search): each page's search starts after the last line of the page before, at the commit that line was read at, and asks for what one answer holds, so a page costs the lines past its place and paging reaches every matching line. In a seat's turn every repository it names is resolved and held as a `repo` is, and a ref it names in each, once a turn; a ref that may be a seat's branch is searched only in repositories the search names |
+| `code_commit_files` | A small change to a branch's files, built on the code host and landed as one push: `files`, one operation a path — `put` (`content`, or `blob_oid` of a file the repository holds; `mode` 100755 for an executable, 120000 for a link whose target is `content`), `edit` (`old`, which must occur exactly once, and `new`), `delete`, `move` (`to`) or `mode` (100644 or 100755) — onto the head the caller read (`expected_head`), or creating the branch from `base`. At most 1 000 operations, each path at most 64 components deep, and 1 MiB a call of operations and `message` as JSON spells them, where `<`, `>` and `&` take six bytes each; a change to build or test belongs in an executor |
+| `code_revert` | The revert of one `commit` onto a branch's head (`expected_head`), under git's own message or a `message` of at most 1 MiB as JSON spells it. One that conflicts commits nothing, and answers each conflicted path with its stages' ids — base, ours, theirs, each readable with `code_read` — and the start of the file as git marked it |
+| `code_cherry_pick` | One `commit`'s change onto a branch's head (`expected_head`), its message naming the commit it came from unless a `message` replaces it, held to `code_revert`'s bound; a conflict is answered as `code_revert`'s |
+| `code_create_branch` | A branch created `at` a commit the repository holds |
+| `code_delete_branch` | A branch deleted at the head the caller read (`expected_head`); its commits stay in the history, and the push history names its last head |
+| `code_create_repo` | A repository: a project owned by a unit (`owner`), or the caller's own scratch repository, `<handle>.<name>`, which `code.scratch` caps and expires once it sits idle. Either starts at `search: grep` |
+| `code_update_repo` | One change a call: the settings (`description`, `default_branch`, `visibility`, `search` — `indexed` or `grep`, never `indexed` on a scratch repository — a project's `owner`, a project's `path_owners` — globs added to and taken from one owner at a time — and, a person's alone, a project's `mirror_from` and `mirror_to`, each set whole or removed by `{}`), `archived` (read-only, and back), or `rename_to` (the old name redirects to the new one for 30 days) |
+| `code_delete_repo` | A repository deleted, restorable until its purge |
+| `code_restore_repo` | A deleted repository brought back as it was, before its purge |
+| `code_protect_branch` | The protection of one `pattern` (`refs/heads/<glob>`, `refs/tags/<glob>`) changed — `direct_push` (`persons` or `none`), `allow_force` and `allow_delete`, each named replacing that control and each left out kept as the rule has it (`persons`, off, off on a new rule) — or taken away (`remove`); and a branch's [merge gate](../concepts/code-host.md#merge-gates) changed a field at a time — `merge_by`, `approvals`, `landing`, `owners_approve`, `delete_source`, `agents_edit_checks` each replacing that field, `checks` and `approvals_unless` an item at a time (`{"add": [...], "remove": [...]}`), `human_paths` a glob at a time (`{"put": [{"glob", "unless"}], "remove": [glob]}`), the rest kept — or taken away (`remove_gate`). It answers the rule as it now stands. A seat tightens a protection and only a person loosens one ([Who may change a protection](../concepts/code-host.md#who-may-change-a-protection)) |
+| `code_open_change` | A [change](../concepts/code-host.md#changes) opened: a `branch` proposed into a `target` (the repository's default branch when left out), with a `title`, a `body`, as a `draft` or not, carrying a work item — the turn's own unless `work_item` names another, by a Worklet item's key (`ENG-42`), any tracker's identity (`<backend>:<id>`) or `none` — and, once it is open, asking the `reviewers` it names in a second write; an ask that did not finish leaves the change open and says why (`reviewers_not_asked`). It answers the change's reference (`web!42`) and its `version`. Every `@handle` the title and body name that is a seat of the company is told ([Who a change wakes](../concepts/code-host.md#who-a-change-wakes)) — at most 32 a write, more refused naming the bound — as it is by the `title` or `body` an update sets, a review's summary and findings, and a comment's body |
+| `code_update_change` | One thing about a change a call, held to the `version` the caller read (`expected_version`): what it says — any of `title`, `body` and `work_item` together — or `draft` (a draft, or ready for review), or its `target` |
+| `code_close_change` | A change closed without merging it (`reason`), or with `reopen` a closed one opened again at its branch's head — held to `expected_version` as an update is |
+| `code_request_review` | Reviewers asked of a change (`reviewers`, at most 32), or an ask withdrawn (`withdraw`), with a `note`. A seat asked must review the repository and not have written the change; a person may always be asked ([Asking for review](../concepts/code-host.md#asking-for-review)) |
+| `code_review_change` | A review of a change's revision — its latest unless `revision` names one — as ONE record: a `verdict` (`approve`, `request_changes` or `comment`), a `summary`, up to 64 `findings` (each a `path`, a `side` — `new`, its head, by default, or `old`, its base — its lines, a `severity`, a `category`, a `title`, a `body` and a `suggestion`, the lines to put in place of its own) on files the revision changes, and `carries`, the reviewer's own standing findings that still stand: a review of a later revision supersedes every other one of theirs ([Reviews](../concepts/code-host.md#reviews)). It answers the review's id and its findings' ids in the order raised |
+| `code_comment_on_change` | A comment: a thread of its own — on a line, with an `anchor` (`path`, `line`, `side`, `revision`) — or a reply to a `thread` or a `finding`; with `thread`, `resolve` marks the thread resolved (`true`) or open again (`false`), after the reply where there is one |
+| `code_resolve_finding` | Findings answered (`findings`, at most 64): `resolved`, `wont_fix` or `disputed` — an author's, which leave a blocker standing for its raiser to judge — or `dismissed` — its raiser's, a maintainer's or a person's, which clears it — with a `note` and, for `resolved`, the `commit` that answers them ([Findings](../concepts/code-host.md#findings)) |
+| `code_apply_suggestions` | The suggestions of the `findings` named (at most 64) — each a finding of the change that still stands, suggests lines and is on the new side — put in place of the lines they are anchored to on the change's source branch at the head the caller read (`expected_head`), as ONE commit of the caller's (`message`, a sentence naming the change by default): each where its finding was shown, all of them or none — an outdated one (`stale_version`, naming it) or two that overlap (`invalid`) apply nothing ([A review's suggestions applied](../concepts/code-host.md#a-reviews-suggestions-applied)). Then each finding is answered `resolved` with the commit, in a second write; the applier becomes an author of the change, whose approval no longer counts |
+| `code_rebase_change` | The change rebased onto its target's tip from the head the caller read (`expected_head`): its commits the target does not hold replayed oldest first, each keeping its author and author date, and its branch moved to them by one forced push of the caller's, held to the branch's protections as a force-push is. The first commit that conflicts stops it with nothing changed (`invalid`, naming the commit and each conflicted path); a change of more than 1 000 such commits, or holding a merge commit, is refused (`invalid`) ([A change rebased](../concepts/code-host.md#a-change-rebased)) |
+| `code_merge_change` | The change merged into its target from the head the caller read (`expected_head`), by `method` (`merge`, the default, `squash` or `fast_forward`), as one record its committer decides against the target's merge gate — or, on a target whose gate requires a check, put in its queue and answered with its place. A change its gate does not allow yet is refused `not_ready`, naming every unmet precondition and who each waits on; `delete_branch` (unsaid: a seat's branch unless a rule keeps it), `close_task` (the work item closed as a second write once it merges, decided as `update_work_item` is) and a person's `override_reason` ([Merging a change](code.md#merging-a-change)) |
+| `code_dequeue_change` | The change's entry taken out of its target's merge queue, at its enqueuer's, its owner's, a maintainer's or a person's ask; a change no queue holds is refused `not_found` (`not_queued`), since an entry no longer live never comes back by itself |
+| `code_revert_change` | A merged change reverted by a change of its own: what its merge brought into its target undone onto the target's tip as one commit of the caller's, on a new branch (`seats/<handle>/revert-<n>`, or `revert-<n>` for a person) whose push opens "Revert <repo>!<n>" into the same target. A revert that does not apply cleanly is refused (`invalid`, naming each conflicted path), one of a change that is not merged `conflict`, and a revert branch already there `exists`; `merge` merges the revert's change as a second write, a merge it could not make said beside it ([Reverting a change](code.md#reverting-a-change)) |
+| `code_rerun_checks` | A commit's checks run again — named by `change` or `sha` as `code_get_check_failures` names them — each named in `checks` with the attempt the caller read as its latest (at most 16 a call), or with `all_failed` every check whose latest attempt ended without passing: each queued at the next attempt, at most ten. A seat reruns only an attempt its infrastructure or a stop ended (`errored`, `cancelled`), on a repository it may write or a change it wrote; a failure is refused it `rerun_genuine`. A check a person's CI reports is refused `native_check`: its CI runs it again |
+| `code_report_check` | A person's own CI's check of a commit, reported onto the commit's checks — `status` `running` when it starts, then `passed`, `failed`, `errored` or `cancelled` with its `summary`, `tail`, `failures` and `url` — by `sha` (for `checked_for`, the default branch when left out) or `change`. A person's alone, never a seat's, and refused `native_check` for a check the engine has queued at that commit ([External CI](code.md#external-ci)) |
+| `code_purge_unreachable` | A repository's unreachable objects purged — every object no branch or tag reaches, such as a secret force-pushed away — by its maintainer, with no grace for what a ref drop left. A person's alone, with a fresh proof of who they are, never a seat's, and a token bound to nobody is refused. Answered once the request is recorded: the request, where it landed, the node that serves it, and what still holds the objects after (`holds`: the nodes' caches until each syncs past it, every backup taken before it commits — on the `nats` object store, before the store deletes them — and the object store for a day after, a versioned S3 bucket for as long as its own rules keep a deleted object's old version); the same call again is the same request, and one asked while another is open widens it. `code_get_repo`'s `expunge` says when it is served |
+| `code_import_repo` | A project repository created and filled from one at another host — `url`, an https URL its home git node fetches — or, with `mirror`, kept in step with it as a pull mirror, which takes no push. `name`, `owner` (as `code_create_repo` takes one), `visibility` and `default_branch` as a create's; `credential` the NAME of the variable holding the source's token — one `code.remote_credentials` declares for the source's host, or the create is refused `not_permitted` — which the node resolves from the secret store and then its environment each time it dials; a token in its place is refused before anything is sent. A person's alone, never a seat's, and a token bound to nobody is refused. Answered once the create is recorded, the repository `importing` until its home has landed the source; the same call made again is the same create |
+
+**One more is not in that table: `code_checkout`,** which an executor's run
+alone is offered, beside `ask_and_wait`, and only on a node that serves the
+code host. Neither the registry nor the operator catalogue holds it, so no
+other phase and no person can call it. It checks one repository (`repo`) out
+into the run's box, on a `branch` from a `base` (the seat's own branch from
+its head by default), to `read` or `write` (`access`, by default write where
+the seat may push the branch), with an optional cone of `paths`, a `change` to
+work on, or an `open_change` to open from what the run pushes once it
+succeeds. The repository is granted on the run's record before the call
+answers, with the commands that clone it, and the box's git reaches nothing
+the run did not check out ([Code
+Sandbox](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)).
+
+**Every revision is a commit id or a ref.** A whole or abbreviated commit id
+(7 or more hex digits) costs nothing; anything else — a branch, a tag, a
+whole ref, `HEAD` — is resolved to the commit it points at as part of the
+call, and every answer names what each ref resolved to and where. A branch
+named like an abbreviation is named by its whole ref (`refs/heads/<name>`).
+
+**What a turn pays.** What a repository is and what a ref points at are rows,
+read at linearizable as every seat tool's reads are; what a commit id names is
+the same object on every node, so a read by one is asked of the repository's
+[home git node](../concepts/code-host.md#the-home-git-node) with no level of
+its own — only a floor its copy is first brought to: this node's own pushes to
+that repository, and the push that last moved each ref the call names. Never
+where the call read its refs: that read is linearizable, and its position is
+past every push, so a copy holding them all would be brought there for
+nothing. A turn reads each repository it names once, at its first call naming
+it — and again only after a read finds the name no longer names what it did:
+another repository declared under it, or the one it named gone — and resolves
+the refs a call names in one read, however many: a diff of two branches pays
+one barrier, and reads both as they stood at the same moment. So a seat that
+resolves a branch with `code_resolve` once and passes the commit id on pays
+one barrier for the repository and one for the branch, however many files it
+then reads. The operator surface has no turn, and reads the repository once a
+call.
+
+**Who may read** is decided per repository, by the node that answers, from its
+own chart: a person and a credential bound to no seat read every repository,
+and a seat what its tier and its relation to the repository allow, so a
+`visibility: unit` repository is absent from an outside seat's listing and
+every read of it is refused `not_permitted` in the code host's own sentence
+([Who may read and push](../concepts/code-host.md#who-may-read-and-push)). No
+argument names who reads. A node that cannot judge — one holding no chart yet,
+a git node still filling its copy — answers about itself, and the call is told
+to try again rather than that it may not read.
+
+**And again for whoever woke the turn.** Inside a turn somebody woke, each call
+is decided for them too, as the artifacts tools decide theirs: a turn a person
+woke reads what the seat may, a turn a colleague seat woke only what both
+seats may — every other repository absent from its listing, and a read of one
+refused naming the colleague — and a turn a stranger woke, or a person who may
+not act in the company now, reads nothing
+([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)).
+The bound is that turn's alone: a colleague the seat asks reads for the seat,
+and the turn the answer wakes is the seat's own work.
+An operator's own assistant calls the tools in no turn, for its caller alone.
+
+**A repository's text is fenced.** A file's lines — a blame's among them —
+and a patch are text its committers wrote — importers and outside contributors
+among them — whom a read by commit id cannot name, so each arrives
+[fenced](../concepts/agent-runtime.md#text-somebody-else-wrote) as `repo_file`
+or `repo_patch` at trust `external`, naming no writer; so does every commit's
+subject a history or a blame names, as `repo_commit`, a message its pusher
+wrote. Every other string of an answer — a path, a ref, a description, a
+commit's author and address — has the fence's escapes applied.
+
+**A change's text names its writer.** A change's description, a review's
+summary, a finding's body and suggestion, and a comment arrive fenced as
+`change_description`, `change_review` and `change_comment` under the seat or
+the person who wrote them, whom the change's rows record, at the trust that
+writer earns from the reader — a description at `colleague` at the most once
+the change has moved past its open, since an edit may have rewritten it by
+somebody its row does not name. A patch `code_get_change` reads is a
+repository's text, fenced as `code_diff`'s is.
+
+**What a check said is nobody's.** A check's summary, the tail of its output,
+each failure's message and every page of its kept log are what the commit's
+code and its tests printed — or what a person's CI sent — so
+`code_get_check_failures` and `code_get_change`'s `checks` part answer each
+fenced as `check_log` at trust `external`, naming no writer.
+
+**A change is read by its revisions.** A change's rows are read at
+linearizable as a repository's are — once a call: a call that reads the change
+twice, its findings beside the revision they are placed in or two revisions
+to compare, makes its later reads at the position the first answered. Where
+the turn has not read the repository yet — its first call naming it, and
+every call on the operator surface, which has no turn — that first read
+reads the repository too, so a change tool's call costs one barrier, never a
+read of the repository and then one of the change. A call that needs only
+where the change stands — its files, a patch, its findings, a write of its
+conversation — reads its row and its head revision alone; the summary and
+`merge_readiness` read its description, its authors, its conversation and
+its readiness, which no other part answers. Its
+files, a file's patch, what changed since an earlier revision and where a
+finding's lines are now are reads by commit id of the heads and bases the
+change's revisions recorded, asked of the home git node at the floor of the
+pushes that moved them — never at the position the rows were read at. A
+revision whose base its home has not recorded yet is answered as not yet
+readable, a minute after its push at the most on a live change.
+
+**A write is a push, and a retry is the same one.** Each of the five that
+change a branch is an [engine-built commit](../concepts/code-host.md#engine-built-commits):
+the repository's git node builds it beside its copy and lands it as one push,
+held to every rule a person's push is — the caller's grant, the protections,
+the repository's bounds — and each of the five that change a repository is one
+request a data node decides ([Repositories made by
+tools](../concepts/code-host.md#repositories-made-by-tools)). Who may is the
+repository's grant, decided where the change is: a person maintains every
+repository a tool made, and a seat what its tier and its relation to the
+repository allow; a token bound to nobody writes nothing. In a turn somebody
+woke, the write is decided for them too, where it is decided: a colleague
+seat's turn changes only what both seats may, a stranger's — or a person's
+who may not act in the company now — nothing but the seat's own work (its own
+`seats/<handle>/` branches and the repositories it owns, never their
+name, visibility, owner or status), and a person's what the seat may. The change
+tools are held the same way: a colleague must hold the access the write needs
+on the repository (`review` to have a seat review a change, `read` for every
+other change write), and a stranger has a seat write nothing of a change but
+its own
+([Writes made for somebody else](../concepts/code-host.md#writes-made-for-somebody-else)).
+Every call names one
+operation — derived from the turn or a request's own key, or on the operator
+catalogue the `op_id` the call was answered — so the same call made again,
+after an answer that said the outcome is unknown, is the same push, and its
+commit the same commit. A seat's write names its turn, the work item it is
+charged to and the model the call was made on, on its push. A refusal is
+answered in the class every write surface renders, by the one rule every
+domain's are: a rule refusing the caller (its grant, a protection, its pushes
+for the day) `forbidden`; the repository in a state that refuses the push
+until somebody changes it (archived, or a pull mirror) `conflict`; the
+repository at a limit on what it keeps (its bytes, its refs) `quota_exceeded`;
+a change to make another way `invalid` — a conflict among them, its marked
+text fenced as `repo_file` — and a ref whose path another ref holds `exists`;
+a head that moved `stale_version`; and what waiting clears `unavailable`.
+
+**A change's writes are each one write, decided where the change is.** A
+change's lifecycle — an open, an edit, a draft's state, a retarget, a close, a
+reopen — is decided by the repository's committer, and its conversation — an
+ask for review, a review, a comment, an answer to findings — by the data node
+that commits the repository, each from its own chart: whoever may push a
+branch opens a change from it; its owner, a maintainer or any person steers
+it; a seat that reviews the repository and did not write the change reviews
+it; an author answers a finding, and its raiser, a maintainer or a person
+dismisses one ([Changes](../concepts/code-host.md#changes), [Reviews and
+findings](../concepts/code-host.md#reviews-and-findings)). Each call reads the
+change once, at linearizable, for the id its write names it by, and the write
+is decided at or past that read; an edit, a draft's state, a retarget, a close
+and a reopen are also held to the `version` the caller read
+(`expected_version`), and refused `stale_version` where the change moved since.
+A call that makes a second write — an open asking its reviewers, a reply
+marking its thread — makes it as a step of its own operation once the first
+landed, and says on its answer if the second did not finish (`reviewers_not_asked`,
+`thread_not_set`), the first standing all the same. A finding, and a comment
+on a line, is anchored where its lines were read — the revision's head on the
+`new` side, its recorded base on the `old` — so a later revision carries it to
+where those lines went, its blob read in one read of the revision's diff, on
+a file the revision changes. A refusal is answered in the class every write
+surface renders: a rule of the change `forbidden`, a change that moved
+`stale_version`, a branch already heading a live change `exists`, the change or
+its repository in a state that refuses the write until somebody changes it (a
+change closed or merged, a repository archived or a pull mirror) `conflict`,
+and what is gone `not_found`. A merge follows the same rule: a draft, or a
+change no longer open, is `conflict` too, and a merge that would take its
+repository past the most it may keep `quota_exceeded`.
+
+**A scratch repository a turn names stays while the turn does.** Every call
+that names a scratch repository — a read or a write — first holds it from the
+idle expiry for as long as the turn runs or its executor is parked, and a
+create holds the repository it makes before it is made
+([A scratch repository's idle expiry](../concepts/code-host.md#a-scratch-repositorys-idle-expiry)).
+
+**One page is one answer, never cut.** A git node answers a page of at most
+56 KiB of JSON and says where the next begins; a listing these tools cut
+themselves — repositories, branches — is cut whole-row and names where the next
+page begins. A history's and a blame's pages are cut as the tools send them,
+every subject's and every line's fence counted, so a hundred fenced subjects
+are several pages and never one answer too large; a subject, an author or a
+line too long for any answer is described by its size (`subject_bytes`,
+`author_bytes`, `text_bytes`) rather than cut. A page whose text spells so many
+fence markers that, escaped, it outgrows one answer is refused naming a
+narrower read: a line range, fewer commits, or a file's lines in place of its
+patch.
+
+**And one no seat is given: `code_repo_readers`**, which the operator
+catalogue serves beside the thirteen reads, on their terms — who read a
+`visibility: unit` repository's contents over a range of company days (`from`
+and `to`, both inclusive, the thirty days ending today where the call names
+neither, at most 181 apart; `next` back as `cursor`): every credential and the
+person it acted as, and every seat, that fetched the repository or read it
+through these tools, with how often and how many bytes, summed over every node,
+and on the first page how many readers a day's record had no room to name
+([Who read it](../concepts/code-host.md#who-read-it)). A `visibility: company`
+repository's readers are not recorded, and its answer says so. It is an
+**admin's**: its answer names the people who read a unit's code, so a person
+who is not an admin is refused it before anything is read — and a seat is
+never offered it, a seat watching who reads the code being a model watching the
+people it works for. `GET /code/repos/{name}/readers` answers the same pages
+to a script.
+
+**Nor is `code_mark_inbox`**, which the operator catalogue serves beside the
+code writes: a person's own marks over their code notices — the ones the
+`inbox` question answers under `source: "code"` — read, unread, snoozed, or
+read through a position on the code log, one gesture at a time, exactly as
+`mark_inbox` marks Worklet's. Each domain keeps the marks over its own
+notices on its own log, so each has its tool. It writes the caller's own record
+and nobody else's, and a seat is never offered it: a seat is woken, never shown
+an inbox ([How a person learns they have work](../concepts/humans-in-the-org.md#how-a-person-learns-they-have-work)).
+
+### The deployment's health
+
+Two read-only tools, `fleet_health` and `code_status`, read the deployment as
+an administrator does: every live node with the alarms its own table has
+firing, and the git nodes' caches and hottest repositories. They are one list
+on both surfaces, like the code tools: a person's assistant holds them on the
+`admin` permission, and an agent seat is offered them only where its role
+carries the grant (`health_tools: true`) — every other seat's registry holds
+them too, and its surfaces leave them out because the authority table refuses
+it them. Neither sets a threshold of its own; what is wrong is the alarm
+table's to say. `fleet_health` answers a page of nodes at a time by id
+(`limit` 1 to 100, 25 by default; `next` back as `cursor`), so a fleet of any
+size is read rather than refused; `firing` narrows it to the nodes whose own
+table has an alarm firing — what an alarm's wake asks it — counting the nodes
+that cannot say as `unevaluated`, and `node` reads one node. `code_status`
+pages its git nodes the same way, the hot list on the first page alone, and
+`node` reads one git node; a page asks only the git nodes it lists, and waits
+for none other, so its cost and its wait do not grow with the fleet — the
+fleet's first page alone asks every git node, for its hot list. In a turn
+somebody woke, a seat reads them only for somebody
+of the company who may act: a turn a stranger woke, or a person who may not
+act in the company now, is answered nothing by either. The repositories
+`code_status` names are read as the code tools read them — held to the seat's
+grant, and in a turn somebody woke to theirs too
+([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)).
+See [The health tools](fleet.md#the-health-tools).
 ### Groups, and who may call each one
 
 Holding a tool is not being allowed to call it. Every call to a built-in is
@@ -416,6 +743,8 @@ group, and names the **gate** its authority row decides:
 | Knowledge | `knowledge` | The company's pages in Doclet, and the search over its knowledge |
 | Chat | `chat` | Chatlet rooms and direct messages |
 | Artifacts | `artifacts` | Documents, slides, sheets and dashboards agents make and share, and the data behind them |
+| Code | `code` | The company's repositories on its own code host: their files and history, branches, changes, reviews and checks ([The company's code](#the-companys-code)) |
+| Health | `health` | The deployment's health: `fleet_health` and `code_status` ([The deployment's health](#the-deployments-health)) |
 | Colleagues | `colleagues` | Finding a colleague, and asking another agent a question |
 | Memory and skills | `memory` | The agent's own notes, past turns and skills |
 | MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, which the engine hands the onboarding pass and a worker so it can reach its MCP servers' tools (an executor holds every tool its seat does from its launch, and its harness defers a server's tools itself) |
@@ -433,10 +762,16 @@ group, and names the **gate** its authority row decides:
 | `artifact_viewer` | Anybody the artifact is shared with, as a viewer or more |
 | `artifact_editor` | The artifact's editors who also author artifacts |
 | `artifact_owner` | The artifact's owner |
+| `health_tools` | An agent whose role carries the `health_tools` grant, since the deployment's health is an administrator's read |
 
 An administrator passes every app gate. A group whose surface the company does
-not run is not there at all: a company on Jira holds no Worklet tool, and one
-on Slack no Chatlet tool.
+not run is not there at all: a company on Jira holds no Worklet tool, one on
+Slack no Chatlet tool, and one that hosts no code no Code tool. Every Code
+tool's gate is `everybody`, because which repository a call may read or change
+is decided per repository by the code host itself, from the seat's
+`role.code.access` and its relation to the repository ([Who may read and
+push](../concepts/code-host.md#who-may-read-and-push)), never by an app the
+agent uses.
 
 The gate is a word for the row, never a second decision: the engine's tests
 hold each built-in's gate to its row's class, app and artifact role, so a
@@ -963,12 +1298,17 @@ answers it ([ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-
   held is not called, and the run is told why; so is one a required tool
   skill covers that the session carrying the run on has not loaded — a skill
   made required while the call waited, say — which leaves the answer unused:
-  the run can load the skill and call again, which asks afresh. The call is
-  recorded among the run's calls, as the tool answered it and without its
-  arguments or result, in the same write as its result: a reply the approved
-  call made counts as the turn's reply wherever the engine reads whether the
-  turn replied, its delivery check and a stopped or lost turn's account among
-  them.
+  the run can load the skill and call again, which asks afresh. Once its
+  result is recorded, the call is added to the run's calls (the bridged tool
+  log kept beside its record) as the tool answered it and without its
+  arguments or result, once. The result and the log are two writes, so the
+  record keeps the call's entry with the result: where the second write never
+  lands, because it failed or its node stopped, a stopped or lost turn's
+  account and a later attempt's run read the call off the record, and the
+  relaunch that carries the run on adds it to the log, at most once. A reply
+  the approved call made counts as the turn's reply wherever the engine reads
+  whether the turn replied, its delivery check and a stopped or lost turn's
+  account among them.
 - **The run carries on where it stopped**, in its own session, told the
   answer and the call's result (the first 16 KiB of it): continued from the
   session the turn kept of it, in whichever box the relaunch gets — its own,
@@ -1146,8 +1486,8 @@ and one it no longer lists *Removed*, counts the changes over the list with
 **Review**, and filters them with **Changed**; the tab itself is marked while
 any wait. The alarm's fix opens the same review. **Review** shows each change,
 one that now claims less risk first and flagged: a description or title as a
-text diff, the arguments as a list diff, and the hints that moved before and
-after. **Accept change** (for a new tool, **Accept the new tool**) and **Keep
+text diff, the arguments a line each, and each hint that moved with its old
+word and its new. **Accept change** (for a new tool, **Accept the new tool**) and **Keep
 blocked** decide it by the digest of the definition shown, and a removal is
 accepted with **Accept that it went**. A definition the server swapped since it
 was shown is refused and read again. The **Servers** tab's **Waiting on you**
@@ -1532,6 +1872,7 @@ a model acts on:
 | `notes_spent` | The running turn has taken as many notes as a turn takes | Do not send it again; put the rest on the work item |
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
 | `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent. A person's answer carries a `remedy` naming the ceiling | Wait for the window the sentence names to turn over, or raise its ceiling |
+| `store_full` | The object store has no room for the content the call would store — the fleet's NATS bucket holds as many bytes as it [reserves](../concepts/object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](../concepts/object-store.md#an-s3-bucket--s3) — so nothing was stored or recorded. Waiting alone does not clear it | Tell an operator, who makes the room the sentence names — on NATS, moves the files to a bucket, raises the bucket's reservation on an external broker, or lets the collector remove what nothing names; on S3, frees space or raises the quota on the bucket's provider, or lets the collector remove what nothing names; the same call is refused the same until then |
 | `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — the node is behind its log, the log refused the read or the append (a maintenance or sealed fleet included), the coordination store did not answer, the event broker did not answer or this node's connection to it is reconnecting, this node's store was busy with other writes, the backend is not configured. A **condition**, which waiting clears. **Never** "it does not exist" | Retry, or use the backend the company does run |
 | `internal_error` | This node failed at something of its own — a read of its own store that broke. Nothing about the call was wrong, and waiting does **not** clear it; the sentence is fixed and the error itself is in the node's log, never in the answer | Tell whoever runs the node; a retry fails the same way |
 
@@ -2289,8 +2630,8 @@ next turn has the new child.
 `${VAR}` a server is started with must resolve to a value before it starts —
 its own `env` or `headers`, its `url`, and, for a seat's child of a per-role
 template, the seat's own `mcp_env` block for it, its unit's block included —
-on the engine host, as a shared server or a seat's child, and in a coding
-agent's box alike. An unresolved one is never handed to the server as an empty
+on the engine host, as a shared server or a seat's child, and in an executor's
+box alike. An unresolved one is never handed to the server as an empty
 string, which a vendor's server either refuses or, worse, starts with and acts
 as nobody; the one exception is a key the server [declares
 optional](#a-key-that-may-go-without-its-value), which is left out instead.

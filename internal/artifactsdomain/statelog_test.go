@@ -42,6 +42,11 @@ func TestTheArtifactsDomainIsACertifiedDomain(t *testing.T) {
 			Rows:       artifactsdomain.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
+			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0080).
+			EncodeTrimmed: artifactsdomain.EncodeTrimmed,
+			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
+			// for this log: certified to write no row.
+			EncodeBarrier: artifactsdomain.EncodeBarrier,
 		}
 	})
 }
@@ -192,6 +197,9 @@ func suitePayload(kind artifactsdomain.ObjectKind, artifact, id string) (
 			artifactsdomain.Generation{V: 1, Generation: 2, By: "suite", StreamAt: suiteStamped}
 	case artifactsdomain.KindBarrier:
 		return artifactsdomain.BarrierSubject(), artifactsdomain.OpBarrier, nil
+	case artifactsdomain.KindTrimmed:
+		return artifactsdomain.TrimmedSubject(statelog.Position{Generation: 1, Seq: 2}),
+			artifactsdomain.OpTrimmed, nil
 	case artifactsdomain.KindFolder:
 		return artifactsdomain.FolderSubject(), artifactsdomain.OpCreate, folderCreatePayload(id)
 	case artifactsdomain.KindBrand:

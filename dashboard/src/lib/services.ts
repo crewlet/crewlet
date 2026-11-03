@@ -1,17 +1,18 @@
 /**
  * Which of Crewlet's own services the company runs, as the engine says it.
  *
- * # Three services, three answers each
+ * # Four services
  *
  * A company runs Worklet (the engine's own tracker: projects, tasks, the
  * Inbox's updates and My work) or another tracker in its place, Jira, or none
  * at all; Doclet (the engine's own knowledge base: spaces and pages) or
- * Confluence, or none; and Chatlet (the engine's own rooms) or the
- * Mattermost or Slack it declares, or none. The engine resolves which from the company document and hands it
- * to every reader on the org projection (`services`, `contract/services.ts`):
- * the socket's first frame, every `org` push and `GET /org`. So nothing here
- * probes for it, and a company that switches a backend is drawn anew on the
- * push that publishes it.
+ * Confluence, or none; Chatlet (the engine's own rooms) or the Mattermost or
+ * Slack it declares, or none; and it hosts its git repositories in the engine
+ * (`code.native`, the Code workspace) or does not. The engine resolves which
+ * from the company document and hands it to every reader on the org
+ * projection (`services`, `contract/services.ts`): the socket's first frame,
+ * every `org` push and `GET /org`. So nothing here probes for it, and a
+ * company that switches a backend is drawn anew on the push that publishes it.
  *
  * # What the dashboard does with it
  *
@@ -43,38 +44,45 @@ export const SERVICE_NAMES: Readonly<Record<Service, string>> = {
   tracker: "Worklet",
   knowledge: "Doclet",
   chat: "Chatlet",
+  code: "Code",
 };
 
 /**
  * Every answer, each ONE object, so a memo keyed on what runs moves only when
- * the engine's answer does rather than on every render of the reader.
+ * the engine's answer does rather than on every render of the reader. Built
+ * once over every combination, keyed on the four in order.
  */
 const RUN: ReadonlyMap<string, ServicesRun> = new Map(
   [true, false].flatMap((tracker) =>
     [true, false].flatMap((knowledge) =>
-      [true, false].map((chat): [string, ServicesRun] => [
-        runKey(tracker, knowledge, chat),
-        Object.freeze({ tracker, knowledge, chat }),
-      ]),
+      [true, false].flatMap((chat) =>
+        [true, false].map((code): [string, ServicesRun] => [
+          runKey(tracker, knowledge, chat, code),
+          Object.freeze({ tracker, knowledge, chat, code }),
+        ]),
+      ),
     ),
   ),
 );
 
-function runKey(tracker: boolean, knowledge: boolean, chat: boolean): string {
-  return `${tracker}/${knowledge}/${chat}`;
+/** The key of one combination in [RUN]. */
+function runKey(tracker: boolean, knowledge: boolean, chat: boolean, code: boolean): string {
+  return `${tracker}/${knowledge}/${chat}/${code}`;
 }
 
-function run(tracker: boolean, knowledge: boolean, chat: boolean): ServicesRun {
-  return RUN.get(runKey(tracker, knowledge, chat))!;
+/** The one object for a combination. */
+function run(tracker: boolean, knowledge: boolean, chat: boolean, code: boolean): ServicesRun {
+  return RUN.get(runKey(tracker, knowledge, chat, code))!;
 }
 
 /** Which services run, from what the engine said: every one, until it has said. */
 export function servicesRun(services: OrgServices | null | undefined): ServicesRun {
-  if (!services) return run(true, true, true);
+  if (!services) return run(true, true, true, true);
   return run(
     services.tracker === "worklet",
     services.knowledge === "doclet",
     services.chat === "chatlet",
+    services.code === "native",
   );
 }
 
@@ -102,7 +110,7 @@ export function useServicesRun(): ServicesRun {
  */
 export function useServicesAsk(): ServicesRun {
   const org = useOrg();
-  return org === null ? run(false, false, false) : servicesRun(org.services ?? null);
+  return org === null ? run(false, false, false, false) : servicesRun(org.services ?? null);
 }
 
 /** Whether the org projection has arrived, so what the company runs is no longer a guess. */

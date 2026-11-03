@@ -31,6 +31,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { ADMIN_RAISES } from "~/lib/remedy.ts";
 
 class InertWebSocket {
@@ -147,7 +148,7 @@ const QUIET = {
   company_feed: { rows: [], complete: true },
   work_projects: { projects: [], total: 0, census: {}, complete: true },
   executors: { runs: [] },
-  work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
+  inbox: { handle: "jane", notices: [], sources: [], unread: 0, primary: 0 },
 };
 
 type Answer = unknown | ((params: Record<string, unknown>) => Promise<unknown>);
@@ -242,9 +243,7 @@ function mount({
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 function tile(label: string | RegExp): HTMLElement {

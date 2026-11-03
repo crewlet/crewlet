@@ -15,32 +15,35 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
-	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE LIVE RELAY: how a node whose own copy is OUT OF SERVICE still tells its
-// open dashboards what its appliers would have — whose inbox moved, what was
-// said in a room, and what moved on an artifact and in its datastore.
+// THE LIVE RELAY: how a node whose own copy of a domain is OUT OF SERVICE
+// still tells its open dashboards what that domain's applier would have —
+// whose inbox moved, what was said in a room, and what moved on an artifact
+// and in its datastore.
 //
 // # Why one is needed at all
 //
 // A node's sockets learn what changed from its OWN appliers, after every
-// committed batch: the tracker's says whose inbox moved
+// committed batch: the tracker's and the code host's say whose inbox moved
 // ([Engine.SetOnInboxMoved]), chat's what landed in a room
 // ([Engine.SetChatLive]), the artifacts' and the datastore's what moved on an
 // artifact and which documents changed ([Engine.OnArtifactsMoved],
 // [Engine.OnArtifactDataMoved]). That is complete only while those appliers
-// apply every record. A copy that is WRONG — an applier halted at a record it cannot
-// decode, a stalled prefix, an estate file shut, rows below the log — goes out
-// of service and the node STAYS in rotation ([localEstate.For]): its seats'
-// calls and its dashboards' reads go to a sound data node through the estate's
-// router, and /ready follows whether it can route rather than whether its copy
-// is sound. So its dashboards keep reading correct data — and an applier that
+// apply every record. A domain's copy that is WRONG — an applier halted at a
+// record it cannot decode, a stalled prefix, an estate file shut, rows below
+// the log — goes out of service and the node STAYS in rotation
+// ([localEstate.For]): its seats' calls and its dashboards' reads of that
+// domain go to a sound data node through the estate's router, and /ready
+// follows whether it can route rather than whether its copy is sound. So its
+// dashboards keep reading correct data — and an applier that
 // commits nothing announces nothing, so every socket on that node stopped
 // receiving `inbox_changed`, and every room open on it, a chat room's or an
 // artifact's, went quiet, until it reconnected somewhere else, which a node
@@ -48,44 +51,57 @@ import (
 // cache on that node hears the same appliers, and a share withdrawn on a
 // sound peer was forgotten by nothing there until the verdict aged out.
 //
-// # ONE relay for every domain that announces, not one per domain
+// # ONE relay for every domain that announces, and a switch PER DOMAIN
 //
-// The verdict that takes a copy out of service is the WHOLE COPY's — one
-// [localEstate.For] for every log the node holds — so whether this node's
-// sockets hear its own appliers or a peer's is one fact for every domain at
-// once, and a relay per domain would be several followers reading that one
-// fact on their own clocks: one switched while its sibling had not, a screen's
-// inbox already a peer's and its room still this node's halted applier's. So
-// there is one ring, one sequence, one follower and one switch, and a batch in
-// the ring is EXACTLY ONE domain's — one applier's commit ([liveBatch]) —
-// handed on to that domain's listeners by [Engine.deliverLive]. The artifact
-// copies once had a follower of their own, which withheld this node's artifact
-// pushes while its copy was out of service and told every room to read again
-// at each switch: a second reader of the one verdict, on its own clock, that
-// relayed nothing, so an artifact room on an out-of-service node heard nobody's
-// appliers at all.
+// A fault is ONE log's (ADR-0079), and so is the verdict that takes a copy out
+// of service ([copyVerdict]): a knowledge-base applier halted at one page
+// leaves the tracker's, chat's and the artifacts' announcements complete. So
+// whether this node's sockets hear its own applier or a peer's is a fact PER
+// DOMAIN, judged on that domain's own copy ([liveDomains],
+// [localEstate.outOfService]). While this node's copy of a domain serves, its
+// sockets hear that domain from its own applier and nothing else. While it
+// does not, they hear a SOUND PEER's applier for it — a peer whose copies of
+// every domain this node relays serve, whatever its other copies are doing —
+// and this node's own announcements of THAT domain, whatever an
+// out-of-service applier still commits, are withheld: two sources would push
+// one movement or one message twice, and the one being withheld is the one
+// nobody vouches for. Every other domain's copy is untouched by it and its
+// applier is still heard. Taken whole — every domain relayed for any one's
+// fault — the relay would withhold a sound copy's announcements for a wrong
+// one's, and a fleet in which each node held a different copy wrong would
+// have no server to follow at all.
 //
-// # One source at a time, and a switch is a re-read
+// The SWITCH is per domain and the MACHINERY is not: there is one ring, one
+// sequence, one follower and one subscription per node, because a relay per
+// domain would be a follower and a subscription per domain on every data node
+// for an exchange that runs only while some copy is wrong. A batch in the ring
+// is EXACTLY ONE domain's — one applier's commit ([liveBatch]) — and the
+// follower hands on only the batches of the domains it relays
+// ([Engine.deliverLive]). The artifact copies once had a follower of their
+// own, which withheld this node's artifact pushes while its copy was out of
+// service and told every room to read again at each switch: a second reader
+// of the verdict, on its own clock, that relayed nothing, so an artifact room
+// on an out-of-service node heard nobody's appliers at all.
 //
-// While this node's copy serves, its sockets hear its own appliers and nothing
-// else. While it does not, they hear a SOUND PEER's appliers, relayed, and the
-// node's own — whatever an out-of-service applier still commits — are
-// withheld: two sources would push one movement or one message twice, and the
-// one being withheld is the one nobody vouches for. Every SWITCH, either way,
-// tells every screen to read again ([Engine.liveGap]: every watched inbox,
-// every chat screen and every artifact room, which is a reset of every artifact
-// and every datastore to their listeners), because what was committed between
-// the last batch one source delivered and the first the other does is not
-// replayed: the rows are the truth, and a screen re-reads them.
+// # A switch is a re-read of that domain's screens
+//
+// Every SWITCH of a domain, either way, tells that domain's screens to read
+// again ([Engine.liveGap]: the watched inboxes for an inbox source, every chat
+// screen for chat, every artifact room for the artifacts or the datastore,
+// which is a reset of every artifact and every datastore to their listeners),
+// because what was committed between the last batch one source delivered and
+// the first the other does is not replayed: the rows are the truth, and a
+// screen re-reads them. A domain that did not switch is not re-read.
 //
 // # A follower reads ONE server, by that server's own sequence
 //
-// Every data node keeps the batches its appliers announced, up to
-// [liveRelayRingBytes] of them, numbered by a sequence of its own under an
-// EPOCH it draws at boot and draws again whenever its copy comes back into
-// service — and serves them on its own subject. A follower asks one server for
-// everything after the last batch it took, and the server answers as soon as
-// it holds one (or at the end of [liveRelayWait]). Positions on the logs would
+// Every data node numbers the batches its appliers announced by a sequence of
+// its own under an EPOCH it draws at boot and draws again whenever one of its
+// copies comes back into service, and serves them on its own subject. A
+// follower asks one server for everything after the last batch it took,
+// naming the domains it relays, and the server answers as soon as it holds
+// one (or at the end of [liveRelayWait]) — or answers it unserved while its
+// own copy of any of those domains is out of service. Positions on the logs would
 // have let a follower switch servers without a re-read, and are not what a
 // batch has: a batch is whatever one node's applier committed together,
 // retained records reprocessed out of order included, so two nodes' batches
@@ -94,6 +110,21 @@ import (
 // "after the last one I took" — and anything it cannot answer is DETECTED
 // rather than lost: another epoch, a sequence the ring no longer reaches, or
 // another server, each of which is a re-read.
+//
+// # A server keeps only what a follower can still ask for
+//
+// A follower new to a server is answered where that server stands and
+// nothing before it, and one that moves to another server starts over there.
+// So NO FOLLOWER IS EVER SERVED A BATCH RECORDED BEFORE THE LAST ANSWER IT
+// TOOK, and all a server has to keep is what a follower answered earlier has
+// not taken yet: the batches recorded since that answer, for one round trip
+// after it ([liveRelayHold]), and, while an ask is held open, the batches
+// that wake it — never more than [liveRelayRingBytes] of them. With no copy
+// out of service anywhere nobody asks, and every data node keeps nothing: a
+// ring kept whatever anybody asked would hold its whole bound on every data
+// node, for followers that do not exist in the normal state. A follower
+// slower than a round trip is answered a gap and re-reads, as one behind a
+// server back in service is.
 //
 // # Signed, because what it answers is shown as somebody's work
 //
@@ -169,7 +200,7 @@ type relayWire = signedask.Channel[relayAsk, relayAnswer]
 // every state-log record is signed under. The keyring is required on every
 // node, so this fails only on a bootstrap [config.Bootstrap.Validate] would
 // already have refused.
-func newRelayWire(ring statelog.Keyring) (*relayWire, error) {
+func newRelayWire(ring recordseal.Keyring) (*relayWire, error) {
 	wire, err := signedask.New[relayAsk, relayAnswer](liveRelayChannel, ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the live relay's envelopes: %w", err)
@@ -188,7 +219,7 @@ var errNoRelayWire = errors.New("engine: no envelopes for the live relay — eve
 //
 // BOUNDED BY BYTES AND NOT BY BATCHES, because the domains' batches differ by
 // orders of magnitude: an inbox movement is identifiers and a count
-// (worklet.InboxMovement), and so is an artifact's movement, while a chat batch
+// ([inbox.Movement]), and so is an artifact's movement, while a chat batch
 // carries each record's routing snapshot — an excerpt of up to
 // [chatlet.MaxExcerpt] bytes and up to [chatlet.MaxRecipients] recipients — and one
 // applier commit can hold a thousand messages ([statelog.ApplyTxRowBudget]
@@ -208,7 +239,25 @@ var errNoRelayWire = errors.New("engine: no envelopes for the live relay — eve
 // gap, answered with a re-read, never a lost movement or message; and a
 // single batch larger than the whole ring is relayed as exactly that gap
 // ([liveRelay.record]).
+//
+// A BOUND, NOT A SIZE: a server holds anything at all only while a follower
+// can still ask for it ([liveRelayHold]), so the normal state — no copy out of
+// service anywhere — holds nothing on any data node.
 const liveRelayRingBytes = queue.MaxPayloadBytes / 2
+
+// liveRelayHold is how long a server keeps a batch after the last moment a
+// follower that has not taken it was answered: one ask's ROUND TRIP after the
+// server's latest answer — or after the batch itself, while an ask is held
+// open for it.
+//
+// [statelog.ReadBudget], TWO SECONDS. A follower asks again the moment an
+// answer lands, once it has handed the answer's batches to listeners that
+// never block, so between an answer leaving and the next ask arriving lie two
+// transits and that hand-off: what the budget the estate's own reads give a
+// peer to answer in bounds, and exactly what the follower's own ask allows
+// beyond the server's wait ([liveRelay.ask]). A follower slower than that is
+// answered a gap and re-reads, never a lost movement or message.
+const liveRelayHold = statelog.ReadBudget
 
 // liveRelayWait is how long a server holds a follower's ask open when it has
 // nothing newer to answer with.
@@ -231,20 +280,50 @@ const liveRelayRetry = servingRecheck
 // one of its appliers made it.
 //
 // EXACTLY ONE FIELD IS SET, because a batch is one applier's commit and each
-// applier is one domain's. The fields are the domains whose appliers announce
-// at all — the tracker's inbox movements, chat's committed effects, and what
-// the artifacts' and the datastore's commits moved — and a domain that starts
-// announcing is one more field here and one more arm in [Engine.deliverLive],
-// [Engine.liveGap] and [Engine.liveListening].
+// applier is one domain's ([liveBatch.domain]). The fields are the kinds of
+// announcement the appliers make at all — the inbox sources' movements (the
+// tracker's and the code host's, each movement naming its source), chat's
+// committed effects, and what the artifacts' and the datastore's commits
+// moved — and a domain that starts announcing is one more field here (or one
+// more [registration.Inbox] source) and one more arm in [liveBatch.domain],
+// [liveDomains], [Engine.deliverLive], [Engine.liveGap] and
+// [Engine.liveListening].
 //
 // ADDITIVE ON THE WIRE: a newer server's batch of a domain this build does not
 // know decodes as a batch with none of these fields set, and is delivered to
 // nobody — which is all this build's sockets could do with it anyway.
 type liveBatch struct {
-	Inbox        []worklet.InboxMovement `json:"inbox,omitempty"`
+	Inbox        []inbox.Movement        `json:"inbox,omitempty"`
 	Chat         []chatlet.Applied       `json:"chat,omitempty"`
 	Artifacts    []artifactsdomain.Moved `json:"artifacts,omitempty"`
 	ArtifactData []artifactdata.Moved    `json:"artifact_data,omitempty"`
+}
+
+// domain is the domain whose applier committed b — for an inbox batch the
+// source its movements name, which is one applier's and so one for the whole
+// batch — or "" for a batch of a kind this build does not know, which nobody
+// here hears anyway.
+func (b liveBatch) domain() string {
+	switch {
+	case len(b.Inbox) > 0:
+		return b.Inbox[0].Source
+	case len(b.Chat) > 0:
+		return chatlet.Domain{}.Name()
+	case len(b.Artifacts) > 0:
+		return artifactsdomain.Domain{}.Name()
+	case len(b.ArtifactData) > 0:
+		return artifactdata.Domain{}.Name()
+	}
+	return ""
+}
+
+// liveDomains is every domain whose applier announces to this node's sockets,
+// in a fixed order: the inbox sources the register marks ([inboxSources]),
+// chat, the artifacts and the datastore — the domains whose copies the relay
+// judges, each on its own verdict.
+func liveDomains() []string {
+	return append(inboxSources(), chatlet.Domain{}.Name(),
+		artifactsdomain.Domain{}.Name(), artifactdata.Domain{}.Name())
 }
 
 // relayedBatch is one batch a server's appliers announced, numbered by the
@@ -276,6 +355,11 @@ type relayAsk struct {
 	Epoch string `json:"epoch,omitempty"`
 	After uint64 `json:"after"`
 
+	// Domains is every domain the follower relays — its own copies of
+	// them are out of service — so the server answers it only while its
+	// copy of each of them serves.
+	Domains []string `json:"domains,omitempty"`
+
 	// From is the asking node, for the server's log.
 	From string `json:"from,omitempty"`
 }
@@ -285,8 +369,8 @@ func (a relayAsk) Binding() (string, time.Time) { return a.ID, a.Deadline }
 
 // relayAnswer is what a server answers: where it stands, and every batch after
 // the follower's that it holds, each a [relayedBatch] — or that it cannot
-// answer from its own copy at all (Unserved), or no longer reaches back as far
-// as the follower (Gap). Signed whole, and naming the ask it answers
+// answer from its own copy of a domain the follower relays (Unserved), or no
+// longer reaches back as far as the follower (Gap). Signed whole, and naming the ask it answers
 // ([signedask.Reply]).
 type relayAnswer struct {
 	// Request is the id of the ask this answers, empty only where the ask
@@ -297,9 +381,10 @@ type relayAnswer struct {
 	Batches  []json.RawMessage `json:"batches,omitempty"`
 	Gap      bool              `json:"gap,omitempty"`
 	Unserved bool              `json:"unserved,omitempty"`
-	// Detail says why an answer is unserved where the server did not take
-	// the ask at all — not signed by the fleet, under a key it does not
-	// hold, past its deadline — for the follower's log.
+	// Detail says why an answer is unserved — the server did not take the
+	// ask at all (not signed by the fleet, under a key it does not hold,
+	// past its deadline), or holds its copy of a domain the follower relays
+	// out of service — for the follower's log.
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -311,7 +396,7 @@ func (a relayAnswer) Answers() string { return a.Request }
 // one it cannot believe ([liveRelay.ask]).
 type relayQueue interface {
 	AskEach(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error
-	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
+	Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
 // liveRelay is one data node's half of the relay: the server's ring, and the
@@ -329,25 +414,29 @@ type liveRelay struct {
 	// roster is every live data node, from memory ([Engine.dataRoster]).
 	roster func(context.Context) ([]string, error)
 
-	// faulted reports whether this node's own copy is out of service, as
-	// far as it can tell without waiting ([localEstate.faultedUnasked]).
-	faulted func(context.Context) bool
+	// domains is every domain whose applier announces ([liveDomains]),
+	// and outOfService which of those this node's own copies are out of
+	// service, in that order, as far as it can tell without waiting
+	// ([localEstate.outOfService]).
+	domains      []string
+	outOfService func(ctx context.Context, domains ...string) []string
 
 	// listening reports whether anything on this node hears what its
 	// appliers announce at all — a data node with nothing attached, or only
 	// a chat hub that serves no socket here, has nobody to relay to, and a
 	// follower that relayed to nobody would be a loop reported as work.
-	// deliver hands one batch to its domain's
-	// listener, and gap tells every screen to read again — the engine's
-	// registered listeners, read per call ([Engine.liveListening],
+	// deliver hands one batch to its domain's listener, and gap tells the
+	// screens of the domains named to read again — the engine's registered
+	// listeners, read per call ([Engine.liveListening],
 	// [Engine.deliverLive], [Engine.liveGap]).
 	listening func() bool
 	deliver   func(liveBatch)
-	gap       func()
+	gap       func(domains []string)
 
-	// relaying is whether this node's sockets hear a peer now rather than
-	// its own appliers.
-	relaying atomic.Bool
+	// relayed is the domains whose announcements this node's sockets hear
+	// from a peer now rather than from its own appliers, in [liveDomains]'
+	// order; nil or empty for none.
+	relayed atomic.Pointer[[]string]
 
 	mu sync.Mutex
 	// epoch names the sequence below; drawn at boot and again whenever this
@@ -358,24 +447,37 @@ type liveRelay struct {
 	// encodings weigh together — never more than [liveRelayRingBytes].
 	ring []heldBatch
 	held int
-	// moved is closed and replaced by every append, so an ask waiting for a
+	// moved is closed and replaced by every batch, so an ask waiting for a
 	// batch wakes the instant one lands.
 	moved chan struct{}
-	// outOfService is whether this node last answered a follower that its
-	// copy is out of service — what tells the next answer it serves to draw
-	// a new epoch.
-	outOfService bool
+	// heldUntil is when the latest answer's [liveRelayHold] runs out, and
+	// waiting how many asks are held open now: while either says a
+	// follower may still ask, a batch is kept ([liveRelay.record]).
+	heldUntil time.Time
+	waiting   int
+	// out is the domains whose copies this node last found out of service
+	// when it answered — what tells the next answer that finds one of them
+	// back to draw a new epoch.
+	out []string
 }
 
-// newLiveRelay builds a relay with a fresh epoch.
+// newLiveRelay builds a relay with a fresh epoch, judging domains.
 func newLiveRelay(self string, q relayQueue, wire *relayWire,
-	roster func(context.Context) ([]string, error),
-	faulted func(context.Context) bool, listening func() bool,
-	deliver func(liveBatch), gap func()) *liveRelay {
+	roster func(context.Context) ([]string, error), domains []string,
+	outOfService func(context.Context, ...string) []string, listening func() bool,
+	deliver func(liveBatch), gap func([]string)) *liveRelay {
 
 	return &liveRelay{self: self, queue: q, wire: wire, taken: signedask.NewGuard(),
-		roster: roster, faulted: faulted, listening: listening, deliver: deliver,
-		gap: gap, epoch: rand.Text(), moved: make(chan struct{})}
+		roster: roster, domains: domains, outOfService: outOfService,
+		listening: listening, deliver: deliver, gap: gap, epoch: rand.Text(),
+		moved: make(chan struct{})}
+}
+
+// relays reports whether this node's sockets hear domain from a peer now,
+// and so whether this node's own announcements of it are withheld.
+func (r *liveRelay) relays(domain string) bool {
+	relayed := r.relayed.Load()
+	return relayed != nil && slices.Contains(*relayed, domain)
 }
 
 // record keeps one batch this node's appliers announced, for its followers.
@@ -384,6 +486,14 @@ func newLiveRelay(self string, q relayQueue, wire *relayWire,
 // by is what a follower would be sent, and a batch encoded per follower would
 // be the same bytes made again for each. It is a JSON encoding of what the
 // applier already built, a small fraction of the commit it follows.
+//
+// A BATCH NOBODY CAN ASK FOR — no follower answered within [liveRelayHold]
+// and none waiting — takes its sequence number and is neither encoded nor
+// kept, and the ring goes with it: that is the normal state on every data
+// node, so it costs a counter and allocates nothing — not even the wake-up,
+// since an ask waits on it only while it is counted as held open. A follower
+// that asks after the hold ran out finds the ring starting past its last
+// batch, which is a gap and a re-read.
 //
 // A BATCH NO ANSWER COULD CARRY — larger than the whole ring, or one that will
 // not encode — still takes its sequence number, and EMPTIES the ring: every
@@ -395,6 +505,14 @@ func (r *liveRelay) record(b liveBatch) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.seq++
+	if r.waiting == 0 && !time.Now().Before(r.heldUntil) {
+		r.ring, r.held = nil, 0
+		return
+	}
+	defer func() {
+		close(r.moved)
+		r.moved = make(chan struct{})
+	}()
 	raw, err := json.Marshal(relayedBatch{Seq: r.seq, liveBatch: b})
 	switch {
 	case err != nil:
@@ -412,13 +530,22 @@ func (r *liveRelay) record(b liveBatch) {
 		}
 		r.ring = slices.Delete(r.ring, 0, evict)
 	}
-	close(r.moved)
-	r.moved = make(chan struct{})
 }
 
 // answer is what this node answers one follower's ask, holding it open up to
 // wait for a batch it does not hold yet.
+//
+// WHILE IT IS HELD OPEN it counts as a follower that may still ask, so every
+// batch recorded meanwhile is kept for it ([liveRelay.record]).
 func (r *liveRelay) answer(ctx context.Context, ask relayAsk, wait time.Duration) relayAnswer {
+	r.mu.Lock()
+	r.waiting++
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.waiting--
+		r.mu.Unlock()
+	}()
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
 	for {
@@ -442,20 +569,34 @@ func (r *liveRelay) answer(ctx context.Context, ask relayAsk, wait time.Duration
 func (r *liveRelay) answerNow(ctx context.Context, ask relayAsk) (relayAnswer, <-chan struct{}) {
 	// ASKED BEFORE THE LOCK: the verdict read may start a read of the
 	// broker, which must never sit under the ring's lock.
-	faulted := r.faulted(ctx)
+	outOfService := r.outOfService(ctx, r.domains...)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if faulted {
-		r.outOfService = true
-		return relayAnswer{Unserved: true}, nil
-	}
-	if r.outOfService {
-		// BACK IN SERVICE: what this node's appliers announced while its
-		// copy was out of service, or did not announce at all, is no
-		// sequence a follower can trust to be whole — so it is another
-		// epoch, which every follower meets as a re-read.
-		r.outOfService = false
+	if slices.ContainsFunc(r.out, func(d string) bool {
+		return !slices.Contains(outOfService, d)
+	}) {
+		// A COPY BACK IN SERVICE: what that domain's applier announced
+		// while its copy was out of service, or did not announce at all,
+		// is no sequence a follower can trust to be whole — so it is
+		// another epoch, which every follower meets as a re-read, and the
+		// ring that epoch numbered goes with it.
 		r.epoch = rand.Text()
+		r.ring, r.held = nil, 0
+	}
+	r.out = outOfService
+	if wrong := slices.DeleteFunc(slices.Clone(ask.Domains), func(d string) bool {
+		return !slices.Contains(outOfService, d)
+	}); len(wrong) > 0 {
+		// A DOMAIN THE FOLLOWER RELAYS that this node's copy cannot vouch
+		// for either: the follower moves to a server whose copy does.
+		// Every other follower is still answered.
+		return relayAnswer{Unserved: true, Detail: fmt.Sprintf(
+			"%s holds its copy of %s out of service", r.self, words.And(wrong))}, nil
+	}
+	// ANSWERED: whatever it is told, this follower asks again within a
+	// round trip, and is owed every batch recorded until then.
+	if until := time.Now().Add(liveRelayHold); until.After(r.heldUntil) {
+		r.heldUntil = until
 	}
 	out := relayAnswer{Epoch: r.epoch, Head: r.seq}
 	// THE FIRST SEQUENCE THE RING STILL HOLDS, which for an empty ring is
@@ -473,7 +614,8 @@ func (r *liveRelay) answerNow(ctx context.Context, ask relayAsk) (relayAnswer, <
 		return out, nil
 	case ask.After > r.seq || ask.After+1 < first:
 		// A FOLLOWER THIS RING NO LONGER REACHES BACK TO — the batches
-		// after its last were evicted, or one was too large to keep — or
+		// after its last were evicted, one was too large to keep, or none
+		// was kept because it asked again later than [liveRelayHold] — or
 		// one claiming a batch this epoch never numbered: it re-reads and
 		// starts again from here.
 		out.Gap = true
@@ -499,7 +641,8 @@ func (r *liveRelay) serve(ctx context.Context) (queue.Unsubscribe, error) {
 	if r.wire == nil {
 		return nil, errNoRelayWire
 	}
-	return r.queue.Serve(ctx, liveRelaySubject(r.self),
+	// WORK DONE NOW: an answer reads this node's ring and returns.
+	return r.queue.Serve(ctx, liveRelaySubject(r.self), queue.ConcurrentAnswers,
 		func(ctx context.Context, raw []byte) ([]byte, error) {
 			return r.wire.SealReply(r.answerSealed(ctx, raw, time.Now()))
 		})
@@ -553,13 +696,17 @@ func (r *liveRelay) answerSealed(ctx context.Context, raw []byte, now time.Time)
 	return out
 }
 
-// follow runs until ctx ends: idle while this node's own copy serves, and
-// following a sound peer's appliers while it does not — see the file head.
+// follow runs until ctx ends: idle while every copy of this node's announcing
+// domains serves, and following a sound peer's appliers for the domains whose
+// copies do not — see the file head.
 func (r *liveRelay) follow(ctx context.Context) {
 	var (
 		source string
 		epoch  string
 		after  uint64
+		// relayed is the domains this follower relays now, in
+		// [liveDomains]' order.
+		relayed []string
 		// tried is the servers asked since the last one that served, so a
 		// follower that lost its server moves through the others before
 		// it pauses.
@@ -569,30 +716,21 @@ func (r *liveRelay) follow(ctx context.Context) {
 		source, epoch, after = "", "", 0
 	}
 	for ctx.Err() == nil {
-		if !r.listening() || !r.faulted(ctx) {
-			if r.relaying.Swap(false) {
-				// BACK TO ITS OWN APPLIERS, which committed nothing for
-				// the batches the relay carried or announce them a
-				// second time: either way, read again.
-				log.InfoContext(ctx, "live_relay_stopped", "server", source,
-					"detail", "this node's copy is back in service, or nothing "+
-						"on it listens for what its appliers announce any more, "+
-						"so its dashboards hear its own appliers again")
-				r.gap()
-			}
+		var want []string
+		if r.listening() {
+			want = r.outOfService(ctx, r.domains...)
+		}
+		if !slices.Equal(want, relayed) {
+			r.switchDomains(ctx, source, epoch != "", relayed, want)
+			relayed = want
+		}
+		if len(relayed) == 0 {
 			switchSource()
 			clear(tried)
 			if !sleepCtx(ctx, servingRecheck) {
 				return
 			}
 			continue
-		}
-		if !r.relaying.Swap(true) {
-			log.WarnContext(ctx, "live_relay_started",
-				"detail", "this node's copy is out of service, so its appliers "+
-					"announce nothing its dashboards can trust; their inbox "+
-					"movements, chat and artifact rooms are relayed from a data "+
-					"node whose copy serves")
 		}
 		if source == "" {
 			source = r.pick(ctx, tried)
@@ -605,7 +743,7 @@ func (r *liveRelay) follow(ctx context.Context) {
 			}
 			tried[source] = true
 		}
-		got, ok := r.ask(ctx, source, relayAsk{Epoch: epoch, After: after})
+		got, ok := r.ask(ctx, source, relayAsk{Epoch: epoch, After: after, Domains: relayed})
 		switch {
 		case !ok || got.Unserved:
 			switchSource()
@@ -613,10 +751,11 @@ func (r *liveRelay) follow(ctx context.Context) {
 		case got.Epoch != epoch || got.Gap:
 			// A SERVER THIS FOLLOWER IS NEW TO, or one it can no longer
 			// place itself in: everything from here is relayed, and
-			// everything before it is read again.
+			// everything before it is read again — for the domains it
+			// relays, the only ones it took from that server.
 			epoch, after = got.Epoch, got.Head
 			clear(tried)
-			r.gap()
+			r.gap(relayed)
 			continue
 		}
 		clear(tried)
@@ -627,9 +766,9 @@ func (r *liveRelay) follow(ctx context.Context) {
 			// the follower goes on from there.
 			log.WarnContext(ctx, "live_relay_unreadable", "server", source,
 				"detail", "a relayed batch this build cannot decode; every "+
-					"screen reads again")
+					"relayed domain's screens read again")
 			after = got.Head
-			r.gap()
+			r.gap(relayed)
 			continue
 		}
 		for _, b := range batches {
@@ -637,8 +776,55 @@ func (r *liveRelay) follow(ctx context.Context) {
 				continue
 			}
 			after = b.Seq
-			r.deliver(b.liveBatch)
+			// ONLY THE DOMAINS IT RELAYS: every other domain's copy here
+			// serves, and its own applier already told its sockets.
+			if slices.Contains(relayed, b.domain()) {
+				r.deliver(b.liveBatch)
+			}
 		}
+	}
+}
+
+// switchDomains moves this node's sockets onto a peer for the domains in want
+// and not in had, and back onto their own appliers for those in had and not in
+// want — each a switch of THAT domain's source, so a re-read of that domain's
+// screens and of no other's.
+//
+// A domain that comes back is re-read here, once its own announcements flow
+// again. One that starts being relayed is re-read here only where the
+// follower is already placed on a server (placed): a follower that is not yet
+// re-reads every domain it relays at the answer that places it, and a second
+// re-read before it would buy nothing.
+func (r *liveRelay) switchDomains(ctx context.Context, server string, placed bool,
+	had, want []string) {
+
+	started := slices.DeleteFunc(slices.Clone(want), func(d string) bool {
+		return slices.Contains(had, d)
+	})
+	stopped := slices.DeleteFunc(slices.Clone(had), func(d string) bool {
+		return slices.Contains(want, d)
+	})
+	relayed := slices.Clone(want)
+	r.relayed.Store(&relayed)
+	if len(started) > 0 {
+		log.WarnContext(ctx, "live_relay_started", "domains", started,
+			"detail", "this node's copies of these domains are out of service, "+
+				"so their appliers announce nothing its dashboards can trust; "+
+				"their inbox movements, chat and artifact rooms are relayed from "+
+				"a data node whose copies of them serve")
+		if placed {
+			r.gap(started)
+		}
+	}
+	if len(stopped) > 0 {
+		// BACK TO ITS OWN APPLIERS, which committed nothing for the
+		// batches the relay carried or announce them a second time:
+		// either way, read again.
+		log.InfoContext(ctx, "live_relay_stopped", "server", server, "domains", stopped,
+			"detail", "this node's copies of these domains are back in service, "+
+				"or nothing on it listens for what its appliers announce any "+
+				"more, so its dashboards hear its own appliers for them again")
+		r.gap(stopped)
 	}
 }
 
@@ -749,30 +935,17 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// faultedUnasked reports whether this node's copy is OUT OF SERVICE as far as
-// it can tell without waiting: a verdict read and found wrong. A copy nobody
-// has judged yet and a node whose core is not up are not — [localEstate.For]
-// serves both — and a stale verdict answers while the read that replaces it
-// runs, exactly as a request is answered.
-func (l *localEstate) faultedUnasked(ctx context.Context) bool {
-	c := l.e.core.Load()
-	if c == nil || c.log == nil {
-		return false
-	}
-	v, known, _ := l.peek(ctx, c)
-	return known && v.fault != ""
-}
-
 // announce is what an applier's post-commit hook does with one batch: KEPT FOR
 // THIS NODE'S RELAY FOLLOWERS whatever its copy's state — a server answers a
-// follower only while its copy serves ([liveRelay.answerNow]) — and handed to
-// this node's own sockets only while they are not being relayed a peer's: one
-// source at a time.
+// follower only while its copies of the follower's domains serve
+// ([liveRelay.answerNow]) — and handed to this node's own sockets only while
+// they are not being relayed a peer's announcements of the batch's domain:
+// one source of each domain at a time.
 func (e *Engine) announce(b liveBatch) {
 	relay := e.liveRelay.Load()
 	if relay != nil {
 		relay.record(b)
-		if relay.relaying.Load() {
+		if relay.relays(b.domain()) {
 			return
 		}
 	}
@@ -796,18 +969,27 @@ func (e *Engine) deliverLive(b liveBatch) {
 	}
 }
 
-// liveGap tells whatever this node registered, for EVERY domain, that what it
-// hears has a gap: a switch of source is one fact about the whole copy, so it
-// is a gap in every domain at once. An artifact's and a datastore's listeners
-// are told it as their domains' own reset — a movement naming nothing, which
-// they already read as "everything decided from these rows may have moved":
-// every room re-read and decided again, and every remembered verdict on the
-// artifact origin forgotten.
-func (e *Engine) liveGap() {
-	e.inboxGap()
-	e.chatGap()
-	e.artifactsListeners.tell([]artifactsdomain.Moved{artifactsdomain.Reset()})
-	e.artifactDataListeners.tell([]artifactdata.Moved{artifactdata.ResetMove()})
+// liveGap tells whatever this node registered for each of domains that what
+// it hears of that domain has a gap: a switch of source is one domain's, so
+// it is a gap in that domain alone — an inbox source's watched inboxes told
+// which source moved, chat's screens, and an artifact's and a datastore's
+// listeners told it as their domains' own reset — a movement naming nothing,
+// which they already read as "everything decided from these rows may have
+// moved": every room re-read and decided again, and every remembered verdict
+// on the artifact origin forgotten.
+func (e *Engine) liveGap(domains []string) {
+	for _, domain := range domains {
+		switch domain {
+		case chatlet.Domain{}.Name():
+			e.chatGap()
+		case artifactsdomain.Domain{}.Name():
+			e.artifactsListeners.tell([]artifactsdomain.Moved{artifactsdomain.Reset()})
+		case artifactdata.Domain{}.Name():
+			e.artifactDataListeners.tell([]artifactdata.Moved{artifactdata.ResetMove()})
+		default:
+			e.inboxGap(domain)
+		}
+	}
 }
 
 // liveListening reports whether anything on this node hears what any of its
@@ -831,7 +1013,7 @@ func (e *Engine) armLiveRelay(ctx context.Context) error {
 		return nil
 	}
 	relay := newLiveRelay(e.id, e.backends.Queue, e.relayWire, e.dataRoster,
-		e.local.faultedUnasked, e.liveListening, e.deliverLive, e.liveGap)
+		liveDomains(), e.local.outOfService, e.liveListening, e.deliverLive, e.liveGap)
 	stop, err := relay.serve(ctx)
 	if err != nil {
 		return fmt.Errorf("engine: serve the live relay: %w", err)

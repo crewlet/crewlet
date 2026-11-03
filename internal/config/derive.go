@@ -1,10 +1,6 @@
 package config
 
-import (
-	"slices"
-
-	"github.com/crewlet/crewlet/internal/org"
-)
+import "github.com/crewlet/crewlet/internal/org"
 
 // Derived is the hierarchy the engine derives from a company document, as
 // data: every conclusion a reader of the document would otherwise have to
@@ -134,6 +130,17 @@ type DerivedUnit struct {
 // effective lead, the unit chain. Nothing here decides a rule of its own. It
 // does not validate: a document with problems still has a hierarchy, and a
 // person fixing those problems needs to see it.
+//
+// THROUGH ONE [org.Index] of that organization, whose answers are the chart's
+// own methods' (held so by org's TestTheIndexAnswersWhatTheChartDoes): each of
+// those methods walks the chart's every seat, so asked of every seat and unit
+// they made a derivation seats², and it is drawn on every configuration
+// write's answer and every read of the organization projection. Measured
+// (BenchmarkDerivingTheHierarchy, four vCPUs of a 2.8 GHz Xeon under a load
+// average near 15), the organization's build included: 14–16 ms and 5.1 MB
+// for 330 units and 930 seats and 51–72 ms and 17 MB for 1 100 units and
+// 3 100, against 95–126 ms and 44 MB and 1.1–1.2 s and 450 MB through the
+// chart's methods — what is left is linear, most of it deriving handles.
 func Derive(c *Company) Derived {
 	o, x := c.organization()
 	return deriveFrom(o, x)
@@ -160,6 +167,7 @@ func DeriveFrom(o *org.Organization) Derived {
 // deriveFrom is the one derivation. `paths` is the document index, or nil for
 // an organization nobody authored a path for.
 func deriveFrom(o *org.Organization, paths *identityIndex) Derived {
+	chart := o.Index()
 	var out Derived
 	at := func(seat *org.Role) Path {
 		if paths == nil {
@@ -204,26 +212,24 @@ func deriveFrom(o *org.Organization, paths *identityIndex) Derived {
 			moved := home != nil && len(at(r)) > 0 && at(r)[0] == "roles"
 			seat.PlacedByRef = &moved
 		}
-		if manager := o.Manager(r); manager != nil {
+		if manager := chart.Manager(r); manager != nil {
 			seat.Manager = manager.Handle()
 		}
-		for m := range o.AllRoles() {
-			// BY HANDLE, which is what a normalized manages list holds: an
-			// authored entry names a seat by handle, and a unit key has been
-			// expanded into the handles in it.
-			if slices.Contains(m.Manages, r.Handle()) {
-				seat.Managers = append(seat.Managers, m.Handle())
-			}
+		// BY HANDLE, which is what a normalized manages list holds: an
+		// authored entry names a seat by handle, and a unit key has been
+		// expanded into the handles in it ([org.Index.Managers]).
+		for _, m := range chart.Managers(r) {
+			seat.Managers = append(seat.Managers, m.Handle())
 		}
-		for _, report := range o.Reports(r) {
+		for _, report := range chart.Reports(r) {
 			seat.Reports = append(seat.Reports, report.Handle())
 		}
 		for _, handle := range r.AutoManaged {
-			if report := o.Role(handle); report != nil {
+			if report := chart.Role(handle); report != nil {
 				seat.AutoReports = append(seat.AutoReports, report.Handle())
 			}
 		}
-		for _, u := range o.UnitChainFor(r) {
+		for _, u := range chart.UnitChainFor(r) {
 			seat.OnboardingChain = append(seat.OnboardingChain, u.Name)
 		}
 		out.Seats = append(out.Seats, seat)
@@ -238,7 +244,7 @@ func deriveFrom(o *org.Organization, paths *identityIndex) Derived {
 			Channel:          u.Channel,
 			ChannelInherited: u.DeclaredChannel == "" && u.Channel != "",
 		}
-		if lead := o.EffectiveLead(u); lead != nil {
+		if lead := chart.EffectiveLead(u); lead != nil {
 			unit.Lead = lead.Handle()
 			unit.LeadInherited = u.DeclaredLead == ""
 		}

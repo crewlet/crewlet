@@ -2,6 +2,7 @@ package svgsafe
 
 import (
 	"regexp"
+	"sync"
 )
 
 // ---- what a drawing draws -------------------------------------------------- //
@@ -61,7 +62,9 @@ type elementRef struct {
 }
 
 // coordinate is one number of path data or a points list.
-var coordinate = regexp.MustCompile(`[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?`)
+var coordinate = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?`)
+})
 
 // Open begins an element (SVG's spelling) of the drawing at line, inside the
 // element opened last and not yet closed. Its attributes follow ([Drawing.Attr]),
@@ -113,7 +116,7 @@ func (d *Drawing) refer(id string, kind refKind, line int) {
 // toward refusing.
 func (d *Drawing) vertices(val string) {
 	if at := d.current(); at >= 0 {
-		n := len(coordinate.FindAllStringIndex(val, -1))
+		n := len(coordinate().FindAllStringIndex(val, -1))
 		d.elems[at].vertices = max(d.elems[at].vertices, (n+1)/2)
 	}
 }

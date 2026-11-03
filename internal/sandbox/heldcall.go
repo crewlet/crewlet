@@ -74,14 +74,22 @@ import (
 // # The call it makes is a call of its round
 //
 // The resume makes the call on the engine host, not the job over its bridge,
-// and the write that records its result records the call itself beside every
-// call the round's jobs made ([HeldMade], [BridgeCall.Approved]): answered as
-// the tool answered it, its arguments and output left sealed on the held call.
-// Every reader of whether the turn replied reads the round's log — the
-// collection's own delivery check, a stop's or a loss's account of the turn,
-// a later round's earlier calls — and a call recorded nowhere but in the
-// sealed result read as a reply that never went out: a person told the agent
-// did not answer them, and the next turn invited to post it again.
+// and the call is recorded beside every call the round's jobs made ([HeldMade],
+// [BridgeCall.Approved]): answered as the tool answered it, its arguments and
+// output left sealed on the held call. Every reader of whether the turn
+// replied reads the round's log — the collection's own delivery check, a
+// stop's or a loss's account of the turn, a later round's earlier calls — and
+// a call recorded nowhere but in the sealed result read as a reply that never
+// went out: a person told the agent did not answer them, and the next turn
+// invited to post it again.
+//
+// The row and the log are two keys, written in no one step
+// ([PendingStore.RecordHeldResult]): the result goes on the row with the
+// call's entry ([HeldCall.Call]), and the call is appended to the log after
+// it, once by the held call's id ([BridgeCall.HeldID]). An append that never
+// landed loses nothing: an ending reads the call off the row
+// ([PendingStore.TurnLog]), and the reset that opens the next job carries it
+// to that job's opening on the row ([PendingRun.OwedCall]), which appends it.
 
 // The three answers every held call offers, as a [decision.Option] id the
 // person's answer names ([HeldDecision]).
@@ -143,11 +151,12 @@ type HeldMade struct {
 	Result string
 
 	// Call is the call as its round's log keeps it, in the shape every call
-	// a job made over its bridge takes ([PendingRun.BridgeCalls]): whether
+	// a job made over its bridge takes ([BridgeLog.Calls]): whether
 	// it failed, and who answered it — its origin, server, source and a
 	// refusal's class — as the surface that made it said. The store names
-	// it, places it and marks it approved; its arguments and output are
-	// never written beside it, since they ride the row sealed.
+	// it, places it, marks it approved and names its held call
+	// ([BridgeCall.HeldID]); its arguments and output are never written
+	// beside it, since they ride the row sealed.
 	Call BridgeCall
 }
 
@@ -241,6 +250,13 @@ type HeldCall struct {
 	// and empty for good where the node making it stopped first.
 	Result string    `json:"result,omitempty"`
 	MadeAt time.Time `json:"made_at,omitzero"`
+
+	// Call is the call as its round's log keeps it, written with the
+	// result ([PendingStore.RecordHeldResult]): what the log is appended
+	// after the result, and what the next job's opening appends where that
+	// append never landed ([OwedCall]). Its arguments and output are never
+	// here.
+	Call *BridgeCall `json:"call,omitempty"`
 
 	// Extra is every key of the section this build does not know: see
 	// wirekeys.go.

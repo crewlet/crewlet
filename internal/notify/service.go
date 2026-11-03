@@ -555,6 +555,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		RecipientEmail:       r.To.Email,
 		Agent:                party.AgentID.String(),
 		Sender:               r.Sender,
+		Writer:               r.Writer,
 		Subject:              r.Subject,
 		Body:                 Render(prompt, r.Inbound, reg),
 		FenceBoundary:        string(r.Fence),

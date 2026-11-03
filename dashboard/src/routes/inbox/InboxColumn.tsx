@@ -50,6 +50,8 @@ import {
   askPreview,
   askTexts,
   budgetLine,
+  changeWords,
+  isNoticeRow,
   moment,
   noticeText,
   noticeTitle,
@@ -369,6 +371,8 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
         ? { text: noticeTitle(row.notice), excerpt: said }
         : { text: noticeTitle(row.notice) };
     }
+    case "change":
+      return changeWords(row.notice);
   }
   return { text: "" };
 }
@@ -383,7 +387,7 @@ function qualifierOf(row: InboxRow): { word: string; danger: boolean } | null {
 
 /** When, as the row's end says it: back at a snooze's end, since a condition began. */
 function whenOf(row: InboxRow, now: number): string {
-  if (row.kind === "notice" && row.notice.snoozed && row.notice.snoozed_until) {
+  if (isNoticeRow(row) && row.notice.snoozed && row.notice.snoozed_until) {
     return `back ${moment(row.notice.snoozed_until, now)}`;
   }
   if (row.kind === "condition") return row.at ? `since ${moment(row.at, now)}` : "";
@@ -444,7 +448,7 @@ const InboxItem = memo(function InboxItem({
   const answered = row.kind === "answered" ? answerWords(row.answered, reader, index) : null;
   const done = settled !== undefined || answered !== null;
   const qualifier = done ? null : qualifierOf(row);
-  const unread = row.kind === "notice" && !row.notice.read && !row.notice.snoozed;
+  const unread = isNoticeRow(row) && !row.notice.read && !row.notice.snoozed;
   // WHAT WAS SAID: the answer this visit gave, or the one the engine recorded.
   const said = answered ?? (settled?.answer ? givenWords(settled.answer) : null);
   const texts = rowTexts(row);
@@ -471,7 +475,7 @@ const InboxItem = memo(function InboxItem({
       outcomeIcon={said ? <AnswerMark words={said} /> : undefined}
       outcomeTone="success"
       unread={unread}
-      actionable={row.kind !== "notice" && !done}
+      actionable={!isNoticeRow(row) && !done}
       done={done}
       doneLabel={settled?.label ?? (answered?.kind === "resolved" ? "Resolved" : "Answered")}
       selected={selected}
@@ -601,6 +605,14 @@ export function Badge({ row, who, size = 24 }: { row: InboxRow; who: Who | null;
     return (
       <span className="attention-icon inbox-badge" data-severity={row.item.severity}>
         <NamedGlyph name={row.item.icon} size="sm" />
+      </span>
+    );
+  }
+  // A CODE NOTICE is about a change, which the code host's own mark draws.
+  if (row.kind === "change") {
+    return (
+      <span className="attention-icon inbox-badge" aria-hidden="true">
+        <NamedGlyph name="code" size="sm" />
       </span>
     );
   }

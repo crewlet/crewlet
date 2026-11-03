@@ -29,8 +29,8 @@ import (
 //     that cannot decode a record saying this log was reanchored cannot
 //     certify any read over it either.
 //
-// The BARRIER is exempt the other way: it resolves to the framework's own
-// scope, which intersects nothing.
+// The BARRIER and the TRIMMED RECORD are exempt the other way: each resolves
+// to the framework's own scope, which intersects nothing.
 func TestOnlyAGateOrAReanchorEverProducesTheRootScope(t *testing.T) {
 	t.Parallel()
 
@@ -51,6 +51,9 @@ func TestOnlyAGateOrAReanchorEverProducesTheRootScope(t *testing.T) {
 		iamdomain.KindSweep: {iamdomain.SweepSubject(17),
 			iamdomain.BucketScope(17)},
 		iamdomain.KindBarrier: {iamdomain.BarrierSubject(),
+			iamdomain.RootScope()},
+		iamdomain.KindTrimmed: {iamdomain.TrimmedSubject(statelog.Position{
+			Generation: 1, Seq: 9}),
 			iamdomain.RootScope()},
 		iamdomain.KindEviction: {iamdomain.EvictionSubject("node-a"),
 			iamdomain.RootScope()},
@@ -324,6 +327,8 @@ func TestValidateRefusesAScopeAWriterCouldNotHaveMeant(t *testing.T) {
 		iamdomain.EvictionSubject("node-a"),
 		iamdomain.GenerationSubject(3),
 		iamdomain.BarrierSubject(),
+		iamdomain.TrimmedSubject(statelog.Position{
+			Generation: 1, Seq: 9}),
 	} {
 		if err := iamdomain.RootScope().Validate(subject); err != nil {
 			t.Errorf("%s was refused the root scope, which is the only honest "+

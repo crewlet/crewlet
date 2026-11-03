@@ -36,6 +36,7 @@ import { installWindow } from "~/testing.tsx";
 import { LiveSocket, Store, type AgentRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
@@ -173,10 +174,10 @@ async function mount(viewer: Record<string, unknown> = { login: "", owner: "", a
       </ViewerProvider>
     </ClientContext.Provider>,
   );
-  await act(async () => {
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
   act(() => LayoutObserver.settle());
+  // What the laid-out chart asks (the directory's listing) lands too.
+  await afterMicrotasks();
   return { asked, store };
 }
 
@@ -250,7 +251,6 @@ test.each([
 ])("a %s human seat's card says what holds it", async (_, holding, line) => {
   jane = holding;
   await mount({ ...OPERATOR, grants: ["admin"] });
-  await act(async () => {});
   const founder = card("Jane Founder");
   expect(caption("Jane Founder")).toBe(line);
   expect(founder.getAttribute("title")).toBe(`${line} · @jane`);
@@ -265,7 +265,6 @@ test.each([
 // gate the listing on Admin again and the tracker reader reads "Human seat".
 test("every signed-in reader reads who holds a human seat, and only an admin acts on it", async () => {
   await mount({ ...OPERATOR, grants: ["worklet"] });
-  await act(async () => {});
   expect(fetched).toContain("/iam/seats");
   expect(caption("Jane Founder")).toBe("Open seat");
   expect(controls("Jane Founder")).toEqual([]);
@@ -292,7 +291,6 @@ test("a directory that did not answer an administrator is said over the chart", 
     },
   );
   await mount(OPERATOR);
-  await act(async () => {});
   expect(screen.getByText("Couldn’t load who holds each seat.")).toBeTruthy();
   expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy();
   expect(caption("Jane Founder")).toBe("Human seat");
@@ -301,7 +299,6 @@ test("a directory that did not answer an administrator is said over the chart", 
 
   seatsRefused = null;
   await mount(OPERATOR);
-  await act(async () => {});
   expect(caption("Jane Founder")).toBe("Open seat");
   expect(screen.queryByText("Couldn’t load who holds each seat.")).toBeNull();
 });
@@ -314,7 +311,6 @@ test("a directory that did not answer an administrator is said over the chart", 
 // drop the grant check, and a line here goes red.
 test("a vacant human card offers Invite and Create in its menu to an administrator alone", async () => {
   await mount(OPERATOR);
-  await act(async () => {});
   // THE POINTER'S STRIP, out of the tab order, says which seat each control
   // is about; an agent's card draws none.
   expect(controls("Jane Founder")).toEqual([
@@ -342,7 +338,6 @@ test("a vacant human card offers Invite and Create in its menu to an administrat
   cleanup();
 
   await mount({ ...OPERATOR, grants: ["worklet"] });
-  await act(async () => {});
   const read = card("Jane Founder");
   expect(caption("Jane Founder")).toBe("Open seat");
   read.focus();
@@ -356,7 +351,6 @@ test("a vacant human card offers Invite and Create in its menu to an administrat
 // card itself does.
 test("the strip's Invite opens the invitation for that card's seat", async () => {
   await mount(OPERATOR);
-  await act(async () => {});
   const invite = [...chartCard(card("Jane Founder")).querySelectorAll("button")].find(
     (b) => b.getAttribute("aria-label") === "Invite someone as Jane Founder",
   )!;
@@ -371,7 +365,6 @@ test("an invited human card's menu cancels its invitation, and a held one has no
     invitation: { id: "inv-3", email: "jane@example.com", expires_at: "2031-05-08T09:00:00Z" },
   };
   await mount(OPERATOR);
-  await act(async () => {});
   const founder = card("Jane Founder");
   founder.focus();
   fireEvent.keyDown(founder, { key: "ContextMenu" });
@@ -387,7 +380,6 @@ test("an invited human card's menu cancels its invitation, and a held one has no
 
   jane = { holder: { person: "p-jane", kind: "person", login: "jane.doe", stage: "active" } };
   await mount(OPERATOR);
-  await act(async () => {});
   const held = card("Jane Founder");
   held.focus();
   fireEvent.keyDown(held, { key: "ContextMenu" });
@@ -569,9 +561,7 @@ function standCanvasAt(width: number): void {
  */
 async function settleChart(): Promise<void> {
   LayoutObserver.settle();
-  await act(async () => {
-    for (let i = 0; i < 3; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
   LayoutObserver.settle();
 }
 

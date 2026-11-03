@@ -11,7 +11,7 @@ import (
 // fully succeed" with the reason dropped whenever a report existed.
 func TestARunsReportSaysWhyItDidNotSucceed(t *testing.T) {
 	t.Parallel()
-	failed := runReport(Result{
+	failed := runReport(PendingRun{}, Result{
 		Text:  "Outcome: partial — the migration is written, the tests were not run",
 		Error: "the harness exited with status 137",
 	})
@@ -22,19 +22,19 @@ func TestARunsReportSaysWhyItDidNotSucceed(t *testing.T) {
 	}
 
 	// Said once: a reason that IS the report is not repeated as its own why.
-	same := runReport(Result{Text: "ran out of turns", Error: "ran out of turns"})
+	same := runReport(PendingRun{}, Result{Text: "ran out of turns", Error: "ran out of turns"})
 	if strings.Count(same, "ran out of turns") != 1 {
 		t.Errorf("a reason equal to the report was repeated:\n%s", same)
 	}
 
 	// A success carries no why, whatever an earlier stage left in Error.
-	ok := runReport(Result{Success: true, Text: "Outcome: succeeded", Error: "a warning"})
+	ok := runReport(PendingRun{}, Result{Success: true, Text: "Outcome: succeeded", Error: "a warning"})
 	if strings.Contains(ok, "Why it did not succeed") {
 		t.Errorf("a successful run was given a reason it failed:\n%s", ok)
 	}
 
 	// And a run with no report says its error, as it always did.
-	bare := runReport(Result{Error: "the harness produced no output"})
+	bare := runReport(PendingRun{}, Result{Error: "the harness produced no output"})
 	if !strings.Contains(bare, "Error: the harness produced no output") {
 		t.Errorf("a run with only an error reads:\n%s", bare)
 	}
@@ -46,7 +46,7 @@ func TestARunsReportSaysWhyItDidNotSucceed(t *testing.T) {
 // turn did.
 func TestARunsReportInstructsNobody(t *testing.T) {
 	t.Parallel()
-	got := runReport(Result{Success: true, Text: "Outcome: succeeded",
+	got := runReport(PendingRun{}, Result{Success: true, Text: "Outcome: succeeded",
 		DeliveredRefs: []string{"pr/42"}})
 	if !strings.HasPrefix(got, "The executor's run succeeded.") ||
 		!strings.Contains(got, "Delivered: pr/42") || !strings.Contains(got, "Outcome: succeeded") {

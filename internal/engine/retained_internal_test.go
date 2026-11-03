@@ -13,8 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -73,11 +73,11 @@ func retain(t *testing.T, e *Engine, b config.Bootstrap, why retentionCause,
 	ring := recordKeyring(&b)
 	switch why {
 	case retainedUnderUnknownKey:
-		ring = statelog.OneKey("rotated-in", "keyring-material-this-node-was-not-restarted-with")
+		ring = recordseal.OneKey("rotated-in", "keyring-material-this-node-was-not-restarted-with")
 	case retainedFromNewerBuild:
 		rec.V = iamdomain.RecordVersion + 1
 	}
-	signer, err := statelog.NewSigner(domain.Name(), ring)
+	signer, err := recordseal.NewSigner(domain.Name(), ring)
 	if err != nil {
 		t.Fatalf("signer: %v", err)
 	}

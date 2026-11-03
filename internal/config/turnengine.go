@@ -258,7 +258,7 @@ const (
 	// DefaultSessionBytesPerSeat is what an unset max_bytes_per_seat takes:
 	// SIXTY-FOUR MEBIBYTES. A captured session compresses to one or two
 	// mebibytes for a day's work and is bounded at thirty-two
-	// (executordomain.SessionMaxBytes), so 64 MiB holds a live turn's
+	// (executorkeep.SessionMaxBytes), so 64 MiB holds a live turn's
 	// session at that bound beside about twenty ordinary ones, or thirty to
 	// forty ordinary sessions alone — a month of one conversation's head a
 	// working day. (A live turn's capped session never needs the head it
@@ -273,7 +273,7 @@ const (
 	DefaultSessionBytesPerSeat int64 = 64 << 20
 
 	// SessionBytesPerSeatFloor is the least a seat may be given: ONE
-	// SESSION AT ITS BOUND, sealed (executordomain.SealedMaxBytes, a little
+	// SESSION AT ITS BOUND, sealed (executorkeep.SealedMaxBytes, a little
 	// over 32 MiB), rounded up to a whole mebibyte, so a capture the
 	// session bound admits is never one the budget refuses outright. A test
 	// in internal/executordomain holds the two together, since this package

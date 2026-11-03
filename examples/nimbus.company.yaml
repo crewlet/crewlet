@@ -592,12 +592,17 @@ integrations:
 tracker:
   backend: worklet
 
-  # Worklet's policy is one setting, and it is left at its default here:
-  # ``worklet: {inbox_retention_days: 365}``, a year.  It is the one
-  # horizon that deletes anything, and what it deletes is a DERIVED inbox
-  # row rather than the history it points at, which answers for ever.  The
-  # clock Worklet's dates mean is the company's own ``timezone`` at the top
-  # of this file.
+  # The clock Worklet's dates mean is the company's own ``timezone`` at
+  # the top of this file, and how long a person's inbox keeps Worklet's
+  # notices is the company's too: ``inbox``, below.
+
+# How long a person's inbox keeps a notice.  A person's inbox is every
+# native domain's notices under one set of rules, so the horizon that
+# ages it is the company's rather than any one domain's, and it is left at
+# its default here: ``inbox: {retention_days: 365}``, a year (30..3650).
+# It is the one horizon that deletes anything, and what it deletes is a
+# DERIVED inbox row rather than the history it points at, which answers
+# for ever.
 
 knowledge:
   backend: doclet
@@ -614,6 +619,52 @@ knowledge:
   # ``HOME``) are both left unset.  Both are reserved: excluded from search
   # and routing, and refused as a unit's own ``space``.
   # See docs/concepts/knowledge-system.md.
+
+# The engine's own git host, beside GitLab rather than instead of it: the
+# control-plane repositories stay where the engineering seats open their
+# merge requests (``integrations.gitlab`` above), and these two are hosted by
+# the engine itself, on its own log — a repository is rows every data node
+# holds, and each push's bytes are one object in the object store.
+#
+# Every activation reconciles this list: a name added is created, a changed
+# setting is settled, and a repository removed from it is DELETED —
+# restorable by declaring it again for ``deleted_retention_days`` (unset:
+# 7) — and purged after that, its name free again.  An owner is a unit (by
+# its id, or its name when it has none) or a seat (by its handle).  A
+# protection rule matches branches or tags by glob (``*`` one path
+# component, ``**`` any number); a ref no rule matches may be force-pushed
+# or deleted, so ``crewlet validate`` warns about a default branch left
+# unprotected.  ``direct_push: none`` freezes the refs it matches.
+# ``scratch`` is left unset: a seat's own repositories, ``<handle>.<slug>``,
+# which only its tools make, are at most 50 a seat (``max_per_seat``) and
+# deleted once idle for 7 days (``idle_days``) unless a live turn holds one.
+# ``checks`` is left unset too, and so the checks a repository defines in its
+# ``.crewlet/checks.yaml`` run in no box here: a check runs a change's own
+# code, so never in this catalogue's ``direct`` cell, and only in a
+# ``container`` or an ``e2b`` box — ``checks.run_in`` names one once the
+# catalogue configures it (an image, or ``e2b:``).
+#
+# ``identity_domain`` is the domain a commit the engine builds through a tool
+# spells its addresses in: its committer, ``Crewlet <engine@example.com>``,
+# and the author of a seat whose role states no email address,
+# ``<handle>@example.com``.  Unset is ``seats.invalid``, a name nobody owns.
+# See docs/concepts/code-host.md.
+code:
+  native: true
+  identity_domain: example.com
+  repos:
+    - name: nimbus-web
+      owner: {unit: Engineering}
+      description: The customer-facing web app.
+      protect:
+        - branch: main
+        - branch: release/*
+          direct_push: none
+    - name: infra
+      owner: {seat: agent-cto}
+      description: Deployment manifests for the Nimbus control plane.
+      protect:
+        - branch: main
 
 # All tool MCP servers live here.  Mattermost and GitLab are
 # ``shared: false`` templates — each agent gets its own stdio instance

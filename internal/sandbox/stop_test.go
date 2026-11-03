@@ -12,7 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -60,14 +60,14 @@ func watchStops(rig *coordRig) *stopSpies {
 		defer spies.mu.Unlock()
 		spies.ended = append(spies.ended, runID)
 	}
-	rig.coordinator.closeStopped = func(_ context.Context, run PendingRun) (executordomain.Ending, error) {
+	rig.coordinator.closeStopped = func(_ context.Context, run PendingRun, _ RunCalls) (executorkeep.Ending, error) {
 		spies.mu.Lock()
 		defer spies.mu.Unlock()
 		if spies.closeErr != nil {
-			return executordomain.Ending{}, spies.closeErr
+			return executorkeep.Ending{}, spies.closeErr
 		}
 		spies.closed = append(spies.closed, run)
-		return executordomain.Ending{Outcome: executordomain.OutcomeStopped, StoppedBy: run.Stop.By}, nil
+		return executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, StoppedBy: run.Stop.By}, nil
 	}
 	return spies
 }
@@ -864,11 +864,7 @@ func TestThePollLeavesARunWhoseEndingIsDecided(t *testing.T) {
 		t.Fatalf("DecideEnding = %v, %v", ok, err)
 	}
 	box := rig.provider.Box(running.SandboxID)
-	keepalives := func() int {
-		box.mu.Lock()
-		defer box.mu.Unlock()
-		return box.timeoutCalls
-	}
+	keepalives := func() int { return len(box.Timeouts()) }
 	before := keepalives()
 
 	if fired := rig.tick(); fired != 0 {

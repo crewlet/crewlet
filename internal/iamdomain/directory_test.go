@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -260,7 +261,7 @@ func TestARedemptionIsOneRecord(t *testing.T) {
 		t.Fatalf("read the redemption's record: %v (present %v)", err, ok)
 	}
 	body, verdict := rig.verifier.Open(payload)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		t.Fatalf("the redemption's record did not verify: %s", verdict)
 	}
 	env, err := iamdomain.DecodeEnvelope(body)

@@ -14,8 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -47,14 +45,27 @@ const (
 	SnapshotDonorsRequired = 2
 
 	// SnapshotFreeSpaceFactor is how much free space the snapshot volume
-	// must hold, as a multiple of the size of the replicated estate's file,
-	// which is what a take copies.
+	// must hold for the copy, as a multiple of the size of the replicated
+	// estate's file, which is what a take copies.
 	//
 	// The default puts a full copy on the SAME VOLUME as the live
 	// database, so a snapshot write that filled the disk would become a
 	// disk-full condition on the volume the applier is committing to —
 	// where the rows and the checkpoint commit together. The margin is
 	// what makes the loop refuse instead.
+	//
+	// THE LOG THE COPY HOLDS BACK IS ADDED to it, not left to the margin.
+	// A copy stops every checkpoint at its moment for its whole run, so the
+	// live file's write-ahead log grows by what the node writes meanwhile,
+	// on the file's own volume: by its write rate times the copy's run,
+	// which is the file's size over the rate the copy reads it. A tenth of
+	// the file covers that only while the node writes its log at under a
+	// tenth of the copy's rate — about 10 MB/s at the ~104 MB/s measured
+	// on the pinned driver — so the gate wants this multiple of the file
+	// PLUS what the last copy measured a copy holding back
+	// ([store.DB.CopyHoldsBack]), and the file's own volume, where the
+	// snapshots live elsewhere, room for that log alone. Before any copy
+	// has measured it, the tenth is what stands for it.
 	SnapshotFreeSpaceFactor = 1.1
 
 	// SnapshotChunkBytes and SnapshotTransferWindow size the transfer.
@@ -355,6 +366,11 @@ type Snapshotter struct {
 	deps SnapshotDeps
 	now  func() time.Time
 	log  *slog.Logger
+
+	// volumeFree measures what a volume has free: [store.VolumeFree], which
+	// only a case replaces (export_test.go), since what the machine running
+	// it has free is no condition a case can state.
+	volumeFree func(dir string) (int64, error)
 }
 
 // NewSnapshotter builds the loop, refusing a dependency set that could not
@@ -384,7 +400,7 @@ func NewSnapshotter(d SnapshotDeps) (*Snapshotter, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Snapshotter{deps: d, now: now, log: logger}, nil
+	return &Snapshotter{deps: d, now: now, log: logger, volumeFree: store.VolumeFree}, nil
 }
 
 // ErrSkipped reports a tick that took no snapshot, carrying the reason.
@@ -712,16 +728,33 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 				"refused by every joiner")
 	}
 
-	free, storeSize, err := s.space()
+	room, err := s.space()
 	if err != nil {
 		return err
 	}
-	if want := int64(float64(storeSize) * SnapshotFreeSpaceFactor); free < want {
+	// THE LOG THE COPY HOLDS BACK IS COUNTED WHERE THE COPY LANDS as well as
+	// on the live file's own volume: the default puts the two on one volume,
+	// and nothing tells two volumes of one pool apart for certain, so the
+	// snapshots' volume keeps room for it whether or not it is the live one.
+	// Where it is not, that asks no more of it than the log beyond the copy.
+	if want := int64(float64(room.size)*SnapshotFreeSpaceFactor) + room.held; room.free < want {
+		held := ""
+		if room.held > 0 {
+			held = fmt.Sprintf(", %d of it the write-ahead log the last copy measured a "+
+				"copy holding back while it runs", room.held)
+		}
 		return &ErrSkipped{Reason: SkipInsufficientSpace, Detail: fmt.Sprintf(
-			"%s has %d bytes free and a copy of a %d-byte store needs %d — the "+
+			"%s has %d bytes free and a copy of a %d-byte store needs %d%s — the "+
 				"default puts the copy on the same volume as the live database, "+
 				"so filling it would stop the applier committing",
-			s.deps.Dir, free, storeSize, want)}
+			s.deps.Dir, room.free, room.size, want, held)}
+	}
+	if room.liveFree < room.held {
+		return &ErrSkipped{Reason: SkipInsufficientSpace, Detail: fmt.Sprintf(
+			"the volume holding the replicated estate (%s) has %d bytes free, and a "+
+				"copy holds back %d bytes of its write-ahead log there while it runs, as "+
+				"the last copy measured — the applier commits to that volume, and would "+
+				"stop once the log filled it", room.liveDir, room.liveFree, room.held)}
 	}
 	return nil
 }
@@ -838,37 +871,45 @@ func (s *Snapshotter) rotate(ctx context.Context, keep string) {
 	}
 }
 
-// space is the snapshot volume's free bytes and the size of the replicated
-// estate's file, which is what a take copies.
-func (s *Snapshotter) space() (free, size int64, err error) {
+// snapshotRoom is what the gate weighs a take against: the snapshot volume's
+// free bytes, the replicated estate's file — which is what the copy writes, at
+// most — the write-ahead log a copy of it is expected to hold back on the
+// file's own volume ([store.DB.CopyHoldsBack]), and that volume's free bytes.
+type snapshotRoom struct {
+	free, size, held int64
+	liveFree         int64
+	liveDir          string
+}
+
+// space is what the gate weighs a take against, measured now.
+func (s *Snapshotter) space() (snapshotRoom, error) {
 	dir := s.deps.Dir
 	if _, statErr := os.Stat(dir); errors.Is(statErr, os.ErrNotExist) {
 		// The directory is created on the first take, so the volume to
 		// measure is its parent's.
 		dir = filepath.Dir(dir)
 	}
-	var fs unix.Statfs_t
-	// Its own name, like statErr above: the function's err is a named
-	// RESULT, and an inner `err` here would shadow it.
-	if statfsErr := unix.Statfs(dir, &fs); statfsErr != nil {
-		return 0, 0, fmt.Errorf("statelog: measure the free space on %s: %w", dir, statfsErr)
+	// FREE IS WHAT AN UNPRIVILEGED PROCESS MAY USE ([store.VolumeFree]),
+	// which is what this loop is.
+	free, err := s.volumeFree(dir)
+	if err != nil {
+		return snapshotRoom{}, fmt.Errorf("statelog: %w", err)
 	}
 	live, err := s.deps.File.DB()
 	if err != nil {
-		return 0, 0, fmt.Errorf("statelog: measure the replicated estate: %w", err)
+		return snapshotRoom{}, fmt.Errorf("statelog: measure the replicated estate: %w", err)
 	}
 	info, err := os.Stat(live.Path())
 	if err != nil {
-		return 0, 0, fmt.Errorf("statelog: measure the replicated estate: %w", err)
+		return snapshotRoom{}, fmt.Errorf("statelog: measure the replicated estate: %w", err)
 	}
-	// Bavail is what an unprivileged process may actually use, which is
-	// what this loop is: Bfree includes the reserve only root can reach.
-	//
-	// BOTH CONVERSIONS ARE LOAD-BEARING ACROSS THE RELEASE MATRIX, whatever
-	// this platform's linter says: Statfs_t.Bsize is int64 on linux and
-	// uint32 on darwin, and both darwin targets are release artefacts.
-	//nolint:unconvert // int64(fs.Bsize) is a no-op on linux and required on darwin
-	return int64(fs.Bavail) * int64(fs.Bsize), info.Size(), nil
+	liveDir := filepath.Dir(live.Path())
+	liveFree, err := s.volumeFree(liveDir)
+	if err != nil {
+		return snapshotRoom{}, fmt.Errorf("statelog: %w", err)
+	}
+	return snapshotRoom{free: free, size: info.Size(), held: live.CopyHoldsBack(info.Size()),
+		liveFree: liveFree, liveDir: liveDir}, nil
 }
 
 // newestSeq is the highest position any domain reached, which names the

@@ -370,7 +370,7 @@ type SessionProber interface {
 func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	history []ledger.Iteration,
 ) (turn.Work, turn.Surface, error) {
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
+	snapshot := r.executorUniverse(r.seatSnapshot())
 
 	// The submission tool is on the surface because it is how the executor
 	// says what it did. The harness calls it over the bridge, and the value it
@@ -532,7 +532,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 ) (turn.Work, turn.Surface, error) {
 	began := time.Now()
 	logged := bridgedLedger(bridgedCalls)
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
+	snapshot := r.executorUniverse(r.seatSnapshot())
 	var surface *tools.Surface
 	// A SUBMISSION CITES THE CARRIED RUN'S CALLS TOO: the relaunched run is
 	// the same round, and the collection judges its submission against
@@ -791,7 +791,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	called := bridgedLedger(inAdmissionOrder(bridged))
 	held := Resume{State: state, Continued: continued}.parked()
 
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
+	snapshot := r.executorUniverse(r.seatSnapshot())
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
@@ -951,7 +951,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// never the run between them, which is each launch's own fact, on its
 	// types.ExecutorCollected. See types.AgentPhaseCompleted.
 	began := time.Now()
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
+	snapshot := r.executorUniverse(r.seatSnapshot())
 	logged := bridgedLedger(bridged)
 
 	var surface *tools.Surface

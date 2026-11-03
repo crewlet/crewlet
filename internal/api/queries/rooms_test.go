@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -37,6 +38,10 @@ type memorySandbox struct{}
 
 func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return nil, nil
+}
+
+func (memorySandbox) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+	return sandbox.BridgeLog{}, nil
 }
 
 func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
@@ -50,8 +55,11 @@ func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, err
 //
 // EVERY CALL SHAPE: the `useQuery` hook a screen renders from, the
 // `useSearchQuery` hook every ranked search is asked through (it applies the
-// search bound before `useQuery`), and the direct `socket.query` a pager or an
-// action uses. Read by [clientsource.Calls], so a
+// search bound before `useQuery`), the `useCodeQuery` hook every code question
+// is asked through over REST (lib/useCodeQuery.ts: never the socket's
+// in-flight slots), and the direct `query` a pager or an action uses — the
+// socket's, or the code questions' REST one for an older page. Read by
+// [clientsource.Calls], so a
 // call a formatter wrapped across lines, one with type arguments and one
 // inside markup are the calls they are. The sweep this replaced was a regular
 // expression whose name class once could not match `a2a_channels` and whose
@@ -63,12 +71,13 @@ func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, err
 // A kind handed over in anything but a string literal is invisible here —
 // [clientsource.Calls] can read nothing else — and that is safe only because
 // the dashboard refuses one: `app/source.test.ts`'s "every read names its
-// question" requires a literal at every `useQuery(`, `useSearchQuery(` and
-// `query(` call, bare or as a method, which is every call Calls is asked for
-// below.
+// question" requires a literal at every `useQuery(`, `useSearchQuery(`,
+// `useCodeQuery(` and `query(` call, bare or as a method, which is every call
+// Calls is asked for below.
 func roomQueries(t *testing.T) map[string][]string {
 	t.Helper()
-	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "useSearchQuery", "query")
+	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "useSearchQuery", "useCodeQuery",
+		"query")
 	if err != nil {
 		// FAILS rather than skips. The dashboard source is committed, so it
 		// is always in a checkout — and a skip here is indistinguishable
@@ -97,7 +106,7 @@ func everySeam(t *testing.T) queries.Sources {
 	return queries.Sources{
 		State:    &livestate.LiveState{},
 		Events:   eventfan.Solo("node-a", &store.EventLog{}),
-		Usage:    &store.DB{},
+		Usage:    usage.Reader{Estate: &store.DB{}},
 		Company:  companySource(t, cfg),
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),
@@ -138,6 +147,9 @@ func everySeam(t *testing.T) queries.Sources {
 		// THIS NODE'S SIGN-IN POSTURE, which internal/api fills from the
 		// Bootstrap on every node that serves the API.
 		SignIn: &queries.SignInPolicy{},
+		// THE CODE HOST'S ROWS, which internal/api fills from the code
+		// surface on every node that serves the API.
+		Code: &stubCode{},
 		// THE COMPANY'S OWN CONVERSATION. Three seams rather than one:
 		// a search is asked for a viewer rather than over rooms, and the
 		// badges are coordination's rather than the log's — so a surface
@@ -421,24 +433,73 @@ func registeredKinds(t *testing.T) []string {
 // answer nobody calls is code with tests, no readers, and no way to notice
 // it stopped being right.
 //
-// NO EXCEPTIONS. This carried a map of kinds "read by name from somewhere that
-// is not a room" — `stream` through a header poll in a file the React rewrite
-// deleted, `config_entities` through a guide — and both had long since gained
-// a room that reads them, so the map was consulted for nothing and excused
-// nothing. An exemption nobody reaches is how the next unread answer gets
-// waved through with a reason that stopped being true; a kind that genuinely
-// has no room reader is a decision this gate should make someone take in the
-// open.
+// NO SILENT EXCEPTIONS. This carried a map of kinds "read by name from
+// somewhere that is not a room" — `stream` through a header poll in a file the
+// React rewrite deleted, `config_entities` through a guide — and both had long
+// since gained a room that reads them, so the map was consulted for nothing and
+// excused nothing. An exemption nobody reaches is how the next unread answer
+// gets waved through with a reason that stopped being true; a kind that
+// genuinely has no room reader is a decision this gate should make someone
+// take in the open. Those decisions are [readOutsideTheDashboard], held both
+// ways here so none outlives its reason: a kind it names that a room reads is
+// red until its line goes, and so is one this build no longer answers.
 func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 	t.Parallel()
 	asked := roomQueries(t)
-	for _, kind := range registeredKinds(t) {
-		if _, ok := asked[kind]; !ok {
+	answered := registeredKinds(t)
+	for _, kind := range answered {
+		rooms, roomReads := asked[kind]
+		command, outside := readOutsideTheDashboard[kind]
+		switch {
+		case roomReads && outside:
+			t.Errorf("%s asks for %q now, so readOutsideTheDashboard's line for it "+
+				"(%s) excuses nothing — delete it", strings.Join(rooms, " and "), kind, command)
+		case !roomReads && !outside:
 			t.Errorf("this build answers %q and no room asks for it — either a "+
 				"reader was lost, or the answer should go with whatever used to "+
 				"call it", kind)
 		}
 	}
+	for kind, command := range readOutsideTheDashboard {
+		if !slices.Contains(answered, kind) {
+			t.Errorf("readOutsideTheDashboard names %q (%s), which this build does "+
+				"not answer — delete its line", kind, command)
+		}
+	}
+}
+
+// readOutsideTheDashboard are the questions no room reads and something
+// outside the dashboard does, over their REST paths, each beside what reads
+// it: who read a unit's repository, an admin's script — the request the code
+// guide prints (docs/guides/code.md, "Who read a unit's repository") — whose
+// assistant asks the operator tool `code_repo_readers` for the same answer
+// (builtin.ReadersOf). The decision [TestEveryQueryThisServerAnswersHasAReader]
+// asks to be taken in the open, and held both ways there: the first room that
+// reads one of these deletes its line, as the Code workspace's Repositories
+// and Pushes deleted the lines of `code_repos` and `code_pushes`, Code ›
+// Changes and its peek those of `code_changes` and `code_change`, a change's
+// page its routing's, `code_change_routing`, a repository's own page those of
+// `code_repo` (which `crewlet code status -repo` reads too) and of its
+// content, `code_refs`, `code_tree`, `code_blob`, `code_log` and
+// `code_blame`, and a commit's page and a comparison those of `code_commit`,
+// `code_diff` and `code_compare`, a seat's Code tab and My work's Reviews
+// that of `code_reviews`, and Code › Queue, Code › Checks and the checks
+// tabs those of a repository's merge queues and its checks, `code_queue`,
+// `code_checks`, `code_check` and `code_check_log`. And the tracker's own
+// inbox, `work_inbox`, which the Inbox reads composed with the code host's
+// through `inbox` and a script and a seat's tool read alone. And Code ›
+// Search and ⌘K's Code scope deleted the line of a search of the
+// repositories' lines, `code_search`, which a script read alone on the
+// path api-endpoints.md prints ("GET /code/search").
+var readOutsideTheDashboard = map[string]string{
+	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
+	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
+	// with the code host's through `inbox` since that question landed: it
+	// stays the tracker's question and its tool's (`work_inbox`, a seat's and
+	// a person's assistant's), read by a script on the path the reference
+	// prints.
+	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
+		"own tool work_inbox",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.

@@ -17,6 +17,12 @@
  * seconds would multiply the list's cost by its length, and the first page is
  * where a change lands for a reader looking at the top.
  *
+ * THE SHARED PAGER (`lib/usePaged.ts`), not one of this file's own: the next
+ * page starts after the last task the first one was answered with, and a task
+ * filed or moved into its range pushes that one off the foot of the polled
+ * first page — onto neither page, a hole drawn as continuity. The pager joins
+ * a moved first page to the pages held before the list is drawn again.
+ *
  * # A row is drawn once
  *
  * A keyset cursor resumes after the last row it was minted on, so a task that
@@ -29,16 +35,10 @@
  * a link to the rest), so for them this is `useQuery` and nothing more.
  */
 
-import { useCallback, useMemo, useState } from "react";
 import { useClient } from "~/lib/store-hooks.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
-import {
-  queryErrorCode,
-  type LogRefusal,
-  type QueryRefusal,
-  type WorkItemsAnswer,
-  type WorkSummary,
-} from "~/protocol/index.ts";
+import type { LogRefusal, QueryRefusal, WorkItemsAnswer, WorkSummary } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
 export interface PagedItems {
@@ -50,10 +50,10 @@ export interface PagedItems {
   refusal: QueryRefusal | LogRefusal | null;
   /** Every row loaded, the first page's and every page after it, drawn once. */
   rows: WorkSummary[];
-  /** Where the next page starts, or "" when the list is whole. */
-  next: string;
-  /** Ask for the next page. A no-op when there is none or one is in flight. */
-  more: () => void;
+  /** Whether a page after every one loaded exists. */
+  more: boolean;
+  /** Ask for it. A no-op when there is none or one is in flight. */
+  loadMore: () => void;
   /** A page is in flight. */
   paging: boolean;
   /** Why the last "Load more" failed, until the next one. */
@@ -61,21 +61,10 @@ export interface PagedItems {
   refetch: () => void;
 }
 
-/** Rows from several pages, each task once, first occurrence kept. */
-export function mergePages(pages: readonly (readonly WorkSummary[])[]): WorkSummary[] {
-  const seen = new Set<string>();
-  const out: WorkSummary[] = [];
-  for (const page of pages) {
-    for (const row of page) {
-      if (seen.has(row.id)) continue;
-      seen.add(row.id);
-      out.push(row);
-    }
-  }
-  return out;
-}
-
-const NO_PAGES: WorkItemsAnswer[] = [];
+/** A page's tasks, each task's id, and the cursor to the page after. */
+const itemsOf = (a: WorkItemsAnswer) => a.items ?? [];
+const itemIdOf = (row: WorkSummary) => row.id;
+const itemsAfter = (a: WorkItemsAnswer) => a.next_cursor ?? "";
 
 export function usePagedItems(
   params: Record<string, unknown>,
@@ -83,54 +72,28 @@ export function usePagedItems(
 ): PagedItems {
   const { socket } = useClient();
   const first = useQuery("work_items", params, { pollMs: options.pollMs });
-  // THE QUESTION THE HELD PAGES BELONG TO. Its serialisation, because the
-  // params object is rebuilt by the screen and only its content is the list.
-  const question = JSON.stringify(params);
-  const [held, setHeld] = useState<{ question: string; pages: WorkItemsAnswer[] } | null>(null);
-  const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<QueryErrorCode | null>(null);
-  const pages = held && held.question === question ? held.pages : NO_PAGES;
-  const last = pages.length > 0 ? pages[pages.length - 1] : first.data;
-  const next = last?.next_cursor ?? "";
-
-  const more = useCallback(async () => {
-    if (!next || paging) return;
-    setPaging(true);
-    setPageError(null);
-    try {
-      // AT THIS TAB'S READ FLOOR, like every other ask: a page read from a
-      // node behind a write this tab just made would draw the task as it was.
-      const page = await socket.query(
-        "work_items",
-        withFloor("work_items", JSON.stringify({ ...params, cursor: next })),
-      );
-      setHeld((prev) =>
-        prev && prev.question === question
-          ? { question, pages: [...prev.pages, page] }
-          : { question, pages: [page] },
-      );
-    } catch (err) {
-      setPageError(queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed");
-    } finally {
-      setPaging(false);
-    }
-  }, [socket, params, question, next, paging]);
-
-  const rows = useMemo(
-    () => mergePages([first.data?.items ?? [], ...pages.map((p) => p.items ?? [])]),
-    [first.data, pages],
+  const paged = usePaged(
+    first,
+    params,
+    // AT THIS TAB'S READ FLOOR, like every other ask: a page read from a node
+    // behind a write this tab just made would draw the task as it was.
+    (cursor) =>
+      socket.query("work_items", withFloor("work_items", JSON.stringify({ ...params, cursor }))),
+    itemsOf,
+    itemIdOf,
+    itemsAfter,
   );
 
   return {
-    data: first.data,
-    loading: first.loading,
-    error: first.error,
-    refusal: first.refusal,
-    rows,
-    next,
-    more: () => void more(),
-    paging,
-    pageError,
-    refetch: first.refetch,
+    data: paged.answers[0] ?? null,
+    loading: paged.loading,
+    error: paged.error,
+    refusal: paged.refusal,
+    rows: paged.items,
+    more: paged.more,
+    loadMore: paged.next,
+    paging: paged.paging,
+    pageError: paged.pageError,
+    refetch: paged.refetch,
   };
 }

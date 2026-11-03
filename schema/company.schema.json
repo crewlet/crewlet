@@ -291,6 +291,783 @@
         "null"
       ]
     },
+    "Code": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "$ref": "#/$defs/CodeChecks"
+        },
+        "deleted_retention_days": {
+          "description": "How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7.",
+          "maximum": 365,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "identity_domain": {
+          "anyOf": [
+            {
+              "maxLength": 189,
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@<domain>, and its author's, <handle>@<domain>, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "limits": {
+          "$ref": "#/$defs/CodeLimits"
+        },
+        "merge_by_floor": {
+          "description": "The least a merge into any protected branch needs, whatever its rules say: writers (unset) — anybody who may write to the repository — maintainers, or persons, a person and never a seat. A merge is held to the stricter of this and the merge_by of every rule matching its branch; a rule with no merge gate reads as writers.",
+          "enum": [
+            "writers",
+            "maintainers",
+            "persons",
+            "",
+            null
+          ]
+        },
+        "native": {
+          "description": "Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node that has run no company yet starts the code host at the activation that hands it a company setting it; on every other node, whatever backends its first company named, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "remote_credentials": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CodeRemoteCredential"
+          },
+          "description": "The variables a repository's mirror or import may name for its credential, by the variable's name, each with the hosts its value may be sent to: a mirror's or an import's credential — in code.repos, or one a person asks for — is refused unless it is the ${NAME} of a variable declared here for its URL's host, and the code host dials no other. At most 64. The value is the secret store's or the environment's, as ever: this table holds names and hosts, never a token.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "repos": {
+          "description": "The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again.",
+          "items": {
+            "$ref": "#/$defs/CodeRepo"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "scratch": {
+          "$ref": "#/$defs/CodeScratch"
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeChecks": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_run_in": {
+          "description": "The cells a repository's checks file may name in a check's run_in, each once: container or e2b. Unset is the one run_in resolves to; set, it holds that one.",
+          "items": {
+            "enum": [
+              "container",
+              "e2b",
+              "",
+              null
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ],
+            "x-crewlet-secret": true
+          },
+          "description": "The secrets a check may be given: a check is given exactly the entries its checks file names in its env. Each key a variable name — a letter or an underscore, then letters, digits and underscores, at most 128 bytes — and none the engine sets in a box itself. ${VAR} supported, resolved when a check's box is made.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "max_timeout_seconds": {
+          "description": "How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3000 — an e2b box on the smallest plan's one-hour session, with ten minutes of it for the box's setup.",
+          "maximum": 21600,
+          "minimum": 60,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "remote": {
+          "$ref": "#/$defs/CodeChecksRemote"
+        },
+        "run_in": {
+          "description": "The cell a check whose checks file names none runs in: container — a container on a git node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct is refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host.",
+          "enum": [
+            "container",
+            "e2b",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeChecksRemote": {
+      "additionalProperties": false,
+      "properties": {
+        "box_hours_per_day": {
+          "description": "How many hours of remote (e2b) box time the company spends on checks in a UTC day, each box charged a minute at a time while it runs: 0..100000; 0 starts none. Once the day's hours are spent, a new remote check waits queued until the next UTC midnight; a box already running runs to its own end. Unset is 192 (provisional): one merge queue saturated all day at ten-minute checks.",
+          "maximum": 100000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_running": {
+          "description": "How many remote (e2b) check boxes the company runs at once, whichever git node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit.",
+          "maximum": 1024,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeHumanPath": {
+      "additionalProperties": false,
+      "properties": {
+        "glob": {
+          "description": "A glob over the repository's tree, from its root, as a path owner's paths are written: * within one component, ** whole components, at most 128 bytes.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "unless": {
+          "description": "The path classes — whitespace_only, comment_only — that let a change through without the person's approval when every path this glob matched is of one. Each once.",
+          "items": {
+            "enum": [
+              "whitespace_only",
+              "comment_only",
+              "",
+              null
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeImportSource": {
+      "additionalProperties": false,
+      "properties": {
+        "credential": {
+          "description": "What the code host fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "url": {
+          "description": "The repository it is filled from: an https URL with no user, query or fragment, at most 1024 bytes.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeLanding": {
+      "additionalProperties": false,
+      "properties": {
+        "batch": {
+          "description": "How many waiting changes one candidate takes: 1..8; unset is 2.",
+          "maximum": 8,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "depth": {
+          "description": "How many candidates the queue tests at once: 1..8; unset is 4.",
+          "maximum": 8,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_blob_bytes": {
+          "description": "The largest file (blob) a push may carry, at most max_push_bytes; unset is 50 MiB. A larger binary belongs in Worklet's files.",
+          "maximum": 1073741824,
+          "minimum": 1024,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_push_bytes": {
+          "description": "The largest pack one push may send; unset is 1 GiB, the most it may be.",
+          "maximum": 1073741824,
+          "minimum": 1048576,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pushes_per_seat_day": {
+          "description": "How many pushes one seat may land in one day on the company's calendar, every repository together: 1..100000; unset is 1000. A runaway bound on what a seat pushing in a loop costs the code log, not a budget; a person's pushes are never counted.",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "repo_max_bytes": {
+          "description": "The most packed bytes one repository may hold, at least max_push_bytes; unset is 20 GiB. Every git node serving a repository caches it whole.",
+          "maximum": 1099511627776,
+          "minimum": 1048576,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeMirrorSource": {
+      "additionalProperties": false,
+      "properties": {
+        "credential": {
+          "description": "What the code host fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "url": {
+          "description": "The repository it follows: an https URL with no user, query or fragment, at most 1024 bytes.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeMirrorTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "as": {
+          "description": "The seat whose identity the push carries at that host, by its handle: a seat that reads this repository — a person's seat reads every one, an agent's what its grant does — never a bot.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "credential": {
+          "description": "What the code host pushes with: one whole ${VAR} reference to the as seat's own token at that host — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "refs": {
+          "description": "The refs it pushes, at most 64 patterns of refs/heads/<glob> and refs/tags/<glob>, each once; unset is the default branch and refs/tags/*. No pattern may reach a seat's own branches under refs/heads/seats/.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "The repository it pushes to: an https URL with no user, query or fragment, at most 1024 bytes.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "url",
+        "credential",
+        "as"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeOwner": {
+      "additionalProperties": false,
+      "properties": {
+        "seat": {
+          "description": "A seat, by its handle. Exactly one of unit and seat.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "unit": {
+          "description": "A unit of the chart: its id, or its name where it has none. Exactly one of unit and seat.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodePathOwner": {
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "description": "The paths it owns: 1 to 32 globs over the repository's tree, each relative to its root, at most 128 bytes. A component of * matches one component and * within one any run of characters but /; ** matches whole components (zero or more, one or more as the last), so docs/** is everything inside docs and **/*.go every Go file; a glob holding a * has at most eight components, and a glob with no * matches only that path. ?, [, \\ and a leading ! are refused: * is the one metacharacter. Each glob once.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "seat": {
+          "description": "A seat, by its handle. Exactly one of unit and seat.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "unit": {
+          "description": "A unit of the chart: its id, or its name where it has none — its effective lead is whom a review is asked of. Exactly one of unit and seat.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeProtection": {
+      "additionalProperties": false,
+      "properties": {
+        "agents_edit_checks": {
+          "description": "Let a seat's approval stand for a change to .crewlet/** — where a repository's checks are defined — which, on a rule requiring checks, otherwise waits for a person's.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "allow_delete": {
+          "description": "Let a push delete a matching ref.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "allow_force": {
+          "description": "Let a push move a matching branch to a commit that does not descend from it. Not on a tag rule: a tag never moves.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "approvals": {
+          "description": "How many counted approvals a merge waits for: none (unset) or one.",
+          "enum": [
+            "none",
+            "one",
+            "",
+            null
+          ]
+        },
+        "approvals_unless": {
+          "description": "The path classes that exempt a change from those approvals: a change whose every touched path is of a class listed — whitespace_only, comment_only — waits for none. Each once.",
+          "items": {
+            "enum": [
+              "whitespace_only",
+              "comment_only",
+              "",
+              null
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "branch": {
+          "description": "A branch name or glob: * matches one path component, ** any number, and a name with no * matches only itself. Exactly one of branch and tag.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "checks": {
+          "description": "At most 32 checks a merge waits for, by name: a lowercase letter or digit, then up to 63 more of them, '.', '_' and '-'. Each once.",
+          "items": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+              },
+              {
+                "const": ""
+              }
+            ],
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "delete_source": {
+          "description": "Whether a merge deletes its change's source branch in the record that merges it: seats (unset), a branch in a seat's own namespace, or none.",
+          "enum": [
+            "seats",
+            "none",
+            "",
+            null
+          ]
+        },
+        "direct_push": {
+          "description": "Who may push to a matching ref directly: persons (unset), a person and never a seat, whose push is refused; or none, which freezes it — nothing pushes to it.",
+          "enum": [
+            "persons",
+            "none",
+            "",
+            null
+          ]
+        },
+        "human_paths": {
+          "description": "At most 32 globs of the repository's paths a change touching which waits for a person's approval, whatever else approved it. Each glob once.",
+          "items": {
+            "$ref": "#/$defs/CodeHumanPath"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "landing": {
+          "$ref": "#/$defs/CodeLanding",
+          "description": "How the branch's queue lands a change: each field its default when unset."
+        },
+        "merge_by": {
+          "description": "Who may merge into a matching branch: writers (unset) — anybody who may write to the repository — maintainers, or persons, a person and never a seat. The stricter of this and code.merge_by_floor holds. Merge gate fields are refused on a tag rule: no merge reaches a tag.",
+          "enum": [
+            "writers",
+            "maintainers",
+            "persons",
+            "",
+            null
+          ]
+        },
+        "owners_approve": {
+          "description": "Make the repository's path owners gating: a change waits for one counted approval from somebody eligible for every owned glob it touches.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "tag": {
+          "description": "A tag name or glob, as for branch. Exactly one of branch and tag.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeRemoteCredential": {
+      "additionalProperties": false,
+      "properties": {
+        "hosts": {
+          "description": "The hosts this variable's value may be sent to, each a host name or an IP address with an optional :port (github.com, gitlab.example.com:8443), matched whole against a mirror's or an import's URL, its port included (443 where none is written): at least one, at most 16, each once.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "hosts"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeRepo": {
+      "additionalProperties": false,
+      "properties": {
+        "archived": {
+          "description": "Read-only: still fetched and cloned, and takes no push.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "default_branch": {
+          "description": "The branch a clone checks out; unset is main.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "One paragraph, at most 1024 bytes.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "import": {
+          "$ref": "#/$defs/CodeImportSource",
+          "description": "Fills it, when it is created, from a repository at another host: it takes no push until its import is done. Read only by its create: a repository that exists already ignores it."
+        },
+        "mirror_from": {
+          "$ref": "#/$defs/CodeMirrorSource",
+          "description": "Makes it a pull mirror of a repository at another host: it is imported from there first — when it is created, and when an existing repository is given one or moved to another url — then moves only by the code host's syncs from it, and takes no push and no change of its own."
+        },
+        "mirror_to": {
+          "$ref": "#/$defs/CodeMirrorTarget",
+          "description": "Makes it a push mirror: the code host pushes the refs it names to a repository at another host, as the seat named by as."
+        },
+        "name": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "The repository's name: one label of lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 63 — no dot, which only a seat's own scratch repository's name carries. It is the address a repository is cloned by, so renaming one here deletes it and creates another.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "owner": {
+          "$ref": "#/$defs/CodeOwner"
+        },
+        "path_owners": {
+          "description": "Who owns which of the repository's paths, at most 64 owners and 256 KiB as the code log records them: a change touching an owner's paths asks it for a review. A path owner is asked, never granted: it reads and pushes what the chart lets it, as before.",
+          "items": {
+            "$ref": "#/$defs/CodePathOwner"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "protect": {
+          "description": "The rules a push to the refs they match is held to, at most 64. A ref no rule matches may be force-pushed or deleted by anybody who may push.",
+          "items": {
+            "$ref": "#/$defs/CodeProtection"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "search": {
+          "description": "How code search reads it: indexed (unset) — from an index of its default branch, by a search across the company's repositories as well as one naming it — or grep — with git grep, and only by a search naming it.",
+          "enum": [
+            "indexed",
+            "grep",
+            "",
+            null
+          ]
+        },
+        "visibility": {
+          "description": "Who may read it besides persons: company (unset) — every seat — or unit — the owning unit's members, its leads and the owning seat.",
+          "enum": [
+            "company",
+            "unit",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeScratch": {
+      "additionalProperties": false,
+      "properties": {
+        "idle_days": {
+          "description": "How many days a seat's scratch repository may go with no push, rename, settings change or restore before it is deleted — restorable for deleted_retention_days, like any deleted repository. A repository a live turn has named is never deleted while the turn lasts. 1..365; unset is 7.",
+          "maximum": 365,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_per_seat": {
+          "description": "How many scratch repositories one seat may hold, every one it owns short of purged — a deleted one counts until its purge frees its room. 0 lets no seat create one; 0..1000; unset is 50.",
+          "maximum": 1000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "CompanyArtifacts": {
       "additionalProperties": false,
       "properties": {
@@ -1280,6 +2057,24 @@
         "null"
       ]
     },
+    "Inbox": {
+      "additionalProperties": false,
+      "properties": {
+        "retention_days": {
+          "description": "How long a person's inbox keeps a notice (default 365, 30..3650). The history it points at is untouched.",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Integrations": {
       "additionalProperties": false,
       "properties": {
@@ -1636,7 +2431,7 @@
       "additionalProperties": false,
       "properties": {
         "image": {
-          "description": "Container image with the harness installed. Required for run_in: container.",
+          "description": "Container image: with the harness installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container.",
           "type": [
             "string",
             "number",
@@ -2430,6 +3225,10 @@
             "null"
           ]
         },
+        "code": {
+          "$ref": "#/$defs/RoleCode",
+          "description": "This seat's access to the company's code on the engine's own code host (code.native)."
+        },
         "contact": {
           "$ref": "#/$defs/HumanContact",
           "description": "Human seats: external account ids per surface."
@@ -2466,6 +3265,15 @@
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        },
+        "health_tools": {
+          "description": "Agent seats: offer this seat fleet_health and code_status, the administrator's reads of the deployment's health, and wake it each time an alarm fires or clears on a node. Setting or clearing it takes admin.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
             "null"
           ]
         },
@@ -2952,6 +3760,25 @@
             "read",
             "operate",
             "configure",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleCode": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "description": "read_only, review or full_access on the engine's own code host. Empty means read_only.",
+          "enum": [
+            "read_only",
+            "review",
+            "full_access",
             "",
             null
           ]
@@ -3601,7 +4428,7 @@
       "additionalProperties": false,
       "properties": {
         "commit_attribution": {
-          "description": "Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, and Crewlet-Run naming the run. Unset = true; false = credit nothing.",
+          "description": "Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, Crewlet-Seat naming the seat, Crewlet-Run naming the run, and Crewlet-Work-Item naming the item its turn is charged to. Unset = true; false = credit nothing.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -4329,9 +5156,6 @@
             "",
             null
           ]
-        },
-        "worklet": {
-          "$ref": "#/$defs/WorkletConfig"
         }
       },
       "type": [
@@ -4673,24 +5497,6 @@
         "object",
         "null"
       ]
-    },
-    "WorkletConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "inbox_retention_days": {
-          "description": "How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched.",
-          "maximum": 3650,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
     }
   },
   "$id": "https://docs.crewlet.ai/engine/latest/schema/company.schema.json",
@@ -4705,6 +5511,12 @@
     },
     "chat": {
       "$ref": "#/$defs/Chat"
+    },
+    "code": {
+      "$ref": "#/$defs/Code"
+    },
+    "inbox": {
+      "$ref": "#/$defs/Inbox"
     },
     "integrations": {
       "$ref": "#/$defs/Integrations"

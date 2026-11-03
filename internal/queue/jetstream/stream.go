@@ -88,11 +88,97 @@
 // hold records in flight whether or not an applier is reading and needs a
 // stop the applier has no call for.
 //
-// Every other pull in this package and in internal/learning/memsync is
+// Every other fetch in this package and in internal/learning/memsync is
 // count-bounded and small — one record for a mailbox's first wait, the
 // configured mailbox batch after a record has arrived, 256 for a peek or a
 // memory replay — so the library's per-batch sizing costs them a few
 // kilobytes at most, and only the first of them is issued while idle.
+//
+// Three pulls in this package are the library's own STANDING pulls instead,
+// kept asked by the library for as long as their readers live, idle or not.
+// The live feed's ([Queue.SubscribeStream]) and a watch's (below) are each a
+// Consume, which delivers to a callback subscription no batch sizes. A domain
+// group's ([DomainLog.Group], the change feed) is a Messages iterator, whose
+// channel the library sizes by its batch — 500 slots at its default: a few
+// kilobytes of pointers, and up to that many of the group's records held
+// ahead of its reader.
+//
+// # A watch is told which records moved, and never carries them
+//
+// A state log is read four ways: by its applier's durable consumer, one a
+// node; by a domain group's consumer, one the fleet shares, where whichever
+// node reaches a record first handles it ([DomainLog.Group], the change
+// feed); by reading one record — by position ([DomainLog.At]) or as its
+// subject's newest ([DomainLog.LastSeq]) — or a range from a position
+// (internal/backup's replay); and by a watch ([DomainLog.Watch]), the newest.
+// A reader that keeps its work in rows — the code host's home node is the
+// first — needs to know only that an object moved, and sooner than its own
+// pass over the rows would find it. So a watch is a consumer of its own that
+// takes each new record's SUBJECT and position and never its body: headers
+// only, from the log's end, acknowledging nothing, one replica in memory on
+// one member. What it may have missed it says it may have missed, and how far
+// on the log that reaches — its consumer lost and replaced at the log's end,
+// a delivery the consumer counted and this node never received, a reconnect —
+// and the caller waits for its copy to reach that position, then reads its
+// rows, which are the record; a nudge only ever shortens a wait. Its pull is
+// the library's own standing pull, which the applier's is not, because a
+// watch acknowledges nothing: what that pull keeps standing ahead of its
+// reader holds nothing back from anybody.
+//
+// # Every connection presents a key
+//
+// ADR-0094. Every embedded broker this package starts — a solo member, a
+// clustered member, a member with a leaf listener, a leaf — installs ONE
+// authenticator (brokerAuth, nats-server's embedding hooks
+// CustomClientAuthentication and, on a clustered member,
+// CustomRouterAuthentication), and it admits exactly four kinds of connection:
+//
+//   - a ROUTE presenting the username and password derived from a key of this
+//     node's ring under [RouteKeyDomain];
+//   - a LEAF LINK presenting the nkey derived from a key of the ring under
+//     [LeafKeyDomain], signing the member's nonce;
+//   - an OPERATOR on a clustered member's loopback client listener presenting
+//     the nkey derived under [ClientKeyDomain] and signing its nonce — the nats
+//     tool, for the broker gestures no engine verb performs; bound to the
+//     global account, never the system one;
+//   - an IN-PROCESS client of this process signing with a key minted at each
+//     start that nothing outside the process ever holds: the engine's, bound to
+//     the global account, and the membership code's, bound to the system
+//     account (membership.go).
+//
+// Every other connection is refused, counted ([Server.OnPeerRefused]) and
+// logged once a minute per class (broker_peer_refused); nats-server's own
+// line per refused attempt goes to DEBUG (natsLogger). By topology:
+//
+//	solo member                   no listener; this process alone
+//	member serving leaves only    leaf listener; + leaves presenting a ring key
+//	clustered member              route listener, loopback client listener,
+//	                              optional leaf listener; + routes and leaves
+//	                              presenting a ring key, + an operator on the
+//	                              client listener from this host
+//	leaf                          no listener; one outbound link presenting
+//	                              the active key
+//
+// THE KEYS ARE THE KEYRING'S, derived per key ([FleetAuthFrom]) by the rule
+// every consumer of secrets.keys follows (internal/runtoken), so the keyring's
+// rotation runbook moves the broker with no step of its own: every node accepts
+// every key of its ring and presents the active one.
+//
+// WHY THE EMBEDDING HOOKS AND NOT NATS-SERVER'S OWN BLOCKS. A cluster's
+// authorization block holds one user, a leaf listener's one nkey or a password
+// list, and the client user list cannot refuse anonymity on a member that
+// declares a system account — measured: with the system key in the server's own
+// nkey list an anonymous client still connected, through the no-auth user the
+// server adds to the global account. None of them carries a rotation without a
+// secret on the wire or an anonymous path; the hooks carry both.
+//
+// WHAT IT DOES NOT DO is encrypt. A route's password crosses the fleet network
+// in clear once per connection — a NATS route carries a password or a
+// certificate, never a signature — and every byte after it crosses in clear,
+// as before. So the fleet network stays private, and the state log's records
+// and the fleet's instructions stay signed (ADR-0031): the admission is per
+// connection and only as private as that network, and a record is believed on
+// its own signature, never on the connection it arrived by.
 package jetstream
 
 import (

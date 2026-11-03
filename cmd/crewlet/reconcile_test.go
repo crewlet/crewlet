@@ -580,6 +580,77 @@ func TestABootstrapSeedDoesNotOverwriteAnExistingCompany(t *testing.T) {
 	}
 }
 
+// A SEED THE FLEET DID NOT TAKE IS NOT THIS NODE'S COMPANY, whichever flag
+// carried it. An activation that fails fails the boot, and the revision stored
+// before it is history: booted on, it was what the restart ran and, found equal
+// to the file, PUBLISHED rather than seeded again — over whatever a peer had
+// activated in between, whenever the seed's instant was the later one, which
+// for a bootstrap is the overwrite its create-only activation exists to
+// refuse.
+//
+// Mutation: move the boot row to the seed's revision before the fleet takes
+// it, and the first assertion goes red; publish what the node boots on rather
+// than seeding again, and the restart's.
+func TestASeedTheFleetDidNotTakeIsNotThisNodesCompany(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		seed tierBSeed
+	}{
+		{"a -company bootstrap", seedOf(parse(t, companyYAML))},
+		{"an -import-company override", overrideOf(parse(t, companyYAML))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := seedStore(t)
+			fleet := coordmemory.NewFleet()
+			plan, err := decideSeed(t.Context(), &config.Bootstrap{}, tc.seed,
+				storeOf(db, fixtureCipher), quiet())
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = seedCompany(t.Context(), db, unreachableActivation{fleet}, nil, plan,
+				fixtureCipher, testNode, builds, quiet())
+			if !errors.Is(err, errActivationUnreachable) {
+				t.Fatalf("seed = %v, want the boot failed by the activation's own error", err)
+			}
+			if booted, found, err := db.Configs().Boot(t.Context()); err != nil {
+				t.Fatal(err)
+			} else if found {
+				for _, made := range fileRevisions(t, db) {
+					if booted.ID == made.ID {
+						t.Fatalf("this node boots on %s, which no fleet took: the next "+
+							"boot runs it, and offers it over the pointer", booted.ID)
+					}
+				}
+			}
+			if tc.seed.Override {
+				// The override is unconditional, so its restart replacing
+				// a peer's company is what it is for.
+				return
+			}
+			// A PEER BOOTSTRAPS while this node is down.
+			peer := activateAsPeer(t, fleet, "peer-revision", []byte(`{"name":"Peer"}`))
+			if err := bootSeedSaying(t, db, fleet, tc.seed, fixtureCipher, quiet()); err != nil {
+				t.Fatalf("the restart: %v", err)
+			}
+			assertFleetOn(t, fleet, peer)
+		})
+	}
+}
+
+// errActivationUnreachable is the activation [unreachableActivation] fails.
+var errActivationUnreachable = errors.New("the coordination store did not answer")
+
+// unreachableActivation is a fleet whose activation fails outright, as one does
+// when the coordination store stops answering between a node's read of the
+// pointer and its write.
+type unreachableActivation struct{ coord.Plane }
+
+func (unreachableActivation) Activate(context.Context, coord.ActivationRequest) (coord.Activation, error) {
+	return coord.Activation{}, errActivationUnreachable
+}
+
 // NO FILE AT ALL IS A NORMAL WAY TO RUN A NODE. The store is authoritative, so
 // a node whose company already lives there needs no Tier B document — and the
 // documented bootstrap path (start the node, then PUT /config) needs the node

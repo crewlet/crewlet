@@ -35,7 +35,7 @@ import (
 // review alone and the delivered record names no job; drop the informational
 // line from the transcript decoder and the run's record never shows it arrive;
 // answer no version probe and the held process is the probe, not the harness.
-func TestAPersonSteersALiveCodingRun(t *testing.T) {
+func TestAPersonSteersALiveExecutor(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
 	// THE RUN HOLDS UNTIL THIS FILE APPEARS, so the note is filed while it

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -80,6 +81,54 @@ func TestOnlyAWakeOwedToAPersonRidesThePriorityLane(t *testing.T) {
 			}
 			if got := queue.Prioritized(woken[0]); got != tc.want {
 				t.Fatalf("the wake rides the priority lane = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A FIRST-PARTY NOTICE'S STATED WRITER DECIDES WHETHER A PERSON WROTE IT.
+//
+// The code host's wakes state who wrote a review comment or a check's verdict
+// on Inbound.Writer and nowhere else. Read past it, the sender is a seat's
+// handle in a namespace the registry handed here does not place, which the
+// rule calls somebody outside the company and so a person: an agent's remark
+// on a change jumped its colleague's lane. Each case names a sender nobody
+// holds, so only the stated kind can turn the answer.
+func TestAFirstPartyNoticesStatedWriterDecidesWhetherAPersonWroteIt(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		writer *types.NotificationWriter
+		meta   map[string]string
+		want   bool
+	}{{
+		name:   "a seat's review comment",
+		writer: notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer"),
+		want:   false,
+	}, {
+		name:   "the engine's own record",
+		writer: notify.FirstPartyWriter(iam.ActorSystem, ""),
+		want:   false,
+	}, {
+		name:   "a person's review comment",
+		writer: notify.FirstPartyWriter(iam.ActorHuman, "dana-founder"),
+		want:   true,
+	}, {
+		name:   "an operator credential's write",
+		writer: notify.FirstPartyWriter(iam.ActorOperator, "ops-bot"),
+		want:   true,
+	}, {
+		name:   "the stated writer outranks the metadata",
+		writer: notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer"),
+		meta:   map[string]string{notify.BodyAuthorKindField: string(iam.ActorHuman)},
+		want:   false,
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			n := notify.Inbound{Source: "code", Sender: "nobody-holds-this", Writer: tc.writer, Metadata: tc.meta}
+			if got := notify.WrittenByPerson(nil, n); got != tc.want {
+				t.Fatalf("WrittenByPerson = %v, want %v", got, tc.want)
 			}
 		})
 	}

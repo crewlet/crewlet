@@ -109,8 +109,8 @@ func TestAMemberGoneForGoodIsRemovedFromTheMetadataGroup(t *testing.T) {
 //
 // NOT PARALLEL, unlike its neighbours, and for a reason of its own: each
 // survivor comes back on the SAME configuration — the same route port, which
-// is what makes it the same member — through [js.StartServer] directly, with
-// none of [withFreshPorts]'s retry. Between the shutdown and the restart that
+// is what makes it the same member — through [Cluster.RestartMember]'s server,
+// with none of [withFreshPorts]'s retry. Between the shutdown and the restart that
 // port is free, and a cluster another case is reserving ports for in the same
 // moment can take it, failing the restart on a bind this case cannot retry.
 // Run serially, nothing in this binary reserves a port while it is down.
@@ -128,13 +128,8 @@ func TestAMemberGoneForGoodIsRemovedAfterEverySurvivorRestarted(t *testing.T) {
 	peer := js.PeerIDOf(c.Configs[gone].ServerName)
 	c.Servers[gone].Shutdown()
 	for i := range gone {
-		c.Servers[i].Shutdown()
-		srv, err := js.StartServer(t.Context(), c.Configs[i])
-		if err != nil {
-			t.Fatalf("restart member %d: %v", i, err)
-		}
-		t.Cleanup(srv.Shutdown)
-		c.Servers[i] = srv
+		c.StopMember(i)
+		c.restartServer(t, i)
 	}
 
 	group := awaitGroup(t, c.Servers[0], func(g js.MetaGroup) bool {

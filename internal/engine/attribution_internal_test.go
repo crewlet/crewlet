@@ -1,6 +1,10 @@
 package engine
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
 
 // A NODE'S CATALOGUE CREDITS A RUN'S COMMITS AS THE COMPANY SAYS: on for a
 // company that says nothing (providers.sandbox.commit_attribution is on unless
@@ -26,7 +30,7 @@ func TestTheCatalogueCreditsCommitsAsTheCompanySays(t *testing.T) {
 			if err != nil || manager == nil {
 				t.Fatalf("buildSandbox = %v, %v", manager, err)
 			}
-			got := manager.CommitAttribution("turn-1")
+			got := manager.CommitAttribution(sandbox.CommitAttribution{Run: "turn-1"})
 			if (got != nil) != tc.credits {
 				t.Fatalf("the catalogue credits commits: %v, want %v", got != nil, tc.credits)
 			}

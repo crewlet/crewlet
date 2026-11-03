@@ -364,7 +364,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	if err != nil {
 		return assistant.DeepOutcome{}, err
 	}
-	run := newCodingRun(t.agent, nil, nil)
+	run := newExecutorRun(t.agent, nil, nil)
 	placement := t.placement
 	if r.Continue != nil && r.Continue.Placement != "" {
 		placement = sandbox.Placement(r.Continue.Placement)
@@ -404,9 +404,9 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 		return assistant.DeepOutcome{}, placeErr
 	}
 	started := d.e.now()
-	// THE CREDIT ON ITS COMMITS NAMES NO RUN: deep work has no page a
-	// `Crewlet-Run:` could lead a reader of the history to, so a commit it
-	// makes carries the co-author line alone.
+	// THE CREDIT ON ITS COMMITS NAMES NO RUN AND NO SEAT: deep work is no
+	// seat's and has no page a `Crewlet-Run:` could lead a reader of the
+	// history to, so a commit it makes carries the co-author line alone.
 	handle, err := runner.Start(ctx, box, sandbox.RunRequest{System: r.System, Brief: r.Brief,
 		Env: run.env, Limits: sandbox.Limits{MaxTurns: r.Steps}, Model: run.model,
 		Resume: session, MCPServers: bridgeServers(endpoint, r.Surface),
@@ -415,7 +415,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 		// server a repository it checked out declares, or a connector of the
 		// account it signs in with.
 		OnlyMCPServers: true,
-		Attribution:    t.manager.CommitAttribution("")})
+		Attribution:    t.manager.CommitAttribution(sandbox.CommitAttribution{})})
 	if err != nil {
 		d.discard(ctx, t, placement, box.ID())
 		return assistant.DeepOutcome{}, fmt.Errorf("the deep-work run could not start: %w", err)

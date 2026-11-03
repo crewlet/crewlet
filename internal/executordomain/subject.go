@@ -55,11 +55,18 @@ const (
 	KindGeneration ObjectKind = "generation"
 
 	// KindBarrier is the read index's payload-free append, on ONE subject
-	// for the whole domain. The only kind that writes no row on any node.
+	// for the whole domain. It writes no row on any node.
 	KindBarrier ObjectKind = "barrier"
+
+	// KindTrimmed is the trim's record that removes the arbitration anchors
+	// below what the log no longer holds ([statelog.TrimmedKind], ADR-0080),
+	// on one subject per floor, which the subject's id names. The framework
+	// removes the anchors in the transaction that applies it; this domain
+	// writes nothing for it, and has the case that says so.
+	KindTrimmed ObjectKind = statelog.TrimmedKind
 )
 
-// ObjectKinds are the five, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the six, and THE ORDER IS LOAD-BEARING.
 //
 // The framework's conformance suite publishes the FIRST THREE a domain
 // declares, twice each, in order, so the declaration decides what the suite
@@ -68,6 +75,7 @@ const (
 // a node's eviction.
 var ObjectKinds = []ObjectKind{
 	KindConversation, KindSeat, KindEviction, KindGeneration, KindBarrier,
+	KindTrimmed,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -76,12 +84,17 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation, and so whether the framework keeps an anchor for it.
 //
-// EVERY KIND BUT THE BARRIER DOES: every record here decides from what the
-// conversation or the seat held when it was decided, so two writers deciding
-// from one state contend and one re-decides. The barrier shares one subject
-// across the whole domain, so an expectation there would serialise every
-// linearizable read behind every other.
-func (k ObjectKind) Arbitrated() bool { return k.Valid() && k != KindBarrier }
+// EVERY KIND BUT THE TWO FRAMEWORK RECORDS DOES: every record here decides
+// from what the conversation or the seat held when it was decided, so two
+// writers deciding from one state contend and one re-decides — which is also
+// why every conversation ever written keeps an anchor until a trimmed record
+// removes it. The barrier shares one subject across the whole domain, so an
+// expectation there would serialise every linearizable read behind every
+// other; the trimmed record REMOVES anchors, and its identical copies are each
+// meant to land, so an expectation would refuse every one after the first.
+func (k ObjectKind) Arbitrated() bool {
+	return k.Valid() && k != KindBarrier && k != KindTrimmed
+}
 
 // InstallsGate reports a kind whose unknown version must STOP the applier
 // rather than be filed for later: the eviction alone (see [Domain.InstallsGate]).
@@ -131,6 +144,13 @@ func EvictionSubject(nodeID string) Subject { return Subject{Kind: KindEviction,
 
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
+
+// TrimmedSubject names the trimmed record whose floor is floor, in the
+// framework's ONE spelling of it ([statelog.TrimmedSubject]): the framework
+// reads the floor back from the id.
+func TrimmedSubject(floor statelog.Position) Subject {
+	return Subject{Kind: KindTrimmed, ID: statelog.TrimmedSubject(floor).ID}
+}
 
 // GenerationSubject names one generation of the stream, which a reanchor
 // claims create-only.

@@ -5,8 +5,8 @@
  * keeps the form open with its reason; closing a changed form asks first,
  * whichever field changed, and one Escape closes only the question; a field
  * for a tool is drawn only where the company connected the tool, with the
- * consequences a GitHub tier and a Mattermost username carry said beside
- * them; the engine's problems sit beside the fields they name; and no
+ * consequences a seat's code access and a Mattermost username carry said
+ * beside them; the engine's problems sit beside the fields they name; and no
  * credential, masked or referenced, reaches the page.
  */
 
@@ -34,6 +34,7 @@ import {
 import { Callout } from "@crewlethq/ui";
 import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
 import { drawnClasses, isDrawnAs } from "~/testing.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 afterEach(cleanup);
 
@@ -130,9 +131,9 @@ function connected(): CompanyDocument {
     goal: "Build",
     mcp_env: { tracker: { TOKEN: "__redacted__", URL: "${TRACKER_URL}" } },
     sandbox: { env: { KEY: "__redacted__" }, max_turns: 40 },
+    code: { access: "review" },
     integrations: {
       github: {
-        tier: "review",
         app_slug: "acme-dev",
         private_key: "${DEV_GITHUB_KEY}",
         webhook_secret: "__redacted__",
@@ -161,9 +162,9 @@ describe("applying", () => {
   });
 
   // A seat's project and space are its OWN keys, vendor-neutral, and mean
-  // something on the engine's own tracker and knowledge base, which a company
-  // that connected nothing runs. Written under `integrations:` they were a
-  // block the engine does not have, and the save was refused.
+  // something on Worklet and Doclet, which a company that connected nothing
+  // runs. Written under `integrations:` they were a block the engine does not
+  // have, and the save was refused.
   test("a seat's project and space are offered on the engine's own backends and written on the seat", () => {
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     tab("Work");
@@ -965,6 +966,8 @@ describe("seat fields", () => {
 
   test("a human seat shows contact and availability, and no agent-only field", () => {
     const doc = fixtureCompany();
+    // Hosting its own code, so an agent seat here would be offered a code access.
+    doc.code = { native: true };
     doc.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
     edit(keyedState(doc), "seat:dev");
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
@@ -976,6 +979,12 @@ describe("seat fields", () => {
     tab("Contact");
     expect((field("GitHub login") as HTMLInputElement).value).toBe("dev");
     expect(field("Availability")).toBeDefined();
+    // A tier caps nothing a person does — they act on every code host as
+    // themselves — so no tab offers one, even where the company hosts code.
+    for (const label of screen.getAllByRole("tab").map((t) => t.textContent!)) {
+      tab(label);
+      expect(screen.queryByLabelText(labelled("Code access")), label).toBeNull();
+    }
   });
 });
 
@@ -1042,7 +1051,7 @@ describe("who holds a person's seat", () => {
   test("a browser nobody signed in on is shown nothing, and nothing is asked", async () => {
     vi.stubGlobal("fetch", seats);
     edit(keyedState(humanDev()), "seat:dev", { viewer: reader([], "") });
-    await act(async () => {});
+    await afterMicrotasks();
     expect(screen.queryByRole("region", { name: "Person" })).toBeNull();
     expect(seats).not.toHaveBeenCalled();
   });
@@ -1074,7 +1083,9 @@ describe("integrations", () => {
     const unused = screen.getByText("GitHub, Slack and Mattermost: not in use.").closest("p")!;
     expect(within(unused).getByRole("link").getAttribute("href")).toBe("#/company/integrations");
     expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
-    expect(screen.queryByLabelText(labelled("Access tier"))).toBeNull();
+    // No code host reads a seat's code access here: GitHub is not connected and
+    // the company hosts no code of its own.
+    expect(screen.queryByLabelText(labelled("Code access"))).toBeNull();
     // WHAT A SEAT OWNS IS NO TOOL'S. The tracker project and the knowledge
     // space are the document's own fields, whichever backend runs either, so
     // they are drawn with no vendor connected, and neither says Jira or
@@ -1136,10 +1147,14 @@ describe("integrations", () => {
     expect(username.textContent).toContain(
       "Managed by the engine. Changing it would create a second bot.",
     );
-    // Already enrolled: its block exists, so a tier says nothing about enrolling.
+    // Already enrolled: its block exists, so nothing asks for its app to be created.
     expect(screen.queryByText(/Create its GitHub app in Integrations/)).toBeNull();
+    // The seat's code access is a section of its own, not a GitHub field: it
+    // is what every code host reads, and it reads the seat's `code.access`.
+    expect(screen.getByRole("heading", { name: "Code", level: 2 })).toBeDefined();
+    expect(field("Code access").textContent).toBe("Review");
 
-    choose("Access tier", "Full access");
+    choose("Code access", "Full access");
     expect(screen.getByText("Also raise the app’s permissions at GitHub.")).toBeDefined();
   });
 
@@ -1195,21 +1210,40 @@ describe("integrations", () => {
     expect(screen.getByText("Managed by hand. Leave empty for agent-dev.")).toBeDefined();
   });
 
-  test("a tier on a seat with no GitHub block enrols it, and says so", () => {
+  // THE ACCESS IS THE SEAT'S, NOT ITS GITHUB BLOCK'S. Choosing one writes
+  // `code.access` and leaves `integrations.github` alone, so it enrols nobody
+  // in GitHub; naming a repository writes the block, and that does.
+  test("a code access writes the seat's own code block, and only a repository enrols it in GitHub", () => {
     const doc = connected();
-    edit(keyedState(doc), "seat:sre");
+    const view = edit(keyedState(doc), "seat:sre");
     tab("Integrations");
+    choose("Code access", "Review");
     expect(screen.queryByText(/Create its GitHub app in Integrations/)).toBeNull();
-    choose("Access tier", "Review");
-    expect(screen.getByText(/Create its GitHub app in Integrations\./)).toBeDefined();
+    apply();
+    const written = seatData(view.state(), "seat:sre");
+    expect(written.code).toEqual({ access: "review" });
+    expect(written.integrations?.github).toBeUndefined();
     cleanup();
 
-    // A repository alone writes the block as well, so it enrols the seat too.
     edit(keyedState(doc), "seat:sre");
     tab("Integrations");
     type("New repository", "acme/api");
     fireEvent.keyDown(field("New repository"), { key: "Enter" });
     expect(screen.getByText(/Create its GitHub app in Integrations/)).toBeDefined();
+  });
+
+  // THE ENGINE'S OWN CODE HOST READS THE SAME FIELD. A company hosting code
+  // natively and connected to no GitHub still caps each seat's grant by its
+  // tier, so the field is there with GitHub not connected.
+  test("a company hosting its own code offers a seat's code access without GitHub", () => {
+    const doc = fixtureCompany();
+    doc.code = { native: true };
+    const view = edit(keyedState(doc), "seat:dev");
+    tab("Integrations");
+    expect(screen.getByText("GitHub, Slack and Mattermost: not in use.")).toBeDefined();
+    choose("Code access", "Full access");
+    apply();
+    expect(seatData(view.state(), "seat:dev").code).toEqual({ access: "full_access" });
   });
 
   test("a seat with no chat app of its own says so, and the Datadog fallback is named on its seat", () => {
@@ -1281,17 +1315,18 @@ describe("problems", () => {
   // one: it would be reported nowhere a reader can see it.
   test("a problem about a field the form does not draw is listed at the top", () => {
     // The fixture company has not connected GitHub, so the seat's GitHub
-    // fields are not drawn at all.
+    // fields are not drawn at all: a repository the engine refuses there,
+    // in the words its validator refuses it with, has no field to sit under.
     const state = checkWithProblems(keyedState(fixtureCompany()), [
       problemAt(
-        ["units", 0, "roles", 1, "integrations", "github", "tier"],
-        "units[0].roles[1].integrations.github.tier: names no tier",
+        ["units", 0, "roles", 1, "integrations", "github", "repos", 0],
+        'units[0].roles[1].integrations.github.repos[0]: value not in the allowed set: "acme" is not a repository; give it as owner/name, which is how GitHub addresses one and how an installation lists them',
       ),
     ]);
     edit(state, "seat:dev");
     const alerts = screen.getAllByRole("alert");
     expect(alerts).toHaveLength(1);
-    expect(alerts[0]!.textContent).toContain("names no tier");
+    expect(alerts[0]!.textContent).toContain("is not a repository");
     expect(describesAControl(alerts[0]!)).toBe(false);
     cleanup();
 
@@ -1332,7 +1367,7 @@ describe("problems", () => {
     expect(describesAControl(spaceAlerts[0]!)).toBe(false);
     cleanup();
 
-    // On the engine's own tracker, which the fixture runs, the same problem
+    // On Worklet, which the fixture runs, the same problem
     // sits under the field that wrote it.
     edit(checkWithProblems(keyedState(fixtureCompany()), [projectProblem]), "seat:dev");
     tab("Work");

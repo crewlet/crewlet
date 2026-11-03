@@ -14,8 +14,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -43,6 +46,141 @@ import (
 // every way a turn ends, the account of how it ended ([Engine.oweExecutorEnd])
 // — the turn's decision, whether its reply reached the party waiting, who
 // stopped it, what lost it.
+
+// executorLogWrites is the executor log's writes the engine records a run's
+// captures and its turn's end through: the estate router's
+// (estate.ExecutorWrites), which a seats-only node reaches through a data node.
+type executorLogWrites interface {
+	Begin(ctx context.Context, c executordomain.Call, n executordomain.NewBegin) (executordomain.BeginResult, error)
+	Capture(ctx context.Context, c executordomain.Call,
+		n executordomain.NewCapture) (executordomain.CaptureResult, error)
+	End(ctx context.Context, c executordomain.Call, n executordomain.NewEnd) (statelog.Result, error)
+}
+
+// executorRecords is the sandbox runtime's writes of the executor log
+// ([sandbox.SessionWrites]), stated as the log's records and answered in the
+// sandbox's words: the sandbox links no state log (its dependency gate), so the
+// author, the operation a record's place derives and the reading of the log's
+// three-valued answer are the engine's, here.
+type executorRecords struct{ log executorLogWrites }
+
+var _ sandbox.SessionWrites = executorRecords{}
+
+// executorRecordsOf is the sandbox's writes over the router's, or nil on an
+// engine built without them, whose runtime then records nothing.
+func executorRecordsOf(log executorLogWrites) sandbox.SessionWrites {
+	if log == nil {
+		return nil
+	}
+	return executorRecords{log: log}
+}
+
+// sandboxAuthor is who every executor record the sandbox runtime makes names:
+// the engine's sandbox runtime, which no person and no model drives.
+var sandboxAuthor = iam.Actor{Name: "sandbox", Kind: iam.ActorSystem}
+
+// Capture records one capture under the operation its place derives
+// ([executordomain.CaptureOpID]): the turn, the launch it was taken from and
+// its ordinal there, at the instant the turn's operations are minted at — so
+// every attempt at it is one operation, however often the sandbox asks.
+func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (sandbox.LogAnswer, error) {
+	stamp := c.Stamp
+	call := executordomain.Call{By: sandboxAuthor,
+		OpID: executordomain.CaptureOpID(stamp.Minted, c.Handle, c.Turn, stamp.Launch, stamp.CaptureSeq)}
+	n := executordomain.NewCapture{
+		Handle: c.Handle, Turn: c.Turn, ConversationKey: c.ConversationKey, WorkKey: c.WorkKey,
+		Harness: stamp.Harness, HarnessVersion: stamp.HarnessVersion, SessionID: stamp.SessionID,
+		Object: c.Object, ContentKey: stamp.ContentKey, ArchiveFormat: stamp.ArchiveFormat,
+		LaunchSeq: stamp.LaunchSeq, CaptureSeq: stamp.CaptureSeq,
+		Home: stamp.Home, Workspace: stamp.Workspace, SeatBudget: stamp.SeatBudget,
+		// WHAT ONLY THE RUN'S ROW KNEW OF THE SESSION, carried onto the log's
+		// row, which outlives it: a launch continuing the session after its
+		// turn ended has no run record to read them from.
+		ContextTokens: stamp.ContextTokens, Interrupted: stamp.Interrupted,
+	}
+	if c.ReadThrough > 0 {
+		// THE TURN'S FIRST READ, as its first launch froze it: the log
+		// keeps it where no begin of the turn landed first.
+		n.ReadThrough = statelog.Unpack(executordomain.Domain{}.Stream().Name, c.ReadThrough)
+		n.Absorbs = c.Absorbs
+	}
+	res, err := r.log.Capture(ctx, call, n)
+	switch {
+	case err == nil && res.Outcome == statelog.OutcomeApplied && res.Recorded:
+		return sandbox.LogLanded, nil
+	case err == nil && res.Outcome == statelog.OutcomeApplied:
+		return sandbox.LogPassedOver, nil
+	case refusedCapture(err):
+		return sandbox.LogRefused, err
+	}
+	return sandbox.LogUnsettled, unsettledRecord(res.Outcome, err)
+}
+
+// Begin records a turn's first read of its conversation under the one
+// operation the turn derives ([executordomain.BeginOpID]), and answers whether
+// the turn's row, read back, holds the base the read froze
+// ([executordomain.BeginResult]). APPLIED is LANDED whether this attempt wrote
+// it or an earlier one, or a capture that landed first, recorded the turn's
+// first read: either way the row read back says what it holds. The log's
+// definite refusals are a capture's ([refusedCapture]).
+func (r executorRecords) Begin(ctx context.Context, b sandbox.BeginRecord) (sandbox.BeginAnswer, error) {
+	call := executordomain.Call{By: sandboxAuthor, OpID: executordomain.BeginOpID(b.Minted, b.Handle, b.Turn)}
+	res, err := r.log.Begin(ctx, call, executordomain.NewBegin{Handle: b.Handle, Turn: b.Turn,
+		ConversationKey: b.ConversationKey, WorkKey: b.WorkKey,
+		ReadThrough: statelog.Unpack(executordomain.Domain{}.Stream().Name, b.ReadThrough),
+		Absorbs:     b.Absorbs, BaseTurn: b.BaseTurn, BaseObject: b.BaseObject})
+	switch {
+	case err == nil && res.Outcome == statelog.OutcomeApplied:
+		return sandbox.BeginAnswer{Log: sandbox.LogLanded, Held: res.Held, Why: res.Why}, nil
+	case refusedCapture(err):
+		return sandbox.BeginAnswer{Log: sandbox.LogRefused}, err
+	}
+	return sandbox.BeginAnswer{Log: sandbox.LogUnsettled}, unsettledRecord(res.Outcome, err)
+}
+
+// refusedCapture reports whether err is the log's definite refusal of a capture:
+// the turn ended or removed, a newer capture recorded, an object too old to
+// name, a seat budget the live turns fill, or a record it refuses outright.
+// Anything else — a node that did not answer, none that serves, a conversation
+// that kept changing — may land if asked again under the same operation.
+func refusedCapture(err error) bool {
+	for _, refusal := range []error{executordomain.ErrTurnEnded, executordomain.ErrStaleCapture,
+		executordomain.ErrUploadStale, executordomain.ErrOverBudget, executordomain.ErrInvalid,
+		executorkeep.ErrSessionTooLarge, executordomain.ErrNotFound} {
+		if errors.Is(err, refusal) {
+			return true
+		}
+	}
+	return false
+}
+
+// End records how a turn ended under the one operation every path that ends
+// the turn derives ([executordomain.EndOpID]). An end the log refuses as
+// already made is LANDED: two frames that both end a turn derive the same
+// operation, and the second is refused because the first was taken.
+func (r executorRecords) End(ctx context.Context, e sandbox.EndRecord) (sandbox.LogAnswer, error) {
+	call := executordomain.Call{By: sandboxAuthor, OpID: executordomain.EndOpID(e.Minted, e.Handle, e.Turn)}
+	res, err := r.log.End(ctx, call, executordomain.NewEnd{Handle: e.Handle, Turn: e.Turn,
+		ConversationKey: e.ConversationKey, WorkKey: e.WorkKey, Ask: e.Ask, Ending: e.Ending})
+	switch {
+	case err == nil && res.Outcome == statelog.OutcomeApplied:
+		return sandbox.LogLanded, nil
+	case errors.Is(err, executordomain.ErrTurnEnded):
+		return sandbox.LogLanded, nil
+	case errors.Is(err, executordomain.ErrInvalid):
+		return sandbox.LogRefused, err
+	}
+	return sandbox.LogUnsettled, unsettledRecord(res.Outcome, err)
+}
+
+// unsettledRecord is what an unsettled answer says: the log's outcome, and the
+// error it came with where there was one.
+func unsettledRecord(outcome statelog.Outcome, err error) error {
+	if err == nil {
+		return fmt.Errorf("outcome %s", outcome)
+	}
+	return fmt.Errorf("outcome %s: %w", outcome, err)
+}
 
 // executorKeep is the engine's part of keeping a run's harness session
 // ([sandbox.SessionKeep]).
@@ -79,14 +217,14 @@ func (k executorKeep) Keeps() bool {
 
 // executorPolicy is `turn_engine.conversation_session`'s switch and per-seat
 // budget, as the revision the fleet's activation pointer names states them
-// ([Engine.fleetCompany]), or why this node cannot know them.
+// ([Engine.servedFleetRevision]), or why this node cannot know them.
 //
 // THE FLEET'S REVISION, NEVER THIS NODE'S OWN, for [Engine.executorRetention]'s
 // reason: the budget a capture carries decides which ended sessions every node
 // releases, so a node serving a revision the fleet did not take must not decide
 // it. A capture that cannot read it is refused, and its stamp says why.
 func (e *Engine) executorPolicy(ctx context.Context) (sandbox.SessionPolicy, error) {
-	company, err := e.fleetCompany(ctx, e.Company())
+	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
 		return sandbox.SessionPolicy{}, err
 	}
@@ -104,7 +242,7 @@ func (e *Engine) executorPolicy(ctx context.Context) (sandbox.SessionPolicy, err
 func handedAAD(turnID string) string { return "sandbox/handed/" + turnID }
 
 // SealHanded seals the secrets a launch handed its box for its run's row
-// ([sandbox.PendingRun.Handed]) under the node's keyring — the coordination
+// ([sandbox.PendingStore.Handed]) under the node's keyring — the coordination
 // store is not encrypted — bound to the turn ([handedAAD]).
 func (k executorKeep) SealHanded(turnID string, handed []byte) (string, error) {
 	cipher := k.engine.Cipher()
@@ -144,21 +282,21 @@ func (k executorKeep) MintedAt(ctx context.Context, turnID, workKey string, work
 
 // Seal streams archive sealed under the fleet keyring into dst, under an
 // object key minted now ([Engine.ExecutorSessions]).
-func (k executorKeep) Seal(handle, turn string, archive io.Reader, dst io.Writer) (executordomain.SealedSpool, error) {
+func (k executorKeep) Seal(handle, turn string, archive io.Reader, dst io.Writer) (executorkeep.SealedSpool, error) {
 	store, err := k.engine.executorSessionStore()
 	if err != nil {
-		return executordomain.SealedSpool{}, err
+		return executorkeep.SealedSpool{}, err
 	}
 	return store.Seal(handle, turn, archive, dst)
 }
 
 // Upload puts what [executorKeep.Seal] sealed into the object it was sealed for.
-func (k executorKeep) Upload(ctx context.Context, spool executordomain.SealedSpool,
-	sealed io.Reader) (executordomain.SealedObject, error) {
+func (k executorKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool,
+	sealed io.Reader) (executorkeep.SealedObject, error) {
 
 	store, err := k.engine.executorSessionStore()
 	if err != nil {
-		return executordomain.SealedObject{}, err
+		return executorkeep.SealedObject{}, err
 	}
 	return store.Upload(ctx, spool, sealed)
 }
@@ -186,7 +324,7 @@ func (e *Engine) executorSessionStore() (*executordomain.SessionStore, error) {
 // be there — best effort and said where the log does not take it.
 //
 // DECIDED ONCE: a turn whose row owes an end already keeps that one.
-func (e *Engine) oweExecutorEnd(ctx context.Context, run sandbox.PendingRun, ending executordomain.Ending) {
+func (e *Engine) oweExecutorEnd(ctx context.Context, run sandbox.PendingRun, ending executorkeep.Ending) {
 	rt := e.sandbox.Load()
 	if rt == nil {
 		return
@@ -237,7 +375,7 @@ func (e *Engine) runEnded(ctx context.Context, turnID string) bool {
 }
 
 // runTurnEnd is the end of the turn run's row belongs to, ending as ending.
-func runTurnEnd(run sandbox.PendingRun, ending executordomain.Ending) sandbox.TurnEnd {
+func runTurnEnd(run sandbox.PendingRun, ending executorkeep.Ending) sandbox.TurnEnd {
 	return sandbox.TurnEnd{Handle: run.AgentHandle, TurnID: run.TurnID,
 		ConversationKey: run.ConversationKey, WorkKey: run.WorkKey, WorkSince: run.WorkSince,
 		Ask: run.TaskDescription, Ending: ending}
@@ -246,7 +384,7 @@ func runTurnEnd(run sandbox.PendingRun, ending executordomain.Ending) sandbox.Tu
 // telTurnEnd is the end of the turn tel describes, ending as ending: for a
 // dispatched turn whose executor's launch opened a run row that the launch
 // then abandoned, so no row is left to owe it on.
-func telTurnEnd(tel turnTelemetry, ending executordomain.Ending) sandbox.TurnEnd {
+func telTurnEnd(tel turnTelemetry, ending executorkeep.Ending) sandbox.TurnEnd {
 	return sandbox.TurnEnd{Handle: tel.handle, TurnID: tel.runID, ConversationKey: tel.convKey,
 		WorkKey: tel.workKey, WorkSince: tel.workSince, Ask: tel.title, Ending: ending}
 }
@@ -258,11 +396,11 @@ func telTurnEnd(tel turnTelemetry, ending executordomain.Ending) sandbox.TurnEnd
 // reached the party waiting, and on what; what the reviewer said landed; what
 // stopped a blocked round. answered is the engine's own answer to a colleague's
 // ask, where the turn owed one.
-func endingOf(res turn.Result, reply turn.Reply, answered colleagueAnswer) executordomain.Ending {
-	ending := executordomain.Ending{Outcome: executordomain.OutcomeCompleted, Decision: string(res.Decision),
+func endingOf(res turn.Result, reply turn.Reply, answered colleagueAnswer) executorkeep.Ending {
+	ending := executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, Decision: string(res.Decision),
 		Delivered: res.Delivered, DeliveredTo: replySurface(reply)}
 	if res.Breach != nil || res.Decision == phase.Failed {
-		ending.Outcome = executordomain.OutcomeFailed
+		ending.Outcome = executorkeep.OutcomeFailed
 	}
 	if res.Breach != nil {
 		ending.Failure = breachAccount(res.Breach)
@@ -281,10 +419,10 @@ func endingOf(res turn.Result, reply turn.Reply, answered colleagueAnswer) execu
 // (turn.Abandon): failed, saying why — the turn's error redacted, since it can
 // quote what a tool or a box said.
 func abandonedEnding(res turn.Result, reply turn.Reply, answered colleagueAnswer, reason string,
-	err error) executordomain.Ending {
+	err error) executorkeep.Ending {
 
 	ending := endingOf(res, reply, answered)
-	ending.Outcome = executordomain.OutcomeFailed
+	ending.Outcome = executorkeep.OutcomeFailed
 	ending.Failure = redact.Secrets(fmt.Sprintf("the resumed turn broke and was abandoned (%s): %v", reason, err))
 	return ending
 }
@@ -294,10 +432,10 @@ func abandonedEnding(res turn.Result, reply turn.Reply, answered colleagueAnswer
 // launch's error redacted, since it can quote what a box or a store said —
 // beside whatever its loop had decided and answered by then.
 func launchAbandonedEnding(res turn.Result, reply turn.Reply, answered colleagueAnswer,
-	err error) executordomain.Ending {
+	err error) executorkeep.Ending {
 
 	ending := endingOf(res, reply, answered)
-	ending.Outcome = executordomain.OutcomeFailed
+	ending.Outcome = executorkeep.OutcomeFailed
 	ending.Failure = redact.Secrets(fmt.Sprintf("the turn's executor launch was abandoned after its run was "+
 		"recorded: %v", err))
 	return ending
@@ -334,9 +472,9 @@ const replyA2A = "a2a"
 // — the reason in their own words, kept as theirs, fenced for any model that
 // reads it (the ending's field is declared somebody else's) — beside whatever
 // the turn's loop had decided and delivered by then.
-func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colleagueAnswer) executordomain.Ending {
+func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colleagueAnswer) executorkeep.Ending {
 	ending := endingOf(res, reply, answered)
-	ending.Outcome, ending.Failure = executordomain.OutcomeStopped, ""
+	ending.Outcome, ending.Failure = executorkeep.OutcomeStopped, ""
 	if pause, ok := stopOf(stop); ok {
 		ending.StoppedBy, ending.StopReason = pause.By, pause.Reason
 	}
@@ -344,27 +482,34 @@ func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colle
 }
 
 // runDelivered is whether the party waiting on run's turn has its answer, as
-// the run's own record of the turn's bridged calls says — [turn.Answered], the
-// rule a turn's loop answers it by, over every round's calls: the earlier
-// launches' ([sandbox.PendingRun.PriorCalls]) and the current one's — for an
-// ending no frame of the turn reaches: a loss, a stop. KNOWN is false where the
-// record is incomplete — calls were elided from it — and what it kept shows no
-// delivery: a definite "did not reply" read off half a record is the false
-// account the end exists to prevent.
-func (e *Engine) runDelivered(c *Company, run sandbox.PendingRun) (reply turn.Reply, delivered, known bool) {
+// the run's own log of the turn's bridged calls says, read by the run's ending
+// ([sandbox.RunCalls]) — [turn.Answered], the rule a turn's loop answers it
+// by, over every round's calls: the earlier rounds' ([sandbox.BridgeLog.PriorCalls])
+// and the current one's — for an ending no frame of the turn reaches: a loss,
+// a stop. KNOWN is false where the log could not be read, or is incomplete —
+// calls were elided from it — and what it kept shows no delivery: a definite
+// "did not reply" read off no log, or half of one, is the false account the
+// end exists to prevent.
+func (e *Engine) runDelivered(c *Company, run sandbox.PendingRun, bridged sandbox.RunCalls) (reply turn.Reply,
+	delivered, known bool) {
+
 	reply = turn.ParseReply(run.Reply)
 	if !reply.Valid() {
 		return reply, false, true
 	}
-	calls := make([]ledger.Call, 0, len(run.PriorCalls)+len(run.BridgeCalls))
-	for _, name := range run.PriorCalls {
+	if bridged.Unread != nil {
+		return reply, false, false
+	}
+	logged := bridged.Log
+	calls := make([]ledger.Call, 0, len(logged.PriorCalls)+len(logged.Calls))
+	for _, name := range logged.PriorCalls {
 		calls = append(calls, ledger.Call{Name: name})
 	}
-	for _, call := range run.BridgeCalls {
+	for _, call := range logged.Calls {
 		calls = append(calls, ledger.Call{Name: call.Name, Failed: call.Failed})
 	}
 	delivered = turn.Answered(calls, deliverySurface(e.seatRegistry(c, run.AgentHandle)), reply)
-	elided := run.PriorCallsElided || run.BridgeCallsElided > 0
+	elided := logged.PriorCallsElided || logged.Elided > 0
 	return reply, delivered, delivered || !elided
 }
 
@@ -383,16 +528,18 @@ func deliverySurface(reg *tools.Registry) turn.Surface {
 // turn's loop, ended it: lost, or stopped by a person — whether its reply
 // reached anybody read off the turn's own calls, and the engine's answer to a
 // colleague's ask beside it.
-func (e *Engine) runEnding(c *Company, run sandbox.PendingRun, answered colleagueAnswer) executordomain.Ending {
-	reply, delivered, known := e.runDelivered(c, run)
-	ending := executordomain.Ending{Delivered: delivered, DeliveredTo: replySurface(reply),
+func (e *Engine) runEnding(c *Company, run sandbox.PendingRun, bridged sandbox.RunCalls,
+	answered colleagueAnswer) executorkeep.Ending {
+
+	reply, delivered, known := e.runDelivered(c, run, bridged)
+	ending := executorkeep.Ending{Delivered: delivered, DeliveredTo: replySurface(reply),
 		DeliveryUnknown: !known}
 	switch {
 	case run.Stop != nil:
-		ending.Outcome = executordomain.OutcomeStopped
+		ending.Outcome = executorkeep.OutcomeStopped
 		ending.StoppedBy, ending.StopReason = run.Stop.By, run.Stop.Reason
 	default:
-		ending.Outcome = executordomain.OutcomeLost
+		ending.Outcome = executorkeep.OutcomeLost
 		if run.Ending != nil {
 			ending.Failure = redact.Secrets(fmt.Sprintf("the executor's run was lost (%s): %s",
 				run.Ending.Reason, run.Ending.Detail))

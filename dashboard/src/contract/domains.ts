@@ -17,6 +17,19 @@
  * reads. A kind missing from here is a screen that stays stale after its own
  * write; a kind listed that takes no floor is a screen that believes it waited
  * and did not.
+ *
+ * A QUESTION READ FROM SEVERAL LOGS IS LISTED UNDER EACH — the company feed is
+ * Worklet's work and Doclet's pages — and its read names one
+ * `min_position` per listed domain this tab has written (`protocol/session.ts`),
+ * which the engine holds each half of the answer to. Listed under one, the
+ * half on the other log would be drawn from before the tab's own write there.
+ *
+ * `code_search` IS DELIBERATELY ABSENT: it answers at the tip it names — each
+ * repository searched at the commit its git node holds, named in the answer's
+ * `tips`, and a hit's file read at that commit — so it takes no floor, and the
+ * engine refuses `read_level=session` and `min_position` on it
+ * (`internal/api/queries.TestCodeSearchIsNotASessionQuery`). Listed here, a
+ * code write would scatter a search to every git node only to be refused.
  */
 export const SESSION_QUERIES = {
   tracker: [
@@ -38,9 +51,10 @@ export const SESSION_QUERIES = {
     "work_flow",
     "company_feed",
     "decisions",
+    "inbox",
     "answered_decisions",
   ],
-  pages: ["pages", "page", "containers", "page_activity", "page_revision"],
+  pages: ["pages", "page", "containers", "page_activity", "page_revision", "company_feed"],
   chat: [
     "chat_channels",
     "chat_channel",
@@ -55,5 +69,27 @@ export const SESSION_QUERIES = {
     "chat_search",
     "chat_room_names",
     "chat_rooms",
+  ],
+  code: [
+    "code_repos",
+    "code_repo",
+    "code_pushes",
+    "code_changes",
+    "code_change",
+    "code_change_routing",
+    "code_reviews",
+    "code_refs",
+    "code_tree",
+    "code_blob",
+    "code_log",
+    "code_blame",
+    "code_diff",
+    "code_compare",
+    "code_commit",
+    "code_queue",
+    "code_checks",
+    "code_check",
+    "code_check_log",
+    "inbox",
   ],
 } as const;

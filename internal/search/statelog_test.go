@@ -46,6 +46,9 @@ func TestTheVectorDomainIsACertifiedDomain(t *testing.T) {
 			Kinds:  suiteKinds(),
 			Rows:   search.NewRows,
 			Write:  suiteWrite,
+			// NO READ INDEX: the engine registers no barrier for the
+			// vectors log, which grants no linearizable read.
+			NoBarrier: true,
 		}
 	})
 }

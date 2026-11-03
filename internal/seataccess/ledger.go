@@ -72,6 +72,11 @@ type LaneRecord struct {
 
 	// Sync is what the last sync did.
 	Sync *SyncResult `json:"sync,omitempty"`
+
+	// Settling is the grant a sync's step reported its vendor still
+	// applying, kept fleet-wide until it ends and cleared by the first
+	// write after; nil where none is ([StepResult.Settling]).
+	Settling *Settling `json:"settling,omitempty"`
 }
 
 // Record is the ledger's record for one seat at one kind: the account, if the

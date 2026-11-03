@@ -24,8 +24,10 @@ func NewContainerBoxAt(root string) (Sandbox, string) {
 }
 
 // WriteExecutable is [writeExecutable], for the stubs the package's external
-// suite writes and its shell runs (setuprecipe_test.go): those cases share
-// this binary, and so every fork its other cases make.
+// suite writes and its shell runs (setuprecipe_test.go, clone_test.go): those
+// cases share this binary, and so every fork its other cases make — and
+// TestEveryExecutableThisSuiteWritesIsWrittenUnderTheForkLock holds every
+// executable write of either suite to the one writer.
 func WriteExecutable(t *testing.T, path, script string) {
 	t.Helper()
 	writeExecutable(t, path, script)

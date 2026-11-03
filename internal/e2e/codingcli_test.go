@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -23,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // THE EXECUTOR'S HARNESS: this test binary again, standing in for Claude
@@ -91,6 +93,15 @@ const (
 	// codingVersionEnv is the release the stand-in answers `claude
 	// --version` with, [codingVersion] when unset.
 	codingVersionEnv = "FAKE_AGENT_VERSION"
+	// codingTokenEnv names a file, outside the box, a [codingModePush] run
+	// keeps its git credential in, for the case to present once the run has
+	// ended.
+	codingTokenEnv = "FAKE_AGENT_TOKEN"
+	// codingPushLogEnv names a file, outside the box, a [codingModePush] run
+	// writes what its commands said and why its push failed to, for the case
+	// to print beside a push it does not find: the run's own standard error
+	// stays in its box, which is reclaimed when the turn ends.
+	codingPushLogEnv = "FAKE_AGENT_PUSH_LOG"
 )
 
 // codingVersion is the release the stand-in reports by default: 2.1.310, the
@@ -117,6 +128,14 @@ const (
 	// that opened its bridge session, and its submission has to reach the
 	// one that rebuilt it. It asks no model.
 	codingModeHeld = "held"
+	// codingModePush is [codingModeWork] that changes what it checks out:
+	// once a `code_checkout` the model made is answered, it runs the
+	// commands the answer gives, commits one file in the clone and pushes
+	// its branch, by git alone, with the credential, the remote and the
+	// identity its launch environment carries. It then waits for
+	// [codingReleaseEnv], so a case reads the run's row while the run still
+	// holds it, and carries on to the submission the model scripts.
+	codingModePush = "push"
 	// codingModeApproval calls a tool at Needs approval over the seat's
 	// bridge ([heldToolName], the e2e binary's own stdio MCP server), is
 	// told the call was held, is refused the submission it tries after it,
@@ -439,7 +458,7 @@ func runHarness(endpoint string) int {
 		return fail("filing the session's transcript: %v", err)
 	}
 	switch mode := cmp.Or(os.Getenv(codingModeEnv), codingModeWork); mode {
-	case codingModeWork:
+	case codingModeWork, codingModePush:
 	case codingModeHeld:
 		// RUNS UNTIL THE TEST SAYS SO, rather than for a fixed time — see
 		// [codingModeHeld]. The ceiling is a backstop against a case that
@@ -593,6 +612,11 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 			out, failed := callOverBridge(ctx, session, id, call.Name, input)
 			stream.toolResult(id, out, failed)
 			ex.Results = append(ex.Results, callResult{Name: call.Name, Content: out, Failed: failed})
+			if call.Name == builtin.CodeCheckoutTool && os.Getenv(codingModeEnv) == codingModePush {
+				if err := pushThroughCheckout(ctx, out, failed); err != nil {
+					return err
+				}
+			}
 			if call.Name == runner.SubmitWorkTool && !failed {
 				// THE RUN'S LAST WORD is what it submitted, as a harness
 				// that finished by reporting ends on its report.
@@ -618,6 +642,85 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 		}
 	}
 	stream.result("error_max_turns", "", rounds, spent)
+	return nil
+}
+
+// pushThroughCheckout is a [codingModePush] run acting on a checkout's answer
+// as an agent does: the commands it gives, run in the run's working
+// directory, then one commit in the clone they made and a push of the branch
+// it is on. The credential is kept outside the box first ([codingTokenEnv]).
+// Every command's output goes to stderr, and to [codingPushLogEnv]'s file
+// with the failure itself: stdout is the run's stream. A refused checkout
+// (refused) is only said there: the run carries on to what the model does
+// next, as a harness handed a refusal does.
+func pushThroughCheckout(ctx context.Context, answer string, refused bool) error {
+	stderr := io.Writer(os.Stderr)
+	if path := os.Getenv(codingPushLogEnv); path != "" {
+		kept, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("opening the push's log: %w", err)
+		}
+		defer kept.Close()
+		stderr = io.MultiWriter(os.Stderr, kept)
+	}
+	if refused {
+		fmt.Fprintf(stderr, "harness: code_checkout was refused, so nothing was pushed:\n%s\n", answer)
+		return nil
+	}
+	err := pushThrough(ctx, answer, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "harness: the push failed: %v\n", err)
+	}
+	return err
+}
+
+// pushThrough is [pushThroughCheckout]'s work, every command's output to
+// stderr.
+func pushThrough(ctx context.Context, answer string, stderr io.Writer) error {
+	_, fenced, ok := strings.Cut(answer, "```sh\n")
+	script, _, closed := strings.Cut(fenced, "```")
+	if !ok || !closed {
+		return fmt.Errorf("the checkout's answer gives no commands to run:\n%s", answer)
+	}
+	if path := os.Getenv(codingTokenEnv); path != "" {
+		if err := os.WriteFile(path, []byte(os.Getenv(sandbox.GitTokenVar)), 0o600); err != nil {
+			return fmt.Errorf("keeping the run's git token: %w", err)
+		}
+	}
+	run := func(dir, name string, args ...string) error {
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Dir, cmd.Stdout, cmd.Stderr = dir, stderr, stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("%s %s in %s: %w", name, strings.Join(args, " "), cmp.Or(dir, "."), err)
+		}
+		return nil
+	}
+	if err := run("", "sh", "-e", "-c", script); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join("web", "FIX.md"), []byte("the fix\n"), 0o644); err != nil {
+		return fmt.Errorf("changing the checkout of web: %w", err)
+	}
+	for _, step := range [][]string{{"add", "FIX.md"}, {"commit", "-q", "-m", "Fix the failing test"},
+		{"push", "-q", "origin", "HEAD"}} {
+		if err := run("web", "git", step...); err != nil {
+			return err
+		}
+	}
+	// SAID, so a case that finds no push tells a push git accepted from one
+	// never made.
+	fmt.Fprintln(stderr, "harness: git pushed web")
+	// HELD UNTIL THE CASE HAS READ THE ROW: the run's grants leave with it.
+	release := os.Getenv(codingReleaseEnv)
+	for deadline := time.Now().Add(2 * time.Minute); release != ""; {
+		if _, err := os.Stat(release); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("pushed run never released (%s)", release)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	return nil
 }
 

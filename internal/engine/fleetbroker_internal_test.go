@@ -17,16 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // brokerRing is the keyring every node of a broker case's fleet holds.
-var brokerRing = statelog.OneKey("k1", "the fleet broker cases' fleet key material")
+var brokerRing = recordseal.OneKey("k1", "the fleet broker cases' fleet key material")
 
 // mustBrokerWire is a node's broker envelopes over ring.
-func mustBrokerWire(t *testing.T, ring statelog.Keyring) *brokerWire {
+func mustBrokerWire(t *testing.T, ring recordseal.Keyring) *brokerWire {
 	t.Helper()
 	wire, err := newBrokerWire(ring)
 	if err != nil {
@@ -43,7 +43,11 @@ type fakeMember struct {
 	groupOK error
 	removed []string
 	refuse  error
+	// client is the loopback client listener this member names, "" for none.
+	client string
 }
+
+func (f *fakeMember) ClientListener() string { return f.client }
 
 func (f *fakeMember) MetaGroup() (jetstream.MetaGroup, error) {
 	f.mu.Lock()
@@ -83,6 +87,8 @@ type wedgedMember struct{ release chan struct{} }
 func newWedgedMember(t *testing.T) *wedgedMember {
 	return &wedgedMember{release: make(chan struct{})}
 }
+
+func (w *wedgedMember) ClientListener() string { return "" }
 
 func (w *wedgedMember) MetaGroup() (jetstream.MetaGroup, error) {
 	<-w.release
@@ -143,7 +149,7 @@ func (f *brokerFleet) client(t *testing.T) *memory.Queue {
 
 // nodeWith is [brokerFleet.node] for a node holding ring.
 func (f *brokerFleet) nodeWith(t *testing.T, profile placement.NodeProfile, member brokerMembership,
-	ring statelog.Keyring) *Engine {
+	ring recordseal.Keyring) *Engine {
 
 	t.Helper()
 	ctx := t.Context()
@@ -254,6 +260,40 @@ func TestTheBrokerListingNamesEveryDisagreement(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("findings %v, want %v", got, want)
+	}
+}
+
+// THE BROKER VIEW NAMES THE ANSWERING NODE'S OWN CLIENT LISTENER, and nobody
+// else's: it is where an operator on that node's host points the nats tool,
+// reachable from that host alone. A member that opens none — and a node with no
+// broker of its own to ask — names none, rather than an address that is not
+// there.
+//
+// Mutation: omit the field → the member's row, red.
+func TestTheBrokerViewNamesThisNodesClientListener(t *testing.T) {
+	t.Parallel()
+	fleet := newBrokerFleet(t)
+	clustered := fleet.node(t, member("node-a", placement.RoleData),
+		&fakeMember{group: groupOf("node-a"), client: "127.0.0.1:41234"})
+	solo := fleet.node(t, member("node-b", placement.RoleData), &fakeMember{group: groupOf("node-a")})
+	leaf := fleet.node(t, placement.NodeProfile{ID: "leaf-1",
+		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf}, nil)
+	for _, tc := range []struct {
+		node *Engine
+		want string
+	}{
+		{clustered, "127.0.0.1:41234"},
+		{solo, ""},
+		{leaf, ""},
+	} {
+		view, err := tc.node.FleetBroker().List(t.Context())
+		if err != nil {
+			t.Fatalf("%s: list: %v", tc.node.id, err)
+		}
+		if view.Client != tc.want {
+			t.Errorf("%s's view names client listener %q, want %q", tc.node.id,
+				view.Client, tc.want)
+		}
 	}
 }
 
@@ -561,8 +601,8 @@ func TestTheBrokerFindingKindsAreClosed(t *testing.T) {
 }
 
 // A REMOVAL THE FLEET DID NOT SIGN REMOVES NOTHING. A member removes a voter
-// through its own system account, so a request anybody who can reach the
-// broker could write would change the quorum every election runs on — past
+// through its own system account, so a request anything the broker admitted
+// could write would change the quorum every election runs on — past
 // the grant, the step-up, the confirmation and the live-member refusal, which
 // all run on the asking node. Three ways to try — no signature, a signature
 // under the fleet's key id with somebody else's material, and the fleet's
@@ -580,7 +620,7 @@ func TestARemovalTheFleetDidNotSignRemovesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outsider, err := mustBrokerWire(t, statelog.OneKey("k1", "not the fleet's material")).
+	outsider, err := mustBrokerWire(t, recordseal.OneKey("k1", "not the fleet's material")).
 		SealRequest(removal)
 	if err != nil {
 		t.Fatal(err)
@@ -656,7 +696,7 @@ func TestASignedRemovalIsCarriedOutOnce(t *testing.T) {
 // counting a refusal about this member's keyring as the group's answer.
 func TestARemovalUnderAnUnheldKeyIsCarriedByAMemberThatHoldsIt(t *testing.T) {
 	t.Parallel()
-	rotated := statelog.Keyring{ActiveID: "k2", Keys: []statelog.Key{
+	rotated := recordseal.Keyring{ActiveID: "k2", Keys: []recordseal.Key{
 		brokerRing.Keys[0], {ID: "k2", Material: "the key the fleet is rotating to"},
 	}}
 	fleet := newBrokerFleet(t)
@@ -686,7 +726,7 @@ func TestABrokerReplyTheAskerCannotBelieveIsNoAnswer(t *testing.T) {
 	t.Parallel()
 	for name, forge := range map[string]func(t *testing.T) []byte{
 		"not signed by the fleet": func(t *testing.T) []byte {
-			out, err := mustBrokerWire(t, statelog.OneKey("k1", "not the fleet's material")).
+			out, err := mustBrokerWire(t, recordseal.OneKey("k1", "not the fleet's material")).
 				SealReply(brokerReply{Node: "node-a", Request: "whatever"})
 			if err != nil {
 				t.Fatal(err)
@@ -709,6 +749,7 @@ func TestABrokerReplyTheAskerCannotBelieveIsNoAnswer(t *testing.T) {
 			fleet.present(t, member("node-a", placement.RoleData))
 			reply := forge(t)
 			stop, err := fleet.client(t).Serve(t.Context(), fleetBrokerSubject("node-a"),
+				queue.ConcurrentAnswers,
 				func(context.Context, []byte) ([]byte, error) { return reply, nil })
 			if err != nil {
 				t.Fatal(err)
@@ -766,12 +807,12 @@ func rawBrokerReply(t *testing.T, q queue.EventQueue, member string, sent []byte
 		t.Fatalf("ask %s = (%d replies, %v), want the member to answer", member, len(replies), err)
 	}
 	_, domain := mustBrokerWire(t, brokerRing).Domains()
-	verifier, err := statelog.NewVerifier(domain, brokerRing)
+	verifier, err := recordseal.NewVerifier(domain, brokerRing)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, verdict := verifier.Open(replies[0])
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		t.Fatalf("the member's reply did not verify: %s", verdict)
 	}
 	var reply brokerReply

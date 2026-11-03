@@ -102,10 +102,14 @@ func (d SeatPauseDeps) wired() bool {
 // `stop_running` — its running work ends: the turn it is on at its next round,
 // and its executor in its box at once, the box reclaimed, what it had spent
 // charged and its turn closed as stopped. An executor parked on a person's
-// question stays parked behind the pause. The node holding the seat carries that out
-// from its own watched copy, typically within a second; nothing here waits for
-// it, because the record IS the pause and a node that has not heard yet holds
-// its mail — and ends the seat's running run — the moment it does.
+// question stays parked behind the pause, and until the seat is resumed every
+// git node refuses its executors' box pushes (internal/code/host's box
+// admission) and their bridge sessions refuse their calls of every tool not
+// proven read-only (internal/api/mcpbridge), both through the engine's
+// stoppedBy. The node holding the seat carries that out from its own watched
+// copy, typically within a second; nothing here waits for it, because the
+// record IS the pause and a node that has not heard yet holds its mail — and
+// ends the seat's running run — the moment it does.
 //
 // # Whose decision it is
 //
@@ -133,8 +137,10 @@ func (t *pauseSeat) Description() string {
 		"incoming work waits on its inbox in order, and its scheduled runs are skipped. " +
 		"The turn it is on finishes first unless `stop_running` is true, which ends that " +
 		"turn at its next round and the seat's executor in its box at once — the box " +
-		"reclaimed — instead. Pausing a paused seat changes nothing, except to add " +
-		"`stop_running`. Resume it with " + ResumeSeatTool + "."
+		"reclaimed — instead, and refuses every change its executors make — their " +
+		"boxes' pushes and their calls of its tools that write — until it is resumed. " +
+		"Pausing a paused seat changes nothing, except to add `stop_running`. Resume it " +
+		"with " + ResumeSeatTool + "."
 }
 
 func (t *pauseSeat) Parameters() map[string]any {
@@ -154,7 +160,10 @@ func (t *pauseSeat) Parameters() map[string]any {
 				"type": "boolean",
 				"description": "End the seat's running work rather than letting it " +
 					"finish: the turn it is on at its next round, and its executor in its " +
-					"box at once, the box reclaimed. What was stopped is not run again.",
+					"box at once, the box reclaimed; and refuse every change its " +
+					"executors make — a push from their boxes, a call of the seat's " +
+					"tools that writes — until the seat is resumed. What was stopped is " +
+					"not run again.",
 			},
 		},
 		"required": []any{"handle"},

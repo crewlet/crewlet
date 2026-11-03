@@ -182,7 +182,7 @@ func peoplePageStatement(q PeopleQuery, limit int) (string, []any) {
 // People answers one page of the directory.
 func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) {
 	limit := pageLimit(q.Limit)
-	out := PeoplePage{At: r.committed()}
+	out := PeoplePage{At: r.reached()}
 	query, args := peoplePageStatement(q, limit)
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, query, args...)
@@ -497,7 +497,7 @@ func (r *Reader) Invitations(ctx context.Context, q InvitationsQuery) (
 	InvitationPage, error) {
 
 	limit := pageLimit(q.Limit)
-	out := InvitationPage{At: r.committed()}
+	out := InvitationPage{At: r.reached()}
 	query, args := invitationsPageStatement(q, limit)
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, query, args...)
@@ -779,7 +779,7 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 	case limit > MaxHistoryPage:
 		limit = MaxHistoryPage
 	}
-	out := HistoryPage{At: r.committed()}
+	out := HistoryPage{At: r.reached()}
 	query, args := historyPageStatement(q, limit)
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, query, args...)

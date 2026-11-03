@@ -287,12 +287,10 @@ func TestTheChatAxisRefusesInShortSentences(t *testing.T) {
 		{"a channel that is not a name",
 			"name: Acme\nunits:\n  - name: Eng\n    channel: \"#Eng\"\n    roles:\n      - name: Ann\n",
 			"units[0].channel"},
-		// Worklet's and Doclet's, which the chat axis's rules were copied
-		// from and read alike
-		{"a worklet block on a jira company",
-			"name: Acme\ntracker:\n  worklet:\n    inbox_retention_days: 90\n" + jira, "tracker.worklet"},
+		// The inbox's, Worklet's and Doclet's, which the chat axis's rules
+		// were copied from and read alike
 		{"an inbox retention out of range",
-			"name: Acme\ntracker:\n  worklet:\n    inbox_retention_days: 3\n", "tracker.worklet.inbox_retention_days"},
+			"name: Acme\ninbox:\n  retention_days: 3\n", "inbox.retention_days"},
 		{"Worklet beside jira", "name: Acme\ntracker: {backend: worklet}\n" + jira, "tracker.backend"},
 		{"Doclet beside confluence",
 			"name: Acme\nknowledge: {backend: doclet}\n" + confluence, "knowledge.backend"},

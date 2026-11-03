@@ -84,4 +84,14 @@
 // PURE. It reads no store and holds no clock: the publish pipeline hands it
 // the files' bytes through an [artifacts.FileSource], and the adoption and the
 // read routes call it on the same bytes.
+//
+// ITS PRIVATE TABLES ARE BUILT AT FIRST USE: the link and host patterns, the
+// slide family grammar and the PNG and WebP chunk tables are each a
+// [sync.OnceValue], built the first time a kit is read. The engine is one
+// binary, and that binary is also every push's proc-receive hook, which runs
+// every linked package's initialisation before its first statement — for a
+// process that reads no kit. cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit
+// holds every package to that. The exported patterns and [FaceFamilies] stay
+// variables: they are this format's published grammar, which other packages
+// and the dashboard's copies are held to.
 package brandformat

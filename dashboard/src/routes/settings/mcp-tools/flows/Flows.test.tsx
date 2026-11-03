@@ -3,11 +3,12 @@
  * back until the engine has said what it would meet.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { TestClient } from "~/test/client.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 import type { McpCheckAnswer, McpServerAnswer } from "~/contract/mcp.ts";
 import { removeServer, restartServer, setEnabled, storeValue, testServer } from "../api.ts";
 import { LINEAR_DETAIL, mcpData } from "../fixtures.ts";
@@ -149,11 +150,8 @@ function mountAt(hash: string) {
   );
 }
 
-async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  });
-}
+/** Every stub's answer has landed, and what it drew (`test/settle.ts`). */
+const settle = afterMicrotasks;
 
 beforeEach(() => vi.clearAllMocks());
 

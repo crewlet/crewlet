@@ -42,8 +42,12 @@ type AccessManaged = "external";
 /** Who wrote the company document instead of the dashboard: the Kubernetes operator. */
 type AccessManagedBy = "operator";
 
-/** Whether Crewlet minted a seat's credential or it was provided from outside Crewlet. */
-type AccessCredentialSource = "minted" | "external";
+/**
+ * Whether Crewlet minted and sealed a seat's credential, it was provided from
+ * outside Crewlet, or Crewlet issues it at use and never seals it (a token
+ * that lasts an hour, issued by each node for its own runs).
+ */
+type AccessCredentialSource = "minted" | "external" | "issued";
 
 /** Who turned an account off: this engine, or somebody at the vendor by hand. */
 type AccessDisabledBy = "crewlet" | "hand";
@@ -153,7 +157,8 @@ interface AccessCredential {
   variable: string;
   /** Further variables the same credential seals (an Atlassian account address, a Slack signing secret). */
   others?: string[];
-  minted_at: string;
+  /** When it was sealed. Absent for an issued credential, which each node issues for itself. */
+  minted_at?: string;
   /** Who the pass that sealed it ran for, as the engine names actors. */
   by?: string;
   /** Whether Crewlet minted it or it was provided from outside Crewlet. */
@@ -269,6 +274,19 @@ export interface AccessBoxLine {
 export interface AccessBox {
   /** A person's lines first, then the engine's. */
   env: AccessBoxLine[];
+  /** Files the box holds for the CLI (a token file it reads), each naming its variable. */
+  files?: AccessBoxFile[];
+}
+
+/** One file in a seat's executor box: what it holds, by reference, never the value. */
+export interface AccessBoxFile {
+  /** Relative to the box's home directory. */
+  path: string;
+  /** The variable reference the file's whole body is (`${<VARIABLE>_<HANDLE>}`). */
+  value: string;
+  /** Whether the engine rewrites it while a run is live, so it stays current. */
+  rewritten: boolean;
+  by: AccessActor;
 }
 
 export interface AccessSeatLane {
@@ -278,6 +296,8 @@ export interface AccessSeatLane {
   /** What the next sync does for this lane as the document stands. */
   plan: AccessStep[];
   tool: AccessToolState;
+  /** Why the tool is in its state, in the engine's words, where the state alone does not say. */
+  tool_reason?: string;
   /** The desired setting is an administration grant. */
   administers?: boolean;
   /** Where the lane's tool is a CLI in the seat's own box (Expo's EAS CLI), what that box holds for it. */

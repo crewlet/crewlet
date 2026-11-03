@@ -35,7 +35,6 @@ func tree() fstest.MapFS {
 		// ending that prefix.
 		"dashboard/assets-previous/index-Cndv8LWe.js": {Data: entryModule},
 		// The unhashed files the build keeps at stable paths.
-		"dashboard/protocol.js":      {Data: repeat("export function decode(frame) { return frame }\n")},
 		"dashboard/crewlet-icon.svg": {Data: repeat(`<path d="M0 0h24v24H0z"/>`)},
 		// Already-compressed kinds, with bytes that are NOT (see font).
 		"dashboard/fonts/face.woff2": {Data: font},
@@ -256,7 +255,7 @@ func TestAHashedAssetIsCachedForGood(t *testing.T) {
 //
 // The shell above all: it is what names this build's hashed files, so a
 // shell cached for a year would go on asking for last year's modules. The
-// fonts, the notices, the icons and protocol.js keep stable paths on purpose
+// fonts, the notices and the icons keep stable paths on purpose
 // (dashboard/vite.config.ts), which is exactly what makes them unsafe to keep
 // without asking. And a hashed-LOOKING name outside assets/ is no exception:
 // the class is the directory the build writes hashes into, not a guess from
@@ -269,7 +268,6 @@ func TestTheShellAndEveryUnhashedFileRevalidate(t *testing.T) {
 		"/favicon.ico",
 		"/static/dashboard/crewlet-icon.svg",
 		"/static/dashboard/index.html",
-		"/static/dashboard/protocol.js",
 		"/static/dashboard/fonts/face.woff2",
 		"/static/dashboard/NOTICES.txt",
 		"/static/dashboard/assets-previous/index-Cndv8LWe.js",
@@ -319,7 +317,6 @@ func TestATextAssetIsGzippedWhenAsked(t *testing.T) {
 			hashedJS: "dashboard/assets/index-Cndv8LWe.js",
 			"/static/dashboard/assets/index-BS_xpF9S.css": "dashboard/assets/index-BS_xpF9S.css",
 			"/dashboard":                         "dashboard/index.html",
-			"/static/dashboard/protocol.js":      "dashboard/protocol.js",
 			"/static/dashboard/crewlet-icon.svg": "dashboard/crewlet-icon.svg",
 		} {
 			res := fetch(t, a, path, map[string]string{"Accept-Encoding": accept})

@@ -2,9 +2,11 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +43,7 @@ func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 
 	r := &retention{db: db}
 	var reading statelog.Reading
-	r.space(&reading)
+	r.space(&reading, time.Now())
 
 	if reading.StoreBytes <= 0 {
 		t.Error("an open store measured zero bytes, so `volume_low` compares " +
@@ -107,7 +109,7 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 		return dir, free[dir], nil
 	}}
 	var reading statelog.Reading
-	r.space(&reading)
+	r.space(&reading, time.Now())
 	if reading.FreeBytes != 1<<10 || reading.StoreBytes != replicatedSize ||
 		reading.StoreVolume != replicatedDir {
 		t.Fatalf("the reading is %d free against %d stored on %q, want the replicated "+
@@ -131,7 +133,7 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 		return dir, 1 << 40, nil
 	}
 	reading = statelog.Reading{}
-	r.space(&reading)
+	r.space(&reading, time.Now())
 	if reading.StoreVolume != nodeDir || !strings.Contains(reading.StoreVolumeUnmeasured, replicatedDir) {
 		t.Fatalf("the reading is of %q with %q unmeasured, want the node volume read and the "+
 			"replicated one named", reading.StoreVolume, reading.StoreVolumeUnmeasured)
@@ -145,41 +147,171 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 	// ONE VOLUME UNDER BOTH is one volume's bytes, summed.
 	r.volumes = func(string) (string, int64, error) { return "one", 1 << 40, nil }
 	reading = statelog.Reading{}
-	r.space(&reading)
+	r.space(&reading, time.Now())
 	if reading.StoreBytes != nodeSize+replicatedSize {
 		t.Errorf("one volume holding both files is %d stored, want %d", reading.StoreBytes,
 			nodeSize+replicatedSize)
 	}
 }
 
-// THE TIGHTEST VOLUME IS THE ONE WITH THE SMALLEST ROOM FOR ITS OWN BYTES, and a
-// volume holding nothing is never it.
+// A COPY HOLDING THE LOG IS NAMED, AND WHAT IT HELD BACK IS ROOM THE NEXT ONE
+// NEEDS.
+//
+// A backup's or a donor snapshot's copy stops every checkpoint at its moment
+// for its whole run (store.DB.Copies), so the live file's write-ahead log grows
+// under it on the volume the node commits to. Both alarms that read the disk
+// were blind to that: `wal_large` told an operator a reader was holding a
+// snapshot open where a copy was, and `volume_low` kept room for the next copy
+// and not for the log it holds back. Here the replicated estate is copied while
+// it is written beside the copy: while the copy runs, the reading names the
+// file whose log is largest and the copy holding it, and the table says so;
+// once it has finished, the reading counts what it held back on the estate's
+// own volume, so a volume with room for a second copy and its tenth but not for
+// that log fires `volume_low`, and one with room for both does not.
+func TestTheReadingNamesACopyHoldingTheLogAndCountsWhatItHoldsBack(t *testing.T) {
+	t.Parallel()
+	hold := storetest.NewCopyHold()
+	nodeDir, replicatedDir := t.TempDir(), t.TempDir()
+	db, estate := storetest.OpenEstate(t, nodeDir+"/company.db", store.Options{
+		WrapDriver: hold.Wrap, ReplicatedPath: replicatedDir + "/crewlet-replicated.db"}, 1)
+	t.Cleanup(func() { _ = db.Close() })
+	replicated := storetest.ReplicatedDB(t, estate)
+	ctx := t.Context()
+	if err := estate.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`CREATE TABLE crewlet_copy_held (id INTEGER PRIMARY KEY, pad BLOB NOT NULL)`)
+		return err
+	}); err != nil {
+		t.Fatalf("create the table written beside the copy: %v", err)
+	}
+	r := &retention{db: db}
+
+	var during statelog.Reading
+	var nodeLog, estateLog int64
+	storetest.HoldCopy(t, replicated, hold, func() {
+		for i := range 64 {
+			if err := estate.Tx(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `INSERT INTO crewlet_copy_held (id, pad)
+					VALUES (?, zeroblob(4096))`, i)
+				return err
+			}); err != nil {
+				t.Fatalf("write row %d beside the copy: %v", i, err)
+			}
+		}
+		nodeLog = mustFileBytes(t, db.Path()+walSuffix)
+		estateLog = mustFileBytes(t, replicated.Path()+walSuffix)
+		r.space(&during, time.Now())
+	})
+	if estateLog <= nodeLog {
+		t.Fatalf("the estate's log is %d bytes beside the node file's %d after the writes "+
+			"its copy held back, so the largest log is not the one the case is about",
+			estateLog, nodeLog)
+	}
+	if during.WALFile != filepath.Base(replicated.Path()) || during.WALBytes != estateLog {
+		t.Fatalf("the reading names the log beside %q at %d bytes, want the replicated "+
+			"estate's at %d", during.WALFile, during.WALBytes, estateLog)
+	}
+	if !strings.HasSuffix(during.WALCopy, ".part") || during.WALCopyFor <= 0 {
+		t.Fatalf("while a copy held the estate's log the reading named %q holding it for %s, "+
+			"want the copy's part file and how long", during.WALCopy, during.WALCopyFor)
+	}
+	// THE TABLE SAYS IT, past the threshold no test writes its way to.
+	large := during
+	large.WALBytes = statelog.WALAlarmBytes + 1
+	alarm, fired := alarmOf(statelog.Report{Alarms: statelog.Evaluate(large)}, statelog.KindWALLarge)
+	if !fired || !strings.Contains(alarm.Detail, during.WALCopy) ||
+		!strings.Contains(alarm.Detail, "folds it back in") {
+		t.Fatalf("a large log a copy holds raised %+v (fired %v), want wal_large naming the "+
+			"copy and that its end folds the log back in", alarm, fired)
+	}
+
+	var after statelog.Reading
+	r.space(&after, time.Now())
+	if after.WALCopy != "" {
+		t.Errorf("a copy that ended is still named holding the log: %q", after.WALCopy)
+	}
+	size := mustFileBytes(t, replicated.Path())
+	held := replicated.CopyHoldsBack(size)
+	if held <= 0 {
+		t.Fatalf("the estate measured a copy holding back %d after one held its log under "+
+			"64 commits", held)
+	}
+	// ROOM FOR A SECOND COPY AND ITS TENTH, which the rule before the log
+	// counted as room — and not for the log as well.
+	room := int64(math.Ceil(statelog.VolumeHeadroomFactor * float64(size)))
+	free := map[string]int64{nodeDir: 1 << 40, replicatedDir: room}
+	r.volumes = func(dir string) (string, int64, error) { return dir, free[dir], nil }
+	var tight statelog.Reading
+	r.space(&tight, time.Now())
+	if tight.StoreVolume != replicatedDir || tight.CopyHeldBytes != held {
+		t.Fatalf("the reading is of %q counting %d held back, want the estate's volume %q "+
+			"counting the %d its copy holds back", tight.StoreVolume, tight.CopyHeldBytes,
+			replicatedDir, held)
+	}
+	alarm, fired = alarmOf(statelog.Report{Alarms: statelog.Evaluate(tight)}, statelog.KindVolumeLow)
+	if !fired || !strings.Contains(alarm.Detail, "write-ahead log a copy holds back") {
+		t.Fatalf("a volume with room for a second copy and not for the log it holds back "+
+			"raised %+v (fired %v), want volume_low naming the log", alarm, fired)
+	}
+	// AND ROOM FOR BOTH IS ROOM.
+	free[replicatedDir] = room + held
+	var roomy statelog.Reading
+	r.space(&roomy, time.Now())
+	if _, fired := alarmOf(statelog.Report{Alarms: statelog.Evaluate(roomy)}, statelog.KindVolumeLow); fired {
+		t.Errorf("a volume with room for a second copy and the log it holds back raised "+
+			"volume_low: %+v", roomy)
+	}
+}
+
+// mustFileBytes is fileBytes failing the case on an error.
+func mustFileBytes(t *testing.T, path string) int64 {
+	t.Helper()
+	n, err := fileBytes(path)
+	if err != nil {
+		t.Fatalf("measure %s: %v", path, err)
+	}
+	return n
+}
+
+// THE TIGHTEST VOLUME IS THE ONE WITH THE SMALLEST ROOM FOR THE NEXT COPY OF ITS
+// OWN BYTES AND THE LOG THAT COPY HOLDS BACK, and a volume holding nothing is
+// never it.
 func TestTheTightestVolumeIsTheOneNearestItsAlarm(t *testing.T) {
 	t.Parallel()
 	file := func(volume string, free, size int64) storedFile {
 		return storedFile{volume: volume, dir: "/" + volume, free: free, size: size}
+	}
+	holding := func(f storedFile, held int64) storedFile {
+		f.held = held
+		return f
 	}
 	for name, tc := range map[string]struct {
 		files []storedFile
 		want  storeVolume
 	}{
 		"no files": {nil, storeVolume{}},
-		"two files, one volume": {[]storedFile{file("a", 100, 10), file("a", 100, 30)},
-			storeVolume{"/a", 100, 40}},
+		"two files, one volume": {[]storedFile{holding(file("a", 100, 10), 3), holding(file("a", 100, 30), 4)},
+			storeVolume{"/a", 100, 40, 7}},
 		"the smaller ratio, not the smaller free": {
-			[]storedFile{file("big", 1000, 900), file("small", 50, 5)}, storeVolume{"/big", 1000, 900}},
+			[]storedFile{file("big", 1000, 900), file("small", 50, 5)}, storeVolume{"/big", 1000, 900, 0}},
 		"an empty volume beside a full one": {
-			[]storedFile{file("empty", 1, 0), file("full", 10, 100)}, storeVolume{"/full", 10, 100}},
+			[]storedFile{file("empty", 1, 0), file("full", 10, 100)}, storeVolume{"/full", 10, 100, 0}},
 		"a full volume beside an empty one": {
-			[]storedFile{file("full", 10, 100), file("empty", 1, 0)}, storeVolume{"/full", 10, 100}},
+			[]storedFile{file("full", 10, 100), file("empty", 1, 0)}, storeVolume{"/full", 10, 100, 0}},
+		// THE SAME RATIO OF FREE TO STORED on both, and the second the
+		// tighter for the log its copy holds back: 1 000 free against a
+		// copy of 500 is room on the first, and not beside 400 of log.
+		"the larger log a copy holds back, at the same ratio": {
+			[]storedFile{file("quiet", 1000, 500), holding(file("busy", 1000, 500), 400)},
+			storeVolume{"/busy", 1000, 500, 400}},
 		// Tens of terabytes each: the cross products overflow an int64,
 		// and wrapped they choose the roomier volume in either order.
 		"sizes past what a product of int64s holds": {
 			[]storedFile{file("a", 14773780071959, 34330076720781), file("b", 27431250736051, 18740855235886)},
-			storeVolume{"/a", 14773780071959, 34330076720781}},
+			storeVolume{"/a", 14773780071959, 34330076720781, 0}},
 		"sizes past what a product of int64s holds, reversed": {
 			[]storedFile{file("b", 27431250736051, 18740855235886), file("a", 14773780071959, 34330076720781)},
-			storeVolume{"/a", 14773780071959, 34330076720781}},
+			storeVolume{"/a", 14773780071959, 34330076720781, 0}},
 	} {
 		if got := tightestVolume(tc.files); got != tc.want {
 			t.Errorf("%s: %+v, want %+v", name, got, tc.want)
@@ -305,11 +437,14 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	// THE CENSUS IS EACH LOG'S, as the report evaluates it
 	// ([statelog.DomainInputs.LinearizableReads]).
 	held, counted := r.census(r.state.running())[trackerLog.Name()]
-	if !counted || held.expected != trackerCensus.Expected() ||
-		held.reads != 3*held.expected {
+	// THE TRACKER'S LOG COUNTS NO READERS OF ITS OWN, so no ceiling enters
+	// its census ([clientBarriers]).
+	expected, _ := held.expectedAt(0, true, 0)
+	if !counted || expected != trackerCensus.Expected() ||
+		held.reads != 3*expected {
 		t.Errorf("the tracker's log reached its census as %d read against %d (counted "+
 			"%v), so `census_drift` compares against nothing", held.reads,
-			held.expected, counted)
+			expected, counted)
 	}
 
 	fired := map[statelog.Kind]bool{}
@@ -317,7 +452,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		fired[alarm.Kind] = true
 	}
 	for _, alarm := range statelog.Evaluate(statelog.Reading{
-		LinearizableReads: held.reads, LinearizableReadsExpected: held.expected,
+		LinearizableReads: held.reads, LinearizableReadsExpected: expected,
 	}) {
 		fired[alarm.Kind] = true
 	}
@@ -342,8 +477,9 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	silent.observed(&empty)
 	alarms := statelog.Evaluate(empty)
 	for _, c := range silent.census(silent.state.running()) {
+		expected, _ := c.expectedAt(0, true, 0)
 		alarms = append(alarms, statelog.Evaluate(statelog.Reading{
-			LinearizableReads: c.reads, LinearizableReadsExpected: c.expected,
+			LinearizableReads: c.reads, LinearizableReadsExpected: expected,
 		})...)
 	}
 	for _, alarm := range alarms {
@@ -628,9 +764,12 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 				background: func(domain string) int { return tc.background[domain] }}
 			census := r.census(r.state.running())
 			held, counted := census[tc.log]
-			if !counted || held.expected != tc.expected {
+			// NONE OF THESE LOGS COUNTS READERS OF ITS OWN, so no ceiling
+			// enters a census here ([clientBarriers]).
+			expected, _ := held.expectedAt(0, true, 0)
+			if !counted || expected != tc.expected {
 				t.Errorf("the census holds %q to %d a day (counted %v), want %d",
-					tc.log, held.expected, counted, tc.expected)
+					tc.log, expected, counted, tc.expected)
 			}
 			if _, counted := census[vectorLog.Name()]; counted {
 				t.Error("the vector log, which no read appends to, is held to a census")
@@ -639,15 +778,16 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			// its own census, and the alarm names the log.
 			fired := false
 			for _, c := range census {
+				sized, _ := c.expectedAt(0, true, 0)
 				for _, alarm := range statelog.Evaluate(statelog.Reading{
-					LinearizableReads: c.reads, LinearizableReadsExpected: c.expected,
+					LinearizableReads: c.reads, LinearizableReadsExpected: sized,
 				}) {
 					fired = fired || alarm.Kind == statelog.KindCensusDrift
 				}
 			}
 			if fired != tc.fires {
 				t.Errorf("census_drift fired %v on %d a day against %d, want %v",
-					fired, held.reads, held.expected, tc.fires)
+					fired, held.reads, expected, tc.fires)
 			}
 		})
 	}

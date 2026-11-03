@@ -33,6 +33,7 @@ import type {
 } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -176,9 +177,7 @@ function mount(
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 const params = (what: string) => asks.filter((a) => a.what === what).map((a) => a.params);
@@ -868,7 +867,7 @@ test("where the company runs no Worklet, the auxiliary model joins the side colu
         withDerived({
           timezone: "UTC",
           roles: [{ name: "CEO", handle: "ceo" }],
-          services: { tracker: "jira", knowledge: "doclet", chat: "chatlet" },
+          services: { tracker: "jira", knowledge: "doclet", chat: "chatlet", code: "none" },
         }),
       ),
   );

@@ -11,7 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
@@ -56,13 +58,13 @@ import (
 // GESTURES for the inbox and the pins, never the lists: each is resolved by
 // the tracker against the record its own decide reads, so a tool never sends
 // back a list it read — which is how one "mark this read" used to erase every
-// other mark. See [worklet.InboxGesture]. Every verb carries the authority the
+// other mark. See [inbox.Gesture]. Every verb carries the authority the
 // table decided ([admittedWrite]), because the tracker keeps the one rule of
 // its own — an agent never re-orders a colleague's queue — and refuses a write
 // nobody admitted.
 type PersonWriter interface {
-	MarkInbox(ctx context.Context, opID, handle string,
-		gesture worklet.InboxGesture,
+	MarkInbox(ctx context.Context, opID, handle string, seen statelog.Position,
+		gesture inbox.Gesture[worklet.Reason],
 		authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	WritePins(ctx context.Context, opID, handle string,
 		gesture worklet.PinGesture,
@@ -137,7 +139,7 @@ func (t *setPriorities) Description() string {
 }
 
 func (t *setPriorities) Parameters() map[string]any {
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"handle": map[string]any{
@@ -292,7 +294,7 @@ func (t *setPins) Parameters() map[string]any {
 		},
 		"required": []string{"kind", "id"},
 	}
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"views": setChangeSchema(map[string]any{"type": "string"},
@@ -382,7 +384,11 @@ func (t *markInbox) Description() string {
 		"everything up to a log position — pass the newest notice you have " +
 		"seen, as `<stream>@<generation>:<sequence>` — and never moves your " +
 		"position backwards. Only what you name changes: every other mark, " +
-		"snooze and your read position stay exactly as they are."
+		"snooze and your read position stay exactly as they are. Pass `seen`, " +
+		"the newest tracker-log position you read (a notice's own `position`), " +
+		"so the mark waits for the notices you were shown rather than being " +
+		"refused by a node not yet at them. Your code notices are marked with " +
+		CodeMarkInboxTool + ": each domain keeps its own marks."
 }
 
 func (t *markInbox) Parameters() map[string]any {
@@ -392,7 +398,7 @@ func (t *markInbox) Parameters() map[string]any {
 			"description": description,
 		}
 	}
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"read":     ids("Record ids to mark read — done."),
@@ -409,7 +415,7 @@ func (t *markInbox) Parameters() map[string]any {
 							"type": "string",
 							"description": fmt.Sprintf("RFC3339; when it "+
 								"comes back. In the future, and at most "+
-								"%d days away.", int(worklet.MaxSnoozeAhead.Hours()/24)),
+								"%d days away.", int(inbox.MaxSnoozeAhead.Hours()/24)),
 						},
 					},
 					"required": []string{"record_id", "until"},
@@ -422,6 +428,16 @@ func (t *markInbox) Parameters() map[string]any {
 					"notice's `log_stream`, `log_generation` and `log_seq`. " +
 					"A position at or behind the one you have read to " +
 					"changes nothing.",
+			},
+			"seen": map[string]any{
+				"type": "string",
+				"description": "How far you have read the tracker's log, " +
+					"`<stream>@<generation>:<sequence>` — the `position` " +
+					"of the newest work notice you were shown, or the " +
+					"tracker source's `newest`. The mark is decided once " +
+					"its node has applied it, so a notice you were shown " +
+					"is never refused as unknown because the node asked " +
+					"had not reached it yet. Omit it to wait for nothing.",
 			},
 			"primary_reasons": map[string]any{
 				"type":  "array",
@@ -462,8 +478,12 @@ func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWrit
 	if bad != "" {
 		return failed(bad)
 	}
+	seen, bad := markFloor(args, topics.TrackerLogStream, "tracker's log", "work")
+	if bad != "" {
+		return failed(bad)
+	}
 	opID := opIDFor(actor, worklet.MarkInboxTool, "inbox", handle, args)
-	result, err := writer.MarkInbox(ctx, opID, handle, gesture, authority)
+	result, err := writer.MarkInbox(ctx, opID, handle, seen, gesture, authority)
 	if err != nil {
 		return writeFailure(ctx, actor, worklet.MarkInboxTool, err)
 	}
@@ -757,13 +777,24 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 	return actor, d.PersonWriter(actor), nil
 }
 
-// inboxGesture reads mark_inbox's arguments, or the sentence refusing them.
+// inboxGesture reads mark_inbox's arguments, or the sentence refusing them —
+// [gestureOf] over the tracker's reasons.
+func inboxGesture(args map[string]any) (inbox.Gesture[worklet.Reason], string) {
+	return gestureOf(args, worklet.Reasons, words.And(worklet.Reasons))
+}
+
+// gestureOf reads an inbox mark's arguments — `read`, `unread`, `unsnooze`,
+// `snooze`, `read_through` and `primary_reasons` — as one gesture over a
+// domain's reasons, or the sentence refusing them: ONE PARSER for every
+// domain's mark tool (mark_inbox, code_mark_inbox), so a schema they share
+// is read the one way and refused in the same words.
 //
 // PRESENCE, NOT VALUE, decides `primary_reasons`: an empty list is a choice —
 // the shipped default — and an absent one leaves the person's choice alone,
-// which a nil slice could not tell apart.
-func inboxGesture(args map[string]any) (worklet.InboxGesture, string) {
-	var g worklet.InboxGesture
+// which a nil slice could not tell apart. reasons are the domain's, which a
+// declared reason must be one of, and list names them as one sentence.
+func gestureOf[R ~string](args map[string]any, reasons []R, list string) (inbox.Gesture[R], string) {
+	var g inbox.Gesture[R]
 	g.Read = argStrings(args, "read")
 	g.Unread = argStrings(args, "unread")
 	g.Unsnooze = argStrings(args, "unsnooze")
@@ -785,7 +816,7 @@ func inboxGesture(args map[string]any) (worklet.InboxGesture, string) {
 					"date and time in RFC3339, like 2026-06-30T09:00:00Z — %q "+
 					"is not one.", i+1, clip(raw))
 			}
-			g.Snooze = append(g.Snooze, worklet.Snooze{
+			g.Snooze = append(g.Snooze, inbox.Snooze{
 				RecordID: strings.TrimSpace(argString(fields, "record_id")),
 				Until:    until.UTC(),
 			})
@@ -799,16 +830,16 @@ func inboxGesture(args map[string]any) (worklet.InboxGesture, string) {
 		g.ReadThrough = &at
 	}
 	if _, held := args["primary_reasons"]; held {
-		reasons := []worklet.Reason{}
+		declared := []R{}
 		for _, raw := range argStrings(args, "primary_reasons") {
-			reason := worklet.Reason(strings.TrimSpace(raw))
-			if !slices.Contains(worklet.Reasons, reason) {
+			reason := R(strings.TrimSpace(raw))
+			if !slices.Contains(reasons, reason) {
 				return g, fmt.Sprintf("%q is not a wake reason. The reasons "+
-					"are: %s.", raw, words.And(worklet.Reasons))
+					"are: %s.", raw, list)
 			}
-			reasons = append(reasons, reason)
+			declared = append(declared, reason)
 		}
-		g.PrimaryReasons = &reasons
+		g.PrimaryReasons = &declared
 	}
 	if g.Empty() {
 		return g, "Name what to mark: `read`, `unread`, `snooze` or " +
@@ -999,7 +1030,7 @@ func (t *workInbox) Parameters() map[string]any {
 			"limit": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf("How many notices, at most %d.",
-					worklet.MaxInboxRows),
+					inbox.MaxRows),
 			},
 		},
 		"required": []string{"handle"},
@@ -1023,13 +1054,13 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		Handle:      handle,
 		PrimaryOnly: argBool(args, "primary_only"),
 		Unread:      argBool(args, "unread"),
-		Snoozed:     worklet.SnoozeExclude,
+		Snoozed:     inbox.SnoozeExclude,
 		Cursor:      strings.TrimSpace(argString(args, "cursor")),
 		Limit:       argInt(args, "limit", 0),
 		Level:       seatReadLevel,
 	}
 	if raw := strings.TrimSpace(argString(args, "snoozed")); raw != "" {
-		q.Snoozed = worklet.SnoozeScope(raw)
+		q.Snoozed = inbox.SnoozeScope(raw)
 		if !q.Snoozed.Valid() {
 			return failed(fmt.Sprintf("%q is not a `snoozed` scope. The "+
 				"scopes are: %s.", raw, strings.Join(snoozeScopeNames(), ", "))), nil
@@ -1076,11 +1107,11 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		"Ask for fewer with `limit`, or narrow with `reasons` or `since`.")
 }
 
-// snoozeScopeNames is the three scopes, derived from the tracker's own list
-// for the reason [reasonList] is.
+// snoozeScopeNames is the three scopes, derived from the inbox's own list so
+// a scope added there is offered here without a copy to keep in step.
 func snoozeScopeNames() []string {
-	out := make([]string, 0, len(worklet.SnoozeScopes))
-	for _, scope := range worklet.SnoozeScopes {
+	out := make([]string, 0, len(inbox.SnoozeScopes))
+	for _, scope := range inbox.SnoozeScopes {
 		out = append(out, string(scope))
 	}
 	return out

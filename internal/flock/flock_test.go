@@ -6,16 +6,49 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
-// TWO TAKERS IN ONE PROCESS EXCLUDE EACH OTHER, as two processes do. The
-// broker's stream directory depends on it: two embedded brokers in one process
-// on one directory corrupt it exactly as two processes would, so a lock that
-// only excluded other processes would let the second one start.
+// hangDetector bounds a Try this suite expects to come back at once. Try is
+// non-blocking by contract, so one that has not answered in this long has
+// blocked — which is the failure, not a slow machine: the honest answer to a
+// held lock is "held, by whom", immediately.
+const hangDetector = 30 * time.Second
+
+// tryWithin takes path, failing the case if the Try blocks.
+func tryWithin(t *testing.T, path string) (*Lock, error) {
+	t.Helper()
+	type answer struct {
+		lock *Lock
+		err  error
+	}
+	answered := make(chan answer, 1)
+	go func() {
+		lock, err := Try(path)
+		answered <- answer{lock, err}
+	}()
+	select {
+	case got := <-answered:
+		return got.lock, got.err
+	case <-time.After(hangDetector):
+		t.Fatalf("a Try of %s has not answered in %v: it blocked on the holder "+
+			"instead of saying who holds the lock", path, hangDetector)
+		return nil, nil
+	}
+}
+
+// TWO TAKERS IN ONE PROCESS EXCLUDE EACH OTHER, as two processes do, and the
+// second is refused AT ONCE. The broker's stream directory depends on it: two
+// embedded brokers in one process on one directory corrupt it exactly as two
+// processes would, so a lock that only excluded other processes would let the
+// second one start.
 //
 // Mutation: share the descriptor between takers (or reuse one claim) and the
-// second Try succeeds.
+// second Try succeeds; take the lock blocking (LOCK_EX without LOCK_NB) and
+// this case fails at its hang detector.
 func TestASecondTakerInThisProcessIsRefused(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "x.lock")
@@ -26,7 +59,7 @@ func TestASecondTakerInThisProcessIsRefused(t *testing.T) {
 	}
 	defer first.Release()
 
-	second, err := Try(path)
+	second, err := tryWithin(t, path)
 	if err == nil {
 		second.Release()
 		t.Fatal("a second taker in this process was handed a lock already held")
@@ -41,6 +74,9 @@ func TestASecondTakerInThisProcessIsRefused(t *testing.T) {
 	if held.Path != path {
 		t.Errorf("the refusal names %q, want the lock file %q", held.Path, path)
 	}
+	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), held.Holder) {
+		t.Errorf("the message %q must name both the lock file and its holder", err)
+	}
 }
 
 // RELEASING FREES IT for the next taker, and leaves the file where it is.
@@ -48,6 +84,12 @@ func TestASecondTakerInThisProcessIsRefused(t *testing.T) {
 // The file stays because unlinking it races a peer that has opened it and is
 // about to lock: that peer would lock an unlinked inode while a third created a
 // fresh file and locked that, and both would believe they held it.
+//
+// And a release is safe twice, from two goroutines at once, and on a nil lock,
+// so every caller can defer it without tracking whether it already ran.
+//
+// Mutation: read and clear the descriptor in two steps rather than one swap,
+// and the race detector reports the two releases.
 func TestReleasingLetsTheNextTakerInAndKeepsTheFile(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "nested", "x.lock")
@@ -56,17 +98,52 @@ func TestReleasingLetsTheNextTakerInAndKeepsTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first lock: %v", err)
 	}
+	var both sync.WaitGroup
+	for range 2 {
+		both.Go(first.Release)
+	}
+	both.Wait()
 	first.Release()
-	first.Release() // twice is a no-op, so every caller can defer it
+	var nothing *Lock
+	nothing.Release()
 
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("the lock file was removed on release: %v", err)
 	}
-	second, err := Try(path)
+	second, err := tryWithin(t, path)
 	if err != nil {
 		t.Fatalf("the lock was not released: %v", err)
 	}
 	second.Release()
+}
+
+// A PATH THAT CANNOT HOLD A LOCK IS NOT A HELD ONE. A lock file whose
+// directory cannot be made has no holder to name, and a caller answers the two
+// in different words — "stop the process that has it" against "this path is
+// wrong" — so the failure is wrapped, names where it failed, and is never
+// ErrHeld.
+func TestAPathThatCannotHoldALockIsNotAHeldOne(t *testing.T) {
+	t.Parallel()
+	notADir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notADir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(notADir, "x.lock")
+
+	lock, err := Try(path)
+	if err == nil {
+		lock.Release()
+		t.Fatal("a lock file under a regular file was locked")
+	}
+	if errors.Is(err, ErrHeld) {
+		t.Fatalf("the failure = %v; a path that cannot hold a lock was reported as held", err)
+	}
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Errorf("the failure = %v; it must wrap the cause", err)
+	}
+	if !strings.Contains(err.Error(), notADir) {
+		t.Errorf("the failure = %v; it must name the directory it could not prepare", err)
+	}
 }
 
 // The stamp is the ONE diagnostic a refused taker gets, and a hostname may be

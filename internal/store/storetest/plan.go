@@ -61,6 +61,35 @@ type PlanLine struct {
 func PlanTree(t testing.TB, db Handle, statement string, args []any) []PlanLine {
 
 	t.Helper()
+	plan, verb, err := planOf(t.Context(), db, statement, args)
+	if err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN:\n%s\n%v", statement, err)
+	}
+	if len(plan) == 0 && verb != "INSERT" {
+		t.Fatalf("the planner said nothing about:\n%s", statement)
+	}
+	return plan
+}
+
+// Plannable is whether the driver plans a text whole, and why not where it
+// refuses: nil for a statement, and the driver's own error for a FRAGMENT of
+// one — a clause a builder splices into a statement — or anything else that is
+// not a statement. A gate that walks its package's source for every text that
+// may be a statement asks this before it holds one to a plan, where [PlanTree]
+// fails the test on a refusal; and it asks here rather than spelling an
+// EXPLAIN of its own, for the reason [TestEveryPlanIsReadThroughStoretest]
+// holds every plan to this file.
+func Plannable(t testing.TB, db Handle, statement string, args []any) error {
+	t.Helper()
+	_, _, err := planOf(t.Context(), db, statement, args)
+	return err
+}
+
+// planOf is [PlanTree]'s reading, the error returned rather than failed on,
+// and the statement's verb, which decides the transaction it is planned in.
+func planOf(ctx context.Context, db Handle, statement string,
+	args []any) ([]PlanLine, string, error) {
+
 	in := db.Read
 	var verb string
 	if words := strings.Fields(statement); len(words) > 0 {
@@ -71,8 +100,8 @@ func PlanTree(t testing.TB, db Handle, statement string, args []any) []PlanLine 
 		in = db.Tx
 	}
 	var plan []PlanLine
-	if err := in(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+statement, args...)
+	err := in(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, "EXPLAIN QUERY PLAN "+statement, args...)
 		if err != nil {
 			return err
 		}
@@ -86,13 +115,8 @@ func PlanTree(t testing.TB, db Handle, statement string, args []any) []PlanLine 
 			plan = append(plan, line)
 		}
 		return rows.Err()
-	}); err != nil {
-		t.Fatalf("EXPLAIN QUERY PLAN:\n%s\n%v", statement, err)
-	}
-	if len(plan) == 0 && verb != "INSERT" {
-		t.Fatalf("the planner said nothing about:\n%s", statement)
-	}
-	return plan
+	})
+	return plan, verb, err
 }
 
 // Plan is [PlanTree]'s lines alone.

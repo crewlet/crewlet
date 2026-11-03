@@ -92,7 +92,7 @@ func TestEveryRecordTheWriterBuildsIsStampedAtTheBase(t *testing.T) {
 		{"an eviction", OpEviction, EvictionSubject("node-z"), RootScope(), "",
 			Eviction{V: GateRecordVersion, By: "suite"}},
 	}
-	covered := map[OpKind]bool{OpBarrier: true, OpGeneration: true}
+	covered := map[OpKind]bool{OpBarrier: true, OpTrimmed: true, OpGeneration: true}
 	for _, b := range builds {
 		covered[b.op] = true
 		for _, party := range []struct {
@@ -123,11 +123,17 @@ func TestEveryRecordTheWriterBuildsIsStampedAtTheBase(t *testing.T) {
 		}
 	}
 
-	// THE TWO RECORDS NO WRITER DECIDES: the read index's barrier and a
-	// reanchor's generation, both at the base for ever.
+	// THE THREE RECORDS NO WRITER DECIDES: the read index's barrier, the
+	// trim's trimmed record and a reanchor's generation, all at the base for
+	// ever.
 	barrier, err := EncodeBarrier(statelog.Envelope{Kind: statelog.BarrierKind})
 	if err != nil {
 		t.Fatalf("EncodeBarrier: %v", err)
+	}
+	trimmed, err := EncodeTrimmed(statelog.TrimmedEnvelope(statelog.Position{
+		Stream: Domain{}.Stream().Name, Generation: 2, Seq: 9}, "node-a"))
+	if err != nil {
+		t.Fatalf("EncodeTrimmed: %v", err)
 	}
 	generation, keeps, err := GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
 		Generation: 2, Case: statelog.ReanchorRecreated,
@@ -138,7 +144,8 @@ func TestEveryRecordTheWriterBuildsIsStampedAtTheBase(t *testing.T) {
 		t.Fatalf("encode a generation: (%v, %v)", keeps, err)
 	}
 	for name, body := range map[string][]byte{
-		"a barrier": barrier, "a generation": generation.Payload,
+		"a barrier": barrier, "a trimmed record": trimmed,
+		"a generation": generation.Payload,
 	} {
 		env, err := DecodeEnvelope(body)
 		if err != nil {

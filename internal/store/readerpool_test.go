@@ -21,15 +21,15 @@ import (
 func TestTheReaderPoolIsDerivedFromTheMachineAndKeepsItsFloor(t *testing.T) {
 	t.Parallel()
 	got := defaultReaderConns()
-	if want := max(minReaderConns, runtime.GOMAXPROCS(0)); got != want {
+	if want := max(MinReaderConns, runtime.GOMAXPROCS(0)); got != want {
 		t.Errorf("defaultReaderConns() = %d, want max(%d, GOMAXPROCS=%d) = %d",
-			got, minReaderConns, runtime.GOMAXPROCS(0), want)
+			got, MinReaderConns, runtime.GOMAXPROCS(0), want)
 	}
 	// THE FLOOR IS LOAD-BEARING and not decoration: two full dashboards is
 	// eight concurrent queries, and a one-core host would otherwise size
 	// its pool at one and make a single tab queue against itself.
-	if got < minReaderConns {
-		t.Errorf("the derived bound %d fell below the floor of %d", got, minReaderConns)
+	if got < MinReaderConns {
+		t.Errorf("the derived bound %d fell below the floor of %d", got, MinReaderConns)
 	}
 	// And the pool built from it carries the identity reserve, or the
 	// reserve would be taken out of the readers rather than kept beside
@@ -72,11 +72,12 @@ func TestWhatOrdinaryWorkMayNotTakeIsAddedToTheReaders(t *testing.T) {
 // TestASocketStormCannotStarveIdentityWork is the reservation doing its job.
 //
 // A socket storm is N dashboards × four in-flight queries each, every one of
-// them a scan. They take every connection first-come-first-served, and the
-// identity read that would let those very requests be decided queues behind
-// all of them — so the queue feeds itself, exactly as the reader/writer loop
-// [Writer] exists to break does. One connection is HELD from the open, and
-// [Identity] is the only way to spend it.
+// them a scan. They take every connection, and the identity read that would
+// let those very requests be decided draws for one against all of them —
+// database/sql hands a connection given back to a waiter chosen at random —
+// so the queue feeds itself, exactly as the reader/writer loop [Writer]
+// exists to break does. One connection is HELD from the open, and [Identity]
+// is the only way to spend it.
 func TestASocketStormCannotStarveIdentityWork(t *testing.T) {
 	t.Parallel()
 	// Three readers, and the connection held for identity beside them.

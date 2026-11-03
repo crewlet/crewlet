@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/regexlit"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -193,12 +194,12 @@ func TestAModuleUnderADotNamedDirectoryIsStillRead(t *testing.T) {
 // package no literal prefix to jump to, so over the whole module each ran at
 // the race detector's megabyte a second — sixteen to twenty-eight seconds a
 // gate. A file reaches the pattern only if it holds what a match needs
-// (sourcetree.Required), and where no match can cross a line
-// (sourcetree.LineLocal), only its lines that do; both are exact, so the
+// (regexlit.Required), and where no match can cross a line
+// (regexlit.LineLocal), only its lines that do; both are exact, so the
 // submatches are the ones a scan of every byte finds.
 func sourceMatches(t *testing.T, root string, pattern *regexp.Regexp) map[string]bool {
 	t.Helper()
-	need, perLine := sourcetree.Required(pattern), sourcetree.LineLocal(pattern)
+	need, perLine := regexlit.Required(pattern), regexlit.LineLocal(pattern)
 	found := map[string]bool{}
 	for _, f := range moduleFiles(t, root) {
 		if !publishes(f.rel) || !need.Admits(f.body) {

@@ -27,6 +27,7 @@ import {
   type FiledArtifactTask,
 } from "./fileTask.ts";
 import { WhoBuildsIt, useWhoBuildsIt, type WhoBuildsItState } from "./WhoBuildsIt.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 const linked: { id: string; workItem: string; after?: string }[] = [];
 let linkAnswer: { kind: "done"; body: Record<string, unknown> } | { kind: "refused"; text: string };
@@ -124,7 +125,7 @@ function mount(children: ReactNode, viewer: Record<string, unknown> = JANE) {
     const answers: Record<string, unknown> = {
       viewer,
       work_projects: { projects: [project("DES"), project("OPS")] },
-      work_inbox: { handle: "jane", notices: [], unread: 0, primary: 0 },
+      inbox: { handle: "jane", notices: [], unread: 0, primary: 0 },
     };
     return Promise.resolve(answers[what] ?? {});
   }) as typeof socket.query;
@@ -142,9 +143,7 @@ function mount(children: ReactNode, viewer: Record<string, unknown> = JANE) {
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 /**

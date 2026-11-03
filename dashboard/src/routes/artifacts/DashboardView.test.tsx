@@ -10,7 +10,7 @@
  */
 
 import type { ReactNode } from "react";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
@@ -23,6 +23,7 @@ import type {
   DashboardDatasetAnswer,
   LiveSocket,
 } from "~/protocol/index.ts";
+import { settled } from "~/test/settle.ts";
 
 // THE BOARD'S BRAND REGION reads the company's brand over the socket, which
 // these tests, mounted with no client, do not serve: the board is drawn bare.
@@ -215,6 +216,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -280,12 +282,17 @@ test("a push naming another collection reads nothing again", async () => {
   const store = dataStore();
   mount(store);
   await waitFor(() => expect(reads.total).toBe(1));
+  // THE GATHER IS ON THE CASE'S CLOCK: a push naming a live dataset's
+  // collection is read again once the gather window closes, so the window is
+  // run out, and every read it caused has landed, before nothing is counted.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   store.applyPush({
     artifact: ID,
     keys: [{ collection: "notes", doc: "n1", version: 2 }],
     reread: true,
   });
-  await new Promise((r) => setTimeout(r, 50));
+  await act(() => vi.runOnlyPendingTimersAsync());
+  await settled(() => reads.total ?? 0);
   expect(reads.deals).toBe(1);
   expect(reads.total).toBe(1);
 });
@@ -299,14 +306,25 @@ test("a dataset the reader may not read draws the refusal and no row", async () 
 });
 
 test("a read the budget refused is asked again once the wait it named is over", async () => {
+  // THE WAIT IS ON THE CASE'S CLOCK: the refusal names one second, which is
+  // run out rather than slept, so "once it is over" is held exactly.
+  // Waited for by settling, not by `eventually`, whose `vi.waitFor` moves a
+  // faked clock on at every look and would spend part of the wait itself.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   budgetSpent = true;
   mount(dataStore());
-  await waitFor(() => expect(reads.spend).toBe(1));
+  await settled(
+    () => reads.spend ?? 0,
+    () => reads.total ?? 0,
+  );
+  expect(reads.spend).toBe(1);
   expect(within(widget("seats")).queryByText("ana")).toBeNull();
-  await waitFor(() => expect(within(widget("seats")).getByText("ana")).toBeTruthy(), {
-    timeout: 3000,
-  });
+  await act(() => vi.advanceTimersByTimeAsync(999));
+  expect(reads.spend).toBe(1);
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  await settled(() => reads.spend ?? 0);
   expect(reads.spend).toBe(2);
+  expect(within(widget("seats")).getByText("ana")).toBeTruthy();
 });
 
 // A READ THAT FAILED OUTSIDE THE ANSWER'S STATUSES is said in a reader's
@@ -322,16 +340,18 @@ test("a dataset that could not be read says so in a reader's words, never the ro
 test("the Sources rail lists every dataset with how it is kept current", async () => {
   mount(dataStore());
   const rail = await screen.findByRole("complementary", { name: "Sources" });
-  await waitFor(() => expect(within(rail).getByText("Pipeline total")).toBeTruthy());
+  // WAITED FOR WHOLE: a dataset's title is drawn before what keeps it
+  // current, which its own answer says.
+  await waitFor(() => {
+    expect(within(rail).getByText("Pipeline total")).toBeTruthy();
+    expect(within(rail).getAllByText("Live").length).toBeGreaterThan(0);
+    expect(within(rail).getByText("As its rows are written")).toBeTruthy();
+    expect(within(rail).getByText("When its inputs change")).toBeTruthy();
+    expect(within(rail).getByText("The deals collection of this dashboard's data")).toBeTruthy();
+  });
   // One card, headed by its own title, as a panel beside a board is.
   expect(within(rail).getByRole("heading", { level: 2, name: "Sources" })).toBeTruthy();
   expect(rail.querySelector(".crewlet-card")).not.toBeNull();
-  // A DATASET IS LIVE ONCE ITS FIRST ROWS HAVE ANSWERED, a commit after its
-  // row is drawn: waited for, not read at once.
-  expect((await within(rail).findAllByText("Live")).length).toBeGreaterThan(0);
-  expect(within(rail).getByText("As its rows are written")).toBeTruthy();
-  expect(within(rail).getByText("When its inputs change")).toBeTruthy();
-  expect(within(rail).getByText("The deals collection of this dashboard's data")).toBeTruthy();
 });
 
 // EVERY WIDGET STANDS ON THE BOARD'S TWELVE-COLUMN GRID, the one Home's board

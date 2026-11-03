@@ -1,8 +1,8 @@
 # ADR-0031: Every state-log record is signed, and the framework verifies before a domain decodes
 
 - **Status:** accepted
-- **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/statelog.TestATamperedRecordIsRefusedPermanently`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`
+- **Authority:** `internal/recordseal`
+- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/recordseal.TestATamperedRecordIsRefusedPermanently`, `internal/recordseal.TestTheRecordSealLinksNothingOfTheEngine`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`
 - **Cost-when-tried:** both readers shipped handing the frame on, and neither failed as a signature bug. The applier put the framed bytes on `Record.Payload`, which every domain decodes, so every record came back `invalid character 'c' looking for beginning of value` from inside the apply transaction — the position never moved, health read the node as BEHIND rather than broken, and it shed its seats to a peer that would have done the same. The change feed read the same bytes and acknowledged each one under its own rule for a record it cannot decode, so every notification in the company stopped.
 - **Tag-status:** unreleased
 
@@ -21,6 +21,13 @@ before any domain decodes. A domain never sees the frame and never sees a byte
 this fleet did not write. The key is Tier A's keyring (ADR-0011), which is why
 a node with no keyring refuses to start rather than running one log signed and
 another not.
+
+The frame itself — the keyring it is derived from, the signer, the verifier
+and the three verdicts below — is `internal/recordseal`'s, a leaf that imports
+nothing of the engine, because every channel this decision reaches past the
+logs seals under the same frame and none of them reads a log. What is the
+state log's is the framework's half: every record sealed on its way to the
+appender, every record opened before a domain decodes it.
 
 The rule is stated for READERS of a log, not for appliers, and that is the
 clause the tree keeps needing: the applier is not the only one. The change feed
@@ -248,3 +255,30 @@ under the keyring's AEAD before it is sealed, with the turn as associated
 data, because it carries what the person asked and what their reads returned,
 and a seal hides nothing. The replay that fills a follower's gaps and the Stop
 are instruction channels, listed above.
+## Amendment: the embedded broker authenticates its connections
+
+The premise this record opens with — the broker has no authentication of its
+own — no longer holds for the embedded broker: since
+[ADR-0094](0094-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)
+it admits only a route, a leaf link or an operator presenting a key derived from
+the same keyring, and a node's own clients in process. The decision stands
+unchanged, and its opening paragraph is kept as the reason it was written. The
+admission is per connection, and only as private as the network a route's
+password crosses in clear once per connection; an external cluster admits whom
+its operator chooses. So a record, an instruction or a presence frame is still
+believed on its own signature or seal, never on the connection it arrived by.
+
+## Amendment: a code search of several repositories is a fourth instruction channel
+
+The scatters this record leaves unsigned only read. A code search of several
+repositories (`internal/codesearch`) reads too, but every git node carries it
+out AS THE ASKER THE REQUEST NAMES: each repository it is assigned is read
+through the node's own reads by object id, which judge that asker's grant from
+the node's chart, and the lines go back to whoever asked. So the request is an
+instruction by this record's own test — a node acts on who it names — and an
+unsigned one would let any client of the broker read any repository as any seat
+or person. It is a `signedask.Channel` in key domains of its own
+(`code.search.request`, `code.search.reply`), held with the other three by
+`internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`. A search
+that names one repository is not a fourth scatter: it is a read through the
+estate's keyed walk, under the estate service's own signature.

@@ -144,6 +144,31 @@ type Config struct {
 	// a loaded machine made routine.
 	Status func(context.Context) (coord.NodeStatus, error)
 
+	// GitBackground is what this node's git cache gives its background
+	// work NOW — its maintenance budget — which the host writes on EVERY
+	// beat beside the profile, under [coord.GitBackgroundKey], before the
+	// status hook runs and never through it. Nil on a node without the git
+	// role, whose row then carries no such key.
+	//
+	// NOT A STATUS FIELD, because a status the beat gave up on is dropped
+	// whole, and this is no display column: it is what every git node
+	// places a repository's maintenance by (internal/estate,
+	// Router.Maintainer), and a figure that went with its status for a beat
+	// would leave the node weighed as one that says nothing of what it can
+	// hold. It must not block — read memory, never a store — which is what
+	// lets the beat write it unbounded.
+	GitBackground func() int64
+
+	// RoleNeeded reports whether the COMPANY needs a role at all right now —
+	// false for git where the company hosts no code. Nil: every role is
+	// needed (every role but git always is).
+	//
+	// Asked by the unmanned-role check on every sweep, so it must not block:
+	// read the current epoch, never a store. Without it, adding git to the
+	// vocabulary would warn fleet_role_unmanned on every fleet that does not
+	// host code and declared its roles.
+	RoleNeeded func(placement.NodeRole) bool
+
 	// Hooks is what the engine does with a seat. Nil is legal.
 	Hooks Hooks
 
@@ -191,10 +216,10 @@ type Config struct {
 	// and dropping work in hand would be pure loss. This one is about work
 	// already in hand, and it fires only where this node cannot serve that
 	// work at all — in the engine, a node that can no longer say where the
-	// estate its seats read and write is served. A copy of the estate that
-	// is WRONG is not such a case: the node takes it out of service and its
-	// seats read the estate from another data node, which is the same
-	// answer a peer would give them.
+	// estate its seats read and write is served. A domain's copy that is
+	// WRONG is not such a case: the node takes that domain's copy out of
+	// service and its seats' calls on it go to another data node, which is
+	// the same answer a peer would give them.
 	//
 	// VOLUNTARY, not fenced: the lease is still held and still renewed, so
 	// the in-flight turn finishes and the seat leaves when it goes idle.
@@ -237,9 +262,14 @@ type Host struct {
 	serviceable func(ctx context.Context) (bool, string)
 	profile     placement.NodeProfile
 	status      func(context.Context) (coord.NodeStatus, error)
-	hooks       Hooks
-	clock       func() time.Time
-	protocol    int
+	// gitBackground is Config.GitBackground; nil on a node without the git
+	// role.
+	gitBackground func() int64
+	// roleNeeded is Config.RoleNeeded; nil needs every role.
+	roleNeeded func(placement.NodeRole) bool
+	hooks      Hooks
+	clock      func() time.Time
+	protocol   int
 
 	ttl            time.Duration
 	heartbeat      time.Duration
@@ -332,22 +362,24 @@ func New(cfg Config) (*Host, error) {
 	ttl := orDuration(cfg.TTL, SeatLeaseTTL)
 
 	h := &Host{
-		backend:      cfg.Backend,
-		owner:        cfg.Owner,
-		nodeID:       cfg.NodeID,
-		seats:        cfg.Seats,
-		ready:        cfg.Ready,
-		serviceable:  cfg.Serviceable,
-		profile:      profile,
-		status:       cfg.Status,
-		hooks:        cfg.Hooks,
-		clock:        cfg.Clock,
-		protocol:     orInt(cfg.Protocol, coord.ProtocolVersion),
-		ttl:          ttl,
-		heartbeat:    orDuration(cfg.HeartbeatInterval, ttl/HeartbeatRatio),
-		sweepEvery:   orDuration(cfg.SweepInterval, SweepInterval),
-		claimLimit:   orInt(cfg.ClaimLimit, ClaimLimitPerSweep),
-		releaseLimit: orInt(cfg.ReleaseLimit, ReleaseLimitPerSweep),
+		backend:       cfg.Backend,
+		owner:         cfg.Owner,
+		nodeID:        cfg.NodeID,
+		seats:         cfg.Seats,
+		ready:         cfg.Ready,
+		serviceable:   cfg.Serviceable,
+		profile:       profile,
+		status:        cfg.Status,
+		gitBackground: cfg.GitBackground,
+		roleNeeded:    cfg.RoleNeeded,
+		hooks:         cfg.Hooks,
+		clock:         cfg.Clock,
+		protocol:      orInt(cfg.Protocol, coord.ProtocolVersion),
+		ttl:           ttl,
+		heartbeat:     orDuration(cfg.HeartbeatInterval, ttl/HeartbeatRatio),
+		sweepEvery:    orDuration(cfg.SweepInterval, SweepInterval),
+		claimLimit:    orInt(cfg.ClaimLimit, ClaimLimitPerSweep),
+		releaseLimit:  orInt(cfg.ReleaseLimit, ReleaseLimitPerSweep),
 		// One TTL — THIS host's, not the shipped constant. Tying the two
 		// together is the whole justification for the number: a deployment
 		// that shortens the lease would otherwise keep a 45-second silence
@@ -637,6 +669,21 @@ func (h *Host) Held() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Sorted(maps.Keys(h.held))
+}
+
+// NeedsRole reports whether the company, as this host reads it, needs a node
+// role at all right now ([Config.RoleNeeded]; every role where none was
+// given) — the question the unmanned-role check asks before it says a role is
+// missing.
+//
+// EXPORTED as the one place the answer is read, by the check and by whoever
+// has to prove the engine's answer reached it: the predicate is handed down
+// through the node, and a link dropped on the way warns fleet_role_unmanned
+// for git on every fleet that declares its roles and hosts no code — exactly
+// what the predicate was added to stop — while every test of the check itself
+// still passes.
+func (h *Host) NeedsRole(role placement.NodeRole) bool {
+	return h.roleNeeded == nil || h.roleNeeded(role)
 }
 
 // HeldSeats is [Host.Held] as the seats themselves, in the same order.

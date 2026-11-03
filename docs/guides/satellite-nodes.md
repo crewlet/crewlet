@@ -40,6 +40,12 @@ its seats need a data node to answer — see
 > broker. If that is not possible from where you want the agent, this is
 > not the mechanism you want.
 
+**A stateless satellite cannot serve git in this release.** The `git` role
+serves the company's repositories on the API listener, so it needs `ingress`,
+and `ingress` needs `data` — a node without `data` that names `git` is refused
+at validation. Serve git from the core nodes; a satellite that holds data can
+take `[data, git, ingress, seats]` like any core node.
+
 ---
 
 ## What actually moves
@@ -50,7 +56,7 @@ not a request handler you can route, it is a place where things run:
 | Moves to the satellite | Stays on the core |
 |---|---|
 | The agent instance, its state and its turns | The HTTP API, the dashboard, every integration's webhooks |
-| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the sandbox waiter, the maintenance sweep, the identity sweep, the trim, the embeddings, the learning passes, the integration reconcile, the object store's collector, the trash reaper and Chatlet's message horizon — on whichever core node holds `workers` |
+| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the sandbox waiter, the maintenance sweep, the identity sweep, the trim, the embeddings, the learning passes, the integration reconcile, the object store's collector, the trash reaper, Chatlet's message horizon and the code-retention duty — on whichever core node holds `workers` |
 | Its LLM calls, its knowledge searches, its tool calls | Every other seat's agents and MCP servers |
 | Its executor runs' launches, and a `direct` or `container` box itself, on the satellite's own host | The company config, the leases and the ledgers — all shared, in the coordination slot |
 
@@ -70,8 +76,8 @@ Whether a satellite is also a **replica** is the `data` role's answer and
 nothing else's. A satellite that holds data applies every one of the
 company's shared state logs (Worklet, Doclet, the
 search vectors, the identity directory, every data node's usage history, the
-artifacts, their datastores, Ask Crewlet's conversations, Chatlet and the
-seats' executor sessions) into its own database, exactly as a core node does. A stateless one applies
+artifacts, their datastores, Ask Crewlet's conversations, Chatlet, the
+seats' executor sessions and the code host) into its own database, exactly as a core node does. A stateless one applies
 none of them and asks a data node instead. See
 [what a satellite holds](#what-a-satellite-holds) before you choose a host
 for either.
@@ -79,8 +85,8 @@ for either.
 ```mermaid
 flowchart LR
     subgraph core["Core network"]
-        C1["node-a<br/><i>data · ingress · seats · workers</i>"]
-        C2["node-b<br/><i>data · ingress · seats · workers</i>"]
+        C1["node-a<br/><i>data · git · ingress · seats · workers</i>"]
+        C2["node-b<br/><i>data · git · ingress · seats · workers</i>"]
         KV[("Coordination<br/>leases · ledgers")]
         MQ[("Event stream")]
     end
@@ -107,7 +113,10 @@ Three steps: say what the node is, say where the role belongs, start it.
 
 Only the Tier A file lives on the satellite. The company itself (roles,
 prompts, providers, integrations) comes from the fleet, so there is no
-company YAML to copy or keep in sync.
+company YAML to copy or keep in sync. A `company.yaml` that happens to sit in
+its working directory (the `-company` default) changes nothing: a bootstrap
+seed is never imported over the company the fleet runs, and the satellite
+boots on the fleet's company rather than on that file.
 
 A **stateless** satellite on an embedded fleet:
 
@@ -186,14 +195,18 @@ and `stream.store_dir` instead of `stream.leaf` — see
 one to a fleet that already has five.
 
 The `secrets:` block is not optional on a satellite either, although it holds
-no estate, serves no API and signs no session cookie. The company document it
-fetches from its peers is sealed under the fleet keyring and authenticated by
-that seal; every request it sends a data node's estate service is signed
-under it, because the data node runs a write as the actor the request names
-and the broker authenticates nothing; and every seat's executor run is handed
-a per-run token signed under it. `crewlet validate` refuses a Tier A file
-without it, naming `secrets.keys`; generate a key once with `crewlet secrets
-keygen` and give every node the same material.
+no estate, serves no API and signs no session cookie. Its leaf link is
+admitted only on a key derived from it — a satellite on another keyring is
+refused by every member and fails its boot naming the key it presented. The
+company document it fetches from its peers is sealed under the fleet keyring
+and authenticated by that seal; every request it sends a data node's estate
+service is signed under it, because the data node runs a write as the actor
+the request names and the broker's admission vouches for a connection, never
+a request; and every seat's executor run is handed a per-run token signed under
+it.
+`crewlet validate` refuses a Tier A file without it, naming `secrets.keys`;
+generate a key once with `crewlet secrets keygen` and give every node the same
+material.
 
 `${VAR}` references are resolved in `node.labels` and `node.id` like
 anywhere else, so an orchestrator injects both from the environment
@@ -357,8 +370,8 @@ Two failures to know by sight:
 
 Worklet, Doclet, the search vectors, the identity
 directory, every data node's usage history, the artifacts, their datastores,
-Ask Crewlet's conversations, Chatlet and the seats' executor sessions are
-[replicated state machines](replication.md).
+Ask Crewlet's conversations, Chatlet, the seats' executor sessions and the
+code host are [replicated state machines](replication.md).
 Each is one ordered log the whole fleet shares, and every **data** node
 applies every log into its own copy of the rows — so it answers questions
 about each one locally, and so it can donate a snapshot of all of them to a
@@ -418,7 +431,7 @@ HTTP — which on a `roles: [data, seats]` satellite is the one place to look,
 because such a node serves no API on its port:
 
 ```
-statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant chat executor]"
+statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant chat executor code]"
 ```
 
 ---

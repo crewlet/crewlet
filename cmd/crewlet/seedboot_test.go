@@ -101,7 +101,7 @@ func running(e *engine.Engine) (string, []string) {
 // A STALE -company FILE NEVER BECOMES THE ENGINE'S COMPANY.
 //
 // The store's revision was changed live: a seat deleted, the embedding model
-// widened, the native tracker and knowledge base taken up. The node restarts
+// widened, Worklet and Doclet taken up. The node restarts
 // with the old file on its command line, which the seed ignores — and the
 // engine used to boot on it anyway, and what a boot builds once per process
 // outlived the reconcile that replaced it. Building it opened the store at the

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -383,11 +384,11 @@ func TestARefusedPostWakesNobodyAndAnUndecidedOneWakesAsBefore(t *testing.T) {
 // behind is an applier at the start of the log.
 type behind struct{}
 
-func (behind) Committed() statelog.Position {
+func (behind) Reached() statelog.Position {
 	return statelog.Position{Stream: chatlet.Domain{}.Stream().Name}
 }
 
-func (behind) WaitCommitted(ctx context.Context, _ statelog.Position) error {
+func (behind) WaitReached(ctx context.Context, _ statelog.Position) error {
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -400,7 +401,7 @@ func (r *writeRound) feedRecord(seq uint64) changefeed.Record {
 		r.t.Fatalf("read record %d: %v (present: %v)", seq, err, ok)
 	}
 	body, verdict := r.verifier.Open(payload)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		r.t.Fatalf("record %d did not verify: %s", seq, verdict)
 	}
 	env, err := chatlet.DecodeEnvelope(body)
@@ -456,7 +457,7 @@ func TestAVerdictTheHorizonLetGoIsUnknownNeverDropped(t *testing.T) {
 		t.Fatalf("read the post's record: %v (present: %v)", err, ok)
 	}
 	body, opened := r.verifier.Open(payload)
-	if opened != statelog.Verified {
+	if opened != recordseal.Verified {
 		t.Fatalf("the post's record did not verify: %s", opened)
 	}
 	dropped, err := chatlet.Decode(body)

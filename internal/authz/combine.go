@@ -44,6 +44,7 @@ var fold = map[Reason]foldClass{
 	ReasonEverybody: foldAdmission,
 	ReasonAsked:     foldAdmission,
 	ReasonShared:    foldAdmission,
+	ReasonSeatGrant: foldAdmission,
 
 	ReasonStage:         foldBar,
 	ReasonUnknownAction: foldBar,
@@ -53,6 +54,7 @@ var fold = map[Reason]foldClass{
 	ReasonTokenRefused:  foldBar,
 	ReasonAssistRefused: foldBar,
 	ReasonAssistScope:   foldBar,
+	ReasonNotGranted:    foldBar,
 	ReasonCeiling:       foldBar,
 
 	ReasonNoGrant:   foldAuthority,
@@ -74,15 +76,22 @@ var fold = map[Reason]foldClass{
 // scope does not reach: the person's approval lifts the second and only
 // their own gesture lifts the first, so a gesture meeting both is told the
 // one no approval would clear.
+//
+// AN AGENT'S ROLE GRANT sits after them, where Decide asks it: in place of
+// the class, once every bar has passed ([decideSeatGrant]). No permission
+// and no proof lifts it — the remedy is the role's, in the company document
+// — so it is a bar rather than a refusal on authority, and it comes before
+// the ceiling, which DecideWithin asks only of an agent Decide admitted.
 var barOrder = []Reason{
 	ReasonStage, ReasonUnknownAction, ReasonSeatRefused, ReasonSeatOnly,
 	ReasonUnseated, ReasonTokenRefused, ReasonAssistRefused, ReasonAssistScope,
-	ReasonCeiling,
+	ReasonNotGranted, ReasonCeiling,
 }
 
 // Admits reports a reason a rule ADMITS by — a permission held, the caller's
 // own record or remark, a lead relation, everybody's overview, an open ask, a
-// share of an artifact — which no refusal carries.
+// share of an artifact, a grant an agent's role carries — which no refusal
+// carries.
 func (r Reason) Admits() bool { return fold[r] == foldAdmission }
 
 // Authority reports a refusal a permission or a relation decided: the caller
@@ -92,8 +101,8 @@ func (r Reason) Admits() bool { return fold[r] == foldAdmission }
 // the refusals the grants beside them can lift; a bar on the caller — a stage
 // that may not act, a seat on a person's verb, a token where a person must be
 // present, the Dashboard Assistant on a verb its grant does not reach, an
-// agent whose requester could not — and a stale proof are not, whatever the
-// caller holds.
+// agent whose role does not carry the row's grant, an agent whose requester
+// could not — and a stale proof are not, whatever the caller holds.
 func (r Reason) Authority() bool { return fold[r] == foldAuthority }
 
 // Combine is the decision for a gesture that needs every one of ds, answered
@@ -103,7 +112,8 @@ func (r Reason) Authority() bool { return fold[r] == foldAuthority }
 //     a seat on a person's verb or a person on a seat's, a credential acting
 //     as no seat, a machine token where a person must be present, the
 //     Dashboard Assistant on a verb it never takes or one its grant's scope
-//     does not reach, an agent whose requester could not ([DecideWithin]) —
+//     does not reach, an agent whose role does not carry the row's grant
+//     ([decideSeatGrant]), an agent whose requester could not ([DecideWithin]) —
 //     the one [Decide] would have reported first, unchanged. It is about who
 //     is asking rather than any part, and no permission and no proof lifts it.
 //   - THEN THE REFUSALS ON AUTHORITY, whose answer is the permission that

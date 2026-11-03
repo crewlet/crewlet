@@ -14,12 +14,15 @@
 # working tree instead of writing markers into it. THE RESOLUTION IS THE ONLY
 # ONE THAT IS EVER CORRECT for generated files: rebuild, do not merge.
 #
-#     make dashboard && git add -A -- static/dashboard
+#     make dashboard && git add -A -- static/dashboard static/artifacts static/protocol
+#
+# (`make dashboard` writes all three trees, the Makefile's UI_OUT, so the
+# resolution stages all three.)
 #
 # NOT `binary` and NOT `-diff`, which would also be tempting: `make
-# dashboard-check` is `npm run build` followed by `git diff --exit-code --
-# static/dashboard` (and a check for files the index does not carry at all),
-# and that diff is the patch both it and ci.yml print when the committed tree
+# dashboard-check` is `npm run build` followed by `git diff --exit-code` over
+# those trees (and a check for files the index does not carry at all), and
+# that diff is the patch both it and ci.yml print when the committed tree
 # drifted. Under `binary` it becomes "Binary files … differ", and
 # `git log -G` over the tree drops from 66 matching commits to none. `-merge`
 # costs neither: the diff is byte-identical to having no attribute at all.
@@ -30,8 +33,7 @@
 # nobody ran `git config`.
 #
 # The whole emitted tree, not just assets/: index.html is generated too and
-# took the third marker injection, and protocol.js is the second build target.
-# Not `static/**` — static/static.go (the embed directive) and
+# took the third marker injection. Not `static/**` — static/static.go (the embed directive) and
 # static/merge_test.go sit beside the generated tree, are hand-written, and
 # must merge as ordinary source; the merge test's "other side" case holds that.
 #
@@ -47,5 +49,12 @@ static/dashboard/** -merge
 # artifact kit, under directories named by their versions. The same rule and
 # the same resolution: rebuild, never merge.
 #
-#     make dashboard && git add -A -- static/dashboard static/artifacts
+#     make dashboard && git add -A -- static/dashboard static/artifacts static/protocol
 static/artifacts/** -merge
+#
+# AND THE PROTOCOL MODULE, the second build target
+# (dashboard/vite.protocol.config.ts): the wire protocol alone, which
+# internal/e2e replays a real company's frames through. Beside the embedded
+# trees rather than in them, since no page loads it, and generated all the
+# same.
+static/protocol/** -merge

@@ -11,15 +11,7 @@
  * how a listing is fetched, cut and drawn is said once, here.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   ArtifactAccessLabel,
   ArtifactCardSkeleton,
@@ -53,6 +45,7 @@ import { ARTIFACT_LIST_DELIMITER, ARTIFACT_LIST_SORTS } from "~/contract/artifac
 import { fmtCount, fmtDate, relTime } from "~/lib/format.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import { usePinsChanged } from "~/lib/artifacts/pins.ts";
@@ -158,63 +151,55 @@ export function listParams(ask: {
 }
 
 /**
- * One listing, its first page live and the pages after it fetched on demand.
- * A change of question drops the pages after the first: they answered another
- * question. A pin or a filing anywhere in the tab asks again, since either
- * moves a row in or out of a listing.
+ * One listing, its first page live and the pages after it fetched on demand,
+ * through the pager every paged list shares (`lib/usePaged.ts`). A change of
+ * question drops the pages after the first: they answered another question.
+ * The next page starts after the last row the first was answered with, and an
+ * artifact made or moved into its range pushes that one off the first page's
+ * foot when it is read again on its poll; the pager joins the moved first page
+ * to the pages after it, so the row is on neither only for a read, never on
+ * screen. A pin, a filing, a rename, the trash or a restore anywhere in the
+ * tab moves a row on any page loaded, so each reads every page again in place
+ * ([Paged.refresh]).
  */
 export function useListing(params: Record<string, unknown>, enabled = true) {
   const { socket } = useClient();
-  const first = useQuery("artifacts", params, { pollMs: GALLERY_POLL_MS, enabled });
-  // A PIN MOVES A ROW between the pinned list and the rest, and marks it.
-  usePinsChanged(first.refetch);
-  // A MOVE takes a row out of one folder's listing and into another's.
-  useFoldersChanged(first.refetch);
-  const key = JSON.stringify(params);
-  const [more, setMore] = useState<{ key: string; items: ArtifactListItem[]; after: string }>({
-    key,
-    items: [],
-    after: "",
+  const first = useQuery("artifacts", params, {
+    pollMs: GALLERY_POLL_MS,
+    enabled,
   });
-  const [loadingMore, setLoadingMore] = useState(false);
-  const extra = more.key === key ? more : { key, items: [], after: "" };
-  const after = extra.items.length > 0 ? extra.after : (first.data?.next_continuation_token ?? "");
-  const loadMore = useCallback(() => {
-    if (!after || loadingMore) return;
-    setLoadingMore(true);
-    socket
-      .query("artifacts", { ...params, "continuation-token": after })
-      .then((page: ArtifactListAnswer) =>
-        setMore((was) => ({
-          key,
-          items: [...(was.key === key ? was.items : []), ...page.contents],
-          after: page.next_continuation_token ?? "",
-        })),
-      )
-      .catch(() => {
-        // A PAGE THAT DID NOT COME is asked for again by the same button:
-        // the rows already drawn stay, and nothing is claimed about the rest.
-      })
-      .finally(() => setLoadingMore(false));
-  }, [after, loadingMore, socket, params, key]);
-  const items = useMemo(() => {
-    const seen = new Set<string>();
-    const out: ArtifactListItem[] = [];
-    for (const item of [...(first.data?.contents ?? []), ...extra.items]) {
-      if (seen.has(item.id)) continue;
-      seen.add(item.id);
-      out.push(item);
-    }
-    return out;
-  }, [first.data, extra.items]);
-  // A RENAME, THE TRASH OR A RESTORE moves rows on any page: the pages after
-  // the first are dropped with the first read again, as a new question would.
-  const refetch = useCallback(() => {
-    setMore({ key, items: [], after: "" });
-    first.refetch();
-  }, [first, key]);
-  return { first, items, after, loadMore, loadingMore, refetch };
+  const paged = usePaged(
+    first,
+    params,
+    (token) => socket.query("artifacts", { ...params, "continuation-token": token }),
+    contentsOf,
+    artifactIdOf,
+    tokenAfter,
+  );
+  // EVERY PAGE, not the first alone: the row a press moved may be on any of
+  // them. Called with no argument whatever the caller hands a callback.
+  const { refresh } = paged;
+  const rereadAll = useCallback(() => refresh(), [refresh]);
+  // A PIN MOVES A ROW between the pinned list and the rest, and marks it.
+  usePinsChanged(rereadAll);
+  // A MOVE takes a row out of one folder's listing and into another's.
+  useFoldersChanged(rereadAll);
+  // A PAGE THAT DID NOT COME is asked for again by the same button: the rows
+  // already drawn stay, and nothing is claimed about the rest.
+  return {
+    first,
+    items: paged.items,
+    more: paged.more,
+    loadMore: paged.next,
+    loadingMore: paged.paging,
+    refetch: rereadAll,
+  };
 }
+
+/** A page's artifacts, each one's id, and the token to the page after. */
+const contentsOf = (a: ArtifactListAnswer) => a.contents ?? [];
+const artifactIdOf = (item: ArtifactListItem) => item.id;
+const tokenAfter = (a: ArtifactListAnswer) => a.next_continuation_token ?? "";
 
 /** How a listing is drawn. */
 export type Shape = "grid" | "list";

@@ -1,13 +1,21 @@
 name: dependabot-dashboard
 
 # Dependabot edits `dashboard/package.json` and the lockfile and cannot run a
-# bundler, but `static/dashboard` is COMMITTED and ci.yml's `dashboard` job
-# rebuilds it and diffs, so a bump that changes the emitted bytes (react, vite,
-# the design system) sat red on that gate until a person ran `make dashboard`.
-# This workflow is that person: it rebuilds on Dependabot's pull request and, if
-# the tree changed, commits the output onto Dependabot's branch. It does what
-# ci.yml prints as the remedy and nothing more. It approves nothing and queues no
-# merge; dependabot-merge.yml does, and `main`'s ruleset decides.
+# bundler, but the build's output is COMMITTED, in every tree the Makefile's
+# UI_OUT names, and ci.yml's `dashboard` job rebuilds those trees and diffs
+# them, so a bump that changes the emitted bytes (react, vite, the design
+# system) sat red on that gate until a person ran `make dashboard`. This
+# workflow is that person: it rebuilds on Dependabot's pull request and, if a
+# tree changed, commits the output onto Dependabot's branch. It does what
+# ci.yml prints as the remedy and nothing more. It approves nothing and queues
+# no merge; dependabot-merge.yml does, and `main`'s ruleset decides.
+#
+# EVERY TREE, from the Makefile's list rather than one kept here. A bump moves
+# more than the dashboard (vite 8.3.5 rewrote the page runtime under
+# static/artifacts too), and a commit carrying one tree of several leaves the
+# gate red and the bump unmerged. `build` asks make for UI_OUT; `push` reads
+# the same line as text from its own checkout, and that reading alone decides
+# where anything is written.
 #
 # TWO JOBS, because one of them runs somebody else's code. `build` runs `npm ci`
 # and a bundler over whatever a dependency published this week, so it holds no
@@ -81,9 +89,10 @@ jobs:
     permissions:
       contents: read
 
-    # A hang detector: the rebuild is `npm ci` and two Vite builds, about 15
-    # seconds warm, and a dependency that stalls an install script must not hold
-    # the runner for GitHub's six-hour default.
+    # A hang detector: the rebuild is `npm ci` and the three Vite builds
+    # `npm run build` chains, five seconds warm inside a 21-second job
+    # (2026-11-02), and a dependency that stalls an install script must not
+    # hold the runner for GitHub's six-hour default.
     timeout-minutes: 10
 
     outputs:
@@ -97,6 +106,26 @@ jobs:
         with:
           persist-credentials: false
 
+      # Every tree the build writes: the Makefile's UI_OUT, the list
+      # `make dashboard-check` and ci.yml's `dashboard` job judge. Asked of
+      # make itself, so it is the list the gate reads however the Makefile
+      # spells it, and asked BEFORE `npm ci` has run anything a dependency
+      # brought. Nothing `push` writes is decided here: it reads its own.
+      - name: the trees the dashboard build writes
+        id: trees
+        run: |
+          set -euo pipefail
+          trees="$(make -s --no-print-directory \
+            --eval='.PHONY: dependabot-dashboard-trees' \
+            --eval='dependabot-dashboard-trees: ; @echo $(UI_OUT)' \
+            dependabot-dashboard-trees)"
+          if [ -z "$trees" ]; then
+            echo "::error::the Makefile's UI_OUT names no tree, so there is nothing to rebuild and judge."
+            exit 1
+          fi
+          echo "$trees"
+          echo "list=$trees" >> "$GITHUB_OUTPUT"
+
       # `latest`, and it must stay the SAME as ci.yml's `dashboard` job: this
       # rebuild is only worth anything if it is byte-for-byte the one the gate
       # runs. If ci.yml moves to `lts/*`, so does this, in the same commit.
@@ -108,31 +137,49 @@ jobs:
 
       - run: make dashboard
 
-      # ci.yml's drift question with the same answer: anything the rebuild
-      # changed, dropped or ADDED under static/dashboard, ignored files included,
-      # because the engine embeds the directory and ships whatever is on disk.
-      - name: has the rebuild changed the committed bundle
+      # ci.yml's drift question with the same answer, asked of each tree:
+      # anything the rebuild changed, dropped or ADDED, ignored files included,
+      # because the engine embeds these directories and ships whatever is on
+      # disk. A tree that moved is copied out WHOLE, at its own path, as the
+      # rebuild left it: that is exactly what should be committed, deletions
+      # included. A tree that did not move is left out.
+      - name: has the rebuild changed a committed tree
         id: drift
+        env:
+          TREES: ${{ steps.trees.outputs.list }}
         run: |
-          changes="$(git status --porcelain --untracked-files=all \
-            --ignored=matching -- static/dashboard)"
-          if [ -z "$changes" ]; then
-            echo "static/dashboard already is what dashboard/ builds."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/dashboard-bundle"
+          read -r -a trees <<< "$TREES"
+          changed=false
+          for tree in "${trees[@]}"; do
+            changes="$(git status --porcelain --untracked-files=all \
+              --ignored=matching -- "$tree")"
+            if [ -z "$changes" ]; then
+              echo "$tree already is what dashboard/ builds."
+              continue
+            fi
             echo "$changes"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+            # A build that leaves a tree with no files is broken, not output to
+            # commit, and `push` would read the missing tree as an unchanged one.
+            if [ -z "$(find "$tree" ! -type d -print -quit 2>/dev/null)" ]; then
+              echo "::error::the rebuild left $tree with no files in it."
+              exit 1
+            fi
+            mkdir -p "$bundle/$(dirname "$tree")"
+            cp -R "$tree" "$bundle/$tree"
+            changed=true
+          done
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
 
-      # The whole directory, not a patch: the app build empties its output
-      # directory first, so this tree is exactly what should be committed,
-      # deletions included. Hidden files are included so that one is refused by
-      # name in the next job instead of dropped silently.
+      # One directory holding each changed tree at its own path, so `push` can
+      # tell which tree a file belongs to. Hidden files are included so that one
+      # is refused by name in the next job instead of dropped silently.
       - if: steps.drift.outputs.changed == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: dashboard-bundle
-          path: static/dashboard
+          path: ${{ runner.temp }}/dashboard-bundle
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -186,12 +233,32 @@ jobs:
           set -euo pipefail
           bundle="$RUNNER_TEMP/dashboard-bundle"
 
+          # WHERE this job may write: the trees the Makefile's UI_OUT names,
+          # read from this job's own checkout and never from `build`, whose
+          # every output a dependency's install scripts could have written.
+          # Read as TEXT, because this job holds the token and so runs nothing
+          # of the checkout, make included. The Makefile keeps the definition
+          # one line of directories directly under static/ for this reader,
+          # and any other shape is refused rather than guessed at.
+          line="$(sed -n 's/^UI_OUT[[:space:]]*:=[[:space:]]*//p' Makefile)"
+          read -r -a trees <<< "$line"
+          if [ "${#trees[@]}" -eq 0 ] || [[ "$line" == *$'\n'* ]]; then
+            echo "::error::the Makefile must define UI_OUT on exactly one 'UI_OUT :=' line, which this job reads as text. See the comment above UI_OUT in the Makefile."
+            exit 1
+          fi
+          for tree in "${trees[@]}"; do
+            if [[ ! "$tree" =~ ^static/[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+              echo "::error::UI_OUT names '$tree', and this job writes only directories directly under static/. Refusing to write it."
+              exit 1
+            fi
+          done
+
           # This directory was produced next to a dependency's install scripts,
           # so it is data until proved otherwise, and what is checked is its
           # NAMES: an allowlist of the kinds of file the bundle is made of.
-          # `static/dashboard` sits inside the Go module, so a stray `zz_test.go`
-          # there would be compiled and run by every `go test ./...`. A new kind
-          # of file in the bundle has to be added here on purpose. Hidden names
+          # Every tree sits inside the Go module, so a stray `zz_test.go` in one
+          # would be compiled and run by every `go test ./...`. A new kind of
+          # file in the bundle has to be added here on purpose. Hidden names
           # are refused at any depth.
           bad="$(find "$bundle" -mindepth 1 \
             \( -name '.*' -o \( ! -type d ! \( -type f \( \
@@ -204,10 +271,32 @@ jobs:
             exit 1
           fi
 
-          # Replaced wholesale, so a file the rebuild dropped is dropped here.
-          rm -rf static/dashboard
-          cp -R "$bundle" static/dashboard
-          git add -A -- static/dashboard
+          # And WHERE each file is: inside one of those trees. `build` hands
+          # over each tree it changed at its own path, so a file anywhere else
+          # is one this job would not write. It is refused by name rather than
+          # dropped, because it also means the two jobs read UI_OUT differently:
+          # a branch behind a change to it wants `@dependabot rebase`.
+          inside=()
+          for tree in "${trees[@]}"; do
+            inside+=(-path "./$tree" -prune -o)
+          done
+          stray="$(cd "$bundle" && find . "${inside[@]}" ! -type d -print)"
+          if [ -n "$stray" ]; then
+            echo "$stray"
+            echo "::error::the rebuilt bundle holds a file outside every tree this branch's Makefile names in UI_OUT. Refusing to commit it."
+            exit 1
+          fi
+
+          # Each tree the rebuild changed is replaced wholesale, so a file it
+          # dropped is dropped here too. A tree `build` did not hand over is one
+          # the rebuild left as committed, and it stays as it is.
+          for tree in "${trees[@]}"; do
+            if [ -d "$bundle/$tree" ]; then
+              rm -rf "$tree"
+              cp -R "$bundle/$tree" "$tree"
+            fi
+          done
+          git add -A -- "${trees[@]}"
 
           if git diff --cached --quiet; then
             echo "The branch already carries this bundle; nothing to commit."
@@ -225,8 +314,9 @@ jobs:
           build(dashboard): rebuild the bundle for this dependency bump
 
           Dependabot edits package.json and the lockfile and cannot run a
-          bundler, so static/dashboard no longer matched what dashboard/
-          builds (make dashboard-check). This is that rebuild, made by
+          bundler, so the committed build output no longer matched what
+          dashboard/ builds (make dashboard-check, over every tree the
+          Makefile's UI_OUT names). This is that rebuild, made by
           .github/workflows/dependabot-dashboard.yml.
 
           [dependabot skip] lets Dependabot force-push over this commit, so

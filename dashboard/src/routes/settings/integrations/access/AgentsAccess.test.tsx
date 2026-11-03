@@ -14,6 +14,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
 import { pick } from "~/testing.tsx";
 import { AgentsAccess } from "./AgentsAccess.tsx";
@@ -28,6 +29,7 @@ import {
   gitlabAnswer,
   jiraAnswer,
   mattermostAnswer,
+  neutralAnswer,
   offLane,
   onLane,
   seat,
@@ -137,8 +139,13 @@ afterEach(cleanup);
 function draw(data: AccessAnswer, over: { held?: string; readOnly?: string; only?: string } = {}) {
   const reload = vi.fn();
   const onAnswer = vi.fn();
+  // THE APP'S LIVE REGION, as the frame mounts it: the kit's selection bar
+  // over the unsaved changes says its count ("One change not saved") through
+  // it, and a sentence said with no region mounted is a warning the console
+  // gate fails.
   const ui = (answer: AccessAnswer) => (
     <LayerHost>
+      <AppAnnouncer />
       <AgentsAccess
         kind={answer.kind}
         name={laneWords(answer.options[0]!.lane).name}
@@ -1203,4 +1210,24 @@ test("an agent's details name the settings Crewlet puts in its box, and only tho
   draw(expoAnswer());
   details("QA", "Expo");
   expect(screen.queryByText("Set by Crewlet")).toBeNull();
+});
+
+// A CREDENTIAL ISSUED AT USE, A TOOL WAITING ON THE VENDOR AND A FILE IN THE
+// BOX each read in the details as what they are: the token by how it is
+// issued, the wait in the engine's words, and the file beside the variables
+// Crewlet sets.
+test("an agent's details read an issued token, the engine's wait and the files Crewlet sets", () => {
+  draw(neutralAnswer({ tool: "waiting", tool_reason: "the vendor is still applying the grant" }));
+  expect(screen.queryByText("Needs you")).toBeNull();
+  details("SRE", "the vendor");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on the vendor"]')!);
+  expect(facts.getByText("VENDOR_TOKEN_SRE").parentElement!.textContent).toBe(
+    "VENDOR_TOKEN_SRE, issued at use",
+  );
+  expect(
+    facts.getByText(
+      "Waiting: the vendor is still applying the grant, Its tool server, one per agent",
+    ),
+  ).toBeTruthy();
+  expect(facts.getByText("VENDOR_TOKEN_FILE and .config/crewlet/token")).toBeTruthy();
 });

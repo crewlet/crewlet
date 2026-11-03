@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // ask and answer are a channel's request and reply as a test spells them: an
@@ -30,9 +30,9 @@ type answer struct {
 func (a answer) Answers() string { return a.Request }
 
 // fleetRing is the keyring every node of a test fleet holds.
-var fleetRing = statelog.OneKey("k1", "the signed-ask suite's fleet key material")
+var fleetRing = recordseal.OneKey("k1", "the signed-ask suite's fleet key material")
 
-func channel(t *testing.T, name string, ring statelog.Keyring) *Channel[ask, answer] {
+func channel(t *testing.T, name string, ring recordseal.Keyring) *Channel[ask, answer] {
 	t.Helper()
 	c, err := New[ask, answer](name, ring)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestARequestTheFleetDidNotSignIsBelievedInNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	outsider := sealed(t, channel(t, "test.channel",
-		statelog.OneKey("k1", "not the fleet's material")), removal)
+		recordseal.OneKey("k1", "not the fleet's material")), removal)
 	altered := bytes.Replace(sealed(t, c, removal), []byte("node-c"), []byte("node-a"), 1)
 	if !bytes.Contains(altered, []byte("node-a")) {
 		t.Fatal("the case did not alter the signed request")
@@ -113,7 +113,7 @@ func TestARequestTheFleetDidNotSignIsBelievedInNothing(t *testing.T) {
 // on to a node that holds the key.
 func TestARequestUnderAKeyThisNodeDoesNotHoldNamesItsIDUntrusted(t *testing.T) {
 	t.Parallel()
-	rotated := statelog.Keyring{ActiveID: "k2", Keys: []statelog.Key{
+	rotated := recordseal.Keyring{ActiveID: "k2", Keys: []recordseal.Key{
 		fleetRing.Keys[0], {ID: "k2", Material: "the key the fleet is rotating to"},
 	}}
 	ahead := channel(t, "test.channel", rotated)
@@ -195,7 +195,7 @@ func TestAReplyIsBelievedOnlyWhenBoundToTheQuestion(t *testing.T) {
 	if err != nil || why != "" || rep.Did != "removed" {
 		t.Fatalf("the fleet's answer to this request = (%+v, %q, %v), want it believed", rep, why, err)
 	}
-	rotated := statelog.Keyring{ActiveID: "k2", Keys: []statelog.Key{
+	rotated := recordseal.Keyring{ActiveID: "k2", Keys: []recordseal.Key{
 		{ID: "k2", Material: "a key this node has not been given"},
 	}}
 	for name, tc := range map[string]struct {
@@ -203,7 +203,7 @@ func TestAReplyIsBelievedOnlyWhenBoundToTheQuestion(t *testing.T) {
 		asked string
 	}{
 		"not signed by the fleet": {reply(channel(t, "test.channel",
-			statelog.OneKey("k1", "not the fleet's material")), answer{Request: "r-1"}), "r-1"},
+			recordseal.OneKey("k1", "not the fleet's material")), answer{Request: "r-1"}), "r-1"},
 		"the fleet's answer to another request": {reply(c, answer{Request: "r-2"}), "r-1"},
 		"altered after it was signed": {bytes.Replace(reply(c, answer{Request: "r-1",
 			Did: "refused"}), []byte("refused"), []byte("removed"), 1), "r-1"},
@@ -233,7 +233,7 @@ func TestEveryChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	if req, rep := c.Domains(); req != "test.channel.request" || rep != "test.channel.reply" {
 		t.Fatalf("domains (%q, %q)", req, rep)
 	}
-	record, err := statelog.NewSigner("tracker", fleetRing)
+	record, err := recordseal.NewSigner("tracker", fleetRing)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,8 +263,8 @@ func TestAChannelThatCannotSignIsNotBuilt(t *testing.T) {
 	if _, err := New[ask, answer]("", fleetRing); err == nil {
 		t.Error("a channel with no name was built")
 	}
-	if _, err := New[ask, answer]("test.channel", statelog.Keyring{}); !errors.Is(err, statelog.ErrUnsigned) {
-		t.Errorf("a channel over an empty keyring = %v, want %v", err, statelog.ErrUnsigned)
+	if _, err := New[ask, answer]("test.channel", recordseal.Keyring{}); !errors.Is(err, recordseal.ErrUnsigned) {
+		t.Errorf("a channel over an empty keyring = %v, want %v", err, recordseal.ErrUnsigned)
 	}
 }
 

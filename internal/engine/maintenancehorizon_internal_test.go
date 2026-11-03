@@ -12,9 +12,8 @@ import (
 func retentionDoc(inboxDays int) string {
 	return fmt.Sprintf(`
 name: Nimbus
-tracker:
-  worklet:
-    inbox_retention_days: %d
+inbox:
+  retention_days: %d
 roles:
   - name: SWE
     handle: swe

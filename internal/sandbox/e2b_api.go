@@ -293,8 +293,8 @@ func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec floa
 			// A CREATE E2B REFUSES AS MALFORMED (400, 422), or a template
 			// it doesn't have (404): everything this request carries is
 			// configuration, so each is a person's to change. The
-			// template (providers.sandbox.e2b.template, or the coding
-			// agent's own) is the likeliest, a missing one or one whose
+			// template (providers.sandbox.e2b.template, or the harness's
+			// own) is the likeliest, a missing one or one whose
 			// envd predates secured access, which E2B refuses saying to
 			// rebuild it; the timeout and the seat's run environment ride
 			// the same request, and E2B refuses a malformed one too.

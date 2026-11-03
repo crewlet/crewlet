@@ -36,18 +36,22 @@ import (
 type Fleet struct {
 	mu sync.Mutex
 
-	windows      map[windowKey]int
-	claims       map[string]time.Time
-	worked       map[string]workedEntry
-	applies      map[string]coord.NodeApply
-	budgets      map[string]coord.Tally
-	channels     map[string]coord.Channel
-	follows      map[string]followEntry
-	chatReads    map[string]coord.ChatReadState
-	fires        map[string]map[string]time.Time
-	custody      map[string]string
-	rebases      map[string]rebaseEntry
-	runs         map[string]coord.Record
+	windows   map[windowKey]int
+	claims    map[string]time.Time
+	worked    map[string]workedEntry
+	applies   map[string]coord.NodeApply
+	budgets   map[string]coord.Tally
+	channels  map[string]coord.Channel
+	follows   map[string]followEntry
+	chatReads map[string]coord.ChatReadState
+	fires     map[string]map[string]time.Time
+	custody   map[string]string
+	rebases   map[string]rebaseEntry
+	runs      map[string]coord.Record
+	// runParts are the parts beside the runs' records, by turn id and part
+	// ([coord.RunPart]) — kept apart from runs as the KV keeps them under
+	// keys a listing of records never reads.
+	runParts     map[runPartKey]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 
@@ -128,8 +132,12 @@ type Fleet struct {
 	payload json.RawMessage
 }
 
+// windowKey is one window's count: the counter's name, the window's width and
+// its start — the width as the KV backend's key carries it, so one name
+// counted at two widths keeps two counts.
 type windowKey struct {
 	bucket string
+	width  time.Duration
 	start  int64
 }
 
@@ -161,6 +169,7 @@ func NewFleet() *Fleet {
 		custody:      map[string]string{},
 		rebases:      map[string]rebaseEntry{},
 		runs:         map[string]coord.Record{},
+		runParts:     map[runPartKey]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
 		seatAccess:   map[string]map[string][]byte{},
@@ -189,22 +198,22 @@ func (f *Fleet) Allow(_ context.Context, bucket string, limit int, window time.D
 		// reading of it that is not an invitation to divide by zero.
 		return false, nil
 	}
-	if window > coord.MaxRateWindow {
-		// The KV backend's bucket keeps no wider window, so the twin
-		// refuses one too: a caller that passed here and failed there
-		// would be found in production.
-		return false, fmt.Errorf("coord/memory: rate window %v is wider than "+
-			"coord.MaxRateWindow (%v)", window, coord.MaxRateWindow)
+	if window > coord.MaxCounterWindow {
+		// REFUSED AS THE KV BACKEND REFUSES IT: no bucket there keeps a
+		// window this long, so a twin that counted it would pass a caller
+		// the fleet refuses.
+		return false, fmt.Errorf("coord/memory: a counter window of %v is longer than the %v any backend keeps "+
+			"(coord.MaxCounterWindow)", window, coord.MaxCounterWindow)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	key := windowKey{bucket: bucket, start: now.Truncate(window).UnixNano()}
+	key := windowKey{bucket: bucket, width: window, start: now.Truncate(window).UnixNano()}
 	// Older windows are dropped as they are passed rather than swept: the
 	// twin runs inside one test process, and a sweep would be state the KV
 	// backend does not have — the server expires those keys.
 	for existing := range f.windows {
-		if existing.bucket == bucket && existing.start < key.start {
+		if existing.bucket == bucket && existing.width == window && existing.start < key.start {
 			delete(f.windows, existing)
 		}
 	}

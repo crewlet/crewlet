@@ -83,11 +83,23 @@ func personRecord(t *testing.T, id string, at time.Time, seat string, total int)
 		Category: "system", Tags: store.ExtractTags(payload), Payload: payload}
 }
 
+// fetchRecord is a record of reads of a unit repository, as the node's reads
+// ledger publishes it ([types.CodeFetched], internal/code/readaudit).
+func fetchRecord(t *testing.T, id string, at time.Time, read types.CodeFetched) store.EventRecord {
+	t.Helper()
+	payload, err := json.Marshal(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store.EventRecord{ID: id, Type: read.EventType(), Actor: read.Actor(), Time: at,
+		Category: "system", Tags: store.ExtractTags(payload), Payload: payload}
+}
+
 // usageTally is what a derived day says, reduced to what these cases count.
 type usageTally struct {
-	spend, turns, failed, reviewed, firstPass, sentBack, reads, person int64
-	toolCalls                                                          int64
-	duration                                                           time.Duration
+	spend, turns, failed, reviewed, firstPass, sentBack, reads, person, repo int64
+	toolCalls                                                                int64
+	duration                                                                 time.Duration
 }
 
 func tallyOf(t *testing.T, db *store.DB, w store.UsageWindow) (usageTally, store.UsageMark) {
@@ -121,6 +133,9 @@ func tallyOf(t *testing.T, db *store.DB, w store.UsageWindow) (usageTally, store
 			out.person += c.Total
 		}
 	}
+	for _, r := range day.RepoReads {
+		out.repo += r.Reads
+	}
 	mark, err := db.UsageMark(t.Context(), w)
 	if err != nil {
 		t.Fatalf("fingerprint the day: %v", err)
@@ -140,8 +155,8 @@ func tallyOf(t *testing.T, db *store.DB, w store.UsageWindow) (usageTally, store
 // again; not kept, its rows go and nothing ever counted them.
 //
 // Every statement a day is derived from is exercised — the spend, the ended
-// turns, the reads, a person's spend — so leaving the predicate off any one of
-// them fails here.
+// turns, the reads, a person's spend, a unit repository's reads — so leaving
+// the predicate off any one of them fails here.
 func TestAUsageDayCountsOnlyTheRowsThisNodeKeeps(t *testing.T) {
 	t.Parallel()
 	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
@@ -155,6 +170,7 @@ func TestAUsageDayCountsOnlyTheRowsThisNodeKeeps(t *testing.T) {
 			phaseRecord(t, "own-review", at(2), "seat-1", "t-own", "review", "done", 10),
 			readRecord(t, "own-read", at(2), "seat-1", "p-own"),
 			personRecord(t, "own-person", at(2), "maya", 7),
+			fetchRecord(t, "own-fetch", at(2), unitFetch("pat:maya", "maya")),
 			endedTurn(t, "own-end", at(3), "seat-1", "t-own",
 				types.TurnTally{DurationMS: 60_000, Reviews: 1, Tools: []types.ToolTally{
 					{Server: "github", Tool: "github_get_issue", Calls: 2}}}),
@@ -173,15 +189,16 @@ func TestAUsageDayCountsOnlyTheRowsThisNodeKeeps(t *testing.T) {
 			phaseRecord(t, "b-review-own", at(2), "seat-1", "t-own", "review", "self_iterate", 1),
 			readRecord(t, "b-read", at(5), "seat-2", "p-b"),
 			personRecord(t, "b-person", at(5), "maya", 70),
+			fetchRecord(t, "b-fetch", at(5), unitFetch("token:ci", "")),
 			endedTurn(t, "b-end", at(6), "seat-2", "t-b",
 				types.TurnTally{DurationMS: 120_000, Failed: true, Reviews: 2, SentBack: 1, Unaccepted: 1,
 					Tools: []types.ToolTally{{Server: "github", Tool: "github_search", Calls: 5}}}),
 		}}
 	}
 	ownOnly := usageTally{spend: 100 + 10, turns: 1, reviewed: 1, firstPass: 1, reads: 1,
-		person: 7, toolCalls: 2, duration: time.Minute}
+		person: 7, repo: 1, toolCalls: 2, duration: time.Minute}
 	withBatch := usageTally{spend: 110 + 1000 + 1, turns: 2, failed: 1, reviewed: 2,
-		firstPass: 1, sentBack: 1, reads: 2, person: 77, toolCalls: 7, duration: 3 * time.Minute}
+		firstPass: 1, sentBack: 1, reads: 2, person: 77, repo: 2, toolCalls: 7, duration: 3 * time.Minute}
 
 	for _, kept := range []bool{true, false} {
 		t.Run(fmt.Sprintf("settled kept=%v", kept), func(t *testing.T) {
@@ -515,7 +532,8 @@ func TestARedeliveredBatchThisNodeSettledIsNotOpenedAgain(t *testing.T) {
 // fingerprints: so the oldest is lowered by an older batch and never raised by
 // a newer one, every settle that marks moves the newest seq — which is what
 // the publisher clears against — a batch of rows no day is derived from marks
-// nothing, and a batch not kept marks nothing because none of its rows ever
+// nothing, a check's ending that names no seat among them, and a batch not
+// kept marks nothing because none of its rows ever
 // counted. The clear takes what it read and only that: a settle after the read
 // survives it — and survives it ALONE, carrying its own day rather than the
 // oldest one the cleared marks named, or a busy keeper's settles of today's
@@ -569,6 +587,11 @@ func TestAKeptSettleMarksTheOldestDayItChanged(t *testing.T) {
 		Category: "notification", Payload: []byte(`{}`)})
 	if m, _ := mark(); !m.Since.Equal(days(5)) || m.Seq != 3 {
 		t.Fatalf("a kept batch of rows no day is derived from moved the mark to %+v", m)
+	}
+	settle("d2", true, gateRecord(t, "d2", days(20), failedCheck("unit", 1, "oid-b", "passed", "dev", "a-dev")))
+	if m, _ := mark(); !m.Since.Equal(days(5)) || m.Seq != 3 {
+		t.Fatalf("a kept batch of a check's ending that names no seat — one of a type a day counts some "+
+			"rows of — moved the mark to %+v", m)
 	}
 	settle("e", false, phaseRecord(t, "e1", days(10), "s", "t", "execute", "", 1))
 	if m, _ := mark(); !m.Since.Equal(days(5)) || m.Seq != 3 {

@@ -30,10 +30,11 @@ import type { LogPosition } from "./session.ts";
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
-import type { OBJECTS_STATES } from "../contract/fleet.ts";
+import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
+import type { CHECK_PURPOSES, CHECK_STATES, QUEUE_STATES } from "../contract/checks.ts";
 import type {
   McpHeldCall,
   McpMemberServersStatusAnswer,
@@ -42,6 +43,16 @@ import type {
 import type { ToolRow } from "../contract/tools.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
+import type {
+  CHANGE_STATES,
+  CodeSearchAnswer,
+  COMMAND_OUTCOMES,
+  FINDING_CATEGORIES,
+  FINDING_SEVERITIES,
+  PRECONDITION_KINDS,
+  PRECONDITION_STATES,
+  REPO_STATUSES,
+} from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
 import type { AssistantViewerAssistant } from "../contract/assistant.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
@@ -1302,6 +1313,8 @@ export interface CompanyDocument {
   units?: ConfigUnit[];
   integrations?: Record<string, unknown>;
   providers?: Record<string, unknown>;
+  /** The native code host's block; `native: true` is a company hosting code. */
+  code?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -1351,6 +1364,11 @@ export interface ConfigRole {
   mcp_env?: Record<string, Record<string, string>>;
   sandbox?: Record<string, unknown>;
   placement?: Record<string, unknown>;
+  /**
+   * The seat's code access, `role.code.access`: the one tier every code host
+   * reads — the native host's cap and a GitHub App's permission set.
+   */
+  code?: { access?: string; [key: string]: unknown };
   integrations?: ConfigRoleIntegrations;
   /**
    * The tracker project a root-level seat owns. Vendor-neutral, so on the seat
@@ -1387,7 +1405,6 @@ export type HumanContactKey =
  */
 export interface ConfigRoleIntegrations {
   github?: {
-    tier?: string;
     repos?: string[];
     app_id?: number;
     app_slug?: string;
@@ -1971,6 +1988,20 @@ export interface FleetNode {
    * no status at all.
    */
   posture?: string;
+  /**
+   * The alarms firing on this node, as its own table found them at its last
+   * beat — the longest-standing first. ABSENT RATHER THAN EMPTY on a node
+   * that has evaluated no table (one running no state log, or mid-boot): an
+   * empty list is a node that looked and found nothing.
+   */
+  alarms?: FleetNodeAlarm[];
+}
+
+/** One alarm firing on a node, as the fleet's node row carries it. */
+export interface FleetNodeAlarm {
+  kind: string;
+  /** When it was raised, empty where the node did not say. */
+  since: string;
 }
 
 /**
@@ -2003,14 +2034,20 @@ export interface ObjectCollect {
   error?: string;
 }
 
+/**
+ * One of [OBJECT_FINDINGS]: what the audit found of a file it cannot count on
+ * reading.
+ */
+export type ObjectFinding = (typeof OBJECT_FINDINGS)[number];
+
 /** One file whose bytes the store cannot give back. */
 export interface ObjectMissingFile {
   /** The object the file's row names. */
   object: string;
   /** The file, as `PROJECT/path`. */
   named_by: string;
-  /** The store holds it with the wrong bytes, rather than not at all. */
-  damaged?: boolean;
+  /** What the audit found of it. */
+  finding: ObjectFinding;
 }
 
 /** What an audit that ran to its end found. */
@@ -2021,11 +2058,15 @@ export interface ObjectFindings {
   referenced: number;
   missing: number;
   damaged: number;
-  /** The first hundred files that cannot be read; `missing` + `damaged` is the whole count. */
+  unanswered: number;
+  /**
+   * The first hundred files that cannot be read; `missing` + `damaged` +
+   * `unanswered` is the whole count.
+   */
   missing_files?: ObjectMissingFile[];
 }
 
-/** The last audit attempt: every object a row names, asked of the store. */
+/** The last audit attempt: every object a live (required) row names, asked of the store. */
 export interface ObjectAudit {
   at: string;
   /** Asked about every named object, over an estate that was complete. */
@@ -2033,6 +2074,7 @@ export interface ObjectAudit {
   referenced: number;
   missing: number;
   damaged: number;
+  unanswered: number;
   error?: string;
   /**
    * What the last audit to run to its end found — this attempt, or the one
@@ -5100,6 +5142,12 @@ export interface SetupRequirement {
   check_with?: string[];
   mintable?: boolean;
   /**
+   * What a person may see of a value the engine minted, rendered by the
+   * engine: a setup block holding a minted key's public half, for a person
+   * to run at the app. Never the secret itself, which no route returns.
+   */
+  public?: { text: string; language: string };
+  /**
    * Written without being asked for.
    *
    * The `enabled` toggle on every inbound app: connecting an integration and
@@ -5401,10 +5449,12 @@ export interface Frame {
    *  admitted the caller. An EMPTY list is an answer — no grant would. */
   grants?: string[];
   /** On a QUERY's `unavailable` error frame: the state log's own refusal
-   *  code, when one is behind the answer, or `no_active_revision` for a work,
-   *  page or search question on a node that has no company yet — see
-   *  {@link LogRefusal}. Never on a watch's, whose words stay in the node's
-   *  log because what the directory says about a login names its seat. */
+   *  code, when one is behind the answer, or the code of a surface the node
+   *  serves none of now — `no_active_revision` for a work, page or search
+   *  question on a node that has no company yet, the code host's own for a
+   *  code question — see {@link LogRefusal}. Never on a watch's, whose words
+   *  stay in the node's log because what the directory says about a login
+   *  names its seat. */
   refusal?: string;
   /**
    * A sentence for the person, on two error frames and nowhere else: a query's
@@ -5458,10 +5508,12 @@ export interface QueryRefusal {
  * and says what would.
  */
 export interface LogRefusal {
-  /** The state log's own code (`behind`, `log_full`, `deferred`, …), or
-   *  `no_active_revision` where the node has not been handed a company yet
-   *  and the question is over its tracker or knowledge base — the code a REST
-   *  503 carries for it — or null where neither is behind the answer. */
+  /** The state log's own code (`behind`, `log_full`, `deferred`, …), or the
+   *  code of a surface the node serves none of now — `no_active_revision`
+   *  where it has not been handed a company yet and the question is over its
+   *  tracker or knowledge base, the code host's own (`applying`,
+   *  `config_apply_failed`, …) for a code question — the code a REST 503
+   *  carries for it, or null where none is behind the answer. */
   code: string | null;
   /** The engine's sentence for the condition, written for a person: what
    *  happened and what to do, in step with `retryAfter`. Every condition has
@@ -5474,27 +5526,6 @@ export interface LogRefusal {
    *  change the answer, and then nothing re-asks on a timer. Read through
    *  `retryAfterMs`, which bounds it at `RETRY_AFTER_MAX_MS`. */
   retryAfter: number;
-}
-
-/**
- * An `inbox_changed` frame's data: one committed tracker batch moved this
- * seat's inbox.
- *
- * IDENTIFIERS AND A COUNT, NEVER CONTENT. The frame says only that the inbox
- * should be asked again; what is in it is read through `work_inbox`, the
- * question that decides who may read it. `unread_delta` is a HINT — it counts
- * the notices the batch wrote, and a redelivery the engine has already
- * collapsed may count one twice — so no screen adds it to a badge.
- */
-export interface InboxChange {
-  handle: string;
-  unread_delta: number;
-  /** The id of the object the newest of those notices was written on: the
-   *  task for a task commit, the PERSON for a `prioritised` notice — whose
-   *  task `work_inbox` names as `task`. */
-  subject: string;
-  /** The reason that notice was routed under — one of `work_inbox`'s. */
-  reason: string;
 }
 
 /** The named answers the socket's request/response channel serves. */
@@ -5736,6 +5767,116 @@ export interface WorkInboxNotice {
   snoozed_until?: string;
 }
 
+/** A position on one domain's log, as a mark reads through it. */
+export interface InboxPosition {
+  stream: string;
+  generation?: number;
+  seq: number;
+}
+
+/** What a code notice carries of its change, read with the page
+ *  (`code.NoticeChange`): its title, state and work item — and, where the
+ *  read asked for `cards`, what its card draws besides, read once the page
+ *  was composed for the notices it kept. */
+export interface CodeNoticeChange {
+  title: string;
+  state: string;
+  work_item?: { backend: string; id: string; key: string; project?: string };
+  /** The description's first KiB; `body_cut` says there is more. A card's. */
+  body?: string;
+  body_cut?: boolean;
+  /** The findings seats raised that stand open, by severity. A card's. */
+  agent_findings?: Record<string, number>;
+  /** Where a live change's merge stands, judged for its reader; absent for a
+   *  merged or closed change, which merges nothing. A card's. */
+  readiness?: CodeNoticeReadiness;
+}
+
+/** What a code notice carries of its change's readiness
+ *  (`code.NoticeReadiness`): its counts and its first sentence — the first
+ *  unmet precondition's, else the first still computing, else that it is
+ *  ready. The change's own page reads every precondition. */
+export interface CodeNoticeReadiness {
+  met: number;
+  total: number;
+  first: string;
+}
+
+/** One notice the code host routed to a person (`code.InboxNotice`). */
+export interface CodeInboxNotice {
+  record_id: string;
+  log_seq: number;
+  log_stream: string;
+  log_generation: number;
+  at: string;
+  reason: string;
+  primary: boolean;
+  addressed: boolean;
+  fallback?: boolean;
+  repo: string;
+  change_id: string;
+  /** The change's name, web!42. */
+  change_ref: string;
+  excerpt?: string;
+  change?: CodeNoticeChange;
+  read: boolean;
+  snoozed?: boolean;
+  snoozed_until?: string;
+}
+
+/** One notice of a person's COMPOSED inbox (`inbox.Notice`): what every source
+ *  says alike, and the source's own notice whole in `extra`. */
+export type InboxNotice =
+  InboxNoticeOf<"tracker", WorkInboxNotice> | InboxNoticeOf<"code", CodeInboxNotice>;
+
+export interface InboxNoticeOf<S extends string, E> {
+  source: S;
+  record_id: string;
+  /** Where it sits on its source's log: what that source's mark reads through. */
+  position: InboxPosition;
+  at: string;
+  reason: string;
+  primary: boolean;
+  addressed: boolean;
+  fallback?: boolean;
+  kind: string;
+  subject: { id: string; key?: string; title?: string };
+  excerpt?: string;
+  actor?: string;
+  actor_kind?: string;
+  read: boolean;
+  snoozed?: boolean;
+  snoozed_until?: string;
+  extra: E;
+}
+
+/** One source a composed inbox read, and what it said of the person's marks. */
+export interface InboxSourceState {
+  name: "tracker" | "code";
+  seen_through?: InboxPosition;
+  primary_reasons: string[];
+  /** The newest notice of this source the page carries. */
+  newest?: InboxPosition;
+}
+
+/** A page of a person's composed inbox — every native domain's notices,
+ *  interleaved by when each happened (`inbox.Page`). */
+export interface InboxAnswer {
+  handle: string;
+  notices: InboxNotice[];
+  /** The sources read: each one the reader may read, and no other. */
+  sources: InboxSourceState[];
+  /** Counts over THIS PAGE. */
+  unread: number;
+  primary: number;
+  /** One position per source, past this page; absent once every source is read. */
+  next_cursor?: string;
+  /** The WEAKEST level a source was read at: the page is no fresher than its stalest half. */
+  read_level?: ReadLevel;
+  /** Every source read held every notice its scan reached. */
+  complete: boolean;
+}
+
 /** The ask a notice or a feed row is about, as it stands at the read. */
 export interface WorkAskView {
   /** The ask's own comment id — what an answer names in `answers`. */
@@ -5945,12 +6086,23 @@ export interface TurnRow {
   work_item?: TurnWorkItem;
 }
 
-/** What started a turn. `kind` is `chat_message` (`id` the message's, `reason`
- *  the routing reason it reached the seat), `work_item` (`id` the item's key,
- *  `reason` the tracker's), `schedule` (`id` its name) or `colleague_ask`
- *  (`id` the colleague channel's). OPEN, for a kind a newer engine adds. */
+/** What started a turn (`types.TriggerOrigin`). `kind` is `chat_message`
+ *  (`id` the message's, `reason` the routing reason it reached the seat),
+ *  `work_item` (`id` the item's key, `reason` the tracker's), `schedule` (`id`
+ *  its name), `colleague_ask` (`id` the colleague channel's), `code_change`
+ *  (`id` the change as the Code screens name it, `web!42`, `reason` the code
+ *  notice's) or `alarm` (`id` the alarm instance as the alarms page names it,
+ *  `reason` its transition: `fired`, `cleared` or `firing_at_boot`). OPEN, for
+ *  a kind a newer engine adds. */
 export interface TurnOrigin {
-  kind: "chat_message" | "work_item" | "schedule" | "colleague_ask" | (string & {});
+  kind:
+    | "chat_message"
+    | "work_item"
+    | "schedule"
+    | "colleague_ask"
+    | "code_change"
+    | "alarm"
+    | (string & {});
   id: string;
   reason?: string;
 }
@@ -6412,6 +6564,11 @@ export interface SeatActivityTotals {
   first_pass: number;
   sent_back: number;
   tokens: number;
+  /** The changes the seat opened, the reviews it gave, and the findings the
+   *  reviews of its own changes raised (`usage.CodeDay`), over the window. */
+  changes_opened: number;
+  reviews_given: number;
+  findings_received: number;
   /** Every day of the previous window, oldest first — so the fortnight a
    *  week-on-week figure is made over comes from the same answer. */
   per_day: SeatActivityDay[];
@@ -6440,6 +6597,11 @@ export interface SeatActivityRow {
   p50_ms?: number;
   p90_ms?: number;
   tokens: number;
+  /** The changes the seat opened, the reviews it gave, and the findings the
+   *  reviews of its own changes raised (`usage.CodeDay`), over the window. */
+  changes_opened: number;
+  reviews_given: number;
+  findings_received: number;
   /** Every day of the window, oldest first, a quiet day as zeros. */
   per_day: SeatActivityDay[];
   last_turn_at?: string;
@@ -7819,6 +7981,7 @@ export interface ArtifactPresencePush {
 export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
+  inbox: InboxAnswer;
   agent: AgentAnswer;
   live_call: LiveCallAnswer;
   agent_memory: AgentMemory;
@@ -7950,3 +8113,1158 @@ export interface QueryMap {
 }
 
 export type QueryName = keyof QueryMap;
+
+/*
+ * THE CODE HOST'S QUESTIONS, asked over REST (`lib/useCodeQuery.ts`) rather
+ * than on the socket, so a screen of the Code workspace never holds one of
+ * the socket's in-flight slots: its answers are pages of rows a person
+ * scrolls, and an answer by object id is immutable, kept by the tab and never
+ * asked again while it is kept.
+ * They are registry questions all the same — the one answer every transport
+ * gives, read back at the tab's floor on the code log (`contract/domains.ts`'s
+ * `SESSION_QUERIES.code`) — and each answer is the engine's one read answer
+ * (`code.ReadAnswer`) as the question's kind fills it.
+ */
+
+/**
+ * Where a repository is in its life (`contract/code.ts`'s `REPO_STATUSES`,
+ * held to `code.RepoStatuses`), or a state a newer engine names, which a row
+ * shows as it is.
+ */
+export type CodeRepoStatus = (typeof REPO_STATUSES)[number] | (string & {});
+
+/** Who owns a repository: one unit, by its key, or one seat, by its handle (`code.Owner`). */
+export interface CodeOwner {
+  kind: "unit" | "seat" | (string & {});
+  ref: string;
+}
+
+/** One protection rule over the refs a pattern matches (`code.Protection`). */
+export interface CodeProtection {
+  pattern: string;
+  allow_force?: boolean;
+  allow_delete?: boolean;
+  /** `persons` lets a person push to a matching ref; `none` lets nobody. */
+  direct_push: "persons" | "none" | (string & {});
+}
+
+/** A repository as a listing draws it (`code.RepoSummary` over `code.RepoRef`). */
+export interface CodeRepoSummary {
+  id: string;
+  name: string;
+  status: CodeRepoStatus;
+  /**
+   * What decides its settings and its life: `config`, the company document's
+   * `code.repos`, or `tools`, the lifecycle requests of the tools that made it.
+   */
+  managed_by: "config" | "tools" | (string & {});
+  /** What it is for: `project`, or `scratch` — a seat's own, named `<handle>.<slug>` after it. */
+  kind: "project" | "scratch" | (string & {});
+  owner: CodeOwner;
+  /** Which SEATS read it: `company`, every seat, or `unit`, the owner's. A person reads every repository. */
+  visibility: "company" | "unit" | (string & {});
+  /**
+   * How code search reads it: `indexed`, from an index of its default branch, or `grep`, only by a
+   * search naming it.
+   */
+  search: "indexed" | "grep" | (string & {});
+  /**
+   * A pull mirror (`code.RepoRef.Mirrored`): it moves only by the code host's syncs
+   * from a repository at another host, and takes no push and no change of its own.
+   * Absent for one that is not.
+   */
+  mirrored?: boolean;
+  default_branch: string;
+  description?: string;
+  protections?: CodeProtection[];
+  /** When it was deleted, absent for a repository that was not. */
+  deleted_at?: string;
+  /**
+   * Its last push, rename, settings change or restore — the clock a scratch
+   * repository expires by; never a read.
+   */
+  last_activity_at?: string;
+  /** Its live refs, branches and tags together. */
+  refs: number;
+  live_packs: number;
+  live_bytes: number;
+  live_objects: number;
+  /** How many expunges have begun on it; absent for one never expunged. */
+  drop_epoch?: number;
+  /**
+   * Its current name, where it was asked for by an OLD one a rename left
+   * redirecting to it — and when that old name is released. Absent where it
+   * was asked for by its own.
+   */
+  redirect?: string;
+  redirect_until?: string;
+  /** The checkpoint its rows were read at. */
+  position: LogPosition;
+  /** The reader's standing on it: read, review, write or maintain. */
+  access?: string;
+  /** The default branch's object id; absent for an empty repository. */
+  head?: string;
+  /** Pushes ever. */
+  pushes: number;
+  /** Absent for a repository nobody pushed to. */
+  last_push_at?: string;
+}
+
+/** One ref update a push asked for, and what became of it (`code.Command`). */
+export interface CodePushCommand {
+  ref: string;
+  old: string;
+  new: string;
+  forced?: boolean;
+  /** `ok` moved the ref, `noop` asked for the value it had, `ng` was refused. */
+  result: "ok" | "noop" | "ng" | (string & {});
+  /** Why an `ng` command was refused, as the engine names the refusal. */
+  reason?: string;
+  detail?: string;
+}
+
+/**
+ * Commands of a push counted by what became of each (`code.CommandCounts`),
+ * keyed by the outcome's word (`contract/code.ts`'s `COMMAND_OUTCOMES`) — or by
+ * one a newer engine names, which a summary says as it is. Each count is
+ * absent at zero.
+ */
+export type CodePushCounts = Readonly<
+  Partial<Record<(typeof COMMAND_OUTCOMES)[number], number>> & Record<string, number | undefined>
+>;
+
+/** What made a seat's push, as the engine stamped it from the call (`code.RunProvenance`). */
+export interface CodePushRun {
+  turn_id: string;
+  /** The tracker the turn's work item is in, and its key there. */
+  work_backend?: string;
+  work_key?: string;
+  model?: string;
+  /** The executor behind a box's push — its launch's job id — and the harness it ran: both or neither. */
+  run_id?: string;
+  harness?: string;
+}
+
+/** One push as its repository's history keeps it (`code.PushRow`). */
+export interface CodePushRow {
+  push_id: string;
+  repo_id: string;
+  position: LogPosition;
+  /** When its record landed on the code log. */
+  at: string;
+  /** A seat's handle, or the credential an operator pushed through (`pat:…`, `session:…`). */
+  actor: string;
+  actor_kind: "agent" | "operator" | "system" | (string & {});
+  /** The seat: the seat itself, or the human seat an operator's credential is bound to. */
+  actor_seat?: string;
+  /**
+   * `git` for what a client's git sent, `engine` for a commit the engine built
+   * from a tool's call, `merge` for a branch a change's merge record moved,
+   * `expiry` for an idle seat branch the engine's own account deleted,
+   * `queue` for a branch a merge queue's landing moved, one push a change,
+   * `import` for refs an import set and `mirror` for refs a pull mirror's
+   * sync moved, each on the engine's own account.
+   */
+  via: "git" | "engine" | "merge" | "expiry" | "queue" | "import" | "mirror" | (string & {});
+  /** A seat's push: the turn, its work item and its model. */
+  run?: CodePushRun;
+  node?: string;
+  atomic?: boolean;
+  /**
+   * Every ref update it asked for — null only where the engine kept none. On a
+   * row read in brief (`brief`), at most five of them: its refused ones first,
+   * then the first it sent, with the rest counted in `omitted`.
+   */
+  commands: CodePushCommand[] | null;
+  /**
+   * The ref updates a row read in brief leaves out of `commands`, counted by
+   * what became of each; absent where nothing is left out, so `commands` and
+   * this are every update the push asked for.
+   */
+  omitted?: CodePushCounts;
+  pack_id?: string;
+  pack_bytes?: number;
+  /**
+   * The commits it introduced, at most a bounded list of them, and never on a
+   * row read in brief; `introduced_count` is the whole.
+   */
+  introduced?: string[];
+  introduced_count?: number;
+  received_at: string;
+}
+
+/** A page of a code listing: its cursor, and the checkpoint and level it was read at. */
+interface CodePage {
+  /** The cursor to the next page, absent at the end. */
+  next?: string;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
+/** `code_repos`: the repositories the asker may read, by name. */
+export interface CodeReposAnswer extends CodePage {
+  /** Absent on a page that holds none, which may still carry a `next`. */
+  repos?: CodeRepoSummary[];
+}
+
+/** `code_pushes`: one repository's pushes, newest first in log order. */
+export interface CodePushesAnswer extends CodePage {
+  /** Absent on a page that holds none. */
+  pushes?: CodePushRow[];
+}
+
+/**
+ * Where a change is in its life (`contract/code.ts`'s `CHANGE_STATES`, held to
+ * `code.ChangeStates`), or a state a newer engine names, shown as it is.
+ */
+export type CodeChangeState = (typeof CHANGE_STATES)[number] | (string & {});
+
+/**
+ * What a change's rows name a principal as (`code.PartyKind`): a seat by its
+ * handle, or a person by the human seat they hold.
+ */
+export type CodePartyKind = "agent" | "person" | (string & {});
+
+/** One principal a change's readiness names (`code.Party`). */
+export interface CodeParty {
+  handle: string;
+  kind: CodePartyKind;
+}
+
+/**
+ * Who may clear one standing blocker (`code.ClearedBy`): its raiser, the seats
+ * that maintain the repository, and — always — any person.
+ */
+export interface CodeClearedBy {
+  raiser: CodeParty;
+  maintainers?: string[];
+  persons?: boolean;
+}
+
+/** One standing blocker a readiness names (`code.Blocker`). */
+export interface CodeBlocker {
+  finding_id: string;
+  /** `open`, or the answer an author gave: `resolved`, `wont_fix` or `disputed`. */
+  state: string;
+  cleared_by: CodeClearedBy;
+}
+
+/**
+ * One precondition of a change's merge, judged (`code.Precondition`): its kind
+ * (`PRECONDITION_KINDS`), where it stands (`PRECONDITION_STATES`), whom an
+ * unmet one waits on, a blocker precondition's standing blockers, and the
+ * engine's one sentence about it.
+ */
+export interface CodePrecondition {
+  kind: (typeof PRECONDITION_KINDS)[number] | (string & {});
+  state: (typeof PRECONDITION_STATES)[number] | (string & {});
+  waits_on?: CodeParty[];
+  blockers?: CodeBlocker[];
+  blockers_omitted?: number;
+  detail: string;
+}
+
+/**
+ * Whether a live change may merge (`code.Readiness`), judged by the engine on
+ * the read that answered it: every precondition one a kind, in the engine's
+ * order, how many are met of how many, and the sentence of the first that is
+ * not.
+ */
+export interface CodeReadiness {
+  met: number;
+  total: number;
+  first: string;
+  preconditions: CodePrecondition[];
+}
+
+/** A change as its row holds it (`code.ChangeRow`). */
+export interface CodeChangeRow {
+  id: string;
+  repo_id: string;
+  /** Its number on its repository: `web!42`'s 42. */
+  number: number;
+  title: string;
+  state: CodeChangeState;
+  /** The branch it proposes, and the branch it proposes it into, each in full. */
+  source_ref: string;
+  target_ref: string;
+  /** The source branch's head at its latest revision, and that revision's number. */
+  head: string;
+  revision: number;
+  owner: string;
+  owner_kind: CodePartyKind;
+  owner_operator_id?: string;
+  work_item?: WorkItemRef;
+  created_turn?: string;
+  created_run?: string;
+  opened_at: string;
+  opened_position: LogPosition;
+  closed_at?: string;
+  close_reason?: string;
+  merged_at?: string;
+  merged_via?: string;
+  merge_oid?: string;
+  merged_by?: string;
+  merged_by_kind?: CodePartyKind;
+  merged_operator_id?: string;
+  override_reason?: string;
+  /** How long its description is; absent for none. */
+  body_bytes?: number;
+  /** The records that changed the row — what a lifecycle write expects. */
+  version: number;
+  position: LogPosition;
+}
+
+/** A change as a listing draws it (`code.ChangeSummary`). */
+export interface CodeChangeSummary extends CodeChangeRow {
+  /** Its repository's name, and its reference: `web!42`. */
+  repo: string;
+  ref: string;
+  /** The reader's access to its repository: read, review, write or maintain. */
+  access?: string;
+  /** Absent for a change that is no longer live, which merges nothing. */
+  readiness?: CodeReadiness;
+  /**
+   * How many of its findings stand open — none of its authors has answered
+   * them (`code_conversations.open_findings`); 0 for a change nobody reviewed.
+   */
+  open_findings: number;
+  /**
+   * When it last moved: the later of its lifecycle's last record (an open, an
+   * edit, a close, a merge, a push that moved its head) and the last thing
+   * somebody wrote about it (an ask for review, a comment, a review, an answer
+   * to a finding) — never the home's facts. What `window=` narrows by. A
+   * change read in brief carries its lifecycle's alone.
+   */
+  updated_at: string;
+}
+
+/**
+ * `code_changes`: the changes a listing's filters name — a page READ, not
+ * kept, so one can be short or empty with a cursor — in the order the index
+ * its filters lead walks.
+ */
+export interface CodeChangesAnswer extends CodePage {
+  /** Absent on a page that holds none. */
+  changes?: CodeChangeSummary[];
+}
+
+/** One author of a change (`code.ChangeAuthor`), from the revision they first wrote. */
+export interface CodeChangeAuthor {
+  author: string;
+  kind: CodePartyKind;
+  first_revision: number;
+  position: LogPosition;
+}
+
+/**
+ * What a change's conversation counts (`code.ConversationRow`): its comments,
+ * its reviews, its findings none of its authors has answered, its standing
+ * blockers, and how many reviewers' latest verdict asks for changes.
+ */
+export interface CodeConversationRow {
+  comments: number;
+  reviews: number;
+  open_findings: number;
+  open_blockers: number;
+  changes_requested: number;
+  version: number;
+  position: LogPosition;
+  /**
+   * When somebody last wrote on the change — an ask for review, a comment, a
+   * thread resolved, a review, an answer to a finding — never the home's
+   * facts. Absent until somebody has.
+   */
+  spoken_at?: string;
+}
+
+/**
+ * Whether a change's latest merged revision merges into its target, as its
+ * home git node recorded it (`code.MergeabilityRow`).
+ */
+export interface CodeMergeabilityRow {
+  revision: number;
+  target_ref: string;
+  target_oid: string;
+  state: "clean" | "conflict" | "unknown" | (string & {});
+  conflicts?: string[];
+  conflicts_omitted?: number;
+  node: string;
+  at: string;
+}
+
+/** One change in detail (`code.ChangeDetail`): its summary, description and authors. */
+export interface CodeChangeDetail extends CodeChangeSummary {
+  body?: string;
+  authors: CodeChangeAuthor[];
+  /** Absent for a change nobody has discussed. */
+  conversation?: CodeConversationRow;
+  /** Absent for a change its home has merged no revision of yet. */
+  mergeability?: CodeMergeabilityRow;
+}
+
+/** A revision's facts, as its home git node recorded them (`code.RevisionFactsRow`). */
+export interface CodeRevisionFacts {
+  target_ref: string;
+  target_oid: string;
+  base_oid?: string;
+  patch_id?: string;
+  patch_id_omitted?: boolean;
+  touched: string[];
+  touches_all?: boolean;
+  /** The revision's change classes, each a list of places in `touched`; absent where none is classed. */
+  classes?: CodeRevisionClasses;
+  node: string;
+}
+
+/**
+ * Which of a revision's touched paths change only whitespace or only comments
+ * (`code.RevisionClasses`): each a list of places in its facts' `touched`,
+ * and `complete` where every touched path was classified — a lexer read each
+ * one — so a path in neither list changes code.
+ */
+export interface CodeRevisionClasses {
+  whitespace_only?: number[];
+  comment_only?: number[];
+  complete?: boolean;
+}
+
+/** One revision of a change (`code.RevisionRow`): a move of its source branch's head. */
+export interface CodeRevisionRow {
+  n: number;
+  head: string;
+  pusher: string;
+  pusher_kind: CodePartyKind;
+  push_id?: string;
+  position: LogPosition;
+  at: string;
+  /** Absent for a revision its home has recorded no facts of yet. */
+  facts?: CodeRevisionFacts;
+}
+
+/** One reviewer a change has asked (`code.ReviewerRow`). */
+export interface CodeReviewerRow {
+  reviewer: string;
+  kind: CodePartyKind;
+  /** `requested`, or `path_owner` for one a revision's path owners asked. */
+  reason: string;
+  /** `requested` while the ask stands, `withdrawn` once taken back. */
+  state: string;
+  requested_by: string;
+  requested_by_kind: CodePartyKind;
+  note?: string;
+  position: LogPosition;
+}
+
+/** A verdict a review gives (`code.Verdicts`). */
+export type CodeVerdict = "approve" | "request_changes" | "comment" | (string & {});
+
+/** One review of a change (`code.ReviewRow`). */
+export interface CodeReviewRow {
+  id: string;
+  revision: number;
+  reviewer: string;
+  reviewer_kind: CodePartyKind;
+  operator_id?: string;
+  verdict: CodeVerdict;
+  summary?: string;
+  findings: number;
+  turn_id?: string;
+  model?: string;
+  position: LogPosition;
+  at: string;
+  /**
+   * The change it judged, on a `code_reviews` listing's rows, which span
+   * changes; absent on a change's own read, which names its change.
+   */
+  change?: CodeChangeName;
+}
+
+/** Where a comment on a line points (`code.CommentAnchor`). */
+export interface CodeCommentAnchor {
+  revision: number;
+  path: string;
+  side: "old" | "new" | (string & {});
+  line: number;
+  blob_oid: string;
+}
+
+/** One comment on a change (`code.CommentRow`), in thread order. */
+export interface CodeCommentRow {
+  id: string;
+  /** Its own id for a thread's first comment, the finding's for a reply to one. */
+  thread_id: string;
+  parent_id?: string;
+  finding_id?: string;
+  author: string;
+  author_kind: CodePartyKind;
+  author_operator_id?: string;
+  anchor?: CodeCommentAnchor;
+  resolved?: boolean;
+  resolved_by?: string;
+  resolved_by_kind?: CodePartyKind;
+  turn_id?: string;
+  body: string;
+  position: LogPosition;
+  at: string;
+}
+
+/** One finding on a change (`code.FindingRow`). */
+export interface CodeFindingRow {
+  id: string;
+  review_id: string;
+  raiser: string;
+  raiser_kind: CodePartyKind;
+  revision: number;
+  commit_oid: string;
+  path: string;
+  blob_oid: string;
+  side: "old" | "new" | (string & {});
+  line_start: number;
+  line_end: number;
+  severity: (typeof FINDING_SEVERITIES)[number] | (string & {});
+  category: (typeof FINDING_CATEGORIES)[number] | (string & {});
+  title: string;
+  body?: string;
+  /** The lines it would put in place of its own, where it suggests some. */
+  suggestion?: string;
+  /** open, resolved, wont_fix, disputed, dismissed or superseded. */
+  state: string;
+  resolution_note?: string;
+  resolved_by?: string;
+  resolved_by_kind?: CodePartyKind;
+  resolved_commit?: string;
+  position: LogPosition;
+}
+
+/**
+ * Where a finding's lines are in the revision a read asks about
+ * (`code.FindingPlace`): moved by the lines changed above them; OUTDATED where
+ * its own lines changed; GONE where the revision holds no file at its path.
+ */
+export interface CodeFindingPlace {
+  start?: number;
+  end?: number;
+  outdated?: boolean;
+  gone?: boolean;
+}
+
+/** One file a diff changed (`code.DiffFile`). */
+export interface CodeDiffFile {
+  path: string;
+  /** The path in base64 where it is no valid UTF-8 (`code.WirePath`). */
+  path_b64?: string;
+  old_path?: string;
+  /** Git's own letter: A added, D deleted, M modified, R renamed, T type changed. */
+  status: string;
+  similarity?: number;
+  old_mode?: string;
+  new_mode?: string;
+  added: number;
+  deleted: number;
+  binary?: boolean;
+  old_oid?: string;
+  new_oid?: string;
+}
+
+/** A page of a diff's files, or of one file's patch (`code.DiffAnswer`). */
+export interface CodeDiffAnswer {
+  base: string;
+  head: string;
+  files: CodeDiffFile[] | null;
+  total: number;
+  added: number;
+  deleted: number;
+  /** One file's patch, as git writes it. */
+  patch?: string;
+}
+
+/**
+ * `code_change`, a part at a time: the change's detail rides the first page of
+ * its revisions (no `part`, or `part=revisions`); each other part answers its
+ * own page beside the change — its reviewers, comments, reviews or findings,
+ * or the asker's own standing findings (`standing`, in `findings`);
+ * `files` and `diff` a revision's files or one file's patch (`diff`), read by
+ * object id on its home git node; and `findings` placed in the revision asked
+ * about (`placed`, by the finding's id).
+ */
+export interface CodeChangeAnswer extends CodePage {
+  change?: CodeChangeDetail;
+  revisions?: CodeRevisionRow[];
+  reviewers?: CodeReviewerRow[];
+  comments?: CodeCommentRow[];
+  reviews?: CodeReviewRow[];
+  findings?: CodeFindingRow[];
+  /** The `files` and `diff` parts: the revision read at, and the one read since. */
+  revision?: number;
+  since_revision?: number;
+  diff?: CodeDiffAnswer;
+  /** The `findings` part's placing of each finding, by its id. */
+  placed?: Record<string, CodeFindingPlace>;
+}
+
+/** One handle a record about a change reached (`code.RoutedRecipient`). */
+export interface CodeRoutedRecipient {
+  handle: string;
+  kind: CodePartyKind;
+  reason: string;
+  addressed?: boolean;
+  fallback?: boolean;
+  fallback_rank?: number;
+}
+
+/** One record about a change, and whom it reached (`code.RoutedRecord`). */
+export interface CodeRoutedRecord {
+  record_id: string;
+  position: LogPosition;
+  at: string;
+  excerpt?: string;
+  recipients: CodeRoutedRecipient[];
+}
+
+/** `code_change_routing`: whom a change's records reached, newest first (`code.RoutedPage`). */
+export interface CodeChangeRoutingAnswer extends CodePage {
+  routed?: {
+    change: { repo: string; ref: string; title: string; state: CodeChangeState };
+    opened_at: string;
+    records: CodeRoutedRecord[] | null;
+    /** `reached`, `nobody` or `swept` (`routing.Delivery`). */
+    delivery: string;
+    retained_from: string;
+  };
+}
+
+/**
+ * One branch rule's merge gate (`code.MergeGate`): who may merge, how many
+ * approvals it waits for and what spares a change them, the paths a person
+ * must approve, the checks it waits for, how many changes its queue tests at
+ * once, and its switches.
+ */
+export interface CodeMergeGate {
+  merge_by: "writers" | "maintainers" | "persons" | (string & {});
+  approvals: "none" | "one" | (string & {});
+  approvals_unless?: string[];
+  human_paths?: { glob: string; unless?: string[] }[];
+  checks?: string[];
+  landing: { depth: number; batch: number };
+  owners_approve?: boolean;
+  delete_source: "seats" | "none" | (string & {});
+  agents_edit_checks?: boolean;
+}
+
+/** A rule's merge gate, named by the rule's pattern (`code.RuleGate`). */
+export interface CodeRuleGate {
+  pattern: string;
+  gate: CodeMergeGate;
+}
+
+/**
+ * Who set one of a repository's rules and when, named by the rule's pattern
+ * (`code.RuleSource`): the decider of the record that last changed the rule —
+ * a seat's handle (`agent`), a person's seat or a credential's login
+ * (`operator`), nobody where the configuration set it (`config`) — and that
+ * record's instant.
+ */
+export interface CodeRuleSource {
+  pattern: string;
+  set_by?: string;
+  set_by_kind: "operator" | "config" | "system" | "agent" | (string & {});
+  set_at: string;
+}
+
+/** Who owns which of a repository's paths, for review (`code.PathOwner`): globs over its tree. */
+export interface CodePathOwner {
+  owner: CodeOwner;
+  paths: string[];
+}
+
+/**
+ * One repository in detail (`code.RepoDetail`): its summary, how many
+ * branches, tags and deleted refs it holds, when it was declared, and — to
+ * this question, which asks for them — who owns its paths and its rules'
+ * merge gates, with who set each rule and when (asked for with the gates).
+ */
+export interface CodeRepoDetail extends CodeRepoSummary {
+  branches: number;
+  tags: number;
+  tombstones: number;
+  created_at: string;
+  path_owners?: CodePathOwner[];
+  gates?: CodeRuleGate[];
+  rule_sources?: CodeRuleSource[];
+  /** Where its expunges stand (`code.ExpungeState`); absent for one never purged with none asked. */
+  expunge?: CodeExpungeState;
+  /** Where it stands with other hosts (`code.RemoteState`); absent for none. */
+  remotes?: CodeRemoteState;
+}
+
+/** A repository's expunges (`code.ExpungeState`): the one open, the purge asked, the last committed. */
+export interface CodeExpungeState {
+  open?: string;
+  /** The purge a person asked for that its maintainer has not served yet, by its id. */
+  request?: string;
+  requested?: LogPosition;
+  expunged_at?: string;
+  dropped_objects?: number;
+  dropped_bytes?: number;
+}
+
+/** A pull mirror's source (`code.MirrorSource`); `credential` is a `${VAR}` reference, never a token. */
+export interface CodeMirrorSource {
+  url: string;
+  credential?: string;
+}
+
+/** A push mirror's target (`code.MirrorTarget`): pushed as the seat `as`, the refs it names. */
+export interface CodeMirrorTarget {
+  url: string;
+  credential: string;
+  as: string;
+  /** Absent for the default: the default branch and `refs/tags/*`. */
+  refs?: string[];
+}
+
+/** A repository's other hosts (`code.RemoteState`). */
+export interface CodeRemoteState {
+  mirror_from?: CodeMirrorSource;
+  mirror_to?: CodeMirrorTarget;
+  /** The import its create filled it from, and how far it went (`code.ImportState`). */
+  import?: {
+    source: CodeMirrorSource;
+    chunks: number;
+    /** Absent while it runs. */
+    done_at?: string;
+    /** Why it ended short; absent for one that landed whole. */
+    error?: string;
+  };
+  /** A pull mirror's last sync; absent for never. */
+  mirror_synced_at?: string;
+}
+
+/** `code_repo`: one repository, by its name — or by an old one a rename left redirecting. */
+export interface CodeRepoAnswer extends CodePage {
+  repo?: CodeRepoDetail;
+}
+
+/** One live ref (`code.RefRow`): its whole name, the object it points at, and where its last move landed. */
+export interface CodeRefRow {
+  ref: string;
+  oid?: string;
+  position: LogPosition;
+}
+
+/** `code_refs`: a repository's live refs under one prefix — its branches by default — in name order. */
+export interface CodeRefsAnswer extends CodePage {
+  /** Absent on a page that holds none. */
+  refs?: CodeRefRow[];
+}
+
+/** Who acts on a repository (`code.Principal`): a seat, or a credential and the seat it acts as. */
+export interface CodePrincipal {
+  kind: "agent" | "operator" | (string & {});
+  operator_id?: string;
+  seat?: string;
+  run?: CodePushRun;
+}
+
+/** The push that INTRODUCED a commit, as its git node's index holds it (`code.PushedBy`). */
+export interface CodePushedBy {
+  push_id: string;
+  position: LogPosition;
+  at: string;
+  principal: CodePrincipal;
+  via: string;
+}
+
+/** What a git node's index of pushes covers (`code.Coverage`). */
+export interface CodeCoverage {
+  from: LogPosition;
+  through: LogPosition;
+  complete?: boolean;
+  gap_from?: LogPosition;
+  gap_through?: LogPosition;
+}
+
+/** A ref a request's revision named, as it was resolved (`queries.CodeResolved`). */
+export interface CodeResolved {
+  ref: string;
+  oid: string;
+  moved?: LogPosition;
+}
+
+/** One entry of a directory's listing (`code.TreeEntry`), in git's own order. */
+export interface CodeTreeEntry {
+  /** Git's: 040000 a directory, 100644 a file, 100755 an executable, 120000 a link, 160000 a submodule. */
+  mode: string;
+  type: "tree" | "blob" | "commit" | (string & {});
+  oid: string;
+  /** From the repository's root; in base64 as `path_b64` where it is no valid UTF-8. */
+  path: string;
+  path_b64?: string;
+  /** A file's bytes; none for a directory, a submodule or an empty file. */
+  size?: number;
+}
+
+/** One page of a directory's listing (`code.TreeAnswer`). */
+export interface CodeTreeAnswer {
+  tree: string;
+  path?: string;
+  entries: CodeTreeEntry[] | null;
+  /** Every entry of the listing, on every page. */
+  total: number;
+}
+
+/** One page of a file's lines (`code.BlobAnswer`). */
+export interface CodeBlobAnswer {
+  path?: string;
+  oid: string;
+  size: number;
+  /** A file git calls binary, answered by its size with no text. */
+  binary?: boolean;
+  /** How many lines the whole file has. */
+  lines: number;
+  /** The lines `text` holds — begun `start_byte` bytes into the first where a page begins inside a line. */
+  start_line?: number;
+  end_line?: number;
+  start_byte?: number;
+  /** The page's text, which with every other page's concatenates to the file byte for byte. */
+  text?: string;
+  /** The page ends inside `end_line`, which the next page goes on with. */
+  continues?: boolean;
+}
+
+/** One commit of a history (`code.LogCommit`), every unbounded field described past its bound. */
+export interface CodeLogCommit {
+  oid: string;
+  parents?: string[];
+  parent_count?: number;
+  author?: string;
+  author_bytes?: number;
+  author_email?: string;
+  author_email_bytes?: number;
+  authored_at: string;
+  committed_at: string;
+  /** The message's first paragraph; absent past its bound with `subject_bytes` its size. */
+  subject?: string;
+  subject_bytes?: number;
+}
+
+/** One page of a history (`code.LogAnswer`), newest first by generation. */
+export interface CodeLogAnswer {
+  path?: string;
+  commits: CodeLogCommit[] | null;
+  scanned: number;
+  complete?: boolean;
+}
+
+/** One line of a blame (`code.BlameLine`): its number, the commit that last changed it, and its text. */
+export interface CodeBlameLine {
+  line: number;
+  commit: string;
+  orig_line: number;
+  orig_path?: string;
+  text?: string;
+  text_bytes?: number;
+}
+
+/** A commit a blame's lines name (`code.BlameCommit`). */
+export interface CodeBlameCommit {
+  author?: string;
+  author_email?: string;
+  authored_at: string;
+  /** The message's first LINE, as git's blame names it. */
+  subject?: string;
+  subject_bytes?: number;
+}
+
+/** One page of a blame (`code.BlameAnswer`): its lines, and each commit they name once. */
+export interface CodeBlameAnswer {
+  path: string;
+  start_line: number;
+  end_line: number;
+  lines: CodeBlameLine[] | null;
+  commits: Record<string, CodeBlameCommit> | null;
+}
+
+/**
+ * A repository's content as a code question answers it (`queries.CodePage`):
+ * the repository by the name it was asked by, the read's kind and its part,
+ * the object a tree or a file was read at, and the next page's cursor — and,
+ * on a read naming a ref, which is never immutable, each ref it resolved by
+ * the parameter that named it, the answering copy's position and the push
+ * that introduced each commit the page names. A read by whole object ids is
+ * answered with none of those, immutably, and kept by the tab
+ * (`lib/useCodeQuery.ts`).
+ */
+export interface CodeGitAnswer {
+  repo: string;
+  kind: "tree" | "blob" | "log" | "blame" | "diff" | "compare" | (string & {});
+  rev?: string;
+  next?: string;
+  tree?: CodeTreeAnswer;
+  blob?: CodeBlobAnswer;
+  log?: CodeLogAnswer;
+  blame?: CodeBlameAnswer;
+  diff?: CodeDiffAnswer;
+  compare?: CodeCompareFacts;
+  resolved?: Record<string, CodeResolved>;
+  position?: LogPosition;
+  pushed_by?: Record<string, CodePushedBy>;
+  coverage?: CodeCoverage;
+}
+
+/** How two commits relate (`code.CompareAnswer`). */
+export interface CodeCompareFacts {
+  /** The commits compared, whole; their best common ancestor, absent for histories that share none. */
+  base: string;
+  head: string;
+  merge_base?: string;
+  /** Head contains base (a fast-forward from base to head), and the reverse. */
+  base_is_ancestor: boolean;
+  head_is_ancestor: boolean;
+  /** The commits head has that base lacks, and the reverse. */
+  ahead: number;
+  behind: number;
+  /** The first page of what head changed since the merge base; the counts are over all of it. */
+  files: CodeDiffFile[] | null;
+  total: number;
+  added: number;
+  deleted: number;
+}
+
+/**
+ * What merging head into base would do, as the repository's home merges it
+ * (`queries.CodeMergePreview`): `clean`, `conflict` with the paths, or
+ * `unknown` for a merge its home could not decide within a read's time.
+ */
+export interface CodeMergePreview {
+  state: "clean" | "conflict" | "unknown" | (string & {});
+  conflicts?: string[];
+  conflicts_omitted?: number;
+}
+
+/** `code_compare`: how two revisions relate, and the merge preview (`queries.CodeComparison`). */
+export interface CodeComparisonAnswer extends CodeGitAnswer {
+  preview: CodeMergePreview;
+}
+
+/** A change as a row about it names it (`code.ChangeName`): its repository, reference, title and state. */
+export interface CodeChangeName {
+  repo: string;
+  ref: string;
+  title: string;
+  state: CodeChangeState;
+}
+
+/**
+ * `code_commit`: one commit by its whole id (`queries.CodeCommit`) — as the
+ * history lists it, the push that introduced it (by the git node's index, and
+ * that push's row where the history still holds it) and the changes it
+ * belongs to: those whose merge it is and the revisions it heads.
+ */
+export interface CodeCommitAnswer {
+  repo: string;
+  commit: CodeLogCommit;
+  pushed_by?: CodePushedBy;
+  push?: CodePushRow;
+  coverage?: CodeCoverage;
+  merged?: CodeChangeName[];
+  revisions?: { change: CodeChangeName; n: number }[];
+  more?: boolean;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
+/** One live entry of a branch's merge queue (`code.QueueRow`), in queue order. */
+export interface CodeQueueRow {
+  repo_id: string;
+  repo: string;
+  entry_id: string;
+  target_ref: string;
+  change_id: string;
+  /** Its change's number on its repository: `web!42`'s 42. */
+  number: number;
+  /** Its place in its branch's queue, from 1. */
+  place: number;
+  seq: LogPosition;
+  head_oid: string;
+  method: string;
+  delete_source?: boolean;
+  close_task?: boolean;
+  enqueued_by: CodeParty;
+  enqueued_operator?: string;
+  state: (typeof QUEUE_STATES)[number] | (string & {});
+  /** The train and the candidate testing it, and the commit the candidate built of it: absent until one takes it. */
+  train?: string;
+  candidate_id?: string;
+  commit_oid?: string;
+  enqueued_at: string;
+}
+
+/** One candidate a merge queue built (`code.CandidateRow`): a train's merge of its entries onto `base_oid`. */
+export interface CodeCandidateRow {
+  repo_id: string;
+  candidate_id: string;
+  target_ref: string;
+  train: string;
+  ordinal: number;
+  base_oid: string;
+  tip_oid: string;
+  entries: { entry_id: string; commit: string }[];
+  pack_id?: string;
+  state: string;
+  position: LogPosition;
+}
+
+/**
+ * One entry a queue put out lately (`code.EjectedRow`): the change, who
+ * enqueued it, why, and the required checks that failed on what it was tested
+ * in or the paths its merge conflicted on.
+ */
+export interface CodeEjectedRow {
+  repo_id: string;
+  repo: string;
+  entry_id: string;
+  target_ref: string;
+  change_id: string;
+  number: number;
+  head_oid: string;
+  enqueued_by: CodeParty;
+  reason: string;
+  checks?: string[];
+  paths?: string[];
+  enqueued_at: string;
+  ejected_at: string;
+}
+
+/**
+ * `code_queue`: a page of the live entries of merge queues, in queue order,
+ * beside a named repository's trains and — on its first page — what its
+ * queues put out in the last day.
+ */
+export interface CodeQueueAnswer {
+  queue?: CodeQueueRow[];
+  trains?: CodeCandidateRow[];
+  ejected?: CodeEjectedRow[];
+  next?: string;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
+/**
+ * One attempt of one check of one commit, checked for one branch
+ * (`code.CheckRow`): its key, where it stands, what it was checking, and what
+ * its queue, its run and its ending say.
+ */
+export interface CodeCheckRow {
+  repo_id: string;
+  /** Its repository's name, which every link to it takes: absent only on a box admission's read. */
+  repo?: string;
+  oid: string;
+  /** The branch it was checked for, in full: `refs/heads/main`. */
+  target: string;
+  name: string;
+  attempt: number;
+  state: (typeof CHECK_STATES)[number] | (string & {});
+  purpose?: (typeof CHECK_PURPOSES)[number] | (string & {});
+  change_id?: string;
+  revision?: number;
+  candidate_id?: string;
+  entry_id?: string;
+  base?: string;
+  defs_oid?: string;
+  /** Whether the branch's protection requires it. */
+  required?: boolean;
+  run_in?: string;
+  timeout_seconds?: number;
+  reason?: string;
+  runner?: string;
+  placement?: string;
+  box?: string;
+  reporter?: string;
+  queued_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  duration_ms?: number;
+  exit_code?: number;
+  summary?: string;
+  failures_omitted?: number;
+  url?: string;
+}
+
+/** One failure an ending names (`code.CheckFailure`): where, which test, and what it said. */
+export interface CodeCheckFailure {
+  path?: string;
+  line?: number;
+  test_id?: string;
+  message: string;
+}
+
+/** One attempt read whole (`code.CheckDetail`): its row, its definition, its tail, its failures and its log. */
+export interface CodeCheckDetail extends CodeCheckRow {
+  def?: { name: string; run: string; timeout_seconds: number; paths?: string[]; run_in?: string };
+  tail?: string;
+  failures?: CodeCheckFailure[];
+  log?: { object: string; hash: string; size: number };
+}
+
+/** `code_checks`: a page of attempts of checks, newest ended first. */
+export interface CodeChecksAnswer {
+  checks?: CodeCheckRow[];
+  next?: string;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
+/** `code_check`: one attempt whole. */
+export interface CodeCheckAnswer {
+  check?: CodeCheckDetail;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
+/** `code_check_log`: one page of the log a failed run kept (`queries.CheckLogPage`). */
+export interface CodeCheckLogPage {
+  object: string;
+  size: number;
+  offset: number;
+  text: string;
+  /** Where the next page starts; absent on the page that reaches the end. */
+  next?: number;
+}
+
+/** The code questions the dashboard asks, and what each answers. */
+export interface CodeQueryMap {
+  code_queue: CodeQueueAnswer;
+  code_checks: CodeChecksAnswer;
+  code_check: CodeCheckAnswer;
+  code_check_log: CodeCheckLogPage;
+  code_commit: CodeCommitAnswer;
+  code_diff: CodeGitAnswer;
+  code_compare: CodeComparisonAnswer;
+  code_repos: CodeReposAnswer;
+  code_repo: CodeRepoAnswer;
+  code_refs: CodeRefsAnswer;
+  code_tree: CodeGitAnswer;
+  code_blob: CodeGitAnswer;
+  code_log: CodeGitAnswer;
+  code_blame: CodeGitAnswer;
+  code_pushes: CodePushesAnswer;
+  code_changes: CodeChangesAnswer;
+  code_change: CodeChangeAnswer;
+  code_change_routing: CodeChangeRoutingAnswer;
+  code_reviews: CodeReviewsAnswer;
+  /** Read at no session floor: it answers at the tip it names (`contract/code.ts`). */
+  code_search: CodeSearchAnswer;
+}
+
+/**
+ * `code_reviews`: one reviewer's reviews across the repositories the asker may
+ * read, newest first, each naming the change it judged.
+ */
+export interface CodeReviewsAnswer extends CodePage {
+  /** Absent on a page that holds none. */
+  reviews?: CodeReviewRow[];
+}
+
+export type CodeQueryName = keyof CodeQueryMap;

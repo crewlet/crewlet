@@ -25,6 +25,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { pick } from "~/testing.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -79,7 +80,7 @@ const QUIET = {
   company_feed: { rows: [], complete: true },
   work_projects: { projects: [], total: 0, census: {}, complete: true },
   executors: { runs: [] },
-  work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
+  inbox: { handle: "jane", notices: [], primary_reasons: [] },
 };
 
 /** Each case reads as a reader of its own, so no case sees another's saved board. */
@@ -161,9 +162,7 @@ function mount({
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 /** The blocks on the page, outside any group. */
@@ -208,7 +207,7 @@ describe("at rest", () => {
   test("Home draws the board it shipped with, with Edit Home and New task", async () => {
     mount();
     await settle();
-    expect(blocks()).toHaveLength(7);
+    expect(blocks()).toHaveLength(8);
     expect(screen.getByRole("region", { name: "The company at a glance" })).toBeTruthy();
     for (const title of [
       /^Needs your decision/,
@@ -217,6 +216,7 @@ describe("at rest", () => {
       "Tokens by team",
       "Projects",
       "Recent activity",
+      "Code waiting on a person",
     ]) {
       expect(screen.getByRole("heading", { name: title })).toBeTruthy();
     }
@@ -368,7 +368,7 @@ describe("Edit Home", () => {
     fireEvent.click(within(ask).getByRole("button", { name: "Discard changes" }));
     await settle();
     expect(notes()).toBe(0);
-    expect(blocks()).toHaveLength(7);
+    expect(blocks()).toHaveLength(8);
     expect(screen.getByRole("button", { name: "Edit Home" })).toBeTruthy();
   });
 

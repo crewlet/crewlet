@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -121,6 +122,19 @@ type Deps struct {
 	// artifactdata.go.
 	Artifacts    ArtifactDeps
 	ArtifactData ArtifactDataDeps
+
+	// Code is the code read tools' — the company's own repositories, read on
+	// the server. The zero value omits all of them, which is a company that
+	// hosts no code. See codetools.go.
+	Code CodeDeps
+
+	// Health is the health tools' — the fleet's nodes and their alarms, and
+	// the git nodes' status. The zero value omits both. Registered for every
+	// seat with the rest of the epoch's builtins, and offered only to a seat
+	// whose role carries the health grant: the table refuses every other seat
+	// before any object is named, which is what withholds them from its
+	// surfaces ([Withheld]). See healthtools.go.
+	Health HealthDeps
 
 	// Chat is Chatlet. Every half nil omits all nine tools, which
 	// is what a company on Slack or Mattermost has — there the colleague
@@ -267,7 +281,13 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&savePage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 		{&commentOnPage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 	}
-	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps))
+	// AND THE CODE TOOLS, the very list the operator catalogue takes
+	// ([CodeTools]): the reads, which name no delivery surface, and where
+	// the code host's writes are wired the writes, each a delivery to it
+	// (the switch below) — and the health tools after them, the same way
+	// ([HealthTools]).
+	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
+		codeCandidates(deps.Code), healthCandidates(deps.Health))
 
 	var names []string
 	for _, c := range candidates {
@@ -305,6 +325,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			// seat listens, which leaves the asker exactly as
 			// unanswered. See [chatlet.WriteTools].
 			opts = append(opts, tools.DeliversTo(chatlet.Source))
+		case slices.Contains(CodeWrites(), c.tool.Name()):
+			// AND A CODE WRITE REACHES THE CODE HOST: a branch moved or a
+			// repository changed is the answer to work that came from it.
+			opts = append(opts, tools.DeliversTo(code.Source))
 		}
 		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
 		// each tool: the authority table is keyed on the tool's own
@@ -369,6 +393,12 @@ func annotationsFor(name string) tools.Annotations {
 	if a, ok := artifactDataAnnotations(name); ok {
 		return a
 	}
+	if a, ok := codeAnnotations(name); ok {
+		return a
+	}
+	if a, ok := healthAnnotations(name); ok {
+		return a
+	}
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
 		LoadToolSkillTool, SearchKnowledgeTool:
@@ -415,7 +445,7 @@ func annotationsFor(name string) tools.Annotations {
 		// lookup was refused it as a write to a surface a human reads
 		// while list_work_items beside it was admitted.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
-	case worklet.MarkInboxTool, worklet.SetPinsTool:
+	case worklet.MarkInboxTool, worklet.SetPinsTool, CodeMarkInboxTool:
 		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE, and saying so
 		// takes an explicit `OpenWorld: No` — these two fell to the
 		// default arm, whose `ReadOnly: No` with OpenWorld UNSET is

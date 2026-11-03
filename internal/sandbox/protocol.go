@@ -117,6 +117,15 @@
 // what the job spent where its box is left and resumes the turn to relaunch the
 // same round, at most [MaxRoundLosses] times a round. See lost.go.
 //
+// AND WHAT A RUN PUSHED TO THE ENGINE'S OWN CODE HOST is the push record's
+// account, never the run's: a collection of a run given a repository there to
+// push to reads the rows the code host wrote under its launch ([RunPushes],
+// [Result.Pushed]) and the run's report states what each ref became, the run
+// having been told its own report need not name them. A record that cannot be
+// read is SAID to be unknown rather than retried — a collection held until the
+// code host answers holds a finished run's seat for as long as the host is
+// down — and never left out, since silence reads as "nothing pushed".
+//
 // AND A RUN'S HARNESS SESSION CAN LEAVE ITS BOX: a run names its session before
 // its harness starts ([RunHandle.SessionID]), says whether it continued the one it
 // was asked to, and why not where it did not ([Result.Continued],
@@ -135,13 +144,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // log is the package's own component, bound for the backend-NEUTRAL runtime:
@@ -204,10 +220,13 @@ type Limits struct {
 
 // Spec is what it takes to mint and drive one box.
 //
-// The REPO IS NOT HERE. Which repository to work in is task context the executor
-// puts in the brief, and the harness clones it with the token the config
-// injects — a spec field for it would make one repo per role a structural fact
-// when it is a per-turn one.
+// AN EXTERNAL HOST'S REPOSITORY IS NOT HERE. Which repository on GitHub or
+// GitLab to work in is task context the executor puts in the brief, and the
+// harness clones it with the token the config injects — a spec field for it
+// would make one repository per role a structural fact when it is a per-turn
+// one. A repository on the engine's OWN code host is here ([Spec.Repos]),
+// because naming one is a GRANT: the run row carries it and the box's
+// credential is judged by it, which a brief cannot be.
 //
 // There are deliberately NO CPU, MEMORY OR DISK FIELDS, and no TEMPLATE either.
 // A remote box's resources are a property of its template, fixed when the
@@ -235,9 +254,10 @@ type Spec struct {
 	TurnID string
 
 	// TimeoutSec is NOT a run deadline: it is the box's initial TTL, which
-	// the waiter refreshes every tick, so a running job is never killed by
-	// the clock. It is the ORPHAN-RECLAIM GRACE — how long a box outlives
-	// an engine that has stopped heart-beating.
+	// the launch refreshes while it provisions the box and the waiter every
+	// tick once the job runs, so neither a long provisioning nor a running
+	// job is ever killed by the clock. It is the ORPHAN-RECLAIM GRACE — how
+	// long a box outlives an engine that has stopped heart-beating.
 	TimeoutSec float64
 
 	// PauseTTLSec bounds a PAUSED box: how long its snapshot is held before
@@ -258,7 +278,13 @@ type Spec struct {
 	// Env is the run environment: the LLM entry's env and sign-in, the
 	// generic agent identity (CREWLET_AGENT_*), the setup steps' env, and
 	// role.sandbox.env — which is where an operator DECLARES an external
-	// token. The engine never names a tool-specific variable itself.
+	// token. The engine never names a tool-specific variable itself, but for
+	// the engine's own code host, whose access it gives a run that names
+	// repositories ([BoxGit], ADR-0093) — and that through the launch's own
+	// environment, never this field. A launch hands the box a COPY with what
+	// it minted for the job added ([LaunchRequest.RunEnv]): what the box is
+	// made with and every setup step runs with, the run's telemetry added at
+	// the job's start.
 	Env map[string]string
 
 	// CredentialFiles is a subscription-harness login: a path relative to the
@@ -273,6 +299,254 @@ type Spec struct {
 	// else's VM is a materially larger trust step than the scoped headless
 	// token the run env already exports.
 	CredentialFiles map[string]string
+
+	// Repos are the repositories on the engine's own code host this run is
+	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
+	// for a run that clones nothing of the engine's own — a repository on
+	// another host is still named in the brief and reached with the
+	// credentials the seat's configuration declares. [Coordinator.Launch]
+	// writes them on the run's row ([PendingRun.Repos]), which is what the
+	// box's credential is judged against for as long as the job runs.
+	Repos []RunRepo
+}
+
+// MaxRunRepos is the most repositories one executor is given: each costs a
+// clone before the harness starts, and a run that needs more is a task
+// that should be split.
+//
+// THE CLONES ADD UP. They run one after another, after the operator's steps
+// and the box's git check, each to its own budget ([DefaultSetupTimeout]), so
+// eight are up to eighty minutes on top of the rest of the box's provisioning
+// — five times the box's TTL ([DefaultBoxTimeout]), which is why the launch
+// keeps the box's timer refreshed for as long as it provisions it
+// ([keepProvisioning]) rather than leaving the sum to the timer the box was
+// made with. What a run waits for before its harness starts is that sum.
+//
+// ONE AFTER ANOTHER, never at once, which would cut that wait to the slowest
+// clone's: a clone's index-pack keeps an entry for every commit and tree it
+// receives while it writes their index — 1.37 million of them for a gigabyte
+// of history (internal/code/host's BenchmarkBoxClone) — and eight at once
+// would share a box its template sized for one harness. In turn, the
+// clones cost a run with many repositories time; at once, they would cost
+// its box memory.
+//
+// NEVER PAST code.MaxRunRepos, the most a read of a run's pushes names: a run
+// given more would have every collected result's "what it pushed" refused,
+// seen only as the sentence that its push record was unread. internal/engine's
+// TestARunGivenItsMostRepositoriesHasItsPushesReadWhole holds the two to each
+// other.
+const MaxRunRepos = 8
+
+// MaxConePaths is the most directories one repository's cone names
+// ([RunRepo.Paths]). A cone is a few top-level directories of a monorepo:
+// sixty-four is past any build's declared reach, and it is one of the two
+// figures that keep the clone step one argument a shell can be given (see
+// [MaxConePathBytes]).
+const MaxConePaths = 64
+
+// MaxConePathBytes is the longest directory a cone names: 255 bytes, the bound
+// a ref has (gitref.MaxRefNameBytes) and a single file name has on every
+// filesystem git runs on (NAME_MAX). A cone names a directory a few
+// components below a repository's root, which a person or a model types out;
+// none comes near it.
+//
+// THE BOUND KEEPS THE CLONE STEP WHOLE. A box runs each setup command as ONE
+// argument of a shell (`sh -c`, `bash -l -c` through E2B's envd), and Linux
+// refuses an argument past 128 KiB (MAX_ARG_STRLEN) before the shell starts,
+// with a failure that names nothing the run asked for. [MaxConePaths] of
+// these, quoted at their worst — a path of nothing but single quotes is four
+// times its length once quoted ([ShellQuote]), and each takes its two quotes
+// and a space — come to at most 64 × 1 023 = 65 472 bytes of the step, and the
+// rest of it (the names and the commands) to a few KiB more;
+// TestTheWorstCloneStepIsOneShellArgument builds that step and holds it under
+// the limit. It bounds what a run's grants add to its row
+// too, which every node's completion poll reads whole: at most [MaxRunRepos] ×
+// 64 × 255 bytes of paths, about 128 KiB before the JSON on the row escapes
+// them.
+const MaxConePathBytes = 255
+
+// RepoAccess is what a run may do with a repository it was given. A named
+// string with Valid, so a newer build's value off the row is a value rather
+// than a panic.
+type RepoAccess string
+
+const (
+	// RepoRead is fetch and clone.
+	RepoRead RepoAccess = "read"
+	// RepoWrite is those and push — whatever the seat's own grant allows,
+	// which every push is decided against again.
+	RepoWrite RepoAccess = "write"
+)
+
+// RepoAccesses is every [RepoAccess] this build knows.
+func RepoAccesses() []RepoAccess { return []RepoAccess{RepoRead, RepoWrite} }
+
+// Valid reports whether a is one of [RepoAccesses].
+func (a RepoAccess) Valid() bool { return slices.Contains(RepoAccesses(), a) }
+
+// RunRepo is one repository a box is given, RESOLVED WHEN THE BOX IS: the
+// repository's id beside the name it had then, so a rename meanwhile cannot
+// move the grant; the commit the box starts from; the branch an executor
+// works on; and the cone it checks out.
+//
+// The json tags are a WIRE FORMAT: an executor's row carries these
+// ([PendingRun.Repos]), and a node of another build reads them. A check's
+// repository rides no row: its box is made, run and closed by one node.
+type RunRepo struct {
+	// Repo is the repository's name at launch: the directory the box is
+	// given it in, and the name its URL carries.
+	Repo string `json:"repo"`
+	// RepoID is the repository's id, canonical: what the grant names.
+	RepoID string `json:"repo_id"`
+	// Base is the whole id of the commit the box starts from: an
+	// executor's base, "" for an empty repository, or the one commit a check
+	// measures.
+	Base string `json:"base"`
+	// Branch is the branch an executor works on, its ref
+	// refs/heads/<branch>; "" for a check, which works on no branch.
+	Branch string `json:"branch"`
+	// Access is what the box may do with the repository: a check's box
+	// reads it.
+	Access RepoAccess `json:"access"`
+	// Paths are the directories checked out (a sparse cone), at most
+	// [MaxConePaths]; empty is the whole tree.
+	Paths []string `json:"paths,omitempty"`
+	// Change is the change an executor works on — the live change whose
+	// source is Branch, which it starts from the head of — and nil for a run
+	// on no change (runchange.go). An executor's alone.
+	Change *RunChange `json:"change,omitempty"`
+	// Open is the change an executor asked to open from Branch once it
+	// finishes — at its collection, once a launch ([OpenChange]) — and nil
+	// for none. An executor's alone, and only one given the repository to
+	// write: a run that may push nothing delivers nothing to open one from.
+	Open *OpenChange `json:"open_change,omitempty"`
+}
+
+// ValidateFor holds a RunRepo to the grammar of the box it is given to for
+// purpose. EVERY PURPOSE: a repository name of either form
+// (gitref.ValidRepoName), a canonical repository id, a base that is "" or a
+// whole commit id, a valid access, and at most [MaxConePaths] cone paths, each
+// a clean directory inside the repository ([ConePathProblem] says what that
+// holds a path to). Then by purpose:
+//
+//   - [CloneCoding]: a branch name git and the code host both take
+//     (gitref.ValidBranch), since the run works on one; a change it works on
+//     named by its id and its number; and a change it asks to open given
+//     write, never beside a change it works on — whose branch heads that
+//     change already — and proposing its branch into another
+//     ([OpenChange.problem]);
+//   - [CloneSingleSHA], a CHECK's: a base — the commit it measures — no
+//     branch, since a check is given one commit and works on none, and read
+//     access, since its box's credential fetches and never pushes.
+//
+// A value a purpose does not read is REFUSED rather than ignored: a branch on
+// a check's repository, or a change on one, is a caller that meant another
+// purpose, and a box made from it would be told one thing and do
+// another.
+//
+// ONE GRAMMAR for every reader: the launch that resolves a run's repositories
+// refuses a request with it, and the clone step is written only for a
+// RunRepo it passes ([CloneRecipe]), so nothing a box is told to run carries a
+// value no RunRepo can.
+func (r RunRepo) ValidateFor(purpose ClonePurpose) error {
+	switch {
+	case !purpose.Valid():
+		return fmt.Errorf("sandbox: repository %s: %q is not a clone purpose (one of %s)", r.Repo, purpose,
+			words.Or(ClonePurposes()))
+	case !gitref.ValidRepoName(r.Repo):
+		return fmt.Errorf("sandbox: %q is not a repository name", r.Repo)
+	case !canonicalID(r.RepoID):
+		return fmt.Errorf("sandbox: repository %s: its id %q is not a UUID in canonical form", r.Repo, r.RepoID)
+	case r.Base != "" && (!gitref.ValidOID(r.Base) || r.Base == gitref.ZeroOID):
+		return fmt.Errorf("sandbox: repository %s: its base %q is not a whole commit id", r.Repo, r.Base)
+	case !r.Access.Valid():
+		return fmt.Errorf("sandbox: repository %s: access %q is neither %q nor %q", r.Repo, r.Access,
+			RepoRead, RepoWrite)
+	case len(r.Paths) > MaxConePaths:
+		return fmt.Errorf("sandbox: repository %s: a cone names at most %d directories, not %d", r.Repo,
+			MaxConePaths, len(r.Paths))
+	}
+	for i, p := range r.Paths {
+		if why := ConePathProblem(p); why != "" {
+			return fmt.Errorf("sandbox: repository %s: paths[%d] %q %s", r.Repo, i, p, why)
+		}
+	}
+	if purpose == CloneCoding {
+		switch {
+		case !gitref.ValidBranch(r.Branch):
+			return fmt.Errorf("sandbox: repository %s: %q is not a branch name git accepts", r.Repo, r.Branch)
+		case r.Change != nil && r.Change.problem() != "":
+			return fmt.Errorf("sandbox: repository %s: the change it works on %s", r.Repo, r.Change.problem())
+		case r.Open != nil && r.Change != nil:
+			return fmt.Errorf("sandbox: repository %s: a run on change !%d asks to open another, and its branch "+
+				"%s heads that one already", r.Repo, r.Change.Number, r.Branch)
+		case r.Open != nil && r.Access != RepoWrite:
+			return fmt.Errorf("sandbox: repository %s: a run given it to %s asks to open a change, and delivers "+
+				"nothing to open one from", r.Repo, r.Access)
+		case r.Open != nil && r.Open.problem(r.Branch) != "":
+			return fmt.Errorf("sandbox: repository %s: the change it asks to open %s", r.Repo,
+				r.Open.problem(r.Branch))
+		}
+		return nil
+	}
+	switch {
+	case r.Change != nil || r.Open != nil:
+		return fmt.Errorf("sandbox: repository %s: a check is given one commit and works on no change", r.Repo)
+	case r.Base == "":
+		return fmt.Errorf("sandbox: repository %s: a check is given one commit, and names none", r.Repo)
+	case r.Branch != "":
+		return fmt.Errorf("sandbox: repository %s: a check is given one commit and works on no branch, "+
+			"and names %q", r.Repo, r.Branch)
+	case r.Access != RepoRead:
+		return fmt.Errorf("sandbox: repository %s: a check's box reads its repository, its credential "+
+			"fetching and never pushing, and is given %q", r.Repo, r.Access)
+	}
+	return nil
+}
+
+// ConePathProblem is why p cannot be a directory of a repository's cone — ""
+// when it can be one. A cone path is relative to the repository's root and
+// already clean: no leading or trailing slash and no empty, "." or ".."
+// component, so one directory has one spelling and none reaches outside the
+// repository; valid UTF-8, because it crosses JSON on the run's row, which
+// replaces an invalid byte, so two paths would arrive as one; no control
+// character, since NUL, a newline and a carriage return each break the
+// line-based file git keeps a cone in and none of the others is ever meant;
+// no space at either end, which git trims from a cone's directory before it
+// writes one (sparse-checkout's strbuf_trim), so " src" would check out src;
+// and at most [MaxConePathBytes].
+//
+// EXPORTED FOR THE ONE OTHER PLACE A CONE IS WRITTEN: a repository's
+// .crewlet/checks.yaml names the cone its check's box checks out
+// (internal/code's ParseChecks), and that cone becomes a box's clone step as a
+// run's does, so a file is held to the rule the step is written under rather
+// than to a second reading of it — one the box would refuse at setup, after
+// the check had taken its box.
+func ConePathProblem(p string) string {
+	switch {
+	case p == "":
+		return "is empty"
+	case len(p) > MaxConePathBytes:
+		return fmt.Sprintf("is %d bytes, past the %d a cone's directory may have", len(p), MaxConePathBytes)
+	case !utf8.ValidString(p):
+		return "is not valid UTF-8"
+	case strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == 0x7f }):
+		return "holds a control character"
+	case strings.HasPrefix(p, " ") || strings.HasSuffix(p, " "):
+		return "begins or ends with a space, which git trims from a cone's directory, so it would check out " +
+			"another one"
+	case path.Clean(p) != p || p == "." || p == ".." || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "../"):
+		return "is not a clean path inside the repository: no leading or trailing slash, and no empty, " +
+			"\".\" or \"..\" component"
+	}
+	return ""
+}
+
+// canonicalID reports whether s is a UUID other than the nil one, spelled as
+// uuid.UUID.String spells it — the one spelling a row compares byte for byte.
+func canonicalID(s string) bool {
+	id, err := uuid.Parse(s)
+	return err == nil && id != uuid.Nil && id.String() == s
 }
 
 // RunHandle points at a detached job.
@@ -402,11 +676,42 @@ type Result struct {
 	// report its reviewer reads carry them — and nothing judges a turn on
 	// them: whether a turn reached anybody is the engine's own record of the
 	// calls it made ([github.com/crewlet/crewlet/internal/agent/turn]).
+	//
+	// A runner hands them on AS THE ACCOUNT WROTE THEM, byte for byte: the
+	// coordinator holds them to what the record can carry, for every runner
+	// alike — redacted, deduplicated, valid UTF-8 and within
+	// [MaxDeliveredRefBytes] — and it can only judge the bytes it is given.
 	DeliveredRefs []string
 
 	// DeliveredRefsElided is how many more refs the run reported than its
-	// record lists ([MaxDeliveredRefBytes]). Set by the coordinator.
+	// record lists: the refs past [MaxDeliveredRefBytes], and any that is not
+	// valid UTF-8, which the record's JSON would turn into another ref. Set
+	// by the coordinator.
 	DeliveredRefsElided int
+
+	// Pushed are the refs the run moved on the engine's own code host, read
+	// from the push rows the code host wrote under its launch ([RunPushes]):
+	// each repository the run was given to push to in turn, its refs in the
+	// order the run first pushed them, held with the run's own refs to
+	// [MaxDeliveredRefBytes] ([boundPushed]). PushedElided is how many more
+	// the push record names than Pushed lists. PushedUnread is why the
+	// record could not be read — set, the run's pushes are UNKNOWN, and an
+	// empty Pushed beside it never means "none".
+	//
+	// The ENGINE'S account of the run's delivery there, which the run's own
+	// `Delivered:` lines are not: a box writes those as it likes. Set by the
+	// coordinator, never by a runner — whatever a runner put here is
+	// replaced at the collection, which reads the record itself.
+	Pushed       []PushedRef
+	PushedElided int
+	PushedUnread string
+
+	// Opened is what became of each change the run asked to open
+	// ([RunRepo.Open]), in the order it was given its repositories: opened
+	// at this collection, one its branch already headed, or why none was
+	// ([OpenedChange]). Set by the coordinator from the engine's account
+	// ([RunPushes.Changes]), as Pushed is, and never by a runner.
+	Opened []OpenedChange
 
 	Error string
 
@@ -617,13 +922,27 @@ type Sandbox interface {
 	// missing, as the others are.
 	ReadTail(ctx context.Context, path string, n int) (FileTail, error)
 
+	// OpenTail streams at most the last n bytes of a file — from where its
+	// end less n stood when it was opened — with the file's whole size then,
+	// for a stream's END kept whole rather than held: a failed check's log,
+	// the output's last bytes put into the object store as they arrive. Its
+	// cost is the n bytes, never the file before them: a remote box sends
+	// only the range, a box on the engine host seeks. OpenFile with the
+	// earlier bytes read and dropped cost a check that wrote gigabytes their
+	// whole transfer from the box to keep its last tens of MiB. A missing
+	// file is a reader that yields nothing and a size of 0, as the others
+	// answer; the caller closes it.
+	OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error)
+
 	// SetTimeout resets the box's wall-clock TTL to seconds from now.
 	//
 	// THE KEEPALIVE. A provider reclaims a box that many seconds after the
 	// TTL was last set, and the waiter calls this every poll tick — so a
 	// running box is bounded only by how long the engine can go WITHOUT a
-	// heartbeat, never by a fixed run deadline. A provider with no settable
-	// TTL no-ops.
+	// heartbeat, never by a fixed run deadline — as the launch does while it
+	// provisions the box, on another goroutine than the one running the
+	// box's setup steps, so a backend answers it beside a command in flight.
+	// A provider with no settable TTL no-ops.
 	SetTimeout(ctx context.Context, seconds float64) error
 
 	// Pause snapshots the box for a later resume, holding a run blocked on
@@ -943,6 +1262,14 @@ type RunRequest struct {
 	// launch is handed its own.
 	Steer SteerWiring
 
+	// ReportedRepos are the repositories on the engine's own code host this
+	// run may push to ([Pushable]), by the names it was given them under.
+	// What it pushes there the engine reads from the push record and reports
+	// for it ([Result.Pushed]), so a runner tells its agent to write a
+	// `Delivered:` line only for what it delivered somewhere else: a line
+	// for a push the record already names is the same delivery said twice.
+	ReportedRepos []string
+
 	// Skills are skills the run's harness is handed as its OWN — see [Skill]:
 	// written where the harness reads skills of its own, listed to its model
 	// beside the ones the box and the checkout hold, and loaded with the
@@ -1071,9 +1398,10 @@ func (w SkillWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL
 
 // CommitAttribution asks a run's runner to credit Crewlet on every commit the
 // run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.ai>`, the
-// one trailer GitHub renders as a participant in the commit, and, where Run is
-// set, `Crewlet-Run: <Run>`, which leads a reader of the history back to the
-// run that wrote it.
+// one trailer GitHub renders as a participant in the commit; where Seat is
+// set, the seat that made the commit and the work item its turn is charged
+// to; and, where Run is set, the run that wrote it, which leads a reader of
+// the history back to the run's page.
 //
 // GIT ADDS IT, NOT THE MODEL. The runner installs a hook in the box that git
 // runs on every commit the run makes (internal/sandbox/executor's
@@ -1081,12 +1409,29 @@ func (w SkillWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL
 // an instruction — and only on a commit whose author is the identity the run
 // commits as, so a person's commit the run amends, cherry-picks or rebases is
 // never credited to Crewlet.
+//
+// A CLAIM, NEVER EVIDENCE: the box can delete the hook or write any trailer
+// it likes, so nothing in the engine reads a pushed commit's trailers — a box
+// push's provenance is stamped from the run's own row at its admission. The
+// trailers carry that provenance where the row does not reach: a mirror of
+// the repository, and a commit older than the code host's push horizon.
 type CommitAttribution struct {
 	// Run is what the run's commits name it by, the identifier its page is
-	// addressed by: a seat's job is its turn's. Empty names no run — a run
-	// with no page of its own — and the co-author line is credited alone.
-	// One line of printable text, since it becomes a trailer's value.
+	// addressed by: a seat's job is its turn's, so every job of one turn —
+	// a relaunch included — names the one run. Empty names no run — a run
+	// with no page of its own — and the commit names none. One line of
+	// printable text, since it becomes a trailer's value.
 	Run string
+
+	// Seat is the handle of the seat the run is the executor of, and
+	// WorkItem the item its turn is charged to (nil for none, which the
+	// commit says as "none" rather than leaving out, since a rewritten
+	// commit's trailer is replaced, never kept). Empty for a run that is no
+	// seat's — deep work for a person — which names neither; a WorkItem
+	// without a Seat, or one with no backend, is the engine's own bug and is
+	// refused.
+	Seat     string
+	WorkItem *types.WorkItem
 }
 
 // Wiring is how a run's harness reaches the seat's tools and the engine's: its

@@ -11,14 +11,23 @@
 // construction, is emitted a second time: one file, unminified, no hashing,
 // importable by plain `node`. It is built from the SAME source the app
 // bundles, so there is no second implementation to drift.
+//
+// INTO static/protocol, BESIDE THE EMBEDDED TREES AND NOT IN THEM. No page
+// imports this module and the engine serves it to nobody: internal/e2e reads
+// it from disk. Written into static/dashboard, it rode the embed into every
+// engine binary and image, 124 KiB of a test's module beside the screens
+// every reader may open, which internal/api's tree budget measures. It is
+// committed and diffed with the bundle all the same (`make dashboard-check`),
+// so the replay runs the source the bundle was built from.
 import { defineConfig } from "vite";
 import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   build: {
-    outDir: fileURLToPath(new URL("../static/dashboard", import.meta.url)),
-    // The app build ran first and owns the directory; this one adds a file.
-    emptyOutDir: false,
+    outDir: fileURLToPath(new URL("../static/protocol", import.meta.url)),
+    // The directory is this build's alone, so it starts empty: a file a
+    // renamed entry left behind would be committed and replayed by nobody.
+    emptyOutDir: true,
     sourcemap: false,
     target: "es2022",
     minify: false,

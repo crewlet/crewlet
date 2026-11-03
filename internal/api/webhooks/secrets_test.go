@@ -439,6 +439,7 @@ roles:
   - name: SRE Lead
     handle: sre-lead
     llm: primary
+    code: {access: full_access}
     integrations:
       github:
         enabled: false
@@ -450,6 +451,7 @@ roles:
   - name: Reviewer
     handle: reviewer
     llm: primary
+    code: {access: review}
     integrations:
       github:
         enabled: false

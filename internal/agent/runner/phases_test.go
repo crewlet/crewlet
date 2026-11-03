@@ -344,6 +344,10 @@ type buildOpts struct {
 	// fence is the seat fence, for the cases about what a closed one stops.
 	fence func() error
 
+	// withheld is what the seat's surfaces leave out (runner.Config.Withheld),
+	// for the cases about a tool the authority table refuses the seat.
+	withheld []string
+
 	// boxServers are the seat's MCP servers that run in its executor's box
 	// (role.sandbox.mcp.servers), for the cases about what the bridge
 	// leaves to the box.
@@ -439,6 +443,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Budget:    opts.budget,
 		Compact:   opts.compact,
 		Sessions:  sessions,
+		Withheld:  opts.withheld,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -485,6 +490,8 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 		t.Errorf("surface deliveries = %v, want slack_post on its own server",
 			surface.Deliveries)
 	}
+	// The executor holds no discovery pair ([TestTheExecutorHoldsEveryToolItsSeatDoes]),
+	// so none of it is among the reads.
 	if !slices.Equal(surface.KnownReads, []string{"slack_history"}) {
 		t.Errorf("surface known reads = %v", surface.KnownReads)
 	}

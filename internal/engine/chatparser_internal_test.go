@@ -3,7 +3,9 @@ package engine
 import (
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/notify"
 )
 
 // CHATLET CONTRIBUTES BOTH HALVES OF THE INBOUND EDGE, and each half is
@@ -28,8 +30,10 @@ import (
 // never a row, so the stateless node routes it exactly as a data node does.
 func TestChatletContributesBothAParserAndAPrompt(t *testing.T) {
 	t.Parallel()
+	// BOTH SIDES, as a data node running Chatlet builds them: the halves a
+	// node runs are read off its read sides ([Engine.nativeHalves]).
 	data := &Engine{}
-	data.native.Store(&native{chat: &chatlet.Store{}})
+	data.native.Store(chatRuntime(&native{}))
 	stateless := &Engine{}
 	stateless.remote.Store(&remoteNative{chat: true})
 	for name, e := range map[string]*Engine{
@@ -49,21 +53,30 @@ func chatContributesBothHalves(t *testing.T, e *Engine) {
 	t.Helper()
 	parsers, prompts := e.nativeParsers(&Company{})
 
+	// THE ALARMS' ARM ASIDE: every node registers it whatever halves its
+	// company runs ([Engine.nativeParsers]), so what this case holds is that
+	// the halves' parsers are chat's and nothing else.
 	var sources []string
 	for _, p := range parsers {
-		sources = append(sources, p.Source())
+		if p.Source() != alarmwake.Source {
+			sources = append(sources, p.Source())
+		}
 	}
-	if len(parsers) != 1 || sources[0] != chatlet.Source {
+	if len(sources) != 1 || sources[0] != chatlet.Source {
 		t.Fatalf("a Chatlet node registered parsers for %v, want exactly "+
 			"[%q] — a company whose chat has no parser commits every message "+
 			"and wakes nobody at all", sources, chatlet.Source)
 	}
 
 	sources = nil
+	var chats []notify.Prompt
 	for _, p := range prompts {
-		sources = append(sources, p.Source())
+		if p.Source() != alarmwake.Source {
+			sources = append(sources, p.Source())
+			chats = append(chats, p)
+		}
 	}
-	if len(prompts) != 1 || sources[0] != chatlet.Source {
+	if len(sources) != 1 || sources[0] != chatlet.Source {
 		t.Fatalf("a Chatlet node registered prompts for %v, want exactly "+
 			"[%q] — a wake whose source no prompt answers for renders through "+
 			"the generic fallback, which names none of the tools a turn "+
@@ -76,9 +89,9 @@ func chatContributesBothHalves(t *testing.T, e *Engine) {
 	// [notify.ChatPrompt.Address] reads a direct conversation as an
 	// ordinary room, so a person's consecutive messages in a DM land in as
 	// many turns as they typed and nothing anywhere reports it.
-	built, isChats := prompts[0].(chatlet.Prompt)
+	built, isChats := chats[0].(chatlet.Prompt)
 	if !isChats {
-		t.Fatalf("the chat prompt is a %T, which is not this package's", prompts[0])
+		t.Fatalf("the chat prompt is a %T, which is not this package's", chats[0])
 	}
 	if len(built.Address.DirectKinds) != len(chatlet.AddressRule().DirectKinds) {
 		t.Errorf("the registered prompt addresses %v as direct and the package "+

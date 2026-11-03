@@ -88,6 +88,17 @@ type SeatActivity struct {
 
 	Tokens int64 `json:"tokens"`
 
+	// ChangesOpened and ReviewsGiven are the changes the seat opened and the
+	// reviews it gave on the code host, and FindingsReceived the findings
+	// other reviewers raised on the changes it owns; ChecksFailed the checks
+	// that failed its changes' heads, and Ejections its changes' ejections
+	// from their targets' merge queues.
+	ChangesOpened    int64 `json:"changes_opened"`
+	ReviewsGiven     int64 `json:"reviews_given"`
+	FindingsReceived int64 `json:"findings_received"`
+	ChecksFailed     int64 `json:"checks_failed"`
+	Ejections        int64 `json:"ejections"`
+
 	// PerDay is every day of the window, oldest first, a quiet one included.
 	PerDay []SeatActivityDay `json:"per_day"`
 
@@ -116,6 +127,12 @@ type SeatActivityTotals struct {
 	FirstPass int64 `json:"first_pass"`
 	SentBack  int64 `json:"sent_back"`
 	Tokens    int64 `json:"tokens"`
+
+	ChangesOpened    int64 `json:"changes_opened"`
+	ReviewsGiven     int64 `json:"reviews_given"`
+	FindingsReceived int64 `json:"findings_received"`
+	ChecksFailed     int64 `json:"checks_failed"`
+	Ejections        int64 `json:"ejections"`
 
 	// PerDay is every day of the previous window, oldest first, a quiet one
 	// included — so a profile draws the fortnight a week-on-week comparison
@@ -177,7 +194,7 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 	if previous {
 		from = prev.First.Label
 	}
-	rows, err := usage.SeatDays(ctx, s.Usage, usage.SpendQuery{
+	rows, err := s.Usage.SeatDays(ctx, usage.SpendQuery{
 		From: from, To: window.Last.Label, AgentID: agentID})
 	if err != nil {
 		return nil, usageErr(err)
@@ -299,6 +316,11 @@ func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 			sf.prev.FirstPass += r.FirstPass
 			sf.prev.SentBack += r.SentBack
 			sf.prev.Tokens += r.Tokens
+			sf.prev.ChangesOpened += r.Code.ChangesOpened
+			sf.prev.ReviewsGiven += r.Code.ReviewsGiven
+			sf.prev.FindingsReceived += r.Code.FindingsReceived
+			sf.prev.ChecksFailed += r.Code.ChecksFailed
+			sf.prev.Ejections += r.Code.Ejections
 			continue
 		}
 		sf.row.Turns += r.Turns
@@ -307,6 +329,11 @@ func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 		sf.row.FirstPass += r.FirstPass
 		sf.row.SentBack += r.SentBack
 		sf.row.Tokens += r.Tokens
+		sf.row.ChangesOpened += r.Code.ChangesOpened
+		sf.row.ReviewsGiven += r.Code.ReviewsGiven
+		sf.row.FindingsReceived += r.Code.FindingsReceived
+		sf.row.ChecksFailed += r.Code.ChecksFailed
+		sf.row.Ejections += r.Code.Ejections
 		sf.hist.Merge(r.Durations)
 		if !r.LastEndedAt.IsZero() && (sf.row.LastTurnAt == nil || r.LastEndedAt.After(*sf.row.LastTurnAt)) {
 			at := r.LastEndedAt.UTC()

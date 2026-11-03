@@ -118,7 +118,8 @@ func TestTheClientsAsynchronousErrorsReachTheEnginesLogger(t *testing.T) {
 			t.Fatalf("DialOwned: %v", err)
 		}
 		t.Cleanup(owned.Close)
-		external := newQueueWith(t, Config{URL: externaltest.Start(t, queue.MaxPayloadBytes).URL()})
+		external := newQueueWith(t, Config{URL: externaltest.Start(t, queue.MaxPayloadBytes).URL(),
+			Token: externaltest.Token})
 
 		want := reflect.ValueOf(clientErrors{}.reported).Pointer()
 		for name, nc := range map[string]*nats.Conn{

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -97,7 +98,7 @@ func TestACutPageStopsTheMergeAtItsLastTurnByStartAndID(t *testing.T) {
 		{TurnID: "t-dd", AgentRole: "Lead", StartedAt: at, EndedAt: at, Phases: 1, TotalTokens: 10},
 	}
 	q := client(t, broker)
-	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
+	stop, err := q.Serve(t.Context(), eventfan.Subject, queue.ConcurrentAnswers, func(_ context.Context, raw []byte) ([]byte, error) {
 		var req struct {
 			Version  int             `json:"version"`
 			Question string          `json:"question"`

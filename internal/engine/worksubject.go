@@ -2,6 +2,7 @@ package engine
 
 import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
@@ -18,7 +19,8 @@ import (
 // first that names an item wins:
 //
 //  1. TRIGGER: the event that woke the turn names the item, a Worklet
-//     wake, or a Jira, GitHub or GitLab webhook about one issue.
+//     wake, a code wake about a change that implements one (ADR-0097), or a
+//     Jira, GitHub or GitLab webhook about one issue.
 //  2. ASKED_BY — the turn answers a colleague's ask, and inherits the item the
 //     ASKING turn was on. Help given on a task is work on that task.
 //  3. RESUME — the turn resumes from its parked executor, whose row recorded
@@ -61,7 +63,7 @@ var workItemNamers = func() map[string]workItemNamer {
 	for _, source := range []interface {
 		workItemNamer
 		Source() string
-	}{worklet.Prompt{}, jira.Prompt{}, github.Prompt{}, gitlab.Prompt{}} {
+	}{worklet.Prompt{}, code.Prompt{}, jira.Prompt{}, github.Prompt{}, gitlab.Prompt{}} {
 		namers[source.Source()] = source
 	}
 	return namers

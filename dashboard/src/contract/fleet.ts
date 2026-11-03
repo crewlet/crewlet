@@ -1,8 +1,8 @@
 /**
  * The fleet's broker and object store, as the engine bounds them: the kinds
  * a node's broker can be and the disagreements named between the two records
- * of its membership, how long a removal may take, and the states of the object
- * store's report.
+ * of its membership, how long a removal may take, the states of the object
+ * store's report, and what its audit finds of a file.
  *
  * Each is a COPY of something the engine owns, because this is a separate
  * build that cannot import a Go identifier — held to the engine's in both
@@ -48,3 +48,14 @@ export const BROKER_REMOVE_TIMEOUT_MS = 185_000;
  * would not give up.
  */
 export const OBJECTS_STATES = ["unavailable", "not_yet", "reported"] as const;
+
+/**
+ * What the object collector's audit found of a file it cannot count on
+ * reading — `collect.Findings`. Each sends an operator somewhere different:
+ * `missing` (the store answered twice that it holds nothing under the file's
+ * object) to a backup, `damaged` (it holds it at another size or digest, or as
+ * nothing it can read) to the store's own repair, and `unanswered` (it failed
+ * twice to answer for it while it answered for the rest) to the store's
+ * health.
+ */
+export const OBJECT_FINDINGS = ["missing", "damaged", "unanswered"] as const;

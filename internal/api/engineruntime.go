@@ -240,9 +240,8 @@ func (r engineRuntime) Builtins() []queries.ToolRow {
 			out = append(out, queries.CatalogueRow(entry, delivers[entry.Name()]))
 		}
 	}
-	for _, tool := range runner.DiscoveryTools(func() *tools.Surface { return nil }) {
-		out = append(out, queries.CatalogueRow(
-			tools.Entry{Tool: tool, Origin: tools.OriginBuiltin}, ""))
+	for _, entry := range runner.DiscoveryTools(func() *tools.Surface { return nil }) {
+		out = append(out, queries.CatalogueRow(entry, ""))
 	}
 	return out
 }

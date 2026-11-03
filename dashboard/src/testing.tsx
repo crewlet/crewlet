@@ -16,8 +16,14 @@
  * `routes/` or `components/` reaches for it.
  */
 
-import { fireEvent, render, screen } from "@testing-library/react";
-import { act, createElement } from "react";
+// testing-library's `act`, never React's own: it is React's, run with
+// `IS_REACT_ACT_ENVIRONMENT` set for its length, which nothing else in this
+// suite sets (testing-library sets it for the whole run only where the
+// runner's hooks are globals, and this suite's are imported). React's own,
+// called outside one of testing-library's, printed "The current testing
+// environment is not configured to support act(...)" from every render here.
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import type { ComponentProps, ElementType, ReactElement } from "react";
 import {
@@ -137,17 +143,23 @@ function referenceChart(): {
   // portals into a node it has to be able to find, and a viewport whose layout
   // effects read the element they are on. And MEASURED, so the chart has a
   // layout and therefore connectors to name: see the doc above.
-  const stop = measuring();
-  const { container: host, unmount } = render(
-    createElement(TreeCanvas, {
-      label: "Reference chart",
-      nodes: [{ id: "a", label: "A", children: [{ id: "b", label: "B" }] }],
-      cards: () => [{ id: "a", children: [{ id: "b", children: [] }] }],
-      cardOf: (id: string) => id,
-      renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), id),
-    }),
-  );
-  stop();
+  const measure = measuring();
+  let rendered: ReturnType<typeof render>;
+  try {
+    rendered = render(
+      createElement(TreeCanvas, {
+        label: "Reference chart",
+        nodes: [{ id: "a", label: "A", children: [{ id: "b", label: "B" }] }],
+        cards: () => [{ id: "a", children: [{ id: "b", children: [] }] }],
+        cardOf: (id: string) => id,
+        renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), id),
+      }),
+    );
+    measure.settle();
+  } finally {
+    measure.stop();
+  }
+  const { container: host, unmount } = rendered;
   const item = host.querySelector("[role='treeitem']");
   const tree = host.querySelector("[role='tree']");
   // THE CONNECTORS ARE THE CHART'S OWN SVG, which is a child of the element
@@ -181,35 +193,74 @@ function referenceChart(): {
 }
 
 /**
- * A ResizeObserver that answers at once, for the length of one render.
+ * A ResizeObserver for the reference chart, installed until `stop`.
  *
  * The reference chart has to be MEASURED to draw its connectors, and it is
  * rendered before any suite's own observer is installed. Every box gets one
  * size, which is all a chart of two cards needs to have a layout at all.
+ *
+ * IT REPORTS WHEN TOLD (`settle`), AFTER THE RENDER, as a browser reports
+ * after layout — never from inside `observe()`. It used to answer at once,
+ * and the canvas observes its boxes from ref callbacks, which React runs
+ * while it is committing: the canvas's answer to a size is a `flushSync`,
+ * so every reference chart drew React's "flushSync was called from inside a
+ * lifecycle method" four times into the output of whichever suite read the
+ * chart's parts first, where it read as a fault in that suite's own screen.
+ * Each box is reported once, when it is first observed, which is all a
+ * browser reports of a box whose size never changes.
  */
-function measuring(): () => void {
+function measuring(): { settle(): void; stop(): void } {
   const real = globalThis.ResizeObserver;
-  class Immediate {
-    constructor(private readonly report: ResizeObserverCallback) {}
-    observe(el: Element): void {
-      const box = { width: 100, height: 40 };
-      this.report(
-        [
-          {
-            target: el,
-            contentRect: box,
-            borderBoxSize: [{ inlineSize: box.width, blockSize: box.height }],
-          },
-        ] as unknown as ResizeObserverEntry[],
-        this as unknown as ResizeObserver,
-      );
+  const observers: Measuring[] = [];
+  class Measuring {
+    private readonly unreported = new Set<Element>();
+    constructor(private readonly report: ResizeObserverCallback) {
+      observers.push(this);
     }
-    unobserve(): void {}
-    disconnect(): void {}
+    observe(el: Element): void {
+      this.unreported.add(el);
+    }
+    unobserve(el: Element): void {
+      this.unreported.delete(el);
+    }
+    disconnect(): void {
+      this.unreported.clear();
+    }
+    /** Reports every box observed since the last report; whether there was one. */
+    deliver(): boolean {
+      if (this.unreported.size === 0) return false;
+      const box = { width: 100, height: 40 };
+      const entries = [...this.unreported].map((target) => ({
+        target,
+        contentRect: box,
+        borderBoxSize: [{ inlineSize: box.width, blockSize: box.height }],
+      }));
+      this.unreported.clear();
+      this.report(entries as unknown as ResizeObserverEntry[], this as unknown as ResizeObserver);
+      return true;
+    }
   }
-  globalThis.ResizeObserver = Immediate as unknown as typeof ResizeObserver;
-  return () => {
-    globalThis.ResizeObserver = real;
+  globalThis.ResizeObserver = Measuring as unknown as typeof ResizeObserver;
+  return {
+    settle: () => {
+      // UNTIL A LAYOUT OBSERVES NOTHING NEW, as a browser goes on reporting
+      // what a layout made it observe. The canvas observes all five of its
+      // boxes (the viewport, both probes, both cards) in its first render, so
+      // the first layout measures every one and the second finds nothing; a
+      // chart still observing new boxes after eight is a package this harness
+      // no longer understands.
+      for (let layout = 0; layout < 8; layout++) {
+        let reported = false;
+        act(() => {
+          for (const observer of [...observers]) reported = observer.deliver() || reported;
+        });
+        if (!reported) return;
+      }
+      throw new Error("the reference chart still observes new boxes after eight layouts");
+    },
+    stop: () => {
+      globalThis.ResizeObserver = real;
+    },
   };
 }
 

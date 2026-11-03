@@ -236,8 +236,8 @@ func TestEveryOpIsClassifiedOrDeliberatelySilent(t *testing.T) {
 		}
 	}
 	for _, op := range []iamdomain.OpKind{
-		iamdomain.OpSweep, iamdomain.OpBarrier, iamdomain.OpEviction,
-		iamdomain.OpGeneration,
+		iamdomain.OpSweep, iamdomain.OpBarrier, iamdomain.OpTrimmed,
+		iamdomain.OpEviction, iamdomain.OpGeneration,
 	} {
 		if _, ok := iamdomain.ClassOf(op); ok {
 			t.Errorf("%s writes a history row — a sweep's whole job is "+

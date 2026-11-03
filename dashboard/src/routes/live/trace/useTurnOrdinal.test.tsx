@@ -8,13 +8,14 @@
  * before this turn began is the last page that could hold it.
  */
 
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { useTurnOrdinal } from "./useTurnOrdinal.ts";
+import { settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -70,12 +71,12 @@ function mount(startedAt: number) {
   return { asked, hook };
 }
 
-async function settle() {
-  for (let i = 0; i < 30; i++) {
-    await act(async () => {
-      await Promise.resolve();
-    });
-  }
+/**
+ * Lets the walk run as far as it goes: every page it asked is answered, and
+ * it asks no further page (see `settled`), however many pages that takes.
+ */
+async function settle(asked: readonly string[]) {
+  await settled(() => asked.length);
 }
 
 test("a turn that began after a page's oldest row stops the walk there", async () => {
@@ -84,13 +85,13 @@ test("a turn that began after a page's oldest row stops the walk there", async (
   // hours ago, before the turn began, so it cannot be on page 3. Twenty-one
   // pages exist.
   const { asked, hook } = mount(T0 - 3.5 * 3_600_000);
-  await settle();
+  await settle(asked);
   expect(asked).toEqual(["", "p1", "p2"]);
   expect(hook.result.current).toBeNull();
 });
 
 test("a turn whose start nothing stamped is looked for on the newest page alone", async () => {
   const { asked } = mount(0);
-  await settle();
+  await settle(asked);
   expect(asked).toEqual([""]);
 });

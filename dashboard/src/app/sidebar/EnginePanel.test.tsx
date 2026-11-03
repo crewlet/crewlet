@@ -4,7 +4,7 @@
  * keeps its height, and the panel that row opens.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -19,6 +19,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { RetentionReport } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { engineAlarms } from "~/test/retentionAlarms.ts";
+import { settled } from "~/test/settle.ts";
 
 afterEach(cleanup);
 
@@ -180,6 +181,7 @@ function client(answers: Record<string, unknown> = {}) {
   const asked: string[] = [];
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) => {
     asked.push(what);
+    queried += 1;
     return Promise.resolve(answers[what] ?? {});
   };
   store.setConnected(true);
@@ -209,12 +211,16 @@ function panel(
   return { ...c, view, rerender };
 }
 
-/** Let the queries a render made answer, and the renders they cause land. */
+/**
+ * Let the queries a render made answer, and the renders they cause land,
+ * including the reads those renders asked in turn (see `settled`).
+ */
 async function settle(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-  });
+  await settled(() => queried);
 }
+
+/** How many reads every client of the file has been asked. */
+let queried = 0;
 
 /** The panel's facts, as term and detail pairs. */
 function facts(dialog: HTMLElement): Record<string, string> {

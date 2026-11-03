@@ -2,6 +2,8 @@ package executor
 
 import (
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // FindingsInstruction is the standing instruction requiring a durable report,
@@ -21,8 +23,15 @@ import (
 // Those lines are the run's delivered refs ([deliveredRefs]); a report that
 // writes none is scraped for pull-request URLs instead, which cannot tell one
 // the run opened from one it only read.
-func FindingsInstruction(findingsPath string) string {
-	return strings.Join([]string{
+//
+// EXCEPT ON THE ENGINE'S OWN CODE HOST, whose pushes the engine reads from
+// its push record and reports for the run (sandbox.Result.Pushed): native is
+// the repositories there the run may push to, by name, and where it names any
+// the run is told so and asked for lines only for what it delivered somewhere
+// else — a line for a push the record names is the same delivery said twice,
+// and the record's is the account nothing in the box can write.
+func FindingsInstruction(findingsPath string, native []string) string {
+	lines := []string{
 		"\n## Before you finish — write your report",
 		"You are NOT the last step. Your output is handed back to the Crewlet " +
 			"agent, which continues this task (replying to the requester, acting " +
@@ -36,19 +45,15 @@ func FindingsInstruction(findingsPath string) string {
 			"for example `Delivered: fix/retry-backoff` and " +
 			"`Delivered: https://git.example.com/acme/api/pull/42`. Write no such " +
 			"line for anything you did not push or open yourself.",
+	}
+	if len(native) > 0 {
+		lines = append(lines, "  Your pushes to "+words.And(native)+" on this company's code host are "+
+			"recorded and reported for you: write a `Delivered:` line only for what you delivered "+
+			"somewhere else.")
+	}
+	return strings.Join(append(lines,
 		"- What remains and what the Crewlet agent should do next.",
-		"Write that file even if you also print a summary — it is the " +
+		"Write that file even if you also print a summary — it is the "+
 			"authoritative report that gets read back to continue the task.",
-	}, "\n")
-}
-
-// shellQuote wraps a value in single quotes for a POSIX shell, escaping any
-// single quote it contains.
-//
-// Its own function rather than a fmt verb because every path this package
-// interpolates into a shell command goes through it: a box home is derived
-// from a provider's id and an operator's state_dir, neither of which this
-// package gets to assume anything about.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	), "\n")
 }

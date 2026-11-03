@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -44,6 +46,14 @@ func TestTheFeedWakesOnlyWhatCarriesANotification(t *testing.T) {
 		},
 		"a barrier": {
 			record: feedRecord(worklet.BarrierSubject(), worklet.OpBarrier, nil, at),
+		},
+		"a trimmed record, whatever it carries": {
+			// MACHINERY, like the barrier: the trim's record removes
+			// anchors and is about no object anybody watches, so it is
+			// named as one — a notification on it wakes nobody.
+			record: feedRecord(worklet.TrimmedSubject(statelog.Position{
+				Stream: topics.TrackerLogStream, Generation: 1, Seq: 40}),
+				worklet.OpTrimmed, &worklet.Notify{Kind: worklet.ChangeFields}, at),
 		},
 		"an eviction": {
 			record: feedRecord(worklet.EvictionSubject("node-b"),

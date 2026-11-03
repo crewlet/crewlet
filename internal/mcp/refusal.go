@@ -150,6 +150,16 @@ const (
 	// names, after which the same request lands.
 	RefusalConflict Refusal = "conflict"
 
+	// RefusalNotReady — a change does not yet meet its target's merge gate:
+	// the sentence names every unmet precondition and who it waits on, and
+	// a ready_to_merge wake follows once the last of them is met. Nothing
+	// about the call was wrong, which tells it from [RefusalInvalid]; and
+	// neither the same call made again nor a re-read clears it, which tells
+	// it from [RefusalStaleVersion] and [RefusalConflict]: the change's
+	// reviewers, its checks or its author clear it, and the caller waits for
+	// the wake rather than asking again (M5-D31).
+	RefusalNotReady Refusal = "not_ready"
+
 	// RefusalExists — the object this call would create already exists, or
 	// a name, a title, a label, an address or an id the call gives an object
 	// is another object's already: a COLLISION, which the sentence names the
@@ -202,6 +212,18 @@ const (
 	// sentence names the window and when it resets.
 	RefusalBudgetExhausted Refusal = "budget_exhausted"
 
+	// RefusalStoreFull — the object store has no room for content the call
+	// would store, so it was not stored, and nothing was recorded. Nothing
+	// about the call was wrong and nothing in the node failed, which tells
+	// it from [RefusalInvalid] and [RefusalInternalError]; and, which tells
+	// it from [RefusalUnavailable], waiting alone does not clear it: the
+	// same call is refused the same way until an operator makes room, so
+	// its sentence names that room, as the store names it
+	// (objstore.Full.Remedy), and never invites the retry. Read as
+	// unavailable, a seat was told to try again shortly and uploaded the
+	// same bytes into the same full bucket.
+	RefusalStoreFull Refusal = "store_full"
+
 	// RefusalUnavailable — this node cannot serve the call right now, or
 	// this company does not run what it needs: the node is behind its log,
 	// the log refused the read or the append, the coordination store did
@@ -238,11 +260,11 @@ const (
 // lists them.
 var Refusals = []Refusal{
 	RefusalInvalid, RefusalNotFound, RefusalForbidden,
-	RefusalStaleVersion, RefusalConflict, RefusalExists,
+	RefusalStaleVersion, RefusalConflict, RefusalNotReady, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
 	RefusalQuotaExceeded, RefusalNotesFull, RefusalNotesSpent,
 	RefusalNotRunning, RefusalBudgetExhausted,
-	RefusalUnavailable, RefusalInternalError,
+	RefusalStoreFull, RefusalUnavailable, RefusalInternalError,
 }
 
 // Valid reports whether a class off the wire is one this build knows. The

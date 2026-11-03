@@ -227,7 +227,7 @@ func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 // reviewer uses, which is what stops onboarding drifting into a second turn
 // engine.
 func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error) {
-	snapshot := r.cfg.Registry.Snapshot()
+	snapshot := r.seatSnapshot()
 	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Onboarding, 0, snapshot, nil,
 		onboardingAlwaysOn)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -671,8 +672,8 @@ func (f *ledgerFake) WriteFields(_ context.Context, opID string, _ []worklet.Fie
 	return f.written(opID)
 }
 
-func (f *ledgerFake) MarkInbox(_ context.Context, opID, _ string,
-	_ worklet.InboxGesture, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
+func (f *ledgerFake) MarkInbox(_ context.Context, opID, _ string, _ statelog.Position,
+	_ inbox.Gesture[worklet.Reason], _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 

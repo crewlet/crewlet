@@ -11,7 +11,7 @@
  */
 
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -24,6 +24,7 @@ import type { BackupPointRow, BackupsAnswer } from "~/contract/backups.ts";
 import type { RetentionReport } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { engineAlarms } from "~/test/retentionAlarms.ts";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
@@ -158,9 +159,7 @@ function mount(
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 /** `fetch`, answering `POST /backup` with the given status and body. */

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -55,12 +56,12 @@ func engineCall(opID string) executordomain.Call {
 }
 
 // fullEnding is an ending with every field set.
-func fullEnding() executordomain.Ending {
-	return executordomain.Ending{Outcome: executordomain.OutcomeStopped, Decision: "done",
+func fullEnding() executorkeep.Ending {
+	return executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
 		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", DeliveryUnknown: true,
 		CompletedWork: "shipped", BlockedOn: "a review", StoppedBy: "jane", StopReason: "enough",
 		Failure: "a guard",
-		Unkept:  &executordomain.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "refused for space"}}
+		Unkept:  &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "refused for space"}}
 }
 
 // sessionOf is one turn's row with every field set, so a field the wire
@@ -154,10 +155,10 @@ type logbook struct {
 	sealed   secrets.KeyCounts
 }
 
-func (l *logbook) For(context.Context) (Backend, bool) {
+func (l *logbook) For(context.Context, string) (Backend, bool) {
 	return Backend{
 		Executor: ExecutorHalf{Reader: l, Writer: l},
-		Committed: func(_ context.Context, at statelog.Position) error {
+		Reached: func(_ context.Context, at statelog.Position) error {
 			l.mu.Lock()
 			defer l.mu.Unlock()
 			l.floors = append(l.floors, at)
@@ -318,7 +319,8 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 	// THE SAME COPY ANSWERED IN-PROCESS, by a data node that asks nobody
 	// else: a walk that left it would find no node and fail.
 	local, err := NewRouter(RouterOptions{Self: "data-self", Queue: f.start(t),
-		Placement: &fakePlacement{}, Session: NewSession(), Envelopes: fleetEnvelopes, Local: book})
+		Placement: &fakePlacement{}, Git: &fakePlacement{}, Session: NewSession(), Timing: Production(),
+		Envelopes: fleetEnvelopes, Local: book})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,7 +640,7 @@ type sessionCopy struct {
 	losing bool
 }
 
-func (c *sessionCopy) For(context.Context) (Backend, bool) {
+func (c *sessionCopy) For(context.Context, string) (Backend, bool) {
 	return Backend{Executor: ExecutorHalf{Reader: c, Writer: c}}, true
 }
 
@@ -709,7 +711,7 @@ func (c *sessionCopy) Head(ctx context.Context, handle, conversationKey string,
 	for _, turn := range ended {
 		out.Endings = append(out.Endings, executordomain.Session{Handle: handle, Turn: turn,
 			ConversationKey: conversationKey,
-			Ending:          &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}})
+			Ending:          &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}})
 	}
 	return out, nil
 }
@@ -751,8 +753,8 @@ type lossy struct {
 	node *sessionCopy
 }
 
-func (l lossy) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
-	return l.q.Serve(ctx, subject, func(ctx context.Context, raw []byte) ([]byte, error) {
+func (l lossy) Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error) {
+	return l.q.Serve(ctx, subject, answers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		answer, err := h(ctx, raw)
 		l.node.mu.Lock()
 		losing := l.node.losing
@@ -855,7 +857,7 @@ func TestAnUnvouchedExecutorWriteMovesOnUnderTheSameOperation(t *testing.T) {
 	endCall := engineCall(executordomain.EndOpID(crossedAt, "swe", liveTurn))
 	res, err := f.client.ExecutorWrites().End(t.Context(), endCall, executordomain.NewEnd{
 		Handle: "swe", Turn: liveTurn, ConversationKey: conversation,
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}})
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}})
 	var unserved *ErrUnserved
 	if err != nil || errors.As(err, &unserved) || res.Outcome != statelog.OutcomeUnknown ||
 		!res.Unvouched || res.OpID != endCall.OpID {
@@ -889,11 +891,10 @@ func TestAConversationReadWaitsForAnEndAnotherNodeMade(t *testing.T) {
 	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-a"} })
 	// THE NODE THE SEAT LEFT ends its turn; the node it moved to launches.
 	left, moved := f.router(t, "agent-left", nil), f.router(t, "agent-moved", nil)
-	moved.readBudget = 10 * time.Second
 	ctx := t.Context()
 	if _, err := left.ExecutorWrites().End(ctx, engineCall(executordomain.EndOpID(crossedAt, "swe", liveTurn)),
 		executordomain.NewEnd{Handle: "swe", Turn: liveTurn, ConversationKey: conversation,
-			Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
 		t.Fatalf("end: %v", err)
 	}
 
@@ -1012,8 +1013,8 @@ func TestTheExecutorFacadesAskExactlyTheExecutorOperations(t *testing.T) {
 	asker := &recordingAsker{answer: reply{Node: "data-a", Unserved: unservedNoBackend,
 		Detail: "data-a runs no native backend for it"}}
 	r, err := NewRouter(RouterOptions{Self: "agent-1", Queue: asker,
-		Placement: &fakePlacement{nodes: []string{"data-a"}}, Session: NewSession(),
-		Envelopes: fleetEnvelopes})
+		Placement: &fakePlacement{nodes: []string{"data-a"}}, Git: &fakePlacement{}, Session: NewSession(),
+		Timing: Production(), Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)
 	}

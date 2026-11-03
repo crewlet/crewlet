@@ -1,1 +1,0 @@
-import{r as e}from"./rolldown-runtime-hePW80VL.js";import{i as t}from"./react-DlYQp10C.js";var n=e(t(),1);function r(e,t=350){let[r,i]=(0,n.useState)(e);return(0,n.useEffect)(()=>{if(Object.is(e,r))return;let n=window.setTimeout(()=>i(e),t);return()=>window.clearTimeout(n)},[e,r,t]),r}var i=`#/doclet/pages/`;export{r as n,i as t};
