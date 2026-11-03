@@ -193,10 +193,11 @@ func TestAConversationsHeadIsTheTurnThatReadItLast(t *testing.T) {
 // parked on a person's question: F10 continues F09 and parks; F11 fires beside
 // it, continues F09 too and ends; F12 continues F11 and ends; and F10,
 // answered hours later, ends last of all. The schedule's line is F11 then F12,
-// so F13 continues F12, is told how F10 ended and is offered its session — as
-// a launch's read, a page of the seat and a read of F10's own row all name
-// it (agreedHead) — and F13's end absorbs both. It runs the shipped
-// applier's and reader's own statements over a migrated estate.
+// so F13 continues F12 — as a launch's read, a page of the seat and a read of
+// F10's own row all name it (agreedHead), and F13's begin holds it as its base
+// — is told how F10 ended and is offered its session, and F13's end absorbs
+// both. It runs the shipped applier's and reader's own statements over a
+// migrated estate.
 //
 // Mutation: order headStatement by end_seq alone, as the head was ordered
 // before, and F13 is handed F10's session, which never saw F11 or F12: the
@@ -236,6 +237,11 @@ func TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued(t *testing.T) {
 	}
 	e.agreedHead("ana", fires, f10)
 
+	// F13'S FIRST LAUNCH HOLDS F12 as the base it continues, then captures.
+	e.begin(beginning(at13, "ana", fires, f13, ""))
+	if !e.holds("ana", f12) {
+		t.Fatal("F13's begin holds nothing, want F12's session, the head its read named")
+	}
 	e.capture(launching(at13, capturing("ana", fires, f13, 1, 1, 100, budget)))
 	e.end(ending("ana", fires, f13, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	for _, gone := range []string{f12, f10} {

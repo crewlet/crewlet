@@ -438,8 +438,9 @@ func TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst(t *testing.T) {
 // the seat's ended sessions oldest END first, as the applier on every data node
 // does ([seatPlan]), so under pressure it takes the head and leaves the stale
 // sibling its session: the next read hands out the newest session the seat
-// still keeps, the sibling's, tells the released head's ending beside it and
-// hands both out, and the next end absorbs both.
+// still keeps, the sibling's, which the next turn's begin holds as the base it
+// continues, tells the released head's ending beside it and hands both out,
+// and the next end absorbs both.
 //
 // Mutation: release in the head's line order, the oldest read first, and the
 // stale sibling goes while the head keeps its session; read the head among rows
@@ -487,6 +488,11 @@ func TestAHeadReleasedBeforeAStaleSiblingHandsTheNextTurnTheSibling(t *testing.T
 	if !slices.Equal(turnsOf(h.Endings), []string{head}) || !slices.Contains(h.Absorbs(), head) {
 		t.Fatalf("the next turn is told %v and hands out %v, want the released head's ending "+
 			"told and handed out", turnsOf(h.Endings), h.Absorbs())
+	}
+	e.begin(beginning(h, "ana", room, next, ""))
+	if !e.holds("ana", sibling) {
+		t.Fatal("the next turn's begin holds nothing, want the stale sibling's session, the base " +
+			"its read named")
 	}
 	e.capture(launching(h, capturing("ana", room, next, 1, 1, 10, tight)))
 	e.end(ending("ana", room, next, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
