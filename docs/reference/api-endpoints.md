@@ -9315,9 +9315,12 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   the reviewer's `completed_work`, the executor's `blocked_on`, who stopped it
   (`stopped_by`) and why (`stop_reason`), and the engine's `failure`. The prose
   among them is a model's or a person's words, and so is `ask_excerpt`, the
-  first kibibyte of what the turn was asked; all are **redacted at this read**.
+  first kibibyte of what the turn was asked; all are **redacted at this read**,
+  and so is the reason an unkept capture's ending gives.
 - **`kept`** says the row still names a session's object, of `object_bytes`
-  sealed. A row that names none is an ending alone: its turn captured nothing,
+  sealed. A row that names none is an ending alone, for one of three reasons
+  its transcript's `why` says: its turn captured nothing (yet, while it runs);
+  its newest capture was not kept, and its end took the older one off the row;
   or the seat's session budget
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object to
   make room for newer ones, keeping how the turn ended.
@@ -9476,8 +9479,9 @@ another count, is `400 bad_params` — read the transcript again from its start 
 rather than a page continued in another archive, or at an ordinal that names
 another entry. A cursor of a row that names no object any more is answered as
 its first page would be, `state: none` with the engine's sentence: the seat's
-session budget released the object, which it does only to a turn that ended,
-and an ended turn is never captured again.
+session budget released the object, or the turn's end did, its newest capture
+not kept — each only of a turn that ended — and an ended turn is never captured
+again.
 
 **Two transcripts at a time on each node.** One read can hold a line at
 `bounds.line_bytes`, as much again while the buffer gathering it grows, and the
@@ -9496,7 +9500,7 @@ held:
 | `state` | Meaning |
 |---|---|
 | `read` | The entries are the transcript's |
-| `none` | The row names no object: its turn captured nothing, or the seat's budget released it |
+| `none` | The row names no object: its turn captured nothing (yet, while it runs), its newest capture was not kept, or the seat's budget released it |
 | `missing` | The object store no longer holds the object |
 | `unreadable` | The object does not open: it is sealed under a keyring key this fleet no longer holds, or its bytes are not the ones sealed for this turn |
 | `malformed` | It opened, and is not an archive of its harness's format, and `why` says which of six ways: it is not gzip-compressed, its compressed bytes are corrupt, it ends part way through, it holds no tar of its harness's files, it holds no export document of its harness's, or its bytes are not laid out as its format describes (a box's own agent can rewrite what its run packs before a collection takes it) |

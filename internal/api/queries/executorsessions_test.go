@@ -527,11 +527,12 @@ func TestAnArchiveThatIsNotItsFormatIsSaidInTheEnginesWords(t *testing.T) {
 
 // AN ENDING'S PROSE IS REDACTED AT THIS READ. What the reviewer said landed,
 // what blocked a round, the reason a person gave for a stop and the account of
-// a failure are a model's or a person's words, kept as written, and each can
+// a failure are a model's or a person's words, kept as written, and why the
+// turn's newest capture was not kept quotes what refused it, and each can
 // quote a token a run met: each reads redacted in both questions — a row of
 // the list, and the session a transcript is read under.
 //
-// Mutation: hand any of the four out as the row holds it, and the token
+// Mutation: hand any of the five out as the row holds it, and the token
 // reaches the reader in that field.
 func TestAnEndingsProseIsRedactedAtThisRead(t *testing.T) {
 	t.Parallel()
@@ -541,7 +542,7 @@ func TestAnEndingsProseIsRedactedAtThisRead(t *testing.T) {
 	reads := &stubSessions{rows: []executordomain.Session{{Handle: "ana", Turn: turn, CapturedAt: at,
 		EndedAt: at, Ending: &executordomain.Ending{Outcome: executordomain.OutcomeStopped,
 			CompletedWork: quoted, BlockedOn: quoted, StoppedBy: "ana.diaz", StopReason: quoted,
-			Failure: quoted}}}}
+			Failure: quoted, Unkept: &executordomain.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: quoted}}}}}
 	store, _ := sessionObjectStore(t)
 	s := sessionSources(t, reads, store)
 	listed, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
@@ -559,13 +560,14 @@ func TestAnEndingsProseIsRedactedAtThisRead(t *testing.T) {
 	for question, row := range map[string]queries.SessionRow{
 		"executor_sessions": rows[0], "executor_session": read.(queries.SessionAnswer).Session,
 	} {
-		if row.Ending == nil {
-			t.Errorf("%s: the row carries no ending", question)
+		if row.Ending == nil || row.Ending.Unkept == nil {
+			t.Errorf("%s: the row carries no ending, or no unkept capture", question)
 			continue
 		}
 		for field, said := range map[string]string{
 			"completed_work": row.Ending.CompletedWork, "blocked_on": row.Ending.BlockedOn,
 			"stop_reason": row.Ending.StopReason, "failure": row.Ending.Failure,
+			"unkept.reason": row.Ending.Unkept.Reason,
 		} {
 			if strings.Contains(said, plantedKey) || !strings.Contains(said, redact.Marker) {
 				t.Errorf("%s: the ending's %s reads %q, want it redacted", question, field, said)

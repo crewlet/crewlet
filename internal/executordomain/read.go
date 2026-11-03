@@ -125,6 +125,42 @@ func (s Session) Ended() bool { return s.Ending != nil }
 // HasObject reports a row that names a session's object.
 func (s Session) HasObject() bool { return !s.Object.Key.IsZero() }
 
+// NotKept is why the row names no session's object, in a reader's words, ""
+// where it names one. A row names none for one of three reasons, each the
+// domain's own and told apart off the row alone: nothing of the turn's session
+// was captured — yet, while the turn is live, its row its begin's; the turn's
+// newest capture was not kept, which its end said ([Ending.Unkept]) and which
+// released the older capture the row named, if any ([applyEnd]) — told by the
+// unkept capture being newer than the place the row keeps, which a release
+// leaves as it was; or the seat's session budget released it to make room
+// ([seatPlan]), the one other release that leaves a row, and one that takes
+// only an ended turn's.
+//
+// SOMEBODY ELSE'S WORDS IN IT: the unkept capture's reason quotes what refused
+// it — an error a box or a store wrote — so a reader redacts what this
+// answers, as it redacts every text a row holds.
+func (s Session) NotKept() string {
+	switch {
+	case s.HasObject():
+		return ""
+	case s.Ending != nil && s.Ending.Unkept != nil && s.Ending.Unkept.supersedes(s.LaunchSeq, s.CaptureSeq):
+		u := *s.Ending.Unkept
+		reason := u.Reason
+		if reason == "" {
+			reason = "no reason was recorded"
+		}
+		return fmt.Sprintf("the turn's newest capture of its session (launch %d, capture %d) was not kept: "+
+			"%s; how the turn ended is kept", u.LaunchSeq, u.CaptureSeq, reason)
+	case s.CapturedAt.IsZero() && !s.Ended():
+		return "nothing of this turn's session has been captured yet"
+	case s.CapturedAt.IsZero():
+		return "nothing of this turn's session was captured: its run ended before its harness packed one, " +
+			"its harness carries none, or the company kept no session"
+	}
+	return "the seat's session budget released this session's object to make room for newer ones; how the " +
+		"turn ended is kept"
+}
+
 // rowScanner is one row, from a query or a query row.
 type rowScanner interface{ Scan(dest ...any) error }
 

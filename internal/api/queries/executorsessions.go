@@ -206,8 +206,8 @@ type SessionRow struct {
 	AskExcerpt string `json:"ask_excerpt" untrusted:"fence"`
 
 	// Kept says the row still names a session's object, and ObjectBytes is
-	// that object's sealed size: zero where the turn captured nothing, or
-	// the seat's budget released it.
+	// that object's sealed size: zero where the turn captured nothing, its
+	// newest capture was not kept, or the seat's budget released it.
 	Kept        bool  `json:"kept"`
 	ObjectBytes int64 `json:"object_bytes"`
 
@@ -251,8 +251,9 @@ const (
 	// TranscriptRead is a session read: the answer holds its entries.
 	TranscriptRead TranscriptState = "read"
 
-	// TranscriptNone is a row naming no object: its turn captured nothing,
-	// or the seat's session budget released it.
+	// TranscriptNone is a row naming no object: its turn captured nothing
+	// (yet, while it runs), its newest capture was not kept, or the seat's
+	// session budget released it ([executordomain.Session.NotKept]).
 	TranscriptNone TranscriptState = "none"
 
 	// TranscriptMissing is an object the store no longer holds.
@@ -598,7 +599,8 @@ func (s Sources) readTranscript(ctx context.Context, row executordomain.Session,
 	out SessionAnswer) (SessionAnswer, error) {
 
 	if !row.HasObject() {
-		out.State, out.Why = TranscriptNone, notKept(row)
+		// REDACTED: why a capture was not kept quotes what refused it.
+		out.State, out.Why = TranscriptNone, redact.Secrets(row.NotKept())
 		return out, nil
 	}
 	if ok, why := executor.Carries(row.Harness, row.ArchiveFormat); !ok {
@@ -697,8 +699,9 @@ func transcriptCursor(key objstore.Key, next int) string {
 // from the start.
 //
 // A ROW THAT NAMES NO OBJECT ANY MORE IS NOT CAPTURED AGAIN: the seat's
-// session budget released its object, which it does to an ended turn alone,
-// and an ended turn is never captured again. So its cursor is the page's to
+// session budget released its object, or the turn's end did, its newest
+// capture not kept — each only of an ended turn — and an ended turn is never
+// captured again. So its cursor is the page's to
 // answer, as the first page is answered — no session kept, and why
 // ([Sources.readTranscript]) — where a refusal saying the session was captured
 // since, and to read it from its start, said what was false and sent the
@@ -748,25 +751,21 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 	}
 	if s.Ending != nil {
 		// A COPY, redacted: the row is the domain's, and the ending's prose
-		// is a model's or a person's words.
+		// is a model's or a person's words — and why its newest capture was
+		// not kept quotes what refused it, an error a box or a store wrote.
 		ending := *s.Ending
 		ending.CompletedWork = redact.Secrets(ending.CompletedWork)
 		ending.BlockedOn = redact.Secrets(ending.BlockedOn)
 		ending.StopReason = redact.Secrets(ending.StopReason)
 		ending.Failure = redact.Secrets(ending.Failure)
+		if u := ending.Unkept; u != nil {
+			unkept := *u
+			unkept.Reason = redact.Secrets(unkept.Reason)
+			ending.Unkept = &unkept
+		}
 		row.Ending = &ending
 	}
 	return row
-}
-
-// notKept is why a row names no object.
-func notKept(s executordomain.Session) string {
-	if s.CapturedAt.IsZero() {
-		return "nothing of this turn's session was captured: its run ended before its harness " +
-			"packed one, or its harness carries none"
-	}
-	return "the seat's session budget released this session's object to make room for newer " +
-		"ones; how the turn ended is kept"
 }
 
 // sessionInstant is an instant of a row, or null for one it has not got.
