@@ -563,7 +563,8 @@ func (s *syncer) take(
 		}
 		res, err := s.sess.Apply(ctx, ApplyInput{
 			Seat: ref, Lane: lane, Step: step, Want: want, Have: have, Record: rec, Sinks: sinks,
-			Prior: slices.Clone(prior),
+			Prior: slices.Clone(prior), HandIn: s.in.Asks[ref.Handle].HandIn, Disconnect: s.in.Disconnect,
+			Release: s.in.Asks[ref.Handle].Release,
 		})
 		if err == nil && res.Waiting != nil {
 			result.Steps = append(result.Steps, StepOutcome{Step: step})

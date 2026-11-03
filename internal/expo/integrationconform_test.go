@@ -2,8 +2,6 @@ package expo_test
 
 import (
 	"context"
-	"net/http"
-	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -32,76 +30,73 @@ func (s *countingSink) Forget(ctx context.Context, names ...string) error {
 	return s.Sink.Forget(ctx, names...)
 }
 
-// expoWorld is the company half and the agents' robots, run as the engine's
-// pass runs them: the company reconcile, then the access sync.
+// expoWorld is the agents' robots run through the access sync, which is all of
+// an Expo pass once the account name resolves (the engine checks that part).
 type expoWorld struct {
-	sync   *syncWorld
-	sink   *countingSink
-	client *expo.Client
+	sync *syncWorld
+	sink *countingSink
 }
 
 func (*expoWorld) Kind() integration.Kind { return integration.KindExpo }
 
 func (w *expoWorld) Reconcile(ctx context.Context) ([]integration.Finding, error) {
-	res, err := expo.Reconcile(ctx, expo.Options{Client: w.client, Account: testAccountName})
-	if err != nil {
-		return nil, err
-	}
 	report, err := seataccess.Sync(ctx, seataccess.SyncInput{
 		Vendor: w.sync.vendor, Ledger: w.sync.ledger, Sink: w.sink, Pass: "test", By: "test",
-		Open: seataccess.OpenInput{
-			Config: w.sync.company,
-			Env: config.NewResolver(config.MapSource{
-				"EXPO_ACCOUNT": testAccountName, "EXPO_ACCESS_TOKEN": provisioner,
-			}),
-		},
+		Open: w.sync.open(),
 	})
 	if err != nil {
 		return nil, err
 	}
-	return append(res.Findings(), report.Findings...), nil
+	return report.Findings, nil
 }
 
 // mutations is every write at Expo and into the sealed store.
 func (w *expoWorld) mutations() int { return len(w.sync.expo.writes()) + int(w.sink.writes.Load()) }
 
-// convergedExpo stands two agents up at different levels and converges them
-// BY RUNNING THE PASS, so the world is converged by definition and the
-// question left is whether the next pass writes.
+// convergedExpo sets two agents up at different levels the way a person does
+// (a robot at Expo, its token pasted), so the question left is whether the
+// next pass writes.
 func convergedExpo(t *testing.T) *expoWorld {
 	t.Helper()
 	s := newSyncWorld(t, config.ExpoLevelDeveloper)
 	on := true
 	s.company.Roles = append(s.company.Roles, config.Role{Name: "SRE", Handle: "sre",
 		Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: &on}}})
-	client, err := expo.NewClient(expo.ClientOptions{Token: provisioner, HTTP: &http.Client{Transport: s.expo.rw}})
-	if err != nil {
-		t.Fatal(err)
+	s.sync()
+	_, qa := s.expo.robot("crewlet-acme-qa", expo.RoleDeveloper)
+	_, sre := s.expo.robot("crewlet-acme-sre", expo.RoleViewOnly)
+	for handle, tok := range map[string]string{"qa": qa.value, "sre": sre.value} {
+		if _, err := s.pasteFor(handle, tok); err != nil {
+			t.Fatalf("paste for %s: %v", handle, err)
+		}
 	}
-	w := &expoWorld{sync: s, sink: &countingSink{Sink: s.sink}, client: client}
-	findings, err := w.Reconcile(context.Background())
-	if err != nil || len(findings) != 0 {
+	w := &expoWorld{sync: s, sink: &countingSink{Sink: s.sink}}
+	if findings, err := w.Reconcile(context.Background()); err != nil || len(findings) != 0 {
 		t.Fatalf("seeding pass = %+v, %v", findings, err)
 	}
 	return w
 }
 
-// outstandingExpo is a converged world where a person has to act twice: the
-// provisioner lost the Admin role, and a new agent's robot cannot be created.
+// outstandingExpo is a converged world where a person has to act three times:
+// qa's token was revoked, sre's robot was given another role at Expo, and a
+// new agent has no robot yet.
 func outstandingExpo(t *testing.T) *expoWorld {
 	t.Helper()
 	w := convergedExpo(t)
 	on := true
 	w.sync.company.Roles = append(w.sync.company.Roles, config.Role{Name: "Release", Handle: "release",
 		Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: &on}}})
+	sealed, _ := w.sync.sink.Held(sealedQA)
 	w.sync.expo.mu.Lock()
-	defer w.sync.expo.mu.Unlock()
-	w.sync.expo.viewerPerms = []expo.Permission{expo.PermissionView, expo.PermissionPublish}
-	w.sync.expo.refuse["CrewletCreateRobot"] = fakeRefusal{code: "UNAUTHORIZED_ERROR", message: "not permitted"}
+	tok := w.sync.expo.tokens[sealed]
+	w.sync.expo.mu.Unlock()
+	w.sync.expo.revoke(tok)
+	sre, _ := w.sync.ledger.Record(integration.KindExpo, "sre")
+	w.sync.expo.setRole(sre.Account.ID, expo.RoleRunner)
 	return w
 }
 
-// THE CONTRACT IS CERTIFIED AGAINST THE REAL PASS, OVER BOTH WORLDS.
+// THE CONTRACT IS CERTIFIED AGAINST THE REAL SYNC, OVER BOTH WORLDS.
 func TestTheExpoReconcilerMeetsTheContract(t *testing.T) {
 	t.Parallel()
 	var converged *expoWorld
@@ -115,49 +110,45 @@ func TestTheExpoReconcilerMeetsTheContract(t *testing.T) {
 	})
 }
 
-// AND THE OUTSTANDING WORLD REPORTS EVERY FAULT IT HOLDS, each on the subject
-// a person acts on.
+// AND THE OUTSTANDING WORLD REPORTS EVERY FAULT IT HOLDS, each on the seat a
+// person acts for, pointing at the account's access tokens page.
 func TestTheOutstandingExpoWorldReportsEveryFault(t *testing.T) {
 	t.Parallel()
 	findings, err := outstandingExpo(t).Reconcile(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[integration.FindingKind]bool{
-		integration.FindingGrantShort: false, integration.FindingIdentityFailed: false,
-	}
+	want := map[string]bool{"qa": false, "sre": false, "release": false}
 	for _, f := range findings {
-		if _, ok := want[f.Kind]; !ok {
+		if _, ok := want[f.Subject]; !ok || f.Kind != integration.FindingApprovalRequired ||
+			f.ActionURL != expo.AccessTokensURL(testAccountName) {
 			t.Errorf("unexpected finding %+v", f)
 			continue
 		}
-		want[f.Kind] = true
-		if f.Kind == integration.FindingGrantShort &&
-			(f.Subject != "integrations.expo.provisioning.access_token" || f.ActionURL != expo.MembersURL(testAccountName)) {
-			t.Errorf("grant_short = %+v", f)
-		}
+		want[f.Subject] = true
 	}
-	for kind, seen := range want {
+	for handle, seen := range want {
 		if !seen {
-			t.Errorf("the outstanding world did not report %s", kind)
+			t.Errorf("the outstanding world did not report seat %s", handle)
 		}
 	}
 }
 
-// AND THE COUNTER SEES THE WRITES IT IS THERE TO SEE: a level change reaches
-// Expo, and a rotation reaches the sealed store.
+// AND THE COUNTER SEES THE WRITES IT IS THERE TO SEE: turning an agent off
+// clears its token from the sealed store.
 func TestTheExpoWriteCounterCountsWrites(t *testing.T) {
 	t.Parallel()
 	w := convergedExpo(t)
 	before := w.mutations()
-	w.sync.seat().Level = config.ExpoLevelViewer
+	off := false
+	w.sync.seat().Enabled = &off
 	if _, err := w.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if w.mutations() <= before {
-		t.Fatal("a level change made no write the counter saw")
+		t.Fatal("turning an agent off made no write the counter saw")
 	}
-	if !slices.Contains(w.sync.expo.writes(), "CrewletRevoke") {
-		t.Errorf("writes = %v, want the revoke of the permissions above viewer", w.sync.expo.writes())
+	if _, ok := w.sync.sink.Held(sealedQA); ok {
+		t.Errorf("%s is still sealed after the agent was turned off", sealedQA)
 	}
 }

@@ -2,6 +2,7 @@ package expo_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -9,33 +10,26 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
-// The fake's fixed identities. Obviously fake values throughout.
-const (
-	testAccountID   = "acct-0001"
-	testAccountName = "example-org"
-	provisioner     = "fake-expo-provisioner-token"
-	provisionerID   = "robot-provisioner"
-)
+// The fake's fixed account. Obviously fake values throughout.
+const testAccountName = "example-org"
 
-// fakeRobot is one robot user on the fake account.
-type fakeRobot struct {
-	id, name string
-	perms    []expo.Permission
-	deleting bool
-	created  time.Time
+// fakeActor is who one token acts as: a robot with a role per account, or a
+// person.
+type fakeActor struct {
+	id, kind, name string
+	roles          map[string]expo.Role
 }
 
-// fakeToken is one access token the fake holds.
+// fakeToken is one access token: its value, its owner and the prefix Expo
+// shows for it.
 type fakeToken struct {
-	id, owner, note, value string
-	revoked                bool
-	created                time.Time
+	id, value, owner, prefix, created string
+	revoked                           bool
 }
 
 // fakeRefusal is how the fake refuses one operation: an HTTP status, or a
@@ -48,47 +42,27 @@ type fakeRefusal struct {
 	message   string
 }
 
-// fakeExpo is one Expo account behind the GraphQL API: its robots, their
-// tokens and the provisioner's own permissions, with GraphQL's errors.
+// fakeExpo is Expo's GraphQL API as the seats' own tokens see it: each token
+// answers as its actor, and a revoked or unknown token answers 401.
 type fakeExpo struct {
 	mu sync.Mutex
 
-	viewerKind  string
-	viewerPerms []expo.Permission
-	appCount    int
-	robots      map[string]*fakeRobot
-	tokens      map[string]*fakeToken
-	seq         int
-	pageSize    int
+	actors map[string]*fakeActor
+	tokens map[string]*fakeToken // by value
+	seq    int
 
 	// refuse answers an operation with a refusal, by operation name.
 	refuse map[string]fakeRefusal
 	// limited answers an operation 429 this many times first.
 	limited map[string]int
-	// emptyValue answers a token create with no value.
-	emptyValue bool
-	// noViewer answers the viewer query with a null actor.
-	noViewer bool
-	// lag leaves a robot it creates out of this many listings after.
-	lag    int
-	lagged map[string]int
 
 	ops []string
 	rw  *httpxtest.Rewriter
 }
 
 func newFakeExpo() *fakeExpo {
-	return &fakeExpo{
-		viewerKind:  "Robot",
-		viewerPerms: []expo.Permission{expo.PermissionAdmin, expo.PermissionView},
-		appCount:    3,
-		robots:      map[string]*fakeRobot{},
-		lagged:      map[string]int{},
-		tokens:      map[string]*fakeToken{},
-		refuse:      map[string]fakeRefusal{},
-		limited:     map[string]int{},
-		pageSize:    2,
-	}
+	return &fakeExpo{actors: map[string]*fakeActor{}, tokens: map[string]*fakeToken{},
+		refuse: map[string]fakeRefusal{}, limited: map[string]int{}}
 }
 
 // server starts the fake and returns a client transport that reaches it in
@@ -101,8 +75,7 @@ func (f *fakeExpo) server(t testing.TB) *http.Client {
 	return &http.Client{Transport: f.rw}
 }
 
-// onlyExpo fails a test whose client addressed anything but Expo's API host,
-// which is where the provisioner token may go.
+// onlyExpo fails a test whose client addressed anything but Expo's API host.
 func (f *fakeExpo) onlyExpo(t testing.TB) {
 	t.Helper()
 	for _, host := range f.rw.Hosts() {
@@ -112,68 +85,81 @@ func (f *fakeExpo) onlyExpo(t testing.TB) {
 	}
 }
 
-// addRobot puts a robot on the account, as if created earlier.
-func (f *fakeExpo) addRobot(name string, perms ...expo.Permission) *fakeRobot {
+// robot puts a robot on the account at role and answers its first token.
+func (f *fakeExpo) robot(name string, role expo.Role) (*fakeActor, *fakeToken) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
-	r := &fakeRobot{id: "robot-" + strconv.Itoa(f.seq), name: name, perms: perms,
-		created: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
-	f.robots[r.id] = r
-	return r
+	a := &fakeActor{id: "robot-" + strconv.Itoa(f.seq), kind: "Robot", name: name,
+		roles: map[string]expo.Role{testAccountName: role}}
+	f.actors[a.id] = a
+	return a, f.mintLocked(a.id)
 }
 
-// addToken puts a token on an actor, as if minted earlier.
-func (f *fakeExpo) addToken(owner, note string) *fakeToken {
+// person puts a person on the account at role and answers their token.
+func (f *fakeExpo) person(name string, role expo.Role) *fakeToken {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.mintLocked(owner, note)
+	f.seq++
+	a := &fakeActor{id: "user-" + strconv.Itoa(f.seq), kind: "User", name: name,
+		roles: map[string]expo.Role{testAccountName: role}}
+	f.actors[a.id] = a
+	return f.mintLocked(a.id)
 }
 
-func (f *fakeExpo) mintLocked(owner, note string) *fakeToken {
+// mint creates another token for an actor, as a person does on its row.
+func (f *fakeExpo) mint(actorID string) *fakeToken {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mintLocked(actorID)
+}
+
+func (f *fakeExpo) mintLocked(actorID string) *fakeToken {
 	f.seq++
 	n := strconv.Itoa(f.seq)
-	t := &fakeToken{id: "token-" + n, owner: owner, note: note, value: "fake-expo-seat-token-" + n,
-		created: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)}
-	f.tokens[t.id] = t
+	// The prefix Expo shows is the value's own beginning.
+	t := &fakeToken{id: "token-" + n, value: "fake" + n + "-expo-seat-token", owner: actorID, prefix: "fake" + n + "-",
+		created: fmt.Sprintf("2026-11-03T00:%02d:00Z", f.seq%60)}
+	f.tokens[t.value] = t
 	return t
 }
 
-// robot is a copy of the robot with id, and whether the fake has it.
-func (f *fakeExpo) robot(id string) (fakeRobot, bool) {
+// revoke revokes a token, as a person does at Expo.
+func (f *fakeExpo) revoke(t *fakeToken) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	r, ok := f.robots[id]
-	if !ok {
-		return fakeRobot{}, false
-	}
-	out := *r
-	out.perms = slices.Clone(r.perms)
-	return out, true
+	t.revoked = true
 }
 
-// liveTokens are the unrevoked tokens on owner, by id, sorted.
-func (f *fakeExpo) liveTokens(owner string) []string {
+// deleteActor deletes a robot and every token it holds, as a person does.
+func (f *fakeExpo) deleteActor(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []string
-	for _, t := range f.tokens {
-		if t.owner == owner && !t.revoked {
-			out = append(out, t.id)
+	delete(f.actors, id)
+	for v, t := range f.tokens {
+		if t.owner == id {
+			delete(f.tokens, v)
 		}
 	}
-	slices.Sort(out)
-	return out
 }
 
-// value is a token's value, for a test asserting what was sealed.
-func (f *fakeExpo) value(id string) string {
+// setRole changes an actor's role on the account, as Edit robot does.
+func (f *fakeExpo) setRole(id string, role expo.Role) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if t, ok := f.tokens[id]; ok {
-		return t.value
+	f.actors[id].roles[testAccountName] = role
+}
+
+// writes is every operation the fake answered that is not one of the two
+// reads a seat's token makes: anything a person would have to undo at Expo.
+func (f *fakeExpo) writes() []string {
+	var out []string
+	for _, op := range f.operations() {
+		if op != "CrewletViewer" && op != "CrewletRole" {
+			out = append(out, op)
+		}
 	}
-	return ""
+	return out
 }
 
 // operations is every operation the fake answered, in order.
@@ -181,19 +167,6 @@ func (f *fakeExpo) operations() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.ops)
-}
-
-// writes is every mutation the fake answered, in order.
-func (f *fakeExpo) writes() []string {
-	var out []string
-	for _, op := range f.operations() {
-		switch op {
-		case "CrewletViewer", "CrewletAccount", "CrewletViewerPermissions", "CrewletAppCount", "CrewletRobots":
-		default:
-			out = append(out, op)
-		}
-	}
-	return out
 }
 
 type gqlBody struct {
@@ -209,12 +182,6 @@ func (f *fakeExpo) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if r.Header.Get("Authorization") != "Bearer "+provisioner {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"errors":[{"message":"Invalid access token"}]}`))
-		return
-	}
 	var body gqlBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		f.gqlError(w, fakeRefusal{code: "GRAPHQL_PARSE_FAILED", message: "bad request"})
@@ -222,6 +189,13 @@ func (f *fakeExpo) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	op := body.OperationName
 	f.ops = append(f.ops, op)
+	tok := f.tokens[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+	if tok == nil || tok.revoked || f.actors[tok.owner] == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"errors":[{"message":"Invalid access token"}]}`))
+		return
+	}
 	if !strings.Contains(body.Query, op) {
 		f.gqlError(w, fakeRefusal{code: "GRAPHQL_VALIDATION_FAILED", message: "operation name mismatch"})
 		return
@@ -242,175 +216,40 @@ func (f *fakeExpo) serve(w http.ResponseWriter, r *http.Request) {
 		f.gqlError(w, ref)
 		return
 	}
+	actor := f.actors[tok.owner]
 	var vars map[string]any
 	_ = json.Unmarshal(body.Variables, &vars)
-	str := func(k string) string { s, _ := vars[k].(string); return s }
 	switch op {
 	case "CrewletViewer":
-		if f.noViewer {
-			f.data(w, map[string]any{"meActor": nil})
-			return
-		}
-		f.data(w, map[string]any{"meActor": map[string]any{
-			"__typename": f.viewerKind, "id": provisionerID, "displayName": "provisioner"}})
-	case "CrewletAccount", "CrewletViewerPermissions", "CrewletAppCount", "CrewletRobots":
-		if !strings.EqualFold(str("name"), testAccountName) {
-			f.gqlError(w, fakeRefusal{code: "ENTITY_NOT_FOUND", errorType: "USER",
-				message: "Account " + str("name") + " not found"})
-			return
-		}
-		f.accountQuery(w, op, vars)
-	case "CrewletCreateRobot":
-		if str("accountID") != testAccountID {
-			f.gqlError(w, fakeRefusal{code: "ENTITY_NOT_FOUND", message: "account not found"})
-			return
-		}
-		f.seq++
-		data, _ := vars["robotData"].(map[string]any)
-		name, _ := data["name"].(string)
-		robot := &fakeRobot{id: "robot-" + strconv.Itoa(f.seq), name: name,
-			perms: permsOf(vars["permissions"]), created: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)}
-		f.robots[robot.id] = robot
-		if f.lag > 0 {
-			f.lagged[robot.id] = f.lag
-		}
-		f.data(w, map[string]any{"robot": map[string]any{"createRobotForAccount": map[string]any{
-			"id": robot.id, "displayName": robot.name, "created": robot.created}}})
-	case "CrewletRenameRobot":
-		robot, ok := f.robots[str("id")]
-		if !ok {
-			f.gqlError(w, fakeRefusal{code: "ENTITY_NOT_FOUND", message: "robot not found"})
-			return
-		}
-		data, _ := vars["robotData"].(map[string]any)
-		robot.name, _ = data["name"].(string)
-		f.data(w, map[string]any{"robot": map[string]any{"updateRobot": map[string]any{"id": robot.id}}})
-	case "CrewletDeleteRobot":
-		robot, ok := f.robots[str("id")]
-		if !ok {
-			f.gqlError(w, fakeRefusal{code: "ENTITY_NOT_FOUND", message: "robot not found"})
-			return
-		}
-		robot.deleting = true
-		f.data(w, map[string]any{"robot": map[string]any{"scheduleRobotDeletion": map[string]any{
-			"state": "QUEUED", "willRetry": false, "errorMessage": nil}}})
-	case "CrewletCreateToken":
-		data, _ := vars["data"].(map[string]any)
-		actor, _ := data["actorID"].(string)
-		note, _ := data["note"].(string)
-		if _, ok := f.robots[actor]; !ok {
-			f.gqlError(w, fakeRefusal{code: "ENTITY_NOT_FOUND", message: "actor not found"})
-			return
-		}
-		tok := f.mintLocked(actor, note)
-		value := tok.value
-		if f.emptyValue {
-			value = ""
-		}
-		f.data(w, map[string]any{"accessToken": map[string]any{"createAccessToken": map[string]any{
-			"token": value, "accessToken": map[string]any{"id": tok.id, "note": tok.note, "createdAt": tok.created}}}})
-	case "CrewletRevokeToken":
-		tok, ok := f.tokens[str("id")]
-		if !ok {
-			f.gqlError(w, fakeRefusal{code: "ENTITY_NOT_FOUND", message: "access token not found"})
-			return
-		}
-		tok.revoked = true
-		f.data(w, map[string]any{"accessToken": map[string]any{"setAccessTokenRevoked": map[string]any{"id": tok.id}}})
-	case "CrewletDeleteToken":
-		if _, ok := f.tokens[str("id")]; !ok {
-			f.gqlError(w, fakeRefusal{code: "ENTITY_NOT_FOUND", message: "access token not found"})
-			return
-		}
-		delete(f.tokens, str("id"))
-		f.data(w, map[string]any{"accessToken": map[string]any{"deleteAccessToken": map[string]any{"id": str("id")}}})
-	case "CrewletGrant", "CrewletRevoke":
-		robot, ok := f.robots[str("actorID")]
-		if str("accountID") != testAccountID || !ok {
-			f.gqlError(w, fakeRefusal{code: "ENTITY_NOT_FOUND", message: "not found"})
-			return
-		}
-		change := permsOf(vars["permissions"])
-		if op == "CrewletGrant" {
-			for _, p := range change {
-				if !slices.Contains(robot.perms, p) {
-					robot.perms = append(robot.perms, p)
-				}
-			}
-		} else {
-			robot.perms = slices.DeleteFunc(robot.perms, func(p expo.Permission) bool {
-				return slices.Contains(change, p)
-			})
-		}
-		field := "grantActorPermissions"
-		if op == "CrewletRevoke" {
-			field = "revokeActorPermissions"
-		}
-		f.data(w, map[string]any{"account": map[string]any{field: map[string]any{"id": testAccountID}}})
-	default:
-		f.gqlError(w, fakeRefusal{code: "GRAPHQL_VALIDATION_FAILED", message: "unknown operation " + op})
-	}
-}
-
-// accountQuery answers the four reads under account.byName.
-func (f *fakeExpo) accountQuery(w http.ResponseWriter, op string, vars map[string]any) {
-	byName := map[string]any{}
-	switch op {
-	case "CrewletAccount":
-		byName = map[string]any{"id": testAccountID, "name": testAccountName}
-	case "CrewletViewerPermissions":
-		byName["viewerUserPermission2"] = map[string]any{
-			"permissions": f.viewerPerms, "effectivePermissions": f.viewerPerms}
-	case "CrewletAppCount":
-		byName["appCount"] = f.appCount
-	case "CrewletRobots":
-		ids := make([]string, 0, len(f.robots))
-		for id := range f.robots {
-			if f.lagged[id] > 0 {
-				f.lagged[id]--
-				continue
-			}
-			ids = append(ids, id)
-		}
-		slices.Sort(ids)
-		start := 0
-		if after, _ := vars["after"].(string); after != "" {
-			start, _ = strconv.Atoi(after)
-		}
-		first := f.pageSize
-		if n, ok := vars["first"].(float64); ok && int(n) < first {
-			first = int(n)
-		}
-		end := min(start+first, len(ids))
-		edges := []any{}
-		for _, id := range ids[start:end] {
-			r := f.robots[id]
-			var deleting any
-			if r.deleting {
-				deleting = "2026-11-02T00:00:00Z"
-			}
+		me := map[string]any{"__typename": actor.kind, "id": actor.id, "displayName": actor.name}
+		if actor.kind == "Robot" {
 			tokens := []any{}
 			for _, t := range f.tokens {
-				if t.owner != id {
+				if t.owner != actor.id {
 					continue
 				}
 				var revoked any
 				if t.revoked {
-					revoked = "2026-11-02T00:00:00Z"
+					revoked = "2026-11-03T00:00:00Z"
 				}
-				tokens = append(tokens, map[string]any{"id": t.id, "note": t.note,
-					"revokedAt": revoked, "createdAt": t.created})
+				tokens = append(tokens, map[string]any{"id": t.id, "visibleTokenPrefix": t.prefix,
+					"createdAt": t.created, "revokedAt": revoked})
 			}
-			edges = append(edges, map[string]any{"node": map[string]any{
-				"permissions": r.perms,
-				"actor": map[string]any{"__typename": "Robot", "id": r.id, "displayName": r.name,
-					"created": r.created, "lastDeletionAttemptTime": deleting, "accessTokens": tokens},
-			}})
+			me["accessTokens"] = tokens
 		}
-		byName["membersPaginated"] = map[string]any{"edges": edges, "pageInfo": map[string]any{
-			"hasNextPage": end < len(ids), "endCursor": strconv.Itoa(end)}}
+		f.data(w, map[string]any{"meActor": me})
+	case "CrewletRole":
+		name, _ := vars["name"].(string)
+		role, ok := actor.roles[name]
+		if !ok {
+			f.gqlError(w, fakeRefusal{code: "UNAUTHORIZED_ERROR", message: "not a member of " + name})
+			return
+		}
+		f.data(w, map[string]any{"account": map[string]any{"byName": map[string]any{
+			"viewerUserPermission": map[string]any{"role": role}}}})
+	default:
+		f.gqlError(w, fakeRefusal{code: "GRAPHQL_VALIDATION_FAILED", message: "unknown operation " + op})
 	}
-	f.data(w, map[string]any{"account": map[string]any{"byName": byName}})
 }
 
 func (f *fakeExpo) data(w http.ResponseWriter, data any) {
@@ -431,15 +270,4 @@ func (f *fakeExpo) gqlError(w http.ResponseWriter, ref fakeRefusal) {
 		"data":   nil,
 		"errors": []any{map[string]any{"message": ref.message, "extensions": ext}},
 	})
-}
-
-func permsOf(v any) []expo.Permission {
-	list, _ := v.([]any)
-	out := make([]expo.Permission, 0, len(list))
-	for _, p := range list {
-		if s, ok := p.(string); ok {
-			out = append(out, expo.Permission(s))
-		}
-	}
-	return out
 }

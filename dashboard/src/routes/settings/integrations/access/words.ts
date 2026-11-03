@@ -37,7 +37,43 @@ export interface LaneWords {
   tool: string;
   /** Where a person approves a seat's install at the vendor through a fresh link, its button label. */
   install?: string;
+  /**
+   * Where only a person can make the agent's account at the vendor, and pastes
+   * its token here (Expo's robots): the vendor's nouns the Set up sheet uses.
+   */
+  handoff?: HandoffWords;
+  /**
+   * What the vendor calls a credential the account still holds besides the
+   * sealed one, one of them and several: "An old token", "old tokens".
+   */
+  retired?: { one: string; many: string };
+  /**
+   * On a lane that lets a person keep a turned-off agent's account at the
+   * vendor (`releasable`), the control that does it: "Keep the robot at Expo".
+   */
+  release?: string;
 }
+
+/** The vendor's own words for the account a person makes for an agent, and the controls they press. */
+export interface HandoffWords {
+  /** What the agent's account is called at the vendor, in a sentence: "robot". */
+  account: string;
+  /** The same, as a label: "Robot". */
+  accountLabel: string;
+  /** The control that makes one: "Add robot". */
+  add: string;
+  /** The control on its row that makes its token: "Create token". */
+  mint: string;
+  /** Where its role is changed, in its row's menu: "Edit robot". */
+  edit: string;
+  /** Why the agent needs one of its own, under the sheet's title. */
+  why: string;
+  /** The role never to pick, said under the role to pick. */
+  never: string;
+}
+
+/** What an old credential is called on a lane whose words name none. */
+export const RETIRED_GENERIC = { one: "An old credential", many: "old credentials" };
 
 const GENERIC: LaneWords = {
   name: "the vendor",
@@ -157,13 +193,23 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     name: "Expo",
     access: "Role at Expo",
     turnOn:
-      "Turning it on creates an Expo robot user for the agent with the chosen role, and its own access token.",
-    off: "Crewlet deletes the robot's access token, so it stops working at once, and has Expo delete the robot. Turning it back on creates a new robot.",
-    remove:
-      "Expo deletes the agent's robot when it is turned off, so removing only stops Crewlet tracking it.",
+      "Turning it on asks you to add a robot for the agent at Expo with the chosen role and paste its token here. Crewlet checks the token and keeps it.",
+    off: "Crewlet deletes the agent's sealed token at once, so it loses Expo here. Then you delete its robot at Expo, and Crewlet confirms it once the old token stops working.",
+    remove: "You delete the agent's robot at Expo, so removing only stops Crewlet tracking it.",
     rotate:
-      "Crewlet creates a new access token for the robot, seals it, then deletes the old one. Anything still using the old token stops working.",
+      "You create a new token for the same robot at Expo and paste it here. Crewlet checks it is the same robot and seals it, then asks you to delete the old token.",
     tool: "EAS CLI in its box",
+    handoff: {
+      account: "robot",
+      accountLabel: "Robot",
+      add: "Add robot",
+      mint: "Create token",
+      edit: "Edit robot",
+      why: "Each agent acts at Expo as its own robot, so its builds and updates are attributable to it.",
+      never: "Never choose Admin: agents never hold it.",
+    },
+    retired: { one: "An old token", many: "old tokens" },
+    release: "Keep the robot at Expo",
   },
 };
 

@@ -1772,7 +1772,17 @@ const (
 	// with it, main's +1529 bytes came to 1,508 bytes on the merged tree,
 	// taking it from 5479.7 KiB (5,611,188 bytes) to 5481.1 KiB (5,612,696
 	// bytes). It moved by main's own 2 KiB, from 5480 KiB: 5482 KiB.
-	treeBudget = 5<<20 + 362<<10
+	// The Expo handoff (the Set up sheet a person walks to make each agent's
+	// robot at Expo and paste its token, a rotate through it, the reminder of
+	// an old credential still at the vendor, keeping a turned-off robot, and
+	// the Cloud and Infrastructure group) took main's from 5449.2 KiB to
+	// 5456.5 KiB (+7.3 KiB, 7475 bytes): the integrations model chunk +7310
+	// bytes and its stylesheet +152 bytes, and 13 bytes across the chunks that
+	// import them. The initial load did not grow. Merged again with it, main's
+	// +7475 bytes came to 7,477 bytes on the merged tree, taking it from
+	// 5481.1 KiB (5,612,696 bytes) to 5488.4 KiB (5,620,173 bytes). It moved by
+	// main's own 7 KiB, from 5482 KiB: 5489 KiB.
+	treeBudget = 5<<20 + 369<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -1,9 +1,12 @@
 package setupapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -19,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
@@ -33,8 +37,10 @@ type fakeAccess struct {
 	observed map[string]map[seataccess.Lane]seataccess.Observed
 	// stepUp is what every plan answers.
 	stepUp bool
-	// outcomes are the last sync's outcome per seat, on every lane.
-	outcomes map[string]seataccess.Outcome
+	// outcomes are the last sync's outcome per seat, on every lane, and
+	// waitingOn the step a seat's lanes wait on a person for.
+	outcomes  map[string]seataccess.Outcome
+	waitingOn map[string]seataccess.StepVerb
 	// syncErr is what Sync answers.
 	syncErr error
 	// ghost is a seat the answer lists that the document does not hold, as
@@ -45,6 +51,10 @@ type fakeAccess struct {
 	unreadAfterSync bool
 	syncs           []setupapi.AccessSync
 	plans           []seataccess.Draft
+	// handInErr is what HandIn answers; handIns are the seats it was asked
+	// about, with what was pasted.
+	handInErr error
+	handIns   []string
 }
 
 func (f *fakeAccess) Answer(_ context.Context, q setupapi.AccessQuery) (seataccess.Answer, error) {
@@ -69,6 +79,10 @@ func (f *fakeAccess) Answer(_ context.Context, q setupapi.AccessQuery) (seatacce
 				Observed: f.observed[seat.Handle][lane], Plan: []seataccess.Step{}}
 			if outcome, ok := f.outcomes[seat.Handle]; ok {
 				la.Sync = &seataccess.SyncResult{Outcome: outcome}
+			}
+			if verb, ok := f.waitingOn[seat.Handle]; ok {
+				la.Sync = &seataccess.SyncResult{Outcome: seataccess.OutcomeWaiting,
+					Error: &seataccess.Failure{Step: verb, Said: "Delete it at the vendor.", Actor: seataccess.ByYou}}
 			}
 			seat.Lanes[lane] = la
 		}
@@ -122,6 +136,18 @@ func (f *fakeAccess) InstallLink(_ context.Context, _ setupapi.AccessQuery,
 		return "", setupapi.ErrNotAwaitingInstall
 	}
 	return "https://slack.com/oauth/v2/authorize?state=fake-" + handle, nil
+}
+
+func (f *fakeAccess) HandIn(_ context.Context, _ setupapi.AccessQuery, handle string,
+	lane seataccess.Lane, value string, _ iam.Actor) (seataccess.HandedIn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.handIns = append(f.handIns, handle+"/"+string(lane)+"="+value)
+	if f.handInErr != nil {
+		return seataccess.HandedIn{}, f.handInErr
+	}
+	return seataccess.HandedIn{Detail: "Works. Robot crewlet-acme-" + handle + ".",
+		Account: "crewlet-acme-" + handle, AccountID: "robot-1", Label: value[:min(8, len(value))] + "…"}, nil
 }
 
 func (f *fakeAccess) lastSync(t *testing.T) setupapi.AccessSync {
@@ -643,5 +669,155 @@ func TestASlackInstallLinkIsMintedOnlyWhileWaiting(t *testing.T) {
 	tab := s.do(t, http.MethodGet, "/setup/integrations/slack/access", "", nil)
 	if strings.Contains(tab.Body.String(), "oauth") {
 		t.Errorf("the tab carries an install link: %s", tab.Body)
+	}
+}
+
+// expoCompany is a company with Expo connected and its QA agent on.
+const expoCompany = `{
+  "name": "Acme",
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "integrations": {"expo": {"enabled": true, "provisioning": {"account_name": "example-org"}}},
+  "roles": [
+    {"name": "QA", "handle": "qa", "llm": "zulu",
+     "integrations": {"expo": {"enabled": true, "level": "runner"}}}
+  ]
+}`
+
+// A PASTED CREDENTIAL IS CHECKED BEFORE IT REACHES THE ENGINE, and every
+// refusal stands beside the field without echoing the value.
+func TestAPastedCredentialIsCheckedBesideItsField(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedDocument(t, expoCompany)
+	const path = "/setup/integrations/expo/access/seats/qa/expo/credential"
+	res := s.do(t, http.MethodPost, path, `{"value": "fake-good-token"}`, nil)
+	body := decode(t, res)
+	if res.Code != http.StatusOK || body["detail"] != "Works. Robot crewlet-acme-qa." || body["access"] == nil {
+		t.Fatalf("a good paste = %d %s", res.Code, res.Body)
+	}
+	if len(s.access.handIns) != 1 || s.access.handIns[0] != "qa/expo=fake-good-token" {
+		t.Fatalf("hand-ins = %v", s.access.handIns)
+	}
+	for _, tc := range []struct{ name, body, says string }{
+		{"empty", `{"value": "  "}`, "Paste the token"},
+		{"a reference", `{"value": "${EXPO_TOKEN_QA}"}`, "not a ${VAR} reference"},
+		{"a wrapped paste", `{"value": "fake-good\ntoken"}`, "line break"},
+		{"an invisible character", `{"value": "fake-good\u200btoken"}`, "invisible character"},
+	} {
+		res := s.do(t, http.MethodPost, path, tc.body, nil)
+		body := decode(t, res)
+		if res.Code != http.StatusBadRequest || body["field"] != "value" ||
+			!strings.Contains(body["detail"].(string), tc.says) {
+			t.Errorf("%s = %d %v", tc.name, res.Code, body)
+		}
+		if strings.Contains(res.Body.String(), "fake-good") {
+			t.Errorf("%s: the answer echoes the value: %s", tc.name, res.Body)
+		}
+	}
+	if len(s.access.handIns) != 1 {
+		t.Errorf("a refused paste reached the engine: %v", s.access.handIns)
+	}
+	if res := s.do(t, http.MethodPost, "/setup/integrations/expo/access/seats/qa/datadog/credential",
+		`{"value": "fake-good-token"}`, nil); res.Code != http.StatusNotFound {
+		t.Errorf("another lane = %d %s, want 404", res.Code, res.Body)
+	}
+}
+
+// THE ENGINE'S ANSWERS MAP TO THE ROUTE'S: a refusal beside the field, a seat
+// not waiting, a kind that takes no paste and a sync in flight.
+func TestAPastedCredentialAnswersTheEnginesRefusals(t *testing.T) {
+	t.Parallel()
+	const path = "/setup/integrations/expo/access/seats/qa/expo/credential"
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   httpjson.Code
+	}{
+		{"a refusal", &setupapi.AccessRefusal{Status: http.StatusBadRequest,
+			Reason: "This robot is a Developer on example-org, and you chose Runner.", Remedy: "Change its role"},
+			http.StatusBadRequest, httpjson.CodeInvalidInput},
+		{"not waiting", setupapi.ErrNotAwaitingHandIn, http.StatusConflict, httpjson.CodeInvalidInput},
+		{"no paste", setupapi.ErrNoHandIn, http.StatusNotFound, httpjson.CodeNoSeatAccess},
+		{"no seat", setupapi.ErrNoSuchAccessSeat, http.StatusNotFound, httpjson.CodeNoSuchSeat},
+		{"in flight", setupapi.ErrAccessSyncInFlight, http.StatusConflict, httpjson.CodePassInFlight},
+	} {
+		s := newSurface(t)
+		s.seedDocument(t, expoCompany)
+		s.access.handInErr = tc.err
+		res := s.do(t, http.MethodPost, path, `{"value": "fake-good-token"}`, nil)
+		body := decode(t, res)
+		if res.Code != tc.status || body["error"] != string(tc.code) {
+			t.Errorf("%s = %d %v, want %d %s", tc.name, res.Code, body, tc.status, tc.code)
+		}
+		if tc.name == "a refusal" && (body["field"] != "value" || body["hint"] != "Change its role.") {
+			t.Errorf("the refusal = %v, want it beside the field with its remedy", body)
+		}
+	}
+}
+
+// KEEPING AN ACCOUNT AT THE VENDOR closes only a step waiting for its deletion,
+// carried by the seat's sync as the person's ask.
+func TestKeepingAnAccountAtTheVendorClosesOnlyADeleteWait(t *testing.T) {
+	t.Parallel()
+	const path = "/setup/integrations/expo/access/seats/qa/expo/release"
+	s := newSurface(t)
+	s.seedDocument(t, expoCompany)
+	s.access.options = []seataccess.Options{{Lane: seataccess.LaneExpo, Releasable: true}}
+	if res := s.do(t, http.MethodPost, path, `{}`, nil); res.Code != http.StatusConflict {
+		t.Fatalf("a release with nothing waiting = %d %s, want 409", res.Code, res.Body)
+	}
+	s.access.waitingOn = map[string]seataccess.StepVerb{"qa": seataccess.VerbMint}
+	if res := s.do(t, http.MethodPost, path, `{}`, nil); res.Code != http.StatusConflict {
+		t.Fatalf("a release while waiting for a token = %d %s, want 409", res.Code, res.Body)
+	}
+	if len(s.access.syncs) != 0 {
+		t.Fatalf("a refused release ran a sync: %+v", s.access.syncs)
+	}
+	s.access.waitingOn = map[string]seataccess.StepVerb{"qa": seataccess.VerbRemove}
+	if res := s.do(t, http.MethodPost, path, `{}`, nil); res.Code != http.StatusOK {
+		t.Fatalf("a release while waiting for the deletion = %d %s, want 200", res.Code, res.Body)
+	}
+	sync := s.access.lastSync(t)
+	if len(sync.Asks) != 1 || !sync.Asks[0].Ask.Release || sync.Asks[0].Ask.Lane != seataccess.LaneExpo {
+		t.Errorf("the release's sync = %+v, want the person's release on the lane", sync)
+	}
+
+	// A LANE THAT KEEPS ONLY A CREDENTIAL offers no keeping, waiting or not.
+	syncs := len(s.access.syncs)
+	s.access.options = []seataccess.Options{{Lane: seataccess.LaneExpo}}
+	if res := s.do(t, http.MethodPost, path, `{}`, nil); res.Code != http.StatusConflict {
+		t.Fatalf("a release on a lane that is not releasable = %d %s, want 409", res.Code, res.Body)
+	}
+	if len(s.access.syncs) != syncs {
+		t.Error("a refused release ran a sync")
+	}
+}
+
+// A PASTED VALUE IS LOGGED NOWHERE: the route's audit line names the seat, the
+// account and what the vendor shows of the credential, accepted or refused.
+// Not parallel: it captures the process's logs.
+func TestAPastedCredentialIsNeverLogged(t *testing.T) {
+	var logs bytes.Buffer
+	logging.Configure(slog.LevelDebug, logging.FormatText, &logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+	const path = "/setup/integrations/expo/access/seats/qa/expo/credential"
+	s := newSurface(t)
+	s.seedDocument(t, expoCompany)
+	var bodies []string
+	for _, value := range []string{"fake-good-token", "fake-good\ttoken"} {
+		bodies = append(bodies, s.do(t, http.MethodPost, path, `{"value": "`+value+`"}`, nil).Body.String())
+	}
+	s.access.handInErr = &setupapi.AccessRefusal{Status: http.StatusBadRequest, Reason: "Expo did not accept this token."}
+	bodies = append(bodies, s.do(t, http.MethodPost, path, `{"value": "fake-good-token"}`, nil).Body.String())
+	if !strings.Contains(logs.String(), "setup_access_credential_sealed") ||
+		!strings.Contains(logs.String(), "credential=fake-goo…") {
+		t.Fatalf("the accepted paste left no audit line naming what the vendor shows: %s", logs.String())
+	}
+	for _, text := range append(bodies, logs.String()) {
+		if strings.Contains(text, "fake-good-token") || strings.Contains(text, "fake-good\ttoken") ||
+			strings.Contains(text, `fake-good\ttoken`) {
+			t.Errorf("a pasted value appears outside the engine: %s", text)
+		}
 	}
 }
