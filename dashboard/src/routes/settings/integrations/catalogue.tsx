@@ -147,6 +147,7 @@ const SURFACE_NAMES: Record<string, string> = {
   datadog: "Datadog",
   cloudflare: "Cloudflare",
   expo: "Expo",
+  google_cloud: "Google Cloud",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -223,6 +224,14 @@ export const CATALOG: Entry[] = [
     vendor: "expo",
     surfaces: surfacesOf("expo"),
     doc: "expo",
+  },
+  {
+    key: "google_cloud",
+    name: "Google Cloud",
+    description: "Projects, VMs, GKE, Cloud Run and Cloud SQL, a service account per agent.",
+    vendor: "google-cloud",
+    surfaces: surfacesOf("google_cloud"),
+    doc: "google-cloud",
   },
 ];
 

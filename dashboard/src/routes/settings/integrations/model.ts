@@ -137,6 +137,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Create an access token for Crewlet with the Admin role on your Expo account, so it can manage the agents' robot users.",
   },
+  google_cloud: {
+    does: [
+      "Read VMs, GKE, Cloud Run, Cloud SQL, metrics and logs in the projects you choose",
+      "Restart and scale VMs and workloads, and run Cloud Run jobs, where you allow it",
+      "Use Google's MCP servers and gcloud as themselves, with no key to keep",
+    ],
+    identity:
+      "Crewlet makes a Google Cloud service account for each agent, in a project that holds only Crewlet's accounts.",
+    byHand:
+      "Create an empty project for Crewlet's accounts and run the setup block the form gives you. Then, on each project agents may use, run the project block from the docs, which creates Crewlet's Operator role and its limited grants.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */

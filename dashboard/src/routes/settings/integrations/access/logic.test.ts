@@ -9,6 +9,7 @@ import {
   CONFLUENCE_LANE,
   DATADOG_LANE,
   EXPO_LANE,
+  GOOGLE_CLOUD_LANE,
   JIRA_LANE,
   GITHUB_LANE,
   MATTERMOST_LANE,
@@ -414,10 +415,10 @@ describe("a scope entry's name", () => {
 // connection takes typed entries, so it always has something to offer.
 test("a scope picker with nothing to offer says whether the list was read", () => {
   const empty: Lane = { ...GITHUB_LANE, scope: undefined };
-  expect(scopeUnavailable({ ...empty, scope_live: false }, [])).toBe(
-    "Crewlet could not read your repositories",
-  );
-  expect(scopeUnavailable(empty, [])).toBe("No repositories to choose from");
+  expect(scopeUnavailable({ ...empty, scope_live: false }, [])).toEqual({
+    words: "Crewlet could not read your repositories",
+  });
+  expect(scopeUnavailable(empty, [])).toEqual({ words: "No repositories to choose from" });
   expect(scopeUnavailable({ ...empty, scope_open: true }, [])).toBeNull();
   expect(scopeUnavailable({ ...empty, scope_live: false }, ["gophrase/backend"])).toBeNull();
   expect(scopeUnavailable(GITHUB_LANE, [])).toBeNull();
@@ -573,4 +574,22 @@ test("a tool waiting with the engine's reason says the reason", () => {
     "Waiting for the credential, Datadog MCP server, one per agent",
   );
   expect(statusOf(DATADOG_LANE, { ...sre, tool: "waiting" }, false, false).label).toBe("In sync");
+});
+
+// A LANE WHOSE ENTRIES A PERSON PREPARES AT THE VENDOR points an empty list at
+// the docs section that says how, and only where the list was read: a list
+// that could not be read says nothing about what exists.
+test("an empty project list links to preparing one, only once the list was read", () => {
+  const none: Lane = { ...GOOGLE_CLOUD_LANE, scope: [], scope_names: {} };
+  expect(scopeUnavailable(none, [])).toEqual({
+    words: "No projects are set up for Crewlet yet",
+    link: {
+      label: "Prepare a project",
+      href: "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#prepare-a-project-for-crewlet",
+    },
+  });
+  expect(scopeUnavailable({ ...none, scope_live: false }, [])).toEqual({
+    words: "Crewlet could not read your projects",
+  });
+  expect(scopeUnavailable(GOOGLE_CLOUD_LANE, [])).toBeNull();
 });

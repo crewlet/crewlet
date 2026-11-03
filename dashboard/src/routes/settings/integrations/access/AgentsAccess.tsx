@@ -29,6 +29,7 @@ import {
   DataTable,
   DescriptionList,
   InlineCode,
+  Link,
   Select,
   SelectionBar,
   Spinner,
@@ -465,7 +466,20 @@ export function AgentsAccess({
         if (readOnly)
           return <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>;
         const unavailable = scopeUnavailable(lane, want.scope);
-        if (unavailable) return <span className="agent-access-quiet">{unavailable}</span>;
+        if (unavailable)
+          return (
+            <span className="agent-access-quiet">
+              {unavailable.words}
+              {unavailable.link && (
+                <>
+                  {". "}
+                  <Link href={unavailable.link.href} external size="inherit">
+                    {unavailable.link.label}
+                  </Link>
+                </>
+              )}
+            </span>
+          );
         const label = `${seat.name}'s ${lane.name} ${words.noun.toLowerCase()}`;
         const disabled = !want.enabled || locked || seat.departed;
         const choices = scopeChoices(lane, want.scope);
@@ -1146,7 +1160,15 @@ function Details({
             ],
             ["Tool", toolWords(lane, saved)],
             ...(settings
-              ? [["Set by Crewlet", <span className="mono">{settings}</span>] as const]
+              ? [
+                  [
+                    "Set by Crewlet",
+                    <span key="box">
+                      <span className="mono">{settings}</span>
+                      {laneWords(lane.key).boxNote && <>. {laneWords(lane.key).boxNote}</>}
+                    </span>,
+                  ] as const,
+                ]
               : []),
             ["Last sync", syncValue(saved, now)],
           ]}
