@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -517,16 +518,57 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"done","s
 `
 }
 
+// openCodeTaken is the context the take of an OpenCode session whose export
+// holds messages (a JSON list) reads off the archive it streams out of its box:
+// the run's own take, through the stand-in opencode's export.
+func openCodeTaken(t *testing.T, messages string) int64 {
+	t.Helper()
+	runner, b := openCodeBox(t, t.TempDir())
+	dir := t.TempDir()
+	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
+		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+	const session = "ses_0123456789abcdef0123456789"
+	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
+		[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sessions", session), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+	if err != nil || taken.Body == nil || taken.Context == nil {
+		t.Fatalf("TakeSession = %+v, %v", taken, err)
+	}
+	if _, err := io.ReadAll(taken.Body); err != nil {
+		t.Fatal(err)
+	}
+	_ = taken.Body.Close()
+	return taken.Context()
+}
+
 // WHAT A SESSION'S LAST REQUEST CARRIED IS READ OFF ITS ARCHIVE AS IT IS KEPT —
 // the context a launch that continues it sends again, which that launch's
 // floor is made of. Claude Code's: the whole input of the last assistant
 // message on the main thread that recorded its usage, cache reads and writes
 // included — never a subagent's, never a later message that recorded none.
 // OpenCode's: the last settled assistant message that measured a prompt,
-// never one that failed.
+// never one that failed and never a compaction's own request — in the export
+// each release this build drives printed for a real session
+// (testdata/opencode) as much as in one written here: there the last step that
+// measured one is the answer to "Carry on.", 1015 tokens its cache did not
+// serve and 200 it read, and every step after it failed — one its provider
+// refused, which measured nothing, and two the session was interrupted in, the
+// first of which measured 1217.
 //
-// Mutation: read the first usage rather than the last, count a sidechain or a
-// failed message, or leave the cache out, and a figure goes red.
+// Mutation: read the first usage rather than the last, count a sidechain, a
+// failed message or a compaction, or leave the cache out, and a figure goes
+// red.
 func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 	t.Parallel()
 	t.Run("claude-code", func(t *testing.T) {
@@ -550,41 +592,34 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 	})
 	t.Run("opencode", func(t *testing.T) {
 		t.Parallel()
-		runner, b := openCodeBox(t, t.TempDir())
-		dir := t.TempDir()
-		writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-			strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
-		const session = "ses_0123456789abcdef0123456789"
-		if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
-			[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "sessions", session), nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
+		// A COMPACTION CARRIES TOKENS TOO, as each of the real exports' does:
+		// its own request's, which measured the conversation it summarised
+		// and not the context the session carries on with.
 		messages := `[{"id":"msg_1","type":"user","text":"x"},` +
 			`{"id":"msg_2","type":"assistant","tokens":{"input":10,"output":5,"reasoning":0,"cache":{"read":1000,"write":50}}},` +
 			`{"id":"msg_3","type":"assistant","error":null,"tokens":{"input":20,"output":9,"cache":{"read":2000,"write":80}}},` +
 			`{"id":"msg_4","type":"assistant","error":{"name":"APIError"},"tokens":{"input":999999,"cache":{"read":0,"write":0}}},` +
-			`{"id":"msg_5","type":"user","text":"a later message"}]`
-		if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
-		if err != nil || taken.Body == nil || taken.Context == nil {
-			t.Fatalf("TakeSession = %+v, %v", taken, err)
-		}
-		if _, err := io.ReadAll(taken.Body); err != nil {
-			t.Fatal(err)
-		}
-		_ = taken.Body.Close()
-		if got := taken.Context(); got != 20+2000+80 {
+			`{"id":"msg_5","type":"user","text":"a later message"},` +
+			`{"id":"msg_6","type":"compaction","status":"completed","reason":"manual","summary":"## Objective",` +
+			`"tokens":{"input":777777,"output":30,"reasoning":0,"cache":{"read":200,"write":0}}}]`
+		if got := openCodeTaken(t, messages); got != 20+2000+80 {
 			t.Errorf("the session's last request carried %d tokens, want 2100", got)
 		}
 	})
+	for _, version := range openCodeFixtureVersions {
+		t.Run("opencode "+version+"'s real export", func(t *testing.T) {
+			t.Parallel()
+			var export struct {
+				Messages json.RawMessage `json:"messages"`
+			}
+			if err := json.Unmarshal([]byte(openCodeExportFixture(t, version)), &export); err != nil {
+				t.Fatalf("the fixture does not decode: %v", err)
+			}
+			if got := openCodeTaken(t, string(export.Messages)); got != 1015+200+0 {
+				t.Errorf("the session's last request carried %d tokens, want 1215", got)
+			}
+		})
+	}
 }
 
 // A RUNNER RESTORES ONLY WHAT IT COULD CONTINUE, decided without a box: a

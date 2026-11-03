@@ -1211,10 +1211,12 @@ const (
 // ([transcriptBuilder.openCodeNext]), so a field a release retyped reads as
 // its zero and the rest of the message as written.
 //
-// ONE TYPE FOR EVERY READER OF AN EXPORT: who wrote a message and when, what
-// it says, and what a step's request measured and whether it failed are all
-// read off this one, so no two readers of the one document disagree about what
-// a message is. OpenCode 1.x's `{"info": {"role": …}, "parts": […]}` is no
+// ONE TYPE FOR EVERY READER OF AN EXPORT: a session's transcript reads who
+// wrote a message, when and what it says ([transcriptBuilder.openCodeMessage]),
+// and the context a session carries what its steps' requests measured and
+// whether each failed ([exportMessageInput]), both off this one, so no two
+// readers of the one document disagree about what a message is, its kind or
+// its failure. OpenCode 1.x's `{"info": {"role": …}, "parts": […]}` is no
 // message of this document: every message of a 2.x export read in that shape
 // had no role and no parts, and a transcript showed nothing.
 type openCodeMessage struct {
@@ -1245,7 +1247,8 @@ type openCodeMessage struct {
 
 	// Tokens is what an assistant step's request measured, and Error, raw,
 	// the failure the step ended on: absent, or null, where it ended without
-	// one.
+	// one. The context a session carries is read off both
+	// ([exportMessageInput]).
 	Tokens *openCodeTokens `json:"tokens"`
 	Error  json.RawMessage `json:"error"`
 }
