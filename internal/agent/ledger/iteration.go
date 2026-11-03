@@ -268,7 +268,13 @@ func RenderIterations(records []Iteration, skip []string, fitted Fitted) string 
 		}
 		opts := Format(skip, rec.Reads)
 		opts.Fitted = fitted
-		lines = append(lines, "Called:", FormatCalls(rec.Calls, opts))
+		lines = append(lines, "Called:")
+		// "(none)" ONLY FOR A ROUND THAT CALLED NOTHING: one whose record
+		// keeps its calls as a tally alone — a parked turn's closed round
+		// condensed that far — called what its tally line says.
+		if len(rec.Calls) > 0 || Count(rec.Elided) == 0 {
+			lines = append(lines, FormatCalls(rec.Calls, opts))
+		}
 		if elided := FormatElided(rec.Elided, skip); elided != "" {
 			lines = append(lines, elided)
 		}

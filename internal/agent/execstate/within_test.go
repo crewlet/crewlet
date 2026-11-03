@@ -122,8 +122,148 @@ func TestAStateWhoseOwnContextIsPastItsShareIsRefused(t *testing.T) {
 	t.Parallel()
 	state := parked()
 	state.Task = strings.Repeat("a", 3<<20)
-	if _, _, err := execstate.EncodeWithin(state, budget); !errors.Is(err, execstate.ErrTooLarge) {
-		t.Errorf("EncodeWithin = %v, want ErrTooLarge", err)
+	_, _, err := execstate.EncodeWithin(state, budget)
+	tooLarge, ok := errors.AsType[*execstate.TooLargeError](err)
+	if !errors.Is(err, execstate.ErrTooLarge) || !ok || !tooLarge.OwnContext() {
+		t.Errorf("EncodeWithin = %v, want ErrTooLarge naming the turn's own context", err)
+	}
+}
+
+// postRounds is n closed rounds of two hundred calls each already as small as
+// a call gets — a channel, an identity, a failure's one-word error — so nothing
+// but folding the calls themselves makes the rounds any smaller.
+func postRounds(n int) []ledger.Iteration {
+	out := make([]ledger.Iteration, n)
+	for i := range out {
+		calls := make([]ledger.Call, 200)
+		for j := range calls {
+			calls[j] = ledger.Call{Name: "post_message", Args: map[string]any{"channel": fmt.Sprintf("C%03d", j)},
+				Digest: fmt.Sprintf("%064x", i*1000+j)}
+			if j%2 == 1 {
+				calls[j].Failed, calls[j].Result = true, "no"
+			}
+		}
+		out[i] = ledger.Iteration{Iteration: i + 1, Intent: fmt.Sprintf("round %d", i+1), Calls: calls}
+	}
+	return out
+}
+
+// A STATE WHOSE CLOSED ROUNDS' CALLS OUTGROW ITS SHARE FOLDS THEM INTO THEIR
+// TALLIES. A turn's rounds have no ceiling, and many rounds of two hundred calls
+// are past a parked state's share once every payload is gone, though the turn's
+// own context is small: so each closed round's calls are folded into its tally
+// of the calls its record does not list — by identity while that fits, so a
+// resumed call log still seeds each exactly, and by tool past that — every
+// call and every failure counted, rather than the park refused as a turn whose
+// own context is too large, which it is not.
+//
+// Mutation: refuse the state once its tallies are folded, and a turn of many
+// rounds can no longer park; drop a call rather than tally it, or its failure,
+// and a resumed call log or a delivery check counts fewer than the round made.
+func TestAStateWhoseClosedRoundsCallsOutgrowItsShareFoldsThemIntoTheirTallies(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		rounds int
+		exact  bool
+	}{
+		"by identity, where that fits": {rounds: 80, exact: true},
+		"by tool, past that":           {rounds: 100},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			state := parked()
+			state.Iterations = postRounds(tc.rounds)
+			if raw, _ := execstate.Encode(state); len(raw) <= budget {
+				t.Fatalf("the case's state weighs %d, within its share: it needs one past it", len(raw))
+			}
+			blob, condensed, err := execstate.EncodeWithin(state, budget)
+			if err != nil || len(blob) > budget || condensed.Calls != tc.rounds {
+				t.Fatalf("EncodeWithin = %d bytes, %+v, %v; want it within %d, every round's calls folded",
+					len(blob), condensed, err, budget)
+			}
+			got, _, err := execstate.Decode(blob)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, round := range got.Iterations {
+				calls, failed, entries := 0, 0, 0
+				for _, e := range round.Elided {
+					if e.Name != "post_message" || (e.Digest != "") != tc.exact {
+						t.Fatalf("round %d keeps %+v, want every call under its tool, its digest kept %v",
+							round.Iteration, e, tc.exact)
+					}
+					calls, failed, entries = calls+e.Calls, failed+e.Failed, entries+1
+				}
+				if len(round.Calls) != 0 || calls != 200 || failed != 100 {
+					t.Errorf("round %d lists %d calls and tallies %d (%d failed), want all 200 (100) tallied",
+						round.Iteration, len(round.Calls), calls, failed)
+				}
+				if want := map[bool]int{true: 200, false: 1}[tc.exact]; entries != want {
+					t.Errorf("round %d tallies its calls in %d entries, want %d", round.Iteration, entries, want)
+				}
+			}
+			// THE CALLER'S STATE IS UNTOUCHED: the park condenses a copy.
+			if len(state.Iterations[0].Calls) != 200 || len(state.Iterations[0].Elided) != 0 {
+				t.Error("condensing changed the state it was handed")
+			}
+		})
+	}
+}
+
+// A STATE WHOSE CLOSED ROUNDS' REVIEWS OUTGROW ITS SHARE CUTS THEM TO THEIR
+// OPENING. A reviewer's prose is a round's last word, and a turn of many rounds
+// sent back with long corrections carries more of it than the state has room
+// for once every call is tallied: each piece keeps its opening, said to be cut,
+// rather than the park being refused.
+//
+// Mutation: refuse the state once its calls are folded, and a turn sent back
+// often with long corrections can no longer park.
+func TestAStateWhoseClosedRoundsReviewsOutgrowItsShareCutsThemToTheirOpening(t *testing.T) {
+	t.Parallel()
+	state := parked()
+	state.Iterations = nil
+	for i := range 100 {
+		state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1,
+			CompletedWork: strings.Repeat("landed. ", 4000), ReviewNotes: strings.Repeat("fix it. ", 4000)})
+	}
+	blob, condensed, err := execstate.EncodeWithin(state, budget)
+	if err != nil || len(blob) > budget || condensed.Reviews != 100 {
+		t.Fatalf("EncodeWithin = %d bytes, %+v, %v; want it within %d, every round's review cut",
+			len(blob), condensed, err, budget)
+	}
+	got, _, err := execstate.Decode(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, round := range got.Iterations {
+		if !strings.HasPrefix(round.ReviewNotes, "fix it. ") || !strings.Contains(round.ReviewNotes, "not kept") ||
+			!strings.HasPrefix(round.CompletedWork, "landed. ") || len(round.ReviewNotes) > 5<<10 {
+			t.Fatalf("round %d keeps a review of %d bytes, want its opening with the cut said",
+				round.Iteration, len(round.ReviewNotes))
+		}
+	}
+}
+
+// A STATE WHOSE CLOSED ROUNDS ARE PAST ITS SHARE, CONDENSED, SAYS SO. A turn of
+// enough rounds is past the share however far its rounds are condensed, though
+// its own context is small: the refusal names the closed rounds as what does
+// not fit, never the turn's own context, which a reader would go looking for in
+// the trigger's words.
+//
+// Mutation: blame the turn's own context whatever is past the share, and a park
+// refused for its rounds sends its reader to a trigger that is a line long.
+func TestAStateWhoseClosedRoundsArePastItsShareCondensedSaysSo(t *testing.T) {
+	t.Parallel()
+	state := parked()
+	state.Iterations = nil
+	for i := range 300 {
+		state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1,
+			Intent: strings.Repeat("set out to do it all. ", 400)})
+	}
+	_, _, err := execstate.EncodeWithin(state, budget)
+	tooLarge, ok := errors.AsType[*execstate.TooLargeError](err)
+	if !ok || tooLarge.OwnContext() || !strings.Contains(err.Error(), "closed rounds") {
+		t.Errorf("EncodeWithin = %v, want ErrTooLarge naming the closed rounds", err)
 	}
 }
 

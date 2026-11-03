@@ -71,6 +71,26 @@ func TestWhatARecordDidNotKeepIsSaid(t *testing.T) {
 	}
 }
 
+// A ROUND WHOSE CALLS ARE ALL TALLIED IS NOT SAID TO HAVE CALLED NOTHING. A
+// parked turn's closed round condensed past its calls keeps them as a tally
+// alone, and its ledger block says what the tally says, rather than "(none)" —
+// which a later round reads as a round that took no action, and does the work
+// again. A round that called nothing at all still says so.
+//
+// Mutation: render "(none)" for an empty list whatever the tally holds, and a
+// round of two hundred posts reads as one that posted nothing.
+func TestARoundWhoseCallsAreAllTalliedIsNotSaidToHaveCalledNothing(t *testing.T) {
+	t.Parallel()
+	tallied := RenderIterations([]Iteration{{Iteration: 1,
+		Elided: []Elided{{Name: "post_message", Calls: 200, Failed: 100}}}}, nil, nil)
+	if strings.Contains(tallied, noCalls) || !strings.Contains(tallied, "post_message ×200 (100 failed)") {
+		t.Errorf("a round whose calls are tallied renders:\n%s", tallied)
+	}
+	if idle := RenderIterations([]Iteration{{Iteration: 1}}, nil, nil); !strings.Contains(idle, noCalls) {
+		t.Errorf("a round that called nothing renders:\n%s", idle)
+	}
+}
+
 // A CLOSED ROUND CARRIES ITS CALLS' IDENTITIES AND ITS DROPPED ONES ACROSS A
 // PARK. The round rides the parked turn's state as JSON, and a later segment
 // seeds its call log from it: a call's digest and the round's tally must come

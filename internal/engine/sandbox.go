@@ -1879,17 +1879,21 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.Interactions = tel.interactions
 	suspension.State.Deadline = tel.deadline
 	// HELD TO ITS SHARE OF THE RUN'S ROW ([sandbox.ExecuteStateBytes]): the
-	// closed rounds' payloads condensed where the state is past it, and a
-	// state still past it — the turn's own context, which no resume can do
-	// without — refused by name rather than by the broker, which would refuse
-	// this write and every write of the row after it.
+	// closed rounds condensed where the state is past it, and a state still
+	// past it refused by name rather than by the broker, which would refuse
+	// this write and every write of the row after it — the name saying which
+	// of the two is past the share, the turn's own context or its closed rounds.
 	blob, condensed, err := execstate.EncodeWithin(suspension.State, sandbox.ExecuteStateBytes)
-	switch {
-	case errors.Is(err, execstate.ErrTooLarge):
+	switch tooLarge, ok := errors.AsType[*execstate.TooLargeError](err); {
+	case ok:
+		what := "its closed rounds, condensed as far as a park condenses them (every round's calls " +
+			"folded by tool, its text and its review cut to their openings), still take it past its share"
+		if tooLarge.OwnContext() {
+			what = "the turn's own context (its ask, its trigger's words, its turn-start context) is past " +
+				"its share by itself, which no condensing of its closed rounds could change"
+		}
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_too_large",
-			"the parked turn state is past its share of the run's row even with its closed rounds' "+
-				"payloads left out: the turn's own context (its ask, its trigger's words, its "+
-				"turn-start context) is too large for a run's row", err)
+			"the parked turn state is past its share of the run's row: "+what, err)
 		return false, nil
 	case err != nil:
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",
@@ -1898,10 +1902,10 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	case condensed.Any():
 		log.InfoContext(ctx, "sandbox_suspension_condensed", "turn_id", turnID, "seat", tel.handle,
 			"results_dropped", condensed.Results, "payloads_left_out", condensed.LeftOut,
-			"texts_cut", condensed.Texts, "tallies_folded", condensed.Identities, "bytes", len(blob),
+			"texts_cut", condensed.Texts, "tallies_folded", condensed.Identities,
+			"rounds_calls_folded", condensed.Calls, "reviews_cut", condensed.Reviews, "bytes", len(blob),
 			"detail", "the parked turn's closed rounds were condensed to fit its share of the run's "+
-				"row; every call keeps its name, its identity and its outcome, and a folded tally "+
-				"its tools and outcomes")
+				"row; every call keeps its tool, its identity or its tool's count, and its outcome")
 	}
 	// The iteration rides BESIDE the blob: the coordinator files each
 	// launch's own record under it and never decodes the state.

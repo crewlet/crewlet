@@ -48,20 +48,60 @@ import (
 //     check reads, which is names and outcomes. A round's tallies are bounded on
 //     its run's row, but a turn's rounds are not, so many long ones can carry
 //     more of them than the state has room for.
+//  5. The closed rounds' CALLS THEMSELVES, each folded into its round's tally of
+//     the calls its record does not list ([ledger.Iteration.Elided]) — by
+//     identity first, its tool, its digest and its outcome, so a resumed call
+//     log still seeds it exactly, and past that by tool, as the tallies were.
+//     What a call keeps however far it is condensed — a name, an identity and
+//     an outcome — is all a tally holds of it too, and a delivery check reads
+//     a tally's calls as the calls they were ([ledger.Called]); what is lost is
+//     the prior-work ledger's line for each, which says how many calls of each
+//     tool the round made instead ([ledger.FormatElided]).
+//  6. The rounds' REVIEW PROSE — what their reviewer said landed and what it
+//     sent back to correct — held to its opening, as the produced text is.
 //
-// Every call keeps its name, its identity ([ledger.Call.Digest]) and its
-// outcome, and every round its intent, its review and the tools and outcomes
-// of the calls its run's record dropped — which is everything a resumed
-// segment derives an operation id or judges a delivery from.
+// Every call keeps its tool, its identity — or, past the last fold, the count
+// of calls to its tool it is one of — and its outcome, and every round its
+// intent, the opening of its review and the tools and outcomes of the calls
+// its record no longer lists — which is everything a resumed segment derives
+// an operation id or judges a delivery from.
 //
-// PAST THAT THE STATE IS REFUSED ([ErrTooLarge]). What is left is the turn's own
-// context — what it was asked, its trigger's words, its turn-start blocks — which
-// no resume can do without and no row can carry: a park that big would be
-// refused by the broker on its write and every write of the row after it.
+// PAST THAT THE STATE IS REFUSED ([ErrTooLarge], as a [*TooLargeError] saying
+// which of two things is past the share). The turn's own context — what it was
+// asked, its trigger's words, its turn-start blocks — which no resume can do
+// without and no condensing touches; or its closed rounds, condensed as far as
+// they go, of which a turn whose `max_iterations` has no ceiling can carry more
+// than any share holds. Either way a park that big would be refused by the
+// broker on its write and every write of the row after it.
 
 // ErrTooLarge is a parked state past its budget even with its closed rounds
 // condensed ([EncodeWithin]).
 var ErrTooLarge = errors.New("execstate: the parked state is past its share of the run's row")
+
+// TooLargeError is [ErrTooLarge] for one state: what it weighs condensed as far
+// as it goes, the budget it was held to, and what the turn's own context
+// weighs — the state with no closed round at all — which says what is past the
+// share.
+type TooLargeError struct {
+	Bytes, Budget, Context int
+}
+
+func (e *TooLargeError) Error() string {
+	what := "its closed rounds, condensed as far as they go, take it past its share"
+	if e.OwnContext() {
+		what = "the turn's own context is past its share by itself"
+	}
+	return fmt.Sprintf("%s: %d bytes with every closed round condensed, and its share is %d; the turn's own "+
+		"context weighs %d — %s", ErrTooLarge, e.Bytes, e.Budget, e.Context, what)
+}
+
+// Unwrap is [ErrTooLarge], which every caller tests for.
+func (e *TooLargeError) Unwrap() error { return ErrTooLarge }
+
+// OwnContext reports whether the turn's own context alone is past the share —
+// what it was asked, its trigger's words, its turn-start blocks — which no
+// condensing of its closed rounds could ever make fit.
+func (e *TooLargeError) OwnContext() bool { return e.Context > e.Budget }
 
 // Condensed is what [EncodeWithin] gave up to fit a state into its budget.
 type Condensed struct {
@@ -74,10 +114,16 @@ type Condensed struct {
 	Texts int
 	// Identities is how many closed rounds' tallies were folded by tool.
 	Identities int
+	// Calls is how many closed rounds' calls were folded into their tallies.
+	Calls int
+	// Reviews is how many rounds' review prose was cut to its opening.
+	Reviews int
 }
 
 // Any reports whether anything was given up.
-func (c Condensed) Any() bool { return c.Results+c.LeftOut+c.Texts+c.Identities > 0 }
+func (c Condensed) Any() bool {
+	return c.Results+c.LeftOut+c.Texts+c.Identities+c.Calls+c.Reviews > 0
+}
 
 // turnRecord is the record a condensed payload says it is not kept on.
 const turnRecord kept.Record = "the turn's record"
@@ -93,6 +139,13 @@ var callTiers = []int{2 << 10, 512, 128}
 // tier: sixteen KiB is several times what the prior-work ledger fits a round's
 // text to, and four is about that.
 var textTiers = []int{16 << 10, 4 << 10}
+
+// reviewTiers are the bytes each of a round's two pieces of review prose keeps
+// of its opening, tier by tier: four KiB is a reviewer's whole correction of
+// ordinary length, and one KiB its first paragraph — what tells the next round
+// what it was sent back for. The last step before a refusal, because the last
+// round's correction is what the round the turn goes on to is there to make.
+var reviewTiers = []int{4 << 10, 1 << 10}
 
 // EncodeWithin is [Encode], held to budget bytes: a state within it is
 // encoded as it is, and one past it is condensed — see the file comment for
@@ -134,19 +187,92 @@ func EncodeWithin(s State, budget int) (json.RawMessage, Condensed, error) {
 			return blob, c, err
 		}
 	}
+	c.Identities += foldTallies(s.Iterations)
+	if blob, err = Encode(s); err != nil || len(blob) <= budget {
+		return blob, c, err
+	}
 	for i := range s.Iterations {
-		elided, folded := byTool(s.Iterations[i].Elided)
-		absorbed, foldedToo := byTool(s.Iterations[i].Absorbed)
-		if folded || foldedToo {
-			s.Iterations[i].Elided, s.Iterations[i].Absorbed = elided, absorbed
-			c.Identities++
+		round := &s.Iterations[i]
+		if len(round.Calls) == 0 {
+			continue
 		}
+		for _, call := range round.Calls {
+			round.Elided = tallied(round.Elided, call)
+		}
+		round.Calls = nil
+		c.Calls++
 	}
 	if blob, err = Encode(s); err != nil || len(blob) <= budget {
 		return blob, c, err
 	}
-	return nil, c, fmt.Errorf("%w: %d bytes with every closed round condensed, and its share is %d",
-		ErrTooLarge, len(blob), budget)
+	c.Identities += foldTallies(s.Iterations)
+	if blob, err = Encode(s); err != nil || len(blob) <= budget {
+		return blob, c, err
+	}
+	for _, tier := range reviewTiers {
+		for i := range s.Iterations {
+			round := &s.Iterations[i]
+			completed, cutToo := turnRecord.Text(round.CompletedWork, tier)
+			notes, cut := turnRecord.Text(round.ReviewNotes, tier)
+			if cut > 0 || cutToo > 0 {
+				if cutToo > 0 {
+					round.CompletedWork = completed
+				}
+				if cut > 0 {
+					round.ReviewNotes = notes
+				}
+				c.Reviews++
+			}
+		}
+		if blob, err = Encode(s); err != nil || len(blob) <= budget {
+			return blob, c, err
+		}
+	}
+	own := s
+	own.Iterations = nil
+	context, err := Encode(own)
+	if err != nil {
+		return nil, c, err
+	}
+	return nil, c, &TooLargeError{Bytes: len(blob), Budget: budget, Context: len(context)}
+}
+
+// foldTallies folds every closed round's two tallies by tool ([byTool]),
+// answering how many rounds it changed.
+func foldTallies(rounds []ledger.Iteration) int {
+	n := 0
+	for i := range rounds {
+		elided, folded := byTool(rounds[i].Elided)
+		absorbed, foldedToo := byTool(rounds[i].Absorbed)
+		if folded || foldedToo {
+			rounds[i].Elided, rounds[i].Absorbed = elided, absorbed
+			n++
+		}
+	}
+	return n
+}
+
+// tallied is tally with call counted in it by its identity — its tool, the
+// digest it was admitted under, none where its arguments are withheld or no
+// digest was recorded, and whether it failed — as the record of the calls a
+// round does not list keeps one ([ledger.Elided]).
+func tallied(tally []ledger.Elided, call ledger.Call) []ledger.Elided {
+	digest := call.Digest
+	if call.Withheld {
+		digest = ""
+	}
+	failed := 0
+	if call.Failed {
+		failed = 1
+	}
+	if i := slices.IndexFunc(tally, func(e ledger.Elided) bool {
+		return e.Name == call.Name && e.Digest == digest
+	}); i >= 0 {
+		tally[i].Calls++
+		tally[i].Failed += failed
+		return tally
+	}
+	return append(tally, ledger.Elided{Name: call.Name, Digest: digest, Calls: 1, Failed: failed})
 }
 
 // byTool is a tally with each tool's calls folded into one count of calls to it
@@ -219,12 +345,15 @@ func keptArgs(args map[string]any, tier int) (map[string]any, bool) {
 }
 
 // cloneRounds copies rounds deeply enough that condensing the copy leaves the
-// caller's untouched: each round and its calls. A call's arguments are
-// replaced whole when they are condensed ([keptArgs]), never changed in place.
+// caller's untouched: each round, its calls and its two tallies, which a call
+// folded into one counts in place ([tallied]). A call's arguments are replaced
+// whole when they are condensed ([keptArgs]), never changed in place.
 func cloneRounds(rounds []ledger.Iteration) []ledger.Iteration {
 	out := slices.Clone(rounds)
 	for i := range out {
 		out[i].Calls = slices.Clone(out[i].Calls)
+		out[i].Elided = slices.Clone(out[i].Elided)
+		out[i].Absorbed = slices.Clone(out[i].Absorbed)
 	}
 	return out
 }

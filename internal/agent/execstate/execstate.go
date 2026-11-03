@@ -51,8 +51,12 @@
 //
 // AND IT IS HELD TO A SHARE OF ITS RUN'S ROW, which is one value in the
 // coordination store and so one broker message: [EncodeWithin] condenses the
-// closed rounds' payloads past it, never a call's identity or outcome, and
-// refuses a state whose own context will not fit. See within.go.
+// closed rounds past it — their payloads first, then their tallies' digests,
+// then their calls folded into those tallies by identity and then by tool,
+// then their review prose — never a call's tool or outcome, and its identity
+// only past the last fold, an over-count of its tool; and it refuses a state
+// still past the share, saying whether the turn's own context or its closed
+// rounds are what will not fit ([TooLargeError]). See within.go.
 package execstate
 
 import (
