@@ -208,7 +208,7 @@ func (r *Result) Findings() []integration.Finding {
 			Detail: "The provisioner token does not hold " + integration.Count(len(r.Unheld), "permission group") +
 				" an agent level grants, and Crewlet grants an agent nothing the token does not hold itself",
 			Remedy:    "Edit the provisioner token at Cloudflare to add them over the account and its zones",
-			ActionURL: r.TokensURL, Subjects: r.Unheld,
+			ActionURL: r.TokensURL, Subjects: dashboardList(r.Unheld),
 		})
 	}
 	return out

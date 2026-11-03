@@ -77,7 +77,7 @@ func Probe(httpClient *http.Client) setup.Probe {
 			if len(in.unheld) == 1 {
 				them = "it"
 			}
-			return setup.Refused("The token works, but it is missing " + words.And(in.unheld) +
+			return setup.Refused("The token works, but it is missing " + words.And(dashboardNames(in.unheld)) +
 				", which an agent level grants. Edit the token at Cloudflare to add " + them +
 				": Crewlet grants an agent nothing the token does not hold itself."), nil
 		}
