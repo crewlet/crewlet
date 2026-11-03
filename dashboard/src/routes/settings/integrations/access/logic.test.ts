@@ -13,11 +13,13 @@ import {
   JIRA_LANE,
   GITHUB_LANE,
   MATTERMOST_LANE,
+  NEUTRAL_LANE,
   datadogAnswer,
   digitaloceanAnswer,
   digitaloceanWaitingAnswer,
   expoAnswer,
   expoWaitingAnswer,
+  neutralAnswer,
   offLane,
   onLane,
 } from "./fixtures.ts";
@@ -32,6 +34,8 @@ import {
   joinLevels,
   levelName,
   boxSettings,
+  boxSettingsFact,
+  credentialNote,
   noToolRemedy,
   onlyScope,
   productOnly,
@@ -48,6 +52,7 @@ import {
   type Lane,
 } from "./logic.ts";
 import type { AccessSeatLane } from "~/contract/access.ts";
+import { laneWords } from "./words.ts";
 
 const sre = () => datadogAnswer().seats.find((s) => s.handle === "sre")!.lanes.datadog!;
 
@@ -600,6 +605,77 @@ test("a box lane that also has a tool server names both routes, the server first
   );
   expect(toolWords(EXPO_LANE, qa)).toBe("Not set up: its sandbox env does not set EXPO_TOKEN");
   expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).not.toMatch(/tool server/);
+});
+
+// WHAT CREWLET PUTS IN THE BOX FOR A CLI names its files too, after its
+// variables, so a token file a CLI reads is said where it lives.
+test("the settings Crewlet puts in a box name its files after its variables", () => {
+  const sre = neutralAnswer().seats[1]!.lanes[NEUTRAL_LANE.key]!;
+  expect(boxSettings(sre)).toBe("VENDOR_TOKEN_FILE and .config/crewlet/token");
+  expect(boxSettings({ ...sre, box: { env: [], files: sre.box!.files } })).toBe(
+    ".config/crewlet/token",
+  );
+});
+
+// A LANE WHOSE CLI MUST COME WITH THE BOX IMAGE says so beside what Crewlet
+// sets there, and a lane with nothing set says nothing at all.
+test("the settings Crewlet sets carry the lane's note on them, and nothing without settings", () => {
+  const sre = neutralAnswer().seats[1]!.lanes[NEUTRAL_LANE.key]!;
+  const words = laneWords(NEUTRAL_LANE.key);
+  expect(boxSettingsFact(NEUTRAL_LANE, sre)).toEqual({
+    settings: "VENDOR_TOKEN_FILE and .config/crewlet/token",
+  });
+  expect(
+    boxSettingsFact(NEUTRAL_LANE, sre, { ...words, boxNote: "the CLI must be in the box image" }),
+  ).toEqual({
+    settings: "VENDOR_TOKEN_FILE and .config/crewlet/token",
+    note: "the CLI must be in the box image",
+  });
+  expect(
+    boxSettingsFact(NEUTRAL_LANE, offLane(), {
+      ...words,
+      boxNote: "the CLI must be in the box image",
+    }),
+  ).toBeNull();
+});
+
+// A CREDENTIAL CREWLET ISSUES AT USE has no time any node shares, so it reads
+// as how it is issued, for as long as its lane says one lasts; a minted one
+// keeps its time, and one provided from outside says so.
+test("a credential reads as issued at use, minted when, or provided externally", () => {
+  const now = Date.now();
+  const issued = neutralAnswer().seats[1]!.lanes[NEUTRAL_LANE.key]!.observed;
+  const words = laneWords(NEUTRAL_LANE.key);
+  expect(credentialNote(NEUTRAL_LANE, issued, now)).toBe(", issued at use");
+  expect(credentialNote(NEUTRAL_LANE, issued, now, { ...words, issued: "15 minutes" })).toBe(
+    ", issued for 15 minutes at a time, at use",
+  );
+  const minted = {
+    ...issued,
+    credential: onLane({ variable: "VENDOR_TOKEN_SRE" }).observed.credential!,
+  };
+  expect(credentialNote(NEUTRAL_LANE, minted, now)).toBe(", minted 1d ago");
+  expect(
+    credentialNote(
+      NEUTRAL_LANE,
+      { ...minted, credential: { ...minted.credential, source: "external" } },
+      now,
+    ),
+  ).toBe(", provided externally");
+});
+
+// A WAIT THE ENGINE CAN NAME says whose it is, so a vendor still applying a
+// grant is never read as a credential somebody owes, nor as Needs you.
+test("a tool waiting with the engine's reason says the reason", () => {
+  const sre = neutralAnswer().seats[1]!.lanes[NEUTRAL_LANE.key]!;
+  const waiting = { ...sre, tool: "waiting" as const };
+  expect(
+    toolWords(NEUTRAL_LANE, { ...waiting, tool_reason: "the vendor is still applying the grant" }),
+  ).toBe("Waiting: the vendor is still applying the grant, Its tool server, one per agent");
+  expect(toolWords(NEUTRAL_LANE, waiting)).toBe(
+    "Waiting for the credential, Its tool server, one per agent",
+  );
+  expect(statusOf(NEUTRAL_LANE, waiting, false, false).label).toBe("In sync");
 });
 
 // DIGITALOCEAN'S TOOL IS ITS MCP SERVER OR DOCTL IN THE BOX, and the variable

@@ -22,7 +22,10 @@
  *   - A MINTABLE credential has no row at all: it is dropped from the form
  *     by shownField, because asking a person to invent a shared token is
  *     asking them to invent a password, and the engine generates it on
- *     submit.
+ *     submit. The one exception is a minted value with a PUBLIC half a person
+ *     has to carry to the app (a key whose public half the app must be
+ *     given): once minted, its row shows the engine's rendering of that half,
+ *     never an input.
  *
  * There is no Replace control. Typing over a field is what replaces what it
  * holds, and an untouched one is not submitted.
@@ -43,6 +46,8 @@ import { Fragment, useCallback, useId, useMemo, useRef, useState, type ReactNode
 import {
   Button,
   Callout,
+  CodeBlock,
+  FormField,
   InlineCode,
   StatusDot,
   Tag,
@@ -227,8 +232,18 @@ export function helpLines(text: string): ReactNode {
  * this rule. Both read it now.
  */
 export function shownField(r: SetupRequirement, answered: Answered): boolean {
-  if (r.hidden || (r.kind === "secret" && r.mintable)) return false;
+  if (r.hidden) return false;
+  if (r.kind === "secret" && r.mintable && !publicView(r)) return false;
   return gateOpen(r, answered);
+}
+
+/**
+ * What a person may see of a minted value, or undefined: the engine's own
+ * rendering of its public half, sent once the value is minted. Its row shows
+ * that and is never an input.
+ */
+export function publicView(r: SetupRequirement): SetupRequirement["public"] {
+  return r.kind === "secret" && r.mintable ? r.public : undefined;
 }
 
 /** What another field currently holds on this form. See [gateOpen]. */
@@ -700,7 +715,8 @@ export function SetupForm({
     [folded, seatGroups, setSeatOpen],
   );
 
-  // A MINTABLE SECRET IS NOT ON THE FORM AT ALL.
+  // A MINTABLE SECRET IS NOT ON THE FORM AT ALL, beyond the public view of
+  // one that has a half a person carries to the app (see [publicView]).
   //
   // There is nothing for a person to type — the engine generates the value,
   // and it has a shape a person would get wrong — so the row was a label
@@ -721,7 +737,7 @@ export function SetupForm({
   const editable = useCallback(
     (section: SetupSection, r: SetupRequirement) => {
       const own = shownBy.get(sectionKey(section)) ?? [];
-      return shownField(r, answeredIn(section, own));
+      return publicView(r) === undefined && shownField(r, answeredIn(section, own));
     },
     [shownBy, answeredIn],
   );
@@ -1252,9 +1268,16 @@ export function SetupForm({
     // [fillTemplate].
     const fill = (text: string) =>
       fillTemplate(text, (field) => values[refKey(section, field)] || defaultOf(section, field));
+    const shown = publicView(r);
     return (
       <div key={key} className="col gap-1">
-        {editable(section, r) ? (
+        {shown ? (
+          // WHAT THE ENGINE RENDERED, copied whole: a block a person pastes
+          // into the app's own shell, which this form keeps no text of.
+          <FormField as="fieldset" label={r.label} helper={helpLines(fill(r.help ?? ""))}>
+            <CodeBlock code={shown.text} language={shown.language} wrap={false} />
+          </FormField>
+        ) : editable(section, r) ? (
           <ValueField
             // OUR OWN CLASS ON THE PACKAGE'S COMPONENT: `.int-form .field > label`
             // sets this form's questions in sentence case, and a class we write

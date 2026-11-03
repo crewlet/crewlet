@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -263,6 +264,24 @@ type StepResult struct {
 	// since this GitLab token cannot block accounts"). The sync records it
 	// as the step outcome's text; empty keeps the drawn text.
 	Did string
+
+	// Settling is set by a step whose grant the vendor has written and is
+	// still applying, so the seat cannot use it yet. The sync records it on
+	// the lane and ends OK: nobody owes a step, so it is never a [Waiting].
+	Settling *Settling
+}
+
+// Settling is a grant the vendor is still applying: until Until the lane's
+// tool reads waiting, for Reason, a sentence in the engine's own words ("the
+// vendor is still applying the grant"). Past Until it clears itself.
+type Settling struct {
+	Reason string    `json:"reason"`
+	Until  time.Time `json:"until"`
+}
+
+// active reports whether s still holds the lane's tool at now.
+func (s *Settling) active(now time.Time) bool {
+	return s != nil && now.Before(s.Until)
 }
 
 // Minted is one credential a step created.
@@ -304,11 +323,19 @@ type Catalog struct {
 	// credential itself first: `APP_KEY` for Datadog; `TOKEN` and `EMAIL`
 	// for Atlassian; `BOT_TOKEN` for Mattermost; `BOT_TOKEN` and
 	// `SIGNING_SECRET` for Slack; `APP_KEY` and `APP_WEBHOOK_SECRET` for
-	// GitHub. Each is sealed under [SinkName](Kind, field, handle).
+	// GitHub. Each is sealed under [SinkName](Kind, field, handle). Empty
+	// only where every lane's credential is issued at use ([LaneSpec.Issued]).
 	Credentials []string
 
 	// Lanes are the lanes this kind grants, each with what it offers.
 	Lanes []LaneSpec
+}
+
+// isCredential reports whether field is the sealed credential itself, the
+// first of [Catalog.Credentials]: false for every field of a catalog whose
+// lanes are all issued at use ([LaneSpec.Issued]), which seals none.
+func (c Catalog) isCredential(field string) bool {
+	return len(c.Credentials) > 0 && c.Credentials[0] == field
 }
 
 // Lane is the spec for one lane, or false where the catalog has none.
@@ -368,6 +395,12 @@ type LaneSpec struct {
 	// TOKEN); empty where its tool is a server. The seat's own box settings
 	// set each to its sealed name ([BoxLines]).
 	BoxEnv []BoxVar
+
+	// Issued is the field of a lane whose credential the engine issues at use
+	// and never seals, its variable [SinkName] of it; empty where the
+	// credential is sealed. The access answer reports it as the seat's
+	// credential ([IssuedCredential]). Never one of [Catalog.Credentials].
+	Issued string
 }
 
 // BoxVar is one variable a box CLI reads a seat credential from: Env, set to
@@ -377,10 +410,10 @@ type BoxVar struct {
 	Env   string
 }
 
-// BoxDefaulter is a [Vendor] whose box CLI reads non-secret settings beside
-// the seat's credentials (an organization, a default project). The engine puts
-// them in the box of every seat whose box-CLI lane is on, below every layer a
-// person writes ([BoxDefaults]).
+// BoxDefaulter is a [Vendor] whose box CLI reads settings beside the seat's
+// credentials (an organization, a default project, a file holding a token
+// issued at use). The engine puts them in the box of every seat with one of
+// the vendor's lanes on, below every layer a person writes ([BoxDefaults]).
 type BoxDefaulter interface {
 	// BoxDefaults is what the engine puts in the box of the seat whose role
 	// is role.
@@ -423,6 +456,31 @@ type BoxSet struct {
 	// the launch resolves. Never a secret, since a default is not scrubbed
 	// from the run's output.
 	Env map[string]string
+
+	// Files are written into the box at launch, beside the files a person's
+	// setup steps write and never into its environment, which holds at most a
+	// file's path ([BoxFile.PathEnv]), so no file can sign a harness in.
+	Files []BoxFile
+}
+
+// BoxFile is one file a vendor puts in a seat's box: at Path, relative to the
+// box's home, holding the whole `${VAR}` reference Ref, resolved at launch
+// through the seat's own resolution, so a credential issued at use is issued
+// there, or Ref itself where it is literal text and no reference. Its value
+// is scrubbed from the run's output as a credential's is.
+type BoxFile struct {
+	Path string
+	Ref  string
+
+	// PathEnv is the variable the launch sets to this file's absolute path in
+	// the box, joined onto that box's own home, for a CLI pointed at the file
+	// by one; empty for none. Never a sign-in, and beneath every other layer.
+	PathEnv string
+
+	// Rewritten is a file the completion poll keeps current for as long as
+	// the run lasts, where Ref names a credential issued at use, which
+	// renews under a running box; a launch alone writes the rest.
+	Rewritten bool
 }
 
 // PermissionSpec is one permission a GitHub App can hold.

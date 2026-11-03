@@ -31,12 +31,29 @@ const (
 	// and underscores alone, such as a Cloudflare API token: a pasted value
 	// holding any other character is not one the vendor issued.
 	ShapeOpaqueToken Shape = "opaque_token"
+
+	// ShapeES256Key is an ECDSA P-256 private key the engine signs ES256
+	// tokens with, PKCS#8 in PEM, which spans several lines. A vendor is
+	// shown only its public half ([ES256JWKS]). See es256.go.
+	ShapeES256Key Shape = "es256_key"
 )
+
+// Multiline reports a shape whose values span lines, which its own rule
+// judges whole ([Shape.Problem]) in place of a credential's one-line rule.
+func (s Shape) Multiline() bool { return s == ShapeES256Key }
 
 // Problem is the sentence for a pasted value this shape refuses, "" for one it
 // takes. noun names the field's value ("provisioner token"). It never quotes
 // the value, only where the characters it refuses are.
 func (s Shape) Problem(noun, value string) string {
+	if s == ShapeES256Key {
+		if _, err := parseES256(value); err != nil {
+			return fmt.Sprintf("This %s is not a key the engine minted: it is one PKCS#8 PEM "+
+				"block holding a P-256 private key. Leave the field to the engine, which mints one "+
+				"on Save.", noun)
+		}
+		return ""
+	}
 	if s != ShapeOpaqueToken {
 		return ""
 	}
@@ -69,8 +86,11 @@ func opaqueTokenRune(r rune) bool {
 // bits of entropy, URL-safe and safe to paste into a third-party app's header
 // field, which is where a shared token ends up.
 func (s Shape) Mint(token func() string) (string, error) {
-	if s == ShapeSigningKey {
+	switch s {
+	case ShapeSigningKey:
 		return whsec.Mint()
+	case ShapeES256Key:
+		return mintES256()
 	}
 	return token(), nil
 }
