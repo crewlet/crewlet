@@ -948,18 +948,29 @@ func endedOn(conversation string, seq uint64) executordomain.Session {
 // conversation of each seat that runs it, every fire a turn of it, so a fire's
 // row is decided as any conversation's is — by the decision its next fire's
 // first launch takes — and said as the schedule's next fire (`next_fire`), in
-// the schedule's words: the newest fire's session is continuable in any box,
-// and an older fire's names the fire the next one is handed instead. A chat
+// the schedule's words: the newest fire's session in the schedule's line is
+// continuable in any box, and a fire that parked on a question — which read
+// the schedule before that fire did and ended after it — names the fire the
+// next one is handed instead, on its page and read alone. A chat
 // conversation's head on the same page stays its next turn's.
 //
 // Mutation: decide a schedule's row as `next_turn`, word it as a
 // conversation's, or tell a chat conversation's row as a schedule's, and a
-// check goes red.
+// check goes red; order the stub's head by its end alone (headOf), as the
+// domain's head statement no longer does, and the parked fire is named the
+// head on the page and alone.
 func TestAScheduleRowSaysWhetherItsNextFireContinuesIt(t *testing.T) {
 	t.Parallel()
 	schedule := notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")
-	older, head, chat := endedOn(schedule, 1), endedOn(schedule, 2), endedOn("chat:room", 3)
-	s := continuableSources(t, []executordomain.Session{chat, head, older}, nil)
+	readAt := func(seq uint64) statelog.Position {
+		return statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1, Seq: seq}
+	}
+	// THE PARKED FIRE read the schedule at 1 and ended last, at 4; THE HEAD
+	// read it at 2, once a fire beside the parked one had ended, and ended at
+	// 3.
+	parked, head, chat := endedOn(schedule, 4), endedOn(schedule, 3), endedOn("chat:room", 5)
+	parked.ReadThrough, head.ReadThrough = readAt(1), readAt(2)
+	s := continuableSources(t, []executordomain.Session{chat, head, parked}, nil)
 	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
 	if err != nil {
 		t.Fatalf("executor_sessions: %v", err)
@@ -970,15 +981,26 @@ func TestAScheduleRowSaysWhetherItsNextFireContinuesIt(t *testing.T) {
 		t.Errorf("the schedule's newest session is %s by %q, want its next fire's, in any box", decided(got),
 			got.ContinuedBy)
 	}
-	if got := rows[older.Turn]; got.ContinuedBy != sandbox.ContinuedByNextFire || got.Continuable == nil ||
-		*got.Continuable || !strings.Contains(got.NotContinuable,
-		"the schedule's next fire is handed fire "+head.Turn+"'s session, the newest in the schedule's line") {
-		t.Errorf("an older fire's session is %s by %q, want its next fire's, naming the fire it is handed",
+	handed := "the schedule's next fire is handed fire " + head.Turn +
+		"'s session, the newest in the schedule's line"
+	if got := rows[parked.Turn]; got.ContinuedBy != sandbox.ContinuedByNextFire || got.Continuable == nil ||
+		*got.Continuable || !strings.Contains(got.NotContinuable, handed) {
+		t.Errorf("the parked fire's session is %s by %q, want its next fire's, naming the fire it is handed",
 			decided(got), got.ContinuedBy)
 	}
 	if got := rows[chat.Turn]; got.ContinuedBy != sandbox.ContinuedByNextTurn || got.Continuable == nil ||
 		!*got.Continuable {
 		t.Errorf("a chat conversation's head is %s by %q, want its next turn's", decided(got), got.ContinuedBy)
+	}
+
+	read, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": parked.Turn})
+	if err != nil {
+		t.Fatalf("executor_session: %v", err)
+	}
+	if alone := read.(queries.SessionAnswer).Session; alone.ContinuedBy != sandbox.ContinuedByNextFire ||
+		alone.Continuable == nil || *alone.Continuable || !strings.Contains(alone.NotContinuable, handed) {
+		t.Errorf("the parked fire's session read alone is %s by %q, want its next fire's, naming the fire it "+
+			"is handed", decided(alone), alone.ContinuedBy)
 	}
 }
 
