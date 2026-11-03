@@ -76,7 +76,8 @@ var primaryField = map[integration.Kind]string{
 }
 
 // desiredKeys are the block keys a lane's [seataccess.Desired] is written in,
-// which the migration replaces and nothing else.
+// which the migration replaces and nothing else. Every lane has an entry:
+// [writeSeatIntegrations] refuses one that has none.
 var desiredKeys = map[seataccess.Lane][]string{
 	seataccess.LaneDatadog:    {"enabled", "role"},
 	seataccess.LaneGitLab:     {"enabled", "access_level", "member_role_id", "projects"},
@@ -85,6 +86,7 @@ var desiredKeys = map[seataccess.Lane][]string{
 	seataccess.LaneMattermost: {"enabled", "roles", "channels"},
 	seataccess.LaneGitHub:     {"enabled", "permissions", "repos"},
 	seataccess.LaneSlack:      {"enabled"},
+	seataccess.LaneExpo:       {"enabled", "level"},
 }
 
 // position is one place a seat named its credential.
@@ -315,13 +317,19 @@ func writeSeatIntegrations(seat map[string]any, role *config.Role,
 		seat["integrations"] = stored
 	}
 	for lane := range lanes {
+		keys, known := desiredKeys[lane]
+		if !known {
+			// A LANE THIS TABLE DOES NOT NAME would be written as an empty
+			// block, which reads as off with no `enabled` at all.
+			return fmt.Errorf("accessmigrate: the %s lane names no block keys to write", lane)
+		}
 		block := object(stored[string(lane)])
 		if block == nil {
 			block = map[string]any{}
 			stored[string(lane)] = block
 		}
 		fresh := object(encoded[string(lane)])
-		for _, key := range desiredKeys[lane] {
+		for _, key := range keys {
 			delete(block, key)
 			if v, ok := fresh[key]; ok {
 				block[key] = v
