@@ -552,7 +552,10 @@ const spoolPrefix = "crewlet-session-"
 //
 // BEST EFFORT AND BOUNDED ([Coordinator.takeContext]): what the read it is part
 // of does is never the capture's to decide, so every failure is stamped and
-// logged and the read goes on.
+// logged and the read goes on — a place the store was asked to reserve and did
+// not answer within the take's time included, which is stamped refused where
+// the row holds it ([Coordinator.abandonPlace]). Only a row the store never
+// lets the read write, past every ask, is left as it stands.
 func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
 	at capturePoint) (*spooledCapture, *SessionKept) {
 
@@ -633,14 +636,19 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// room it is kept before by ([Coordinator.takeContext]).
 	reserveBy, _ := ctx.Deadline()
 	took, stampErr := c.reserveCapture(ctx, reserveBy, run.TurnID, stamp)
-	if stampErr != nil || !took {
+	switch {
+	case stampErr != nil:
+		// UNANSWERED WITHIN THE TAKE'S TIME, which a store may have taken all
+		// the same — a write applied and answered too late — so the place is
+		// settled in the room the read leaves the outcome stamp, where the row
+		// holds it ([Coordinator.abandonPlace]).
+		return nil, c.abandonPlace(ctx, by, run, stamp, at, stampErr)
+	case !took:
 		// ANOTHER READ OF THE SAME RUN TOOK THIS PLACE FIRST — a stop's and a
-		// collection's, at once — and keeps the session itself; or the row
-		// could not be written however often it was asked, which leaves
-		// nowhere to say what came of it.
+		// collection's, at once — and keeps the session itself.
 		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
-			"capture_seq", stamp.CaptureSeq, "error", fmt.Sprint(stampErr),
-			"detail", "the capture's place could not be reserved on the run's row")
+			"capture_seq", stamp.CaptureSeq,
+			"detail", "another read of the run reserved the capture's place first, and keeps the session")
 		return nil, nil
 	}
 	spooled, err := c.spool(ctx, run, stamp, taken)
@@ -1136,6 +1144,39 @@ func (c *Coordinator) reserveCapture(ctx context.Context, by time.Time, turnID s
 		case <-wait.C:
 		}
 	}
+}
+
+// abandonPlace settles the place a take asked to reserve and was never answered
+// within its own time ([Coordinator.reserveCapture]): a store that applied the
+// write and answered too late leaves the place begun on the run's row, which is
+// read as a keep still under way for as long as a capture can take
+// ([captureInFlight]) — the turn's end waits on it, and a relaunch reads it as
+// one it cannot continue — with nobody left to settle it.
+//
+// WITHIN WHAT THE READ LEAVES THE OUTCOME STAMP, never past by
+// ([Coordinator.takeContext]): the row is read again, and where it holds THIS
+// take's own begun stamp — its place, its job, the instant it was stamped at —
+// that place is stamped refused, which a begun place advances to. A place the
+// row does not hold, holds settled, or holds as another read reserved it is
+// left as it stands: never settled for a take that never held it.
+func (c *Coordinator) abandonPlace(ctx context.Context, by time.Time, run PendingRun, stamp SessionCapture,
+	at capturePoint, cause error) *SessionKept {
+
+	settle, cancel := c.settleContext(ctx, by)
+	defer cancel()
+	current, found, err := c.pending.Get(settle, run.TurnID)
+	if err == nil && found {
+		if held := current.Capture; held != nil && held.samePlace(stamp) && held.Launch == stamp.Launch &&
+			held.State == CaptureBegun && held.At.Equal(stamp.At) {
+			return c.finishCapture(ctx, by, run, stamp, CaptureRefused, fmt.Sprintf("its place on the "+
+				"run's row was reserved as the take's time ran out, and nothing was taken under it: %v",
+				cause))
+		}
+	}
+	log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
+		"capture_seq", stamp.CaptureSeq, "error", errors.Join(cause, err).Error(),
+		"detail", "the capture's place could not be reserved on the run's row")
+	return nil
 }
 
 // stampSettled stamps a capture's outcome on its run's row, asked again while

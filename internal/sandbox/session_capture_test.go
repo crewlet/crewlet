@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -224,5 +225,143 @@ func TestALoginTheBoxGrewPastItsBoundRefusesTheCapture(t *testing.T) {
 	if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused ||
 		!strings.Contains(c.Reason, "a whole launch may hand") {
 		t.Fatalf("the record holds %+v, want the capture refused for the login's bound", c)
+	}
+}
+
+// timedStamps is a run store that records the deadline every stamp of a
+// capture is asked under, by the state it stamps; and, where late is set,
+// applies a place's reservation and answers it only once its caller has given
+// up — a coordination store that took the write and whose answer came too late
+// — stamping it, where steal is set, as another read racing this one reserved
+// the same place: at another instant.
+type timedStamps struct {
+	PendingStore
+	late, steal bool
+
+	mu        sync.Mutex
+	deadlines map[CaptureState][]time.Time
+}
+
+func (s *timedStamps) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	deadline, _ := ctx.Deadline()
+	s.mu.Lock()
+	if s.deadlines == nil {
+		s.deadlines = map[CaptureState][]time.Time{}
+	}
+	s.deadlines[stamp.State] = append(s.deadlines[stamp.State], deadline)
+	s.mu.Unlock()
+	if !s.late || stamp.State != CaptureBegun {
+		return s.PendingStore.StampCapture(ctx, turnID, stamp)
+	}
+	applied := stamp
+	if s.steal {
+		applied.At = applied.At.Add(-time.Second)
+	}
+	if _, err := s.PendingStore.StampCapture(context.WithoutCancel(ctx), turnID, applied); err != nil {
+		return false, err
+	}
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+// askedUnder is every deadline a stamp of state was asked under.
+func (s *timedStamps) askedUnder(state CaptureState) []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.deadlines[state])
+}
+
+// readUntil is a read of a box whose deadline leaves its take two seconds — its
+// own deadline, T — and, after that, the room the read keeps for the take's
+// outcome stamp, up to by, and for its box's pause ([Coordinator.takeContext]).
+func readUntil(t *testing.T) (read context.Context, by time.Time) {
+	t.Helper()
+	read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
+	t.Cleanup(cancel)
+	deadline, _ := read.Deadline()
+	return read, deadline.Add(-discardGrace)
+}
+
+// A CAPTURE'S OUTCOME IS STAMPED IN THE ROOM THE READ LEAVES IT. A take whose
+// place was reserved and whose spool then failed is stamped refused under a
+// context of its own that ends at the read's by — never at the take's own
+// deadline, which may be what ended the spool and would leave the stamp no
+// time, and never past by, where the read needs the rest of its time for the
+// box's pause.
+//
+// Mutation: bound the refusal's stamp by the take's own deadline, or by the
+// record's budget alone, and its deadline is not the read's by.
+func TestACapturesOutcomeIsStampedInTheRoomTheReadLeavesIt(t *testing.T) {
+	t.Parallel()
+	rig, _, keep := keepingRig(t)
+	keep.sealErr = errors.New("the keyring would not seal")
+	run := rig.launchKept(t, "t1")
+	stamps := &timedStamps{PendingStore: rig.coordinator.pending}
+	rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
+	read, by := readUntil(t)
+	spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+		readCapture(BoxReadCollect, Result{}, false))
+	if spooled != nil {
+		t.Fatalf("a take whose seal failed spooled %+v", spooled)
+	}
+	refused := stamps.askedUnder(CaptureRefused)
+	if len(refused) == 0 {
+		t.Fatal("the take's refusal was never stamped")
+	}
+	for _, deadline := range refused {
+		if !deadline.Equal(by) {
+			t.Errorf("the refusal was stamped under a deadline %s off the read's by, want it at by",
+				deadline.Sub(by))
+		}
+	}
+	if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
+		t.Fatalf("the capture whose seal failed stands %+v, want it refused", c)
+	}
+}
+
+// A PLACE RESERVED AS THE TAKE'S TIME RAN OUT IS SETTLED. The coordination store
+// took the reservation of the take's place and answered after the take's own
+// deadline, so the take never spooled — and the place stood begun on the run's
+// row, read as a keep under way for as long as a capture can take, the turn's
+// end waiting on it, with nobody left to settle it. The take reads the row again
+// in the room the read leaves its outcome stamp and stamps its own place
+// refused; a place another read reserved in its stead is left as it stands.
+//
+// Mutation: leave a reservation that ended unanswered as it is, or settle the
+// place whoever reserved it, and a case goes red.
+func TestAPlaceReservedAsTheTakesTimeRanOutIsSettled(t *testing.T) {
+	t.Parallel()
+	for name, steal := range map[string]bool{
+		"the take's own place":          false,
+		"a place another read reserved": true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig, _, _ := keepingRig(t)
+			run := rig.launchKept(t, "t1")
+			stamps := &timedStamps{PendingStore: rig.coordinator.pending, late: true, steal: steal}
+			rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
+			read, by := readUntil(t)
+			spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+				readCapture(BoxReadCollect, Result{}, false))
+			if spooled != nil {
+				t.Fatalf("a take whose place was never answered spooled %+v", spooled)
+			}
+			c := rig.get("t1").Capture
+			switch {
+			case c == nil:
+				t.Fatal("the place the store took is gone from the row")
+			case steal && c.State != CaptureBegun:
+				t.Fatalf("another read's place stands %s (%q), want it begun as that read left it",
+					c.State, c.Reason)
+			case !steal && (c.State != CaptureRefused || !strings.Contains(c.Reason, "time ran out")):
+				t.Fatalf("the take's own place stands %s (%q), want it refused, saying why", c.State, c.Reason)
+			}
+			for _, deadline := range stamps.askedUnder(CaptureRefused) {
+				if deadline.After(by) {
+					t.Errorf("the place was settled under a deadline %s past the read's by", deadline.Sub(by))
+				}
+			}
+		})
 	}
 }
