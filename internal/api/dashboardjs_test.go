@@ -1649,6 +1649,16 @@ const (
 	// level 9, is the chunk names it lists and the export names the bundler
 	// gave its shared chunk anew, not anything it loads. It stays at 5455
 	// KiB, the measured size's next KiB.
+	// A fire's turn naming its schedule's conversation as one — the Turn
+	// page's rail and a phase card's footer printing a conversation key
+	// decoded and saying whether it is the external conversation the turn
+	// served or the schedule the turn was a fire of — took it from 5454.6 KiB
+	// to 5454.8 KiB (+231 bytes): the conversation label moved from the
+	// memory chunk (-279) into the phases chunk the phase card and the Memory
+	// tab share (+457), and the live and settled chunks that print a key
+	// +20 and +33. The initial load did not grow: its files are the same
+	// bytes but for the chunk names they list. It stays at 5455 KiB, the
+	// measured size's next KiB.
 	treeBudget = 5<<20 + 335<<10
 )
 
