@@ -216,58 +216,58 @@ test("a mintable secret is not on the form at all", () => {
 });
 
 // A MINTED VALUE WITH A HALF A PERSON CARRIES shows that half, as the engine
-// renders it, and never an input: Google Cloud's federation key is minted on
-// the first save, and its row is then the Cloud Shell block that holds its
-// public key. Before it is minted there is nothing to show.
+// renders it, and never an input: a signing key minted on the first save has
+// a row that is then the setup block holding its public key, for a person to
+// run at the app. Before it is minted there is nothing to show.
 test("a minted value's public view is shown as the engine renders it, never as an input", () => {
-  const block = "gcloud config set project acme-crewlet-id\necho done";
-  const google = (minted: boolean): SetupToolState => ({
+  const block = "vendor keys upload --account acme <<'EOF'\n{\"keys\": []}\nEOF";
+  const vendor = (minted: boolean): SetupToolState => ({
     ...tool,
-    key: "google_cloud",
+    key: "vendor",
     requirements: [
       req({
-        field: "provisioner",
-        label: "Provisioner",
+        field: "account",
+        label: "Account",
         kind: "id",
-        config_path: "integrations.google_cloud.provisioning.provisioner",
+        config_path: "integrations.vendor.provisioning.account",
       }),
       req({
-        field: "federation_key",
-        label: "Federation key",
+        field: "signing_key",
+        label: "Signing key",
         kind: "secret",
         mintable: true,
         present: minted,
-        help: "Run this block in Cloud Shell.",
-        config_path: "integrations.google_cloud.provisioning.federation_key",
+        help: "Run this block in the app's shell.",
+        config_path: "integrations.vendor.provisioning.signing_key",
         ...(minted ? { public: { text: block, language: "sh" } } : {}),
       }),
       req({
-        field: "provider",
-        label: "Provider",
+        field: "key_id",
+        label: "Key ID",
         kind: "id",
-        config_path: "integrations.google_cloud.provisioning.provider",
+        config_path: "integrations.vendor.provisioning.key_id",
       }),
     ],
   });
   const form = (minted: boolean) => (
     <SetupForm
-      sections={[{ name: "Google Cloud", tool: google(minted) }]}
-      title="Google Cloud"
+      sections={[{ name: "The vendor", tool: vendor(minted) }]}
+      title="The vendor"
       onClose={() => {}}
       onDone={() => {}}
     />
   );
   const { baseElement, rerender } = render(form(false));
-  expect(screen.queryByText("Federation key")).toBeNull();
+  expect(screen.queryByText("Signing key")).toBeNull();
   rerender(form(true));
-  const group = screen.getByRole("group", { name: "Federation key" });
-  expect(group.textContent).toContain("gcloud config set project acme-crewlet-id");
-  expect(group.textContent).toContain("Run this block in Cloud Shell.");
+  const group = screen.getByRole("group", { name: "Signing key" });
+  expect(group.textContent).toContain("vendor keys upload --account acme");
+  expect(group.textContent).toContain("Run this block in the app's shell.");
   expect(within(group).getByRole("button", { name: /Copy/ })).toBeTruthy();
   expect(within(group).queryByRole("textbox")).toBeNull();
   expect(baseElement.querySelectorAll('input[type="password"]').length).toBe(0);
-  expect(screen.getByLabelText(/Provisioner/)).toBeTruthy();
-  expect(screen.getByLabelText(/Provider/)).toBeTruthy();
+  expect(screen.getByLabelText(/Account/)).toBeTruthy();
+  expect(screen.getByLabelText(/Key ID/)).toBeTruthy();
 });
 
 // A HELD CREDENTIAL SHOWS THAT IT IS HELD, and never what it is.
