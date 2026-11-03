@@ -31,6 +31,10 @@ type LaneAnswer struct {
 	// Tool is whether the seat can use its credential through a tool now.
 	Tool ToolState `json:"tool"`
 
+	// ToolReason is why Tool is waiting, in the engine's words, where it
+	// waits on the vendor applying a grant ([Settling]); empty otherwise.
+	ToolReason string `json:"tool_reason,omitempty"`
+
 	// Administers is whether the lane's setting is an administration grant
 	// (D10), for the review's warning.
 	Administers bool `json:"administers,omitempty"`

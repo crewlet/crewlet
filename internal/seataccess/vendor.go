@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -257,6 +258,24 @@ type StepResult struct {
 	// since this GitLab token cannot block accounts"). The sync records it
 	// as the step outcome's text; empty keeps the drawn text.
 	Did string
+
+	// Settling is set by a step whose grant the vendor has written and is
+	// still applying, so the seat cannot use it yet. The sync records it on
+	// the lane and ends OK: nobody owes a step, so it is never a [Waiting].
+	Settling *Settling
+}
+
+// Settling is a grant the vendor is still applying: until Until the lane's
+// tool reads waiting, for Reason, a sentence in the engine's own words ("the
+// vendor is still applying the grant"). Past Until it clears itself.
+type Settling struct {
+	Reason string    `json:"reason"`
+	Until  time.Time `json:"until"`
+}
+
+// active reports whether s still holds the lane's tool at now.
+func (s *Settling) active(now time.Time) bool {
+	return s != nil && now.Before(s.Until)
 }
 
 // Minted is one credential a step created.

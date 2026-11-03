@@ -394,9 +394,10 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 		if issued := seataccess.IssuedCredential(q.Kind, lane, ref.Handle, d, observed); issued != nil {
 			observed.Credential = issued
 		}
+		tool, reason := seataccess.ToolOf(q.Company, ref.Handle, lane, d, observed, lr.Settling, time.Now())
 		sa.Lanes[lane] = seataccess.LaneAnswer{
 			Desired: d, Observed: observed, Sync: lr.Sync, Plan: nonNilSteps(steps[lane]),
-			Tool:        seataccess.ToolStateOf(q.Company, ref.Handle, lane, d, observed),
+			Tool: tool, ToolReason: reason,
 			Administers: seataccess.Administers(offers[lane], d),
 			Box:         seataccess.BoxOf(q.Company, q.Kind, lane, ref.Handle),
 		}

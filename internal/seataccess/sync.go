@@ -557,6 +557,7 @@ func (s *syncer) take(
 	}
 	sinks := SinkNames(s.cat, ref.Handle)
 	var prior []StepResult
+	var settling *Settling
 	for i, step := range steps {
 		if i == 0 || steps[i-1].Op != step.Op {
 			prior = nil
@@ -589,6 +590,9 @@ func (s *syncer) take(
 			break
 		}
 		prior = append(prior, res)
+		if res.Settling != nil {
+			settling = res.Settling
+		}
 		done := StepOutcome{Step: step, Done: true}
 		if res.Did != "" {
 			done.Text = res.Did
@@ -596,6 +600,11 @@ func (s *syncer) take(
 		result.Steps = append(result.Steps, done)
 	}
 	s.finish(rec, lane, want, have, result)
+	if settling.active(s.now) && want.Enabled {
+		lr := rec.Lanes[lane]
+		lr.Settling = settling
+		rec.Lanes[lane] = lr
+	}
 	switch result.Outcome {
 	case OutcomeFailed:
 		eff.removed = false
@@ -740,6 +749,10 @@ func (s *syncer) finish(rec *Record, lane Lane, want Desired, have Observed, res
 	lr := rec.Lanes[lane]
 	lr.Sync = &result
 	lr.Observed = have
+	// A GRANT THAT HAS SETTLED, or one for a lane now off, holds nothing.
+	if !lr.Settling.active(s.now) || !want.Enabled {
+		lr.Settling = nil
+	}
 	if result.Outcome == OutcomeOK {
 		applied := want
 		lr.Applied = &applied

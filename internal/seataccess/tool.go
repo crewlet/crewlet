@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
@@ -92,6 +93,22 @@ func ToolStateOf(c *config.Company, handle string, lane Lane, want Desired, have
 		return ToolWaiting
 	}
 	return ToolLive
+}
+
+// ToolOf is [ToolStateOf] with the grant the lane's last sync left settling
+// ([LaneRecord.Settling]): a tool the seat could use reads waiting, for the
+// settling's reason, while now is before its end, and as ever after it. A
+// settling grant never makes the sync itself waiting, which is a person's step.
+func ToolOf(c *config.Company, handle string, lane Lane, want Desired, have Observed,
+	settling *Settling, now time.Time) (ToolState, string) {
+	state := ToolStateOf(c, handle, lane, want, have)
+	switch {
+	case !settling.active(now):
+		return state, ""
+	case state == ToolLive, state == ToolBuiltin, state == ToolWaiting:
+		return ToolWaiting, settling.Reason
+	}
+	return state, ""
 }
 
 // boxReads reports whether the seat with handle sets every one of lane's

@@ -4138,7 +4138,11 @@ a tool right now: `live`, `waiting` (a server reads it and it is not sealed
 yet), `builtin` (Jira and Confluence, whose credential the engine's own tools
 read), `no_server` (no server the company declares reads it), `server_off`
 (every server that reads it is turned off, `enabled: false`) or `off` (the
-seat or its account is off). A lane whose tool is a CLI in the agent's own box
+seat or its account is off). A `waiting` tool also carries `tool_reason`, a
+sentence in the engine's words, where it waits on the vendor applying a grant
+the last sync wrote (a new account not yet grantable, a grant not yet in
+effect): that sync ended `ok`, since nobody owes a step, and the tool reads as
+it otherwise would once the vendor's stated wait ends. A lane whose tool is a CLI in the agent's own box
 (Expo's EAS CLI) also carries `box`, what that box holds for it: in `env`, the
 exact `sandbox.env` lines the seat needs, each variable set to the seat's own
 sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
