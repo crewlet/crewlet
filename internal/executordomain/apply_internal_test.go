@@ -379,7 +379,9 @@ func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
 
 // THE SEAT'S BUDGET RELEASES THE OLDEST ENDED SESSIONS FIRST, keeping their
 // endings, and never a live turn's: and a capture that cannot fit even with
-// every ended session released writes nothing and releases nothing.
+// every ended session released writes nothing and releases nothing. What that
+// order leaves a conversation whose head it releases first,
+// TestAHeadReleasedBeforeAStaleSiblingHandsTheNextTurnTheSibling holds.
 //
 // A row a turn's begin wrote needs no case here: it names no object, so the
 // budget, which counts and releases only rows that name one, can neither count
@@ -424,6 +426,72 @@ func TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst(t *testing.T) {
 	}
 	if l, _ := e.session("ana", live); !l.HasObject() {
 		t.Error("a live turn's session was released")
+	}
+}
+
+// A HEAD RELEASED BEFORE A STALE SIBLING HANDS THE NEXT TURN THE SIBLING, and
+// tells it how the released head ended. A turn parked on a person's question
+// read the conversation first and ended last — a STALE SIBLING; the turn that
+// read it after the parked one is the head, and ended first. The budget walks
+// the seat's ended sessions oldest END first, as the applier on every data node
+// does ([seatPlan]), so under pressure it takes the head and leaves the stale
+// sibling its session: the next read hands out the newest session the seat
+// still keeps, the sibling's, tells the released head's ending beside it and
+// hands both out, and the next end absorbs both.
+//
+// Mutation: release in the head's line order, the oldest read first, and the
+// stale sibling goes while the head keeps its session; read the head among rows
+// that name no session, and the next turn is handed one nobody keeps; leave a
+// released row out of the endings, and the head's ending is told to nobody.
+func TestAHeadReleasedBeforeAStaleSiblingHandsTheNextTurnTheSibling(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	const (
+		tight = 100
+		room  = "chat:room"
+	)
+	earlier, sibling, head, other, next := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
+	e.capture(capturing("ana", room, earlier, 1, 1, 20, tight))
+	e.end(ending("ana", room, earlier, "", Ending{Outcome: OutcomeCompleted}))
+	// THE SIBLING reads the conversation and parks; THE HEAD reads it after,
+	// ends and absorbs the turn both continued; the sibling ends last.
+	e.capture(launching(e.head("ana", room), capturing("ana", room, sibling, 1, 1, 30, tight)))
+	e.capture(launching(e.head("ana", room), capturing("ana", room, head, 1, 1, 30, tight)))
+	e.end(ending("ana", room, head, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", room, sibling, "", Ending{Outcome: OutcomeCompleted}))
+	if h := e.head("ana", room); h.Session == nil || h.Session.Turn != head {
+		t.Fatalf("the premise: the head is %+v, want the turn that read the conversation last",
+			h.Session)
+	}
+
+	// SIXTY BYTES HELD AND FIFTY TO CAPTURE under a hundred: one release makes
+	// room, and the oldest end is the head's.
+	if _, n := e.capture(capturing("ana", "chat:other", other, 1, 1, 50, tight)); n == 0 {
+		t.Fatal("a capture the budget holds once one session is released wrote nothing")
+	}
+	if s, _ := e.session("ana", head); s.HasObject() || !s.Ended() {
+		t.Errorf("the head is %+v, want its session released, the oldest end first, and its "+
+			"ending kept", s)
+	}
+	if s, _ := e.session("ana", sibling); !s.HasObject() {
+		t.Fatal("the stale sibling's session was released before the head's, which ended first")
+	}
+
+	h := e.head("ana", room)
+	if h.Session == nil || h.Session.Turn != sibling {
+		t.Fatalf("the next turn is handed %+v, want the newest session the seat still keeps, "+
+			"the stale sibling's", h.Session)
+	}
+	if !slices.Equal(turnsOf(h.Endings), []string{head}) || !slices.Contains(h.Absorbs(), head) {
+		t.Fatalf("the next turn is told %v and hands out %v, want the released head's ending "+
+			"told and handed out", turnsOf(h.Endings), h.Absorbs())
+	}
+	e.capture(launching(h, capturing("ana", room, next, 1, 1, 10, tight)))
+	e.end(ending("ana", room, next, "", Ending{Outcome: OutcomeCompleted}))
+	for _, gone := range []string{sibling, head} {
+		if _, found := e.session("ana", gone); found {
+			t.Errorf("turn %s was handed to the next turn and survived its end", gone)
+		}
 	}
 }
 
