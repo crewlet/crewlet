@@ -1219,21 +1219,27 @@ func lastLine(out string) string {
 }
 
 // killScript is the shell script that ends every process target names — a
-// pid, `-<pgid>` for a process group, or `-1` for every process its caller may
-// signal — in the shape [Sandbox.KillJob] promises: SIGTERM, up to
-// [JobStopGrace] for them to go, SIGKILL, and up to [JobStopGrace] more for
-// the kernel to take them. A target with nothing left to signal is done at
-// once.
+// pid, or `-<pgid>` for a process group — in the shape [Sandbox.KillJob]
+// promises: SIGTERM, up to [JobStopGrace] for them to go, SIGKILL, and up to
+// [JobStopGrace] more for the kernel to take them, each wait over as soon as
+// `kill -0` finds nothing of target left. A target with nothing left to
+// signal is done at once.
 //
 // THE `-SIG` SPELLING, which reads a negative operand as a pid in dash, bash
 // and busybox ash alike; dash takes `kill -s TERM -<pgid>` for an option it
 // does not know, and wants a `--` before the pid that busybox ash need not
-// read the same way (end-job-scratch/exp-kill.sh). Its output goes nowhere: a
-// box's agent that stops listening when its own process ends — which `-1` can
-// be — would otherwise end the script on its next write.
+// read the same way (end-job-scratch/exp-kill.sh).
 func killScript(target string) string {
-	await := fmt.Sprintf(`i=0; while kill -0 %s 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); done`,
-		target, int(JobStopGrace/(100*time.Millisecond)))
+	return killAndAwait(target, "kill -0 "+target+" 2> /dev/null")
+}
+
+// killAndAwait is a kill in [killScript]'s shape whose waits last while the
+// shell condition alive holds — what is left of target — and no longer than
+// a grace each. Its output goes nowhere: a box's agent that stops listening
+// when its own process ends would otherwise end the script on its next write.
+func killAndAwait(target, alive string) string {
+	await := fmt.Sprintf(`i=0; while %s && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); done`,
+		alive, int(JobStopGrace/(100*time.Millisecond)))
 	return fmt.Sprintf("exec > /dev/null 2>&1\nkill -TERM %s || exit 0\n%s\nkill -KILL %s\n%s\n",
 		target, await, target, await)
 }

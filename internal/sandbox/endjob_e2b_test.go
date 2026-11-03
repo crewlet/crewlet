@@ -40,11 +40,14 @@ func (s *e2bStub) startedScript(t *testing.T) string {
 // that answers nothing there is refused as no process of the job; a pid below
 // 2 — the VM's init, and the forms of a pid that address groups — is refused
 // before envd is asked anything. The kill is every process of the box's user:
-// envd starts a job in envd's own process group, which nothing may signal.
+// envd starts a job in envd's own process group, which nothing may signal; and
+// it waits on what is left of the user's processes, never on `kill -0 -1`,
+// which a VM's processes the user cannot signal answer with success for good.
 //
 // Mutation: drop the floor on the pid, and pid 1 is asked of envd; spell the
 // request with `-s USR1` or the kill with a `--`, and busybox ash reads the
-// kill's group as a number it refuses (end-job-scratch/exp-kill.sh).
+// kill's group as a number it refuses (end-job-scratch/exp-kill.sh); wait on
+// `kill -0 -1`, and every kill in a VM waits out both its graces.
 func TestAnE2BBoxEndsAndKillsItsJobAsItsUser(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -91,10 +94,13 @@ func TestAnE2BBoxEndsAndKillsItsJobAsItsUser(t *testing.T) {
 		t.Fatalf("KillJob: %v", err)
 	}
 	script := stub.startedScript(t)
-	for _, want := range []string{"kill -TERM -1 ", "kill -KILL -1\n", "kill -0 -1 "} {
+	for _, want := range []string{"kill -TERM -1 ", "kill -KILL -1\n", "while userlive && "} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the kill ran %q, which has no %q", script, want)
 		}
+	}
+	if strings.Contains(script, "kill -0 -1") {
+		t.Errorf("the kill ran %q, which waits on `kill -0 -1`: a VM answers it with success for good", script)
 	}
 	if strings.Contains(script, " -- ") || strings.Contains(script, "-s ") {
 		t.Errorf("the kill ran %q, a spelling busybox ash reads otherwise", script)
