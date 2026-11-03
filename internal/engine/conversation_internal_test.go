@@ -712,10 +712,13 @@ func sameTurns(a, b []string) bool {
 // conversation and renders no account of its earlier turns; the turn's first
 // launch freezes no read, records no begin and continues no session — and the
 // turn's end is recorded on the executor log all the same, which is the turn's
-// account rather than its session.
+// account rather than its session: by the frame that ends a turn of a
+// conversation refused at the delegation cap, and by the one that ends a turn
+// whose first launch was abandoned once its run was recorded, each of a company
+// with the switch off.
 //
-// Mutation: read the head with the switch off, or record no end, and a check
-// goes red.
+// Mutation: read the head with the switch off, or gate a turn's end in its
+// frame on the switch, and a check goes red.
 func TestTheSwitchOffCarriesNothingBetweenTurns(t *testing.T) {
 	t.Parallel()
 	k := newConversingLaunch(t, 0, 0)
@@ -742,10 +745,37 @@ func TestTheSwitchOffCarriesNothingBetweenTurns(t *testing.T) {
 		t.Fatalf("with the switch off the launch recorded begins %+v and continued %q", begins,
 			k.lastStarted(t).Resume)
 	}
-	k.e.endTurnNow(k.ctx, sandbox.TurnEnd{Handle: "swe", TurnID: "t9", ConversationKey: "chat:D1",
-		WorkKey: "wk-t9", Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}})
-	if row, ok := k.log.row("t9"); !ok || !row.Ended() {
-		t.Fatalf("with the switch off a turn's end was not recorded: %+v (%v)", row, ok)
+
+	capped, cappedLog := loggingEngine(t)
+	capped.Company().Config.TurnEngine.ConversationSession.Enabled = org.Off()
+	rigRuns(t, capped, halfwayPlay)
+	res, err := capped.runTurn(k.ctx, Request{
+		Handle: "swe", WorkKey: "wk-1", RunID: "run-1", WorkSince: time.Now().UTC(), Depth: 2,
+		ConversationKey: "chat:D1", Events: []*events.Event{taskWake("task-9", "ENG-9")},
+	})
+	if err != nil || res.Suspended || res.Breach == nil || res.Breach.Kind != types.GuardDepthCap {
+		t.Fatalf("runTurn = %+v, %v; want the turn refused at the delegation cap", res, err)
+	}
+	if ends := awaitEnds(t, cappedLog, "run-1", 1); len(ends) != 1 || ends[0].ConversationKey != "chat:D1" ||
+		ends[0].Ending.Outcome != executordomain.OutcomeFailed {
+		t.Fatalf("with the switch off a turn refused at the delegation cap ended %+v, want its one end, failed",
+			ends)
+	}
+
+	abandoned, abandonedLog := loggingEngine(t)
+	abandoned.Company().Config.TurnEngine.ConversationSession.Enabled = org.Off()
+	rig := rigRuns(t, abandoned, halfwayPlay)
+	rig.runners["claude-code"].StartErr = errors.New("the box refused to start its job")
+	if _, err := abandoned.runTurn(k.ctx, Request{
+		Handle: "swe", WorkKey: "wk-1", RunID: "run-1", WorkSince: time.Now().UTC(),
+		ConversationKey: "chat:D1", Events: []*events.Event{taskWake("task-9", "ENG-9")},
+	}); err == nil {
+		t.Fatal("a turn whose job would not start ran")
+	}
+	if ends := awaitEnds(t, abandonedLog, "run-1", 1); len(ends) != 1 ||
+		ends[0].Ending.Outcome != executordomain.OutcomeFailed {
+		t.Fatalf("with the switch off a turn whose first launch was abandoned ended %+v, want its one end, "+
+			"failed", ends)
 	}
 }
 
