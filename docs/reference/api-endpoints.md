@@ -11166,7 +11166,11 @@ alone; every other reader, a seat's lead included, is told the model the job
 runs under and not the entry. `bridge_calls` is always an array on a row the
 store answered — every run's tools reach it over the bridge, so an empty one is
 a run that has called nothing yet — and absent only where the run's body is
-withheld from the reader.
+withheld from the reader. A call a person approved once the run asked for it
+([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs))
+is among them, marked `approved: true`, with no `args` and no `output`: the
+run's resume made it with the arguments the run held sealed, and handed its
+result to the job that carries the work on sealed too.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed
