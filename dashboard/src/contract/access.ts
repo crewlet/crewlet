@@ -16,7 +16,8 @@
  * Crewlet's own sets of permission groups; Expo's `viewer`, `runner`,
  * `developer` or `release_manager`, each a set of Expo permissions named for
  * the Expo role that holds them; Google Cloud's `viewer`, `operator` or
- * `administer`, Crewlet's own sets of Google's predefined roles) and is drawn
+ * `administer`, Crewlet's own sets of Google's predefined roles; AWS's `read`,
+ * `operate` or `administer`, Crewlet's own customer managed policies) and is drawn
  * under the vendor's exact name, which
  * `options` carries. Datadog's, Jira's and Confluence's lists are read live
  * from the vendor, so no list of them lives here. GitHub has no levels; a
@@ -37,7 +38,8 @@ export type AccessLaneKey =
   | "mattermost"
   | "cloudflare"
   | "expo"
-  | "google_cloud";
+  | "google_cloud"
+  | "aws";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";

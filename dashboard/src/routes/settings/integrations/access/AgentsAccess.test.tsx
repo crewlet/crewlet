@@ -26,6 +26,7 @@ import {
   expoWaitingAnswer,
   githubAnswer,
   gitlabAnswer,
+  awsAnswer,
   googleCloudAnswer,
   jiraAnswer,
   mattermostAnswer,
@@ -1275,6 +1276,52 @@ test("turning a Google Cloud seat off says the account is disabled and kept", as
   expect(
     await screen.findByText(
       /Crewlet disables the agent's service account, so it loses Google Cloud at once/,
+    ),
+  ).toBeTruthy();
+});
+
+// AN AWS SEAT IS AN IAM ROLE WITH CREDENTIALS NOBODY HOLDS: the details name
+// the role, the level, credentials issued for 15 minutes at use, and the two
+// files Crewlet puts in the box for the CLI's crewlet profile. Nothing rotates.
+test("an AWS seat's details name its role, 15-minute credentials and the CLI's crewlet profile", () => {
+  draw(awsAnswer());
+  details("SRE", "AWS");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on AWS"]')!);
+  expect(facts.getByText("crewlet/gophrase/seat/crewlet-sre-7c2e")).toBeTruthy();
+  expect(facts.getByText("Permissions policies")).toBeTruthy();
+  expect(facts.getByText("Operate")).toBeTruthy();
+  expect(facts.getByText("AWS_CREDENTIALS_SRE").parentElement!.textContent).toBe(
+    "AWS_CREDENTIALS_SRE, issued for 15 minutes at a time, at use",
+  );
+  expect(facts.getByText("Live, AWS MCP Server, one per agent")).toBeTruthy();
+  const box = facts.getByText(".config/crewlet/aws-credentials.json and .aws/config");
+  expect(box.parentElement!.textContent).toContain(
+    ". AWS CLI configuration provided in ~/.aws/config as the profile crewlet, so commands use --profile crewlet",
+  );
+  expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
+});
+
+// AWS APPLYING A NEW ROLE IS NOT A PERSON'S STEP: it reads as the tool
+// waiting, in the engine's words, and never as Needs you.
+test("an AWS seat waiting on AWS says so in its tool, never Needs you", () => {
+  draw(awsAnswer({ tool: "waiting", tool_reason: "AWS is still applying the change" }));
+  expect(screen.queryByText("Needs you")).toBeNull();
+  details("SRE", "AWS");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on AWS"]')!);
+  expect(
+    facts.getByText("Waiting: AWS is still applying the change, AWS MCP Server, one per agent"),
+  ).toBeTruthy();
+});
+
+// TURNING AN AWS SEAT OFF DENIES IT EVERYTHING AND KEEPS ITS ROLE, so it stops
+// within the time the live run measured and comes back as itself.
+test("turning an AWS seat off says it is denied everything within about 2 minutes, role kept", async () => {
+  draw(awsAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "SRE on AWS" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      /Crewlet attaches AWS's deny-all policy to the agent's role and detaches its level policies, so it stops within about 2 minutes of saving/,
     ),
   ).toBeTruthy();
 });

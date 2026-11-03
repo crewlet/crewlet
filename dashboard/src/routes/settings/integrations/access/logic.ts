@@ -425,12 +425,15 @@ export function boxSettings(saved: AccessSeatLane): string | null {
 
 /**
  * What the details say after a seat's credential variable: who provides it,
- * that Crewlet issues it at use for an hour (never sealed, so no time is a
- * fleet fact), or when it was minted.
+ * that Crewlet issues it at use for the lane's period (never sealed, so no
+ * time is a fleet fact), or when it was minted.
  */
 export function credentialNote(lane: Lane, o: AccessObserved, now: number): string {
   if (providedExternally(lane, o)) return ", provided externally";
-  if (o.credential?.source === "issued") return ", issued for an hour at a time, at use";
+  if (o.credential?.source === "issued") {
+    const period = laneWords(lane.key).issued;
+    return period ? `, issued for ${period} at a time, at use` : ", issued at use";
+  }
   return o.credential?.minted_at ? `, minted ${relTime(o.credential.minted_at, now)}` : "";
 }
 

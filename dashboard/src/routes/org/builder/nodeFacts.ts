@@ -197,7 +197,8 @@ export type Tool =
   | "atlassian"
   | "cloudflare"
   | "expo"
-  | "google_cloud";
+  | "google_cloud"
+  | "aws";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -212,6 +213,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   cloudflare: "Cloudflare",
   expo: "Expo",
   google_cloud: "Google Cloud",
+  aws: "AWS",
 };
 
 /**
@@ -408,8 +410,8 @@ export function toolServersOf(seat: ConfigRole, home: DraftUnit | undefined): Se
 
 /**
  * The seat blocks each provisioning vendor keeps an account for, by their key
- * under `roles[].integrations` (`config.SeatAccessLanes`): GitLab's, Datadog's
- * and Google Cloud's own, and Atlassian's two products over its one account. A seat is
+ * under `roles[].integrations` (`config.SeatAccessLanes`): GitLab's, Datadog's,
+ * Google Cloud's and AWS's own, and Atlassian's two products over its one account. A seat is
  * enrolled with a vendor by having one of them on. Its `mcp_env` says nothing
  * about it: the engine seals each account's credential under a name of its own
  * and refuses one written there for a managed integration.
@@ -419,6 +421,7 @@ const VENDOR_LANES = {
   datadog: ["datadog"],
   atlassian: ["jira", "confluence"],
   google_cloud: ["google_cloud"],
+  aws: ["aws"],
 } as const;
 
 /**
@@ -441,7 +444,8 @@ const VENDOR_LANES = {
  * deletes it once the seat is off or gone, so nothing is left to decommission.
  *
  * GOOGLE CLOUD'S SERVICE ACCOUNT STAYS: the engine disables it when the seat
- * goes, and deletes it only when somebody removes it on the Agents tab.
+ * goes, and deletes it only when somebody removes it on the Agents tab. So
+ * does AWS's IAM role, denied everything until somebody removes it.
  */
 export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
   if (isMintedKey(seat.key)) return [];
@@ -470,6 +474,7 @@ export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[]
   if (isConnected(company, "google_cloud") && enrolled("google_cloud")) {
     out.push("its Google Cloud service account");
   }
+  if (isConnected(company, "aws") && enrolled("aws")) out.push("its AWS IAM role");
   return out;
 }
 

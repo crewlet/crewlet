@@ -197,6 +197,7 @@ export const INTEGRATION_TOOLS = {
   cloudflare: ["cloudflare"],
   expo: ["expo"],
   google_cloud: ["google_cloud"],
+  aws: ["aws"],
 } as const;
 
 /**
