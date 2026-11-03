@@ -20,12 +20,16 @@ import (
 )
 
 // trapsUSR1 is a shell line that, sent SIGUSR1, writes "heard" into heard and
-// goes on, and that writes its own pid into pid once its trap is set — a run's
-// script's end protocol in miniature.
+// goes on, and that writes its own pid into pid once its traps are set — a
+// run's script's end protocol in miniature. Sent SIGUSR2, it writes heard's
+// witness instead ([unsignalled]).
 func trapsUSR1(heard, pid string) string {
-	return `trap 'echo heard > ` + shQuote(heard) + `' USR1; echo $$ > ` + shQuote(pid) +
-		`; while :; do sleep 0.05; done`
+	return `trap 'echo heard > ` + shQuote(heard) + `' USR1; trap 'echo witnessed > ` +
+		shQuote(witnessOf(heard)) + `' USR2; echo $$ > ` + shQuote(pid) + `; while :; do sleep 0.05; done`
 }
+
+// witnessOf is the file a [trapsUSR1] shell writes when it is sent SIGUSR2.
+func witnessOf(heard string) string { return heard + ".witness" }
 
 // shQuote is s quoted for sh.
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -63,16 +67,28 @@ func startStrangerTrapping(t *testing.T, dir string) (int, string) {
 	return readPID(t, pidFile), heard
 }
 
-// absentFor fails the case if path appears within a window a delivered signal
-// would have shown in: a trap runs within the 50 ms of its shell's sleep.
-func absentFor(t *testing.T, path, what string) {
+// unsignalled fails the case if the [trapsUSR1] shell at pid, whose heard
+// file is heard, was sent SIGUSR1 before now. It sends the shell SIGUSR2 and
+// waits for the witness that writes: of two signals pending, the kernel
+// delivers the lower-numbered first, and the shell runs the traps of the
+// signals it caught in the same order, so an end request sent before the
+// witness has written heard by the time the witness is written.
+//
+// NOT A QUIET WINDOW, of any length: a trap that has not run yet is no
+// evidence that nothing was sent, and a loaded runner delays a trap past any
+// window, so a window only sees a signal that is quick to show.
+func unsignalled(t *testing.T, pid int, heard, what string) {
 	t.Helper()
-	deadline := time.Now().Add(300 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			t.Fatal(what)
-		}
-		time.Sleep(20 * time.Millisecond)
+	witness := witnessOf(heard)
+	if err := syscall.Kill(pid, syscall.SIGUSR2); err != nil {
+		t.Fatalf("sending pid %d its witness signal: %v", pid, err)
+	}
+	waitFor(t, 10*time.Second, func() bool {
+		_, err := os.Stat(witness)
+		return err == nil
+	}, fmt.Sprintf("pid %d never wrote its witness %s", pid, witness))
+	if _, err := os.Stat(heard); err == nil {
+		t.Fatal(what)
 	}
 }
 
@@ -109,7 +125,7 @@ func TestADirectBoxEndsOnlyAProcessOfItsJob(t *testing.T) {
 		t.Fatalf("an end request for a job the box's record does not name was answered %v, "+
 			"want ErrNotJobProcess", err)
 	}
-	absentFor(t, heard, "the script was signalled for a job the record does not name")
+	unsignalled(t, script, heard, "the script was signalled for a job the record does not name")
 
 	if err := box.EndJob(t.Context(), handle, script); err != nil {
 		t.Fatalf("EndJob of the job's own script: %v", err)
@@ -118,7 +134,7 @@ func TestADirectBoxEndsOnlyAProcessOfItsJob(t *testing.T) {
 		_, err := os.Stat(heard)
 		return err == nil
 	}, "the job's script never heard its end request")
-	absentFor(t, strangerHeard, "the process outside the job was signalled")
+	unsignalled(t, stranger, strangerHeard, "the process outside the job was signalled")
 }
 
 // A DIRECT BOX KILLS EVERY PROCESS OF ITS JOB AND KEEPS THE BOX. The read that
