@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -35,6 +36,10 @@ type Options struct {
 	// Managed are the token IDs the access ledger records. The orphan
 	// advisory never reports them.
 	Managed []string
+
+	// InUse are the levels a seat that is on holds ([seataccess.LevelsInUse]):
+	// a level the token cannot grant is a problem only for one of them.
+	InUse []string
 }
 
 // Result is what one pass found. It writes nothing at Cloudflare.
@@ -48,12 +53,14 @@ type Result struct {
 	// MissingZones are the configured zones the account does not have.
 	MissingZones []string
 
-	// Unresolved is, by level, the permission group names the account's
-	// catalogue does not offer.
-	Unresolved map[string][]string
+	// OwnUnheld are the groups the provisioner needs for itself and lacks.
+	OwnUnheld []string
 
-	// Unheld are the provisioner groups the token does not hold itself.
-	Unheld []string
+	// Gaps are the levels the account's catalogue or the token cannot grant.
+	Gaps []seataccess.LevelGap
+
+	// InUse are the levels a seat that is on holds.
+	InUse []string
 
 	// Orphaned are the active tokens named for this company's agents that
 	// the ledger does not record: reported, never touched, since a name is
@@ -94,7 +101,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	return &Result{
 		Status: in.status, Zones: len(in.zones), MissingZones: in.cat.missingZones,
-		Unresolved: in.unresolved, Unheld: in.unheld,
+		OwnUnheld: ownUnheld(in.unheld), Gaps: levelGaps(in.unresolved, in.unheld, opts.Client.TokensURL()),
+		InUse:     opts.InUse,
 		Orphaned:  orphanedTokens(tokens, opts.Managed, opts.Company, in.status.ID),
 		TokensURL: opts.Client.TokensURL(), now: now,
 	}, nil
@@ -129,7 +137,7 @@ func reconcileError(err error) error {
 		return fmt.Errorf("cloudflare: integrations.cloudflare.provisioning.api_token: %w: %w",
 			integration.ErrCredentialRejected, err)
 	}
-	rejected := integration.Reject(err, Status(err))
+	rejected := reject(err)
 	if errors.Is(rejected, integration.ErrCredentialRejected) && needs != "" {
 		return fmt.Errorf("cloudflare: the provisioner token in integrations.cloudflare."+
 			"provisioning.api_token was refused reading %s, which needs %s: %w", where, needs, rejected)
@@ -172,20 +180,7 @@ func (r *Result) Findings() []integration.Finding {
 			ActionURL: r.TokensURL, Subjects: r.MissingZones,
 		})
 	}
-	for _, level := range Levels() {
-		missing := r.Unresolved[level]
-		if len(missing) == 0 {
-			continue
-		}
-		out = append(out, integration.Finding{
-			Kind: integration.FindingUnknownTier, Subject: "cloudflare level " + level,
-			Title: "Permission groups not found",
-			Detail: fmt.Sprintf("Cloudflare lists no permission group a token can be granted named %s, "+
-				"which the %s level grants, so no agent can be given that level", words.And(missing), LevelName(level)),
-			Remedy:   "Move the agents at this level to another one on the Agents tab until Cloudflare lists the group again",
-			Subjects: missing,
-		})
-	}
+	out = append(out, seataccess.GapFindings(r.Gaps, r.InUse)...)
 	if len(r.Orphaned) > 0 {
 		names := make([]string, 0, len(r.Orphaned))
 		for _, tok := range r.Orphaned {
@@ -201,14 +196,14 @@ func (r *Result) Findings() []integration.Finding {
 			ActionURL: r.TokensURL, Subjects: names,
 		})
 	}
-	if len(r.Unheld) > 0 {
+	if len(r.OwnUnheld) > 0 {
 		out = append(out, integration.Finding{
 			Kind: integration.FindingGrantShort, Subject: subjectToken,
 			Title: "Provisioner token is missing permissions",
-			Detail: "The provisioner token does not hold " + integration.Count(len(r.Unheld), "permission group") +
-				" an agent level grants, and Crewlet grants an agent nothing the token does not hold itself",
+			Detail: "The provisioner token does not hold " + words.And(dashboardNames(r.OwnUnheld)) +
+				", which it needs to manage the agents' tokens at all",
 			Remedy:    "Edit the provisioner token at Cloudflare to add them over the account and its zones",
-			ActionURL: r.TokensURL, Subjects: r.Unheld,
+			ActionURL: r.TokensURL, Subjects: dashboardList(r.OwnUnheld),
 		})
 	}
 	return out

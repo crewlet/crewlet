@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -56,27 +59,32 @@ func Probe(httpClient *http.Client) setup.Probe {
 				" in the account. Correct integrations.cloudflare.provisioning.zones, or give the " +
 				"token access to the zone at Cloudflare."), nil
 		}
-		if len(in.unresolved) > 0 {
-			var parts []string
-			for _, level := range Levels() {
-				if missing := in.unresolved[level]; len(missing) > 0 {
-					parts = append(parts, fmt.Sprintf("%s for %s", words.And(missing), LevelName(level)))
-				}
-			}
-			return setup.Refused("The token works, but Cloudflare lists no permission group a " +
-				"token can be granted named " + strings.Join(parts, "; ") + "."), nil
-		}
-		if len(in.unheld) > 0 {
+		if own := ownUnheld(in.unheld); len(own) > 0 {
 			them := "them"
-			if len(in.unheld) == 1 {
+			if len(own) == 1 {
 				them = "it"
 			}
-			return setup.Refused("The token works, but it is missing " + words.And(in.unheld) +
-				", which an agent level grants. Edit the token at Cloudflare to add " + them +
-				": Crewlet grants an agent nothing the token does not hold itself."), nil
+			return setup.Refused("The token works, but it is missing " + words.And(dashboardNames(own)) +
+				", which Crewlet needs to manage the agents' tokens. Edit the token at Cloudflare to add " +
+				them + "."), nil
+		}
+		// A LEVEL IT CANNOT GRANT is unavailable, not a broken token, unless it
+		// is the default one: then no agent can be given a level at all.
+		gaps := levelGaps(in.unresolved, in.unheld, "")
+		if i := slices.IndexFunc(gaps, func(g seataccess.LevelGap) bool {
+			return g.Level == config.CloudflareLevelRead
+		}); i >= 0 {
+			return setup.Refused("The token works, but no agent can be given a level yet. " +
+				gaps[i].Reason + "."), nil
 		}
 		detail := fmt.Sprintf("Works. The token is active, reads %s in the account and holds "+
 			"every permission an agent level grants", countZones(len(in.zones)))
+		if len(gaps) > 0 {
+			detail = fmt.Sprintf("Works. The token is active and reads %s in the account", countZones(len(in.zones)))
+			for _, g := range gaps {
+				detail += ". " + g.Reason
+			}
+		}
 		if !in.status.ExpiresOn.IsZero() {
 			detail += ". It expires on " + in.status.ExpiresOn.Format(time.DateOnly)
 		}
@@ -102,11 +110,20 @@ func probeVerdict(ctx context.Context, err error, token string) setup.Verdict {
 		return setup.Verdict{Outcome: setup.VerifyUnreachable, Detail: "Cloudflare did not " +
 			"answer in time while checking " + name + ". Nothing was stored."}
 	}
+	if TokenRefused(err) {
+		return setup.Refused("This is not a valid Cloudflare API token. Paste only the token's value, " +
+			"from Copy on the token page.")
+	}
 	reason := ""
-	if api, ok := errors.AsType[*APIError](err); ok && api.Detail != noDetail {
+	api, isAPI := errors.AsType[*APIError](err)
+	if isAPI && api.Detail != noDetail {
 		reason = api.Detail
 	}
-	verdict := setup.Judge(setup.Failure{App: "Cloudflare", Err: err, Status: Status(err)}, "")
+	// THE ADDRESS IS FIXED (APIBase), so a 4xx other than a rate limit is
+	// Cloudflare refusing what was sent, never an address that is wrong.
+	refused := isAPI && api.Status >= http.StatusBadRequest && api.Status < http.StatusInternalServerError &&
+		api.Status != http.StatusTooManyRequests
+	verdict := setup.Judge(setup.Failure{App: "Cloudflare", Err: err, Status: Status(err), Refused: refused}, "")
 	if verdict.Outcome != setup.VerifyRefused {
 		return verdict
 	}

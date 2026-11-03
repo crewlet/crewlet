@@ -2,15 +2,21 @@
  * Per-seat access answers as the engine sends them, for the Agents tab's
  * suites: GoPhrase's Datadog (SRE on the Datadog Admin Role, its tool live,
  * the rest off), its GitHub (every agent on, with the app permissions its
- * old tier registered), its Cloudflare (SRE able to purge, the rest off) and
- * its Expo (QA's robot a Developer, the rest off), built from the fields a
- * case names.
+ * old tier registered), its GitLab (Dev a Developer in a group that lists no
+ * projects), its Cloudflare (SRE able to purge, the rest off) and its Expo
+ * (QA's robot a Developer, the rest off), built from the fields a case names.
  *
  * Times are relative to the moment the fixture is built, so "1d ago" reads
  * the same on every run.
  */
 
-import type { AccessAnswer, AccessOptions, AccessSeat, AccessSeatLane } from "~/contract/access.ts";
+import type {
+  AccessAnswer,
+  AccessBox,
+  AccessOptions,
+  AccessSeat,
+  AccessSeatLane,
+} from "~/contract/access.ts";
 import { lanesOf, type Lane } from "./logic.ts";
 
 const MIN = 60_000;
@@ -20,6 +26,7 @@ export const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
 const DATADOG_OPTIONS: AccessOptions = {
   lane: "datadog",
+  tool_server: "datadog",
   live: true,
   rotatable: true,
   levels: [
@@ -32,6 +39,7 @@ const DATADOG_OPTIONS: AccessOptions = {
 
 const GITHUB_OPTIONS: AccessOptions = {
   lane: "github",
+  tool_server: "github",
   live: false,
   permissions: [
     { key: "contents", name: "Contents", administers_on_write: true },
@@ -42,6 +50,8 @@ const GITHUB_OPTIONS: AccessOptions = {
     { key: "deployments", name: "Deployments" },
     { key: "workflows", name: "Workflows", write_only: true, administers_on_write: true },
   ],
+  scoped: true,
+  scope_live: true,
   scope: ["gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"],
 };
 
@@ -52,17 +62,45 @@ const MATTERMOST_OPTIONS: AccessOptions = {
     { id: "system_user", name: "Member" },
     { id: "system_user system_post_all_public", name: "Member who posts in any public channel" },
   ],
+  scoped: true,
+  scope_live: true,
   scope: ["town-square", "incidents", "releases"],
 };
 
-/** Cloudflare's two fixed levels, each a set of permission groups the engine resolves. */
+/** A GitLab group whose connection lists no projects, so any project in it may be typed. */
+const GITLAB_OPTIONS: AccessOptions = {
+  lane: "gitlab",
+  tool_server: "gitlab",
+  live: true,
+  rotatable: true,
+  levels: [
+    { id: "20", name: "Reporter" },
+    { id: "30", name: "Developer" },
+    { id: "40", name: "Maintainer", administers: true },
+  ],
+  scoped: true,
+  scope_live: true,
+  scope_open: true,
+};
+
+/**
+ * Cloudflare's three fixed levels, each a set of permission groups the engine
+ * resolves; Configure waits on groups the provisioner token does not hold.
+ */
 const CLOUDFLARE_OPTIONS: AccessOptions = {
   lane: "cloudflare",
+  tool_server: "cloudflare",
   live: false,
   rotatable: true,
   levels: [
     { id: "read", name: "Read" },
     { id: "operate", name: "Operate" },
+    {
+      id: "configure",
+      name: "Configure",
+      unavailable:
+        "The Configure level is unavailable until the provisioner token holds Zone Settings: Edit and Response Compression: Edit",
+    },
   ],
 };
 
@@ -100,6 +138,8 @@ const CONFLUENCE_OPTIONS: AccessOptions = {
     { id: "create:comment", name: "Add comments" },
     { id: "administer:space", name: "Admin", administers: true },
   ],
+  scoped: true,
+  scope_live: true,
   scope: ["ENG", "OPS"],
 };
 
@@ -117,6 +157,8 @@ const JIRA_OPTIONS: AccessOptions = {
     { id: "10003", name: "Member" },
     { id: "10004", name: "Administrator", administers: true },
   ],
+  scoped: true,
+  scope_live: true,
   scope: ["ENG", "OPS"],
 };
 
@@ -124,6 +166,7 @@ export const DATADOG_LANE = laneOf(DATADOG_OPTIONS);
 export const JIRA_LANE = laneOf(JIRA_OPTIONS);
 export const CONFLUENCE_LANE = laneOf(CONFLUENCE_OPTIONS);
 export const GITHUB_LANE = laneOf(GITHUB_OPTIONS);
+export const GITLAB_LANE = laneOf(GITLAB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
 export const CLOUDFLARE_LANE = laneOf(CLOUDFLARE_OPTIONS);
 export const EXPO_LANE = laneOf(EXPO_OPTIONS);
@@ -225,6 +268,32 @@ export function githubAnswer(): AccessAnswer {
   };
 }
 
+/** GitLab with Dev a Developer on one project, in a group that lists none. */
+export function gitlabAnswer(): AccessAnswer {
+  return {
+    kind: "gitlab",
+    revision: "rev-7",
+    syncing: false,
+    options: [GITLAB_OPTIONS],
+    seats: [
+      seat("dev", "Dev", {
+        gitlab: onLane({
+          variable: "GITLAB_TOKEN_DEV",
+          desired: { enabled: true, level: "30", scope: ["gophrase/backend"] },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet-gophrase-dev",
+            level: "30",
+            scope: ["gophrase/backend"],
+            credential: { variable: "GITLAB_TOKEN_DEV", minted_at: ago(DAY) },
+          },
+        }),
+      }),
+    ],
+  };
+}
+
 /** Mattermost with one bot on and in no channel yet. */
 export function mattermostAnswer(): AccessAnswer {
   return {
@@ -318,6 +387,11 @@ export function cloudflareAnswer(): AccessAnswer {
   };
 }
 
+/** The line Expo's EAS CLI needs in a seat's box, as the engine sends it. */
+const expoBox = (handle: string): AccessBox => ({
+  env: [{ name: "EXPO_TOKEN", value: `\${EXPO_TOKEN_${handle}}`, by: "you" }],
+});
+
 /**
  * Expo with QA's robot on Developer, its token named in its sandbox env so its
  * tool is live, and PM off at the default level.
@@ -330,10 +404,11 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
     last_sync_at: ago(4 * MIN),
     options: [EXPO_OPTIONS],
     seats: [
-      seat("pm", "PM", { expo: offLane("viewer") }),
+      seat("pm", "PM", { expo: { ...offLane("viewer"), box: expoBox("PM") } }),
       seat("qa", "QA", {
         expo: onLane({
           variable: "EXPO_TOKEN_QA",
+          box: expoBox("QA"),
           desired: { enabled: true, level: "developer" },
           observed: {
             exists: true,

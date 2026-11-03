@@ -176,10 +176,11 @@ func TestTheTranscriptRidesTheLaunchsRecordRedacted(t *testing.T) {
 // question is redacted where its ask is recorded ([Ask.Redacted]), so the
 // question's case asks through the store with the tokens in its context.
 //
-// Mutation: skip the publish's redaction of a box's result (collectedRecord's), or
-// the ask's where it is recorded, and the report's, the failure's and the
-// question's records carry the tokens; drop the run-token rule from
-// internal/redact, and every case does.
+// Mutation: skip the coordinator's redaction of a box's report and failure —
+// where they are fitted ([Coordinator.fitText]) and where they are published
+// (collectedRecord's), each enough alone — or the ask's where it is recorded,
+// and the report's, the failure's and the question's records carry the
+// tokens; drop the run-token rule from internal/redact, and every case does.
 func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 	t.Parallel()
 	const engine = "https://engine.example.com"
@@ -259,6 +260,37 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 				t.Errorf("no record carries what the box printed, redacted: %v", records)
 			}
 		})
+	}
+}
+
+// THE RECORD'S TWO REASONS ARE REDACTED AS IT IS PUBLISHED. Why a run started
+// a session of its own quotes what OpenCode answered in the box, and why its
+// session was not kept quotes the refusal the take met, which can quote what
+// the box's archive holds — and the box's environment holds the seat's
+// credentials. The runner holds the first where it builds the run's result,
+// and the take the second where it meets it, but the record trusts neither,
+// nor a host of another build, as it trusts no runner with the report: each
+// reason is redacted again as the record is published, whole, and then cut
+// ([boundReason]).
+//
+// Mutation: carry either reason as it was handed over, or cut it without
+// redacting it, and the case goes red.
+func TestTheRecordsTwoReasonsAreRedactedAsItIsPublished(t *testing.T) {
+	t.Parallel()
+	const body = "Q7wErTy9UiOp3AsDfGh5JkLzXcVbNm1PqRsT"
+	rec := collectedRecord(PendingRun{}, LaunchRecord{}, Result{
+		Success:  true,
+		Text:     "done",
+		FellBack: "OpenCode did not import it: Error: ghp_" + body,
+		Kept:     &SessionKept{NotKept: "the box's session could not be taken: ghp_" + body},
+	}, time.Now())
+	for field, said := range map[string]string{
+		"harness_session_fell_back": rec.HarnessSessionFellBack,
+		"session_not_kept":          rec.SessionNotKept,
+	} {
+		if strings.Contains(said, body) || !strings.Contains(said, redact.Marker) {
+			t.Errorf("the record's %s is %q; want the credential it quoted redacted", field, said)
+		}
 	}
 }
 

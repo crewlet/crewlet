@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,14 +78,19 @@ func TestACloudflareSeatNamesALevelTheEngineOffers(t *testing.T) {
 		!strings.Contains(err.Error(), "roles[0].integrations.cloudflare.level") {
 		t.Errorf("an unknown level = %v, want a refusal naming the seat's level", err)
 	}
-	c, err := config.ParseCompany([]byte(doc(", level: operate")))
-	if err != nil {
-		t.Fatalf("operate was refused: %v", err)
+	for _, level := range config.CloudflareLevels() {
+		c, err := config.ParseCompany([]byte(doc(", level: " + level)))
+		if err != nil {
+			t.Fatalf("%s was refused: %v", level, err)
+		}
+		if got := c.Roles[0].Integrations.Cloudflare.LevelOrDefault(); got != level {
+			t.Errorf("level = %q, want %s", got, level)
+		}
 	}
-	if got := c.Roles[0].Integrations.Cloudflare.LevelOrDefault(); got != config.CloudflareLevelOperate {
-		t.Errorf("level = %q, want operate", got)
+	if !slices.Contains(config.CloudflareLevels(), config.CloudflareLevelConfigure) {
+		t.Errorf("levels %v do not offer configure", config.CloudflareLevels())
 	}
-	c, err = config.ParseCompany([]byte(doc("")))
+	c, err := config.ParseCompany([]byte(doc("")))
 	if err != nil {
 		t.Fatalf("a seat naming no level was refused: %v", err)
 	}

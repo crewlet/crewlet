@@ -21,7 +21,7 @@
  * again and install.
  */
 
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
@@ -33,6 +33,7 @@ import {
   Spinner,
   Switch,
   Tag,
+  TagsInput,
   VisuallyHidden,
   type DataTableColumn,
   type DataTableRowTone,
@@ -53,11 +54,12 @@ import { asSentence, plural, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import "~/styles/access.css";
-import { accessApi, refusalWords, type AccessDraft } from "./api.ts";
+import { accessApi, refusalWords, type AccessDraft, type PlacedRefusal } from "./api.ts";
 import { PermissionsDialog, RemoveDialog, ReviewDialog, RotateDialog } from "./Dialogs.tsx";
 import {
   accessWords,
   availableActions,
+  boxSettings,
   emptyScopeHint,
   joinLevels,
   lanesOf,
@@ -68,6 +70,7 @@ import {
   levelsHeading,
   levelSummary,
   noToolRemedy,
+  onlyScope,
   offSentence,
   permissionCount,
   permissionWords,
@@ -75,8 +78,11 @@ import {
   productOnlyNote,
   providedExternally,
   refusedLevel,
+  refusedScope,
   sameDesired,
   scopeApplies,
+  scopeChoices,
+  scopeUnavailable,
   scopeWords,
   statusOf,
   syncValue,
@@ -140,14 +146,19 @@ const UNSAVED_WORDS = {
 function levelOptions(lane: Lane): SelectOption[] {
   // WHERE THE LIST COMES FROM is the menu's own heading; the empty level
   // (product access only) carries the vendor's note on what it then sees. A
-  // multi-select has no empty row: choosing nothing is that level.
+  // multi-select has no empty row: choosing nothing is that level. A level the
+  // connection cannot grant yet is offered disabled, saying why.
   const group = levelsHeading(lane);
   return lane.levels
     .filter((l) => !(lane.multiple && l.id === ""))
     .map((l) => ({
       value: l.id,
       label: l.custom ? `${l.name} (custom)` : l.name,
-      ...(l.note ? { description: l.note } : {}),
+      ...(l.unavailable
+        ? { description: l.unavailable, disabled: true }
+        : l.note
+          ? { description: l.note }
+          : {}),
       group,
     }));
 }
@@ -172,6 +183,21 @@ export function AgentsAccess({
   const [editing, setEditing] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [rotating, setRotating] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [said, setSaid] = useState("");
+  // A REFUSAL ABOUT ONE SEAT'S CONTROL, drawn beside that control until the
+  // seat's draft changes.
+  const [refusal, setRefusal] = useState<PlacedRefusal | null>(null);
+  const uid = useId();
+  const refusalId = (seat: AccessSeat, lane: Lane) => `${uid}-refused-${seat.handle}-${lane.key}`;
+  /** The refusal about this seat's lane and one of these controls, or undefined. */
+  const refusalAt = (seat: AccessSeat, lane: Lane, ...fields: PlacedRefusal["field"][]) =>
+    refusal?.seat === seat.handle && refusal.lane === lane.key && fields.includes(refusal.field)
+      ? refusal
+      : undefined;
+  /** What a control a refusal names carries: the refused mark, and the sentence that says why. */
+  const refusedProps = (seat: AccessSeat, lane: Lane, ...fields: PlacedRefusal["field"][]) =>
+    refusalAt(seat, lane, ...fields)
+      ? { error: true, "aria-describedby": refusalId(seat, lane) }
+      : {};
   // WHAT EACH SEAT'S LANE HAS IN FLIGHT, so its own buttons say so and the
   // rest of the table stays usable.
   const [pending, setPending] = useState<Record<string, Pending>>({});
@@ -190,7 +216,7 @@ export function AgentsAccess({
 
   const lanes = lanesOf(data);
   const seats = only ? data.seats.filter((s) => s.handle === only) : data.seats;
-  const scoped = lanes.some((l) => l.scope !== undefined);
+  const scoped = lanes.some((l) => l.scoped);
   // A HELD TAB says why on each control; a read-only one draws no control at all.
   // A HOLD stops everything; a read-only document stops only what writes it.
   const locked = held !== undefined || readOnly !== undefined || data.syncing;
@@ -207,12 +233,13 @@ export function AgentsAccess({
       const saved = seat.lanes[lane.key];
       if (d && saved && !sameDesired(lane, d, saved.desired)) {
         changes++;
-        refused ??= refusedLevel(lane, d) ?? undefined;
+        refused ??= refusedLevel(lane, d) ?? refusedScope(lane, d, seat.name) ?? undefined;
       }
     }
 
   const change = (seat: AccessSeat, lane: Lane, next: Partial<AccessDesired>) => {
     setSaid("");
+    setRefusal((r) => (r?.seat === seat.handle && r.lane === lane.key ? null : r));
     setDraft((d) => {
       const merged = { ...desiredOf(seat, lane.key), ...next };
       const lanesDraft = { ...(d[seat.handle] ?? {}) };
@@ -336,7 +363,10 @@ export function AgentsAccess({
               checked={want.enabled}
               disabled={locked || seat.departed}
               title={held}
-              onCheckedChange={(checked) => change(seat, lane, { enabled: checked })}
+              onCheckedChange={(checked) => {
+                const only = checked ? onlyScope(lane, want) : undefined;
+                change(seat, lane, only ? { enabled: true, scope: only } : { enabled: checked });
+              }}
             />
           )}
         </>
@@ -364,6 +394,7 @@ export function AgentsAccess({
                 menuClassName="agent-access-menu"
                 multiple
                 ariaLabel={`${seat.name}'s ${lane.name} permissions`}
+                {...refusedProps(seat, lane, "level")}
                 value={levelIds(want.level)}
                 options={levelOptions(lane)}
                 disabled={off || locked || seat.departed}
@@ -383,6 +414,7 @@ export function AgentsAccess({
                 width="full"
                 menuClassName="agent-access-menu"
                 ariaLabel={`${seat.name}'s ${lane.name} access`}
+                {...refusedProps(seat, lane, "level")}
                 value={want.level ?? ""}
                 options={levelOptions(lane)}
                 disabled={off || locked || seat.departed}
@@ -397,6 +429,9 @@ export function AgentsAccess({
                 variant="ghost"
                 disabled={off || locked || seat.departed}
                 title={permissionWords(lane, want.permissions)}
+                aria-describedby={
+                  refusalAt(seat, lane, "permissions") ? refusalId(seat, lane) : undefined
+                }
                 onClick={() => setEditing({ seat, lane })}
               >
                 {permissionCount(lane, want.permissions)}
@@ -409,42 +444,56 @@ export function AgentsAccess({
       },
     },
     scope: {
-      label: laneWords(lanes.find((l) => l.scope !== undefined)?.key ?? "").scope?.noun ?? "Scope",
+      label: laneWords(lanes.find((l) => l.scoped)?.key ?? "").scope?.noun ?? "Scope",
       sortable: false,
       render: ({ seat, lane, want }) => {
-        const off = !want.enabled;
-        const words = laneWords(lane.key);
-        return (
-          <>
-            {!scopeApplies(lane, want) || !words.scope ? null : readOnly ? (
-              <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>
-            ) : lane.scope ? (
-              <Select
-                size="sm"
-                width="full"
-                menuClassName="agent-access-menu"
-                multiple
-                searchable
-                ariaLabel={`${seat.name}'s ${lane.name} ${words.scope.noun.toLowerCase()}`}
-                value={want.scope ?? []}
-                options={lane.scope.map((o) => ({ value: o, label: o }))}
-                disabled={off || locked || seat.departed}
-                placeholder={words.scope.empty}
-                onChange={(v) =>
-                  change(seat, lane, {
-                    scope: (Array.isArray(v) ? v : [v]).map(String),
-                  })
-                }
-                renderMultiLabel={(sel) =>
-                  sel.length === 0
-                    ? words.scope!.empty
-                    : sel.length <= 2
-                      ? sel.map((s) => s.label).join(", ")
-                      : plural(sel.length, words.scope!.singular, words.scope!.noun.toLowerCase())
-                }
-              />
-            ) : null}
-          </>
+        const words = laneWords(lane.key).scope;
+        if (!scopeApplies(lane, want) || !words) return null;
+        if (readOnly)
+          return <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>;
+        const unavailable = scopeUnavailable(lane, want.scope);
+        if (unavailable) return <span className="agent-access-quiet">{unavailable}</span>;
+        const label = `${seat.name}'s ${lane.name} ${words.noun.toLowerCase()}`;
+        const disabled = !want.enabled || locked || seat.departed;
+        const choices = scopeChoices(lane, want.scope);
+        const pick = (next: string[]) => change(seat, lane, { scope: next });
+        const refused = refusalAt(seat, lane, "scope");
+        // AN OPEN CONNECTION LISTS NOT ALL IT REACHES (a GitHub installation
+        // on every repository), so an entry it does not list may be typed.
+        return lane.scope_open ? (
+          <TagsInput
+            aria-label={label}
+            value={want.scope ?? []}
+            options={choices}
+            allowCustom
+            disabled={disabled}
+            placeholder={words.empty}
+            aria-invalid={refused ? true : undefined}
+            aria-describedby={refused ? refusalId(seat, lane) : undefined}
+            onChange={pick}
+          />
+        ) : (
+          <Select
+            size="sm"
+            width="full"
+            menuClassName="agent-access-menu"
+            multiple
+            searchable
+            ariaLabel={label}
+            {...refusedProps(seat, lane, "scope")}
+            value={want.scope ?? []}
+            options={choices}
+            disabled={disabled}
+            placeholder={words.empty}
+            onChange={(v) => pick((Array.isArray(v) ? v : [v]).map(String))}
+            renderMultiLabel={(sel) =>
+              sel.length === 0
+                ? words.empty
+                : sel.length <= 2
+                  ? sel.map((x) => x.label).join(", ")
+                  : plural(sel.length, words.singular, words.noun.toLowerCase())
+            }
+          />
         );
       },
     },
@@ -515,7 +564,13 @@ export function AgentsAccess({
           variant="warning"
           title={`No ${name} tool for ${only ? "this agent" : "its agents"}`}
         >
-          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: ${noToolRemedy(lanes[0]!.key)}`}
+          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: ${noToolRemedy(
+            lanes[0]!,
+            withoutTool.flatMap((s) => {
+              const saved = s.lanes[lanes[0]!.key];
+              return saved ? [{ name: s.name, saved }] : [];
+            }),
+          )}`}
         </Callout>
       )}
 
@@ -572,9 +627,19 @@ export function AgentsAccess({
                 onRemove: () => setRemoving({ seat: row.seat, lane: row.lane }),
               });
           const hint = emptyScopeHint(row.lane, row.want) ?? productOnlyNote(row.lane, row.want);
-          return message || hint ? (
+          const placed = refusalAt(row.seat, row.lane, "level", "permissions", "scope");
+          return message || hint || placed ? (
             <div className="agent-access-under">
               {message}
+              {placed && (
+                <p
+                  id={refusalId(row.seat, row.lane)}
+                  className="t-caption agent-access-refused"
+                  role="alert"
+                >
+                  {placed.words}
+                </p>
+              )}
               {hint && <p className="t-caption">{hint}</p>}
             </div>
           ) : null;
@@ -590,7 +655,14 @@ export function AgentsAccess({
       {/* THE KIT'S STICKY BAR, which docks to the foot on a phone and says the
           count as it changes: what is drafted, Discard, and the review. */}
       {!readOnly && (
-        <SelectionBar count={changes} onClear={() => setDraft({})} labels={UNSAVED_WORDS}>
+        <SelectionBar
+          count={changes}
+          onClear={() => {
+            setDraft({});
+            setRefusal(null);
+          }}
+          labels={UNSAVED_WORDS}
+        >
           <Button
             size="small"
             variant="primary"
@@ -620,6 +692,14 @@ export function AgentsAccess({
           // from a newer revision) keeps the draft and reads again; the review
           // plans it again against the revision that came back.
           onStale={reload}
+          // A REFUSAL ABOUT A SEAT ON THIS TABLE is drawn beside its control;
+          // one about a seat the table does not show is said in the banner.
+          onRefused={(r) => {
+            setReview(false);
+            if (rows.some((row) => row.seat.handle === r.seat && row.lane.key === r.lane))
+              setRefusal(r);
+            else setSaid(r.words);
+          }}
         />
       )}
       {editing && (
@@ -905,6 +985,8 @@ function Details({
 }) {
   const o = saved.observed;
   const outside = managedOutside(lane);
+  // WHAT CREWLET PUTS IN THE SEAT'S BOX ITSELF, beside the lines a person adds.
+  const settings = boxSettings(saved);
   const buttons =
     actions.length > 0 ? (
       <span className="agent-access-detail-actions">
@@ -962,6 +1044,9 @@ function Details({
               ),
             ],
             ["Tool", toolWords(lane, saved)],
+            ...(settings
+              ? [["Set by Crewlet", <span className="mono">{settings}</span>] as const]
+              : []),
             ["Last sync", syncValue(saved, now)],
           ]}
         />

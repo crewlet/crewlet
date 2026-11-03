@@ -1602,19 +1602,32 @@ const (
 	// the settings chunk +1134 bytes, the integrations model chunk +485 bytes
 	// and its sheet +179 bytes, the kit's chunks +313 bytes net, the Problems
 	// chunk +66 bytes, and 72 bytes across the rest. 5444 KiB.
+	// The kit's move to 0.91.0 (the Scaleway and DigitalOcean marks) took it
+	// from 5443.7 KiB to 5444.6 KiB (+0.9 KiB, 967 bytes): the icons chunk
+	// +1409 bytes for the two marks, less 442 bytes net across the kit's
+	// renamed chunks, the shell page and the stylesheet. 5445 KiB.
+	// The Agents tab's generic scope and tool mechanics (scope names, a list
+	// that could not be read, a required scope and its single-entry pre-fill,
+	// an open connection's typed entries, a refusal drawn beside its control,
+	// each seat's box lines from the engine and a lane's two tool routes) took
+	// it from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, 3165 bytes): the
+	// integrations model chunk +3096 bytes, its sheet +61 bytes and 8 bytes
+	// elsewhere. 5448 KiB.
+	// A level an agent cannot be given drawn disabled with its reason, a
+	// setup verdict that wraps, and the kit's move to 0.92.0 (a StatusDot's
+	// word that wraps) took it from 5447.7 KiB to 5449.2 KiB (+1.5 KiB, 1529
+	// bytes): the kit +1467 bytes net across its renamed chunks and its
+	// stylesheet, and the access and settings chunks +62 bytes. 5450 KiB.
 	// A bridged call the run's record keeps in part drawn as such on a run's
 	// page (its "partly kept" tag, and over its arguments and its result how
-	// much the call sent and answered) and a long log's dropped middle said by
-	// tool in its callout took it from 5443.7 KiB to 5444.7 KiB (+1.0 KiB,
-	// 1008 bytes), all of it the Executors chunk; every other chunk kept its
-	// size. The initial load did not grow. 5445 KiB.
-	// A collected run's dropped calls said by tool on its execute card, the
-	// wording moved into one helper the card and the board's log share, took
-	// it from 5444.7 KiB to 5445.4 KiB (+0.7 KiB, 687 bytes): the shared
-	// chunk the helper landed in +601 bytes, the phases chunk +319 and the
-	// settled chunk +252, and the Executors chunk -485 for the wording it no
-	// longer carries. The initial load stays within its own budget. 5446 KiB.
-	treeBudget = 5<<20 + 326<<10
+	// much the call sent and answered), a long log's dropped middle said by
+	// tool in its callout, and a collected run's dropped calls said by tool on
+	// its execute card, the wording in one helper the card and the board's log
+	// share, took it from 5449.2 KiB to 5450.9 KiB (+1.7 KiB, 1696 bytes): the
+	// shared chunk the helper landed in +601 bytes, the Executors chunk +524,
+	// the phases chunk +319 and the settled chunk +252; every other chunk kept
+	// its size. 5451 KiB.
+	treeBudget = 5<<20 + 331<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

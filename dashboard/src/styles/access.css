@@ -42,6 +42,10 @@
 .agent-access-quiet {
   color: var(--color-text-secondary);
 }
+/* Why the engine refused one seat's control, under its row. */
+.agent-access-refused {
+  color: var(--color-feedback-danger-ink);
+}
 .agent-access-menu {
   min-width: 22rem;
 }

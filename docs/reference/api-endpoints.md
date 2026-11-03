@@ -3662,9 +3662,13 @@ What each surface checks, and with what:
 Refusals: `400 invalid_body` for an unknown key; `400 invalid_input` when
 `field` is not a requirement of that surface (or seat) or is not a `secret`,
 when `value` is empty, when a key in `values` is not a field of the surface,
-when a `${NAME}` names no stored secret ("There is no secret NAME."), and when
-the check cannot be made from what was given (Datadog's other key, a site
-address, an organization id), each with a sentence saying what is missing;
+when a `${NAME}` names no stored secret ("There is no secret NAME."), when a
+typed value is one its field refuses, as a save would refuse it (whitespace or
+an invisible character inside a credential, a space inside an address or an
+identifier, a character outside the vendor's alphabet where the field declares
+one), with `field` and `path` and before any vendor is asked, and when the
+check cannot be made from what was given (Datadog's other key, a site address,
+an organization id), each with a sentence saying what is missing;
 `404 unknown_kind`; `404 invalid_input` for a seat that takes no per-seat
 setup; `409 no_active_revision`; `409` under one of the five codes for a
 revision this node [cannot open](#a-revision-this-node-cannot-open-is-refused-whichever-route-reads-it).
@@ -4089,9 +4093,10 @@ and writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
 Datadog role id, a GitLab access level, a Jira project role id; Cloudflare's
-`read` or `operate`, each a fixed set of permission groups; Expo's `viewer`,
-`runner`, `developer` or `release_manager`, each a fixed set of Expo
-permissions), GitHub's permissions, and the scope it is narrowed to. A lane is the block's key:
+`read`, `operate` or `configure`, each a fixed set of permission groups;
+Expo's `viewer`, `runner`, `developer` or `release_manager`, each a fixed set
+of Expo permissions), GitHub's permissions, and the scope it is narrowed to.
+A lane is the block's key:
 `atlassian` has two, `jira` and `confluence`, over one account per agent, and
 every other integration has one named after itself. Jira and Confluence asked
 for by their own names answer `404 no_seat_access`.
@@ -4122,18 +4127,44 @@ answers the name and when it was minted, never the value.
 }
 ```
 
+A level the company's connection cannot grant yet carries `unavailable`, the
+sentence saying what it waits on ("The Configure level is unavailable until the
+provisioner token holds Zone Settings: Edit and Response Compression: Edit"),
+and the tab offers it disabled with that reason.
+
 Each seat lane's `tool` says whether the agent can use its credential through
 a tool right now: `live`, `waiting` (a server reads it and it is not sealed
 yet), `builtin` (Jira and Confluence, whose credential the engine's own tools
 read), `no_server` (no server the company declares reads it), `server_off`
 (every server that reads it is turned off, `enabled: false`) or `off` (the
-seat or its account is off).
+seat or its account is off). A lane whose tool is a CLI in the agent's own box
+(Expo's EAS CLI) also carries `box`, what that box holds for it: in `env`, the
+exact `sandbox.env` lines the seat needs, each variable set to the seat's own
+sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
+settings the engine supplies itself, as configured (`"by": "crewlet"`):
+`{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "by": "you"}]}`.
+With no server, `tool` is `live` or `waiting` only while the seat's box sets
+every one of its own lines exactly so.
 
 `revision` is the company revision the answer was read at, and the `ETag` is
 the same value quoted. An entry of `options` whose vendor did not answer just
 now carries no levels: which of its levels administers is unknown, so a
 turn-on or a change of level on that lane asks the step-up a raise does, and
-the next read asks the vendor again. Each entry of `options` also says whether a person can
+the next read asks the vendor again. A scoped lane's entry says so (`scoped`)
+whatever its list holds: `scope` is the entries the company's connection
+reaches, or `scope_open` where it does not list them; `scope_names` names an
+entry where the vendor names one apart from its id; and `scope_live` says the
+list is known: written in the company document (GitLab's projects, GitHub's
+repositories, Mattermost's channels, and the Jira projects and Confluence
+spaces the org model names), or read from the vendor just now. An entry
+without it could not be read, so its empty `scope` says nothing about the
+reach. `scope_required` marks a lane whose agent,
+once on, must name at least one scope entry. `tool_server` names the
+`mcp_servers` entry a per-seat tool server for the lane is started from: the
+company's own where it declares one reading the lane's credential (an enabled
+one first), else the name the catalogue's server is conventionally declared
+under. It is absent where no server reads the lane's credential (Expo, whose
+tool is the CLI in the agent's box). Each entry of `options` also says whether a person can
 ask for a credential on that lane to be rotated (`rotatable`), and carries
 `"managed": "external"` where the engine does not provision the integration
 for the company, which is wherever it does not hold the authority that creates
@@ -4187,11 +4218,18 @@ it leaves out keeps its setting. Its fields are `enabled`, `level`,
 `permissions` (GitHub only, each `read` or `write`) and `scope`; any other
 field is refused `400 invalid_body`, so a body cannot name a variable. A
 person's seat or a seat the company does not hold is `404 no_such_seat`; a
-lane the integration does not grant, or a level, permission or scope entry the
-vendor does not offer now, is `400 access_not_offered` with the lane, the value
-and what is offered. A live-listed level (a Datadog role, a Jira project role)
+lane the integration does not grant is `400 no_seat_access`, and a level,
+permission or scope entry the vendor does not offer now is
+`400 access_not_offered`, naming the first such `seat`, its `lane`, the
+`field` it is about (`level`, `permissions` or `scope`) and the `detail`, with
+what is `offered` instead where a list says it, or the level a set is
+`required` to hold. A live-listed level (a Datadog role, a Jira project role)
 is judged only when the vendor answered just now; otherwise the sync reports
-an id it does not hold as a finding. A GitLab project is within reach only
+an id it does not hold as a finding. A scope entry is judged the same way, only
+when `scope_live` says the list was read. On a lane with `scope_required`, a
+seat turned on with an empty `scope` is `400 access_not_offered` whatever was
+read; the sync reports a stored one as a finding, and `crewlet validate`
+refuses it in the document at the lane's scope key. A GitLab project is within reach only
 inside the group the company's connection joins agents to, so where the
 connection lists no projects, a project outside that group is
 `400 access_not_offered` too.
@@ -10258,7 +10296,8 @@ seat.
 | Status | `error` | When |
 |---|---|---|
 | `404` | `not_found` | The configuration declares no such server |
-| `409` | `conflict` | The server is turned off (`enabled: false`), so nothing runs it; or the seat named is not granted the server |
+| `409` | `conflict` | The server is turned off (`enabled: false`), so nothing runs it |
+| `409` | `seat_not_granted` | The seat named is not granted the server, so nothing runs it as that seat |
 | `400` | `invalid_body` | A `seat` named for a shared server, which runs one instance for the company; or a body with a field the route does not read |
 | `404` | `no_such_seat` | The organization has no agent seat by that handle |
 | `503` | `unavailable` | The node could not record the request; ask again |
@@ -10345,7 +10384,8 @@ record goes when the configuration stops declaring the server.
 | Status | `error` | When |
 |---|---|---|
 | `404` | `not_found` | The configuration declares no such server |
-| `409` | `conflict` | The server is turned off, so nothing runs it to test (test its entry as a draft instead); or the seat named is not granted the server |
+| `409` | `conflict` | The server is turned off, so nothing runs it to test (test its entry as a draft instead) |
+| `409` | `seat_not_granted` | The seat named is not granted the server, so nothing runs it as that seat |
 | `400` | `invalid_body` | A `seat` named for a shared server, none named for a per-agent one, or a body with a field the route does not read |
 | `404` | `no_such_seat` | The organization has no agent seat by that handle |
 | `503` | `unavailable` | The node could not ask the fleet; ask again |
@@ -10398,8 +10438,11 @@ entry the dry run refuses is answered `422 validation_error` with the
 problems a write of it would get. An admitted draft is tested as the dry run
 left it, turned on whatever its `enabled` says, on the nodes the saved entry
 would run on, and answered as [`POST /mcp-servers/{name}/check`](#post-mcp-serversnamecheck)
-answers, with `"draft": true`. **A draft's test is never recorded**: the
-server's latest test is of the entry the company runs.
+answers, with `"draft": true`. Tested for an agent (`seat`), it is started with
+what the saved entry would start that agent's instance with: the agent's own
+values, its unit's, and its own credential at every integration the entry
+reads, bound as the save will bind it. **A draft's test is never recorded**:
+the server's latest test is of the entry the company runs.
 
 ### `POST /mcp-probe`
 
@@ -10558,9 +10601,9 @@ The body is read strictly (`400 invalid_body` for a field it does not read, no
 `value`, an empty one, or one holding a line break or a NUL, since a header's
 or a variable's value is one line), and any other query parameter is `400
 invalid_query`. `404 not_found` for a server the configuration does not
-declare, `404 no_such_seat` for a seat that is not an agent's, `409 conflict`
-for a seat the server is not granted to. **No answer, log line or audit record
-carries the value**, a refusal included: every call is one `mcp_server_acted`
+declare, `404 no_such_seat` for a seat that is not an agent's, and
+`409 seat_not_granted` for a seat the server is not granted to. **No answer,
+log line or audit record carries the value**, a refusal included: every call is one `mcp_server_acted`
 with the action `store_value`, naming the `key` and the `variable`, and a
 test's sentences withhold the values the server was started with.
 

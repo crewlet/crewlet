@@ -304,6 +304,7 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 			Desired: d, Observed: observed, Sync: lr.Sync, Plan: nonNilSteps(steps[lane]),
 			Tool:        seataccess.ToolStateOf(q.Company, ref.Handle, lane, d, observed),
 			Administers: seataccess.Administers(offers[lane], d),
+			Box:         seataccess.BoxOf(q.Company, q.Kind, lane, ref.Handle),
 		}
 	}
 	return sa, nil
@@ -342,6 +343,14 @@ func seatInput(ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desir
 		in.Record = &r
 	}
 	return in
+}
+
+// liveOffer is what a vendor answered for a lane, with the facts its catalog
+// holds kept as base has them, and a scoped lane's scope marked as read.
+func liveOffer(base, live seataccess.Options) seataccess.Options {
+	live.Rotatable, live.Scoped, live.ScopeRequired = base.Rotatable, base.Scoped, base.ScopeRequired
+	live.ScopeLive = base.Scoped
+	return live
 }
 
 // seatOffers is what each of kind's lanes offers now on company, read live from
@@ -398,8 +407,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 		}
 		if session != nil {
 			if live, err := session.Options(openCtx, lane); err == nil {
-				live.Rotatable = o.Rotatable
-				o = live
+				o = liveOffer(o, live)
 			} else {
 				whole = false
 				log.WarnContext(ctx, "seat_access_offer_unread", "kind", kind,
@@ -407,6 +415,10 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 			}
 		}
 		o.Lane = lane
+		o.ToolServer = seataccess.ToolServerOf(company, lane)
+		if registered {
+			o = seataccess.WithReach(o, vendor, company, roster)
+		}
 		if !provisioned {
 			o.Managed, o.Rotatable = seataccess.ManagedExternal, false
 		}

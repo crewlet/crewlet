@@ -152,6 +152,11 @@ const (
 	// so the integration is READY with a note, not blocked.
 	FindingGrantExcess FindingKind = "grant_excess"
 
+	// FindingLevelUnavailable is an access level no seat that is on holds and
+	// the company's connection cannot grant yet. ADVISORY: the level is offered
+	// disabled, and a seat on it makes the gap a blocking finding instead.
+	FindingLevelUnavailable FindingKind = "level_unavailable"
+
 	// FindingRegistrationOrphaned is something this engine registered at
 	// the third-party app that it no longer manages, because the name it is
 	// held under changed.
@@ -284,17 +289,21 @@ func (f FindingKind) severity() int {
 		// Beneath the expiring credential: a spare permission is a note
 		// that stays a note.
 		return 15
-	case FindingRegistrationOrphaned:
-		// Beneath the excess grant. Both report ready; this one is the
-		// more purely informational of the two, because what it names is
-		// still working.
+	case FindingLevelUnavailable:
+		// Beneath the excess grant: a level nobody holds is a choice a
+		// person cannot make yet, not access anybody has.
 		return 16
+	case FindingRegistrationOrphaned:
+		// Beneath the unavailable level. Each reports ready; this one is
+		// the more purely informational, because what it names is still
+		// working.
+		return 17
 	case FindingCoveragePartial:
 		// LAST OF ALL, because it is the only one naming nothing wrong.
-		// The two above it are loose ends somebody may want to tidy; this
+		// The ones above it are loose ends somebody may want to tidy; this
 		// is a decision already taken, reported so a reader does not have
 		// to infer it from silence. Anything else present outranks it.
-		return 17
+		return 18
 	default:
 		// A kind this build does not know, ranked ABOVE the advisory and
 		// below every real problem. A peer on a newer build can write one
@@ -369,6 +378,11 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 	case FindingGrantExcess:
 		// READY, not degraded. It is a note on a working integration.
 		return PhaseReady, ActorAdmin
+	case FindingLevelUnavailable:
+		// READY, and the ADMIN's: what makes the level available is a
+		// grant at the third-party app, to the credential the engine
+		// grants through.
+		return PhaseReady, ActorAdmin
 	case FindingRegistrationOrphaned:
 		// READY too, and owed by the ADMIN: what has to happen is at the
 		// third-party app — repoint the monitors, then remove the
@@ -435,6 +449,8 @@ func (f FindingKind) sentence(subject string) string {
 		return "a person's name holds another account than it did when the company was last applied" + about
 	case FindingGrantExcess:
 		return "an agent holds more access than its role asks for" + about
+	case FindingLevelUnavailable:
+		return "an access level cannot be granted until the connection allows it" + about
 	case FindingRegistrationOrphaned:
 		return "this engine registered something that it no longer manages" + about
 	case FindingCoveragePartial:

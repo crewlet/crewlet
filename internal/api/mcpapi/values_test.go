@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -500,5 +501,37 @@ func TestAValueIsTestedWithItsEntryAsTheActiveRevisionStatesIt(t *testing.T) {
 	}
 	if strings.Contains(raw, theValue) {
 		t.Errorf("the answer carries the value: %s", raw)
+	}
+}
+
+// A VALUE FOR AN AGENT THE SERVER IS NOT GIVEN is refused with its own code and
+// the sentence a person reads for it, never a collision's, tested or not.
+func TestAValueForAnAgentNotGivenTheServerSaysSo(t *testing.T) {
+	t.Parallel()
+	company, err := config.ParseCompany([]byte(`
+name: Acme
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, shared: false, access: {except: [dev]}}
+roles:
+  - name: Dev
+    handle: dev
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checker := &valueChecker{}
+	svc := valueSurface(t, checker, &fakeDocuments{company: company}, valueStore(t), &recordedAudit{})
+	for _, path := range []string{
+		"/mcp-servers/tracker/values/TOKEN?seat=dev", "/mcp-servers/tracker/values/TOKEN?seat=dev&test=false",
+	} {
+		code, raw := put(t, svc, proved(time.Minute), path, valueBody(theValue))
+		body := decoded(t, raw)
+		if code != http.StatusConflict || body["error"] != string(httpjson.CodeSeatNotGranted) ||
+			body["message"] != httpjson.CodeSeatNotGranted.Message() || body["detail"] == "" {
+			t.Errorf("%s = %d %v, want 409 seat_not_granted with its sentence and why", path, code, body)
+		}
+	}
+	if asked := checker.requests(); len(asked) != 0 {
+		t.Errorf("a seat not given the server was tested: %+v", asked)
 	}
 }

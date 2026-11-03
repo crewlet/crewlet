@@ -277,6 +277,11 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 	if _, waiting := recordedNotes(t, store, "run-1"); !slices.Equal(waiting, []string{"n-1"}) {
 		t.Fatalf("the note does not wait: %v", waiting)
 	}
+	// The watch Bind starts may open the note first and log the warning on its
+	// own goroutine, after Take has returned.
+	eventually(t, "the unheld key's warning", func() bool {
+		return strings.Contains(logs.String(), `"steer_note_key_unknown"`)
+	})
 	logged := logs.String()
 	var warned string
 	for line := range strings.SplitSeq(logged, "\n") {

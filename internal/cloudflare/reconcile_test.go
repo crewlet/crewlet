@@ -54,11 +54,12 @@ func convergedCloudflare(t *testing.T, tb integrationtest.TB) *cloudflareWorld {
 
 // outstandingCloudflare holds two faults a person settles: a zone the account
 // does not have (the document's), and a group the provisioner does not hold
-// (Cloudflare's, by an admin).
+// which the level an agent is on grants (Cloudflare's, by an admin).
 func outstandingCloudflare(t *testing.T, tb integrationtest.TB) *cloudflareWorld {
 	t.Helper()
 	w := convergedCloudflare(t, tb)
 	w.opt.Config.Provisioning.Zones = []string{zoneExampleName, "missing.example"}
+	w.opt.InUse = []string{config.CloudflareLevelOperate}
 	w.f.set(func(f *fakeCloudflare) {
 		own := f.provisionerOwn[0]
 		own.PermissionGroups = slices.DeleteFunc(slices.Clone(own.PermissionGroups),
@@ -98,7 +99,8 @@ func TestTheOutstandingWorldReportsEveryFaultItHolds(t *testing.T) {
 	}
 	want := map[integration.FindingKind]string{
 		integration.FindingUnknownTier:          "integrations.cloudflare.provisioning.zones",
-		integration.FindingGrantShort:           "integrations.cloudflare.provisioning.api_token",
+		integration.FindingGrantShort:           "cloudflare level operate",
+		integration.FindingLevelUnavailable:     "cloudflare level configure",
 		integration.FindingRegistrationOrphaned: "cloudflare agent tokens",
 	}
 	for _, f := range findings {
@@ -134,10 +136,13 @@ func TestAnExpiringProvisionerIsReported(t *testing.T) {
 	}
 }
 
-// A LEVEL CLOUDFLARE CANNOT RESOLVE IS REPORTED BY NAME.
+// A LEVEL CLOUDFLARE CANNOT RESOLVE IS REPORTED BY NAME, and so is every
+// level above it, since each grants what the levels before it do: a fault
+// for the level an agent is on, an advisory for one nobody holds.
 func TestAnUnresolvableLevelIsReported(t *testing.T) {
 	t.Parallel()
 	w := convergedCloudflare(t, t)
+	w.opt.InUse = []string{config.CloudflareLevelRead, config.CloudflareLevelOperate}
 	w.f.set(func(f *fakeCloudflare) {
 		f.groups = slices.DeleteFunc(f.groups, func(g fakeGroup) bool { return g.Name == "Cache Purge" && g.Selectable == nil })
 	})
@@ -145,9 +150,60 @@ func TestAnUnresolvableLevelIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || findings[0].Subject != "cloudflare level operate" ||
-		!slices.Equal(findings[0].Subjects, []string{"Cache Purge"}) {
-		t.Fatalf("findings = %+v, want the operate level's missing group", findings)
+	if len(findings) != 2 {
+		t.Fatalf("findings = %+v, want the operate and configure levels' missing group", findings)
+	}
+	for i, want := range []struct {
+		level string
+		kind  integration.FindingKind
+	}{{"operate", integration.FindingUnknownTier}, {"configure", integration.FindingLevelUnavailable}} {
+		if findings[i].Kind != want.kind || findings[i].Subject != "cloudflare level "+want.level ||
+			!slices.Equal(findings[i].Subjects, []string{"Cache Purge"}) {
+			t.Errorf("finding %d = %+v, want the %s level missing Cache Purge as %s", i, findings[i], want.level, want.kind)
+		}
+	}
+}
+
+// A LEVEL THE PROVISIONER CANNOT GRANT NEEDS ATTENTION ONLY WHILE AN AGENT IS
+// ON IT. A company whose agents never take configure reads ready, with a note
+// naming what the level waits on; an agent on it makes the same gap a fault.
+// Mutation: report a gap whatever the agents hold, and the first half is red.
+func TestALevelNoAgentHoldsIsANoteNotAFault(t *testing.T) {
+	t.Parallel()
+	w := convergedCloudflare(t, t)
+	w.opt.InUse = []string{config.CloudflareLevelOperate}
+	w.f.set(func(f *fakeCloudflare) {
+		own := f.provisionerOwn[0]
+		own.PermissionGroups = slices.DeleteFunc(slices.Clone(own.PermissionGroups), func(g cloudflare.GroupRef) bool {
+			return g.ID == groupID("Zone Settings Write") || g.ID == groupID("Response Compression Write")
+		})
+		f.provisionerOwn = []cloudflare.Policy{own}
+	})
+	findings, err := w.Reconcile(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || findings[0].Kind != integration.FindingLevelUnavailable ||
+		findings[0].Detail != "The Configure level is unavailable until the provisioner token holds "+
+			"Zone Settings: Edit and Response Compression: Edit" ||
+		!slices.Equal(findings[0].Subjects, []string{"Zone Settings: Edit", "Response Compression: Edit"}) {
+		t.Fatalf("findings = %+v, want the one note on the Configure level", findings)
+	}
+	if report := integration.Classify(findings); report.Phase != integration.PhaseReady {
+		t.Errorf("a level nobody holds classified as %s, want ready", report.Phase)
+	}
+
+	w.opt.InUse = append(w.opt.InUse, config.CloudflareLevelConfigure)
+	findings, err = w.Reconcile(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || findings[0].Kind != integration.FindingGrantShort ||
+		findings[0].Subject != "cloudflare level configure" {
+		t.Fatalf("findings = %+v, want the Configure level's gap as a fault", findings)
+	}
+	if report := integration.Classify(findings); report.Phase != integration.PhaseDegraded {
+		t.Errorf("an agent's level the token cannot grant classified as %s, want degraded", report.Phase)
 	}
 }
 

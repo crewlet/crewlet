@@ -29,6 +29,19 @@ const (
 	zoneOtherName   = "example.org"
 )
 
+// fakeEnvelope is a refusal as Cloudflare writes one, chained errors included.
+type fakeEnvelope struct {
+	status int
+	errors []cloudflare.Message
+}
+
+// malformedToken is Cloudflare's answer to an Authorization header holding no
+// token it can read.
+var malformedToken = fakeEnvelope{status: http.StatusBadRequest, errors: []cloudflare.Message{{
+	Code: 6003, Message: "Invalid request headers",
+	Chain: []cloudflare.Message{{Code: 6111, Message: "Invalid format for Authorization header"}},
+}}}
+
 // fakeGroup is one permission group the fake account lists.
 type fakeGroup struct {
 	ID, Name   string
@@ -62,6 +75,9 @@ type fakeCloudflare struct {
 	refuse map[string]int
 	// refuseID answers any route naming one token with a status.
 	refuseID map[string]int
+	// envelope answers a route with this status and error envelope, by route
+	// key, as Cloudflare answers a token it cannot read.
+	envelope map[string]fakeEnvelope
 	// limited answers a route 429 this many times first, with retryAfter.
 	limited    map[string]int
 	retryAfter string
@@ -80,6 +96,7 @@ var (
 	zoneGroups = []string{
 		"Zone Read", "Zone Settings Read", "Analytics Read", "DNS Read", "Cache Settings Read",
 		"Firewall Services Read", "SSL and Certificates Read", "Cache Purge", "Cache Settings Write",
+		"Zone Settings Write", "Response Compression Write",
 	}
 	accountGroups = []string{
 		"Account Analytics Read", "Account Settings Read", "Account API Tokens Write", "Account API Tokens Read",
@@ -91,6 +108,7 @@ func groupID(name string) string { return "pg-" + strings.ReplaceAll(strings.ToL
 func newFakeCloudflare() *fakeCloudflare {
 	f := &fakeCloudflare{
 		tokens: map[string]*fakeToken{}, refuse: map[string]int{}, refuseID: map[string]int{},
+		envelope:          map[string]fakeEnvelope{},
 		limited:           map[string]int{},
 		provisionerStatus: cloudflare.StatusActive, retryAfter: "0",
 		zones: []cloudflare.Zone{
@@ -163,6 +181,14 @@ func (f *fakeCloudflare) serve(w http.ResponseWriter, r *http.Request) {
 		f.limited[route] = n - 1
 		w.Header().Set("Retry-After", f.retryAfter)
 		f.fail(w, http.StatusTooManyRequests, 971, "Please wait and consider throttling your request speed")
+		return
+	}
+	if e, ok := f.envelope[route]; ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(e.status)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false, "errors": e.errors, "messages": []any{}, "result": nil,
+		})
 		return
 	}
 	if status := f.refuse[route]; status != 0 {

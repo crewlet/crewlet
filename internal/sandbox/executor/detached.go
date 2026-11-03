@@ -553,7 +553,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// restores, the archive it packs — and it was read back from a box a run's
 	// own agent could write, so one that is no id a harness mints is refused
 	// rather than handed to the run's script as a path.
-	if req.Resume != "" && !validSessionID(req.Resume) {
+	if req.Resume != "" && !sandbox.ValidSessionID(req.Resume) {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: the session this run continues, %q, is "+
 			"not a session id a harness names", req.Resume)
 	}
@@ -1060,9 +1060,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 	// WHICH SESSION THE RUN TOOK UP, as its script recorded before its harness
 	// started ([Paths.SessionRecord]): the session a harness that reported none
-	// ran in, whether it was the one the run was asked to continue, and the
-	// harness's release. A record the box refused is a piece the run did not
-	// report, as any other is.
+	// ran in, whether it was the one the run was asked to continue, why it
+	// started anew where it did — a sentence, held to its bound here, where it
+	// enters the result ([sandbox.BoundFellBack]): the line is the box's, as
+	// long as the record — and the harness's release. A record the box refused
+	// is a piece the run did not report, as any other is.
 	recorded, recordRefusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
 	if err != nil {
 		return sandbox.Result{}, err
@@ -1071,10 +1073,17 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		refused = append(refused, recordRefusal)
 	}
 	rec := parseSessionRecord(recorded)
-	if result.SessionID == "" {
+	// THE HARNESS'S OWN WORD for its session only where it is an id a harness
+	// mints ([sandbox.ValidSessionID]), the record's otherwise: what the harness
+	// printed is a file in the box as much as the record is, and the id rides
+	// the launch's record and is handed to a later run's script (the
+	// assistant's deep work resumes its run by it), so one that is no id is
+	// none, as the record's is.
+	if !sandbox.ValidSessionID(result.SessionID) {
 		result.SessionID = rec.id
 	}
-	result.Continued, result.FellBack, result.HarnessVersion = rec.continued, rec.why, releaseOf(rec.release)
+	result.Continued, result.HarnessVersion = rec.continued, releaseOf(rec.release)
+	result.FellBack = sandbox.BoundFellBack(rec.why)
 	if result.Captured, err = r.captured(ctx, box, paths, rec); err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading the session the box packed: %w", err)
 	}

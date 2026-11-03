@@ -32,6 +32,8 @@ func TestTheDashboardReadsAccessAsTheEngineWritesIt(t *testing.T) {
 		{"AccessPermission", reflect.TypeFor[seataccess.PermissionSpec]()},
 		{"AccessSeat", reflect.TypeFor[seataccess.SeatAnswer]()},
 		{"AccessSeatLane", reflect.TypeFor[seataccess.LaneAnswer]()},
+		{"AccessBox", reflect.TypeFor[seataccess.Box]()},
+		{"AccessBoxLine", reflect.TypeFor[seataccess.BoxLine]()},
 		{"AccessDesired", reflect.TypeFor[seataccess.Desired]()},
 		{"AccessObserved", reflect.TypeFor[seataccess.Observed]()},
 		{"AccessCredential", reflect.TypeFor[seataccess.Credential]()},
@@ -43,6 +45,7 @@ func TestTheDashboardReadsAccessAsTheEngineWritesIt(t *testing.T) {
 		{"AccessPlanAnswer", reflect.TypeFor[seataccess.PlanAnswer]()},
 		{"AccessSeatPlan", reflect.TypeFor[seataccess.SeatPlan]()},
 		{"AccessInstallLink", reflect.TypeFor[seataccess.InstallLink]()},
+		{"AccessRefusal", reflect.TypeFor[seataccess.OfferRefusal]()},
 	} {
 		members, err := clientsource.Interface(tree, c.client)
 		if err != nil {
@@ -132,6 +135,8 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 		), func(v string) bool { return seataccess.StepVerb(v).Valid() }},
 		{"AccessActor", strs(string(seataccess.ByCrewlet), string(seataccess.ByYou)),
 			func(v string) bool { return seataccess.StepActor(v).Valid() }},
+		{"AccessRefusalField", strs(string(seataccess.FieldLevel), string(seataccess.FieldPermissions),
+			string(seataccess.FieldScope)), func(v string) bool { return seataccess.RefusalField(v).Valid() }},
 		{"AccessOutcome", strs(
 			string(seataccess.OutcomeOK), string(seataccess.OutcomeFailed),
 			string(seataccess.OutcomeWaiting),
