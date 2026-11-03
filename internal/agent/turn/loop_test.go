@@ -3,6 +3,7 @@ package turn_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -626,6 +627,42 @@ func TestTheLedgerCarriesWhatTheNextRoundNeeds(t *testing.T) {
 	// And the next round is handed the ledger, or it re-fires what landed.
 	if len(f.historySeen) < 2 || len(f.historySeen[1]) != 1 {
 		t.Errorf("the next round saw %v", f.historySeen)
+	}
+}
+
+// A CLOSED ROUND KEEPS THE CALLS ITS RECORD DID NOT LIST. A long round's run
+// keeps its calls' head and tail and a tally of the middle it dropped (Elided),
+// and of the calls its calls' own work made (Absorbed): the round the loop
+// closes carries both into the history every later round is handed, where the
+// next segment's call log is seeded from them and a delivery check reads the
+// dropped ones as calls the round made.
+//
+// Mutation: close the round without either tally, and the next round's seed
+// is short of every call the record dropped — a later call derives an earlier
+// one's operation id — and a reply among them is no delivery.
+func TestAClosedRoundKeepsTheCallsItsRecordDidNotList(t *testing.T) {
+	t.Parallel()
+	elided := []ledger.Elided{{Name: "slack_post", Digest: "d1", Calls: 60, Failed: 2}}
+	absorbed := []ledger.Elided{{Name: "leave_channel", Digest: "w1", Calls: 1}}
+	first := delivered("first")
+	first.Elided, first.Absorbed = elided, absorbed
+	f := &fake{
+		works:    []turn.Work{first, delivered("second")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}, {Decision: phase.Done}},
+	}
+	res, _ := turn.Run(context.Background(), f, settings(),
+		turn.Input{RunID: "t1", Reply: turn.ToolReply("")})
+	if len(res.Iterations) != 1 {
+		t.Fatalf("ledger = %d entries, want the one closed round", len(res.Iterations))
+	}
+	if rec := res.Iterations[0]; !slices.Equal(rec.Elided, elided) || !slices.Equal(rec.Absorbed, absorbed) {
+		t.Errorf("the closed round carries %+v dropped and %+v absorbed, want %+v and %+v", rec.Elided,
+			rec.Absorbed, elided, absorbed)
+	}
+	if len(f.historySeen) < 2 || len(f.historySeen[1]) != 1 ||
+		!slices.Equal(f.historySeen[1][0].Elided, elided) || !slices.Equal(f.historySeen[1][0].Absorbed, absorbed) {
+		t.Errorf("the next round was handed %+v, want the closed round with both tallies", f.historySeen)
 	}
 }
 
