@@ -446,7 +446,9 @@ func (r filledRuns) ListActive(ctx context.Context) ([]sandbox.PendingRun, error
 
 func (filledRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	run := filled[sandbox.PendingRun]()
-	run.Status, run.AudienceHandles = sandbox.StatusAwaiting, []string{assistSeat}
+	// NO ENDING DECIDED: a run whose ending is decided waits on nobody, its
+	// question included (putTo), so a filled one would be put to no one.
+	run.Status, run.AudienceHandles, run.Ending = sandbox.StatusAwaiting, []string{assistSeat}, nil
 	return run, true, nil
 }
 
