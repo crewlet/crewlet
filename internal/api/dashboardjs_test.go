@@ -1635,7 +1635,13 @@ const (
 	// the tab loads in (271 bytes gzipped). The initial load did not grow:
 	// its files are the same bytes but for the chunk names they list. It
 	// moved down to 5455 KiB, the measured size's next KiB.
-	treeBudget = 5<<20 + 335<<10
+	// The Scaleway integration (its catalogue entry, story and Agents tab
+	// words, a two-route lane's live tool line, and the org builder's Scaleway
+	// facts) took it from 5454.2 KiB to 5456.0 KiB (+1.8 KiB, 1817 bytes): the
+	// integrations model chunk +1548 bytes, the catalogue chunk +221 bytes,
+	// and 48 bytes across the settings and org builder chunks. The initial
+	// load did not grow. 5456 KiB, 6 bytes clear.
+	treeBudget = 5<<20 + 336<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
