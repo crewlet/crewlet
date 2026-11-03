@@ -364,12 +364,12 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	if err != nil {
 		return assistant.DeepOutcome{}, err
 	}
-	run := newExecutorRun(t.agent, nil)
+	run := newExecutorRun(t.agent, nil, nil)
 	placement := t.placement
 	if r.Continue != nil && r.Continue.Placement != "" {
 		placement = sandbox.Placement(r.Continue.Placement)
 	}
-	if !placement.OnEngineHost() && !entrySignsIn(t.agent, run.env) {
+	if !placement.OnEngineHost() && !entrySignsIn(t.agent, run.signIn) {
 		return assistant.DeepOutcome{}, fmt.Errorf("deep work runs in %s, and nothing signs "+
 			"providers.llm.%s in there: mint a token that travels with `crewlet llm login %s "+
 			"-capture-token`, or set its run_in to direct to run on the engine host", placement,

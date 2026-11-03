@@ -343,6 +343,11 @@ type runEnv struct {
 	// before the LLM credentials and the telemetry are laid over it.
 	env map[string]string
 
+	// defaults is the integrations' box settings no layer above sets, each
+	// resolved: laid beneath the entry's env too, and never judged as a
+	// sign-in ([newExecutorRun]).
+	defaults map[string]string
+
 	// setup is the provider-wide steps then the seat's own, every file's
 	// body read as the content it is.
 	setup []sandbox.SetupStep
@@ -386,10 +391,11 @@ type runEnv struct {
 // ([seataccess.BoxDefaults]), such as an organization a person would
 // otherwise copy into every seat. Every credential comes from config: an
 // external token is DECLARED in role.sandbox.env or a setup step's env, and
-// the engine never names one of its own. Precedence, later winning: the
-// integrations' defaults, then identity, then the setup steps' contributions,
-// then the seat's own env, so an operator's explicit value always beats a
-// step's default, and every layer a person writes beats an integration's.
+// the engine never names one of its own. Precedence, later winning: identity,
+// then the setup steps' contributions, then the seat's own env, so an
+// operator's explicit value always beats a step's default. The integrations'
+// defaults are returned apart (runEnv.defaults), for the launch to lay beneath
+// the entry's env as well ([newExecutorRun]).
 //
 // BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0093): a run given repositories on
 // it is given ACCESS TO THAT SURFACE — the run's own credential and the box's
@@ -455,11 +461,6 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		optional, fact     bool
 	}
 	merged := map[string]layered{}
-	for _, d := range boxDefaults {
-		// A FACT, never a gap: no layer a person writes declares it, and one
-		// that does not resolve is left out and said like an identity fact.
-		merged[d.Env] = layered{value: d.Value, path: "integrations." + string(d.Kind), fact: true}
-	}
 	if handle := seat.Handle(); handle != "" {
 		merged["CREWLET_AGENT_HANDLE"] = layered{value: handle, path: "role.handle", fact: true}
 	}
@@ -535,6 +536,24 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 			}
 		}
 		out.setup[i].Files = files
+	}
+
+	// THE INTEGRATIONS' BOX DEFAULTS, kept apart from the run's own: a name any
+	// layer here sets is that layer's, and one that does not resolve is left
+	// out and said like an identity fact, never a gap.
+	for _, d := range boxDefaults {
+		if _, set := merged[d.Env]; set {
+			continue
+		}
+		if missing := resolver.Missing(d.Value); len(missing) > 0 {
+			facts.hold(d.Env, missing, false, "", false)
+			out.facted = append(out.facted, "integrations."+string(d.Kind))
+			continue
+		}
+		if out.defaults == nil {
+			out.defaults = map[string]string{}
+		}
+		out.defaults[d.Env] = resolver.Value(d.Value)
 	}
 
 	out.gap = gap.missing(seat.Handle(), "the run")
@@ -3761,11 +3780,16 @@ type executorRun struct {
 	model string
 	files map[string]string
 	env   map[string]string
+
+	// signIn is env without the integrations' box defaults: what the run's
+	// sign-in is judged on, since a default never signs a harness in.
+	signIn map[string]string
 }
 
-// newExecutorRun is the [executorRun] of a box run on agent — the executor-chain
-// member the launch picked ([agentLauncher.member]) — over seatEnv, the
-// environment the seat's own config assembled ([Engine.runEnvironment]).
+// newExecutorRun is the [executorRun] of a box run on agent, the executor-chain
+// member the launch picked ([agentLauncher.member]), over seatEnv, the
+// environment the seat's own config assembled ([Engine.runEnvironment]), with
+// boxDefaults, the integrations' box settings, beneath everything.
 //
 // ONE CONSTRUCTION for a seat's executor run and the Dashboard Assistant's
 // deep work on its own entry ([assistantDeep.Run]), which brings no seat
@@ -3776,7 +3800,7 @@ type executorRun struct {
 // and its env and sign-in, which that harness reads, are always ones the runner can
 // use — and a launch that fell back past the head runs on the member it fell
 // back to, with that member's environment and login rather than the head's.
-func newExecutorRun(agent *harness.Provider, seatEnv map[string]string) executorRun {
+func newExecutorRun(agent *harness.Provider, seatEnv, boxDefaults map[string]string) executorRun {
 	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE HARNESS IT IS
 	// WRITTEN FOR. An entry's model is in that harness's own grammar — OpenCode
 	// reads `<provider>/<model>`, Claude Code an alias — so the run is handed
@@ -3788,10 +3812,23 @@ func newExecutorRun(agent *harness.Provider, seatEnv map[string]string) executor
 	// URL in the entry's env names, which the run environment carries — a
 	// provider the engine declared beside it would shadow the one the model
 	// names.
+	// THE INTEGRATIONS' BOX DEFAULTS LOWEST OF ALL, beneath the entry's env
+	// too, and out of every sign-in judgment: a cloud CLI's region or token
+	// file must never override, strip or stand in for the harness's sign-in.
+	signIn := underlay(seatEnv, entryEnv(agent, seatEnv))
+	defaults := make(map[string]string, len(boxDefaults))
+	for name, value := range boxDefaults {
+		// A HARNESS'S OWN SIGN-IN NAME IS NEVER AN INTEGRATION'S TO SET: a
+		// cloud toggle or a token under it would switch or replace the sign-in.
+		if !slices.Contains(agent.CredentialEnvNames(), name) {
+			defaults[name] = value
+		}
+	}
 	run := executorRun{
-		model: agent.ModelArgument(),
-		env:   underlay(seatEnv, entryEnv(agent, seatEnv)),
-		files: agent.SandboxCredentials(),
+		model:  agent.ModelArgument(),
+		env:    underlay(maps.Clone(signIn), defaults),
+		signIn: signIn,
+		files:  agent.SandboxCredentials(),
 	}
 	// A LOGIN THE HARNESS KEEPS IN ITS OWN DATABASE travels as the document its
 	// export printed, mapped where the runner imports it from — the runner's
