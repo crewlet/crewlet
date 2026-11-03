@@ -397,8 +397,10 @@ type CoordinatorOptions struct {
 	//
 	// AND THE SESSION CARRIES WHAT IT OWES BEFORE THIS RETURNS: a call whose
 	// own record did not land, which its session carries onto the run's
-	// record as it ends (internal/api/mcpbridge's Ledger.Settle), so the
-	// reads and the deletes that follow an ending see it.
+	// record as it ends (internal/api/mcpbridge's Ledger.End, the session's
+	// last carry of its own, made once any carry [CoordinatorOptions.Settle]
+	// asked for is done), so the reads and the deletes that follow an ending
+	// see it.
 	Ended func(runID string)
 
 	// Settle asks the bridge session serving a run's job to carry onto the
