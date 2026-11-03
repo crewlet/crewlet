@@ -1586,7 +1586,17 @@ const (
 	// the view) took it from 5438.6 KiB to 5439.3 KiB (+0.7 KiB, 760 bytes),
 	// all of it the agents chunk the view loads in (+281 bytes gzipped): 339
 	// bytes past 5439 KiB. The initial load did not grow. 5440 KiB.
-	treeBudget = 5<<20 + 320<<10
+	// The Cloudflare connect polish (a setup field's help kept as its lines,
+	// a refused value placed beside its field, Test as listing only the agents
+	// an integration has on, the access review laid out as labels and values
+	// and read again when the document moved, and a variable's bare name drawn
+	// as code) and the kit's move to 0.90.1 (the Expo mark, and secret fields
+	// that refuse saved logins) took it from 5439.3 KiB to 5442.2 KiB (+2.8
+	// KiB, 2899 bytes): the settings chunk +1134 bytes, the icons chunk +650
+	// bytes (the Expo mark), the integrations model chunk +485 bytes and its
+	// sheet +179 bytes, the kit's chunks +313 bytes net, the Problems chunk
+	// +66 bytes, and 72 bytes across the rest. 5443 KiB.
+	treeBudget = 5<<20 + 323<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
