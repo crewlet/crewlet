@@ -163,6 +163,23 @@ var curated = sync.OnceValue(func() []Entry {
 			recognise:   []recognition{{match: hostIs("mcp.cloudflare.com")}},
 		},
 		{
+			// OAUTH ONLY, AND NO SEAT BINDING: the server is its own
+			// authorization server (scope mcp:access), and whether it takes an
+			// Expo access token as a bearer is undocumented.
+			ID: "expo", Name: "expo", Title: "Expo", Vendor: "expo",
+			Description: "EAS builds, submissions, workflows and updates, app store and crash reports, and the " +
+				"Expo documentation, through Expo's own server.",
+			Transport: TransportHTTP, URL: "https://mcp.expo.dev/mcp",
+			Headers:     []Input{},
+			Auth:        []AuthMethod{AuthOAuth},
+			OAuthClient: ClientCIMD,
+			Prerequisite: "Sign in with an Expo account that is a member of the company's account. " +
+				"search_documentation needs an Expo paid plan, and the simulator tools start billed sessions.",
+			Docs:      "https://docs.expo.dev/eas/ai/mcp/",
+			ReadAt:    "2026-11-02",
+			recognise: []recognition{{match: hostIs("mcp.expo.dev")}},
+		},
+		{
 			ID: "gitlab", Name: "gitlab", Title: "GitLab", Vendor: "gitlab",
 			Description: "Merge requests, issues, pipelines and the GitLab API, through the glab CLI's own " +
 				"server, one per agent.",
