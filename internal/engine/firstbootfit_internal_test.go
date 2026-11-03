@@ -110,7 +110,8 @@ func TestTheFitThePagesPrintIsTheBootsOwn(t *testing.T) {
 // every page that prints it: docs/guides/replication.md's table of what the
 // code log's reservation costs and the prose around it, docs/guides/
 // deployment.md's bullets, docs/guides/retention.md's re-embedding excursion,
-// Tier A's code log field and [StreamBudgetShare]'s reason.
+// Tier A's code log field, [StreamBudgetShare]'s reason and the reason the
+// code log's derived share is two thirds (config.DerivedCodeLogNumerator).
 //
 // Nothing held them before, and when the share moved from a half to five
 // eighths the pages were restated by hand and the field's own doc was missed:
@@ -318,6 +319,31 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	} {
 		page := prose(t, file)
 		for _, want := range wants {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s does not say %q", file, want)
+			}
+		}
+	}
+
+	// THE REASON THE SHARE IS TWO THIRDS, as the guide and the share's own
+	// doc (config.DerivedCodeLogNumerator) give it: below where every ask
+	// fits, the code log's ask is room the other logs give up, and the
+	// vector changelog beside it still holds a year-five re-embedding on
+	// 100 GiB free. Unheld, it went on saying 626 GiB and a fifth to spare
+	// from the first boot of eight logs, through every log added since.
+	if left(fit(unset, 100*gib, "")[vectors].Bytes) <= 0 {
+		t.Errorf("a first boot on 100 GiB free creates the vector changelog with no room for "+
+			"the year-five re-embedding of %d bytes, which the pages say still fits: reword them",
+			yearFivePeak)
+	}
+	for _, file := range []string{"docs/guides/replication.md", "internal/config/retention.go"} {
+		page := prose(t, file)
+		for _, want := range []string{
+			fmt.Sprintf("Below about %d GiB free it is room the other logs give up", everyAskFrom),
+			fmt.Sprintf("a first boot's mutation log about a fifth shorter, and a year-five "+
+				"re-embedding still fits the vector changelog at 100 GiB free with %d %% of it "+
+				"to spare", percentLeft(unset, 100*gib, "")),
+		} {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s does not say %q", file, want)
 			}

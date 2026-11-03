@@ -739,8 +739,8 @@ it, from the repository's 22nd idle hour until a push moves its clock or the
 expiry takes it — and one more in a turn resumed so long after its work began
 that the engine mints the writes of its resumed half anew (past 29 days, a day
 inside the 30 the code log's operation ledger remembers), which records its
-holds at that instant too: recorded at the run's start, a hold would be one no
-node could confirm, and every call the turn makes about the repository
+holds at that instant too: recorded when its work began, a hold would be one
+no node could confirm, and every call the turn makes about the repository
 refused. **A hold that cannot be read expires nothing**: a run
 store that cannot be listed, or a seat holder that does not answer, ends that
 pass's expiry, says so on its `code_retention_pass` line
@@ -805,9 +805,13 @@ HTTPS alone. The node resolves the host itself and refuses it when any address
 it resolves to is not on the public internet — unless Tier A's
 [`git.import_allow_private`](configuration.md#git) lets it
 reach the node's own network — and hands git exactly the addresses it judged, so
-git never asks DNS again; redirects are not followed. The proxy and the
-certificate authorities are the process's own (`HTTPS_PROXY`, `NO_PROXY`,
-`SSL_CERT_FILE`), as [Deployment](../guides/deployment.md#reaching-other-forges) says.
+git never asks DNS again; redirects are not followed. Through a proxy — the
+process's own, the one `HTTPS_PROXY` names for the URL less what `NO_PROXY`
+exempts — the node resolves nothing: the proxy resolves and dials the host, so
+the address rule is the proxy's to hold and `git.import_allow_private` changes
+nothing. The certificate authorities are the process's own too
+(`SSL_CERT_FILE`, `SSL_CERT_DIR`), as
+[Deployment](../guides/deployment.md#reaching-other-forges) says.
 A `credential` is always one whole `${VAR}` reference, kept as the reference
 on every data node and in every backup and resolved from the secret store,
 then the node's environment, each time the node dials — and only where the
@@ -4364,8 +4368,11 @@ repository it cannot reach.
 
 **The token is a backstop, the run's row the authority.** A token is valid
 seven days (`host.RunTokenTTL`), longer than any job a person would leave
-running, since an executor has no wall-clock limit and an expiry would fail
-its only durable output, its last push. What admits a box is its run's row on
+running, since an executor has no wall-clock limit of its own — only a
+scheduled turn's run is ended, by the completion poll, once its schedule's
+`timeout_seconds` has passed since the fire's turn began
+([Scheduling](scheduling.md#hard-wall-clock-timeout)) — and an expiry would
+fail its only durable output, its last push. What admits a box is its run's row on
 the fleet's coordination store, read on every request: a run that ended, was
 reaped or launched again — a later launch of the same turn — is
 refused the moment its row says so, whatever its token's expiry.

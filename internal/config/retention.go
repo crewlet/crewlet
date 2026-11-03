@@ -368,13 +368,13 @@ const (
 	// company hosts any code: a node sizes its state logs on its first
 	// boot, before the company document says whether it does, so the share
 	// is weighed against what it costs the logs beside it, not set at what
-	// the code log takes a day. Below about 626 GiB free it is room the
+	// the code log takes a day. Below about 652 GiB free it is room the
 	// other logs give up in the fit (docs/guides/replication.md, "What the
 	// code log's reservation costs", whose figures internal/engine's
 	// TestThePagesPrintTheCeilingsAFirstBootCreates computes): two thirds
 	// makes a first boot's mutation log about a fifth shorter, and a
 	// year-five re-embedding still fits the vector changelog at 100 GiB
-	// free with about a fifth of it to spare. A share at the code log's
+	// free with 13 % of it to spare. A share at the code log's
 	// byte rate — the rule DerivedPagesLogDivisor states for the knowledge
 	// base, at which a blocked trim fills both logs in the same time —
 	// would cost every company far more, codeless ones included: at twice

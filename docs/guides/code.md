@@ -34,12 +34,14 @@ dashboard). Then:
   newer** on its host (the engine's image builds the newest release) and a
   place for its cache, sized by its Tier A [`git` block](../concepts/configuration.md#git); the
   [deployment guide](deployment.md#the-code-host) says how to size both.
-- **On a node that booted with no company, or one running no native backend
-  yet**, the activation that sets `code.native` starts the code host — no
-  restart.
-- **On a node whose native runtime is already running** (a company that has run
-  Worklet or Doclet on it), turning `code.native` on —
-  or off — takes effect at **that node's restart**, and the node says so in its
+- **On a node that has run no company yet** (one that booted with none), the
+  activation that hands it a company setting `code.native` starts the code
+  host with the rest of its native runtime, with no restart.
+- **On every other node**, turning `code.native` on — or off — takes effect at
+  **that node's restart**. A node builds its native runtime once, from the
+  first company it runs, whatever backends that company names, so this holds
+  for a company on a vendor's tracker, knowledge base and chat as much as for
+  one running Worklet or Doclet. The node says so in its
   log as `native_backend_needs_restart`. Turned on, such a node answers git and
   `/code/` with a `503` naming `native_backend_needs_restart` until it
   restarts, and no `Retry-After`: waiting changes nothing, and another node
