@@ -48,6 +48,9 @@ func Requirements(in *config.Cloudflare, resolve func(string) (string, bool)) []
 			Connect:    true,
 			Checkable:  true,
 			CheckWith:  []string{"account_id"},
+			// A PASTE IS CHECKED AGAINST CLOUDFLARE'S ALPHABET before it is
+			// stored or tested.
+			Shape: setup.ShapeOpaqueToken,
 			Help: "An account API token holding " + words.And(ProvisionerGroups()) +
 				", over the account and its zones. Crewlet mints each agent's token through it, " +
 				"and gives an agent nothing this token does not hold itself. Create one on your",
@@ -78,6 +81,17 @@ func Requirements(in *config.Cloudflare, resolve func(string) (string, bool)) []
 		}
 	}
 	return reqs
+}
+
+// provisionerRequirement is the provisioner token's field, whose rule the Test
+// button applies to a typed value before anything is sent.
+func provisionerRequirement() setup.Requirement {
+	for _, r := range Requirements(nil, nil) {
+		if r.Field == "api_token" {
+			return r
+		}
+	}
+	panic("cloudflare: the setup form has no api_token field")
 }
 
 // Summary is the sentence the connect form opens with.

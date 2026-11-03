@@ -35,6 +35,12 @@ func Probe(httpClient *http.Client) setup.Probe {
 		if token == "" {
 			return setup.Verdict{}, setup.Unusable("Enter the provisioner token to test it.")
 		}
+		// THE FIELD'S OWN RULE, before anything is sent: a value with a space
+		// or a character no token has is not one, and Cloudflare would only
+		// answer that it cannot read the header.
+		if problem := provisionerRequirement().ValueProblem(token); problem != "" {
+			return setup.Verdict{}, setup.Unusable(problem)
+		}
 		if !accountIDPattern.MatchString(account) {
 			return setup.Verdict{}, setup.Unusable("Enter the account ID, 32 hexadecimal " +
 				"characters from your account's overview page: the token is checked against it.")
