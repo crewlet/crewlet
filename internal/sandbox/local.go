@@ -820,7 +820,9 @@ func removeRecord(l boxLayout, name string) error {
 // false where it recorded none for it: a job an older build started, which
 // recorded nothing; a runtime whose exec did not lead a session of its own
 // ([containerBox.StartBackground] records no group then); a record of another
-// job's; or one that cannot be read, which is said.
+// job's; or one that cannot be read, which is said. The kill of a job with
+// none reads its group off its first process instead
+// ([killFirstProcessGroup]).
 func containerJobGroup(l boxLayout, pid int) (int, bool) {
 	raw, err := readRecord(l, groupRecord)
 	if absent(err) {
@@ -829,7 +831,7 @@ func containerJobGroup(l boxLayout, pid int) (int, bool) {
 	if err != nil {
 		localLog.Warn("local_sandbox_job_group_unreadable", "sandbox_id", l.id, "path", l.groupFile(),
 			"error", err.Error(), "detail", "the job's process group in its container could not be read, "+
-				"so its first process alone is signalled to end it")
+				"so its kill reads the group off the job's first process instead")
 		return 0, false
 	}
 	fields := strings.Fields(string(raw))

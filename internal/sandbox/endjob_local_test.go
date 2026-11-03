@@ -3,7 +3,9 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -305,41 +307,236 @@ func TestAContainerBoxEndsAndKillsItsJobInsideTheContainer(t *testing.T) {
 	}
 }
 
-// A CONTAINER JOB AN OLDER BUILD STARTED IS KILLED BY ITS HANDLE. Such a start
-// recorded no process group, so the job's first process alone is told to go,
-// then killed after the grace; the rest of the job is left to the box's
-// reclaim, and nothing else of the container's is touched.
-//
-// Mutation: signal `-0`, the killing shell's own group, in place of the
-// handle, and the job's first process is left running.
-func TestAContainerJobStartedByAnOlderBuildIsKilledByItsHandle(t *testing.T) {
-	t.Parallel()
-	rig := newContainerRig(t)
-	main := startMain(t)
+// ownGroupEnv makes this test binary, re-executed, a process that leaves its
+// parent's process group for a group of its own — no session's — and then
+// becomes `/bin/sh -c` of the variable's value, its pid kept: a job's first
+// process in a group no exec's own session leads, as a container runtime whose
+// exec makes no session of its own would leave one ([startJobInOwnGroup]).
+const ownGroupEnv = "CREWLET_SANDBOX_OWN_GROUP"
+
+// AN init RATHER THAN TestMain's dispatch, which every platform's suite runs:
+// leaving a process group is unix's alone, as this file is. It acts only in a
+// binary re-executed with [ownGroupEnv] set, and never returns there.
+func init() {
+	script, ok := os.LookupEnv(ownGroupEnv)
+	if !ok {
+		return
+	}
+	if err := syscall.Setpgid(0, 0); err != nil {
+		fmt.Fprintln(os.Stderr, "leaving the process group:", err)
+		os.Exit(2)
+	}
+	_ = os.Unsetenv(ownGroupEnv)
+	err := syscall.Exec("/bin/sh", []string{"sh", "-c", script}, os.Environ())
+	fmt.Fprintln(os.Stderr, "becoming the job's shell:", err)
+	os.Exit(2)
+}
+
+// startJobInOwnGroup starts script as a job in rig's container whose first
+// process is in a group of its own that no exec's session leads, and leaves it
+// with no group recorded, as an older build's start left one on such a
+// runtime. It answers the job's handle and pid, and its group — the first
+// process's own pid.
+func startJobInOwnGroup(t *testing.T, rig containerRig, script string) (string, int) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	handle, err := rig.box.StartBackground(t.Context(),
-		"sh -c "+shQuote("sleep 300 & while :; do sleep 0.05; done")+" > /dev/null 2>&1", ExecOptions{})
+		ownGroupEnv+"="+shQuote(script)+" "+shQuote(self)+" > /dev/null 2>&1", ExecOptions{})
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	pid, _ := strconv.Atoi(handle)
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	waitFor(t, 10*time.Second, func() bool {
+		proc, found, err := procgroup.Inspect(pid)
+		return err == nil && found && proc.Group == pid
+	}, "the job's first process never left its exec's group")
 	if group, recorded := containerJobGroup(rig.box.layout, pid); recorded {
 		t.Cleanup(func() { _ = syscall.Kill(-group, syscall.SIGKILL) })
 	}
-	// AS AN OLDER BUILD LEFT IT: no group recorded.
 	if err := removeRecord(rig.box.layout, groupRecord); err != nil {
 		t.Fatal(err)
 	}
+	return handle, pid
+}
+
+// startJobWithNoGroupRecorded starts script as a job in rig's container, its
+// first process in the group its exec's own session leads as runc makes it,
+// and leaves it with no group recorded, as an older build's start left one. It
+// answers the job's handle and that group.
+func startJobWithNoGroupRecorded(t *testing.T, rig containerRig, script string) (string, int) {
+	t.Helper()
+	handle, err := rig.box.StartBackground(t.Context(), script+" > /dev/null 2>&1", ExecOptions{})
+	if err != nil {
+		t.Fatalf("StartBackground: %v", err)
+	}
+	pid, _ := strconv.Atoi(handle)
+	group, recorded := containerJobGroup(rig.box.layout, pid)
+	if !recorded {
+		raw, _ := os.ReadFile(rig.box.layout.groupFile())
+		t.Fatalf("the premise: the job's start recorded no process group to take away (%q)", raw)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-group, syscall.SIGKILL) })
+	if err := removeRecord(rig.box.layout, groupRecord); err != nil {
+		t.Fatal(err)
+	}
+	return handle, group
+}
+
+// awaitMembers waits for group to hold at least n living processes.
+func awaitMembers(t *testing.T, group, n int) {
+	t.Helper()
+	waitFor(t, 10*time.Second, func() bool {
+		living, readable := livingIn(group)
+		return readable && len(living) >= n
+	}, fmt.Sprintf("the job's group never held %d living processes", n))
+}
+
+// A CONTAINER JOB THAT RECORDED NO GROUP IS KILLED BY THE GROUP ITS EXEC LEADS.
+// A job an older build started recorded no process group, and its first
+// process is not the job: it is the runner's wrapper, and the run's script and
+// its harness are its children. So the kill reads, off that first process, the
+// group the job's exec leads a session of its own with, and kills every
+// process of it — the container's main process spared.
+//
+// Mutation: signal the first process alone, as the kill of a job with no group
+// recorded once did, and the job's other processes outlive the kill.
+func TestAContainerJobThatRecordedNoGroupIsKilledByTheGroupItsExecLeads(t *testing.T) {
+	t.Parallel()
+	rig := newContainerRig(t)
+	main := startMain(t)
+	handle, group := startJobWithNoGroupRecorded(t, rig,
+		"sh -c "+shQuote("sleep 300 & while :; do sleep 0.05; done"))
+	awaitMembers(t, group, 2)
 
 	if err := rig.box.KillJob(t.Context(), handle); err != nil {
 		t.Fatalf("KillJob: %v", err)
 	}
-	if !procgrouptest.AwaitGone(t, pid, 10*time.Second) {
-		t.Fatalf("the job's first process outlived the kill:\n%s", rig.logged())
-	}
+	waitFor(t, 10*time.Second, func() bool {
+		living, readable := livingIn(group)
+		return readable && len(living) == 0
+	}, "a process of the job outlived the kill of a job that recorded no group")
 	if proc, found, err := procgroup.Inspect(main); err != nil || !found || proc.Zombie {
 		t.Fatalf("the container's main process went with the job (%+v, %v, %v)", proc, found, err)
 	}
-	if !strings.Contains(rig.logged(), "kill -TERM "+handle+" ") {
-		t.Fatalf("the job's handle was not what was signalled:\n%s", rig.logged())
+}
+
+// A CONTAINER JOB WHOSE GROUP NO EXEC LEADS IS SIGNALLED NOTHING. A job that
+// recorded no process group, whose first process is in a group no exec's own
+// session leads — what a runtime whose exec makes no session leaves — has no
+// group the box can name as the job's alone, and its first process alone is
+// no kill of it: the kill signals nothing, says so, and the job still reads
+// as running, never as a job that ended.
+//
+// Mutation: signal the first process alone where no group is named, as the
+// kill once did, and the job reads as ended while its other processes run.
+func TestAContainerJobWhoseGroupNoExecLeadsIsSignalledNothing(t *testing.T) {
+	t.Parallel()
+	rig := newContainerRig(t)
+	// TWO PROCESSES THAT STAY, the shell waiting on its child: a member that
+	// exits by itself would read as one the kill signalled.
+	handle, pid := startJobInOwnGroup(t, rig, "sleep 300 & wait")
+	awaitMembers(t, pid, 2)
+	members, _ := livingIn(pid)
+
+	if err := rig.box.KillJob(t.Context(), handle); !errors.Is(err, ErrNoJobGroup) {
+		t.Fatalf("the kill of a job whose group no exec leads answered %v, want ErrNoJobGroup", err)
+	}
+	for _, member := range members {
+		if running, err := procgrouptest.Running(member); err != nil || !running {
+			t.Fatalf("process %d of the job was signalled by a kill that named no group of it (%v, %v)",
+				member, running, err)
+		}
+	}
+	if state, err := rig.box.Job(t.Context(), handle); err != nil || state != JobRunning {
+		t.Fatalf("the job reads %q (%v) after a kill that signalled nothing, want it running", state, err)
+	}
+}
+
+// boxPollRunner polls a job as internal/sandbox/executor's runner does — the
+// done marker its wrapper writes as the job's script exits, and otherwise the
+// box's own word on the job's first process — and its job's script answers no
+// end request, as an older build's answers none.
+type boxPollRunner struct {
+	*FakeRunner
+	done string
+}
+
+func (r boxPollRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (JobState, error) {
+	if _, err := os.Stat(r.done); err == nil {
+		return JobEnded, nil
+	}
+	return box.Job(ctx, handle.CommandID)
+}
+
+// beating reports whether the file a job's script rewrites every 50 ms
+// changes within a window several beats long.
+func beating(path string) bool {
+	before, _ := os.ReadFile(path) //nolint:gosec // the case's own file
+	time.Sleep(300 * time.Millisecond)
+	after, _ := os.ReadFile(path) //nolint:gosec // the case's own file
+	return len(after) > 0 && string(before) != string(after)
+}
+
+// A CONTAINER JOB WITH NO GROUP RECORDED IS READ OVER ONLY ONCE IT IS. The read
+// that ends a stopped or lost job whose script answers no request — an older
+// build's, which also recorded no process group in its container — kills it,
+// and takes its session final only where the job is over: killed whole, by the
+// group its exec leads, its script gone with its wrapper; or, where no exec
+// leads its group, signalled nothing, read as still running and taken as it
+// stands, not final — while its script works on, as the log says.
+//
+// Mutation: kill a job with no group recorded by its first process alone, and
+// the read takes the job for over, final, while its script still runs.
+func TestAContainerJobWithNoGroupRecordedIsReadOverOnlyOnceItIs(t *testing.T) {
+	for name, ownGroup := range map[string]bool{"its exec's group": false, "a group no exec leads": true} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLogs(t)
+			rig := newContainerRig(t)
+			beat, done := filepath.Join(rig.dir, "beat"), filepath.Join(rig.dir, "done")
+			// THE RUNNER'S WRAPPER: the run's script its child, and the done
+			// marker written once the script exits.
+			wrapper := "sh -c " + shQuote("while :; do date +%s%N > "+shQuote(beat)+"; sleep 0.05; done") +
+				"; echo $? > " + shQuote(done)
+			var handle string
+			if ownGroup {
+				handle, _ = startJobInOwnGroup(t, rig, wrapper)
+			} else {
+				handle, _ = startJobWithNoGroupRecorded(t, rig, "sh -c "+shQuote(wrapper))
+			}
+			waitFor(t, 10*time.Second, func() bool { return beating(beat) }, "the job's script never beat")
+
+			runner := boxPollRunner{FakeRunner: NewFakeRunner("older"), done: done}
+			runner.Unheard = true
+			coord := &Coordinator{endWait: time.Second, endPoll: 10 * time.Millisecond}
+			over := coord.endJob(t.Context(), PendingRun{TurnID: "t1", SandboxID: "box1", CommandID: handle},
+				rig.box, runner)
+			at := readCapture(BoxReadStop, Result{}, over)
+
+			if ownGroup {
+				if over || at.final || !at.pack {
+					t.Fatalf("a job its kill signalled nothing of read over %v, its capture final %v and packed "+
+						"now %v; want it still running, taken as it stands", over, at.final, at.pack)
+				}
+				if !beating(beat) {
+					t.Fatal("the premise: the job's script stopped working though nothing of it was signalled")
+				}
+				for _, line := range []string{"sandbox_job_ungrouped", "sandbox_job_unended"} {
+					if !strings.Contains(logs.String(), line) {
+						t.Errorf("the read did not say %s:\n%s", line, logs.String())
+					}
+				}
+				return
+			}
+			if !over || !at.final {
+				t.Fatalf("a job killed whole read over %v, its capture final %v; want both", over, at.final)
+			}
+			if beating(beat) {
+				t.Fatal("the read took the job for over while its script still works")
+			}
+		})
 	}
 }

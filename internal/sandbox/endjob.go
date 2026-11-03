@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 )
@@ -137,8 +138,9 @@ const jobEndPoll = time.Second
 // is no process of the job ([EndGone]), a box that could not be asked.
 //
 // A JOB STILL RUNNING AFTER ALL THAT — a box whose kill could not reach it, a
-// poll that cannot say — is taken as it stands, not final, and its reclaim ends
-// it; the log says so.
+// container that can name no process group of the job's own and so signalled
+// nothing of it ([ErrNoJobGroup]), a poll that cannot say — is taken as it
+// stands, not final, and its reclaim ends it; the log says so.
 //
 // THE KILL OUTLIVES THE READ: it runs under a context of its own ([detached]),
 // since the stop or the loss decided the job's end, and a read cut short — its
@@ -151,7 +153,10 @@ func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, r
 	}
 	handle := run.Handle()
 	if state, err := runner.Poll(ctx, box, handle); err == nil && state.Over() {
-		c.killJob(ctx, run, box, "")
+		// THE SWEEP'S ERROR IS NO VERDICT on the job, whose end its poll
+		// already read: [Coordinator.killJob] says it, and strays it could
+		// not reach go with the box's reclaim.
+		_ = c.killJob(ctx, run, box, "")
 		return true
 	}
 	ask, err := EndUnheard, error(nil)
@@ -172,7 +177,7 @@ func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, r
 	case c.awaitEnd(ctx, box, runner, handle):
 		log.InfoContext(ctx, "sandbox_job_ended", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
 			"launch_id", run.LaunchID, "waited_seconds", time.Since(began).Seconds())
-		c.killJob(ctx, run, box, "")
+		_ = c.killJob(ctx, run, box, "")
 		return true
 	default:
 		why = "outlived_its_end"
@@ -184,18 +189,20 @@ func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, r
 		log.InfoContext(ctx, "sandbox_job_killed", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
 			"why", why)
 	}
-	c.killJob(ctx, run, box, why)
+	killErr := c.killJob(ctx, run, box, why)
 	state, err := runner.Poll(ctx, box, handle)
 	if err == nil && state.Over() {
 		return true
 	}
-	detail := "the job is still running after it was asked to end and killed, so its session is taken as it " +
-		"stands, not final, and its box's reclaim ends it"
-	if err != nil {
-		detail = "whether the job is over could not be read after it was killed: " + err.Error() +
-			"; its session is taken as it stands, not final, and its box's reclaim ends it"
+	detail := "the job is still running after its end and its kill"
+	switch {
+	case err != nil:
+		detail = "whether the job is over could not be read after its kill: " + err.Error()
+	case killErr != nil:
+		detail = "the job is still running, and its kill could not end it: " + killErr.Error()
 	}
-	log.WarnContext(ctx, "sandbox_job_unended", "turn_id", run.TurnID, "sandbox_id", run.SandboxID, "detail", detail)
+	log.WarnContext(ctx, "sandbox_job_unended", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+		"detail", detail+"; its session is taken as it stands, not final, and its box's reclaim ends it")
 	return false
 }
 
@@ -222,12 +229,26 @@ func (c *Coordinator) awaitEnd(ctx context.Context, box Sandbox, runner Runner, 
 
 // killJob kills what is left of run's job in box ([Sandbox.KillJob]) under a
 // context of its own ([detached]) — see [Coordinator.endJob] — why being the
-// reason the end gave for it, "" for the sweep after the job's own end.
-func (c *Coordinator) killJob(ctx context.Context, run PendingRun, box Sandbox, why string) {
+// reason the end gave for it, "" for the sweep after the job's own end; and
+// answers the kill's error, which the read's poll weighs.
+//
+// A BOX THAT CAN NAME NO GROUP OF THE JOB'S OWN signalled nothing
+// ([ErrNoJobGroup]) and is said at info, apart from a box that could not be
+// asked: it is what such a box always answers — after a clean end as much as
+// past the wait — and what is left of the job then runs until the box's
+// reclaim, which the poll after the kill says where it matters.
+func (c *Coordinator) killJob(ctx context.Context, run PendingRun, box Sandbox, why string) error {
 	killCtx, cancel := detached(ctx)
 	defer cancel()
-	if err := box.KillJob(killCtx, run.CommandID); err != nil {
+	err := box.KillJob(killCtx, run.CommandID)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrNoJobGroup):
+		log.InfoContext(ctx, "sandbox_job_ungrouped", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+			"why", why, "detail", err.Error()+"; what is left of the job runs until its box is reclaimed")
+	default:
 		log.WarnContext(ctx, "sandbox_job_kill_failed", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
 			"why", why, "error", err.Error())
 	}
+	return err
 }

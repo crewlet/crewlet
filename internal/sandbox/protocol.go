@@ -525,18 +525,26 @@ type Sandbox interface {
 	// them to go, SIGKILL, [JobStopGrace] for the kernel to take them
 	// ([JobKillWait]). On the engine host that is the job's recorded group,
 	// continued first as Close continues it. In a container it is the job's
-	// group in its container, recorded on the engine host as the job started —
-	// never every process the box's user may signal, which would take the
+	// group in its container — recorded on the engine host as the job
+	// started, or, for a job an older build started, which recorded none, read
+	// off the job's first process where an exec's own session leads it — never
+	// every process the box's user may signal, which would take the
 	// container's main process and stop the container the read still execs
-	// its pack in — or, for a job an older build started, which recorded no
-	// group, its first process alone. In an E2B VM it is every process of the
-	// box's user: envd starts a job in envd's own process group, which no
-	// signal may reach, and runs as root, out of reach of the user's; and the
-	// box is reclaimed right after.
+	// its pack in. In an E2B VM it is every process of the box's user: envd
+	// starts a job in envd's own process group, which no signal may reach,
+	// and runs as root, out of reach of the user's; and the box is reclaimed
+	// right after.
 	//
-	// A job that is already over is nothing to kill. An error is a box that
-	// could not be asked; whether what it killed is over is the job's poll to
-	// say.
+	// NEVER A PART OF THE JOB FOR THE WHOLE: a box that can name no process
+	// group of the job's own signals nothing of it and answers [ErrNoJobGroup].
+	// The job's first process alone is no kill of the job — the run's script
+	// and its harness are that process's children, and go on without it — and
+	// it is the process a box answers [Sandbox.Job] by, so a kill of it alone
+	// had a job still working read as one that had ended.
+	//
+	// A job that is already over is nothing to kill. Any other error is a box
+	// that could not be asked; whether what it killed is over is the job's
+	// poll to say.
 	KillJob(ctx context.Context, commandID string) error
 
 	// WriteFile puts content at path whole, by REPLACING the file there: the
@@ -1153,6 +1161,14 @@ func probeByKill(ctx context.Context, box Sandbox, commandID string) (bool, erro
 // ErrNotJobProcess is an end request ([Sandbox.EndJob]) refused unsent: the pid
 // it names is no living process of the job.
 var ErrNotJobProcess = errors.New("sandbox: the pid is no living process of the job")
+
+// ErrNoJobGroup is a kill ([Sandbox.KillJob]) that signalled nothing, because
+// its box can name no process group that is the job's own: a container job
+// whose start recorded none, and whose first process is gone or in a group no
+// exec's session of its own leads. What is left of such a job runs on until
+// its box is reclaimed, and whether it is over is its poll's to say.
+var ErrNoJobGroup = errors.New("sandbox: the box names no process group of the job's own, " +
+	"so nothing of it was signalled")
 
 // The words [endScript] answers in, one for each of its two outcomes, so an
 // exec that never ran the script — a container runtime that is down, a box

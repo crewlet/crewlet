@@ -843,7 +843,8 @@ func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (
 // process) leads no group, and only the kernel's word read here names it. A
 // group is recorded only where the job's is the exec shell's own: a runtime
 // whose exec leads no session of its own leaves the job in a group it may
-// share with the container's other processes, and no group is recorded for it.
+// share with the container's other processes, and no group is recorded for it
+// — so its kill signals nothing of it ([containerBox.KillJob]).
 //
 // Direct mode does not need this: it spawns the job itself with its own
 // session, which gets both properties without a shell trick.
@@ -985,14 +986,16 @@ func reportedGroup(output string) (shell, group int, ok bool) {
 
 // recordGroup records the process group the job pid names leads in its
 // container, as its exec reported it ([groupReport]), where that group is the
-// exec shell's own; and says so where it records none, since such a job is
-// ended by its first process alone ([containerBox.KillJob]).
+// exec shell's own; and says so where it records none, since such a job's
+// kill can name its group only where an exec's own session leads it, and
+// signals nothing of it otherwise ([containerBox.KillJob]).
 func (b *containerBox) recordGroup(output, pid string) {
 	shell, group, ok := reportedGroup(output)
 	if !ok || group != shell || group < 2 {
 		localLog.Info("local_sandbox_job_group_unrecorded", "sandbox_id", b.layout.id, "pid", pid,
-			"detail", "the container's exec did not lead a process group of its own, so the job is "+
-				"ended through its first process alone and the rest of it by the box's reclaim")
+			"detail", "the container's exec did not lead a process group of its own, so a kill of the "+
+				"job signals nothing of it unless an exec's own session leads the group its first "+
+				"process is in, and the box's reclaim ends it")
 		return
 	}
 	if err := writeRecord(b.layout, groupRecord, []byte(strconv.Itoa(group)+" "+pid)); err != nil {
@@ -1009,29 +1012,70 @@ func (b *containerBox) EndJob(ctx context.Context, _ string, script int) error {
 	return endByKill(ctx, b, script)
 }
 
-// KillJob implements [Sandbox] in the container: the job's own process group as
-// its exec recorded it ([containerJobGroup]) — so the container's main process,
-// which the read after this still execs beside, is spared — or, for a job that
-// recorded none, its first process alone, the rest of it left to the box's
-// reclaim ([killScript]).
+// KillJob implements [Sandbox] in the container: the job's own process group,
+// so the container's main process, which the read after this still execs
+// beside, is spared — the group its exec recorded as the job started
+// ([containerJobGroup]), or, for a job that recorded none, the one its first
+// process is in where an exec's own session leads it ([killFirstProcessGroup]).
+//
+// A JOB WHOSE GROUP NEITHER NAMES IS SIGNALLED NOTHING ([ErrNoJobGroup]), never
+// its first process alone. That process is the runner's wrapper, and the run's
+// script and its harness are its children, which a signal to it alone does
+// not reach: they went on working, while the wrapper's death — which is what
+// [containerBox.Job] answers by — had the job read as ended, and its session
+// was taken final while its harness still wrote to it. Left alone, the job
+// reads as running, and its session is taken as it stands, not final, until
+// the box's reclaim ends it.
 func (b *containerBox) KillJob(ctx context.Context, commandID string) error {
 	pid, err := strconv.Atoi(commandID)
 	if err != nil || pid <= 1 {
 		return localErrorf("container sandbox %s: job handle %q is not a process id", b.layout.id, commandID)
 	}
-	target := strconv.Itoa(pid)
+	script := killFirstProcessGroup(pid)
 	if group, ok := containerJobGroup(b.layout, pid); ok {
-		target = "-" + strconv.Itoa(group)
+		script = killScript("-" + strconv.Itoa(group))
 	}
-	res, err := b.Exec(ctx, killScript(target), ExecOptions{Cwd: DefaultHome})
+	res, err := b.Exec(ctx, script, ExecOptions{Cwd: DefaultHome})
 	if err != nil {
 		return fmt.Errorf("container sandbox %s: ending its job: %w", b.layout.id, err)
+	}
+	if lastLine(res.Stdout) == killUngrouped {
+		return fmt.Errorf("container sandbox %s: job %d recorded no process group as it started, and its "+
+			"first process is gone or in a group no exec's own session leads: %w", b.layout.id, pid, ErrNoJobGroup)
 	}
 	if res.ExitCode != 0 {
 		return localErrorf("container sandbox %s: ending its job failed with exit %d: %s",
 			b.layout.id, res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	return nil
+}
+
+// killUngrouped is what [killFirstProcessGroup] says where it names no group,
+// having signalled nothing.
+const killUngrouped = "crewlet-kill-ungrouped"
+
+// killFirstProcessGroup is the script that kills, in its container, the
+// process group a job's first process (pid) is in, read off the kernel at the
+// kill — for a job whose start recorded none, as a job an older build started
+// recorded none — and only where that group is the one an exec's own session
+// leads: its id the session's own (the fifth and sixth fields of the
+// process's /proc/<pid>/stat, counted after the LAST ") ", as [groupReport]
+// counts them), 2 or more, and not the killing shell's own. That is the group
+// runc makes of every exec — its first process the leader of a session of its
+// own, a backgrounded job staying in its shell's group — and the container's
+// main process is in no such group: its init's child leads a group in the
+// init's session. Anywhere else the script says so ([killUngrouped]) and
+// signals nothing: a first process that is gone, a runtime whose exec leads no
+// session of its own (the group then reads as one outside the container's
+// namespace, 0), a group of a session another process leads.
+//
+// READ AND SIGNALLED IN ONE EXEC, so the group the kill reaches is the one the
+// read named: the first process may end between two execs, and its pid is
+// then free for the container to hand to another process.
+func killFirstProcessGroup(pid int) string {
+	return fmt.Sprintf(`if read -r s < /proc/%d/stat; then s=${s##*) }; set -- $s; fi 2> /dev/null
+if [ "${3:-0}" = "${4:-}" ] && [ "$3" -ge 2 ] 2> /dev/null && [ "$3" != "$$" ]; then g=-$3; else echo %s; exit 0; fi
+`, pid, killUngrouped) + killScript(`"$g"`)
 }
 
 // trailingPID is the last numeric line of output — the backgrounded job's pid.
