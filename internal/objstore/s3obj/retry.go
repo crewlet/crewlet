@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"slices"
 	"sync"
@@ -87,6 +88,52 @@ var refusedCertificate = retry.IsErrorRetryableFunc(func(err error) aws.Ternary 
 	return aws.UnknownTernary
 })
 
+// unreachableByConstruction reads a dial no attempt can complete as FINAL: an
+// address the dialer cannot parse — a port past 65535 or none at all where the
+// address leaves no room for one, an IPv6 zone holding a `]`, too many colons —
+// or a connection asked of port 0, which no listener ever holds. The SDK asks
+// every failure to send again: it reads any dial's error as a connection worth
+// asking again, so an endpoint such as `http://127.0.0.1:65536` held the boot's
+// check of the bucket for the minute a failing request is given up after
+// ([judge.giveUpAfter]) and the check's clean-up after it — 77 to 86 s for a
+// node to refuse an address it could never reach.
+//
+// ONLY WHAT NO RETRY CAN CHANGE. A connection refused on any other port, a
+// timeout, an unreachable network and a name the resolver could not answer
+// yet are asked again as before: the bucket's server may not be up yet, the
+// network may come back. And only the dialer's own words for an address it
+// could not parse ([unparsedAddress]), never every *net.AddrError: "no
+// suitable address found" is what a resolver's answer left, and the next
+// answer may differ.
+//
+// Config validation refuses an endpoint like these before a node starts
+// (config's checkS3Endpoint). This holds for what it cannot see: the address
+// of the proxy HTTPS_PROXY names, which every request is dialed through.
+var unreachableByConstruction = retry.IsErrorRetryableFunc(func(err error) aws.Ternary {
+	if addr, ok := errors.AsType[*net.AddrError](err); ok && unparsedAddress[addr.Err] {
+		return aws.FalseTernary
+	}
+	if op, ok := errors.AsType[*net.OpError](err); ok && op.Op == "dial" {
+		if tcp, ok := op.Addr.(*net.TCPAddr); ok && tcp.Port == 0 {
+			return aws.FalseTernary
+		}
+	}
+	return aws.UnknownTernary
+})
+
+// unparsedAddress is every error the dialer gives an address it cannot parse,
+// in its own words — net exports none of them as a value, so they are matched
+// as it writes them, and TestADialNoAttemptCanCompleteIsNotAskedAgain draws
+// each from the dialer itself, so a Go that rewords one fails there rather
+// than quietly asking such a dial again for a minute.
+var unparsedAddress = map[string]bool{
+	"invalid port":               true,
+	"missing port in address":    true,
+	"too many colons in address": true,
+	"unexpected '[' in address":  true,
+	"unexpected ']' in address":  true,
+}
+
 // newRetryer is how the bucket's client asks a request again: the SDK's
 // standard mode with no client-wide quota, no count of attempts and backoff
 // pacing the attempts — [fullJitter] in production, a case's own in this
@@ -126,14 +173,16 @@ var refusedCertificate = retry.IsErrorRetryableFunc(func(err error) aws.Ternary 
 // wraps the retryer in that count after every option has run.
 //
 // WHAT IS ASKED AGAIN is the SDK's own — a 500, 502, 503 or 504, its throttle
-// codes, every failure to send — but a request given up ([gaveUp]) and a
-// certificate the node does not trust ([refusedCertificate]), both final, and
-// with a 429 besides: the SDK retries a gateway's `429 Too Many Requests` by
-// no rule of its own.
+// codes, every failure to send — but a request given up ([gaveUp]), a
+// certificate the node does not trust ([refusedCertificate]) and a dial no
+// attempt can complete ([unreachableByConstruction]), each final, and with a
+// 429 besides: the SDK retries a gateway's `429 Too Many Requests` by no rule
+// of its own.
 func newRetryer(backoff retry.BackoffDelayer) aws.Retryer {
 	return retry.AddWithMaxAttempts(retry.NewStandard(func(s *retry.StandardOptions) {
 		s.RateLimiter = ratelimit.None
-		s.Retryables = append(append([]retry.IsErrorRetryable{gaveUp, refusedCertificate}, s.Retryables...),
+		s.Retryables = append(append([]retry.IsErrorRetryable{gaveUp, refusedCertificate,
+			unreachableByConstruction}, s.Retryables...),
 			retry.RetryableHTTPStatusCode{Codes: map[int]struct{}{http.StatusTooManyRequests: {}}})
 		s.Backoff = backoff
 	}), 0)

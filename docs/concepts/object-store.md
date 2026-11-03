@@ -504,9 +504,13 @@ up to the point the provider has no room left, when a write is refused as full
   the span again, since a bucket asking the node to slow down is up. One its
   deadline ends says so and names the bucket's last answer. A refusal that
   asking again cannot change — a key the bucket refuses, a bucket that is not
-  there, a certificate the node does not trust — fails at once, the check at
-  boot included; a bucket that does not answer at all holds that check for
-  its thirty seconds.
+  there, a certificate the node does not trust, an address no connection can
+  be made to (a port of 0 or past 65535, or one the dialer cannot parse, the
+  proxy's included) — fails at once, the check at boot included; a bucket
+  that does not answer at all holds that check for its thirty seconds. A
+  connection refused on any other port, an unreachable network and a name the
+  resolver could not answer yet are asked again, since the bucket's server or
+  the network may come back.
 
   Measured against the S3 fake 100 ms away, every request answered
   `500 InternalError`, eight or four runs of each at once: an 8 MiB upload
