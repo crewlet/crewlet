@@ -50,6 +50,16 @@ export interface LaneWords {
    * its token here (Expo's robots): the vendor's nouns the Set up sheet uses.
    */
   handoff?: HandoffWords;
+  /**
+   * What the vendor calls a credential the account still holds besides the
+   * sealed one, one of them and several: "An old token", "old tokens".
+   */
+  retired?: { one: string; many: string };
+  /**
+   * Where a person deletes the agent's account at the vendor after it is
+   * turned off, the control that keeps it there instead: "Keep the robot at Expo".
+   */
+  release?: string;
 }
 
 /** The vendor's own words for the account a person makes for an agent, and the controls they press. */
@@ -69,6 +79,9 @@ export interface HandoffWords {
   /** The role never to pick, said under the role to pick. */
   never: string;
 }
+
+/** What an old credential is called on a lane whose words name none. */
+export const RETIRED_GENERIC = { one: "An old credential", many: "old credentials" };
 
 const GENERIC: LaneWords = {
   name: "the vendor",
@@ -214,6 +227,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       why: "Each agent acts at Expo as its own robot, so its builds and updates are attributable to it.",
       never: "Never choose Admin: agents never hold it.",
     },
+    retired: { one: "An old token", many: "old tokens" },
+    release: "Keep the robot at Expo",
   },
 };
 

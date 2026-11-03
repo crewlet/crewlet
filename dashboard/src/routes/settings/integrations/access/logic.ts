@@ -92,12 +92,13 @@ function seatFacts(lane: Lane, saved: AccessSeatLane) {
 export function handoffOf(lane: Lane, saved: AccessSeatLane): Handoff | undefined {
   if (!laneWords(lane.key).handoff) return undefined;
   const wait = saved.sync?.outcome === "waiting" ? saved.sync.error : undefined;
-  if (!wait || wait.actor !== "you" || !wait.action_url || !HANDOFF_STEPS.has(wait.step)) {
+  const url = wait?.action_url || lane.action_url;
+  if (!wait || wait.actor !== "you" || !url || !HANDOFF_STEPS.has(wait.step)) {
     return undefined;
   }
   return {
     step: wait.step as HandoffStep,
-    url: wait.action_url,
+    url,
     said: wait.said,
     ...seatFacts(lane, saved),
     renew: saved.observed.credential !== undefined || saved.observed.credential_gone === true,
@@ -109,13 +110,14 @@ export function handoffOf(lane: Lane, saved: AccessSeatLane): Handoff | undefine
  * The handoff a rotate opens on a lane whose tokens a person makes: a new
  * token for the account the seat already has, pasted here. The engine takes a
  * paste for a seat whose token still works as the rotate, so the seat action
- * is never called. Undefined on every other lane, which rotates by itself.
+ * is never called. The vendor's page is the lane's own, since a rotate waits
+ * on nothing yet. Undefined on every other lane, which rotates by itself.
  */
 export function rotateHandoffOf(lane: Lane, saved: AccessSeatLane): Handoff | undefined {
   if (!laneWords(lane.key).handoff) return undefined;
   return {
     step: "mint",
-    url: undefined,
+    url: lane.action_url,
     said: "",
     ...seatFacts(lane, saved),
     renew: true,

@@ -331,12 +331,13 @@ describe("a handoff", () => {
   });
 
   // A ROTATE IS A PASTE FOR THE ROBOT THE SEAT ALREADY HAS: a new token, opened
-  // at the paste, with no wait behind it. Every other lane rotates by itself.
+  // at the paste on the lane's own page at the vendor, with no wait behind it.
+  // Every other lane rotates by itself.
   test("a rotate opens a new token for the robot the seat has, and only on Expo", () => {
     const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
     expect(rotateHandoffOf(EXPO_LANE, qa)).toMatchObject({
       step: "mint",
-      url: undefined,
+      url: "https://expo.dev/accounts/gophrase/settings/access-tokens",
       account: "crewlet-gophrase-qa",
       role: { name: "Developer" },
       renew: true,

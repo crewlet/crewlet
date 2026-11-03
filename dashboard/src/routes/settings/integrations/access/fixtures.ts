@@ -67,10 +67,13 @@ const CLOUDFLARE_OPTIONS: AccessOptions = {
 };
 
 /** Expo's four levels, each a set of Expo permissions named for the Expo role that holds them. */
+const EXPO_TOKENS_PAGE = "https://expo.dev/accounts/gophrase/settings/access-tokens";
+
 const EXPO_OPTIONS: AccessOptions = {
   lane: "expo",
   live: false,
   rotatable: true,
+  action_url: EXPO_TOKENS_PAGE,
   levels: [
     { id: "viewer", name: "Viewer", note: "View all projects" },
     {
@@ -353,7 +356,6 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
   };
 }
 
-const EXPO_TOKENS_PAGE = "https://expo.dev/accounts/gophrase/settings/access-tokens";
 const PM_ROBOT = "crewlet-gophrase-pm";
 
 /** The engine's sentence for each wait the Set up sheet opens on, for PM's robot at Runner. */
@@ -413,5 +415,25 @@ export function expoWaitingAnswer(
       tool: "off",
     },
   });
+  return answer;
+}
+
+/** QA's robot in sync and holding old tokens besides the sealed one, which Expo still accepts. */
+export function expoRetiredAnswer(labels: string[] = ["9f3c1a…"]): AccessAnswer {
+  const answer = expoAnswer();
+  const qa = answer.seats[1]!.lanes.expo!;
+  qa.observed.retired = labels.map((label) => ({ label, since: "2026-11-01T09:30:00Z" }));
+  qa.sync = {
+    at: ago(MIN),
+    outcome: "waiting",
+    steps: [],
+    error: {
+      step: "revoke",
+      said: `Delete robot crewlet-gophrase-qa's other tokens ${labels.join(", ")} at Expo`,
+      remedy: "",
+      actor: "you",
+      action_url: EXPO_TOKENS_PAGE,
+    },
+  };
   return answer;
 }

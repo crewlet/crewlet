@@ -28,6 +28,7 @@ import {
   Callout,
   DataTable,
   DescriptionList,
+  InlineCode,
   Select,
   SelectionBar,
   Spinner,
@@ -49,7 +50,7 @@ import type {
 } from "~/contract/access.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { useNow } from "~/lib/clock.ts";
-import { asSentence, plural, relTime } from "~/lib/format.ts";
+import { asSentence, fmtDate, plural, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import "~/styles/access.css";
@@ -89,7 +90,7 @@ import {
   type SeatAction,
   type Status,
 } from "./logic.ts";
-import { laneWords } from "./words.ts";
+import { laneWords, RETIRED_GENERIC } from "./words.ts";
 
 export interface AgentsAccessProps {
   /** The integration's key, which the access routes are keyed on. */
@@ -735,7 +736,7 @@ function laneMessage({
   pending: Pending;
   /** An install link the browser would not open in a new tab, drawn as a link instead. */
   link: string | undefined;
-  onAct: (action: "retry" | "keep" | "restore" | "done") => void;
+  onAct: (action: "retry" | "keep" | "restore" | "done" | "release") => void;
   onInstall: () => void;
   onRemove: () => void;
   /** Opens the Set up sheet, where only a person can make the seat's account at the vendor. */
@@ -746,7 +747,7 @@ function laneMessage({
   const keep = !busy && !readOnly;
   const o = saved.observed;
   const press = (
-    action: "retry" | "keep" | "restore" | "done",
+    action: "retry" | "keep" | "restore" | "done" | "release",
     label: ReactNode,
     quiet = false,
   ) => (
@@ -863,6 +864,38 @@ function laneMessage({
           : " The next sync restores Crewlet's setting."}
       </Callout>
     );
+  } else if (saved.desired.enabled && (o.retired?.length ?? 0) > 0) {
+    // AN OLD CREDENTIAL STILL WORKS AT THE VENDOR, which only a person can
+    // delete there: each by the label the vendor shows and when it was made,
+    // in place of the wait that repeats it every pass, and cleared on its own
+    // once the vendor shows it gone.
+    const retired = o.retired!;
+    const words = laneWords(lane.key).retired ?? RETIRED_GENERIC;
+    const one = retired.length === 1;
+    body = (
+      <Callout
+        variant="warning"
+        title={
+          one
+            ? `${words.one} still works at ${lane.name}`
+            : `${retired.length} ${words.many} still work at ${lane.name}`
+        }
+        action={
+          <span className="agent-access-actions">
+            {at(saved.sync?.error?.action_url ?? lane.action_url)}
+            {!busy && press("done", "Done, check again", true)}
+          </span>
+        }
+      >
+        {retired.map((r) => (
+          <p key={r.label}>
+            <InlineCode>{r.label}</InlineCode>
+            {r.since && `, created ${fmtDate(r.since)}`}
+          </p>
+        ))}
+        <p>{`Delete ${one ? "it" : "them"} at ${lane.name}. Crewlet notices once ${one ? "it is" : "they are"} gone.`}</p>
+      </Callout>
+    );
   } else if (
     saved.sync?.outcome === "waiting" ||
     (!saved.sync && saved.plan.some((s) => s.by === "you"))
@@ -878,6 +911,9 @@ function laneMessage({
     const todo = error?.said || waiting?.text;
     if (!todo) return null;
     const install = laneWords(lane.key).install;
+    // KEEPING THE ACCOUNT AT THE VENDOR IS THE PERSON'S CHOICE on the wait to
+    // delete it there, which Crewlet records rather than waits on.
+    const release = error?.step === "remove" ? laneWords(lane.key).release : undefined;
     // A HANDOFF IS ONE BUTTON THAT OPENS ITS SHEET, which holds the vendor's
     // page, the account to make and the paste; nothing to check again here.
     const handoff = busy ? undefined : handoffOf(lane, saved);
@@ -911,6 +947,7 @@ function laneMessage({
                 </Button>
               ) : null)}
             {!busy && !control && press("done", "Done, check again", true)}
+            {!busy && release && press("release", release, true)}
           </span>
         }
       >

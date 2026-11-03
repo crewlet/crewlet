@@ -193,8 +193,8 @@ test("a robot the engine did not name is asked for in the engine's words", () =>
 });
 
 // A ROTATE STARTS AT THE PASTE, its token step one step back for a person who
-// has not made the new token yet; with no wait behind it, the engine named no
-// page, so there is no Open Expo to draw. Mutation: start a rotate at the token.
+// has not made the new token yet, opening the lane's own page at the vendor,
+// since a rotate waits on nothing. Mutation: start a rotate at the token.
 test("a rotate starts at the paste, with how to make the token one step back", () => {
   const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
   draw(rotateHandoffOf(EXPO_LANE, qa)!);
@@ -203,5 +203,19 @@ test("a rotate starts at the paste, with how to make the token one step back", (
   press("Back");
   const token = within(sheet()).getByRole("region", { name: "Create a new token" });
   expect(token.textContent).toContain("On the row of crewlet-gophrase-qa, choose Create token.");
+  expect(
+    within(token)
+      .getByRole("link", { name: /Open Expo/ })
+      .getAttribute("href"),
+  ).toBe(TOKENS_PAGE);
+});
+
+// NO PAGE, NO LINK: where neither the wait nor the lane names the vendor's
+// page, the step says where in words and draws no Open Expo to nowhere.
+test("a step with no page at the vendor draws no Open Expo", () => {
+  const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
+  draw(rotateHandoffOf({ ...EXPO_LANE, action_url: undefined }, qa)!);
+  press("Back");
+  const token = within(sheet()).getByRole("region", { name: "Create a new token" });
   expect(within(token).queryByText(/Open Expo/)).toBeNull();
 });

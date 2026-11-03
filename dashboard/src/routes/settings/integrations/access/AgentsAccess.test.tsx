@@ -20,6 +20,7 @@ import {
   confluenceAnswer,
   datadogAnswer,
   expoAnswer,
+  expoRetiredAnswer,
   expoWaitingAnswer,
   githubAnswer,
   jiraAnswer,
@@ -932,4 +933,64 @@ test("turning an Expo agent on reviews the robot and the token as a person's ste
   expect(
     within(dialog).getByText("Steps marked with a person need somebody at Expo."),
   ).toBeTruthy();
+});
+
+// AN OLD TOKEN THAT STILL WORKS IS ONE LINE ON THE ROW: what Expo shows for
+// it and when it was made, Open Expo, and a check that reads it again; the
+// wait that repeats it every pass is not said a second time. Mutation: drop
+// the branch and the row falls back to the wait's sentence alone.
+test("an Expo robot's old token still at Expo reads as one line with its label and date", () => {
+  draw(expoRetiredAnswer());
+  const under = screen
+    .getByText("An old token still works at Expo")
+    .closest(".agent-access-under")!;
+  const line = within(under as HTMLElement).getByText("9f3c1a…");
+  expect(line.tagName).toBe("CODE");
+  expect(line.parentElement!.textContent).toMatch(/^9f3c1a…, created /);
+  expect(
+    within(under as HTMLElement).getByText(/Delete it at Expo\. Crewlet notices once it is gone\./),
+  ).toBeTruthy();
+  expect(
+    within(under as HTMLElement)
+      .getByRole("link", { name: /Open Expo/ })
+      .getAttribute("href"),
+  ).toBe("https://expo.dev/accounts/gophrase/settings/access-tokens");
+  expect(
+    within(under as HTMLElement).getByRole("button", { name: "Done, check again" }),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Delete robot crewlet-gophrase-qa's other tokens/)).toBeNull();
+});
+
+test("several old tokens are counted, and a lane with no words of its own says credentials", () => {
+  draw(expoRetiredAnswer(["9f3c1a…", "41be07…"]));
+  expect(screen.getByText("2 old tokens still work at Expo")).toBeTruthy();
+  expect(screen.getByText(/Delete them at Expo\./)).toBeTruthy();
+  cleanup();
+  const datadog = datadogAnswer();
+  datadog.seats[2]!.lanes.datadog!.observed.retired = [{ label: "app-key-old" }];
+  draw(datadog);
+  expect(screen.getByText("An old credential still works at Datadog")).toBeTruthy();
+  expect(screen.getByText("app-key-old").parentElement!.textContent).toBe("app-key-old");
+});
+
+// KEEPING THE ROBOT IS THE PERSON'S CHOICE on the wait to delete it at Expo,
+// recorded by the engine. Mutation: drop the release words and it is gone.
+test("a robot to delete at Expo can be kept there instead", async () => {
+  const answer = expoWaitingAnswer("mint");
+  const pm = answer.seats[0]!.lanes.expo!;
+  pm.sync!.error = {
+    ...pm.sync!.error!,
+    step: "remove",
+    said: "Delete robot crewlet-gophrase-pm at Expo",
+  };
+  draw(answer);
+  fireEvent.click(screen.getByRole("button", { name: "Keep the robot at Expo" }));
+  await waitFor(() =>
+    expect(calls.act).toEqual([{ kind: "expo", handle: "pm", lane: "expo", action: "release" }]),
+  );
+});
+
+test("keeping the robot is offered only on the wait to delete it", () => {
+  draw(expoWaitingAnswer("mint"));
+  expect(screen.queryByRole("button", { name: "Keep the robot at Expo" })).toBeNull();
 });

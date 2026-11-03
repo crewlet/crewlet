@@ -93,6 +93,8 @@ export interface AccessOptions {
   scope_open?: boolean;
   /** Whether a person can ask Crewlet to rotate a seat's credential on this lane. */
   rotatable?: boolean;
+  /** Where a person takes this lane's steps at the vendor, for a step that names no page of its own. */
+  action_url?: string;
   /**
    * The lane's access is a SET of levels rather than one (Confluence's space
    * permissions by operation, on a site without space roles): a seat's level
@@ -153,9 +155,24 @@ export interface AccessObserved {
   created_at?: string;
   /** When a sync found the account changed at the vendor by somebody else. */
   changed_by_hand_at?: string;
+  /**
+   * The credentials the account still holds besides the sealed one (an old
+   * token after a rotate), for a person to delete at the vendor. Absent where
+   * the vendor cannot tell.
+   */
+  retired?: AccessRetired[];
 }
 
-type AccessOp = "create" | "enable" | "level" | "scope" | "mint" | "disable" | "remove" | "rotate";
+/** One credential the account still holds that is not the sealed one. */
+interface AccessRetired {
+  /** What the person looks for at the vendor (Expo's token prefix), drawn as it is. */
+  label: string;
+  /** When the vendor says it was created. */
+  since?: string;
+}
+
+type AccessOp =
+  "create" | "enable" | "level" | "scope" | "mint" | "disable" | "remove" | "rotate" | "retire";
 
 type AccessVerb =
   | "create"
@@ -285,7 +302,8 @@ export interface AccessPlanAnswer {
 }
 
 /** `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`. */
-export type AccessSeatAction = "rotate" | "remove" | "keep" | "restore" | "retry" | "done";
+export type AccessSeatAction =
+  "rotate" | "remove" | "keep" | "restore" | "retry" | "done" | "release";
 
 /**
  * `POST .../access/seats/{handle}/{lane}/credential`: a credential a person
