@@ -82,8 +82,9 @@ type ledger struct {
 	calls []mcpbridge.Call
 	err   error
 	// settled counts the times the ledger was asked to carry what it owes
-	// ([mcpbridge.Ledger.Settle]).
-	settled int
+	// for the run's collection ([mcpbridge.Ledger.Settle]), and ended the
+	// times its session's end asked ([mcpbridge.Ledger.End]).
+	settled, ended int
 }
 
 func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
@@ -103,11 +104,25 @@ func (l *ledger) Settle(context.Context, string) bool {
 	return false
 }
 
-// settles is how many times the ledger was asked to carry what it owes.
+func (l *ledger) End(context.Context, string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ended++
+	return false
+}
+
+// settles is how many times the run's collection asked the ledger to carry
+// what it owes, and ends how many times its session's end did.
 func (l *ledger) settles() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.settled
+}
+
+func (l *ledger) ends() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ended
 }
 
 func (l *ledger) rows() []mcpbridge.Call {
@@ -977,14 +992,16 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 // EVERY WAY A SESSION ENDS CARRIES WHAT ITS LEDGER OWES, ONCE. A call whose
 // record did not land is carried by a later call of its session, and no call
 // comes after the session's end: so the run's close, the relaunch's opening that
-// replaces it and the seat leaving this node each ask the session's ledger to
-// carry what it still owes before they return, and an end that finds the
-// session ended already asks again for nothing. The run's collection asks the
-// job's own session too, without ending it; a job the run's opening does not
-// serve is asked for nothing.
+// replaces it and the seat leaving this node each end the session's ledger,
+// which carries what it still owes before they return, and an end that finds
+// the session ended already asks again for nothing. The run's collection asks
+// the job's own session to carry too, without ending it; a job the run's
+// opening does not serve is asked for nothing.
 //
-// Mutation: end an opening without asking its ledger, and a session that ends
-// owing calls leaves them off the run's record.
+// Mutation: end an opening without ending its ledger, and a session that ends
+// owing calls leaves them off the run's record; end it as the collection's ask
+// does, and a call whose record fails after the end is promised a carry that
+// never comes.
 func TestEveryWayASessionEndsCarriesWhatItsLedgerOwesOnce(t *testing.T) {
 	t.Parallel()
 	for name, end := range map[string]func(*fixture){
@@ -1006,8 +1023,9 @@ func TestEveryWayASessionEndsCarriesWhatItsLedgerOwesOnce(t *testing.T) {
 			f := newFixture(t)
 			f.open(t)
 			end(f)
-			if n := f.ledger.settles(); n != 1 {
-				t.Errorf("the ended session's ledger was asked to carry what it owes %d times, want once", n)
+			if n, asked := f.ledger.ends(), f.ledger.settles(); n != 1 || asked != 0 {
+				t.Errorf("the ended session's ledger was ended %d times and asked as a collection %d times, "+
+					"want ended once", n, asked)
 			}
 		})
 	}
@@ -1020,9 +1038,9 @@ func TestEveryWayASessionEndsCarriesWhatItsLedgerOwesOnce(t *testing.T) {
 			t.Errorf("an ask for a job the opening does not serve reached its ledger %d times", n)
 		}
 		f.bridge.Settle(t.Context(), "run-1", "job-1")
-		if n := f.ledger.settles(); n != 1 || f.bridge.Live() != 1 {
-			t.Errorf("the job's own ask reached its ledger %d times and left %d sessions live, want once "+
-				"and the session open", n, f.bridge.Live())
+		if n := f.ledger.settles(); n != 1 || f.ledger.ends() != 0 || f.bridge.Live() != 1 {
+			t.Errorf("the job's own ask reached its ledger %d times, ended it %d times and left %d sessions "+
+				"live, want once, never, and the session open", n, f.ledger.ends(), f.bridge.Live())
 		}
 	})
 }

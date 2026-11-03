@@ -96,7 +96,9 @@ import (
 // one its session makes as it ends, the store out of reach from the call
 // through every one of them, or the run's record moved on to its next job
 // before one landed — is a call no record of the run holds, and no seed can
-// count it. The bridge logs each such call by name.
+// count it. The engine's bridge ledger names each such call in its log, at
+// warning: its tool, its place among its job's calls and the opening of its
+// identity.
 //
 // A DELEGATED WORKER forks the log ([Fork]) and its calls are absorbed back
 // ([Absorb]) once its wave is done. Workers write under the parent's unit of

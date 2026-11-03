@@ -384,15 +384,21 @@ type Ledger interface {
 	// Settle carries onto the run's record whatever calls the ledger still
 	// owes it — ones whose own record did not land, which it carries on a
 	// later call's — before it returns, under a context and a bound of its
-	// own, and reports whether it carried any. The bridge asks for it as
-	// the session's opening ENDS ([Bridge.Close], a relaunch's opening
-	// replacing it, [Bridge.ReleaseSeat]): no call of the session comes
-	// after that to carry them, and a session that ended with calls owed
-	// would leave them off the run's record even where the store answers a
-	// second later. And the run's collection asks for it through
-	// [Bridge.Settle] before it reads the job's record, since a job's last
-	// call has no later call of its own.
+	// own, and reports whether it carried any. The run's collection asks for
+	// it through [Bridge.Settle] before it reads the job's record, since a
+	// job's last call has no later call of its own.
 	Settle(ctx context.Context, runID string) bool
+
+	// End is Settle as the session's opening ENDS ([Bridge.Close], a
+	// relaunch's opening replacing it, [Bridge.ReleaseSeat]): no call of the
+	// session comes after that to carry what it owes, and a session that
+	// ended with calls owed would leave them off the run's record even where
+	// the store answers a second later. AND IT IS THE SESSION'S LAST CARRY OF
+	// ITS OWN: a call still in flight as the opening ends records itself
+	// after it, and one whose record then fails is on no record unless a
+	// later call of the session carries it — which the ledger says of it,
+	// rather than promise a carry that is not coming.
+	End(ctx context.Context, runID string) bool
 }
 
 // Call is one finished bridged call, as the ledger records it.
@@ -954,7 +960,7 @@ func (b *Bridge) routeOf(s *Session) (route, error) {
 // others already finished.
 //
 // AND IT RETURNS ONCE THE SESSION'S LEDGER HAS CARRIED WHAT IT OWES
-// ([Ledger.Settle]), bounded by the ledger: the paths that end a run go on to
+// ([Ledger.End]), bounded by the ledger: the paths that end a run go on to
 // read its record, or to delete it.
 func (b *Bridge) Close(runID string) {
 	if b == nil {
@@ -1226,7 +1232,7 @@ func (b *Bridge) ReleaseSeat(seat uuid.UUID) {
 	}
 	b.mu.Unlock()
 	// SIDE BY SIDE: each ending waits on its ledger's carry of what it owes
-	// ([Ledger.Settle]), which a store in an outage holds to the ledger's
+	// ([Ledger.End]), which a store in an outage holds to the ledger's
 	// bound, and a seat leaving this node waits on the slowest of them rather
 	// than on their sum.
 	var ended sync.WaitGroup
@@ -1549,14 +1555,15 @@ func (o *binding) end() { o.endKeeping(nil) }
 // endKeeping is [binding.end], closing the opening's note inbox unless it is
 // keep — the inbox an opening replacing this one serves too.
 //
-// AND IT SETTLES THE SESSION'S LEDGER ([Ledger.Settle]) before it returns,
-// once, by the call that ended it: no call of the opening comes after its end
-// to carry what the ledger owes, and every path that ends one — the run's
-// settle, a stop, a relaunch's opening, the seat leaving this node — goes on
-// to read the run's record, delete it, or hand the run to a node whose ledger
-// owes it nothing. Last, once the opening refuses every new call and its box's
-// sessions are closed, so nothing it owes is still to come but what a call
-// already in flight records itself.
+// AND IT ENDS THE SESSION'S LEDGER ([Ledger.End]), which carries what it owes,
+// before it returns, once, by the call that ended it: no call of the opening
+// comes after its end to carry what the ledger owes, and every path that ends
+// one — the run's settle, a stop, a relaunch's opening, the seat leaving this
+// node — goes on to read the run's record, delete it, or hand the run to a node
+// whose ledger owes it nothing. Last, once the opening refuses every new call
+// and its box's sessions are closed, so nothing it owes is still to come but
+// what a call already in flight records itself — which the ledger, told the
+// session ended, says is on no record where it does not land.
 func (o *binding) endKeeping(keep SteerInbox) {
 	if o == nil {
 		return
@@ -1578,7 +1585,7 @@ func (o *binding) endKeeping(keep SteerInbox) {
 		}
 	}
 	if first && o.session.Ledger != nil {
-		o.session.Ledger.Settle(o.ctx, o.session.RunID)
+		o.session.Ledger.End(o.ctx, o.session.RunID)
 	}
 }
 
@@ -1879,10 +1886,10 @@ var errNoSeat = errors.New("mcpbridge: this run's tool surface is bound to no " 
 // duplicate-post failure the whole delivery machinery exists to prevent. The
 // ledger does what it can before the answer goes back — the engine's tries the
 // append again, and owes a call it still could not record to the session's
-// later appends and its carries ([Ledger.Settle]), whole — and an error it
-// reports here is logged: a call no record holds costs the reviewer a line of
-// evidence and a resumed segment's call log a count, where a duplicated side
-// effect costs somebody two identical messages.
+// later appends and its carries ([Ledger.Settle], [Ledger.End]), whole — and an
+// error it reports here is logged: a call no record holds costs the reviewer a
+// line of evidence and a resumed segment's call log a count, where a duplicated
+// side effect costs somebody two identical messages.
 //
 // Under the run's context rather than the request's, so a box that hangs up
 // does not take the row with it.

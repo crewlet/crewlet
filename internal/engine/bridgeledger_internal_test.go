@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
@@ -502,5 +504,149 @@ func TestACarryThatCannotLandIsKeptWhileItMightStill(t *testing.T) {
 	r.ledger.bind("another-job")
 	if r.ledger.Settle(t.Context(), r.turnID) || r.ledger.owing() != 0 {
 		t.Errorf("a carry for a job the row no longer holds left %d owed, want it forgotten", r.ledger.owing())
+	}
+}
+
+// movingStore is a pending store whose bridged appends fail while it is down,
+// and which answers an append for a job its row no longer holds once the row
+// has moved on — a relaunch replaced the job, or the run ended — as the store
+// does: taken, and landed nowhere.
+type movingStore struct {
+	sandbox.PendingStore
+	down, moved atomic.Bool
+}
+
+func (s *movingStore) AppendBridgeCall(context.Context, string, sandbox.BridgeAppend) (bool, error) {
+	if s.down.Load() {
+		return false, errors.New("the coordination store is electing a leader")
+	}
+	return !s.moved.Load(), nil
+}
+
+// readingLedger is the engine's ledger of one session bound to job
+// "launch-1" over store, saying what it could not record into the buffer it
+// answers, as JSON lines.
+func readingLedger(store sandbox.PendingStore) (*bridgeLedger, *bytes.Buffer) {
+	var logs bytes.Buffer
+	l := newBridgeLedger(store, nil)
+	l.log = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	l.bind("launch-1")
+	return l, &logs
+}
+
+// logLine is the one line of logs whose message is msg, or nil where there is
+// none; a second is a case's failure.
+func logLine(t *testing.T, logs *bytes.Buffer, msg string) map[string]any {
+	t.Helper()
+	var found map[string]any
+	for line := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
+		var rec map[string]any
+		if line == "" || json.Unmarshal([]byte(line), &rec) != nil || rec["msg"] != msg {
+			continue
+		}
+		if found != nil {
+			t.Fatalf("the ledger said %q twice:\n%s", msg, logs)
+		}
+		found = rec
+	}
+	return found
+}
+
+// named is the calls a line names, as it names them.
+func named(rec map[string]any) []string {
+	listed, _ := rec["owed"].([]any)
+	out := make([]string, 0, len(listed))
+	for _, c := range listed {
+		s, _ := c.(string)
+		out = append(out, s)
+	}
+	return out
+}
+
+// AN OWED CALL NO RECORD WILL TAKE IS NAMED, CALL BY CALL, AT WARNING. Calls
+// whose records did not land are owed to the session's next append or carry,
+// and the row may have moved on before either lands — a relaunch replaced the
+// job while one of its calls was still in flight, or the run ended. Whichever
+// append then takes them to the row — a carry of the session's, or a later call
+// of the old job, whose own drop is the ordinary end of a job — the store
+// answers it for a job the row does not hold, and the calls it carried are on
+// no record of the run: each is named, by its tool, its place and the opening
+// of its identity, so the line says WHICH calls a resumed segment cannot
+// count, and the session forgets them.
+//
+// Mutation: drop the calls a later call of the old job carried with only that
+// call's own debug line, and the calls no record holds are named nowhere.
+func TestAnOwedCallNoRecordWillTakeIsNamedCallByCall(t *testing.T) {
+	t.Parallel()
+	for name, carry := range map[string]func(t *testing.T, l *bridgeLedger){
+		"carried by a later call of the old job": func(t *testing.T, l *bridgeLedger) {
+			if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"},
+				Seq: 3, Digest: strings.Repeat("c", 64)}); err != nil {
+				t.Fatalf("the late call's append: %v", err)
+			}
+		},
+		"carried by the session's carry": func(t *testing.T, l *bridgeLedger) {
+			if l.Settle(t.Context(), "run-1") {
+				t.Fatal("a carry to a row that moved on answered carried")
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := &movingStore{}
+			l, logs := readingLedger(store)
+			store.down.Store(true)
+			for i, digest := range []string{strings.Repeat("a1", 32), strings.Repeat("b2", 32)} {
+				if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "post_message"},
+					Seq: i + 1, Digest: digest}); err == nil {
+					t.Fatal("an append landed while the store was down")
+				}
+			}
+			store.down.Store(false)
+			store.moved.Store(true)
+			carry(t, l)
+
+			line := logLine(t, logs, "bridge_owed_calls_after_their_job")
+			want := []string{"post_message at place 1, digest a1a1a1a1", "post_message at place 2, digest b2b2b2b2"}
+			if line == nil || line["level"] != "WARN" || !reflect.DeepEqual(named(line), want) {
+				t.Errorf("the calls no record will take were said as %v, want each named at warning: %v\n%s",
+					line, want, logs)
+			}
+			if n := l.owing(); n != 0 {
+				t.Errorf("the session still owes %d appends no record will take", n)
+			}
+		})
+	}
+}
+
+// A CALL WHOSE RECORD FAILS ONCE ITS SESSION HAS ENDED IS SAID TO BE ON NO
+// RECORD. The session's end makes its last carry of its own; a call still in
+// flight as the opening ended records itself after that, and where its record
+// does not land nothing of the session's will carry it but another call still
+// in flight. So the ledger says so, naming it — never the line that promises
+// the carry its session's end has already made.
+//
+// Mutation: end the session without marking the ledger ended, and the failed
+// record is promised a carry that never comes.
+func TestACallWhoseRecordFailsOnceItsSessionEndedIsSaidToBeOnNoRecord(t *testing.T) {
+	t.Parallel()
+	store := &movingStore{}
+	l, logs := readingLedger(store)
+	if l.End(t.Context(), "run-1") {
+		t.Fatal("the end of a session that owed nothing answered carried")
+	}
+	store.down.Store(true)
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "post_message"},
+		Seq: 4, Digest: strings.Repeat("d4", 32)}); err == nil {
+		t.Fatal("an append landed while the store was down")
+	}
+	if promised := logLine(t, logs, "bridge_call_owed"); promised != nil {
+		t.Errorf("a call whose record failed after its session ended was promised a carry: %v", promised)
+	}
+	line := logLine(t, logs, "bridge_owed_calls_unrecorded")
+	if line == nil || line["level"] != "WARN" || line["session_ended"] != true ||
+		!reflect.DeepEqual(named(line), []string{"post_message at place 4, digest d4d4d4d4"}) {
+		t.Errorf("the call was said as %v, want it named at warning as on no record of an ended session\n%s",
+			line, logs)
 	}
 }
