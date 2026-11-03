@@ -31,3 +31,37 @@ export function repoRoot(): string {
 export function engineFile<T>(path: string): T {
   return JSON.parse(readFileSync(join(repoRoot(), path), "utf8")) as T;
 }
+
+/**
+ * GitHub's anchor for a heading, the same rule `internal/docsgate` pins: the
+ * rendered text lower-cased, keeping letters, marks, digits, connectors,
+ * spaces and hyphens, each space a hyphen.
+ */
+export function slug(heading: string): string {
+  return heading
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
+    .replace(/ /g, "-");
+}
+
+/** Every anchor a markdown file renders, numbered on repetition, outside fences. */
+export function headingAnchors(file: string): Set<string> {
+  const out = new Set<string>();
+  const seen = new Map<string, number>();
+  let fenced = false;
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (/^\s{0,3}(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    const m = fenced ? null : /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
+    if (!m) continue;
+    const s = slug(m[1]!);
+    const n = seen.get(s) ?? 0;
+    out.add(n > 0 ? `${s}-${n}` : s);
+    seen.set(s, n + 1);
+  }
+  return out;
+}
