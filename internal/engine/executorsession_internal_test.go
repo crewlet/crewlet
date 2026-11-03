@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/a2a"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -19,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -299,6 +302,121 @@ func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 		BridgeCallsElided: 4, Stop: stop}, colleagueAnswer{})
 	if elided.Delivered || !elided.DeliveryUnknown {
 		t.Fatalf("a record whose calls were elided ended %+v, want whether it replied not known", elided)
+	}
+}
+
+// THE CALL A PERSON APPROVED IS A DELIVERY OF ITS TURN. A tool at Needs approval
+// that reaches the party waiting is held, and the run parks on it; the person
+// allows it once, the resume makes it on the engine host, and the job that
+// carries the work on opens. Whether the turn replied is read off the run's row
+// — by a stop's or a loss's account of the turn, and by the collection's own
+// delivery check over the round's calls — and the call was nowhere on it: the
+// job carrying the work on clears the held call, whose result was the only
+// trace of it. A reply that went out was recorded as one that did not, and the
+// next turn told so.
+//
+// Mutation: drop the call from the write that records its result
+// ([sandbox.PendingStore.RecordHeldResult]), or have heldCommit record it as
+// failed whatever the surface answered, and both readers say the turn did not
+// reply.
+func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
+	t.Parallel()
+	e, _ := loggingEngine(t)
+	company := e.Company()
+	// A TOOL THAT REACHES THE PERSON WAITING, on the surface they wait on.
+	if err := company.Tools.Register(namedTool("vendor_post"), tools.Origin("vendor")); err != nil {
+		t.Fatalf("registering the delivering tool: %v", err)
+	}
+	reply := turn.Reply{Kind: turn.ReplyTool, Surface: "vendor"}.String()
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": []byte("crewlet-test-sealing-key-32bytes")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seal := sandbox.NewCallSeal(cipher)
+	store := sandbox.NewCoordStore(e.backends.Fleet)
+	ctx := t.Context()
+	row := sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
+		Harness: "claude-code", Reply: reply}
+	opened, err := store.BeginLaunch(ctx, row, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	launch := opened.LaunchID
+
+	// HELD, and parked on: the call to vendor_post the job made.
+	held := sandbox.HeldCall{ID: "0190f3a8-0000-7000-8000-000000000001", LaunchID: launch,
+		Server: "vendor", Tool: "vendor_post", Raw: "post", Digest: "sha256:d1", HeldAt: time.Now().UTC()}
+	if held.Arguments, err = seal.SealArguments("run-1", held, map[string]any{"body": "done"}); err != nil {
+		t.Fatal(err)
+	}
+	const question = "May swe call vendor_post on the vendor MCP server?"
+	if got, err := store.RecordAsk(ctx, "run-1", launch, sandbox.Ask{Question: question,
+		Decision: sandbox.HeldDecision(question, nil), To: sandbox.AskToManager, Held: &held}); err != nil ||
+		got != sandbox.AskRecorded {
+		t.Fatalf("RecordAsk = %v, %v", got, err)
+	}
+	if err := store.MarkAwaiting(ctx, "run-1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	if _, ok, err := store.RecordAnswer(ctx, "run-1", launch, sandbox.RecordedAnswer{
+		Sealed: []byte("sealed: once"), Via: types.AnswerViaOperator, EventIDs: []string{"r1"}},
+		sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	claimed, ok, err := store.ClaimForResume(ctx, "run-1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{})
+	if err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+
+	// MADE, as the resume makes it: marked, then its result recorded through
+	// the engine's commit with what the surface answered.
+	commit := heldCommit{seal: seal, held: &sandbox.HeldResume{TurnID: "run-1", Call: *claimed.HeldCall,
+		Choice: sandbox.HeldOnce,
+		Mark: func(ctx context.Context) (sandbox.HeldCall, bool, error) {
+			return store.MarkHeldCall(ctx, "run-1", launch, sandbox.Fence{})
+		},
+		Record: func(ctx context.Context, made sandbox.HeldMade) error {
+			recorded, err := store.RecordHeldResult(ctx, "run-1", launch, made, sandbox.Fence{})
+			if err == nil && !recorded {
+				err = errors.New("the result was not recorded")
+			}
+			return err
+		},
+	}}
+	if prior, err := commit.Begin(ctx); err != nil || !prior.First {
+		t.Fatalf("Begin = %+v, %v, want this mark the first", prior, err)
+	}
+	if err := commit.Record(ctx, sandbox.HeldResult{Output: "posted"}, toolloop.ToolResult{Output: "posted",
+		Origin: tools.Origin("vendor"), Server: "vendor", Source: tools.Origin("vendor")}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	// THE JOB THAT CARRIES THE WORK ON opens, the held call cleared with the
+	// question it was.
+	carried := row
+	carried.Continues = true
+	if _, err := store.BeginLaunch(ctx, carried, sandbox.Fence{}); err != nil {
+		t.Fatalf("the carry-on BeginLaunch: %v", err)
+	}
+	got, found, err := store.Get(ctx, "run-1")
+	if err != nil || !found || got.HeldCall != nil {
+		t.Fatalf("the carried-on row = %+v, %v, %v, want it found with no held call", got.HeldCall, found, err)
+	}
+
+	// A STOP'S ACCOUNT reads the round's calls...
+	stopped := got
+	stopped.Stop = &sandbox.RunStop{By: "jane"}
+	if ending := e.runEnding(company, stopped, colleagueAnswer{}); !ending.Delivered || ending.DeliveryUnknown {
+		t.Fatalf("a turn whose reply was the approved call ended %+v, want its reply delivered", ending)
+	}
+	// ...and so does the collection's own delivery check, over the bridged
+	// log the resumed turn's record is built from.
+	var calls []ledger.Call
+	for _, call := range bridgedCalls(got.BridgeCalls) {
+		calls = append(calls, call.Call)
+	}
+	if !turn.Answered(calls, deliverySurface(e.seatRegistry(company, "swe")), turn.ParseReply(reply)) {
+		t.Fatalf("the collection's check reads %+v as no reply, want the approved call its delivery", calls)
 	}
 }
 

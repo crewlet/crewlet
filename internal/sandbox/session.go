@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // EACH LAUNCH'S HARNESS SESSION, KEPT, and each turn's END, recorded
@@ -92,9 +93,18 @@ import (
 // ([ErrEndOwed]): after every capture of the turn has settled, so the end's
 // tombstone never refuses the turn's own last session, and with the turn's
 // NEWEST capture where it was not kept ([executordomain.Unkept]), so the log's
-// row never goes on naming an older session as the turn's last. The seat's mail
-// waits on it as on every ending kept for its retry. A turn with no capture
-// still ends: its row names no object, and holds the account.
+// row never goes on naming an older session as the turn's last. On every frame
+// somebody waits on — a completion's resume, a stop, a seat's recovery — the
+// ending is decided there and the end recorded by the ending's own retry,
+// armed at once ([errAskAway]): a capture still being kept, and the log's
+// write after it, are not that frame's to wait on. A seat's retirement, which
+// holds the seat's lease and a budget of its own, both decides its endings and
+// records their ends on its own frame. So the row outlives the frame that
+// decided its ending by the settling of the turn's captures — bounded by a
+// capture's own budget ([SessionCaptureBudget], about twenty-one minutes at
+// the bounds) — and the end's write, and the seat's mail waits on it as on
+// every ending kept for its retry. A turn with no capture still ends: its row
+// names no object, and holds the account.
 //
 // # The switch
 //
@@ -332,6 +342,39 @@ func (c SessionCapture) newerThan(o SessionCapture) bool {
 // samePlace reports whether c and o are the same capture.
 func (c SessionCapture) samePlace(o SessionCapture) bool {
 	return c.LaunchSeq == o.LaunchSeq && c.CaptureSeq == o.CaptureSeq
+}
+
+// stampOnto stamps capture on run as [PendingStore.StampCapture] does, and
+// reports whether it took: the row's own rule, which the store applies to the
+// row as it stands, and an ending applies to its copy where the row cannot be
+// read back after a stamp it made ([Coordinator.publishEnd]).
+//
+// A CAPTURE PLACED AFTER THE ROW'S NEWEST IS TAKEN, whatever its state, and one
+// at the newest's own place only where it moves that capture on — begun to an
+// outcome, unresolved to an answer — so a late write never takes an answer
+// back; anything older is refused. And a capture that LANDED is the turn's
+// kept one wherever it is newer than the kept one — an older capture's answer
+// that comes after a newer one began included — while a place the row holds
+// refused is never kept, whatever a late write says.
+func stampOnto(run *PendingRun, capture SessionCapture) bool {
+	took := false
+	newest := run.Capture
+	switch {
+	case newest == nil || capture.newerThan(*newest):
+		took = true
+	case capture.samePlace(*newest):
+		took = newest.State.advancesTo(capture.State)
+	}
+	if took {
+		stamped := capture
+		run.Capture = &stamped
+	}
+	landed := capture.State == CaptureLanded && (took || !capture.samePlace(*newest))
+	if landed && (run.Kept == nil || capture.newerThan(*run.Kept)) {
+		kept := capture
+		run.Kept, took = &kept, true
+	}
+	return took
 }
 
 // kept is the capture as a box read reports it ([SessionKept]).
@@ -1356,7 +1399,8 @@ func captureInFlight(run PendingRun, now time.Time) bool {
 
 // awaitCapture is run's row once no capture of its turn is in flight
 // ([captureInFlight]) — read again every [captureWaitTick], for at most within
-// — or as it stands when ctx ends first.
+// — and whether it is still there; or why the wait could not say: ctx ended
+// first, or the row could not be read when the wait ran out.
 //
 // WHY AN END WAITS, for as long as a capture can take ([SessionCaptureBudget]):
 // the end tombstones its turn, and a capture whose record lands after it is
@@ -1366,27 +1410,63 @@ func captureInFlight(run PendingRun, now time.Time) bool {
 // waits off every frame somebody waits on (its ending's own retry).
 //
 // A RELAUNCH WAITS FAR LESS ([relaunchCaptureWait]), on the frame that
-// relaunches: see restore.go.
-func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun, within time.Duration) PendingRun {
-	// NEVER LONGER THAN within, whatever the stamp's clock says: a stamp
-	// whose node's clock runs ahead is waited out on this one's.
-	ctx, cancel := context.WithTimeout(ctx, within)
+// relaunches: see restore.go. Its wait running out on a row it did read leaves
+// the capture in flight there, which the relaunch reads as one it does not
+// wait out.
+//
+// A READ THAT FAILS IS NO ANSWER, and the wait goes on: the capture is still
+// begun on the last row this read, and nothing says it has settled. The wait
+// used to end on it, with that stale row, and the end it was holding back was
+// recorded over a capture still being kept — the end's tombstone refused the
+// turn's last session, and the end named it begun and never finished, which it
+// was not. An end is never recorded from a row the wait could not read: once
+// the capture's own budget is out with the last read failed, or the wait's
+// budget is, or ctx ended, the caller keeps its ending and asks again on its
+// own spacing; and a relaunch continues no kept session off such a row.
+//
+// PAST THE BUDGET ON A ROW IT DID READ, for an end's wait the capture's own
+// budget is out too, on this node's clock, and the end is recorded naming it
+// begun and never finished ([unkeptOf]): its node stopped, or its budget ran
+// out.
+func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun,
+	within time.Duration) (PendingRun, bool, error) {
+
+	// NEVER LONGER THAN within, whatever the stamp's clock says: a stamp whose
+	// node's clock runs ahead is waited out on this one's.
+	wait, cancel := context.WithTimeout(ctx, within)
 	defer cancel()
-	for captureInFlight(run, c.now()) {
-		wait := time.NewTimer(c.captureTick)
+	var unread error
+	for unread != nil || captureInFlight(run, c.now()) {
+		if unread != nil && !captureInFlight(run, c.now()) {
+			return run, true, fmt.Errorf("sandbox: run %s could not be read to see what a capture of "+
+				"its turn came to: %w", run.TurnID, unread)
+		}
+		tick := time.NewTimer(c.captureTick)
 		select {
-		case <-ctx.Done():
-			wait.Stop()
-			return run
-		case <-wait.C:
+		case <-wait.Done():
+			tick.Stop()
+			switch {
+			case ctx.Err() != nil:
+				return run, true, fmt.Errorf("sandbox: waiting for a capture of run %s to settle: %w",
+					run.TurnID, ctx.Err())
+			case unread != nil:
+				return run, true, fmt.Errorf("sandbox: run %s could not be read while a capture of its "+
+					"turn was being kept: %w", run.TurnID, unread)
+			}
+			return run, true, nil
+		case <-tick.C:
 		}
-		current, found, err := c.pending.Get(ctx, run.TurnID)
-		if err != nil || !found {
-			return run
+		current, found, err := c.pending.Get(wait, run.TurnID)
+		switch {
+		case err != nil:
+			unread = err
+			continue
+		case !found:
+			return PendingRun{}, false, nil
 		}
-		run = current
+		run, unread = current, nil
 	}
-	return run
+	return run, true, nil
 }
 
 // unkeptOf is the turn's newest capture where it is not one the turn's row on
@@ -1521,7 +1601,7 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 		why := fmt.Sprintf("its outcome %q is not one this build knows", ending.Outcome)
 		if len(unknown) > 0 {
 			why = fmt.Sprintf("it holds %s, which this build does not know",
-				strings.Join(slices.Sorted(maps.Keys(unknown)), ", "))
+				words.And(slices.Sorted(maps.Keys(unknown))))
 		}
 		log.WarnContext(ctx, "executor_turn_end_deferred", "turn_id", run.TurnID, "agent", run.AgentHandle,
 			"detail", "the end the run's record owes was written by a newer build — "+why+" — so it is "+
@@ -1529,9 +1609,16 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 		return run, fmt.Errorf("sandbox: the end turn %s owes was written by a newer build: %s", run.TurnID, why)
 	default:
 		if newest := run.Capture; newest != nil && newest.State == CaptureUnresolved {
-			c.settleCapture(ctx, run, *newest)
-			if current, found, getErr := c.pending.Get(ctx, run.TurnID); getErr == nil && found {
+			settled := c.settleCapture(ctx, run, *newest)
+			current, found, getErr := c.pending.Get(ctx, run.TurnID)
+			if getErr == nil && found {
 				run = current
+			} else {
+				// WHAT THE ASK JUST SETTLED, where the row cannot be read
+				// back to show it: stamped on this copy by the row's own
+				// rule. Read off the copy as it was, the end named a capture
+				// that had just landed as one never answered.
+				stampOnto(&run, settled)
 			}
 		}
 		ending.Unkept = unkeptOf(run)

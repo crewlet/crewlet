@@ -59,7 +59,7 @@ function Executors() {
             <ListItem
               key={run.turn_id}
               href={href(["live", "executors", run.turn_id])}
-              trailing={<RunStatus status={run.status} />}
+              trailing={<RunStatus status={run.status} ending={run.ending} />}
             >
               <span className="home-widget-line">
                 <span className="truncate">{runTitle(run)}</span>

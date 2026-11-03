@@ -217,6 +217,17 @@ func (r *runRig) collect(t *testing.T, turnID string) error {
 // dispatch parks on the launch, the run is played and collected, and the
 // resume reviews it — failing the case wherever the turn did not take that
 // path.
+//
+// THE RESUME DECIDES THE RUN'S ENDING, AND THE ENDING DELETES THE RECORD: on
+// the resume's own frame where the record owes nothing more, and otherwise
+// just after it, by this node's retry of the ending. An engine that records on
+// an executor log owes every turn's end on the run's record
+// ([sandbox.Coordinator.OweEnd]), and the ending records that end off the
+// frame that decided it, before the delete: the log's write, and a capture
+// still being kept, are not for a completion's frame to wait on. So the record
+// is read as the resume left it, gone or its ending decided, and never a run
+// the turn launched again or a claim left standing; and then it is waited on
+// until it goes, which an ending that never finishes does not.
 func runToItsEnd(t *testing.T, e *Engine, rig *runRig, req Request) {
 	t.Helper()
 	res, err := e.runTurn(t.Context(), req)
@@ -229,10 +240,16 @@ func runToItsEnd(t *testing.T, e *Engine, rig *runRig, req Request) {
 	if err := rig.collect(t, req.RunID); err != nil {
 		t.Fatalf("collecting the run of %s: %v", req.RunID, err)
 	}
-	if row, found, err := e.sandbox.Load().pending.Get(t.Context(), req.RunID); err != nil || found {
-		t.Fatalf("the run of %s is still on the record after its resume (%+v, %v): the "+
-			"turn did not end", req.RunID, row.Status, err)
+	pending := e.sandbox.Load().pending
+	if row, found, err := pending.Get(t.Context(), req.RunID); err != nil || (found && row.Ending == nil) {
+		t.Fatalf("the run of %s is still on the record after its resume, its ending undecided (%+v, %v): "+
+			"the turn did not end", req.RunID, row.Status, err)
 	}
+	eventually(t, "the ending of the run of "+req.RunID+" to record its turn's end and delete its record",
+		func() bool {
+			_, found, err := pending.Get(t.Context(), req.RunID)
+			return err == nil && !found
+		})
 }
 
 // modelPlayer plays a run as its harness would, with pick as the harness's

@@ -1566,18 +1566,25 @@ const (
 	// +0.1 KiB, and useLatestHandlers, which the Sign in dialog is the first
 	// settings screen to read, became a chunk of its own (+1.5 KiB) as Rollup
 	// moved 1.2 KiB of shared settings code into the Access chunk. 5437 KiB.
+	// An executor whose ending is decided drawn as ending (the executors
+	// board, a run's page, the Inbox's busy seat and answer fates), and on a
+	// run's page the call a person approved and the call its run held for
+	// that approval each drawn as what it is, took it from 5436.4 KiB to
+	// 5437.3 KiB (+0.9 KiB, 970 bytes): the Executors chunk +0.7 KiB, the
+	// inbox chunk +0.2 KiB, and 44 bytes of the home, live and entry scripts.
+	// 5438 KiB.
 	// A session's row saying whether, and where, a relaunch would continue it
 	// (the sentence under its account for a session continued in any box,
 	// only in the box its run parked in, not at all, or not decidable now)
-	// took it from 5436.1 KiB to 5436.8 KiB (+0.7 KiB, 700 bytes), all of it
-	// the agents chunk the view loads in (+252 bytes gzipped), under 5437
-	// KiB. The initial load did not grow. 5437 KiB.
+	// took it from 5437.3 KiB to 5438.0 KiB (+0.7 KiB, 700 bytes), all of it
+	// the agents chunk the view loads in (+255 bytes gzipped): 3 bytes past
+	// 5438 KiB. The initial load did not grow. 5439 KiB.
 	// That sentence keyed by the engine's set of places a relaunch continues
 	// a session in (SessionContinuesIn), so a place the engine adds is a
-	// typecheck failure in the view, took it from 5436.8 KiB to 5436.8 KiB
-	// (+60 bytes), all of it the agents chunk (+38 bytes gzipped). The
-	// initial load did not grow. 5437 KiB.
-	treeBudget = 5<<20 + 317<<10
+	// typecheck failure in the view, took it from 5438.0 KiB to 5438.1 KiB
+	// (+60 bytes), all of it the agents chunk (+33 bytes gzipped). The
+	// initial load did not grow. 5439 KiB.
+	treeBudget = 5<<20 + 319<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

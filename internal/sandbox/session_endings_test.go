@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -205,5 +208,280 @@ func TestAnEndANewerBuildOwedIsLeftForANodeThatReadsIt(t *testing.T) {
 					run.OwedEnd, run.EndRecorded)
 			}
 		})
+	}
+}
+
+// loggingRig is a coordinator rig that records every turn's end on an executor
+// log, as every engine's coordinator does, and keeps no session (the company's
+// switch off): an ending whose record owes its turn's end is finished by this
+// node's retry, off the frame that decided it ([errAskAway]).
+func loggingRig(t *testing.T) (*coordRig, *sessionWrites) {
+	t.Helper()
+	rig := newCoordRig(t)
+	writes := &sessionWrites{}
+	rig.coordinator.sessions, rig.coordinator.keep = writes, &sessionKeep{}
+	rig.coordinator.sessionRetry, rig.coordinator.recordBudget = time.Millisecond, 200*time.Millisecond
+	rig.coordinator.captureTick = time.Millisecond
+	rig.coordinator.spoolDir = t.TempDir()
+	// THE ENGINE'S ACCOUNT OF A LOSS, as production wires TurnLost.
+	rig.coordinator.turnLost = func(context.Context, PendingRun) executordomain.Ending {
+		return executordomain.Ending{Outcome: executordomain.OutcomeLost}
+	}
+	return rig, writes
+}
+
+// owesItsEnd makes the rig's resumed turns owe their end as the engine's do
+// before they return ([Coordinator.OweEnd]), then runs then — nil for nothing.
+func owesItsEnd(t *testing.T, rig *coordRig, then func()) {
+	t.Helper()
+	rig.resumer.during = func(ctx context.Context, run PendingRun) {
+		if owed, err := rig.coordinator.OweEnd(ctx, run.TurnID, executordomain.Ending{
+			Outcome: executordomain.OutcomeCompleted, Decision: "done"}); err != nil || !owed {
+			t.Errorf("the resumed turn's OweEnd = %v, %v", owed, err)
+		}
+		if then != nil {
+			then()
+		}
+	}
+}
+
+// listsThen is a PendingStore whose next listing of a seat's runs, once armed,
+// runs then AFTER the store answered it: the listing's caller holds rows read
+// before whatever then does, as a goroutine whose read was answered and which is
+// not scheduled again until then has run holds them.
+type listsThen struct {
+	PendingStore
+	mu   sync.Mutex
+	then func()
+}
+
+func (s *listsThen) arm(then func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.then = then
+}
+
+func (s *listsThen) ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error) {
+	s.mu.Lock()
+	then := s.then
+	s.then = nil
+	s.mu.Unlock()
+	runs, err := s.PendingStore.ListActiveForSeat(ctx, handle)
+	if then != nil {
+		then()
+	}
+	return runs, err
+}
+
+// detach drops every hold on handle's inbox, as the detach a seat's release
+// makes does.
+func (h *holdSpy) detach(handle string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.held, handle)
+}
+
+// A RECOUNT READ BEFORE AN ENDING'S DELETE NEVER OUTLIVES IT. A resumed turn's
+// frame recounts its seat as the resume returns, while the ending it decided is
+// finished at once, off the frame, by this node's retry: which records the
+// turn's end, deletes the record, recounts the seat and settles. A frame whose
+// listing was read before that delete and written after the retry's recount
+// counted the deleted run as holding again, and held the seat's inbox with
+// nothing left to recount it: the seat took no mail until it moved.
+//
+// Two moves order the frame's recount after the retry's here, the retry's delete
+// ([Coordinator.moved]) and the retry's own recount as it is written
+// ([Coordinator.syncSeat]), and either orders it alone; the two cases after this
+// one hold each to a race only it orders.
+//
+// Mutation: drop both moves, and the frame's stale listing is written last, the
+// seat counted held and its inbox held for a run that is gone.
+func TestARecountReadBeforeAnEndingsDeleteNeverOutlivesIt(t *testing.T) {
+	t.Parallel()
+	rig, writes := loggingRig(t)
+	holds := rig.withHold()
+	stale := &listsThen{PendingStore: rig.coordinator.pending}
+	rig.coordinator.pending = stale
+	launchScheduled(t, rig, "t1")
+	if !holds.holding("swe") {
+		t.Fatal("the premise: the running job holds the seat's inbox")
+	}
+	// THE FRAME'S RECOUNT IS THE SEAT'S NEXT LISTING, and its goroutine is not
+	// scheduled again until the ending's retry has run to its settle.
+	owesItsEnd(t, rig, func() { stale.arm(func() { rig.fireRetries() }) })
+	rig.runner.Finish(Result{Success: true})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	rig.finished("t1")
+	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].n.Ending.Decision != "done" {
+		t.Fatalf("recorded %+v, want the resumed turn's one end", ends)
+	}
+	if held, _ := rig.coordinator.SeatRuns("swe"); held || holds.holding("swe") {
+		t.Fatalf("the seat is counted held (%v) and its inbox held (%v) for a run whose record is gone",
+			held, holds.holding("swe"))
+	}
+}
+
+// A RECOUNT READ BEFORE A DELETE OF THIS NODE'S READS AGAIN, though nothing
+// recounts the seat after the delete: an ending this node finishes deletes the
+// run's record and moves the seat ([Coordinator.moved]), as every count it
+// applies does, so a listing that straddles the delete is read again rather
+// than written over it — which counted the run whose record is gone as holding,
+// and held the seat's inbox behind it.
+//
+// Mutation: drop the move an ending's delete makes ([Coordinator.moved]), and
+// the recount writes its stale listing, the seat counted held for a run that is
+// gone.
+func TestARecountReadBeforeADeleteOfThisNodesReadsAgain(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	holds := rig.withHold()
+	stale := &listsThen{PendingStore: rig.coordinator.pending}
+	rig.coordinator.pending = stale
+	launchScheduled(t, rig, "t1")
+	run := rig.get("t1")
+	// THE RUN ENDS HERE, its record deleted, while the recount's listing is on
+	// its way back; nothing recounts the seat after the delete.
+	stale.arm(func() {
+		if decided, err := rig.coordinator.endRecord(t.Context(), run, ending{
+			fence: rigLease, whileIn: Active, launch: EveryLaunch, reclaim: true,
+		}); err != nil || decided == nil {
+			t.Errorf("the premise: the run's ending = %v, %v, want it decided and finished here",
+				decided, err)
+		}
+		if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+			t.Errorf("the premise: the ending deleted the record (found %v, %v)", found, err)
+		}
+	})
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	if held, _ := rig.coordinator.SeatRuns("swe"); held || holds.holding("swe") {
+		t.Fatalf("the seat is counted held (%v) and its inbox held (%v) for a run whose record is gone",
+			held, holds.holding("swe"))
+	}
+}
+
+// A RECOUNT OLDER THAN ONE WRITTEN BEFORE IT READS AGAIN. The store moves under
+// a seat's recounts by other nodes' hands too, which move nothing this node
+// counts: the seat's last holder finishing an ending it decided, whose steps
+// after the decision take no lease, deletes the run's record. A recount whose
+// listing was read before that delete, and written after a newer recount that
+// read the store without the run, counted the run as holding again over the
+// newer count, and held the seat's inbox with nothing left to recount it.
+//
+// Mutation: drop the move a recount makes as it is written
+// ([Coordinator.syncSeat]), and the older listing is written last, the seat
+// counted held for a run that is gone.
+func TestARecountOlderThanOneWrittenBeforeItReadsAgain(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	holds := rig.withHold()
+	stale := &listsThen{PendingStore: rig.coordinator.pending}
+	rig.coordinator.pending = stale
+	launchScheduled(t, rig, "t1")
+	ctx := t.Context()
+	stale.arm(func() {
+		// ANOTHER NODE ENDS THE RUN, record and all, in the store alone...
+		decided, ok, err := rig.pending.DecideEnding(ctx, "t1",
+			ending{whileIn: Active, launch: EveryLaunch}.decision())
+		if err != nil || !ok {
+			t.Errorf("the premise: another node's ending = %v, %v", ok, err)
+			return
+		}
+		if _, deleted, err := rig.pending.Finish(ctx, "t1", decided.Ending.ID); err != nil || !deleted {
+			t.Errorf("the premise: another node's delete = %v, %v", deleted, err)
+		}
+		// ...AND A NEWER RECOUNT HERE reads the store after it, and is
+		// written first.
+		rig.coordinator.syncSeat(ctx, "swe")
+	})
+	rig.coordinator.syncSeat(ctx, "swe")
+	if held, _ := rig.coordinator.SeatRuns("swe"); held || holds.holding("swe") {
+		t.Fatalf("the seat is counted held (%v) and its inbox held (%v) for a run whose record is gone",
+			held, holds.holding("swe"))
+	}
+}
+
+// A SEAT TAKEN BACK BESIDE AN ENDING STILL BEING FINISHED HOLDS ITS MAIL BEHIND
+// IT. This node's retry of a resumed turn's ending waits for the turn's capture
+// to land before it records the turn's end; meanwhile the seat's lease lapses,
+// the seat is released, and this node takes it again. Its recovery finds the
+// ending decided and another attempt here finishing it, and left it to that
+// attempt holding nothing: the seat's mail ran while its run's record still
+// owed the turn's end — the turn the conversation's next turn must never
+// overtake. The ending is kept for this node's retry as well, which holds the
+// mail behind it and finds the record gone the moment the attempt it waited
+// behind returns.
+//
+// Mutation: leave an ending another attempt on the node is finishing to that
+// attempt alone ([Coordinator.endRun]), and the seat taken back is not held; or
+// ask the ending kept behind the attempt again only on the hand-back's spacing
+// ([Coordinator.finishOnce]), and the seat's mail waits that long after the
+// record is gone.
+func TestASeatTakenBackBesideAnEndingStillBeingFinishedHoldsItsMail(t *testing.T) {
+	t.Parallel()
+	rig, writes, keep := keepingRig(t)
+	holds := rig.withHold()
+	keep.gate = make(chan struct{})
+	rig.launchKept(t, "t1")
+	owesItsEnd(t, rig, nil)
+	session := rig.runner.Session
+	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	// THE ENDING'S RETRY, in its slot and waiting for the capture to land.
+	busy := make(chan struct{})
+	go func() {
+		defer close(busy)
+		rig.fireRetries()
+	}()
+	// THE KEEP LANDS ONCE THE CASE HAS LOOKED, on every way out of it, so the
+	// retry waiting behind it is never left waiting.
+	landed := sync.OnceFunc(func() {
+		close(keep.gate)
+		<-busy
+		rig.awaitKeeps()
+	})
+	defer landed()
+	eventually(t, func() bool {
+		rig.coordinator.mu.Lock()
+		defer rig.coordinator.mu.Unlock()
+		return rig.coordinator.finishing["t1"]
+	}, "the ending's retry never began finishing it")
+	// THE SEAT IS LOST AND TAKEN AGAIN BY THIS NODE: the release detaches the
+	// inbox, which drops every hold it carried.
+	rig.coordinator.ReleaseSeat("swe")
+	holds.detach("swe")
+	if err := rig.recoverSeat(t.Context(), "node-a:2", 2); err != nil {
+		t.Fatalf("recoverSeat: %v", err)
+	}
+	if run := rig.get("t1"); run.Ending == nil || len(run.OwedEnd) == 0 {
+		t.Fatalf("the premise: the record holds its ending (%v) and owes its turn's end (%s)",
+			run.Ending != nil, run.OwedEnd)
+	}
+	if !holds.holding("swe") {
+		t.Fatal("the seat taken back takes its mail while its run's record still owes the turn's end")
+	}
+
+	landed()
+	// ASKED AGAIN THE MOMENT THE ATTEMPT IT WAITED BEHIND RETURNED, which
+	// finished it: the hold behind a record that is gone lifts then, not a
+	// hand-back's spacing later.
+	if due := rig.retries.delays(); !slices.Equal(due, []time.Duration{0}) {
+		t.Fatalf("the ending kept behind the attempt is asked again in %v, want at once", due)
+	}
+	for range 3 {
+		rig.fireRetries()
+	}
+	rig.finished("t1")
+	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].n.Ending.Decision != "done" {
+		t.Fatalf("recorded %+v, want the resumed turn's one end", ends)
+	}
+	if holds.holding("swe") || rig.coordinator.owes("t1") {
+		t.Fatalf("the seat's inbox is held (%v), or the ending still owed (%v), once its record is gone",
+			holds.holding("swe"), rig.coordinator.owes("t1"))
 	}
 }

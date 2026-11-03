@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -49,8 +50,14 @@ type HeldCommit interface {
 	// attempt at the same answer marked it, and Made says whether that
 	// attempt recorded what the call returned (Result).
 	Begin(ctx context.Context) (HeldPrior, error)
-	// Record records what the call returned.
-	Record(ctx context.Context, result sandbox.HeldResult) error
+	// Record records what the call returned — result, as the run that
+	// carries the work on is handed it — and the call itself as a call of the
+	// run's round, with what the surface that made it answered (answered:
+	// whether it failed and why, and who answered it), in one write
+	// ([sandbox.PendingStore.RecordHeldResult]): every reader of whether the
+	// turn replied reads the round's calls, and a call made and recorded
+	// nowhere among them was a reply that read as never sent.
+	Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error
 }
 
 // HeldPrior is how a held call stood when [HeldCommit.Begin] marked it.
@@ -148,7 +155,7 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) error
 	}
 	result := sandbox.HeldResult{Output: textcut.Within(res.Output, sandbox.MaxHeldResultBytes),
 		Failed: res.Failed}
-	if err := held.Commit.Record(ctx, result); err != nil {
+	if err := held.Commit.Record(ctx, result, res); err != nil {
 		// THE CALL IS MADE, and the run is told what it returned whatever
 		// the record says: only a later attempt at the same answer, which
 		// would then say the result is unknown, reads the record.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -30,10 +31,11 @@ func (c *closeIssue) Call(_ context.Context, args map[string]any) (tools.Result,
 }
 
 // ledgerCommit is a [HeldCommit] over one row's mark, as the store keeps it:
-// marked once, the result recorded once.
+// marked once, the result recorded once, with what the surface answered.
 type ledgerCommit struct {
 	marked   bool
 	result   *sandbox.HeldResult
+	answered toolloop.ToolResult
 	refuse   error
 	recorded int
 }
@@ -52,9 +54,9 @@ func (l *ledgerCommit) Begin(context.Context) (HeldPrior, error) {
 	return HeldPrior{}, nil
 }
 
-func (l *ledgerCommit) Record(_ context.Context, result sandbox.HeldResult) error {
+func (l *ledgerCommit) Record(_ context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error {
 	if l.result == nil {
-		l.result = &result
+		l.result, l.answered = &result, answered
 	}
 	l.recorded++
 	return nil
@@ -79,8 +81,14 @@ func heldSurface(t *testing.T, tool *closeIssue) *tools.Surface {
 // call may or may not have taken effect. Neither makes it again. A denied call
 // is never made, and the run is told it was refused as forbidden.
 //
+// THE RECORD IS HANDED WHAT THE SURFACE ANSWERED, beside the result: the call
+// is recorded among its round's calls as the tool that made it answered it
+// ([HeldCommit.Record]), and every reader of whether the turn replied reads it
+// there.
+//
 // Mutation: make the call before [HeldCommit.Begin] marks it, or on a mark that
-// is not the first, and the second attempt calls the tool twice.
+// is not the first, and the second attempt calls the tool twice; hand the record
+// anything but the surface's own answer, and the call is recorded as nobody's.
 func TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -99,6 +107,10 @@ func TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny(t *testing.T) {
 	if len(tool.calls) != 1 || tool.calls[0]["id"] != "7" || commit.recorded != 1 {
 		t.Fatalf("the approved call ran %d time(s) with %v, recorded %d, want once with the approved "+
 			"arguments", len(tool.calls), tool.calls, commit.recorded)
+	}
+	if got := commit.answered; got.Origin != tools.Origin("tracker") || got.Failed ||
+		!strings.Contains(got.Output, "closed #7") {
+		t.Fatalf("the record was handed %+v of the call, want what the tracker's tool answered", got)
 	}
 	told := Asked{Held: first}.Continuation(provenance.NewBoundary())
 	if !strings.Contains(told, "allowed it this once") || !strings.Contains(told, "closed #7") {

@@ -958,7 +958,11 @@ answers it ([ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-
   returned. A later attempt at the same answer, after a node restart, hands
   the run that result, or says the call may or may not have taken effect; it
   never makes it again. A tool blocked or changed since the call was held is
-  not called, and the run is told why.
+  not called, and the run is told why. The call is recorded among the run's
+  calls, as the tool answered it and without its arguments or result, in the
+  same write as its result: a reply the approved call made counts as the
+  turn's reply wherever the engine reads whether the turn replied, its
+  delivery check and a stopped or lost turn's account among them.
 - **The run carries on where it stopped**, in its own session, told the
   answer and the call's result (the first 16 KiB of it): continued from the
   session the turn kept of it, in whichever box the relaunch gets — its own,
