@@ -757,7 +757,7 @@ func TestAFrozenReadFitsItsBound(t *testing.T) {
 			Size: executordomain.SealedMaxBytes}
 	}
 	head := executordomain.Session{Handle: "swe", Turn: turn(0), Object: object(),
-		ContentKey:     strings.Repeat(worst, 255),
+		ContentKey:     strings.Repeat(worst, executordomain.ContentKeyMaxBytes),
 		Harness:        strings.Repeat(worst, executordomain.HarnessMaxBytes),
 		HarnessVersion: strings.Repeat(worst, executordomain.HarnessVersionMaxBytes),
 		SessionID:      strings.Repeat(worst, executordomain.SessionIDMaxBytes),

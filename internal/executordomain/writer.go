@@ -272,7 +272,7 @@ func (n NewCapture) validate() error {
 	}{
 		{"the harness", n.Harness, HarnessMaxBytes}, {"the harness's version", n.HarnessVersion, HarnessVersionMaxBytes},
 		{"the session id", n.SessionID, SessionIDMaxBytes},
-		{"the content key", n.ContentKey, maxContentKeyBytes},
+		{"the content key", n.ContentKey, ContentKeyMaxBytes},
 		{"the home path", n.Home, PathMaxBytes}, {"the workspace path", n.Workspace, PathMaxBytes},
 	} {
 		if err := checkText(f.field, f.value, f.max); err != nil {
@@ -320,9 +320,11 @@ func (n NewCapture) validate() error {
 	return nil
 }
 
-// maxContentKeyBytes is the longest content key a capture names: a keyring
-// key id a sealed stream's header can carry.
-const maxContentKeyBytes = 255
+// ContentKeyMaxBytes is the longest content key a capture names: a keyring
+// key id a sealed stream's header can carry. Exported for the readers that
+// carry a row's content key on in a record of their own and state that
+// record's bound from the log's (internal/sandbox's ConversationBaseMaxBytes).
+const ContentKeyMaxBytes = 255
 
 // checkTurn refuses the identity every record about a turn carries: a seat's
 // handle, a turn id in its one canonical spelling ([canonicalTurn]), and keys
