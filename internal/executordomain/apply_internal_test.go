@@ -44,24 +44,32 @@ func TestALateCaptureNeverRollsASessionBack(t *testing.T) {
 }
 
 // AN ENDED TURN TAKES NO FURTHER CAPTURE, and its end is terminal: a capture
-// decided before the end and landing after it writes nothing, and a second end
-// changes nothing, because the end's tombstone and the row's end both refuse.
+// decided before the end and landing after it writes nothing — nor releases
+// another turn's session to make room for itself — and a second end changes
+// nothing, because the end's tombstone and the row's end both refuse.
 //
 // Mutation: drop the tombstone and the ended checks from applyCapture and the
-// late capture reopens the ended row with a session the turn's ending does not
-// describe.
+// late capture is planned against the seat's budget as a live turn's would be,
+// releasing another turn's session for a capture the ended row then refuses.
 func TestAnEndedTurnTakesNoFurtherCapture(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
-	run := newTurn()
+	run, other := newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:room", run, 1, 1, 100, budget))
 	at, _ := e.end(ending("ana", "chat:room", run, "", Ending{Outcome: OutcomeCompleted,
 		Decision: "done"}))
 	if reason, ok := e.tombed("ana", run); !ok || reason != tombEnded {
 		t.Fatalf("the ended turn's tombstone is (%q, %v), want %q", reason, ok, tombEnded)
 	}
-	if _, n := e.capture(capturing("ana", "chat:room", run, 2, 1, 100, budget)); n != 0 {
+	e.capture(capturing("ana", "chat:other", other, 1, 1, 100, budget))
+	e.end(ending("ana", "chat:other", other, "", Ending{Outcome: OutcomeCompleted}))
+	// ROOM FOR THE LATE CAPTURE IS THE OTHER TURN'S SESSION'S: a hundred bytes
+	// beside a hundred under a budget of a hundred and fifty.
+	if _, n := e.capture(capturing("ana", "chat:room", run, 2, 1, 100, 150)); n != 0 {
 		t.Errorf("a capture after the end wrote %d rows", n)
+	}
+	if s, _ := e.session("ana", other); !s.HasObject() {
+		t.Error("a capture its turn's end refuses released another turn's session")
 	}
 	if _, n := e.end(ending("ana", "chat:room", run, "", Ending{Outcome: OutcomeFailed})); n != 0 {
 		t.Errorf("a second end wrote %d rows", n)
