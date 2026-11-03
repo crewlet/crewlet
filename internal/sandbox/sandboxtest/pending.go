@@ -2019,8 +2019,7 @@ func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
 	Ask(t, s, "t1", sandbox.Ask{Question: "which base branch?", To: sandbox.AskToRequester,
 		Branch: "wip/swe/t1"})
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		SessionID: "sess-1",
-		AskedAt:   time.Now().UTC(),
+		AskedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("park: %v", err)
 	}

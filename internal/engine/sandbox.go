@@ -4058,6 +4058,7 @@ func (e *Engine) signInReplaced(ctx context.Context, c *Company, in resumeInput)
 			"is carried on once, in its box, on the entry's new sign-in")
 	// THE SESSION THE JOB'S BOX RAN, never the one its launch chose: a box
 	// that could not take that one up ran one of its own, and the round is
-	// carried on in that ([sandbox.PendingRun.SessionRan]).
+	// carried on in that — and in none in its box where the box's word never
+	// reached the job's record ([sandbox.PendingRun.SessionRan]).
 	return &runner.Rotated{SessionID: run.SessionRan(), BoxKept: run.SandboxID != ""}
 }

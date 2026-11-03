@@ -893,13 +893,16 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 // session its script starts of its own where its box cannot take that one up,
 // and its box says which it started by the token its harness dials: a person's
 // answer, or a replaced sign-in, carries the round on in the one the box said —
-// the one of its own where it fell back, which no file in the box overrides —
-// and in the session the row names where the box took the chosen one up, or
-// has not said. A launch that continues no session names no second one.
+// the one of its own where it fell back, the chosen one where it took that up —
+// and in none at all where the box's word never reached the row, which cannot
+// tell the two apart; there the round is carried on from the turn's kept
+// capture, or in a session of its own. A launch that continues no session
+// names no second one, and its box has nothing to say: the session it named is
+// the one it ran.
 //
 // Mutation: carry the round on in the session the launch chose whatever the box
-// said, or leave the launch's second session off the job's record, and a case
-// goes red.
+// said or where it said nothing, or leave the launch's second session off the
+// job's record, and a case goes red.
 func TestARoundIsCarriedOnInTheSessionItsJobsBoxRan(t *testing.T) {
 	t.Parallel()
 	rig, restore, kept := keptTurn(t)
@@ -921,7 +924,7 @@ func TestARoundIsCarriedOnInTheSessionItsJobsBoxRan(t *testing.T) {
 	}{
 		"its box took the chosen session up":   {said: SessionStartContinued, want: "s-1"},
 		"its box started a session of its own": {said: SessionStartFresh, want: fresh},
-		"its box has not said":                 {want: "s-1"},
+		"its box has not said":                 {want: ""},
 	} {
 		said := run
 		said.Launch.SessionStart = tc.said
@@ -931,6 +934,11 @@ func TestARoundIsCarriedOnInTheSessionItsJobsBoxRan(t *testing.T) {
 		if asked := askedRun(said, AnswerWords{Text: "use main"}); asked.SessionID != tc.want {
 			t.Errorf("%s: an answer carries the round on in %q, want %q", name, asked.SessionID, tc.want)
 		}
+	}
+	// A LAUNCH THAT CONTINUED NO SESSION ran the one it named.
+	own := PendingRun{TurnID: "t1", SessionID: "s-own", SandboxID: "box-1"}
+	if got := own.SessionRan(); got != "s-own" {
+		t.Errorf("a job whose launch continued no session ran %q, want the one its launch named", got)
 	}
 }
 

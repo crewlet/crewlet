@@ -945,7 +945,14 @@ type PendingRun struct {
 	// branch the run's ask named ([Ask.Branch]), held to [MaxBranchBytes]
 	// and to a name git accepts, and empty when the ask named none: never one of the refs the run delivered, which are a
 	// pull request's URL as often as a branch.
-	Branch    string `json:"branch"`
+	Branch string `json:"branch"`
+
+	// SessionID is the harness session the job's launch named before its
+	// harness started — the one it continues, or one minted for it — written by
+	// the attach that names the job's box ([PendingStore.AttachSandbox]) and
+	// by nothing a box says: which session the job's box ran is
+	// [PendingRun.SessionRan], read off this, the launch's other session and
+	// the box's word on its token.
 	SessionID string `json:"session_id"`
 
 	// Question is what the job the row holds asked a person, in one
@@ -2281,9 +2288,12 @@ func (c ConversationRef) preferred(a, b PendingRun) bool {
 // Clarification is what parking a run on the question its job asked records
 // beside it. The question itself is on the row already, written by the ask
 // ([PendingStore.RecordAsk]).
+//
+// NEVER THE SESSION THE COLLECTION READ OFF THE BOX: the session the answer
+// carries the run on in is the one its launch named and its box said it ran
+// ([PendingRun.SessionRan]), and what the collection read is a file in the box
+// the run's model could rewrite.
 type Clarification struct {
-	SessionID string
-
 	// InputTokens and OutputTokens are what the job that asked cost,
 	// carried to the resume its answer drives — see
 	// [PendingRun.ParkedInputTokens].
@@ -2762,23 +2772,36 @@ type LaunchRecord struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// SessionRan is the harness session the job the row holds worked in, as its
-// launch and its box say it, for a relaunch that carries the job's round on in
-// the box it ran in — a person's answer, a replaced sign-in — to continue: the
-// session the box said it started of its own in a continued one's place
-// ([SessionStartFresh], [LaunchRecord.FreshSessionID]), which no file in the
-// box the run's model could rewrite overrides; and otherwise the session the
-// row names — the one the job's launch named (the session it continued, or
-// the one it minted for a session of its own), or, for a job parked on a
-// question, the one its collection read off the box.
+// SessionRan is the harness session the job the row holds worked in, for a
+// relaunch that carries the job's round on in the box it ran in — a person's
+// answer, a replaced sign-in — to continue; "" where the row cannot say which.
 //
-// THE BOX'S WORD OVER THE LAUNCH'S CHOICE: a job asked to continue a session
-// whose box could not take it up ran another, and a relaunch continuing the
-// first in place would hand the guard that job's skill loads — made in the
-// second — for a transcript that never read them.
+// FROM WHAT THE LAUNCH NAMED AND THE TOKEN THE BOX DIALLED, AND NOTHING ELSE.
+// Every runner names its run's session before its harness starts — the one it
+// continues, or one it mints — and, for a run that continues one, the session
+// its script starts of its own in that one's place ([RunHandle.FreshSessionID]);
+// the box says which of the two it started by the bridge token its harness
+// dials ([LaunchRecord.SessionStart]). So the session is the one the launch
+// named where the launch continued none, the continued one where the box said
+// it took it up, and the job's own where the box said it started that. Never a
+// file in the box — the session record the collection reads, the harness's
+// stream — which the run's model could rewrite to name a transcript of its own.
+//
+// UNKNOWN WHERE THE BOX'S WORD NEVER REACHED THE ROW for a launch that continued
+// a session: its box ran one of two sessions, and the row cannot tell which. A
+// relaunch then carries the round on from the turn's kept capture, or in a
+// session of its own, never in place: continuing the launch's choice there
+// would hand the guard the job's skill loads, made perhaps in the other, for a
+// transcript that never read them.
 func (r PendingRun) SessionRan() string {
-	if r.Launch.SessionStart == SessionStartFresh && r.Launch.FreshSessionID != "" {
+	switch r.Launch.SessionStart {
+	case SessionStartFresh:
 		return r.Launch.FreshSessionID
+	case SessionStartContinued:
+		return r.SessionID
+	}
+	if r.Launch.FreshSessionID != "" {
+		return ""
 	}
 	return r.SessionID
 }

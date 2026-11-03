@@ -614,9 +614,14 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 	}
 	r.started = append(r.started, req)
 	handle := RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}
-	// A CONTINUING RUN NAMES THE SESSION ITS SCRIPT STARTS OF ITS OWN in the
-	// continued one's place, as a runner does before its harness starts.
+	// THE SESSION THE RUN WORKS IN, NAMED AS IT STARTS, as a runner names it
+	// before its harness starts: the one it continues, or one minted for it —
+	// and, for a run that continues one, the session its script starts of its
+	// own in that one's place. What a job's box ran is read off these and its
+	// word ([PendingRun.SessionRan]), never off what its collection reports.
+	handle.SessionID = "session-" + handle.CommandID
 	if req.Resume != "" {
+		handle.SessionID = req.Resume
 		handle.FreshSessionID = "fresh-" + handle.CommandID
 	}
 	if r.Player != nil {

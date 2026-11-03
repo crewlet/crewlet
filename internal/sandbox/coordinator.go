@@ -2180,7 +2180,6 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	}
 
 	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
-		SessionID:   result.SessionID,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		// And what condensing this collection cost, paid by the same resume.
@@ -5180,7 +5179,9 @@ type AskedRun struct {
 	Branch string
 
 	// SessionID is the asking job's harness session, which the relaunch
-	// continues where it runs in the asking job's box ([Continuation]).
+	// continues where it runs in the asking job's box ([Continuation]): the
+	// one its box ran ([PendingRun.SessionRan]), "" where the row cannot say
+	// which, which continues none there.
 	SessionID string
 
 	// BoxKept is whether that box is still there. False once it was

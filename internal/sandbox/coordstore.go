@@ -569,7 +569,6 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Status = StatusAwaiting
 		run.AudienceHandles = append([]string(nil), q.Answerers.Handles...)
 		run.AudienceFallback = q.Answerers.Fallback
-		run.SessionID = q.SessionID
 		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens
 		run.ParkedCacheReadTokens, run.ParkedCacheWriteTokens = q.CacheReadTokens, q.CacheWriteTokens
 		// A NEW QUESTION, measured from its own asking, with nothing yet
