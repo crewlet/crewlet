@@ -221,7 +221,9 @@ test("a session's account says whether a relaunch would continue it", () => {
       />
     </Router>,
   );
-  expect(screen.getByText(`A relaunch would not continue this session: ${OLDER_WHY}.`)).toBeTruthy();
+  expect(
+    screen.getByText(`A relaunch would not continue this session: ${OLDER_WHY}.`),
+  ).toBeTruthy();
   refusing.unmount();
 
   render(
@@ -255,7 +257,11 @@ test("an ended turn's account says whether its conversation's next turn would co
   );
   expect(
     continuableWords(
-      session({ continuable: false, continues_in: undefined, not_continuable: OLDER_THAN_HEAD_WHY }),
+      session({
+        continuable: false,
+        continues_in: undefined,
+        not_continuable: OLDER_THAN_HEAD_WHY,
+      }),
     ),
   ).toBe(`The conversation's next turn would not continue this session: ${OLDER_THAN_HEAD_WHY}.`);
   expect(
@@ -298,7 +304,9 @@ test("a reason is closed once, and a row with none still reads as a sentence", (
     "A relaunch would not continue this session.",
   );
   expect(
-    continuableWords(live({ continuable: null, continues_in: undefined, not_continuable: undefined })),
+    continuableWords(
+      live({ continuable: null, continues_in: undefined, not_continuable: undefined }),
+    ),
   ).toBe("Whether a relaunch continues this session cannot be said now.");
 });
 

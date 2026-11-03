@@ -6,14 +6,13 @@
  * travel over the durable seat inbox — so what is shown is the record itself:
  * who asked whom, how many messages crossed, and when.
  *
- * This screen used to carry a second lens over the conversation ledger: one
- * row per completed turn, keyed on the external thread it served. That was a
- * viewer for somebody ELSE's threads — a Slack channel, a Jira issue — which
- * is not what a conversations screen in this product is meant to be, and the
- * name promised a chat system the engine does not have. The ledger itself
- * stays exactly where it was: it is prior-turn context for the agent's prompt
- * (see internal/engine, `req.History`), not a display feature, and removing it
- * would make every threaded seat forget what it said last turn.
+ * This screen used to carry a second lens: one row per completed turn, keyed on
+ * the external thread it served. That was a viewer for somebody ELSE's threads
+ * — a Slack channel, a Jira issue — which is not what a conversations screen in
+ * this product is meant to be, and the name promised a chat system the engine
+ * does not have. What a seat did in a thread is its executor sessions, under
+ * its profile's Memory tab: each turn's session, keyed on the conversation it
+ * served and continued by that conversation's next turn.
  *
  * # The whole record, not the open half
  *

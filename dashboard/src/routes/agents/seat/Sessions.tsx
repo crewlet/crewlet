@@ -1,5 +1,5 @@
 /**
- * A seat's executor sessions, beside its Conversations under Memory.
+ * A seat's executor sessions, under its memory on the Memory tab.
  *
  * Every turn whose executor captured its harness's session has a row, and so
  * does every turn that read its conversation, from its first launch on: it
@@ -42,17 +42,19 @@
  *
  * # Choosing a session shows it — that session, and never the last one
  *
- * As Conversations does: the chosen session is a filter on the address
- * (`session=`), the list is bounded beside the transcript and keeps the chosen
- * row in its own view — the moment the rows are drawn, for a session the
- * address named before the list was read — and on a phone, where the
- * transcript is below the whole list, choosing one scrolls to it and focuses
- * its heading. The transcript is drawn fresh for every choice and every
- * re-read, from its loading state: a read of an archive takes a moment, and
- * the previous session's account and entries drawn under the new one's heading
- * meanwhile would read as the new one's. A re-read moves focus to the
- * transcript's heading, the button pressed for it being gone with the pages it
- * stood under. And the transcript is NOT INSIDE THE LIST'S ANSWER: a poll of
+ * The chosen session is a filter on the address (`session=`), the list is
+ * bounded beside the transcript and keeps the chosen row in its own view — the
+ * moment the rows are drawn, for a session the address named before the list
+ * was read — and on a phone, where the transcript is below the whole list,
+ * choosing one scrolls to it and focuses its heading: the row's highlight is
+ * otherwise the only feedback, a screen above what it opened. Opening one
+ * replaces the history entry, so Back leaves the seat rather than walking
+ * every session the reader glanced at. The transcript is drawn fresh for every
+ * choice and every re-read, from its loading state: a read of an archive takes
+ * a moment, and the previous session's account and entries drawn under the new
+ * one's heading meanwhile would read as the new one's. A re-read moves focus to
+ * the transcript's heading, the button pressed for it being gone with the pages
+ * it stood under. And the transcript is NOT INSIDE THE LIST'S ANSWER: a poll of
  * the list that failed draws the failure in the list's own card, and leaves
  * the transcript, and the pages a reader loaded, where they are.
  */
@@ -709,7 +711,9 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
       )}
       {ending?.unkept && (
         <p className="t-caption">
-          {unkept ? `Its newest session was not kept: ${unkept}.` : "Its newest session was not kept."}
+          {unkept
+            ? `Its newest session was not kept: ${unkept}.`
+            : "Its newest session was not kept."}
         </p>
       )}
       {ending?.answer && <p className="t-caption">It answered a colleague: {ending.answer}.</p>}

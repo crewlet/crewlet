@@ -424,10 +424,10 @@ describe("sectioning", () => {
 /**
  * AN OUTLINE IS THE DOCUMENT'S SHAPE, NOT A LIST OF ITS HEADINGS.
  *
- * The executor's user message is the case: its conversation ledger writes one
- * `###` per prior turn INSIDE `## Earlier in this conversation`, and flattened
- * those read as blocks of the message in their own right, sitting between it
- * and the ask.
+ * The executor's user message is the case: its prior-work ledger writes one
+ * `###` per earlier round INSIDE `## Already done earlier in this turn`, and
+ * flattened those read as blocks of the message in their own right, sitting
+ * between it and the ask.
  */
 describe("nesting", () => {
   /** An outline as `title(child, child)`, which is the shape under test. */
@@ -444,8 +444,8 @@ describe("nesting", () => {
 
   it("puts a heading under the nearest shallower one", () => {
     expect(
-      shape("## Ledger\nrules\n\n### Turn one\na\n\n### Turn two\nb\n\n## Task\nthe ask"),
-    ).toBe("Ledger(Turn one, Turn two), Task");
+      shape("## Ledger\nrules\n\n### Iteration 1\na\n\n### Iteration 2\nb\n\n## Task\nthe ask"),
+    ).toBe("Ledger(Iteration 1, Iteration 2), Task");
   });
 
   it("keeps a run of peers flat", () => {

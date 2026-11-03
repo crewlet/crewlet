@@ -1,20 +1,19 @@
 /**
- * The two per-seat panels whose wire shape nobody had ever seen.
+ * The per-seat panel whose wire shape nobody had ever seen.
  *
- * # Why these two, and why as units
+ * # Why this one, and why as a unit
  *
- * A seat's counterparty profiles and its thread ledger were both written by
- * the engine from the day their subsystems landed and read by nothing. The
- * client carried a TYPE for each, invented rather than observed, and both were
- * wrong: `CounterpartyProfile` had a `summary` string and a flat `subject`
- * where the engine writes a traits bag and a two-identity subject, and
- * `ConversationRow` had `source` and `local` fields no answer has ever
- * carried. A type nothing renders is a guess, and it stays a guess.
+ * A seat's counterparty profiles were written by the engine from the day their
+ * subsystem landed and read by nothing. The client carried a TYPE for them,
+ * invented rather than observed, and it was wrong: `CounterpartyProfile` had a
+ * `summary` string and a flat `subject` where the engine writes a traits bag
+ * and a two-identity subject. A type nothing renders is a guess, and it stays
+ * a guess.
  *
- * These are mounted as UNITS rather than through the seat screen, for the
- * reason the engine's own pure-value suites give: a rule exercised only
- * through the whole machine is a rule nobody re-runs. The screen needs an org,
- * a roster, a projection and four queries before either panel draws at all.
+ * It is mounted as a UNIT rather than through the seat screen, for the reason
+ * the engine's own pure-value suites give: a rule exercised only through the
+ * whole machine is a rule nobody re-runs. The screen needs an org, a roster, a
+ * projection and four queries before the panel draws at all.
  *
  * The fixtures below are the shapes the engine actually emitted, copied from a
  * running company rather than from the type.
@@ -23,9 +22,8 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
-import { CounterpartyRow, ThreadTurn, counterpartyKey } from "./Memory.tsx";
+import { CounterpartyRow, counterpartyKey } from "./Memory.tsx";
 import { Router } from "~/app/router.tsx";
-import { overflowing } from "~/testing.tsx";
 
 afterEach(cleanup);
 
@@ -158,50 +156,8 @@ test("a freshly corroborated profile carries no staleness line", () => {
   expect(screen.queryByText(/No longer learning about them/)).toBeNull();
 });
 
-// `reply` AND `unsent` CARRY THE SAME ARTIFACT, and which one holds it is the
-// whole record of whether anybody received it. A turn can end with real work
-// done and no way to say so — the round budget ran out, the loop broke — and a
-// panel that rendered the two alike would show work announced to nobody as
-// announced. That is the exact confusion that had a seat answer a follow-up
-// against a message it never sent.
-test("an undelivered turn is marked, and a delivered one is not", () => {
-  const { unmount } = render(
-    <Router>
-      <ThreadTurn entry={{ turn_id: "t-1", at: seen, reply: "Filed LEAD-1.", trigger: "chat" }} />
-    </Router>,
-  );
-  expect(screen.getByText("Filed LEAD-1.")).toBeTruthy();
-  expect(screen.queryByText(/Nothing was delivered/i)).toBeNull();
-  unmount();
-
-  render(
-    <Router>
-      <ThreadTurn entry={{ turn_id: "t-2", at: seen, unsent: "Filed LEAD-1.", trigger: "chat" }} />
-    </Router>,
-  );
-  expect(screen.getByText(/Nothing was delivered/i)).toBeTruthy();
-  expect(screen.getByText(/Filed LEAD-1\./)).toBeTruthy();
-});
-
-// A TURN'S TOOL LOG IS A BLOCK, NOT A BARE `pre`. It was hand-written markup
-// carrying the block stylesheet's own class, which put it under a ceiling with
-// `overflow: auto` — so a long log was a scroll container with no tab stop and
-// no accessible name, and in Chrome and Safari a scroll container with no
-// tabindex cannot be scrolled by keyboard at all. This is the one panel where
-// the whole record of what a turn DID is in that box.
-test("a long tool log is a named, focusable region rather than an unreachable box", () => {
-  const container = overflowing(
-    <Router>
-      <ThreadTurn entry={{ turn_id: "t-3", at: seen, tool_calls: "read_file\n".repeat(400) }} />
-    </Router>,
-  );
-  const region = container.querySelector('[role="region"][tabindex="0"]');
-  expect(region).not.toBeNull();
-  expect(region?.getAttribute("aria-label")).toBe("Tool calls in this turn");
-});
-
 // WHEN THEY LAST WORKED TOGETHER IS RELATIVE, like every other list on the
-// profile (Episodes, Threads), with the instant on hover: a full timestamp
+// profile (Episodes, Sessions), with the instant on hover: a full timestamp
 // with seconds was the one row on the tab that read differently.
 test("a profile's last interaction reads relative, the instant on its title", () => {
   render(
@@ -223,29 +179,4 @@ test("a profile's last interaction reads relative, the instant on its title", ()
   const when = screen.getByText("2d ago");
   expect(when.getAttribute("title")).toMatch(/2026/);
   expect(document.body.textContent).not.toMatch(/\d{2}:\d{2}:\d{2}/);
-});
-
-// THE TRIGGER IS A BRIEF IN MARKDOWN, often a paragraph: drawn in a chip it
-// printed "## Coalesced updates" and "**Task:**" raw and cut the chip after
-// it at the card's edge. It reads as its words, and no chip carries it.
-test("a thread turn's trigger reads as plain words, not markdown in a chip", () => {
-  const { container } = render(
-    <Router>
-      <ThreadTurn
-        entry={{
-          turn_id: "t-4",
-          at: seen,
-          decision: "reply",
-          trigger:
-            "## Coalesced updates (5 events)\n\nA task you are assigned to changed. **Task:** ENG-6",
-        }}
-      />
-    </Router>,
-  );
-  const line = screen.getByText(/Coalesced updates \(5 events\)/);
-  expect(line.textContent).toBe(
-    "Coalesced updates (5 events) A task you are assigned to changed. Task: ENG-6",
-  );
-  expect(line.closest(".crewlet-tag")).toBeNull();
-  expect(container.textContent).not.toMatch(/##|\*\*/);
 });

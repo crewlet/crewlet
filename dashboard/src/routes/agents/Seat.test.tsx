@@ -298,14 +298,7 @@ const DEFAULTS: Record<string, unknown> = {
     onboarded_at: "",
     held_by: "node-1",
   },
-  conversations: {
-    handle: "swe",
-    conversations: [],
-    conversations_total: 0,
-    entries: [],
-    held_by: "node-1",
-  },
-  // THE MEMORY TAB LISTS THE SEAT'S EXECUTOR SESSIONS beside its threads, so
+  // THE MEMORY TAB LISTS THE SEAT'S EXECUTOR SESSIONS under its memory, so
   // every case that opens it is answered a list — none, here — and a session
   // the address names reads as one whose turn captured nothing.
   executor_sessions: sessionsList([]),
@@ -526,7 +519,7 @@ test("a person's profile has three tabs and asks nothing a runtime answers", asy
     "agent",
     "turns",
     "tokens",
-    "conversations",
+    "executor_sessions",
     "work_item_turns",
   ]) {
     expect(askedFor(what), `a person's profile asked ${what}`).toEqual([]);
@@ -1964,13 +1957,6 @@ test("the memory tab's lists say they are the latest page of the whole", async (
   mount("#/company/org/seats/swe?tab=memory", {
     answers: {
       agent_memory: memoryOf(),
-      conversations: {
-        handle: "swe",
-        conversations: [],
-        conversations_total: 0,
-        entries: [],
-        held_by: "node-2",
-      },
     },
   });
   await waitFor(() => expect(screen.getByText(/Latest 50 of 142/)).toBeTruthy());
@@ -2178,248 +2164,13 @@ test("a seat no node holds says why its memory is empty", async () => {
   mount("#/company/org/seats/swe?tab=memory", {
     answers: {
       agent_memory: memoryOf({ diary: [], diary_total: 0, held_by: "none" }),
-      conversations: {
-        handle: "swe",
-        conversations: [],
-        conversations_total: 0,
-        entries: [],
-        held_by: "none",
-      },
     },
   });
   await waitFor(() => {
-    // The ledger's line, whole, and the memory card's longer sentence.
-    expect(screen.getByText("No node is running this seat.")).toBeTruthy();
     expect(
       screen.getByText(/No node is running this seat, so its memory can’t be shown\./),
     ).toBeTruthy();
   });
-});
-
-const THREAD = "slack:C0TEAM/1709280000.000100";
-
-const threads = (entries: unknown[]) => (p: Record<string, unknown>) => ({
-  handle: "swe",
-  held_by: "node-2",
-  conversations: [{ key: THREAD, turns: 2, last_at: "2026-03-01T09:00:00Z" }],
-  conversations_total: 1,
-  entries: p.conversation ? entries : [],
-});
-
-/** A card's header by its title. */
-function header(title: string): HTMLElement {
-  const el = screen.getByText(title).closest(".crewlet-card__header");
-  expect(el, `no card header carries the title ${title}`).not.toBeNull();
-  return el as HTMLElement;
-}
-
-// A THREAD'S KEY IS ITS ONLY IDENTITY, SO IT HAS THE ROW: its own line, whole,
-// with what is known about the thread as the caption under it. Beside a tag
-// and a full timestamp it kept 78px of the list and ENG-28 to ENG-32 all read
-// `work:ENG-…`. A Worklet task's uuid is cut to its head, the key whole on the
-// row's title.
-test("a thread's key has its row, a uuid cut to its head and the key on the title", async () => {
-  const native = "work:task:b375beaf-52ee-4db1-a1e3-06d450fbd9f1";
-  mount("#/company/org/seats/swe?tab=memory", {
-    answers: {
-      agent_memory: memoryOf(),
-      conversations: {
-        handle: "swe",
-        held_by: "node-2",
-        conversations: [
-          { key: "work:ENG-9999", turns: 3, last_at: "2026-09-21T07:00:00Z" },
-          { key: native, turns: 1, last_at: "2026-09-21T06:00:00Z" },
-        ],
-        conversations_total: 2,
-        entries: [],
-      },
-    },
-  });
-  const whole = await screen.findByText("work:ENG-9999");
-  const row = whole.closest("button")!;
-  // ON A LINE OF ITS OWN: the key is a direct child of the row, and nothing
-  // else shares its line.
-  expect(whole.parentElement).toBe(row);
-  expect(row.getAttribute("title")).toBe("work:ENG-9999");
-  expect(row.querySelector(".crewlet-tag"), "no tag competes with the key").toBeNull();
-  expect(row.textContent).toContain("3 turns");
-  const cut = screen.getByText("work:task:b375beaf");
-  expect(cut.closest("button")!.getAttribute("title")).toBe(native);
-  expect(screen.queryByText(native)).toBeNull();
-});
-
-test("with no thread open the pane counts nothing and instructs only from its empty state", async () => {
-  mount("#/company/org/seats/swe?tab=memory", {
-    answers: { agent_memory: memoryOf(), conversations: threads([]) },
-  });
-  await screen.findByText("Thread turns");
-  expect(
-    header("Thread turns").querySelector(".crewlet-count"),
-    "nothing was asked for, so a 0 here states a quantity about a thread nobody named",
-  ).toBeNull();
-  expect(screen.getByText("Choose a thread.")).toBeTruthy();
-});
-
-test("an open thread's turns are counted, and opening one names it on the question", async () => {
-  mount(`#/company/org/seats/swe?tab=memory&conversation=${encodeURIComponent(THREAD)}`, {
-    answers: {
-      agent_memory: memoryOf(),
-      conversations: threads([
-        { turn_id: "t1", at: "2026-03-01T09:00:00Z", intent: "answered the question" },
-        { turn_id: "t2", at: "2026-03-01T10:00:00Z", intent: "followed up" },
-      ]),
-    },
-  });
-  await screen.findByText("Thread turns");
-  await waitFor(() =>
-    expect(header("Thread turns").querySelector(".crewlet-count")?.textContent).toBe("2"),
-  );
-  expect(askedFor("conversations").at(-1)?.params).toMatchObject({
-    handle: "swe",
-    conversation: THREAD,
-  });
-});
-
-/** Record every `scrollIntoView` (jsdom lays nothing out and may not have
- *  one), and put back whatever was there. */
-function spyScroll() {
-  const had = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
-  const fn = vi.fn();
-  Object.defineProperty(Element.prototype, "scrollIntoView", {
-    configurable: true,
-    writable: true,
-    value: fn,
-  });
-  return {
-    mock: fn.mock,
-    restore: () => {
-      if (had) Object.defineProperty(Element.prototype, "scrollIntoView", had);
-      else delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;
-    },
-  };
-}
-
-// CHOOSING A THREAD SHOWS IT. Stacked on a phone the detail is below the
-// whole list — 1,900px under a row near the top — and at 1440 it sat a screen
-// above a row near the end, so the row's highlight was the only feedback the
-// section's one interaction gave. The detail's heading is scrolled to and
-// focused when it is off screen; when it is already in view (the sticky
-// column beside the list) nothing moves, focus included.
-test("choosing a thread brings its turns on screen and focuses their heading", async () => {
-  const scrolled = spyScroll();
-  const rect = vi.spyOn(Element.prototype, "getBoundingClientRect");
-  // THE DETAIL IS FAR BELOW the scroller's view, as it is on a phone.
-  rect.mockImplementation(function (this: Element) {
-    const top = this.id === "prof-thread-turns" ? 1900 : 0;
-    return { top, bottom: top + 20, left: 0, right: 300, width: 300, height: 20 } as DOMRect;
-  });
-  try {
-    mount("#/company/org/seats/swe?tab=memory", {
-      answers: { agent_memory: memoryOf(), conversations: threads([]) },
-    });
-    const row = (await screen.findByText(THREAD)).closest("button")!;
-    fireEvent.click(row);
-    const heading = await screen.findByRole("heading", { name: "Thread turns" });
-    await waitFor(() => expect(document.activeElement).toBe(heading));
-    expect(scrolled.mock.contexts).toContain(heading);
-    // AND THE SUBTITLE NAMES WHICH THREAD, the list that says so being a
-    // screen away.
-    expect(header("Thread turns").textContent).toContain(THREAD);
-  } finally {
-    scrolled.restore();
-    rect.mockRestore();
-  }
-});
-
-test("a thread whose turns are already on screen moves nothing", async () => {
-  // jsdom's every rect is the origin's, so the heading reads as in view.
-  const scrolled = spyScroll();
-  try {
-    mount("#/company/org/seats/swe?tab=memory", {
-      answers: { agent_memory: memoryOf(), conversations: threads([]) },
-    });
-    const row = (await screen.findByText(THREAD)).closest("button")!;
-    row.focus();
-    fireEvent.click(row);
-    await waitFor(() => expect(row.getAttribute("aria-pressed")).toBe("true"));
-    const heading = screen.getByRole("heading", { name: "Thread turns" });
-    expect(scrolled.mock.contexts).not.toContain(heading);
-    expect(document.activeElement).toBe(row);
-  } finally {
-    scrolled.restore();
-  }
-});
-
-// A THREAD NAMED IN THE ADDRESS the page was opened on is not a gesture: the
-// page opens at its top rather than jumping to it.
-test("a thread opened from the address does not scroll the page to it", async () => {
-  const scrolled = spyScroll();
-  const rect = vi.spyOn(Element.prototype, "getBoundingClientRect");
-  rect.mockImplementation(function (this: Element) {
-    const top = this.id === "prof-thread-turns" ? 1900 : 0;
-    return { top, bottom: top + 20, left: 0, right: 300, width: 300, height: 20 } as DOMRect;
-  });
-  try {
-    mount(`#/company/org/seats/swe?tab=memory&conversation=${encodeURIComponent(THREAD)}`, {
-      answers: { agent_memory: memoryOf(), conversations: threads([]) },
-    });
-    const heading = await screen.findByRole("heading", { name: "Thread turns" });
-    expect(scrolled.mock.contexts).not.toContain(heading);
-    expect(document.activeElement).not.toBe(heading);
-  } finally {
-    scrolled.restore();
-    rect.mockRestore();
-  }
-});
-
-// CHOOSING ANOTHER THREAD SHOWS THAT THREAD'S TURNS, from its loading state.
-// The choice asks again with the new `conversation=`, and until that answer
-// arrives the one in hand is the last thread's: its turns drawn under the new
-// thread's name read as the new thread's own.
-test("choosing another thread never shows the last thread's turns under it", async () => {
-  const other = "slack:C0TEAM/1709290000.000200";
-  const listed = {
-    handle: "swe",
-    held_by: "node-2",
-    conversations: [
-      { key: THREAD, turns: 1, last_at: "2026-03-01T09:00:00Z" },
-      { key: other, turns: 1, last_at: "2026-03-01T08:00:00Z" },
-    ],
-    conversations_total: 2,
-  };
-  let answer: (entries: unknown[]) => void = () => undefined;
-  mount(`#/company/org/seats/swe?tab=memory&conversation=${encodeURIComponent(THREAD)}`, {
-    answers: {
-      agent_memory: memoryOf(),
-      conversations: (p: Record<string, unknown>) =>
-        p.conversation === other
-          ? new Promise((resolve) => {
-              answer = (entries) => resolve({ ...listed, entries });
-            })
-          : {
-              ...listed,
-              entries:
-                p.conversation === THREAD
-                  ? [
-                      {
-                        turn_id: "t1",
-                        at: "2026-03-01T09:00:00Z",
-                        intent: "The first thread's turn.",
-                      },
-                    ]
-                  : [],
-            },
-    },
-  });
-  expect(await screen.findByText("The first thread's turn.")).toBeTruthy();
-  const row = screen.getAllByRole("button").find((b) => b.getAttribute("title") === other)!;
-  fireEvent.click(row);
-  await waitFor(() => expect(screen.queryByText("The first thread's turn.")).toBeNull());
-  act(() =>
-    answer([{ turn_id: "t2", at: "2026-03-01T08:00:00Z", intent: "The other thread's turn." }]),
-  );
-  expect(await screen.findByText("The other thread's turn.")).toBeTruthy();
-  expect(screen.queryByText("The first thread's turn.")).toBeNull();
 });
 
 // ---------------------------------------------------------------------------
@@ -2802,9 +2553,8 @@ test("a page cut at the read's own bound says the rest cannot be shown", async (
 // A SESSION THE ADDRESS NAMES IS KEPT IN ITS LIST'S VIEW once the rows are
 // drawn: on opening, the list has no rows until it is answered, which is after
 // the first render, and a list that kept the row in view only then opened at
-// its top with the pressed row out of sight. A thread the address names is
-// kept so as well.
-test("a session or a thread the address names is kept in its list's view", async () => {
+// its top with the pressed row out of sight.
+test("a session the address names is kept in its list's view", async () => {
   mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
     answers: {
       agent_memory: memoryOf(),
@@ -2821,15 +2571,6 @@ test("a session or a thread the address names is kept in its list's view", async
     expect(
       keptInView.some((row) => row.textContent?.includes("Fix the flaky provisioner test.")),
     ).toBe(true),
-  );
-  cleanup();
-
-  keptInView.length = 0;
-  mount(`#/company/org/seats/swe?tab=memory&conversation=${encodeURIComponent(THREAD)}`, {
-    answers: { agent_memory: memoryOf(), conversations: threads([]) },
-  });
-  await waitFor(() =>
-    expect(keptInView.some((row) => row.getAttribute("title") === THREAD)).toBe(true),
   );
 });
 
