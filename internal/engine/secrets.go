@@ -55,6 +55,20 @@ func (e *Engine) Resolve(value string) string { return e.resolver().Value(value)
 // treats an empty answer as found.
 func (e *Engine) LookupSecret(name string) (string, bool) { return e.resolver().LookupOK(name) }
 
+// deriveKey is a key for one purpose from this node's secrets keyring, alike on
+// every node holding it ([secrets.Keyring.Derive]), or nil where the node holds
+// none. A seat-access session fingerprints a credential with it.
+func (e *Engine) deriveKey(info string) []byte {
+	if e.boot == nil {
+		return nil
+	}
+	ring, err := e.boot.Secrets.Keyring()
+	if err != nil {
+		return nil
+	}
+	return ring.Derive(info)
+}
+
 // resolver is the chain this node resolves ${VAR} through.
 //
 // Never nil: until a snapshot is installed — and on an engine holding no

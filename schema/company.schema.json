@@ -629,6 +629,46 @@
         "null"
       ]
     },
+    "DigitalOcean": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "provisioning": {
+          "$ref": "#/$defs/DigitalOceanProvisioning",
+          "description": "The DigitalOcean team the agents' tokens act in. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "DigitalOceanProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "team": {
+          "description": "The DigitalOcean team the agents' tokens act in, by its name as the control panel's team menu shows it. The first agent's token proves it.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "E2BSandbox": {
       "additionalProperties": false,
       "properties": {
@@ -1247,9 +1287,13 @@
           "$ref": "#/$defs/Datadog",
           "description": "Datadog monitor alerts delivered as inbound events. Absent = disabled."
         },
+        "digitalocean": {
+          "$ref": "#/$defs/DigitalOcean",
+          "description": "DigitalOcean team the agents' tokens act in: a person creates each agent's personal access token and pastes it. Absent = disabled."
+        },
         "expo": {
           "$ref": "#/$defs/Expo",
-          "description": "Expo account and provisioner token, used to create one Expo robot user per agent. Absent = disabled."
+          "description": "Expo account the agents' robot users act for: a person creates each agent's robot and pastes its token. Absent = disabled."
         },
         "forge_app_id": {
           "description": "Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud.",
@@ -2983,6 +3027,34 @@
         "null"
       ]
     },
+    "RoleDigitalOcean": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has its own DigitalOcean personal access token, which a person creates in the control panel and pastes. Off revokes the token at DigitalOcean and clears its sealed copy.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "The token's DigitalOcean scopes. read (the default): reads Droplets, volumes, networking, DNS, databases, Kubernetes, apps and monitoring. operate: read plus creating, changing and deleting them. administer: operate plus cluster credentials, database passwords and consoles, which can outlive the token.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleExpo": {
       "additionalProperties": false,
       "properties": {
@@ -3164,6 +3236,10 @@
         "datadog": {
           "$ref": "#/$defs/RoleDatadog",
           "description": "This seat's Datadog service account: whether it is on and its role."
+        },
+        "digitalocean": {
+          "$ref": "#/$defs/RoleDigitalOcean",
+          "description": "This seat's own DigitalOcean personal access token: whether it is on and its level."
         },
         "expo": {
           "$ref": "#/$defs/RoleExpo",
@@ -3823,6 +3899,7 @@
             "atlassian",
             "cloudflare",
             "datadog",
+            "digitalocean",
             "expo",
             "github",
             "gitlab",

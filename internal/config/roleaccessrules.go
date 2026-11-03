@@ -75,7 +75,7 @@ func (c *Company) validateSeatBlocks() error {
 				// seat already, each with its own remedy: the GitHub App by
 				// [Company.validateHumanSeatApps], the chat apps by the org
 				// model's agent-only rule.
-				if slices.Contains([]string{"datadog", "gitlab", "jira", "confluence", "cloudflare", "expo"}, b.lane) {
+				if slices.Contains([]string{"datadog", "gitlab", "jira", "confluence", "cloudflare", "expo", "digitalocean"}, b.lane) {
 					p.add(here, ErrConflict, "%s: a person signs in as themselves. "+
 						"Remove this block, or make the seat an agent seat", seatAccessOnHuman)
 				}
@@ -109,6 +109,7 @@ func (c *Company) validateSeatBlocks() error {
 		c.checkMattermost(&p, at(base, "mattermost"), in.Mattermost)
 		c.checkCloudflare(&p, at(base, "cloudflare"), in.Cloudflare)
 		c.checkExpo(&p, at(base, "expo"), in.Expo)
+		c.checkDigitalOcean(&p, at(base, "digitalocean"), in.DigitalOcean)
 	}
 	return p.err()
 }

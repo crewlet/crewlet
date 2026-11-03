@@ -74,6 +74,11 @@ func seatFields(kind string) []seatField {
 		// RETIRED_TOKEN is a turned-off seat's token, kept only to see its
 		// robot deleted at Expo, and read by no tool.
 		return []seatField{{"TOKEN", true}, {"RETIRED_TOKEN", false}}
+	case "digitalocean":
+		// RETIRED_TOKEN is a replaced or turned-off seat's token, kept only
+		// until Crewlet's revoke of it at DigitalOcean succeeds, and read by
+		// no tool.
+		return []seatField{{"TOKEN", true}, {"RETIRED_TOKEN", false}}
 	default:
 		return nil
 	}

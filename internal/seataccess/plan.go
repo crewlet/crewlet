@@ -1,5 +1,7 @@
 package seataccess
 
+import "github.com/crewlet/crewlet/internal/config"
+
 // THE ONE PLAN FUNCTION.
 //
 // The preview route and the sync both run [Plan], so a preview cannot promise
@@ -48,6 +50,10 @@ type SeatInput struct {
 	// ([StepsInput.Options]). Optional: a lane with none is drawn with what
 	// the vendor can name without it.
 	Options map[Lane]Options
+
+	// Company is the document the seat is in, which names what a person makes
+	// at the vendor for it ([StepsInput.HandIn]). Optional.
+	Company *config.Company
 }
 
 // Plan is every step the next sync takes for one seat at the vendor, by lane,
@@ -224,7 +230,7 @@ func walk(
 		for _, p := range ops {
 			got := drawSteps(v, StepsInput{
 				Seat: in.Seat, Lane: lane, Op: p.op, Want: want, Have: have,
-				Options: in.Options[lane],
+				Options: in.Options[lane], HandIn: handInName(v, in.Company, in.Seat, lane, want),
 			})
 			for j := range got {
 				got[j].Op, got[j].Index = p.op, j
