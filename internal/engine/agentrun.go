@@ -340,7 +340,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		servers = e.boxServers(ctx, company, l.seat, settings)
 	}
 
-	run := newExecutorRun(agent, runEnv.env, runEnv.defaults)
+	run := newExecutorRun(agent, runEnv.env, runEnv.defaults, runEnv.homePaths)
 	// THE RUN'S MODEL ON ITS SESSION, before the session opens: see
 	// [mcpbridge.Session.Model].
 	session.Model = run.model
@@ -430,7 +430,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		MCPServers: servers,
 		// WHAT OF ITS ENVIRONMENT IS A CREDENTIAL, which only this side can
 		// tell, for its session's scrub.
-		Secrets:     launchSecrets(agent, runEnv, run.env),
+		Secrets: launchSecrets(agent, runEnv, run.env),
+		// AND THE PATHS ITS BOX FILES ARE NAMED BY, under the box's home,
+		// joined onto the box's own once the launch has one.
+		HomePaths:   run.homePaths,
 		Skills:      req.Skills.Box(),
 		Model:       run.model,
 		ProviderKey: member.Key,

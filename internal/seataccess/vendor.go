@@ -452,18 +452,24 @@ type BoxSet struct {
 	Env map[string]string
 
 	// Files are written into the box at launch, beside the files a person's
-	// setup steps write and never into its environment, so no file can sign
-	// a harness in.
+	// setup steps write and never into its environment, which holds at most a
+	// file's path ([BoxFile.PathEnv]), so no file can sign a harness in.
 	Files []BoxFile
 }
 
 // BoxFile is one file a vendor puts in a seat's box: at Path, relative to the
 // box's home, holding the whole `${VAR}` reference Ref, resolved at launch
 // through the seat's own resolution, so a credential issued at use is issued
-// there. Its value is scrubbed from the run's output as a credential's is.
+// there, or Ref itself where it is literal text and no reference. Its value
+// is scrubbed from the run's output as a credential's is.
 type BoxFile struct {
 	Path string
 	Ref  string
+
+	// PathEnv is the variable the launch sets to this file's absolute path in
+	// the box, joined onto that box's own home, for a CLI pointed at the file
+	// by one; empty for none. Never a sign-in, and beneath every other layer.
+	PathEnv string
 
 	// Rewritten is a file the completion poll keeps current for as long as
 	// the run lasts, where Ref names a credential issued at use, which

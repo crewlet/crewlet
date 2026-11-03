@@ -183,6 +183,40 @@ func TestABoxListsTheEnginesFilesWhileOn(t *testing.T) {
 	}
 }
 
+// A FILE'S VARIABLE IS ONE OF THE ENGINE'S LINES ON THE WIRE, among its
+// settings by name, holding the file's path from the box's home, since the
+// launch joins it onto each box's own. A setting of the same name is the line
+// instead, as it wins in the box, and a file naming no variable, such as one of
+// literal text, adds none.
+// Mutation: drop the line, or let it replace the setting, and this goes red.
+func TestABoxListsTheVariableNamingAFilesPath(t *testing.T) {
+	t.Parallel()
+	on := true
+	c := &config.Company{Roles: []config.Role{{Name: "QA", Handle: "qa",
+		Integrations: config.RoleIntegrations{Datadog: &config.RoleDatadog{Enabled: &on, Role: "a"}}}}}
+	settings := map[string]string{"CLI_ZONE": "fr-par-1", "CLI_SHADOWED": "a setting"}
+	cli := defaulter{cat: issuedOnly, vars: settings, files: []BoxFile{
+		{Path: ".config/crewlet/token", Ref: "${DATADOG_ACCESS_TOKEN_QA}", PathEnv: "CLI_TOKEN_FILE", Rewritten: true},
+		{Path: ".config/crewlet/other", Ref: "${DATADOG_SITE}", PathEnv: "CLI_SHADOWED"},
+		{Path: ".config/crewlet/config", Ref: "[default]\nregion = fr-par\n"},
+	}}
+	got := boxOf(c, cli, LaneDatadog, "qa")
+	want := []BoxLine{
+		{Name: "CLI_SHADOWED", Value: "a setting", By: ByCrewlet},
+		{Name: "CLI_TOKEN_FILE", Value: "~/.config/crewlet/token", By: ByCrewlet},
+		{Name: "CLI_ZONE", Value: "fr-par-1", By: ByCrewlet},
+	}
+	if got == nil || !slices.Equal(got.Env, want) {
+		t.Fatalf("box = %+v, want the lines %v", got, want)
+	}
+	if len(got.Files) != 3 {
+		t.Errorf("files = %+v, want all three of the vendor's", got.Files)
+	}
+	if len(settings) != 2 {
+		t.Errorf("listing the box wrote into the vendor's own settings: %v", settings)
+	}
+}
+
 // A VENDOR'S BOX DEFAULTS REACH A SEAT WITH ANY OF ITS LANES ON, whether that
 // lane's tool reads a box variable or not, and no seat with every lane off:
 // its settings and its files alike. Mutation: reach only a seat with a lane

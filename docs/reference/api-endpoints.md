@@ -4254,7 +4254,12 @@ box itself, by path under the box's home, each with its reference as
 configured and never its value, and `rewritten` where the completion poll keeps
 it current: `{"path": ".config/crewlet/token", "value": "${VENDOR_TOKEN_QA}",
 "rewritten": true, "by": "crewlet"}`. It is absent where the engine writes
-none, and `env` is a list, empty or not, wherever `box` is sent.
+none, and `env` is a list, empty or not, wherever `box` is sent. A file a
+vendor's CLI finds through a variable adds that variable to `env` among the
+engine's own lines, its value the file's path from the box's home:
+`{"name": "CLI_TOKEN_FILE", "value": "~/.config/crewlet/token", "by": "crewlet"}`.
+The launch sets it to the file's absolute path in the agent's box, joined onto
+that box's own home, so it is right in every cell.
 With no server, `tool` is `live` or `waiting` only while the seat's box sets
 every one of its own lines exactly so.
 

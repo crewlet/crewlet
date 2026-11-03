@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -430,22 +431,22 @@ func TestEachIssuersStoryIsToldInItsWords(t *testing.T) {
 // A VENDOR'S BOX FILE IS WRITTEN AT LAUNCH, KEPT BY THE POLL, AND NEVER IN THE
 // ENVIRONMENT. The launch resolves it through the seat's own resolution, so an
 // issued variable is issued, in a step of its own ahead of every other; a
-// person's file at the same path is theirs. It is in neither the run's env nor
-// its box defaults, which are all a sign-in is judged on, and it is scrubbed as
-// a credential. The poll rewrites a file marked rewritten once its token
-// renews, through the refresh that keeps a person's token files, and leaves
-// the rest to the launch.
+// person's file at the same path is theirs, and so is naming it. It is in
+// neither the run's env nor its box defaults, which are all a sign-in is judged
+// on, and only its path is kept for the launch, under its variable. It is
+// scrubbed as a credential. The poll rewrites a file marked rewritten once its
+// token renews, through the refresh that keeps a person's token files, and
+// leaves the rest to the launch.
 func TestAVendorsBoxFileIsWrittenAtLaunchAndKeptByThePoll(t *testing.T) {
 	t.Parallel()
 	e, c, fake := twoIssuers(t)
 	const path, setting = ".config/crewlet/fake-token", "FAKE_CLI_TOKEN_FILE"
-	file := &seataccess.BoxFile{Path: path, Ref: "${" + builderFake + "}", Rewritten: true}
+	file := &seataccess.BoxFile{Path: path, Ref: "${" + builderFake + "}", PathEnv: setting, Rewritten: true}
 	e.boxSupply = func(_ *config.Company, handle string) []seataccess.BoxDefault {
 		if handle != "builder" {
 			return nil
 		}
-		return []seataccess.BoxDefault{{Kind: fakeCloud, Env: setting, Value: "/home/user/" + path},
-			{Kind: fakeCloud, File: file}}
+		return []seataccess.BoxDefault{{Kind: fakeCloud, File: file}}
 	}
 	builder := c.Org.AgentSeatByHandle("builder")
 	run := e.runEnvironment(t.Context(), c, builder, nil, nil, e.boxDefaults(c.Config, "builder"))
@@ -463,15 +464,20 @@ func TestAVendorsBoxFileIsWrittenAtLaunchAndKeptByThePoll(t *testing.T) {
 			}
 		}
 	}
-	if run.defaults[setting] != "/home/user/"+path {
-		t.Errorf("defaults = %v, want the vendor's setting beside its file", run.defaults)
+	if run.homePaths[setting] != path || run.env[setting] != "" || run.defaults[setting] != "" {
+		t.Errorf("the file's variable is %q kept, %q in the env, %q in the defaults: want only its "+
+			"path under the home, kept for the launch", run.homePaths[setting], run.env[setting], run.defaults[setting])
 	}
 	if !slices.Contains(run.secrets, token) {
 		t.Error("the file's token is not scrubbed from the run's output")
 	}
 	mine := []sandbox.SetupStep{{Name: "mine", Files: map[string]string{path: "a person's own"}}}
-	if own := e.runEnvironment(t.Context(), c, builder, nil, mine, e.boxDefaults(c.Config, "builder")); own.setup[0].Name == integrationFilesStep {
+	own := e.runEnvironment(t.Context(), c, builder, nil, mine, e.boxDefaults(c.Config, "builder"))
+	if own.setup[0].Name == integrationFilesStep {
 		t.Error("the vendor's file was written over a person's file at the same path")
+	}
+	if own.homePaths != nil {
+		t.Errorf("the vendor named a person's file at its path: %v", own.homePaths)
 	}
 
 	box := sandbox.NewFakeSandbox("box-1")
@@ -495,5 +501,67 @@ func TestAVendorsBoxFileIsWrittenAtLaunchAndKeptByThePoll(t *testing.T) {
 	e.refreshTokenFiles(t.Context(), nil, run2, box)
 	if again, _ := box.ReadFile(t.Context(), path); string(again) != string(renewed) {
 		t.Error("the poll rewrote a vendor's file the vendor left to the launch")
+	}
+}
+
+// A BOX FILE'S VARIABLE NAMES A FILE THE BOX HOLDS: one the launch writes, or
+// a rewritten one whose token waits, which the poll writes once issued; never
+// one left out for good, and never a name the seat's own box settings set,
+// which are theirs. A file of literal text is written as it is, names no
+// variable, and the poll leaves it alone. Mutation: keep every file's
+// variable, or keep it over the seat's own line, and this goes red.
+func TestABoxFilesVariableNamesAFileTheBoxHolds(t *testing.T) {
+	t.Parallel()
+	e, c, fake := twoIssuers(t)
+	const issued, unset, literal = ".config/crewlet/issued", ".config/crewlet/unset", ".config/crewlet/config"
+	const text = "[default]\nregion = fr-par\n"
+	e.boxSupply = func(*config.Company, string) []seataccess.BoxDefault {
+		return []seataccess.BoxDefault{
+			{Kind: fakeCloud, File: &seataccess.BoxFile{Path: issued, Ref: "${" + builderFake + "}",
+				PathEnv: "CLI_TOKEN_FILE", Rewritten: true}},
+			{Kind: fakeCloud, File: &seataccess.BoxFile{Path: unset, Ref: "${FAKECLOUD_NEVER_SET}",
+				PathEnv: "CLI_OTHER_FILE"}},
+			{Kind: fakeCloud, File: &seataccess.BoxFile{Path: literal, Ref: text}},
+		}
+	}
+	builder := c.Org.AgentSeatByHandle("builder")
+	launch := func(settings *org.RoleSandbox) runEnv {
+		return e.runEnvironment(t.Context(), c, builder, settings, nil, e.boxDefaults(c.Config, "builder"))
+	}
+
+	run := launch(nil)
+	if want := map[string]string{"CLI_TOKEN_FILE": issued}; !maps.Equal(run.homePaths, want) {
+		t.Errorf("the kept variables are %v, want %v: the written file's alone", run.homePaths, want)
+	}
+	if got := run.setup[0].Files[literal]; got != text {
+		t.Errorf("the literal file holds %q, want its text as written", got)
+	}
+	if _, written := run.setup[0].Files[unset]; written {
+		t.Error("a file whose reference does not resolve was written")
+	}
+
+	box := sandbox.NewFakeSandbox("box-1")
+	box.Put(literal, text)
+	e.refreshTokenFiles(t.Context(), nil, sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}, box)
+	if got, _ := box.ReadFile(t.Context(), literal); string(got) != text {
+		t.Errorf("the poll wrote %q over the literal file", got)
+	}
+
+	own := launch(&org.RoleSandbox{Env: map[string]string{"CLI_TOKEN_FILE": "/elsewhere"}})
+	if own.homePaths != nil || own.env["CLI_TOKEN_FILE"] != "/elsewhere" {
+		t.Errorf("the seat's own line gave env %q and kept %v, want the line alone",
+			own.env["CLI_TOKEN_FILE"], own.homePaths)
+	}
+
+	fake.mu.Lock()
+	delete(fake.ready, "builder")
+	fake.mu.Unlock()
+	waiting := launch(nil)
+	if waiting.homePaths["CLI_TOKEN_FILE"] != issued {
+		t.Errorf("a rewritten file waiting on its token kept %v, want its variable for the poll's write",
+			waiting.homePaths)
+	}
+	if _, written := waiting.setup[0].Files[issued]; written {
+		t.Error("a file whose token waits was written at launch")
 	}
 }
