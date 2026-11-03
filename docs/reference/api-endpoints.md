@@ -4181,7 +4181,11 @@ apps with. On such a lane a seat's switch still binds its
 tool to the credential handed in from outside Crewlet, its access is managed
 where that credential was issued, and its `observed.credential` names the
 variable the seat holds with `"source": "external"`. A credential Crewlet
-minted says `"source": "minted"`. `observed.retired` lists the credentials an
+minted says `"source": "minted"`. A lane whose credential the engine issues
+at use and never seals names the seat's variable with `"source": "issued"`
+while the seat is on and its account exists, with no `minted_at`: each node
+issues its own, so a time would be the answering node's. Only a credential
+Crewlet sealed carries `minted_at`. `observed.retired` lists the credentials an
 account still holds besides the sealed one (`label`, what the vendor shows of
 each, and `since`, when it was created as near as Crewlet knows), where the
 vendor can tell: while it is non-empty on a lane that is on, every pass plans
