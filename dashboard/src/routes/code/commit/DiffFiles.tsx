@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo } from "react";
 import { Button, Select, Skeleton, Stack } from "@crewlethq/ui";
-import { useParam } from "~/app/router.tsx";
+import { useNavigator, useParam } from "~/app/router.tsx";
 import { DiffView, type DiffHunk, type DiffLine } from "~/components/DiffView.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
@@ -66,7 +66,8 @@ function statusWord(f: CodeDiffFile): string {
 }
 
 export function DiffFiles({ repo, base, head }: { repo: string; base: string; head: string }) {
-  const [file, setFile] = useParam("file", "", "filter");
+  const nav = useNavigator();
+  const [file] = useParam("file", "", "filter");
   const [layout, setLayout] = useParam("layout", "unified", "filter");
   const [lineParam] = useParam("line", "", "filter");
   const params = useMemo(() => ({ name: repo, base, head }), [repo, base, head]);
@@ -130,7 +131,10 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
                     // address can carry: listed, and not opened.
                     disabled={Boolean(f.path_b64)}
                     title={statusWord(f)}
-                    onClick={() => setFile(f.path)}
+                    // A LINE IS THE FILE'S IT WAS NAMED IN: opening another
+                    // file drops it, rather than marking that file's line
+                    // of the same number.
+                    onClick={() => nav.filter({ file: f.path, line: null })}
                   >
                     <span className="mono">{f.path}</span>{" "}
                     <span className="muted">

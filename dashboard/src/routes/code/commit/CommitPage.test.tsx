@@ -415,6 +415,33 @@ test("a line between two hunks is outside the diff once a hunk past it is read",
   expect(cursors).toEqual([null, "p:1"]);
 });
 
+// A LINE IS THE FILE'S IT WAS NAMED IN: opening another file from the list
+// drops it from the address, so the other file's line of the same number is
+// never marked as the one a failure points at. Mutation: keep the line when
+// another file is opened, and this fails.
+test("opening another file drops the line the address named", async () => {
+  stubEngine({
+    files: [
+      [
+        { path: "app.go", status: "M", added: 1, deleted: 1 },
+        { path: "z.go", status: "M", added: 1, deleted: 1 },
+      ],
+    ],
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/code/repos/web/commits/${SHA}?file=app.go&line=2`);
+
+  await screen.findByRole("region", { name: "Changes to app.go" });
+  const list = screen.getByRole("list", { name: "Files changed" });
+  fireEvent.click(within(list).getByRole("button", { name: /z\.go/ }));
+
+  const region = await screen.findByRole("region", { name: "Changes to z.go" });
+  await within(region).findByText("new");
+  const query = new URLSearchParams(location.hash.split("?")[1] ?? "");
+  expect(query.get("file")).toBe("z.go");
+  expect(query.has("line")).toBe(false);
+  expect(region.querySelectorAll(".diff-view__line[data-picked]").length).toBe(0);
+});
+
 // A ROOT COMMIT'S CHANGE IS EVERY FILE IT HOLDS, measured from git's empty
 // tree. Mutation: skip the diff of a root commit, or diff it against itself,
 // and this fails.
