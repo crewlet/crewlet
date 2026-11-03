@@ -567,6 +567,59 @@ test("a literal_in_config refusal is shown against its field", async () => {
   expect(screen.getByText(/integrations.datadog.webhook_token/)).toBeDefined();
 });
 
+// A VALUE THE ENGINE WILL NOT STORE AS TYPED IS SAID BESIDE ITS FIELD, in the
+// engine's words: a line break pasted into a token is invisible in the box,
+// and a banner over the form names no field. Mutation: drop invalid_input from
+// the located refusals and the sentence lands in the banner.
+test("an invalid_input refusal is shown against the field its path names", async () => {
+  const detail = "The token holds a line break. Paste only the token's value.";
+  stubFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          error: "invalid_input",
+          detail,
+          field: "api_token",
+          path: "integrations.cloudflare.provisioning.api_token",
+        }),
+        { status: 400 },
+      ),
+  );
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Cloudflare",
+          tool: {
+            ...tool,
+            key: "cloudflare",
+            requirements: [
+              req({
+                field: "api_token",
+                label: "Provisioner token",
+                kind: "secret",
+                connect: true,
+                secret_name: "CLOUDFLARE_API_TOKEN",
+                config_path: "integrations.cloudflare.provisioning.api_token",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Cloudflare"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const field = screen.getByLabelText(/Provisioner token/);
+  fireEvent.change(field, { target: { value: "cfat_example_value" } });
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  const said = await screen.findByText(detail);
+  const describedBy = (field.getAttribute("aria-describedby") ?? "").split(" ");
+  expect(describedBy).toContain(said.closest("[id]")!.id);
+  expect(screen.queryByRole("alert", { name: detail })).toBeNull();
+});
+
 // THE FORM SAYS WHAT CONNECTING DOES BEFORE IT ASKS FOR ANYTHING.
 //
 // A form that opens with a credential field asks for a secret before saying

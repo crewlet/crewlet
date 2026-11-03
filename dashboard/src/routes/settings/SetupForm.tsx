@@ -177,6 +177,30 @@ export function fillTemplate(text: string, resolve: (field: string) => string): 
 }
 
 /**
+ * A refusal about one field, by the config path the engine names, and what to
+ * say beside it: a literal where a `${VAR}` belongs, or a value the engine
+ * will not store as typed (`invalid_input`, said in the engine's words).
+ */
+function fieldRefusal(err: RestError): { path: string; said: string } | undefined {
+  const path = String(err.body.path ?? "");
+  if (path === "") return undefined;
+  if (err.code === "literal_in_config") {
+    return {
+      path,
+      said:
+        "The company configuration holds a value at " +
+        path +
+        " rather than a ${VAR} reference, so there is no variable to store the " +
+        "credential in. Clear it in Configuration, then try again.",
+    };
+  }
+  if (err.code === "invalid_input") {
+    return { path, said: err.detail || err.hint || "This value cannot be stored as typed." };
+  }
+  return undefined;
+}
+
+/**
  * A requirement's help, one line per line break the app wrote (a token's
  * grouped permissions under its sentence), each with its literals picked out.
  * What follows the help, its link included, continues the last line.
@@ -862,18 +886,14 @@ export function SetupForm({
       // The engine's refusals are specific, and the specific ones belong
       // beside the field rather than in a banner nobody connects to an
       // input.
-      if (err.code === "literal_in_config") {
-        const path = String(err.body.path ?? "");
+      const located = fieldRefusal(err);
+      if (located) {
+        const { path, said } = located;
         const found = sections
           .flatMap((section) => (ownBy.get(sectionKey(section)) ?? []).map((r) => ({ section, r })))
           .find(({ r }) => r.config_path === path);
         const target = found?.r;
         if (found && target) {
-          const said =
-            "The company configuration holds a value at " +
-            path +
-            " rather than a ${VAR} reference, so there is no variable to store the " +
-            "credential in. Clear it in Configuration, then try again.";
           // A GENERATED CREDENTIAL HAS NO FIELD TO SIT UNDER, and it is
           // exactly the one the engine refuses this way, because the
           // operator never sees the slot it will not overwrite. Beside a
