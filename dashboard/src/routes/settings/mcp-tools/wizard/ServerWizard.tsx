@@ -45,6 +45,7 @@ import type {
   McpValueState,
 } from "~/contract/mcp.ts";
 import { listed } from "~/lib/format.ts";
+import { useAccess } from "~/routes/settings/integrations/access/api.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { findOpener, firstInvalid, focusWhenShown, openerNow } from "~/lib/wizardFocus.ts";
 import {
@@ -83,6 +84,7 @@ import {
   ReviewStep,
   SignInStep,
   TestStep,
+  testersOf,
   type ReviewCheck,
   type TestState,
 } from "./steps.tsx";
@@ -188,6 +190,22 @@ export function ServerWizard({
   const [storedFor, setStoredFor] = useState<Readonly<Record<string, string>>>({});
   const reach = saved ? (data.reaches(saved.server.name) ?? []) : [];
   const [seat, setSeat] = useState(() => reach[0]?.handle ?? data.agents[0]?.handle ?? "");
+  // A SERVER AN INTEGRATION SIGNS IN is tested only as an agent the integration
+  // has turned on: as any other, the engine refuses it, so the test could only
+  // fail. The seat moves to the first of them, and nothing runs while none is.
+  const bound = draft.signIn === "integration" ? draft.catalogue?.integration || null : null;
+  const access = useAccess(bound);
+  const testers = useMemo(
+    () => testersOf(data.agents, bound, access),
+    // `access` is a new object each render; what it says is its data and error.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data.agents, bound, access.data, access.error],
+  );
+  useEffect(() => {
+    if (draft.shared || !testers || testers.length === 0) return;
+    if (!testers.some((s) => s.handle === seat)) setSeat(testers[0]!.handle);
+  }, [draft.shared, testers, seat]);
+  const testable = draft.shared || (testers?.some((s) => s.handle === seat) ?? false);
   const root = useRef<HTMLDivElement>(null);
   const inflight = useRef<AbortController | null>(null);
 
@@ -306,11 +324,11 @@ export function ServerWizard({
   useEffect(() => {
     if (step !== "test" && !(step === "approvals" && draft.listed.length === 0)) return;
     if (test.kind !== "idle" && test.for === signature) return;
-    if (!draft.shared && !seat) return;
+    if (!testable) return;
     void runTest();
     // `runTest` reads the draft as it stands when the step opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, signature]);
+  }, [step, signature, testable]);
 
   async function save() {
     const screen = lifetime();
@@ -585,7 +603,7 @@ export function ServerWizard({
               draft={draft}
               test={test}
               current={signature}
-              agents={data.agents}
+              agents={testers}
               seat={seat}
               onSeat={setSeat}
               ofDraft={!testsSaved}

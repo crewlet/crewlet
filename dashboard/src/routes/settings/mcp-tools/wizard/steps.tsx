@@ -41,6 +41,7 @@ import type {
   McpToolLevel,
 } from "~/contract/mcp.ts";
 import type { Seat } from "~/lib/seats.ts";
+import type { AccessAnswer } from "~/contract/access.ts";
 import { listed, plural } from "~/lib/format.ts";
 import type { ConfigProblem } from "~/protocol/types.ts";
 import { Testing, TestResult } from "../flows/TestDialog.tsx";
@@ -702,6 +703,27 @@ export function SignInStep({
 
 // ---- test --------------------------------------------------------------------------
 
+/**
+ * Who a per-agent server can be tested as: every agent, or, for a server an
+ * integration signs in, the agents it has turned on, in the chart's order.
+ * Null until that integration's access is read; a read that failed lists
+ * every agent, and the engine says which one it refuses.
+ */
+export function testersOf(
+  agents: readonly Seat[],
+  bound: string | null,
+  access: { data: AccessAnswer | null; error: unknown },
+): readonly Seat[] | null {
+  if (bound === null || access.error) return agents;
+  if (!access.data) return null;
+  const on = new Set(
+    access.data.seats
+      .filter((seat) => Object.values(seat.lanes).some((lane) => lane?.desired.enabled))
+      .map((seat) => seat.handle),
+  );
+  return agents.filter((seat) => on.has(seat.handle));
+}
+
 /** Where the wizard's test stands. */
 export type TestState =
   | { kind: "idle" }
@@ -722,13 +744,17 @@ export function TestStep({
   test: TestState;
   /** The draft's signature now, so an answer for an older draft says so. */
   current: string;
-  agents: readonly Seat[];
+  /** Who it can be tested as ([testersOf]); null while the integration's access is read. */
+  agents: readonly Seat[] | null;
   seat: string;
   onSeat: (handle: string) => void;
   /** Whether the test is of the draft rather than of the saved server as it runs. */
   ofDraft: boolean;
 }) {
   const stale = test.kind !== "idle" && test.kind !== "running" && test.for !== current;
+  const bound = draft.signIn === "integration" ? (draft.catalogue?.integration ?? "") : "";
+  const title = draft.catalogue?.title ?? "The integration";
+  const testers = agents ?? [];
   return (
     <div className="mcp-stack">
       {ofDraft && draft.signIn === "oauth" ? (
@@ -737,23 +763,47 @@ export function TestStep({
           one. Sign in on the server's page once it is saved.
         </Callout>
       ) : null}
-      {!draft.shared ? (
+      {!draft.shared && (!bound || testers.length > 0) ? (
         <FormField
           label="Test as"
-          helper="A per-agent server runs as one agent, with its own credentials."
+          helper={
+            bound
+              ? `An agent with ${title} on, signed in with the credential ${title} keeps for it.`
+              : "A per-agent server runs as one agent, with its own credentials."
+          }
         >
           {(field) => (
             <Select
               id={field.id}
               value={seat}
-              disabled={test.kind === "running"}
-              options={agents.map((s) => ({ value: s.handle, label: s.name }))}
+              disabled={test.kind === "running" || agents === null}
+              options={testers.map((s) => ({ value: s.handle, label: s.name }))}
               onChange={(v) => onSeat(String(v))}
             />
           )}
         </FormField>
       ) : null}
-      {!draft.shared && agents.length === 0 ? (
+      {!draft.shared && bound && agents === null ? (
+        <Text as="p" variant="caption" tone="secondary">
+          Reading which agents have {title} on.
+        </Text>
+      ) : null}
+      {/* NO TEST THAT CANNOT PASS: a server an integration signs in runs only
+          as an agent it has turned on, so with none on there is nobody to
+          test it as, and the fix is on the integration. */}
+      {!draft.shared && bound && agents !== null && testers.length === 0 ? (
+        <Callout variant="warning" title={`No agent has ${title} on`}>
+          Turn {title} on for an agent first, on its{" "}
+          <a
+            className="t-link prose-link"
+            href={href(["company", "integrations", bound], { open: "agents" })}
+          >
+            Agents tab
+          </a>
+          , then test it as that agent.
+        </Callout>
+      ) : null}
+      {!draft.shared && !bound && testers.length === 0 ? (
         <Callout variant="info" title="No agent to test it as">
           A per-agent server runs as one agent, and the company has none yet. Add the server, and
           test it from its page once an agent is given it.
