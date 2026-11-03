@@ -3817,7 +3817,8 @@ then they are loading — so the last thread's turns never stand under the new
 one's name. Each turn's trigger reads as plain words, its markdown stripped. A
 seat no node holds says why it shows nothing. Beside them are the seat's
 **Sessions** (`session=` opens one): every turn whose executor captured its
-harness's session, the whole record of what its run read, called and wrote —
+harness's session, or that read its conversation as its first launch began,
+the whole record of what its run read, called and wrote —
 read through any node, since the rows are the replicated estate's and the
 bytes the fleet's object store's, and on the same `audit.seat.read` as the
 rest of the tab, the verb an executor's live output is decided by. Each row is
@@ -3831,17 +3832,27 @@ a thread is shown, the list bounded beside it and the chosen row kept in its
 view: the engine's account of how the turn ended, as the list's row last read
 says it — a turn's end is recorded with no new capture, so it reaches the
 list's poll and never the transcript — with the decision, whether its reply
-reached anybody and where, what landed, what blocked it, who stopped it and
-why, the failure, each only where the ending carries it, what is kept of the
-session and its size, and a link to the turn — and a sentence saying whether a
-relaunch of the turn would continue the session, as the engine decided it and
-no more: that one would, in whichever box it gets, where that box can take it
-up and the seat's budget can carry it, or only in the box its run parked in,
-while that box is held, with the engine's reason no other box would; where it
-would not, the engine's own reason; or, where the engine could not decide (a
-record it could not read, a job still working, a capture still being kept, the
-node holding the seat not answering what a relaunch is launched on), that this
-cannot be said now and why: an unknown is never drawn as a no. Under
+reached the party waiting and where, that it did not reach the party waiting
+on the surface it was owed on, or that whether it did is not known — never
+drawn as not made — what landed, what blocked it, who stopped it and why, the
+failure, that its newest session was not kept and why, each only where the
+ending carries it, what is kept of the session and its size, a link to the
+turn, and, where the turn's first launch was handed the session its
+conversation's last turn left, that turn's id as a link opening that session
+here (`session=`) — and a sentence saying which launch would continue the
+session and whether, as the engine decided it and no more, keyed by the
+engine's sets of launches and of places: a relaunch of a live turn, or an ended
+turn's conversation's next turn, would continue it in whichever box it gets,
+where that box can take it up and the seat's budget can carry it; a relaunch
+only in the box its run parked in, while that box is held, with the engine's
+reason no other box would; where it would not, the engine's own reason — an
+ended turn that is not its conversation's newest naming the turn whose session
+the next turn is handed instead; a turn that served no conversation that its
+session is not continued; or, where the engine could not decide (a record it
+could not read, a job still working, a capture still being kept, a turn whose
+end is not on the log yet, the node holding the seat not answering what a launch
+is launched on), that this cannot be said now and why: an unknown is never
+drawn as a no. Under
 it is the
 **transcript**, a page at a time (**Load more of the transcript**) as the
 harness recorded it: each entry labelled by who it is from (brief, note, model,

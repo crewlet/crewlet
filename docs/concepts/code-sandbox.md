@@ -1349,79 +1349,124 @@ long and how much is kept). That archive is the whole record of what the run
 read, called and wrote, and a seat's **Sessions** — under its profile's Memory
 tab on the dashboard ([A seat's profile](../reference/dashboard-design.md#a-seats-profile)),
 or [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions)
-— list them, the latest first: how each turn ended (the engine's own account,
-which the transcript cannot know), what it was asked, and whether its session
-is still kept.
+— list them, the latest begun first: how each turn ended (the engine's own
+account, which the transcript cannot know), what it was asked, and whether its
+session is still kept. **A row begins at its turn's first launch** where the
+turn read its conversation — its `begin`, which names the session that launch
+was handed (`base_turn`) — and at its first capture otherwise. **And a row goes
+with the turn that was handed it**: once a later turn of its conversation that
+was handed its session, and that kept a session of its own, ends, its end
+absorbs the turns its read handed out, and their rows are gone from the list —
+as are rows past the retention, and a removed seat's. A session read by its turn
+after its row went is `404 not_found`, saying it may have gone any of these ways.
 
-**Each says whether a relaunch would continue it** (`continuable`), where
-(`continues_in`), and where not, why (`not_continuable`), decided by the one
-decision a relaunch takes ([above](#a-relaunch-continues-the-turns-session))
-over what a relaunch reads: the turn's row of the executor log as a relaunch
-reads it, the turn's run record in the coordination store and the job that
-record names as the one a relaunch would follow, and the member of the seat's
-executor chain a relaunch would be launched on now — the first not sitting out
-its plan — with the cell its run lands in and its runner. **The member is the
-one the node holding the seat would pick**, off the chain of the company
-revision the turn's relaunch runs on: which members sit out a spent plan is what
-that node's own calls have met, which company revision says sessions are kept
-is the revision it runs, a resumed segment of the turn running there relaunches
-— its reviewer's send-back, the round it carries on — on the revision it was
-admitted under, whatever an apply has put live since, and a relaunch is decided
-there. So the node answering asks it — itself where it holds the seat, and
-otherwise the node the seat's lease names, once a page — and is answered, turn
-by turn, with that node's pick and whether that member's runner restores the
-turn's session.
-`any_box` where the turn is live and not ending, the newest capture of that job
-was kept and is the one the row names, and that runner restores its harness,
-format and release; a round whose job was lost a second time is carried on in a
-session of its own, which a reader is told cannot be said where a review of the
-work it submitted may yet continue it. `parked_box` where that is not so but a
-person's answer would still carry the turn's parked run on in the box it parked
-in — the run still holds the box, the box ran the row's own session (not one it
-started in that one's place, and not one whose job's box never said which of
-the two it ran), the member is of the box's harness in its cell, and a box on
-the engine host is on the host of the node holding the seat, which alone can
-continue in it — which continues the session that box holds there and nowhere
-else, for as long as the box is held; `not_continuable` then says why no other
-box would. A box that cannot be continued in says why, beside why the kept
-capture is not continued. As far as the engine can know before a box is chosen,
-and no further: whether the box a relaunch gets runs a harness release that can
-take the session up, and whether the seat's budget can carry its context, are
-the launch's to find out, and no row says them. An ended turn's session is
-never continuable: no later turn continues a session yet; and a turn whose
-run's ending is decided is ending, from the decision on. **An unknown is never
-a no**: `continuable` is null, with its reason, where the run record or the
-row at the relaunch's level could not be read, and where a relaunch would not
-decide now either — the job it would follow still working, or a claim on it
-whose read is still under way, one that has neither taken the job's final
-capture nor begun its turn; that job's capture still being kept; what a
-relaunch is launched on not to be said (every member of the seat's chain
-sitting out its plan, no node holding the seat, the node holding it not
-answering within two seconds); and a relaunch only the resume of a collected
-job decides, until its turn begins — whether its round is carried on in its
-box, which it is where the job's sign-in was replaced while it ran, and whether
-a round lost a second time is carried on in a session of its own or reviewed
-from the work it submitted. **A resumed turn says what it does with the round
-as it begins**, on the job's record — collects the job, or carries the round on
-— and from then on, its review included, the claim is decided on that, whether
-or not its read took any capture: a turn that collects its job is reviewed, and
-its send-back continues nothing in the job's box; one that carries the round on
-in that box continues it there. A claim of a person's answer reads no box, and
-is decided whatever its job kept. A page reads the coordination store once for
-its runs, one listing of the seat's live runs — and one turn's record alone for
-a live row the listing does not hold, a record of a status this build does not
-know or one it could not decode — and once more for the seat's lease, to find
-the node holding the seat, wherever a live row asks it, that node's own pages
-included; and not at all where every turn on it has ended. Where the store does
-not answer, a live turn's row says so, and the page is answered all the
-same. **A row is read again at the
-relaunch's level** (`linearizable`) only where the page was read below it and
-the row names another capture than the one its run's record keeps — a copy of
-the log behind the record, which would read a capture a relaunch continues as
-one the log no longer names: a read at that level costs a barrier on the
-executor log, and a row naming the kept capture decides as one read there
-would. A transcript's later pages (read with a `cursor`) leave `continuable`
-null: its first page says it.
+**A row that keeps no session says why**, one of three: nothing of the turn's
+session was captured (yet, while it runs); its newest capture was not kept —
+its end said so, with the reason the store or the log gave, redacted, and took
+the older capture off the row, since that one does not hold what came after it;
+or the seat's session budget released it to make room for newer ones.
+
+**Each says which launch would continue it** (`continued_by`), **whether it
+would** (`continuable`), where (`continues_in`), and where not, why
+(`not_continuable`), each decided by the one decision that launch takes, over
+what that launch reads, and of the member of the seat's executor chain it would
+be launched on now — the first not sitting out its plan — with the cell its run
+lands in and its runner:
+
+- **A live turn's session, by a relaunch of it** (`relaunch`): the decision a
+  relaunch takes ([above](#a-relaunch-continues-the-turns-session)), over the
+  turn's row of the executor log as a relaunch reads it, the turn's run record
+  in the coordination store and the job that record names as the one a relaunch
+  would follow. `any_box` where the turn is live and not ending, the newest
+  capture of that job was kept and is the one the row names, and that runner
+  restores its harness, format and release; a round whose job was lost a second
+  time is carried on in a session of its own, which a reader is told cannot be
+  said where a review of the work it submitted may yet continue it. `parked_box`
+  where that is not so but a person's answer would still carry the turn's
+  parked run on in the box it parked in — the run still holds the box, the box
+  ran the row's own session (not one it started in that one's place, and not
+  one whose job's box never said which of the two it ran), the member is of the
+  box's harness in its cell, and a box on the engine host is on the host of the
+  node holding the seat, which alone can continue in it — which continues the
+  session that box holds there and nowhere else, for as long as the box is
+  held; `not_continuable` then says why no other box would. A box that cannot
+  be continued in says why, beside why the kept capture is not continued. **A
+  turn that has kept no session of its own** — its first job lost with its box
+  before anything of it was kept — says so, and where its row still holds the
+  session its first launch was handed and the member restores it, that a
+  relaunch in a box of its own continues that session instead
+  ([A conversation's next turn continues its last turn's
+  session](#a-conversations-next-turn-continues-its-last-turns-session)).
+- **An ended turn's session, by its conversation's next turn** (`next_turn`):
+  the decision that turn's first launch takes of the head its dispatch reads.
+  Only the conversation's **head** is continued — its newest ended turn whose
+  row still names a session, which the read that answered the row names from
+  the same snapshot, so a row's standing is the one its page's `read_level`
+  states — `any_box`, where the member restores it, and in a box of the next
+  turn's own. A row that is not the head names the turn whose session the next
+  turn is handed instead; one that names no session says why; and one whose
+  company keeps no session says so. A turn whose run is over, or whose ending is
+  decided, and whose end is not on the log as the row was read is the next
+  turn's too, and `null` until its end lands. A turn that served no
+  conversation — a colleague's ask, a generic source's wake — is continued by
+  no launch: it sends no `continued_by`, and `continuable` is `false`.
+
+**The member is the one the node holding the seat would pick**, off the chain
+of the company revision the launch runs on: which members sit out a spent plan
+is what that node's own calls have met, which company revision says sessions are
+kept is the revision it runs, a resumed segment of the turn running there
+relaunches — its reviewer's send-back, the round it carries on — on the revision
+it was admitted under, whatever an apply has put live since, and a
+conversation's next turn is admitted under the revision live when it comes. So
+the node answering asks it — itself where it holds the seat, and otherwise the
+node the seat's lease names, once a page — and is answered, session by session,
+with that node's pick and whether that member's runner restores the session: a
+live turn's by its turn, and a conversation's head by none, so a segment of the
+ended turn still pinned in the moments before it returns answers for no
+revision the next turn runs on. As far as the engine can know before a box is
+chosen, and no further: whether the box a launch gets runs a harness release
+that can take the session up, whether it is a box of the launch's own, and
+whether the seat's budget can carry its context, are the launch's to find out,
+and no row says them.
+
+**An unknown is never a no**: `continuable` is null, with its reason, where the
+run record or the row at the relaunch's level could not be read, and where the
+launch would not decide now either — the job a relaunch would follow still
+working, or a claim on it whose read is still under way, one that has neither
+taken the job's final capture nor begun its turn; that job's capture still being
+kept; what the launch is launched on not to be said (every member of the seat's
+chain sitting out its plan, no node holding the seat, the node holding it not
+answering within two seconds); a relaunch only the resume of a collected job
+decides, until its turn begins — whether its round is carried on in its box,
+which it is where the job's sign-in was replaced while it ran, and whether a
+round lost a second time is carried on in a session of its own or reviewed from
+the work it submitted; and a turn whose end is not on the log yet. **A resumed
+turn says what it does with the round as it begins**, on the job's record —
+collects the job, or carries the round on — and from then on, its review
+included, the claim is decided on that, whether or not its read took any
+capture: a turn that collects its job is reviewed, and its send-back continues
+nothing in the job's box; one that carries the round on in that box continues it
+there. A claim of a person's answer reads no box, and is decided whatever its
+job kept.
+
+**What a page costs.** A page reads the coordination store once for its runs,
+one listing of the seat's live runs — and one turn's record alone for a live row
+the listing does not hold, a record of a status this build does not know or one
+it could not decode — and none where every row on it has ended; and once more
+for the seat's lease, to find the node holding the seat, wherever a row asks it
+— a live row whose run is neither over nor ending, or a conversation's head —
+that node's own pages included. Where the store does not answer, a live turn's
+row says so, and the page is answered all the same. **A live row is read again
+at the relaunch's level** (`linearizable`) only where the page was read below
+it and the row names another capture than the one its run's record keeps, or
+the record keeps none — a copy of the log behind the record, which would read a
+capture a relaunch continues as one the log no longer names: a read at that
+level costs a barrier on the executor log, and a row naming the kept capture
+decides as one read there would. An ended row is decided on its page's own
+snapshot, its conversation's head read in the same transaction as the rows: one
+seek of the conversation's index for each conversation the page names. A
+transcript's later pages (read with a `cursor`) leave `continuable` null: its
+first page says it.
 
 **One session opens as its transcript**
 ([`GET /agents/{id}/sessions/{turn_id}`](../reference/api-endpoints.md#get-agentsidsessionsturn_id)):
