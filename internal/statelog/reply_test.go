@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -361,5 +362,65 @@ func TestAWaitIsBoundedByTheRequestItBelongsToAndNoOther(t *testing.T) {
 		if got := statelog.WithReplyMargin(unmarked.ctx, unmarked.margin); got != unmarked.ctx {
 			t.Errorf("a context with %s was marked a served request", unmarked.name)
 		}
+	}
+}
+
+// A WAIT ENDS WHERE THE CLOCK'S READING PUT IT, HOWEVER LATE IT IS ARMED. The
+// clock the bound is taken from is read a whole stall before the wait is armed
+// — a goroutine stopped between the two, as a stop of the world or a starved
+// runner stops one — and the wait still ends at the instant its asker must be
+// answered by, where that comes first, and at its own budget past the reading
+// where the budget does, ahead of the asker's instant; and the bound names the
+// wait it made, from the reading to that end. Armed as what was left of it,
+// either bound ran on by the stall: the first to its asker's own deadline, a
+// margin late, and the second past the instant it was chosen ahead of.
+//
+// IN A SYNCTEST BUBBLE, where a timer fires at exactly its time, so the end is
+// held to the instant and to nothing about how late the machine wakes the case.
+func TestAWaitEndsWhereTheClocksReadingPutItHoweverLateItIsArmed(t *testing.T) {
+	t.Parallel()
+	// stall is how long before the wait is armed the clock is read: a reply's
+	// margin, so a bound re-anchored by it runs to the asker's deadline.
+	const stall = replyMargin
+	for _, tc := range []struct {
+		name   string
+		budget time.Duration
+		asker  bool
+	}{
+		{name: "the asker's instant comes first", budget: statelog.ReadBudget, asker: true},
+		// Ahead of the asker's instant at the reading, and behind it once armed.
+		{name: "the wait's own budget comes first", budget: stall + askerSlack/2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				ctx, deadline := asked(t)
+				answerBy := deadline.Add(-replyMargin)
+				armed := time.Now()
+				read := armed.Add(-stall)
+				want := read.Add(tc.budget)
+				if tc.asker {
+					want = answerBy
+				}
+				if !armed.Add(want.Sub(read)).After(answerBy) {
+					t.Fatalf("the premise: armed as what was left of it, the %v bound would "+
+						"still end by the asker's instant", want.Sub(read))
+				}
+
+				waitCtx, cancel, bound := statelog.WaitWithinFrom(ctx, tc.budget, read)
+				defer cancel()
+				if bound.Asker != tc.asker || bound.Within != want.Sub(read) {
+					t.Fatalf("the wait is bounded %+v, want asker=%v within %v of the clock's "+
+						"reading", bound, tc.asker, want.Sub(read))
+				}
+				<-waitCtx.Done()
+				if ended := time.Now(); !ended.Equal(want) {
+					t.Fatalf("the wait ended %v after it was armed, want %v: the asker must be "+
+						"answered %v after it was armed, and a stall of %v between reading the "+
+						"clock and arming the wait moved its end", ended.Sub(armed),
+						want.Sub(armed), answerBy.Sub(armed), stall)
+				}
+			})
+		})
 	}
 }
