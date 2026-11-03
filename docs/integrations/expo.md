@@ -8,7 +8,7 @@ The engine creates, re-levels and deletes those robots and their tokens itself, 
 
 | An agent on | Can | Cannot |
 |---|---|---|
-| `viewer` (the default) | View the account's projects, builds, submissions and updates | Start, cancel or change anything |
+| `viewer` (the default) | View the account's projects. Whether Expo lets a Viewer read EAS builds is not yet checked | Start, cancel or change anything |
 | `runner` | Everything `viewer` can, plus Expo's low-risk actions, such as starting a build | Publish an update |
 | `developer` | Everything `runner` can, plus publish updates and manage the project's credentials | Publish to a protected channel |
 | `release_manager` | Everything `developer` can, plus publish to protected channels and use protected credentials | Manage the account, its members or its programmatic access |
@@ -46,7 +46,7 @@ The form offers **Test key** under the provisioner token. It runs read-only quer
 | The token works | The user or robot the token belongs to | The token is wrong or revoked |
 | The account exists | The account by its name | The account name is wrong, or the token cannot see that account |
 | The token can manage robots | The token's own permissions on the account | The token's user or robot does not hold Admin on the account |
-| The projects are readable | The account's projects | Expo did not answer the listing; the result carries its reason |
+| The projects can be counted | The number of projects on the account | Expo refused or did not answer the count; the result carries its reason |
 
 When every stage passes, the result names the account and the number of projects on it. That is the whole claim: whether Expo accepts each level's permissions is proved only when the first agent's robot is created, because a test never writes at Expo.
 
@@ -90,14 +90,14 @@ Expo describes its Viewer role as viewing projects through Expo Go. If an agent 
 
 | You do | Crewlet does at Expo |
 |---|---|
-| Turn a seat on | Creates a robot user named `crewlet-<company>-<handle>` on the account with the level's permissions, then creates an access token for it and seals the value. |
+| Turn a seat on | Creates a robot user named `crewlet-<company>-<handle>` (`crewlet-<handle>` where the company has no name) on the account with the level's permissions, then creates an access token for it with the note `crewlet seat <handle>` and seals the value. |
 | Change its level | Grants the robot the permissions the new level adds, then revokes the ones it drops, so it never holds less than the lower of the two levels in between. The token does not change, so the agent's tools keep working. |
-| Turn it off | Deletes the robot's access token, so the agent stops at once, then asks Expo to delete the robot, and clears the sealed value. |
+| Turn it off | Revokes and deletes every live token on the robot, so the agent stops at once, then asks Expo to delete the robot, and clears the sealed value. |
 | Turn it back on | Creates a new robot and a new token. No person is needed. |
 | Remove it (only while off) | Nothing at Expo: the robot is already deleted. Crewlet stops tracking it. |
-| Rotate its token | Creates a new token, seals it, then deletes the old one. Anything still using the old value stops working. |
+| Rotate its token | Creates a new token, seals it, then revokes and deletes the engine's other tokens on the robot. Anything still using the old value stops working. |
 
-Crewlet only ever changes robots and tokens it created. It records the ID of every robot and token it creates and never adopts one by its name, even one under a `crewlet-` name.
+Crewlet only ever changes robots and tokens it created. It records the ID of each robot it creates and never adopts one by its name, even one under a `crewlet-` name. It treats a token as its own when the token sits on that robot and carries the note `crewlet seat <handle>`, so a token a person adds to the robot is left alone.
 
 ### The token is the engine's, and named for the seat
 
@@ -117,7 +117,7 @@ An agent works with Expo two ways.
         EXPO_TOKEN: "${EXPO_TOKEN_QA}"
 ```
 
-The engine names no variable in a run of its own, so without this line (or a setup step's `env` or file naming the same token) the agent's container has no Expo token. While the access sync has not minted the token yet, a run waits for it rather than starting without it. The Agents tab reports per seat whether the tool is live, waiting for its token, or not set up because the seat's box names no `${EXPO_TOKEN_<HANDLE>}`, and says the line to add. With it, an agent runs commands such as these with no `eas login`:
+The engine names no variable in a run of its own, so without this line the agent's container has no Expo token. A `sandbox.env` line is read first; a setup step of the seat's own that sets `EXPO_TOKEN` in its `env` also counts. While the access sync has not minted the token yet, a run waits for it rather than starting without it. The Agents tab reports per seat whether the tool is live, waiting for its token, or not set up because the box does not set `EXPO_TOKEN` to exactly `${EXPO_TOKEN_<HANDLE>}`, and says the line to add. With it, an agent runs commands such as these with no `eas login`:
 
 ```sh
 npx eas-cli@27.2.0 build:list
@@ -135,7 +135,8 @@ Each command names the one EAS CLI release Crewlet pins, so every agent runs the
 Each pass reads every robot this engine manages, including the robot of a seat that has since left the document.
 
 - **A robot's permissions changed at Expo** by somebody else are restored to the seat's level and reported as `drift_restored`, with the before and after.
-- **A robot or token deleted at Expo** is dropped from the engine's records, and the next pass creates a fresh one if the seat is on.
+- **A robot deleted at Expo** is recreated on the next pass if the seat is on. One created in the last ten minutes is given up to ten minutes first, since Expo's listing may not show it yet.
+- **A token deleted or revoked at Expo** is replaced by a new token on the same robot.
 - **A robot somebody emptied of every permission** at Expo is treated as turned off by hand, and a pass never grants it back, in case it was incident response. The tab offers **Turn back on** or **Keep off**.
 - **A seat that leaves the document** is treated as off: its token is deleted and its robot with it.
 
@@ -199,5 +200,5 @@ When an agent reports an error from the EAS CLI:
 | `EAS project not configured` | The project in the agent's working directory is not linked to EAS | A person links it once with `eas init` and commits the `extra.eas.projectId` it writes |
 | A permission error on `build`, `update` or `submit` | The agent's level does not allow the action | Raise the agent's level on the Agents tab, if it should be allowed |
 | A permission error publishing to `production` (or another protected channel) | The channel is protected, and only `release_manager` can publish to it | Publish it yourself, or give one agent `release_manager` |
-| `EXPO_TOKEN` is not set, or the CLI asks for a login | The seat's `sandbox.env` does not set `EXPO_TOKEN`; the Agents tab shows its tool as not set up | Add `EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"` to the seat's `sandbox.env`, as in [The agent's Expo tools](#the-agents-expo-tools) |
+| `EXPO_TOKEN` is not set, or the CLI asks for a login | The seat's `sandbox.env` does not set `EXPO_TOKEN` to exactly `${EXPO_TOKEN_<HANDLE>}`; the Agents tab shows its tool as not set up | Add `EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"` to the seat's `sandbox.env`, as in [The agent's Expo tools](#the-agents-expo-tools) |
 | An authentication error | The agent's token was deleted or rotated at Expo by somebody else | The next pass replaces it; **Retry** on the agent's row does it now |
