@@ -58,7 +58,9 @@ import (
 //  6. The closed rounds' CALLS THEMSELVES, each folded into its round's tally of
 //     the calls its record does not list ([ledger.Iteration.Elided]) — by
 //     identity first, its tool, its digest and its outcome, so a resumed call
-//     log still seeds it exactly, and past that by tool, as the tallies were.
+//     log still seeds it exactly, and past that by tool, as the tallies were —
+//     and with them the names of the round's tools that are reads
+//     ([ledger.Iteration.Reads]), which only a listed call is drawn with.
 //     What a call keeps however far it is condensed — a name, an identity and
 //     an outcome — is all a tally holds of it too, and a delivery check reads
 //     a tally's calls as the calls they were ([ledger.Called]); what is lost is
@@ -232,7 +234,11 @@ func EncodeWithin(s State, budget int) (json.RawMessage, Condensed, error) {
 		for _, call := range round.Calls {
 			round.Elided = tallied(round.Elided, call)
 		}
-		round.Calls = nil
+		// AND WHICH OF ITS TOOLS ARE READS, which only a call the round
+		// lists is drawn with ([ledger.Iteration.Reads]): a tally is drawn
+		// by tool without them, and a round that called many tools would
+		// otherwise keep every one of their names for nothing.
+		round.Calls, round.Reads = nil, nil
 		c.Calls++
 	}
 	if blob, err = Encode(s); err != nil || len(blob) <= budget {

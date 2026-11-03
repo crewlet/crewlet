@@ -564,3 +564,49 @@ func TestEveryCutAParkMakesSaysWhatItsRoundWasParkedWith(t *testing.T) {
 		}
 	})
 }
+
+// A ROUND FOLDED INTO ITS TALLY KEEPS NO NAMES ONLY ITS LISTED CALLS ARE DRAWN
+// WITH. Which of a round's tools are reads (ledger.Iteration.Reads) is read only
+// beside the calls its record lists — to mark a line "(read)" and to cap how
+// many reads are shown — so once the round's calls are folded into its tally,
+// nothing reads it. Two hundred rounds that each called a hundred read tools
+// carry kilobytes of those names a round beside each tool's count in the
+// tally, which is past the share; dropped with the calls, the turn parks.
+//
+// Mutation: keep a folded round's names of its read tools, and the turn is
+// refused at its park for names nothing reads.
+func TestARoundFoldedIntoItsTallyKeepsNoNamesOnlyItsListedCallsAreDrawnWith(t *testing.T) {
+	t.Parallel()
+	state := worst()
+	state.Iterations = nil
+	reads := make([]string, 100)
+	for k := range reads {
+		reads[k] = fmt.Sprintf("read_%055d", k)
+	}
+	for i := range 200 {
+		calls := make([]ledger.Call, 200)
+		for j := range calls {
+			calls[j] = ledger.Call{Name: reads[j%len(reads)], Digest: fmt.Sprintf("%064x", i*1000+j)}
+		}
+		state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1, Calls: calls, Reads: reads})
+	}
+	got, condensed := condensedWithin(t, state)
+	if condensed.Calls != 200 {
+		t.Fatalf("the park folded %d rounds' calls, want all 200", condensed.Calls)
+	}
+	for _, round := range got.Iterations {
+		calls := 0
+		for _, e := range round.Elided {
+			calls += e.Calls
+		}
+		if round.Reads != nil || round.Calls != nil || len(round.Elided) != len(reads) || calls != 200 {
+			t.Fatalf("round %d keeps %d read names and %d calls listed, and tallies %d calls in %d entries; "+
+				"want no names, none listed, and all 200 tallied by tool", round.Iteration, len(round.Reads),
+				len(round.Calls), calls, len(round.Elided))
+		}
+	}
+	// THE CALLER'S STATE IS UNTOUCHED: the park condenses a copy.
+	if len(state.Iterations[0].Reads) != len(reads) || len(state.Iterations[0].Calls) != 200 {
+		t.Error("condensing changed the state it was handed")
+	}
+}
