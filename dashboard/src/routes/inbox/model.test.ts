@@ -10,7 +10,9 @@ import {
   answerWords,
   answeredQuestion,
   answeredRows,
+  ASK_HEADING,
   askContext,
+  askHeadline,
   askQuestion,
   earlierOf,
   followThrough,
@@ -177,7 +179,29 @@ describe("what an ask says", () => {
       body: "\nShould we ship Friday?\nThe webinar moved.\n",
     } as unknown as WorkAskRow;
     expect(askQuestion(words)).toBe("Should we ship Friday?");
+    expect(askHeadline(words)).toBe("Should we ship Friday?");
     expect(askContext(words)).toBe("The webinar moved.");
+  });
+
+  test("a free-text ask written as one long paragraph is read whole under a plain heading", () => {
+    const body =
+      "@miles Thanks for approving. PR #24 is still open at head `da7fe81`, clean and " +
+      "QA-approved. My GitHub app is refused on merge (403), so please merge it yourself.";
+    const words = { ...ASK_ROW, decision: undefined, body } as unknown as WorkAskRow;
+    expect(askHeadline(words)).toBe(ASK_HEADING);
+    expect(askContext(words)).toBe(body);
+    // The row still previews the message itself.
+    expect(askQuestion(words)).toBe(body);
+  });
+
+  test("a structured ask is headlined by its question, however long", () => {
+    const question =
+      `${"Hold the release until the migration lands and the rollback is rehearsed? ".repeat(2)}`.trim();
+    const long = {
+      ...ASK_ROW,
+      decision: { ...ASK_ROW.decision, question },
+    } as unknown as WorkAskRow;
+    expect(askHeadline(long)).toBe(question);
   });
 });
 

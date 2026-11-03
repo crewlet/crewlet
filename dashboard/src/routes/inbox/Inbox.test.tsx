@@ -571,6 +571,22 @@ describe("the pane", () => {
     expect(screen.getByText("The only cost is the webinar slot.")).toBeTruthy();
   });
 
+  // A one-paragraph free-text ask used to be its own headline, unformatted.
+  test("a free-text ask written as one paragraph is read formatted under a plain heading", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = askItem();
+    (ask.ask as { decision?: unknown }).decision = undefined;
+    ask.ask.body =
+      "Thanks for approving. The pull request is still open at head `da7fe81`, clean and " +
+      "QA-approved, but my app is refused on merge, so please merge it yourself.";
+    mount({ answers: { decisions: decisionsOf(ask) } });
+    await settle();
+    expect(screen.getByRole("heading", { name: "A question for you" })).toBeTruthy();
+    const lead = document.querySelector(".crewlet-reading-pane__lead");
+    expect(lead?.querySelector("code")?.textContent).toBe("da7fe81");
+    expect(lead?.textContent).toContain("please merge it yourself.");
+  });
+
   // AN ASK IS ONE MESSAGE: its question's bare `#11` is placed by the
   // repository its context names; an address its asker wrote opens only as
   // the dashboard rebuilt it on the company's own host; and a cited task's

@@ -94,8 +94,9 @@ import {
   answeredQuestion,
   answeredTexts,
   askContext,
+  askHeadline,
+  askIsMessage,
   askTexts,
-  askQuestion,
   followThrough,
   budgetLine,
   moment,
@@ -383,7 +384,7 @@ function AskPane({
           </>,
         )}
         <ReadingPaneTitle>
-          {renderTokens(askQuestion(ask), "question", "text", true)}
+          {renderTokens(askHeadline(ask), "question", "text", true)}
         </ReadingPaneTitle>
         {context && (
           <ReadingPaneLead>
@@ -488,7 +489,12 @@ function AnsweredPane({
   const asked = (decision && WAS_ASKED[decision.role]) || "asked you";
   const said =
     words.kind === "resolved" ? null : words.kind === "choice" ? words.said : `“${words.said}”`;
-  const context = run ? run.question_context.trim() : "";
+  // An answered message is read whole, since its heading does not quote it.
+  const context = run
+    ? run.question_context.trim()
+    : ask && askIsMessage(ask.ask)
+      ? ask.ask.body.trim()
+      : "";
   return (
     <TokenScope texts={answeredTexts(answered)}>
       <>
@@ -503,7 +509,7 @@ function AnsweredPane({
           <RunQuestion question={answeredQuestion(answered)} />
         ) : (
           <ReadingPaneTitle>
-            {renderTokens(answeredQuestion(answered), "question", "text", true)}
+            {renderTokens(ask ? askHeadline(ask.ask) : "", "question", "text", true)}
           </ReadingPaneTitle>
         )}
         {context && (
