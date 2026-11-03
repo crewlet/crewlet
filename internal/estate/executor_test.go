@@ -503,45 +503,77 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 }
 
 // A SEATS-ONLY NODE'S CAPTURE IS RECORDED THROUGH A DATA NODE, and its
-// position is that node's next floor on the executor log.
+// position is that node's next floor on the executor log — and so is a turn's
+// begin.
 //
 // A node without `data` holds no copy and no publisher, and a seat it holds ran
 // its box there: with no route, the session's object is uploaded, nothing
 // names it, and the collector deletes it a day later. The capture runs on the
 // data node under the engine's call whole — its author and the operation the
 // domain derived — and the next read this node sends, on whichever data node
-// answers it, waits to have applied the capture.
+// answers it, waits to have applied the capture. A begin is the record a
+// relaunch reads its turn's own row for, to know whether it holds its base, so
+// the read after it waits for it the same way.
 //
-// Mutation: drop the capture's Observe, or declare executor.session with no
-// domain, and the next read carries no floor.
+// Mutation: drop the capture's or the begin's Observe, or declare
+// executor.session with no domain, and the next read carries no floor.
 func TestASeatsOnlyNodesCaptureIsRecordedThroughADataNode(t *testing.T) {
 	t.Parallel()
-	f := newFleet(t)
-	book := &logbook{}
-	serveExecutor(t, f.start(t), "data-a", book)
-	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-a"} })
-	call := engineCall(executordomain.CaptureOpID(crossedAt, "swe", liveTurn, "launch-1", 1))
+	for name, write := range map[string]struct {
+		call executordomain.Call
+		run  func(ctx context.Context, w ExecutorWrites, call executordomain.Call) (statelog.Result, error)
+	}{
+		"a capture": {
+			call: engineCall(executordomain.CaptureOpID(crossedAt, "swe", liveTurn, "launch-1", 1)),
+			run: func(ctx context.Context, w ExecutorWrites, call executordomain.Call) (statelog.Result, error) {
+				got, err := w.Capture(ctx, call, captureOf(liveTurn))
+				if err == nil && !got.Recorded {
+					return got.Result, fmt.Errorf("the capture answered %+v, unrecorded", got)
+				}
+				return got.Result, err
+			},
+		},
+		"a begin": {
+			call: engineCall(executordomain.BeginOpID(crossedAt, "swe", liveTurn)),
+			run: func(ctx context.Context, w ExecutorWrites, call executordomain.Call) (statelog.Result, error) {
+				got, err := w.Begin(ctx, call, beginOf(liveTurn))
+				if err == nil && !got.Held {
+					return got.Result, fmt.Errorf("the begin answered %+v, holding nothing", got)
+				}
+				return got.Result, err
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			book := &logbook{}
+			serveExecutor(t, f.start(t), "data-a", book)
+			f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-a"} })
 
-	got, err := f.client.ExecutorWrites().Capture(t.Context(), call, captureOf(liveTurn))
-	if err != nil || !got.Recorded || got.Outcome != statelog.OutcomeApplied {
-		t.Fatalf("the capture answered (%+v, %v), want it recorded", got, err)
-	}
-	book.mu.Lock()
-	calls := slices.Clone(book.calls)
-	book.mu.Unlock()
-	if len(calls) != 1 || calls[0] != call {
-		t.Fatalf("the data node ran %+v, want the one capture under the engine's call %+v", calls, call)
-	}
+			got, err := write.run(t.Context(), f.client.ExecutorWrites(), write.call)
+			if err != nil || got.Outcome != statelog.OutcomeApplied {
+				t.Fatalf("%s answered (%+v, %v), want it applied", name, got, err)
+			}
+			book.mu.Lock()
+			calls := slices.Clone(book.calls)
+			book.mu.Unlock()
+			if len(calls) != 1 || calls[0] != write.call {
+				t.Fatalf("the data node ran %+v, want the one write under the engine's call %+v",
+					calls, write.call)
+			}
 
-	if _, err := f.client.ExecutorReads().Session(t.Context(), "swe", liveTurn,
-		statelog.Freshness{Level: statelog.ReadSession}); err != nil {
-		t.Fatalf("the read after the capture: %v", err)
-	}
-	book.mu.Lock()
-	floors := slices.Clone(book.floors)
-	book.mu.Unlock()
-	if !slices.Contains(floors, got.Position) {
-		t.Errorf("the read after the capture waited for %v, want the capture's own %v", floors, got.Position)
+			if _, err := f.client.ExecutorReads().Session(t.Context(), "swe", liveTurn,
+				statelog.Freshness{Level: statelog.ReadSession}); err != nil {
+				t.Fatalf("the read after %s: %v", name, err)
+			}
+			book.mu.Lock()
+			floors := slices.Clone(book.floors)
+			book.mu.Unlock()
+			if !slices.Contains(floors, got.Position) {
+				t.Errorf("the read after %s waited for %v, want its own %v", name, floors, got.Position)
+			}
+		})
 	}
 }
 
