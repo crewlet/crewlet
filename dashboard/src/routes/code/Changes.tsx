@@ -35,8 +35,11 @@
  * lifecycle's last record and the last thing somebody wrote about it, never
  * the home's facts, so a target branch that moved re-dates nothing. `window=`
  * narrows the listing to the changes that moved within the last day, week or
- * month; with nothing else narrowing the walk the engine walks its two
- * indexes of that instant, and the rows come newest move first.
+ * month. Beside every state, or a merged or closed one, and nothing else
+ * narrowing the walk, the engine walks its two indexes of that instant and the
+ * rows come newest move first; beside a live state (the default open, or
+ * draft) it walks that state's changes, which a company keeps few of, and
+ * tests the window on each, so the rows come newest opening first.
  *
  * # Needs a person
  *

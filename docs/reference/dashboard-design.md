@@ -7789,8 +7789,11 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   engine's `needs` (`CHANGE_NEEDS`, held to `code.Needs`): on me, on a review,
   on a fix, on a person. **Moved** is the engine's `window` (`CHANGE_WINDOWS`,
   held to `code.ChangeWindows`): the changes that moved within the last day,
-  week or month; with nothing else narrowing the walk the engine walks its two
-  indexes of that instant and the rows come newest move first. `repo=` is chosen in the bar from the repositories the
+  week or month; beside every state, or a merged or closed one, and nothing
+  else narrowing the walk, the engine walks its two indexes of that instant
+  and the rows come newest move first, while beside a live state (the
+  default open, or draft) the engine walks that state's changes, tests the
+  window on each, and the rows come newest opening first. `repo=` is chosen in the bar from the repositories the
   reader may read; `owner=`, `reviewer=` and `work=` arrive from a link (the
   peek's owner and work item) and are said in the bar with a Clear. **A row's
   readiness is the engine's judgement**, made again on the read that answered

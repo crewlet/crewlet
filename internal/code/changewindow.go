@@ -24,8 +24,8 @@ import (
 // # A window walks the two indexes in step
 //
 // A listing that names a window and nothing an index of who or where leads —
-// no repository, work item, reviewer or need — walks the two instants' indexes
-// together, newest first ([windowWalk]): a page of each, every change taken at
+// no repository, work item, reviewer or need, and no live state — walks the
+// two instants' indexes together, newest first ([windowWalk]): a page of each, every change taken at
 // the later of its two instants and left to the walk of the other index where
 // that one is the later, the two merged by instant and id. A change is so
 // listed once, at its last move. A page is cut where the walk of an index that
@@ -36,7 +36,13 @@ import (
 //
 // A listing that names a window beside what leads another walk tests the
 // window on each row its page read, as it tests every filter its index does not
-// seek (changeread.go).
+// seek (changeread.go), and lists in that walk's order. A LIVE STATE (draft,
+// open) is one of those, the commonest — a screen of changes asks for the open
+// ones until told otherwise — because its index holds the live set alone, where
+// these two hold every change that moved within the window, every merged one
+// among them: in a company that merges a thousand changes a day and keeps five
+// hundred open, a month's window walked here reads some thirty thousand rows to
+// keep the five hundred, which the state's own walk reads ten pages of.
 
 // ChangeWindow is how far back a `changes` listing narrowed to a window
 // reaches: the changes that moved within it, by [ChangeSummary.UpdatedAt].

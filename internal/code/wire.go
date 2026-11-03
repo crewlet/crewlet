@@ -1418,10 +1418,12 @@ type ReadQuery struct {
 	// Window narrows a `changes` listing to the changes that moved within
 	// it ([ChangeWindow], [ChangeSummary.UpdatedAt]), refused on every other
 	// kind. A listing that names nothing else an index leads by — no
-	// repository, work item, reviewer or need — walks the two indexes of
-	// when its changes last moved (changewindow.go), newest move first, and
-	// tests a state and an owner on the rows it read; one that names any of
-	// those walks that one's index and tests the window on each row.
+	// repository, work item, reviewer or need, and no live state — walks the
+	// two indexes of when its changes last moved (changewindow.go), newest
+	// move first, and tests a terminal state and an owner on the rows it
+	// read; one that names any of those walks that one's index, in its order
+	// (a live state's newest opening first), and tests the window on each
+	// row.
 	Window ChangeWindow `json:"window,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
