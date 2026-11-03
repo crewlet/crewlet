@@ -387,8 +387,9 @@ func (s *Surface) ArgsOf(name string, raw map[string]any) toolargs.Args {
 // ([Surface.ArgsOf]), the value [Surface.Admit] records.
 //
 // ONE RULE, called beside the admission by a caller that records the call
-// somewhere the log is later seeded from — a bridged run's row — so the record
-// carries the identity the log counted, whatever it keeps of the arguments.
+// somewhere the log is later seeded from — a bridged run's tool log — so the
+// record carries the identity the log counted, whatever it keeps of the
+// arguments.
 func (s *Surface) DigestOf(name string, raw map[string]any) string {
 	return turnctx.ArgsDigest(s.ArgsOf(name, raw).Map())
 }
