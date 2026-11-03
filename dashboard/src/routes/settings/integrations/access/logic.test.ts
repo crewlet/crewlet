@@ -24,6 +24,7 @@ import {
   availableActions,
   emptyScopeHint,
   handoffOf,
+  rotateHandoffOf,
   joinLevels,
   levelName,
   noToolRemedy,
@@ -305,6 +306,7 @@ describe("a handoff", () => {
       role: { name: "Runner", note: "View all projects and perform low-risk actions on them" },
       current: undefined,
       renew: false,
+      rotating: false,
     });
   });
 
@@ -321,13 +323,26 @@ describe("a handoff", () => {
   });
 
   test("the robot is named only as the engine named it", () => {
-    expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer("create", { named: false })))?.account).toBe(
-      undefined,
-    );
-    // A robot the seat already has is named by what Expo showed.
-    expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer("mint", { named: false })))?.account).toBe(
-      "crewlet-gophrase-pm",
-    );
+    for (const step of ["create", "mint"] as const) {
+      expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer(step, { named: false })))?.account).toBe(
+        undefined,
+      );
+    }
+  });
+
+  // A ROTATE IS A PASTE FOR THE ROBOT THE SEAT ALREADY HAS: a new token, opened
+  // at the paste, with no wait behind it. Every other lane rotates by itself.
+  test("a rotate opens a new token for the robot the seat has, and only on Expo", () => {
+    const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
+    expect(rotateHandoffOf(EXPO_LANE, qa)).toMatchObject({
+      step: "mint",
+      url: undefined,
+      account: "crewlet-gophrase-qa",
+      role: { name: "Developer" },
+      renew: true,
+      rotating: true,
+    });
+    expect(rotateHandoffOf(DATADOG_LANE, sre())).toBeUndefined();
   });
 
   // DELETING AT THE VENDOR IS A WAIT OF ITS OWN, drawn on the row with its

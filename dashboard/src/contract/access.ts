@@ -198,8 +198,6 @@ interface AccessFailure {
   remedy: string;
   actor: AccessActor;
   action_url?: string;
-  /** The account the person makes or acts on at the vendor, by name, where the step has one. */
-  account?: string;
 }
 
 interface AccessSync {

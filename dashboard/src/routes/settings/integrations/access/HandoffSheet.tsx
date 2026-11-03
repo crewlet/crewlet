@@ -4,8 +4,9 @@
  * make its token there, and paste the token here for Crewlet to check and keep.
  *
  * ONE SHEET FOR EVERY HANDOFF. A new agent walks all three steps. A token
- * (its first, or a new one after the vendor refused the old one or a rotate)
- * starts at the token, since the account is already there. A role changed at
+ * (its first, or a new one after the vendor refused the old one) starts at
+ * the token, since the account is already there, and a rotate starts at the
+ * paste, its token step one step back. A role changed at
  * the vendor is one panel with both roles and the way to fix it. What the
  * person does is the engine's to say (the sync's wait, read by [handoffOf]);
  * only the vendor's nouns are this screen's.
@@ -62,8 +63,9 @@ export function HandoffSheet(props: HandoffSheetProps) {
   );
 }
 
-/** Opens the vendor's page for the step, in a new tab, so the sheet stays where it was. */
-function OpenVendor({ lane, url }: { lane: Lane; url: string }) {
+/** Opens the vendor's page for the step, in a new tab, so the sheet stays where it was; nothing where the engine named none. */
+function OpenVendor({ lane, url }: { lane: Lane; url: string | undefined }) {
+  if (!url) return null;
   return (
     <span className="agent-access-actions">
       <ButtonLink size="small" variant="secondary" href={url} external>
@@ -93,8 +95,9 @@ function Walk({
 }: HandoffSheetProps & { words: HandoffWords }) {
   const fresh = handoff.step === "create";
   const ids: StepId[] = fresh ? ["account", "token", "paste"] : ["token", "paste"];
-  const [at, setAt] = useState<StepId>(ids[0]!);
-  const [reached, setReached] = useState<StepId>(ids[0]!);
+  const start: StepId = handoff.rotating ? "paste" : ids[0]!;
+  const [at, setAt] = useState<StepId>(start);
+  const [reached, setReached] = useState<StepId>(start);
   const [token, setToken] = useState("");
   const [refused, setRefused] = useState("");
   const [checking, setChecking] = useState(false);
