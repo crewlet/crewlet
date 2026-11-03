@@ -600,10 +600,12 @@ A duty whose one tick can outlast its lease — the embedding duty's index train
 A duty that decides from a domain's rows — the trim (the evictions and the
 arbitration anchors in the rows of every log that claims identity: the
 tracker's, the knowledge base's, the identity estate's, the artifacts log's,
-the artifact datastore's and the code log's), the embedding duty (the
-tracker's, the knowledge base's and the vectors' rows), the object collector
-(the tracker's, the code log's and the artifacts log's, whose rows name the
-objects it collects) and the code-retention duty (the code log's, whose rows
+the artifact datastore's, the Dashboard Assistant's, the chat's, the executor
+log's and the code log's), the embedding duty (the tracker's, the knowledge
+base's and the vectors' rows), the object collector (the tracker's, the code
+log's, the artifacts log's, the Dashboard Assistant's and the executor log's,
+whose rows name the objects it collects: a seat's sealed executor session among
+them) and the code-retention duty (the code log's, whose rows
 say which repositories are due a purge) — is declined by a node whose copy of
 any of them is out of service: it does not claim it, it gives the duty's lease back if it
 holds it, and a node whose copies serve takes the duty at its own next tick
