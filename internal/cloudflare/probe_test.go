@@ -69,12 +69,15 @@ func TestTheProbeNamesWhatIsWrong(t *testing.T) {
 		{"a group Cloudflare no longer lists", func(f *fakeCloudflare) {
 			f.groups = slices.DeleteFunc(f.groups, func(g fakeGroup) bool { return g.Name == "DNS Read" })
 		}, typed, setup.VerifyRefused, "DNS Read"},
-		{"a group the token does not hold", func(f *fakeCloudflare) {
-			own := f.provisionerOwn[0]
-			own.PermissionGroups = slices.DeleteFunc(slices.Clone(own.PermissionGroups),
-				func(g cloudflare.GroupRef) bool { return g.ID == groupID("Cache Purge") })
-			f.provisionerOwn = []cloudflare.Policy{own}
-		}, typed, setup.VerifyRefused, "missing Cache Purge: Purge"},
+		// A GROUP A HIGHER LEVEL GRANTS leaves that level unavailable and the
+		// token working; one the default level or the token itself needs
+		// leaves no agent anything.
+		{"a group only higher levels grant", withoutHeld("Cache Purge"), typed, setup.VerifyWorks,
+			"The Operate level is unavailable until the provisioner token holds Cache Purge: Purge"},
+		{"a group the default level grants", withoutHeld("DNS Read"), typed, setup.VerifyRefused,
+			"no agent can be given a level yet. The Read level is unavailable until the provisioner token holds DNS: Read"},
+		{"a group the token needs itself", withoutHeld("Account Settings Read"), typed, setup.VerifyRefused,
+			"missing Account Settings: Read, which Crewlet needs to manage the agents' tokens"},
 		{"a zone the account lacks", func(f *fakeCloudflare) {
 			f.zones = slices.DeleteFunc(f.zones, func(z cloudflare.Zone) bool { return z.Name == zoneExampleName })
 		}, typed, setup.VerifyRefused, `no zone named "example.com"`},
@@ -142,5 +145,15 @@ func TestTheFormIsTheDocumentsAndTheProbes(t *testing.T) {
 		if r.Present {
 			t.Errorf("%s reads present on a company with no block", r.Field)
 		}
+	}
+}
+
+// withoutHeld is a provisioner that holds every group but name.
+func withoutHeld(name string) func(*fakeCloudflare) {
+	return func(f *fakeCloudflare) {
+		own := f.provisionerOwn[0]
+		own.PermissionGroups = slices.DeleteFunc(slices.Clone(own.PermissionGroups),
+			func(g cloudflare.GroupRef) bool { return g.ID == groupID(name) })
+		f.provisionerOwn = []cloudflare.Policy{own}
 	}
 }

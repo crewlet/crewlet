@@ -301,6 +301,41 @@ func TestAnUnresolvableLevelIsRefusedForTheSeat(t *testing.T) {
 	}
 }
 
+// A LEVEL THE PROVISIONER CANNOT GRANT is refused for the seat on it with what
+// to add, and nothing is asked of Cloudflare; the offer carries the same
+// reason on that level alone. Mutation: drop the check from the grant, and
+// the seat's token is minted.
+func TestALevelTheProvisionerCannotGrantIsRefusedAndOfferedAsUnavailable(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, config.CloudflareLevelConfigure)
+	w.f.set(withoutHeld("Zone Settings Write"))
+	const reason = "The Configure level is unavailable until the provisioner token holds Zone Settings: Edit"
+	report := w.sync()
+	if len(report.Findings) != 1 || report.Findings[0].Kind != integration.FindingIdentityFailed ||
+		!strings.Contains(report.Findings[0].Detail, reason) ||
+		!strings.Contains(report.Findings[0].Remedy, "add them") {
+		t.Fatalf("findings = %+v, want the seat refused with what to add", report.Findings)
+	}
+	if len(w.f.wrote()) != 0 {
+		t.Errorf("a level the provisioner cannot grant wrote %v", w.f.wrote())
+	}
+
+	session, err := w.vendor.Open(t.Context(), seataccess.OpenInput{Config: w.company,
+		Env: config.NewResolver(config.MapSource{"CF_TOKEN": provisioner})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer, err := session.Options(t.Context(), seataccess.LaneCloudflare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range offer.Levels {
+		if want := map[string]string{config.CloudflareLevelConfigure: reason}[l.ID]; l.Unavailable != want {
+			t.Errorf("level %s is offered as unavailable %q, want %q", l.ID, l.Unavailable, want)
+		}
+	}
+}
+
 // A TOKEN SOMEBODY DISABLED AT CLOUDFLARE STAYS OFF until a person asks (D3),
 // and turning it back on keeps the value it holds.
 func TestAHandDisabledTokenWaitsForAPerson(t *testing.T) {
