@@ -1578,12 +1578,22 @@ const (
 	// its access blocks) took it from 5437.3 KiB to 5438.6 KiB (+1.3 KiB,
 	// 1300 bytes): the integrations model chunk +1.0 KiB, the catalogue chunk
 	// +0.2 KiB and the settings chunk 72 bytes. 5439 KiB.
+	// A session's row saying whether, and where, a relaunch would continue it
+	// (the sentence under its account for a session continued in any box,
+	// only in the box its run parked in, not at all, or not decidable now,
+	// keyed by the engine's set of places a relaunch continues a session in,
+	// SessionContinuesIn, so a place the engine adds is a typecheck failure in
+	// the view) took it from 5438.6 KiB to 5439.3 KiB (+0.7 KiB, 760 bytes),
+	// all of it the agents chunk the view loads in (+281 bytes gzipped): 339
+	// bytes past 5439 KiB. The initial load did not grow. 5440 KiB.
 	// The Expo integration (its catalogue entry, story and Agents tab words,
-	// with its box tool remedy, and @crewlethq 0.90.0 for the Expo mark) took
-	// it from 5438.6 KiB to 5440.8 KiB (+2.2 KiB, 2228 bytes): the
-	// integrations model chunk +1.3 KiB, the icons chunk +0.6 KiB, the
-	// catalogue chunk +0.2 KiB and the settings chunk 67 bytes. 5441 KiB.
-	treeBudget = 5<<20 + 321<<10
+	// with its box tool remedy, the org builder's Expo facts, and @crewlethq
+	// 0.90.0 for the Expo mark) took it from 5439.3 KiB to 5441.5 KiB (+2.2
+	// KiB, 2228 bytes): the integrations model chunk +1.3 KiB, the icons chunk
+	// +0.6 KiB, the catalogue chunk +0.2 KiB, the settings chunk 67 bytes and
+	// the org builder's nodes chunk 12 bytes. The initial load did not grow.
+	// 5442 KiB.
+	treeBudget = 5<<20 + 322<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

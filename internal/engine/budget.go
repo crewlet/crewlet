@@ -781,8 +781,8 @@ func (m *meter) refusing(ctx context.Context) (refusal, bool, error) {
 }
 
 // starved reports the capped window of either scope that leaves the seat less
-// room than an executor launch needs (the basis's floor), when none is
-// refusing outright — the window a launch's floor refusal waits on.
+// room than floor, the tokens an executor launch needs ([launchFloor]), when
+// none is refusing outright — the window a launch's floor refusal waits on.
 //
 // THE SAME WINDOWS THE LAUNCH'S FLOOR READS ([meter.Remaining]): the launch is
 // refused when the tightest capped window of either scope has less than the
@@ -792,8 +792,8 @@ func (m *meter) refusing(ctx context.Context) (refusal, bool, error) {
 //
 // No floor is no starvation, and a basis that caps nothing has no window to be
 // short in. THREE-VALUED for the reason refusing is.
-func (m *meter) starved(ctx context.Context) (refusal, bool, error) {
-	if m.basis.floor <= 0 {
+func (m *meter) starved(ctx context.Context, floor int) (refusal, bool, error) {
+	if floor <= 0 {
 		return refusal{}, false, nil
 	}
 	windows := m.windows()
@@ -815,7 +815,7 @@ func (m *meter) starved(ctx context.Context) (refusal, bool, error) {
 		}
 		for p, ceiling := range scope.caps {
 			slot := usage.In(p)
-			if ceiling-slot.Used >= m.basis.floor {
+			if ceiling-slot.Used >= floor {
 				continue
 			}
 			if !found || coord.Outlasts(slot.Window, out.Window) {

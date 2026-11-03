@@ -467,8 +467,8 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	if n.engine.SeatHeldBySandbox("swe") {
 		t.Fatal("a seat waiting on a person cannot receive their answer while parked")
 	}
-	// The box is held paused for an exact resume, with its TTL now ticking
-	// for the reaper.
+	// The box is held paused, its working tree kept for the answer's
+	// relaunch, with its TTL now ticking for the reaper.
 	if parked.SandboxID == "" {
 		t.Fatal("the box was torn down, so the answer cannot resume the checkout")
 	}

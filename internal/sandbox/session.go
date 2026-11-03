@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -260,12 +261,44 @@ type SessionCapture struct {
 	// is not final.
 	Final bool `json:"final,omitempty"`
 
-	// BridgeSeq is the last bridged call ([BridgeCall.Seq]) the row held,
-	// and NoteCursor the last note read ([RunSteer.Reads]), when the archive
-	// was packed: what the session it holds had been answered and told, and
-	// so where what came after it begins for a launch that continues it.
-	BridgeSeq  int `json:"bridge_seq,omitempty"`
+	// BridgeSeq is the highest place of a bridged call ([BridgeCall.Seq]) the
+	// row held when the archive was packed, and BridgeOpen the places at or
+	// below it the row held NO call at then ([openPlaces]): a call the
+	// bridge numbers as it arrives is recorded only once its tool answers, so
+	// a place below the highest can still be a call in flight — one whose
+	// outcome the session may never have been handed. Together they say
+	// which of the round's calls the session had been answered: a launch
+	// that continues it is told every call past BridgeSeq or at a place
+	// BridgeOpen names, with its outcome.
+	BridgeSeq  int   `json:"bridge_seq,omitempty"`
+	BridgeOpen []int `json:"bridge_open,omitempty"`
+
+	// NoteCursor is the last note read ([RunSteer.Reads]) the session holds
+	// ([notesHeld]): every note read when the archive was packed, but for a
+	// session its harness was cut off in, none its job took at its last take
+	// of them, which may never have reached it. A launch that continues the
+	// session hands it every note read after.
 	NoteCursor int `json:"note_cursor,omitempty"`
+
+	// Interrupted says the session's harness was CUT OFF rather than exiting
+	// cleanly: the archive was packed by the engine ([SessionTake.Pack]) — a
+	// job still working, one cut off at its turn's cap, one lost with its
+	// engine, one that died before its script could pack — or by the run's
+	// script after a harness that exited otherwise than cleanly, killed by a
+	// signal or its memory limit ([Result.HarnessCutOff]). Its transcript may
+	// end mid-record, its last tool call with no result. A launch that
+	// continues it restores the archive over the copy in its box
+	// ([CarriedSession.Replace]) and tells the run its transcript may end
+	// mid-call.
+	Interrupted bool `json:"interrupted,omitempty"`
+
+	// ContextTokens is the whole input of the last request the session's
+	// harness sent its model, cache included, as its own transcript recorded
+	// it ([TakenSession.Context]): what a launch that continues the session
+	// sends again before it reads a word of its brief, and so what that
+	// launch's budget floor is made of. Zero where the transcript recorded
+	// none this build reads.
+	ContextTokens int64 `json:"context_tokens,omitempty"`
 
 	// At is when it was taken, on this node's clock.
 	At time.Time `json:"at"`
@@ -311,25 +344,46 @@ func (c SessionCapture) samePlace(o SessionCapture) bool {
 	return c.LaunchSeq == o.LaunchSeq && c.CaptureSeq == o.CaptureSeq
 }
 
+// sameTake reports whether c and o are stamps of ONE TAKE of a capture: its
+// place, the job it was taken from and the instant the take stamped it at
+// ([SessionCapture.At]), which every stamp a take makes carries — its
+// reservation, its outcome, and its record's answer asked again by the turn's
+// end. Two reads of one job at once — a stop's and a collection's — reserve
+// the same place each at an instant of its own.
+func (c SessionCapture) sameTake(o SessionCapture) bool {
+	return c.samePlace(o) && c.Launch == o.Launch && c.At.Equal(o.At)
+}
+
+// holdsStamp reports whether run's row already holds capture as it is: the
+// same take's stamp at the newest place, in the same state — what a write the
+// store applied and answered too late for its asker to hear leaves there.
+func holdsStamp(run PendingRun, capture SessionCapture) bool {
+	newest := run.Capture
+	return newest != nil && capture.sameTake(*newest) && newest.State == capture.State
+}
+
 // stampOnto stamps capture on run as [PendingStore.StampCapture] does, and
-// reports whether it took: the row's own rule, which the store applies to the
-// row as it stands, and an ending applies to its copy where the row cannot be
-// read back after a stamp it made ([Coordinator.publishEnd]).
+// reports whether it changed the row: the row's own rule, which the store
+// applies to the row as it stands, and an ending applies to its copy where the
+// row cannot be read back after a stamp it made ([Coordinator.publishEnd]).
 //
 // A CAPTURE PLACED AFTER THE ROW'S NEWEST IS TAKEN, whatever its state, and one
-// at the newest's own place only where it moves that capture on — begun to an
-// outcome, unresolved to an answer — so a late write never takes an answer
-// back; anything older is refused. And a capture that LANDED is the turn's
-// kept one wherever it is newer than the kept one — an older capture's answer
-// that comes after a newer one began included — while a place the row holds
-// refused is never kept, whatever a late write says.
+// at the newest's own place only where it is the SAME TAKE'S ([sameTake]) and
+// moves that capture on — begun to an outcome, unresolved to an answer — so a
+// late write never takes an answer back, and no read settles a place another
+// read reserved: a take refused before it held a place, say, which stamps the
+// place after the newest it read, finds it reserved since by a read that is
+// keeping the session. Anything older is refused. And a capture that LANDED is
+// the turn's kept one wherever it is newer than the kept one — an older
+// capture's answer that comes after a newer one began included — while a place
+// the row holds refused is never kept, whatever a late write says.
 func stampOnto(run *PendingRun, capture SessionCapture) bool {
 	took := false
 	newest := run.Capture
 	switch {
 	case newest == nil || capture.newerThan(*newest):
 		took = true
-	case capture.samePlace(*newest):
+	case capture.sameTake(*newest):
 		took = newest.State.advancesTo(capture.State)
 	}
 	if took {
@@ -442,8 +496,9 @@ var SessionCaptureBudget = SessionTakeBudget + SessionKeepBudget
 // saying so, and the turn's next launch starts fresh.
 const sessionKeepDrain = discardGrace
 
-// captureWaitTick spaces the reads of a run's row an ending makes while a
-// capture of its turn is still being kept ([Coordinator.awaitCapture]).
+// captureWaitTick spaces the reads of a run's row an ending, or a relaunch,
+// makes while a capture of its turn is still being kept
+// ([Coordinator.awaitCapture]).
 const captureWaitTick = 2 * time.Second
 
 // capturePoint is where in a run's life a capture is taken.
@@ -455,20 +510,88 @@ type capturePoint struct {
 	pack bool
 	// final says the job had ended ([SessionCapture.Final]).
 	final bool
+	// cutOff says the session's harness did not exit cleanly
+	// ([SessionCapture.Interrupted]).
+	cutOff bool
 }
 
 // readCapture is the capture a box read takes: the archive the run's script
 // packed where its job ended and packed one, and one packed now otherwise — a
 // job still working (one its turn's cap ended, one a person stopped), which is
 // not final, or one that ended without packing (a crash, a loss with its box
-// left), which is.
+// left), which is. CUT OFF wherever the engine packs it, and where the script
+// packed it after a harness that did not exit cleanly ([Result.HarnessCutOff]):
+// a harness killed while its wrapper lived on is packed by the script all the
+// same, its transcript ending wherever the kill found it.
 func readCapture(read BoxRead, result Result, running bool) capturePoint {
-	return capturePoint{name: string(read), pack: running || result.Captured == nil, final: !running}
+	pack := running || result.Captured == nil
+	return capturePoint{name: string(read), pack: pack, final: !running, cutOff: pack || result.HarnessCutOff}
 }
 
 // lossCapture is a lost run's box, read before its ending reclaims it: its job
-// went with its host, so what its box holds is final.
-var lossCapture = capturePoint{name: "loss", pack: true, final: true}
+// went with its host, so what its box holds is final, and its harness was cut
+// off.
+var lossCapture = capturePoint{name: "loss", pack: true, final: true, cutOff: true}
+
+// maxOpenPlaces bounds [SessionCapture.BridgeOpen]: the most places below a
+// capture's highest call it names, the highest of them.
+//
+// SIXTY-FOUR, from what can be open at once: a call is in flight from its
+// arrival to its tool's answer, and a harness has at most its model's parallel
+// calls and its subagents' in flight together — a handful, a few dozen at the
+// most. The rest of what a row lacks is older: places the row's bound dropped
+// from the middle of a long round ([MaxBridgeCalls]), whose calls were answered
+// long before, and calls refused before they ran, which no record holds. A
+// place among those named costs the stamp a number and the continuation
+// nothing, since no call is recorded at it.
+const maxOpenPlaces = 64
+
+// openPlaces is the places at or below last that run's row holds no call at —
+// calls in flight when its job's session was packed, and places that never
+// held one — the highest [maxOpenPlaces] of them, ascending
+// ([SessionCapture.BridgeOpen]).
+func openPlaces(run PendingRun, last int) []int {
+	held := make(map[int]bool, len(run.BridgeCalls))
+	for _, call := range run.BridgeCalls {
+		held[call.Seq] = true
+	}
+	var open []int
+	for seq := last; seq > 0 && len(open) < maxOpenPlaces; seq-- {
+		if !held[seq] {
+			open = append(open, seq)
+		}
+	}
+	slices.Reverse(open)
+	return open
+}
+
+// notesHeld is the last note read ([RunSteer.Reads]) a session packed from
+// run's job — launch — holds ([SessionCapture.NoteCursor]): every one read,
+// where its harness exited cleanly; and where it was cut off, every one read
+// before the job's LAST TAKE of its notes, whose notes may never have reached
+// it. A take is recorded read in the write that answers the harness's ask,
+// before the answer is handed back (internal/engine's note hooks), so a
+// harness cut off between the two never had them; a take before the last was
+// answered, since the harness went on to ask again. The notes the job's brief
+// read are the brief's, which the session holds from its first message.
+func notesHeld(run PendingRun, launch string, cutOff bool) int {
+	held := run.Steer.Reads
+	if !cutOff {
+		return held
+	}
+	last := 0
+	for _, note := range run.Steer.Notes {
+		read := note.Read
+		if read != nil && read.Launch == launch && read.Boundary != string(types.SteerBoundaryBrief) &&
+			read.Order > last {
+			last = read.Order
+		}
+	}
+	if last > 0 {
+		held = min(held, last-1)
+	}
+	return held
+}
 
 // spooledCapture is a capture taken out of its box and spooled, sealed, on this
 // node's disk: its upload and its record are what is left ([Coordinator.keepCapture]).
@@ -493,7 +616,11 @@ const spoolPrefix = "crewlet-session-"
 //
 // BEST EFFORT AND BOUNDED ([Coordinator.takeContext]): what the read it is part
 // of does is never the capture's to decide, so every failure is stamped and
-// logged and the read goes on.
+// logged and the read goes on — a place the store was asked to reserve and did
+// not answer within the take's time included, which is stamped refused on the
+// row as it stands when the store writes that, whether the store took the
+// reservation before it or would after ([Coordinator.abandonPlace]). Only a row
+// the store never lets the read write, past every ask, is left as it stands.
 func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
 	at capturePoint) (*spooledCapture, *SessionKept) {
 
@@ -557,10 +684,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, nil
 	}
 	defer func() { _ = taken.Body.Close() }()
+	last := current.LastBridgeSeq()
 	stamp := SessionCapture{
 		LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current), Launch: run.LaunchID,
-		State: CaptureBegun, Final: at.final,
-		BridgeSeq: current.LastBridgeSeq(), NoteCursor: current.Steer.Reads, At: c.now().UTC(),
+		State: CaptureBegun, Final: at.final, Interrupted: at.cutOff,
+		BridgeSeq: last, BridgeOpen: openPlaces(current, last),
+		NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC(),
 		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
 		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
@@ -568,24 +697,36 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}
 	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME, never past it: a
 	// reservation answered after the take's deadline reserves a place for a
-	// take that can no longer spool, and leaves the stamp of what came of it
-	// none of the room it is kept before by ([Coordinator.takeContext]).
+	// take that can no longer spool, and leaves the outcome stamp none of the
+	// room it is kept before by ([Coordinator.takeContext]).
 	reserveBy, _ := ctx.Deadline()
-	stampCtx, stampCancel := stampContext(ctx, reserveBy)
-	took, stampErr := c.pending.StampCapture(stampCtx, run.TurnID, stamp)
-	stampCancel()
-	if stampErr != nil || !took {
+	took, stampErr := c.reserveCapture(ctx, reserveBy, run.TurnID, stamp)
+	switch {
+	case stampErr != nil:
+		// UNANSWERED WITHIN THE TAKE'S TIME, which a store may have taken all
+		// the same — a write applied and answered too late, or applied once
+		// its asker had given up — so the place is settled in the room the
+		// read leaves the outcome stamp ([Coordinator.abandonPlace]).
+		return nil, c.abandonPlace(ctx, by, run, stamp, at, stampErr)
+	case !took:
 		// ANOTHER READ OF THE SAME RUN TOOK THIS PLACE FIRST — a stop's and a
-		// collection's, at once — and keeps the session itself; or the row
-		// could not be written, which leaves nowhere to say what came of it.
+		// collection's, at once — and keeps the session itself. Never this
+		// take's own earlier ask, answered too late: the store answers a
+		// stamp the row already holds as taken ([PendingStore.StampCapture]).
 		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
-			"capture_seq", stamp.CaptureSeq, "error", fmt.Sprint(stampErr),
-			"detail", "the capture's place could not be reserved on the run's row")
+			"capture_seq", stamp.CaptureSeq,
+			"detail", "another read of the run reserved the capture's place first, and keeps the session")
 		return nil, nil
 	}
 	spooled, err := c.spool(ctx, run, stamp, taken)
 	if err != nil {
 		return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, takeRefusal(ctx, err))
+	}
+	// WHAT THE SESSION'S LAST REQUEST CARRIED, read off the archive as it was
+	// spooled, for the floor of the launch that continues it: stamped with the
+	// capture's outcome, which is the stamp that launch reads.
+	if taken.Context != nil {
+		spooled.stamp.ContextTokens = taken.Context()
 	}
 	digestCtx, digestCancel := stampContext(ctx, by)
 	keepErr := taken.Keep(digestCtx)
@@ -606,11 +747,11 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 // takeContext is the context a take runs under, and the instant by which its
 // own records must be made: its own budget ([SessionTakeBudget]), and never
 // past where the read it is part of must stop to leave those records their
-// room — the stamp of what came of it, the digest it leaves in the box
-// ([stampContext]) — and after them its pause and its answer theirs
-// ([discardGrace] each). So nothing a take does, cut short or not, costs the
-// box its pause, which is what stops a job its turn's cap ended. by is zero
-// where the read has no deadline.
+// room — the stamp of what came of it ([Coordinator.settleContext]), the
+// digest it leaves in the box ([stampContext]) — and after them its pause and
+// its answer theirs ([discardGrace] each). So nothing a take does, cut short or
+// not, costs the box its pause, which is what stops a job its turn's cap ended.
+// by is zero where the read has no deadline.
 func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Time) {
 	deadline := time.Now().Add(SessionTakeBudget)
 	var by time.Time
@@ -624,14 +765,13 @@ func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context
 	return take, cancel, by
 }
 
-// stampContext is the context one of a take's own records is made under —
-// a stamp of the capture, the digest of its archive left in the box: one of
-// its own ([detached]), since the take's budget may be what ended the take and
-// the stamp is what says so, and never past by, where the read the take is
-// part of needs the rest of its time for the box's pause
-// ([Coordinator.takeContext]). The reservation of a capture's place is made
-// by the take's own deadline instead, so the stamp of what came of it keeps
-// its room. by zero bounds it by its own grace alone.
+// stampContext is the context the one record a take makes only once is made
+// under — the digest of its archive, left in the box: one of its own
+// ([detached]), since the take's budget may be what ended the take, and never
+// past by, where the read the take is part of needs the rest of its time for
+// the box's pause ([Coordinator.takeContext]). by zero bounds it by its own
+// grace alone. A stamp of the capture is asked again, bounded the same way
+// ([Coordinator.settleContext]).
 func stampContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
 	stamp, cancel := detached(ctx)
 	if by.IsZero() {
@@ -1000,39 +1140,39 @@ func loginValuesOf(raw []byte) []string {
 // launch's latest attempt failed rather than reading an older capture as its
 // latest.
 //
-// UNDER A CONTEXT OF ITS OWN, by by at the latest ([stampContext]): the take's
-// budget may be what ended it, and the stamp is what says so.
+// AT THE PLACE AFTER THE NEWEST THE TAKE READ, which another read of the same
+// job may have reserved since — a stop's beside a collection's — and is
+// keeping: there the stamp, another take's, is not taken ([stampOnto]), and
+// that read's capture stands.
+//
+// UNDER A CONTEXT OF ITS OWN, by by at the latest, asked again while the store
+// does not answer ([Coordinator.stampSettled]): the take's budget may be what
+// ended it, and the stamp is what says so.
 func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, current PendingRun,
 	at capturePoint, why string) *SessionKept {
 
+	last := current.LastBridgeSeq()
 	stamp := SessionCapture{LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current),
 		Launch: run.LaunchID, State: CaptureRefused, Reason: redact.Secrets(why), Final: at.final,
-		BridgeSeq: current.LastBridgeSeq(), NoteCursor: current.Steer.Reads, At: c.now().UTC()}
+		Interrupted: at.cutOff, BridgeSeq: last, BridgeOpen: openPlaces(current, last),
+		NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC()}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason)
-	stampCtx, cancel := stampContext(ctx, by)
-	defer cancel()
-	if _, err := c.pending.StampCapture(stampCtx, run.TurnID, stamp); err != nil {
-		log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", run.TurnID, "error", err.Error())
-	}
+	c.stampSettled(ctx, by, run.TurnID, stamp)
 	return stamp.kept()
 }
 
 // finishCapture stamps how a capture came out and reports it.
 //
-// UNDER A CONTEXT OF ITS OWN, by by at the latest where a take is still
-// stamping it ([stampContext]; zero off the read): the capture's budget may be
+// UNDER A CONTEXT OF ITS OWN, asked again while the store does not answer
+// within a record's budget, and never past by where a take is still stamping it
+// ([Coordinator.settleContext]; zero off the read): the capture's budget may be
 // what ended it, and the stamp is what says so.
 func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run PendingRun, stamp SessionCapture,
 	state CaptureState, why string) *SessionKept {
 
 	stamp.State, stamp.Reason = state, redact.Secrets(why)
-	stampCtx, cancel := stampContext(ctx, by)
-	defer cancel()
-	if _, err := c.pending.StampCapture(stampCtx, run.TurnID, stamp); err != nil {
-		log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", run.TurnID,
-			"capture_seq", stamp.CaptureSeq, "state", string(state), "error", err.Error())
-	}
+	c.stampSettled(ctx, by, run.TurnID, stamp)
 	switch state {
 	case CaptureLanded:
 		log.InfoContext(ctx, "executor_session_kept", "turn_id", run.TurnID, "agent", run.AgentHandle,
@@ -1044,6 +1184,137 @@ func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run Pendi
 			"detail", stamp.Reason)
 	}
 	return stamp.kept()
+}
+
+// reserveCapture reserves a capture's place on its run's row — its stamp,
+// begun ([PendingStore.StampCapture]) — asked again while the coordination
+// store does not answer ([Coordinator.askStamp]), never past by — the take's
+// own deadline, where a take reserves it — as [Coordinator.stampSettled] asks
+// an outcome: false, with no error, where another read of the same job took the
+// place first.
+//
+// ASKED AGAIN SO A READ LEAVES A STAMP OF WHAT IT TOOK wherever the store lets
+// it: a turn's newest capture is known only by its stamp, and its end tells the
+// log the turn's newest capture where it was not kept ([unkeptOf]). A place the
+// store would not take at all is a capture never made, which the take abandons.
+// AND AN EARLIER ASK THE STORE APPLIED, its answer lost, is this take's
+// reservation: asked again, the store answers a stamp the row already holds as
+// taken, so the take goes on under its own place rather than reading it as
+// another read's and walking away from it, begun.
+func (c *Coordinator) reserveCapture(ctx context.Context, by time.Time, turnID string,
+	stamp SessionCapture) (bool, error) {
+
+	took, _, err := c.askStamp(ctx, by, turnID, stamp)
+	return took, err
+}
+
+// abandonPlace settles the place a take asked to reserve and was never answered
+// within its own time ([Coordinator.reserveCapture]). A store that applied the
+// reservation and answered too late — or that applies it once its asker has
+// given up, its write already on its way — leaves the place begun on the run's
+// row, read as a keep still under way for as long as a capture can take
+// ([captureInFlight]): the turn's end waits on it, and a relaunch reads it as
+// one it cannot continue, with nobody left to settle it.
+//
+// ONE STAMP, DECIDED ON THE ROW AS IT STANDS when the store writes it — the
+// place refused, as THIS take stamped it, at its instant: taken where the row
+// holds the take's own begun stamp, which it advances, and where the row holds
+// nothing at that place yet, which a reservation still on its way finds
+// answered — refused as made against a row that has moved since, or, asked
+// again, taking nothing of a place that has its answer ([stampOnto]). Never a
+// read of the row and a decision off it: a reservation landing between the two
+// was left begun. A place another read reserved, or a newer one, is left as it
+// stands, never settled for a take that never held it.
+//
+// ASKED AGAIN WHILE THE STORE DOES NOT ANSWER, within what the read leaves the
+// outcome stamp and never past by ([Coordinator.takeContext]): a reservation
+// is answered late by a store having a bad moment — a stream's leader stepping
+// down after it took the write — which answers nothing else during it either.
+func (c *Coordinator) abandonPlace(ctx context.Context, by time.Time, run PendingRun, stamp SessionCapture,
+	at capturePoint, cause error) *SessionKept {
+
+	refused := stamp
+	refused.State = CaptureRefused
+	refused.Reason = redact.Secrets(fmt.Sprintf("the take's time ran out before the store answered the "+
+		"reservation of its place on the run's row, so nothing was taken under it: %v", cause))
+	took, _, err := c.askStamp(ctx, by, run.TurnID, refused)
+	if took {
+		log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "agent", run.AgentHandle,
+			"launch_seq", refused.LaunchSeq, "capture_seq", refused.CaptureSeq,
+			"state", string(CaptureRefused), "detail", refused.Reason)
+		return refused.kept()
+	}
+	detail := "another read of the run holds the capture's place, or a newer one, and keeps the session"
+	if err != nil {
+		detail = "the capture's place could not be settled on the run's row within the read's time; a " +
+			"reservation the store took stands begun until it ages out"
+	}
+	log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
+		"capture_seq", stamp.CaptureSeq, "error", errors.Join(cause, err).Error(), "detail", detail)
+	return nil
+}
+
+// stampSettled stamps a capture's outcome on its run's row, asked again while
+// the coordination store does not answer ([Coordinator.askStamp]), under a
+// context of its own, which outlives the caller's: the capture's budget may be
+// what ended it. Never past by, where a take is still stamping it
+// ([Coordinator.settleContext]).
+//
+// ASKED AGAIN BECAUSE A STAMP LEFT BEGUN IS READ AS A KEEP STILL UNDER WAY for
+// as long as a capture can take ([SessionCaptureBudget], twenty minutes and
+// more): the turn's end waits that long on it, and a relaunch reads a capture
+// that settled as one it cannot continue. Once the record's budget is spent
+// the store's outage is its own alarm's, and the stamp ages out as never
+// finished.
+func (c *Coordinator) stampSettled(ctx context.Context, by time.Time, turnID string, stamp SessionCapture) {
+	if _, attempts, err := c.askStamp(ctx, by, turnID, stamp); err != nil {
+		log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", turnID,
+			"capture_seq", stamp.CaptureSeq, "state", string(stamp.State), "attempts", attempts,
+			"error", err.Error())
+	}
+}
+
+// askStamp stamps a capture on its run's row ([PendingStore.StampCapture]),
+// asked again while the coordination store does not answer, spaced by a
+// doubling wait, within one record's budget ([sessionRecordBudget]) and under a
+// context of its own, never past by ([Coordinator.settleContext]): whether the
+// row took it, how many times it was asked, and the store's last error where it
+// never answered — the one way of asking every stamp of a capture takes.
+func (c *Coordinator) askStamp(ctx context.Context, by time.Time, turnID string,
+	stamp SessionCapture) (bool, int, error) {
+
+	stampCtx, cancel := c.settleContext(ctx, by)
+	defer cancel()
+	for attempt := 1; ; attempt++ {
+		took, err := c.pending.StampCapture(stampCtx, turnID, stamp)
+		if err == nil {
+			return took, attempt, nil
+		}
+		wait := time.NewTimer(backoff.Doubling(attempt, c.sessionRetry, sessionRetryCeiling))
+		select {
+		case <-stampCtx.Done():
+			wait.Stop()
+			return false, attempt, err
+		case <-wait.C:
+		}
+	}
+}
+
+// settleContext is the context a stamp asked again is made under: one of its
+// own, which outlives the caller's, within one record's budget — and never past
+// by, where the read a take is part of needs the rest of its time for the box's
+// pause, as [stampContext] bounds a take's single record. by zero, a stamp made
+// off the read, is bounded by the record's budget alone.
+func (c *Coordinator) settleContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
+	settle, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.recordBudget)
+	if by.IsZero() {
+		return settle, cancel
+	}
+	bounded, cancelBounded := context.WithDeadline(settle, by)
+	return bounded, func() {
+		cancelBounded()
+		cancel()
+	}
 }
 
 // uploadRefusal is why an upload of a session was refused, in the words its
@@ -1158,12 +1429,7 @@ func (c *Coordinator) settleCapture(ctx context.Context, run PendingRun, last Se
 		last.State, last.Reason = c.recordCapture(ctx, run.AgentHandle, run.TurnID, run.ConversationKey,
 			run.WorkKey, last)
 	}
-	stampCtx, cancel := detached(ctx)
-	defer cancel()
-	if _, err := c.pending.StampCapture(stampCtx, run.TurnID, last); err != nil {
-		log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", run.TurnID,
-			"capture_seq", last.CaptureSeq, "error", err.Error())
-	}
+	c.stampSettled(ctx, time.Time{}, run.TurnID, last)
 	return last
 }
 
@@ -1177,16 +1443,21 @@ func captureInFlight(run PendingRun, now time.Time) bool {
 }
 
 // awaitCapture is run's row once no capture of its turn is in flight
-// ([captureInFlight]) — read again every [captureWaitTick], for as long as the
-// capture's budget allows — and whether it is still there; or why the wait
-// could not say: ctx ended first, or the row could not be read when the wait
-// ran out.
+// ([captureInFlight]) — read again every [captureWaitTick], for at most within
+// — and whether it is still there; or why the wait could not say: ctx ended
+// first, or the row could not be read when the wait ran out.
 //
-// WHY AN END WAITS: the end tombstones its turn, and a capture whose record
-// lands after it is refused, so ended first, the turn's last session would be
-// lost to the next turn. A keep is made off the read that took it, on the node
-// whose host the box is on, which may be another node; the row is what both
-// read.
+// WHY AN END WAITS, for as long as a capture can take ([SessionCaptureBudget]):
+// the end tombstones its turn, and a capture whose record lands after it is
+// refused, so ended first, the turn's last session would be lost to the next
+// turn. A keep is made off the read that took it, on the node whose host the
+// box is on, which may be another node; the row is what both read. An end
+// waits off every frame somebody waits on (its ending's own retry).
+//
+// A RELAUNCH WAITS FAR LESS ([relaunchCaptureWait]), on the frame that
+// relaunches: see restore.go. Its wait running out on a row it did read leaves
+// the capture in flight there, which the relaunch reads as one it does not
+// wait out.
 //
 // A READ THAT FAILS IS NO ANSWER, and the wait goes on: the capture is still
 // begun on the last row this read, and nothing says it has settled. The wait
@@ -1196,15 +1467,18 @@ func captureInFlight(run PendingRun, now time.Time) bool {
 // was not. An end is never recorded from a row the wait could not read: once
 // the capture's own budget is out with the last read failed, or the wait's
 // budget is, or ctx ended, the caller keeps its ending and asks again on its
-// own spacing.
+// own spacing; and a relaunch continues no kept session off such a row.
 //
-// PAST THE BUDGET ON A ROW IT DID READ, the capture's own budget is out too, on
-// this node's clock, and the end is recorded naming it begun and never
-// finished ([unkeptOf]): its node stopped, or its budget ran out.
-func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun) (PendingRun, bool, error) {
-	// NEVER LONGER THAN A CAPTURE CAN TAKE, whatever the stamp's clock says: a
-	// stamp whose node's clock runs ahead is waited out on this one's.
-	wait, cancel := context.WithTimeout(ctx, SessionCaptureBudget)
+// PAST THE BUDGET ON A ROW IT DID READ, for an end's wait the capture's own
+// budget is out too, on this node's clock, and the end is recorded naming it
+// begun and never finished ([unkeptOf]): its node stopped, or its budget ran
+// out.
+func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun,
+	within time.Duration) (PendingRun, bool, error) {
+
+	// NEVER LONGER THAN within, whatever the stamp's clock says: a stamp whose
+	// node's clock runs ahead is waited out on this one's.
+	wait, cancel := context.WithTimeout(ctx, within)
 	defer cancel()
 	var unread error
 	for unread != nil || captureInFlight(run, c.now()) {

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -87,6 +88,14 @@ type Launched struct {
 	// report them a second time. Empty with an error is a launch that wrote
 	// nothing, whose notes are the turn's still.
 	LaunchID string
+
+	// BridgeFrom is the last call the run's record held when the job's
+	// session over the bridge opened — the round's calls before it, which
+	// the job numbers its own after — recorded on the parked state
+	// ([execstate.State.BridgeFrom]) so every later rebuild of the run's
+	// guard replays the loads of this job's own session and of no other
+	// ([Runner.rebuiltSurface]).
+	BridgeFrom int
 }
 
 // AgentRunRequest is one executor handed to its harness's agent loop.
@@ -155,6 +164,40 @@ type AgentRunRequest struct {
 	// [Asked] and [Lost]. Nil for every other launch.
 	Continue *Continuation
 
+	// Session is the turn's kept session the launch continues, in whatever box
+	// it gets — the session of the job the relaunch follows, as the launcher
+	// said it would before the run's briefs were written ([SessionProber]) —
+	// with the briefs that continue it: in the box it was last worked in, and
+	// in any other. Set on every relaunch whose job before left a kept
+	// session that can be continued: a reviewer's send-back as much as a
+	// round carried on. Nil starts a session of its own, or continues one in
+	// place ([AgentRunRequest.Continue]); and a launch that cannot take it up
+	// after all — the object unreadable, the box's harness too old, the
+	// seat's budget unable to carry it — starts fresh with Brief.
+	Session *SessionContinuation
+
+	// Decided is told how the launch decided its run takes up a session —
+	// the turn's kept capture, the job before's own copy in its box, or none
+	// ([SessionDecision]) — once the launch has its box and before the run
+	// starts there: the runner arms the run's guard with the skills that
+	// session holds, and publishes the prompt it was handed. A launcher calls
+	// it once per launch that reaches its run's start, and never for one that
+	// does not.
+	Decided func(SessionDecision)
+
+	// Started is told which session the job's box started, once its harness
+	// first reaches the seat's tools and before any call of the run is made
+	// there: the session the launch decided to continue (continued), or one
+	// of its own its script started in that one's place, its restore having
+	// failed in the box. The box says it by the token its harness dials
+	// (internal/api/mcpbridge, started.go), which its model cannot forge. The
+	// runner holds the run's guard to that session, and where it is one of
+	// its own, publishes the fresh brief the run was handed in the
+	// continuation's place ([Runner.sessionStarted]). A launcher calls it
+	// after Decided, at most once per opening of the job's tools; a box whose
+	// harness never reaches them never says, and its run makes no call.
+	Started func(continued bool)
+
 	// Fence is the turn's own fence ([Config.Fence]), which the launch asks
 	// again immediately before it opens anything: the prompt built since
 	// the phase opened can take a model call of its own, and a seat that
@@ -179,6 +222,100 @@ type Continuation struct {
 	// on a sign-in replaced while it ran ([Rotated]): the launch records it
 	// on the new job, so that job is not carried on again for it.
 	SignInReplaced bool
+
+	// ContextTokens is what the last request of that session carried, as
+	// its newest capture measured it ([SessionBasis.ContextTokens]): what
+	// the relaunch sends again before Brief where it continues the session
+	// in its box, which its floor is made of. Zero where no capture measured
+	// it, which holds the launch to the static floor.
+	ContextTokens int64
+}
+
+// SessionDecision is how a launch decided its run takes up a session, told
+// before the run starts ([AgentRunRequest.Decided]).
+type SessionDecision struct {
+	// Continues says the run continues a session rather than starting one
+	// of its own; Kept that the session is the turn's kept capture
+	// ([AgentRunRequest.Session]) rather than the job before's own copy in
+	// its box ([AgentRunRequest.Continue]); and NewBox that the box is not
+	// the one the session was last worked in, so the run is handed the
+	// continuation that says so ([SessionContinuation.Replaced]).
+	Continues, Kept, NewBox bool
+}
+
+// SessionContinuation is how a relaunch continues the turn's kept session — see
+// [AgentRunRequest.Session].
+type SessionContinuation struct {
+	// Basis is the kept capture the launch continues, as the launcher
+	// answered it ([SessionProber]); the launch takes up exactly that one.
+	Basis SessionBasis
+
+	// Brief is the run's prompt in the box the session was last worked in,
+	// and Replaced in any other — Brief and what a box that replaced that
+	// one changes (continued.go).
+	Brief, Replaced string
+}
+
+// SessionBasis is the kept session a relaunch of the turn continues, or why it
+// continues none — a [SessionProber]'s answer.
+type SessionBasis struct {
+	// LaunchSeq and CaptureSeq are the capture's place among the turn's,
+	// zero where the relaunch continues none; SessionID is its harness's
+	// session.
+	LaunchSeq, CaptureSeq int64
+	SessionID             string
+
+	// Harness is the harness that wrote the session, the only one that
+	// continues it: a launch hands the continuation on only where the member
+	// it picks as it launches runs it, and starts a session of its own where
+	// that member runs another.
+	Harness string
+
+	// BridgeSeq, BridgeOpen and NoteCursor are what the session accounts
+	// for — the highest bridged call it had been answered, the places below
+	// that held no call yet when it was captured, and the last note read —
+	// so the brief that continues it carries what came after.
+	BridgeSeq  int
+	BridgeOpen []int
+	NoteCursor int
+
+	// Interrupted says the session was captured from a harness that was cut
+	// off, so its transcript may end mid-call.
+	Interrupted bool
+
+	// Home is where the session was last worked: absolute paths in its
+	// transcript are under it.
+	Home string
+
+	// ContextTokens is what the last request of the session of the job the
+	// relaunch follows carried, as that job's newest capture measured it —
+	// kept or not, so set where the relaunch continues no kept capture too:
+	// what a launch that continues that session sends first, in a box it is
+	// restored into or the job's own, which the launch's floor is made of.
+	// Zero where no capture measured any.
+	ContextTokens int64
+
+	// Why is why the relaunch continues no kept session, "" where it
+	// continues one.
+	Why string
+}
+
+// Continues reports whether the basis names a kept session to continue.
+func (b SessionBasis) Continues() bool { return b.CaptureSeq > 0 }
+
+// SessionProber is an [AgentLauncher] that says, before a relaunch writes its
+// run's briefs, which kept session of the turn the launch may continue: the
+// kept capture of the job the relaunch follows where its harness and format let
+// a runner the launch can pick restore it, or why not. Which member the launch
+// picks, and whether the seat's budget can carry the session, are the launch's
+// to decide, once the briefs exist.
+//
+// ASKED FIRST because what the run is told depends on it: a continued session
+// is told what it lacks rather than everything. OPTIONAL: a launcher without
+// it continues no kept session, which every relaunch then starts fresh, or in
+// place.
+type SessionProber interface {
+	ProbeSession(ctx context.Context) SessionBasis
 }
 
 // executeAsAgentRun launches the executor as a detached agentic run.
@@ -189,10 +326,13 @@ type Continuation struct {
 // still use, and the skills it had loaded.
 //
 // A LAUNCH THAT DOES NOT HAPPEN STILL CLOSES ITS PHASE. The started record is
-// published before the launch, so the record carries the prompt the run was
-// sent; a launch refused after that publishes the phase's completion too —
-// failed, or stopped where a person stopped it — or the phase reads as still
-// running for ever on every screen that draws it.
+// published before the launch, carrying the fresh brief — the prompt a run
+// that starts a session of its own is sent, and where a relaunch continues the
+// session of the job it follows, the brief its launch hands it follows as the
+// phase's opening frame once the launch has chosen it ([Runner.sessionDecided]);
+// a launch refused after that publishes the phase's completion too — failed,
+// or stopped where a person stopped it — or the phase reads as still running
+// for ever on every screen that draws it.
 func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	history []ledger.Iteration,
 ) (turn.Work, turn.Surface, error) {
@@ -213,19 +353,41 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// over the bridge after this segment has suspended and charged what it
 	// spent — see [BridgedSpend].
 	bridged := NewBridgedSpend()
-	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, round, snapshot, submit,
-		executorActive(snapshot, r.boxServers()))
-	if err != nil {
-		return turn.Work{}, turn.Surface{}, err
-	}
-	surface = built
 
 	// THE NOTES THIS BRIEF IS THE FIRST TO READ, after every one the turn
 	// read before — and the launch's from here: handed back on every way out
 	// that reaches no run's record ([Runner.steerReturn]), and recorded
 	// delivered only once the launch has opened its job ([Runner.steerBriefed]).
 	fresh := r.steerBrief(ctx)
-	system, user := r.executorPrompt(ctx, notes, history, built, fresh)
+	user := r.executorBrief(ctx, notes, history, fresh)
+
+	// A RELAUNCH CONTINUES THE SESSION OF THE JOB IT FOLLOWS where its
+	// launcher says it can (continued.go) — a reviewer's send-back, in a
+	// segment that collected the turn's last run — asked before the
+	// continuation is written, which is built from what that session lacks.
+	// THE SURFACE'S GUARD STARTS EMPTY either way: it holds what the session
+	// the launch decides its run takes up holds, and the launch decides that
+	// once it has its box ([Runner.sessionDecided]).
+	var basis SessionBasis
+	if r.cfg.Resume != nil {
+		basis = r.sessionBasis(ctx)
+	}
+	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, round, snapshot, submit,
+		executorActive(snapshot, r.boxServers()))
+	if err != nil {
+		r.steerReturn(ctx, Launched{}, fresh)
+		return turn.Work{}, turn.Surface{}, err
+	}
+	surface = built
+	briefs := launchBriefs{fresh: user, freshReported: true}
+	if basis.Continues() {
+		briefs.kept = r.keptSession(basis, r.sendBackLead(notes), r.cfg.Resume.Bridged, fresh, "")
+		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
+		// the session this continues is that job's, and holds the skills its
+		// launch armed only where its box said it took them up.
+		briefs.state, briefs.bridged = r.cfg.Resume.parked(), r.cfg.Resume.Bridged
+	}
+	system := r.executorSystem(built)
 	// ITS TOOL SKILLS, handed to its harness as the harness's own rather
 	// than listed in its prompt (handedskills.go), matched against the
 	// surface it is launched with.
@@ -258,11 +420,15 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	began := time.Now()
 	caps := roundCaps{max: runRound, ceiling: runRound}
 	emit.started(ctx, phase.Execute, round, system, user, surface, caps)
+	decided := &launchDecided{}
 
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
 		System:     system.Text,
 		Brief:      user.Text,
 		Notes:      fresh,
+		Session:    briefs.kept,
+		Decided:    r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
+		Started:    r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
 		Surface:    surface,
 		Skills:     handed,
 		Spend:      bridged,
@@ -288,36 +454,43 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	r.steerBriefed(ctx, round, launched.LaunchID, fresh)
 
-	r.recordAgentSuspension(round, surface, history, began, time.Since(began), handed)
+	r.recordAgentSuspension(round, surface, history, began, time.Since(began), handed, launched.BridgeFrom)
 	return turn.Work{Calls: calls(surface), Suspended: true}, describe(surface), nil
 }
 
 // continueAgentRun carries on a run that parked on a person's question, now
-// answered ([Asked]), or whose job was lost with its host ([Lost]): the SAME
-// round, relaunched rather than collected — in the run's box, continuing the
-// asking run's own conversation, where that box is still there, and as a fresh
-// run told what happened where it is not, or where the conversation was cut
-// off. The launch decides which, once it knows which box it has.
+// answered ([Asked]), whose job was lost with its host ([Lost]), or which was
+// refused on a sign-in replaced while it ran ([Rotated]): the SAME round,
+// relaunched rather than collected — continuing the session of the job it
+// follows, from that job's kept capture in whatever box the launch gets, or
+// as the job's own box holds it, and as a fresh run told what happened where
+// the session can be continued neither way. The launch decides which, once it
+// knows which box it has.
 //
 // A ROUND THAT MAY NOT BE CARRIED ON AGAIN ([Lost.Limit]) is not relaunched:
 // its phase is closed here as failed, saying why, and the turn ends with it.
 //
-// THE ROUND'S SURFACE AND CLOCK CARRY ON. The surface is the asking run's as
-// it left it — the tools its launch had active, the skills the turn had
-// loaded, and what its bridged calls did to it since: every tool it activated
-// and every skill it loaded, which a run continuing its own session goes on
-// calling — and its calls so far are seeded into the turn's call log through
+// THE ROUND'S SURFACE AND CLOCK CARRY ON. The surface is the job's as it left
+// it — the tools its launch had active and what its bridged calls did to it
+// since — and its calls so far are seeded into the turn's call log through
 // that surface before the relaunch, so the relaunched run's writes go on
-// counting from them: the one rebuild every segment that re-enters a run
-// makes ([Runner.rebuiltSurface]). The round's launch time keeps accumulating
-// from the instant the round first launched. No new phase is opened: the
-// round's started record was published when it first launched, and its
-// completion is the collection that finally closes it — unless this relaunch
-// is refused, which closes it here.
+// counting from them: the one rebuild every segment that re-enters a run makes
+// ([Runner.rebuiltSurface]). ITS GUARD IS THE RELAUNCH'S: it holds what the
+// session the launch decides its run takes up holds — the job's own, which
+// loaded what it did, or none — and is empty from the relaunch's last step
+// before its launch until the launch decides ([Runner.sessionDecided]); the
+// call a person approved is made before that, under the asking session's
+// guard as the rebuild armed it. The round's launch time keeps accumulating from
+// the instant the round first launched. No new phase is opened: the round's
+// started record was published when it first launched, the prompt this
+// relaunch hands its run is published as the phase's opening frame once the
+// launch has chosen it, and the round's completion is the collection that
+// finally closes it — unless this relaunch is refused, which closes it here.
 func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteration,
-	state execstate.State, carry carried, logged []ledger.Call,
+	state execstate.State, carry carried, bridgedCalls []BridgedCall,
 ) (turn.Work, turn.Surface, error) {
 	began := time.Now()
+	logged := bridgedLedger(bridgedCalls)
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 	var surface *tools.Surface
 	// A SUBMISSION CITES THE CARRIED RUN'S CALLS TOO: the relaunched run is
@@ -336,7 +509,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// carried run's calls included, as the surface is rebuilt and so BEFORE
 	// the launch: the relaunched run's bridged calls are admitted against
 	// this log from its first one.
-	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history, logged)
+	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history, bridgedCalls)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -378,6 +551,20 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// check that could refuse the relaunch, so a round refused here never
 	// made it, and before the prompt, which tells the run what it returned
 	// (ADR-0077).
+	//
+	// UNDER THE GUARD OF THE SESSION THAT ASKED IT, as the rebuild armed it:
+	// the job's own loads, and the skills its launch armed where its box said
+	// it took that session up ([Resume.parked]). The surface still asks the
+	// guard of an approved call, and a guard emptied for the relaunch first
+	// refused a skill-covered call the person approved, recorded the refusal as
+	// the call's result, and so used up the approval. A guard that refuses it
+	// all the same — a skill made required while the call waited, or one the
+	// rebuild cannot hold for want of the box's word — is asked before the call
+	// is marked, which leaves the approval unused ([makeHeld]). And only of a
+	// call no attempt has marked: one an earlier attempt at the answer made, and
+	// whose relaunch was refused after it, is answered from its mark, since the
+	// guard decides whether a call nobody made may be made now, never whether
+	// one was.
 	if asked, ok := carry.(*Asked); ok && asked.Held != nil {
 		if heldErr := makeHeld(ctx, surface, asked.Held); heldErr != nil {
 			r.steerReturn(ctx, Launched{}, fresh)
@@ -385,6 +572,13 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 				fmt.Errorf("runner: %s: %s: %w", phase.Execute, carry.what(), heldErr)
 		}
 	}
+	// THE GUARD IS THE RELAUNCH'S FROM HERE, empty until its launch decides
+	// which session its run takes up ([Runner.sessionDecided]): the rebuild
+	// armed it as the job before left it, which is what a run that continues
+	// that job's session holds and a fresh one does not. Before the launch,
+	// so the relaunched run's first call meets the guard of the session it
+	// runs in, never the asking one's.
+	r.armSession(built, nil, nil)
 	// UNDER THE TURN'S OWN FENCE TOKEN, which the relaunched run's tools fence
 	// what they read with: a reply carried on is somebody's words, fenced as
 	// the message that woke the turn is ([Asked.Continuation]).
@@ -393,17 +587,43 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if rendered := renderedNotes(fresh); len(rendered) > 0 {
 		continued += "\n\n" + strings.Join(rendered, "\n\n")
 	}
+	// A FRESH RUN'S BRIEF is the round's own, and what became of the run
+	// before it — what it asked and was told, or how it was cut off: it
+	// remembers neither.
+	reseed := prompts.Prompt{Text: user.Text + "\n\n" + carry.reseed(fence)}
+	// AND THE SESSION OF THE JOB IT FOLLOWS, CONTINUED in whatever box the
+	// launch gets (continued.go), where its launcher says it can and the
+	// round may be continued from it at all: a round lost a second time
+	// starts fresh rather than replay the state it was lost in ([Lost]) —
+	// neither from the job's kept capture nor as its box holds it.
+	inPlace := carry.session()
+	var basis SessionBasis
+	briefs := launchBriefs{fresh: reseed, state: state, bridged: bridgedCalls}
+	if carry.keeps() {
+		basis = r.sessionBasis(ctx)
+		briefs.kept = r.keptSession(basis, carry.continuation(fence), bridgedCalls, fresh, carry.branch())
+	} else {
+		inPlace = ""
+	}
+	if inPlace != "" {
+		briefs.inPlace = continued
+	}
+	decided := &launchDecided{}
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
 		System: system.Text,
-		// A FRESH RUN'S BRIEF is the round's own, and what became of the run
-		// before it — what it asked and was told, or how it was cut off: it
-		// remembers neither.
-		Brief: user.Text + "\n\n" + carry.reseed(fence),
-		Notes: fresh,
+		Brief:  reseed.Text,
+		Notes:  fresh,
 		Continue: &Continuation{
-			SessionID: carry.session(), Brief: continued,
+			SessionID: inPlace, Brief: continued,
 			SignInReplaced: isRotated(carry),
+			// WHAT THAT SESSION SENDS FIRST, as its newest capture measured
+			// it whether the turn kept it or not: the floor of a launch
+			// that continues it in its box.
+			ContextTokens: basis.ContextTokens,
 		},
+		Session:    briefs.kept,
+		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),
+		Started:    r.sessionStarted(ctx, emit, state.Round, system, surface, caps, briefs, decided),
 		Surface:    surface,
 		Skills:     handed,
 		Spend:      bridged,
@@ -430,7 +650,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		launchedAt = began
 	}
 	r.recordAgentSuspension(state.Round, surface, history, launchedAt,
-		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began), handed)
+		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began), handed, launched.BridgeFrom)
 	// THE ROUND'S CALLS SO FAR, the run's before it asked or was cut off:
 	// they happened and stay on the round's record, as an EARLIER ATTEMPT's
 	// ([turn.Work.Inherited]) — the job before made them, and a retry of this
@@ -440,12 +660,17 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 
 // recordAgentSuspension captures what the run's collection needs.
 func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, history []ledger.Iteration,
-	began time.Time, launched time.Duration, handed HandedSkills,
+	began time.Time, launched time.Duration, handed HandedSkills, bridgeFrom int,
 ) {
 	state := execstate.State{
-		Version:      execstate.Version,
-		ActiveTools:  surface.Active(),
+		Version:     execstate.Version,
+		ActiveTools: surface.Active(),
+		// THE SKILLS THE SESSION THE LAUNCH DECIDED ON HOLDS, as its guard
+		// was armed ([Runner.sessionDecided]), and the call the job's own
+		// calls are numbered after: every rebuild of the run's guard replays
+		// this job's loads on top of these, and no other job's.
 		LoadedSkills: r.loadedSkills(),
+		BridgeFrom:   bridgeFrom,
 		// THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, which every
 		// later opening of its bridge reads a reported load by, and every
 		// rebuild of its guard names a refusal by (handedskills.go).
@@ -497,16 +722,24 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // says the run's bridged calls have cost so far ([NewBridgedSpendFrom]).
 // spent is that total and bridged the row's calls, in any order.
 //
+// AND ITS GUARD, THE SESSION'S ITS BOX STARTED: the skills its launch armed
+// only where the job's record says its box took up the session the launch
+// continued (continued, [Resume.Continued]), and none but its own loads
+// otherwise, a record that says nothing included ([Resume.parked]). A box that
+// has not said yet says it on its first request to this opening, which
+// [ReopenedRun.Started] is told, before any call there is made.
+//
 // It launches nothing and parks nothing: the run is going already, and its
 // collection resumes the turn as it would have. THE SUBMISSION IT CAPTURES IS
 // NEVER READ, exactly as the launch's is not when the run is collected in
 // another process: the collection replays submit_work from the run's durable
 // log ([Runner.resumeAgentRun]).
 func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
-	bridged []BridgedCall, spent Bridged,
-) (*tools.Surface, *BridgedSpend, error) {
+	bridged []BridgedCall, spent Bridged, continued bool,
+) (ReopenedRun, error) {
 	history := state.Iterations
 	called := bridgedLedger(inAdmissionOrder(bridged))
+	held := Resume{State: state, Continued: continued}.parked()
 
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 	var surface *tools.Surface
@@ -518,12 +751,39 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 			func() turn.Surface { return describe(surface) }))
 
 	meter := NewBridgedSpendFrom(spent)
-	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), state, snapshot, submit, history, called)
+	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), held, snapshot, submit, history,
+		inAdmissionOrder(bridged))
 	if err != nil {
-		return nil, nil, err
+		return ReopenedRun{}, err
 	}
 	surface = built
-	return surface, meter, nil
+	own := ownCalls(inAdmissionOrder(bridged), state.BridgeFrom, 0, nil)
+	return ReopenedRun{Surface: surface, Meter: meter,
+		Started: func(boxContinued bool) {
+			var loaded []string
+			if boxContinued {
+				loaded = state.LoadedSkills
+			}
+			r.armSession(surface, loaded, own)
+		}}, nil
+}
+
+// ReopenedRun is an executor run's tool surface as a node that took the run
+// over rebuilt it ([Runner.ReopenAgentRun]): the surface, the meter its
+// session's calls are counted on, and what its guard is held to once the run's
+// box says which session it started.
+type ReopenedRun struct {
+	Surface *tools.Surface
+	Meter   *BridgedSpend
+
+	// Started holds the run's guard to the session its box says it started,
+	// on its first request to the opening this node serves, before any call
+	// there: the skills its launch armed and the job's own loads where it
+	// continued the session its launch chose, the job's own loads alone where
+	// it started one of its own (internal/api/mcpbridge, Session.Started). The
+	// box's word over the record's, which a box that had not said when the run
+	// was taken over left empty.
+	Started func(continued bool)
 }
 
 // rebuiltSurface is a run's surface rebuilt by a later segment, as the run
@@ -535,9 +795,12 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 //
 // AS THE RUN LEFT IT: the tools its launch recorded — every tool it can reach,
 // so nothing a run does over the bridge adds one — and the skills its guard
-// held then, with every skill the run loaded since over the bridge read off
-// called ([Runner.observeLoads]). AND ITS PLACE IN THE TURN:
-// the closed rounds in history and the run's calls, seeded into the call log
+// held then, with every skill the run's own job loaded since over the bridge
+// read off its calls ([Runner.observeLoads]): those numbered past the calls the
+// round held when the job opened ([execstate.State.BridgeFrom]), never an
+// earlier job's of the round, whose session the run's may not be. AND ITS
+// PLACE IN THE TURN: the closed rounds in history and the round's calls in
+// bridged, in the order the bridge admitted them, seeded into the call log
 // through the rebuilt surface ([seedCalls]), so a count read from here sees
 // every call made before it.
 //
@@ -549,15 +812,15 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 // calls through the collection's surface: a rebuild that replays half of what
 // the run did is the drift this rule exists to stop.
 func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.State,
-	snapshot tools.Snapshot, submit tools.Callable, history []ledger.Iteration, called []ledger.Call,
+	snapshot tools.Snapshot, submit tools.Callable, history []ledger.Iteration, bridged []BridgedCall,
 ) (*tools.Surface, error) {
 	surface, err := r.surfaceWith(ctx, m, phase.Execute, state.Round, snapshot, submit,
 		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return nil, err
 	}
-	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, called)
-	r.observeLoads(surface, called)
+	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, bridgedLedger(bridged))
+	r.observeLoads(surface, ownCalls(bridged, state.BridgeFrom, 0, nil))
 	// AND THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, so a call the
 	// rebuilt guard refuses names the skill as the run's harness lists it.
 	r.handedAs(state.NativeSkills)
@@ -650,7 +913,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// included, which the round's record states as what the run held and
 	// what it could still have discovered ([Runner.finishWork]); and the
 	// turn's call log, which starts from what the turn already called.
-	built, err := r.rebuiltSurface(ctx, r.ownMeter(), state, snapshot, submit, history, logged)
+	built, err := r.rebuiltSurface(ctx, r.ownMeter(), state, snapshot, submit, history, bridged)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}

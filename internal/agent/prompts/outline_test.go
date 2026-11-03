@@ -110,6 +110,17 @@ func outlineCorpus() []outlined {
 			nested: map[string][]string{"task": {"# Add rate limiting", "## Why", "## How", "🧯"}},
 		},
 		{name: "user message, nothing", prompt: BuildPhaseUserMessage(UserMessage{}), keys: []string{"task"}},
+		{
+			name: "a send-back, continued",
+			prompt: BuildContinuedRound(ContinuedRound{Task: chatTrigger,
+				Review: "## Missing\n- the summary was never posted — post it in the thread 🧵"}),
+			keys: []string{"sent_back", "task", "prior_work", "review"},
+			nested: map[string][]string{
+				"task":   {"## Triage — decide BEFORE replying", "## Thread context", "naïve cache warmed ✅"},
+				"review": {"## Missing", "🧵"},
+			},
+		},
+		{name: "a send-back, nothing", prompt: BuildContinuedRound(ContinuedRound{}), keys: []string{"sent_back", "task", "prior_work"}},
 	}
 }
 

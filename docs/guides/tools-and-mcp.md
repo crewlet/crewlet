@@ -955,18 +955,28 @@ answers it ([ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-
 - **The call is made at most once.** The node holding the seat records the
   first answer it takes, refuses a second (`409 stale_version` at the route),
   marks the call on the run's record before it makes it, and records what it
-  returned. A later attempt at the same answer, after a node restart, hands
-  the run that result, or says the call may or may not have taken effect; it
-  never makes it again. A tool blocked or changed since the call was held is
-  not called, and the run is told why. The call is recorded among the run's
-  calls, as the tool answered it and without its arguments or result, in the
-  same write as its result: a reply the approved call made counts as the
-  turn's reply wherever the engine reads whether the turn replied, its
-  delivery check and a stopped or lost turn's account among them.
-- **The run carries on where it stopped**, in its own session in the box it
-  left where the box was kept, told the answer and the call's result (the
-  first 16 KiB of it); otherwise a fresh run starts and is told the call, the
-  answer and the result.
+  returned. A later attempt at the same answer — after a node restart, or
+  after the run's relaunch was refused once the call was made, by the seat's
+  budget, say — hands the run that result, or says the call may or may not
+  have taken effect; it never makes it again, whatever changed since. Before
+  an attempt begins making it, a tool blocked or changed since the call was
+  held is not called, and the run is told why; so is one a required tool
+  skill covers that the session carrying the run on has not loaded — a skill
+  made required while the call waited, say — which leaves the answer unused:
+  the run can load the skill and call again, which asks afresh. The call is
+  recorded among the run's calls, as the tool answered it and without its
+  arguments or result, in the same write as its result: a reply the approved
+  call made counts as the turn's reply wherever the engine reads whether the
+  turn replied, its delivery check and a stopped or lost turn's account among
+  them.
+- **The run carries on where it stopped**, in its own session, told the
+  answer and the call's result (the first 16 KiB of it): continued from the
+  session the turn kept of it, in whichever box the relaunch gets — its own,
+  or a new one, told what a new box changes — or, where nothing of it was
+  kept, as the box it left holds it while that box is kept. Only where
+  neither can be continued does a fresh run start, told the call, the answer
+  and the result ([A relaunch continues the turn's
+  session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)).
 - **A call that waits raises an alarm.** One that has waited ten minutes, a
   third of the default pause TTL a parked run's box is kept for, raises
   `mcp_approval_waiting` on its server ([A server's alarms](#a-servers-alarms)),

@@ -8,9 +8,9 @@ import (
 )
 
 // askAndAnswer launches t1, has its job park on a question in the box it ran
-// in — its harness's session named — with one bridged call made before it asked,
-// and answers it, running relaunch inside the resume the answer drives, as a
-// turn that carries the run on does.
+// in — its harness's session named by its launch — with one bridged call made
+// before it asked, and answers it, running relaunch inside the resume the
+// answer drives, as a turn that carries the run on does.
 func askAndAnswer(t *testing.T, rig *coordRig, reap bool,
 	relaunch func(ctx context.Context, r PendingRun, asked *AskedRun),
 ) PendingRun {
@@ -34,7 +34,9 @@ func askAndAnswerAfter(t *testing.T, rig *coordRig, reap bool, made []BridgeCall
 		}
 	}
 	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
-	rig.runner.Finish(Result{SessionID: "sess-ask"})
+	// THE SESSION THE COLLECTION READS OFF THE BOX, a file there the run's
+	// model could have rewritten: never what the answer continues.
+	rig.runner.Finish(Result{SessionID: "a-session-the-box-wrote"})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
@@ -67,18 +69,22 @@ func continuing(asked *AskedRun) LaunchRequest {
 // that asked knew what it had read, tried and decided, and all of that is in
 // its harness's session in the box it asked from — so the relaunch continues that
 // session there, with the answer as its next prompt, rather than starting a
-// conversation told only the question and the answer. And the round goes on:
-// the call the run made before it asked is still the round's, on the row.
+// conversation told only the question and the answer. The session is the one
+// the job's launch named, never one its collection read off the box, which the
+// run's model could have rewritten. And the round goes on: the call the run
+// made before it asked is still the round's, on the row.
 //
-// Mutation: start the continued job on the round's brief with no session, or
-// empty the bridged log on the relaunch's reset, and this goes red.
+// Mutation: start the continued job on the round's brief with no session, park
+// the run on the session its collection read off the box, or empty the bridged
+// log on the relaunch's reset, and this goes red.
 func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	var relaunched LaunchResult
 	run := askAndAnswer(t, rig, false, func(ctx context.Context, r PendingRun, asked *AskedRun) {
-		if asked == nil || asked.SessionID != "sess-ask" || !asked.BoxKept {
-			t.Errorf("the resume carries %+v, want the asking run's session and its kept box", asked)
+		if asked == nil || asked.SessionID != "sess-t1" || !asked.BoxKept {
+			t.Errorf("the resume carries %+v, want the session the asking job's launch named and "+
+				"its kept box", asked)
 			return
 		}
 		res, err := rig.launchVia(ctx, rig.manager, continuing(asked))
@@ -96,7 +102,7 @@ func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 	}
 	started := rig.runner.Started()
 	last := started[len(started)-1]
-	if last.Resume != "sess-ask" || last.Brief != "the answer: use main" {
+	if last.Resume != "sess-t1" || last.Brief != "the answer: use main" {
 		t.Fatalf("the carried-on job started with session %q and brief %q, want the asking "+
 			"run's session and the answer", last.Resume, last.Brief)
 	}
