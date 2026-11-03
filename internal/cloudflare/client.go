@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // APIBase is Cloudflare's v4 API. Fixed rather than configurable, so a
@@ -42,10 +44,12 @@ const maxResponse = 4 << 20
 // accountIDPattern is the shape Cloudflare gives every account identifier.
 var accountIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// Message is one entry of an envelope's `errors` or `messages`.
+// Message is one entry of an envelope's `errors` or `messages`, with the
+// errors Cloudflare chains under it.
 type Message struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int       `json:"code"`
+	Message string    `json:"message"`
+	Chain   []Message `json:"error_chain,omitempty"`
 }
 
 // APIError is a call Cloudflare refused: a status of 300 or more, or a 2xx
@@ -72,6 +76,30 @@ func Status(err error) int {
 		return api.Status
 	}
 	return 0
+}
+
+// tokenRefusedCodes are Cloudflare's error codes for a value that is not a
+// token at all: 1000 Invalid API Token, 6003 Invalid request headers and 6111
+// Invalid format for Authorization header. Cloudflare answers them with 400,
+// which on its fixed API says nothing about the address.
+//
+//nolint:gochecknoglobals // an immutable set, not state
+var tokenRefusedCodes = []int{1000, 6003, 6111}
+
+// TokenRefused reports a refusal of the token itself, by Cloudflare's error
+// codes rather than its status.
+func TokenRefused(err error) bool {
+	api, ok := errors.AsType[*APIError](err)
+	return ok && slices.ContainsFunc(api.Codes, func(c int) bool { return slices.Contains(tokenRefusedCodes, c) })
+}
+
+// reject is [integration.Reject] with Cloudflare's own word for a refused
+// token: a 400 whose codes refuse the token is the credential's, as a 401 is.
+func reject(err error) error {
+	if TokenRefused(err) && !errors.Is(err, integration.ErrCredentialRejected) {
+		return fmt.Errorf("%w: %w", integration.ErrCredentialRejected, err)
+	}
+	return integration.Reject(err, Status(err))
 }
 
 // noDetail is what a refusal that said nothing reads as.
@@ -249,17 +277,22 @@ func (c *Client) once(
 	return env, nil
 }
 
-// refusalOf is an envelope's error codes and its messages as one bounded
-// sentence.
+// refusalOf is an envelope's error codes, its chained ones included, and its
+// messages as one bounded sentence.
 func refusalOf(errs []Message) ([]int, string) {
-	codes := make([]int, 0, len(errs))
-	texts := make([]string, 0, len(errs))
-	for _, e := range errs {
-		codes = append(codes, e.Code)
-		if text := strings.TrimSpace(e.Message); text != "" {
-			texts = append(texts, text)
+	var codes []int
+	var texts []string
+	var walk func([]Message)
+	walk = func(errs []Message) {
+		for _, e := range errs {
+			codes = append(codes, e.Code)
+			if text := strings.TrimSpace(e.Message); text != "" {
+				texts = append(texts, text)
+			}
+			walk(e.Chain)
 		}
 	}
+	walk(errs)
 	if len(texts) == 0 {
 		return codes, ""
 	}

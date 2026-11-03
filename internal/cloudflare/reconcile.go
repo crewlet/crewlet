@@ -129,7 +129,7 @@ func reconcileError(err error) error {
 		return fmt.Errorf("cloudflare: integrations.cloudflare.provisioning.api_token: %w: %w",
 			integration.ErrCredentialRejected, err)
 	}
-	rejected := integration.Reject(err, Status(err))
+	rejected := reject(err)
 	if errors.Is(rejected, integration.ErrCredentialRejected) && needs != "" {
 		return fmt.Errorf("cloudflare: the provisioner token in integrations.cloudflare."+
 			"provisioning.api_token was refused reading %s, which needs %s: %w", where, needs, rejected)

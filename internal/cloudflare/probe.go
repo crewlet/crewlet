@@ -102,11 +102,20 @@ func probeVerdict(ctx context.Context, err error, token string) setup.Verdict {
 		return setup.Verdict{Outcome: setup.VerifyUnreachable, Detail: "Cloudflare did not " +
 			"answer in time while checking " + name + ". Nothing was stored."}
 	}
+	if TokenRefused(err) {
+		return setup.Refused("This is not a valid Cloudflare API token. Paste only the token's value, " +
+			"from Copy on the token page.")
+	}
 	reason := ""
-	if api, ok := errors.AsType[*APIError](err); ok && api.Detail != noDetail {
+	api, isAPI := errors.AsType[*APIError](err)
+	if isAPI && api.Detail != noDetail {
 		reason = api.Detail
 	}
-	verdict := setup.Judge(setup.Failure{App: "Cloudflare", Err: err, Status: Status(err)}, "")
+	// THE ADDRESS IS FIXED (APIBase), so a 4xx other than a rate limit is
+	// Cloudflare refusing what was sent, never an address that is wrong.
+	refused := isAPI && api.Status >= http.StatusBadRequest && api.Status < http.StatusInternalServerError &&
+		api.Status != http.StatusTooManyRequests
+	verdict := setup.Judge(setup.Failure{App: "Cloudflare", Err: err, Status: Status(err), Refused: refused}, "")
 	if verdict.Outcome != setup.VerifyRefused {
 		return verdict
 	}
