@@ -1800,7 +1800,11 @@ const (
 	// lane naming its issued token's period took the merged tree from 5486.1
 	// KiB (5,617,793 bytes) to 5486.9 KiB (5,618,603 bytes, +810 bytes), all
 	// of it the integrations model chunk. It stays at 5487 KiB.
-	treeBudget = 5<<20 + 367<<10
+	// AWS (its catalogue entry and story, the Agents tab's words and the org
+	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
+	// tile's cloud glyph) took it from 5486.9 KiB to 5489.0 KiB (5,620,690
+	// bytes, +2,087 bytes). 5490 KiB.
+	treeBudget = 5<<20 + 370<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

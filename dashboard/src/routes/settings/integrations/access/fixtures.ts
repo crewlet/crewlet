@@ -3,8 +3,9 @@
  * suites: GoPhrase's Datadog (SRE on the Datadog Admin Role, its tool live,
  * the rest off), its GitHub (every agent on, with the app permissions its
  * old tier registered), its GitLab (Dev a Developer in a group that lists no
- * projects), its Cloudflare (SRE able to purge, the rest off) and its Expo
- * (QA's robot a Developer, the rest off), built from the fields a case names.
+ * projects), its Cloudflare (SRE able to purge, the rest off), its Expo
+ * (QA's robot a Developer, the rest off) and its AWS (SRE's role on Operate,
+ * the rest off), built from the fields a case names.
  *
  * Times are relative to the moment the fixture is built, so "1d ago" reads
  * the same on every run.
@@ -126,6 +127,32 @@ const EXPO_OPTIONS: AccessOptions = {
   ],
 };
 
+/** AWS's three fixed levels, each Crewlet's own customer managed policy, attached additively. */
+const AWS_OPTIONS: AccessOptions = {
+  lane: "aws",
+  tool_server: "aws",
+  live: false,
+  levels: [
+    {
+      id: "read",
+      name: "Read",
+      note: "Reads resource settings and the contents of CloudWatch Logs. It reads no stored objects, items, parameter values or secrets.",
+    },
+    {
+      id: "operate",
+      name: "Operate",
+      administers: true,
+      note: "Read, plus starting, stopping and scaling instances and services, invalidating caches, and alarms.",
+    },
+    {
+      id: "administer",
+      name: "Administer",
+      administers: true,
+      note: "Operate, plus the named services whole. It can create access that outlives the agent's session: instance key pairs, user data, database master passwords, bucket and key policies, function URLs, security group openings and snapshot sharing. Shell access, commands and new code work only on resources you tag crewlet:agent-access = administer.",
+    },
+  ],
+};
+
 const laneOf = (options: AccessOptions): Lane =>
   lanesOf({ kind: options.lane, revision: "", syncing: false, options: [options], seats: [] })[0]!;
 
@@ -179,6 +206,7 @@ export const GITLAB_LANE = laneOf(GITLAB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
 export const CLOUDFLARE_LANE = laneOf(CLOUDFLARE_OPTIONS);
 export const EXPO_LANE = laneOf(EXPO_OPTIONS);
+export const AWS_LANE = laneOf(AWS_OPTIONS);
 
 /** A lane that is on and in sync, holding what `over` says. */
 export function onLane(over: Partial<AccessSeatLane> & { variable: string }): AccessSeatLane {
@@ -568,6 +596,64 @@ export function neutralAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
             created_at: ago(DAY),
           },
           box: neutralBox("SRE"),
+          ...sre,
+        }),
+      }),
+    ],
+  };
+}
+
+/**
+ * The files Crewlet puts in an AWS seat's box, as the engine sends them: the
+ * issued credentials it rewrites, and the CLI profile that reads them. No
+ * environment line, since an AWS_* variable would reach a harness's sign-in.
+ */
+const awsBox = (handle: string): AccessBox => ({
+  env: [],
+  files: [
+    {
+      path: ".config/crewlet/aws-credentials.json",
+      value: `\${AWS_CREDENTIALS_${handle}}`,
+      rewritten: true,
+      by: "crewlet",
+    },
+    {
+      path: ".aws/config",
+      value:
+        "[profile crewlet]\nregion = us-east-2\ncredential_process = cat /home/crewlet/.config/crewlet/aws-credentials.json\n",
+      rewritten: false,
+      by: "crewlet",
+    },
+  ],
+});
+
+/**
+ * AWS with SRE's IAM role on Operate, its credentials issued at use and the
+ * AWS MCP Server bound, and PM off at the default level.
+ */
+export function awsAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
+  return {
+    kind: "aws",
+    revision: "rev-3",
+    syncing: false,
+    last_sync_at: ago(4 * MIN),
+    options: [AWS_OPTIONS],
+    seats: [
+      seat("pm", "PM", { aws: offLane("read") }),
+      seat("sre", "SRE", {
+        aws: onLane({
+          variable: "AWS_CREDENTIALS_SRE",
+          desired: { enabled: true, level: "operate" },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet/gophrase/seat/crewlet-sre-7c2e",
+            account_id: "AROA4EXAMPLE7C2EROLE",
+            level: "operate",
+            credential: { variable: "AWS_CREDENTIALS_SRE", source: "issued" },
+            created_at: ago(DAY),
+          },
+          box: awsBox("SRE"),
           ...sre,
         }),
       }),
