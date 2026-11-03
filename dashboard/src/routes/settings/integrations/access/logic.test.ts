@@ -524,7 +524,7 @@ test("a Scaleway seat reads its level, its tool by both routes and what turning 
     "Live, Scaleway CLI (scw) in its box, or the Scaleway MCP server",
   );
   expect(toolWords(SCALEWAY_LANE, { ...sre, tool: "no_server" })).toBe(
-    "Not set up: no scaleway tool server is declared, and its sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY",
+    "Not set up: no scaleway tool server is declared, and its sandbox env does not set SCW_SECRET_KEY and SCW_ACCESS_KEY",
   );
   expect(scopeWords(SCALEWAY_LANE, sre.desired.scope)).toBe("gophrase-prod");
   expect(offSentence(SCALEWAY_LANE, offLane("read"))).toBe(

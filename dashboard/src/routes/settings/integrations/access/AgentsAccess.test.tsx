@@ -1256,7 +1256,7 @@ test("a Scaleway agent with no tool is told the server or its own two box lines"
   const advice = screen.getByText(/SRE has an account at Scaleway and nothing to use it with/);
   expect(advice.textContent).toContain("the company declares no scaleway tool server");
   expect(advice.textContent).toContain(
-    'SCW_ACCESS_KEY: "${SCALEWAY_ACCESS_KEY_SRE}" and SCW_SECRET_KEY: "${SCALEWAY_SECRET_KEY_SRE}"',
+    'SCW_SECRET_KEY: "${SCALEWAY_SECRET_KEY_SRE}" and SCW_ACCESS_KEY: "${SCALEWAY_ACCESS_KEY_SRE}"',
   );
   expect(advice.textContent).not.toMatch(/SCW_DEFAULT/);
 });
