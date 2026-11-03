@@ -1473,16 +1473,30 @@ type bucketJS struct {
 	// the broker is asked at all — and then the broker answers.
 	refusals int
 	refusal  error
-	// drop leaves every other request of each read unanswered — the first,
-	// the third, … — as a member that is not leading the object drops a
-	// read without a word.
+	// drop leaves the first request of each read unanswered, as a member
+	// that is not leading the object drops a read without a word, and
+	// answers every request sent while a dropped one is still outstanding:
+	// the re-ask of a read that keeps listening for its lost request.
+	//
+	// A READ'S FIRST REQUEST IS TOLD BY WHAT IS OUTSTANDING, not by a
+	// count: a request that finds no dropped one of its read outstanding
+	// opens a read, and one that finds one is a re-ask of it. Counted as
+	// every other request, a re-ask the broker answered slower than the
+	// read term was followed by a second one, which was dropped as if it
+	// opened a read, and the next read's first request was answered.
 	drop bool
 	// left is what each read's context gave it to answer in, by the read
-	// — or a negative duration for one handed no deadline at all — and at
-	// when each was sent.
+	// — or a negative duration for one handed no deadline at all.
 	left map[string][]time.Duration
-	at   map[string][]time.Time
+	// held is each read's dropped request still outstanding, and dropped
+	// every request each read had dropped, in order.
+	held    map[string]*droppedRead
+	dropped map[string][]*droppedRead
 }
+
+// droppedRead is one dropped request, and whether a re-ask was sent while it
+// was still outstanding.
+type droppedRead struct{ reasked bool }
 
 func (b *bucketJS) wrote(verb string) {
 	b.mu.Lock()
@@ -1496,8 +1510,8 @@ func (b *bucketJS) sent() []string {
 	return slices.Clone(b.writes)
 }
 
-// read records what ctx gave the read named call to answer in and when it was
-// sent, and reports whether it is one to leave unanswered.
+// read records what ctx gave the read named call to answer in, and reports
+// whether this request is one to leave unanswered — see [bucketJS.drop].
 func (b *bucketJS) read(ctx context.Context, call string) (drop bool) {
 	left := time.Duration(-1)
 	if deadline, ok := ctx.Deadline(); ok {
@@ -1506,29 +1520,51 @@ func (b *bucketJS) read(ctx context.Context, call string) (drop bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.left == nil {
-		b.left, b.at = map[string][]time.Duration{}, map[string][]time.Time{}
+		b.left, b.held, b.dropped = map[string][]time.Duration{}, map[string]*droppedRead{},
+			map[string][]*droppedRead{}
 	}
 	b.left[call] = append(b.left[call], left)
-	b.at[call] = append(b.at[call], time.Now())
-	return b.drop && len(b.left[call])%2 == 1
+	if !b.drop {
+		return false
+	}
+	if held := b.held[call]; held != nil {
+		held.reasked = true
+		return false
+	}
+	dropped := &droppedRead{}
+	b.held[call], b.dropped[call] = dropped, append(b.dropped[call], dropped)
+	return true
 }
 
-// lefts is every read's recorded time to answer, by the read, and when each
-// request of it was sent.
-func (b *bucketJS) lefts() (map[string][]time.Duration, map[string][]time.Time) {
+// ended is call's dropped request ending, once its read has stopped listening.
+func (b *bucketJS) ended(call string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.held, call)
+}
+
+// reads is every read's recorded time to answer, by the read, and whether each
+// of its dropped requests was asked again while it was outstanding.
+func (b *bucketJS) reads() (map[string][]time.Duration, map[string][]bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	left := make(map[string][]time.Duration, len(b.left))
-	at := make(map[string][]time.Time, len(b.at))
 	for call, l := range b.left {
-		left[call], at[call] = slices.Clone(l), slices.Clone(b.at[call])
+		left[call] = slices.Clone(l)
 	}
-	return left, at
+	reasked := make(map[string][]bool, len(b.dropped))
+	for call, drops := range b.dropped {
+		for _, d := range drops {
+			reasked[call] = append(reasked[call], d.reasked)
+		}
+	}
+	return left, reasked
 }
 
 func (b *bucketJS) ObjectStore(ctx context.Context, bucket string) (jetstream.ObjectStore, error) {
-	if b.read(ctx, "bucket "+bucket) {
+	if call := "bucket " + bucket; b.read(ctx, call) {
 		<-ctx.Done()
+		b.ended(call)
 		return nil, ctx.Err()
 	}
 	b.mu.Lock()
@@ -1549,8 +1585,9 @@ func (b *bucketJS) ObjectStore(ctx context.Context, bucket string) (jetstream.Ob
 }
 
 func (b *bucketJS) Stream(ctx context.Context, name string) (jetstream.Stream, error) {
-	if b.read(ctx, "stream "+name) {
+	if call := "stream " + name; b.read(ctx, call) {
 		<-ctx.Done()
+		b.ended(call)
 		return nil, ctx.Err()
 	}
 	return b.JetStream.Stream(ctx, name)
@@ -1839,16 +1876,24 @@ func TestAFailedCreatesReadBackKeepsBothErrors(t *testing.T) {
 // and that was measured costing a fleet's boot sixteen idle seconds a lookup.
 // So a request nobody answers is presumed lost at the read term and the next
 // is sent a re-ask after it, the first still outstanding beside it; asked as
-// a write, the next would follow a write's term later — fifteen seconds
-// clustered and thirty solo.
+// a write, the next would follow a write's term later.
 //
-// At each topology's own write term and a read term short enough to measure
-// against it, since what is held is which of its cadences each call is asked
-// again at. Two opens: one that loses the create race as
-// [TestANodeThatLosesTheCreateRaceBindsItsPeersBucket] stages it — the lookup
-// told the bucket is not there, and the create told its name is taken by a
-// peer's — so the read-back runs, and one that finds the bucket; every read's
-// first request dropped, and its second answered.
+// At an hour-long write term, so what tells the cadences apart is whether the
+// re-ask comes at all, never how long it took. A read asked at the write's
+// term, or not asked again, is still asking when [readOpenPatience] ends the
+// open. A read that abandons its lost request before asking again finds
+// nothing outstanding, so each of its requests is dropped in turn and it never
+// ends either. Measured instead against a gap of a read term past the cadence,
+// the queue's sibling of this case failed on a loaded race-detector run whose
+// re-ask came 63 ms behind its 70 ms timer: how late a timer's goroutine wakes
+// is the scheduler's latency, which the read never promised.
+//
+// Two opens on each topology. The first loses the create race as
+// [TestANodeThatLosesTheCreateRaceBindsItsPeersBucket] stages it: the lookup is
+// told the bucket is not there, and the create is told its name is taken by a
+// peer's, so the read-back runs. The second finds the bucket. Every read has
+// its first request dropped, and must be asked again with that request still
+// outstanding.
 func TestEveryReadOpenMakesIsAskedAgainAtTheReadTerm(t *testing.T) {
 	t.Parallel()
 	for _, clustered := range []bool{false, true} {
@@ -1862,25 +1907,60 @@ func TestEveryReadOpenMakesIsAskedAgainAtTheReadTerm(t *testing.T) {
 			}
 			timing := jsprovision.Clustered(clustered).Timing()
 			timing.ReadTerm, timing.ReAsk = 100*time.Millisecond, 50*time.Millisecond
+			timing.AskTerm = time.Hour
 			w := &bucketJS{JetStream: c, hidden: 1, drop: true}
 			cfg := natsobj.Config{MaxBytes: testCeiling, Replicas: 1, Clustered: clustered}
-			for _, open := range []string{"losing the create race", "finding the bucket"} {
-				if _, err := natsobj.OpenAt(t.Context(), w, cfg, timing); err != nil {
-					t.Fatalf("open the bucket, %s: %v", open, err)
+			// THE OPENS RUN ON THE CASE'S OWN CONTEXT, which carries no
+			// deadline: a read handed none of its own must still show as
+			// one below. The patience is the test's to keep, not the reads'.
+			type opened struct {
+				open string
+				err  error
+			}
+			opens := make(chan opened, 2)
+			go func() {
+				for _, open := range []string{"losing the create race", "finding the bucket"} {
+					_, err := natsobj.OpenAt(t.Context(), w, cfg, timing)
+					opens <- opened{open, err}
+					if err != nil {
+						return
+					}
+				}
+			}()
+			for range 2 {
+				select {
+				case o := <-opens:
+					if o.err != nil {
+						t.Fatalf("open the bucket, %s: %v", o.open, o.err)
+					}
+				case <-time.After(readOpenPatience):
+					t.Fatalf("an open was still reading after %v — a dropped read "+
+						"held for the write's %v term, or never asked again, waits "+
+						"on a reply nobody will send", readOpenPatience, timing.AskTerm)
 				}
 			}
 
-			lefts, at := w.lefts()
+			lefts, reasked := w.reads()
 			// THE LOOKUP OF EACH OPEN, AND THE RACE'S READ-BACK: three
-			// reads of the bucket, two requests each. Fewer, and one of
-			// the three was not measured at all.
-			if n := len(lefts["bucket "+natsobj.Bucket]); n < 6 {
-				t.Errorf("the bucket was asked %d time(s), want two for each of "+
-					"each open's lookup and the lost race's read-back", n)
+			// reads of the bucket, each with its first request dropped.
+			// Fewer, and one of the three was not held to its term at all.
+			if n := len(reasked["bucket "+natsobj.Bucket]); n < 3 {
+				t.Errorf("%d read(s) of the bucket had a request dropped, want each "+
+					"open's lookup and the lost race's read-back", n)
 			}
-			if n := len(lefts["stream "+natsobj.Stream]); n < 4 {
-				t.Errorf("the stream was asked %d time(s), want two for each "+
+			if n := len(reasked["stream "+natsobj.Stream]); n < 2 {
+				t.Errorf("%d read(s) of the stream had a request dropped, want each "+
 					"open's bind", n)
+			}
+			for call, drops := range reasked {
+				for i, again := range drops {
+					if !again {
+						t.Errorf("%s, read %d: its dropped request was never asked "+
+							"again while it was outstanding — a read that abandons a "+
+							"request it presumed lost replaces a late answer with a "+
+							"request a term behind it", call, i+1)
+					}
+				}
 			}
 			ceiling := max(timing.Lookup, timing.ReadBack)
 			for call, ls := range lefts {
@@ -1897,23 +1977,17 @@ func TestEveryReadOpenMakesIsAskedAgainAtTheReadTerm(t *testing.T) {
 					}
 				}
 			}
-			// WELL INSIDE A WRITE'S TERM, with a read term of slack for a
-			// loaded runner: what tells the cadences apart is the hundredfold
-			// between them.
-			limit := 2*timing.ReadTerm + timing.ReAsk
-			for call, sent := range at {
-				for i := 0; i+1 < len(sent); i += 2 {
-					if gap := sent[i+1].Sub(sent[i]); gap > limit {
-						t.Errorf("%s was asked again %v after a request nobody "+
-							"answered, want within %v — a dropped read held for a "+
-							"write's %v term waits on a reply nobody will send",
-							call, gap, limit, timing.AskTerm)
-					}
-				}
-			}
 		})
 	}
 }
+
+// readOpenPatience bounds each open of
+// [TestEveryReadOpenMakesIsAskedAgainAtTheReadTerm] as a hang guard and nothing
+// more. At the read term an open's reads end in under a second. A read asked at
+// the case's hour-long write term never ends inside it, and neither does one
+// held as a single request to the thirty-second lookup ceiling, which the
+// guard sits under.
+const readOpenPatience = 20 * time.Second
 
 // A BUCKET REPLICATED BELOW THIS NODE IS REFUSED, BY THE SETTING, as the queue
 // refuses such a stream: an upload acknowledged there would prove fewer copies
