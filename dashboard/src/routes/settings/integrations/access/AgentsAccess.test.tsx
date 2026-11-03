@@ -1216,7 +1216,7 @@ test("an agent's details read an issued token, the engine's wait and the files C
   details("SRE", "the vendor");
   const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on the vendor"]')!);
   expect(facts.getByText("VENDOR_TOKEN_SRE").parentElement!.textContent).toBe(
-    "VENDOR_TOKEN_SRE, issued for an hour at a time, at use",
+    "VENDOR_TOKEN_SRE, issued at use",
   );
   expect(
     facts.getByText(

@@ -35,6 +35,16 @@ export interface LaneWords {
   scope?: { noun: string; singular: string; empty: string; emptyOn?: string; none?: string };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
+  /**
+   * How long a credential Crewlet issues at use lasts there, in a few words
+   * ("an hour"), where the lane's credential is issued rather than sealed.
+   */
+  issued?: string;
+  /**
+   * What the details add beside the settings Crewlet puts in a seat's box,
+   * where the CLI they serve has to come with the box image.
+   */
+  boxNote?: string;
   /** Where a person approves a seat's install at the vendor through a fresh link, its button label. */
   install?: string;
   /**
