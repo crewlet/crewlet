@@ -62,31 +62,39 @@ ceiling below that floor never has it left, so on a seat that runs an executor,
 or on a company that has one, it is refused when the document is validated,
 at the ceiling: raise it to the floor, or lower the floor (`0` turns it off).
 
-**A relaunch that continues its turn's session needs room for that session.**
-Within a turn, a send-back, a person's answer, a lost job or a replaced sign-in
+**A launch that continues a session needs room for that session.** Within a
+turn, a send-back, a person's answer, a lost job or a replaced sign-in
 [continues the turn's harness session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)
-where it can, and a continued run sends the session's whole context again
-before it reads a word of its brief. So its launch needs the larger of the floor
+where it can; a conversation's next turn
+[continues the session its last turn left](../concepts/code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session);
+and a continued run sends the session's whole context again before it reads a
+word of its brief. So its launch needs the larger of the floor
 and that context with the brief that continues it: the whole input of the
 session's last request, cache included, recorded when the session was captured,
 and the estimate of the brief it is handed — a 60 000-token session handed a
 2 000-token continuation needs 62 000 left in every capped window. That holds
-for a run continued in its own box as much as for one restored into another; a
-session no capture measured (keeping switched off) has no known context, and
-its launch needs the floor alone. A continued launch is always a relaunch — a
-resumed segment's — so below its figure it is held, or for an answer turned
-back, exactly as above, never parked, and its reason names what the figure is
-made of. A session whose figure is past the smallest ceiling of the seat's or
-the company's capped windows, which no window turning over ever leaves room for,
-is not continued: the relaunch starts a session of its own on the floor. A seat
+for a run continued in its own box as much as for one restored into another,
+and for the session a conversation's last turn left, whose context is what that
+turn's capture recorded; a session no capture measured (keeping switched off)
+has no known context, and its launch needs the floor alone. A relaunch below
+its figure is held, or for an answer turned back, exactly as above. A turn's
+first launch below its figure **parks the seat's mail on that figure**, never on
+the floor alone: a window with room for a fresh run and not for the session
+would read as having room, and hand the delivery straight back into the same
+refusal. A colleague's ask waiting behind such a park is still owed its answer.
+Either way the reason names what the figure is made of. A session whose figure
+is past the smallest ceiling of the seat's or the company's capped windows,
+which no window turning over ever leaves room for, is not continued: the launch
+starts a session of its own on the floor. A seat
 with no capped window continues a session of any size.
 
 **And it pays for its context on every request.** Every request a harness makes
 sends its whole conversation, and every one is charged its whole input, the
 cache's share included ([Cache share](#cache-share)): a run that continues a
 60 000-token session and makes 20 requests is charged about 1.2 million input
-tokens for that context alone, most of them cache reads, where the same run
-started fresh begins at its
+tokens for that context alone, most of them cache reads — a conversation's next
+turn as much as a relaunch, so every turn of a long conversation starts from
+what its last turn left — where the same run started fresh begins at its
 harness's own prompt, its standing instructions and its brief and grows from
 there. A session's context is bounded by its harness's compaction for that
 reason. Every Claude Code run compacts its conversation at 100 000 tokens

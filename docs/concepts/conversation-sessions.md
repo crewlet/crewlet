@@ -307,10 +307,12 @@ log
 ([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)),
 so a later launch of the same turn, in any box on any node, continues it
 ([Code Sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)); a
-conversation's next turn starts a session of its own. The trash reaper deletes a session untouched for
+conversation's next turn continues the session its last turn left
+([Code Sandbox](code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)).
+The trash reaper deletes a session untouched for
 `retention_days`, never one whose turn's run is still live, reading the value
 off the revision the fleet runs at every hourly pass rather than at start; a
-turn that never ended, a day past its last capture with no run of it live, it
+turn that never ended, a day past its last record with no run of it live, it
 first ends as `lost`, so a lost end holds the seat's budget for a day rather
 than for the whole retention.
 `max_bytes_per_seat` is the most one seat's sessions may hold: past it a
