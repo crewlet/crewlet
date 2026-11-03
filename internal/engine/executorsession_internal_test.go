@@ -38,35 +38,20 @@ const leakedToken = "ghp_" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7d"
 // no object store — so the order of a capture and its turn's end is the
 // sandbox package's cases' to hold, where the keep is the case's.
 type executorLogSpy struct {
-	mu     sync.Mutex
-	begins []executordomain.NewBegin
-	ends   []executordomain.NewEnd
-	ended  map[string]bool
-	calls  map[string]int
+	mu    sync.Mutex
+	ends  []executordomain.NewEnd
+	ended map[string]bool
+	calls map[string]int
 }
 
-// Begin records a turn's first read, and answers it held wherever it names a
-// base, as the log does where nothing moved the base before it landed.
+// Begin answers a turn's first read held wherever it names a base, as the log
+// does where nothing moved the base before it landed. What a begin carries is
+// the conversation cases' to read (conversation_internal_test.go's headLog);
+// these cases are about how a turn ends.
 func (s *executorLogSpy) Begin(_ context.Context, _ executordomain.Call,
 	n executordomain.NewBegin) (executordomain.BeginResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.begins = append(s.begins, n)
 	return executordomain.BeginResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied},
 		Held: n.BaseTurn != ""}, nil
-}
-
-// beginsOf is every begin recorded for turnID.
-func (s *executorLogSpy) beginsOf(turnID string) []executordomain.NewBegin {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []executordomain.NewBegin
-	for _, n := range s.begins {
-		if n.Turn == turnID {
-			out = append(out, n)
-		}
-	}
-	return out
 }
 
 func (s *executorLogSpy) Capture(_ context.Context, _ executordomain.Call,

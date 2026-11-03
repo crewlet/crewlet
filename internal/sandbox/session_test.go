@@ -27,7 +27,6 @@ import (
 // before the turn's last capture.
 type sessionWrites struct {
 	mu       sync.Mutex
-	begins   []begunRecord
 	captures []capturedRecord
 	ends     []endedRecord
 	order    []string
@@ -37,31 +36,19 @@ type sessionWrites struct {
 	refuse error
 }
 
-type begunRecord struct {
-	call executordomain.Call
-	n    executordomain.NewBegin
-}
-
-// Begin records a turn's first read, and answers it held wherever it names a
-// base and the turn has not ended, as the log does where nothing moved the base
-// before it landed.
-func (w *sessionWrites) Begin(_ context.Context, c executordomain.Call,
+// Begin answers a turn's first read held wherever it names a base and the turn
+// has not ended, as the log does where nothing moved the base before it landed.
+// What a begin carries is the conversation cases' to read (conversationLog);
+// these cases launch turns that read no conversation.
+func (w *sessionWrites) Begin(_ context.Context, _ executordomain.Call,
 	n executordomain.NewBegin) (executordomain.BeginResult, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.ended[n.Turn] {
 		return executordomain.BeginResult{}, fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
 	}
-	w.begins = append(w.begins, begunRecord{call: c, n: n})
 	return executordomain.BeginResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied},
 		Held: n.BaseTurn != ""}, nil
-}
-
-// begun is every begin recorded, in the order recorded.
-func (w *sessionWrites) begun() []begunRecord {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return append([]begunRecord(nil), w.begins...)
 }
 
 type capturedRecord struct {
