@@ -80,16 +80,17 @@ const (
 	LaneConfluence Lane = "confluence"
 	LaneSlack      Lane = "slack"
 	LaneMattermost Lane = "mattermost"
+	LaneCloudflare Lane = "cloudflare"
 	LaneExpo       Lane = "expo"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
 // ([integration.Kinds]): chat, then the tracker and its wiki, then the code
-// hosts, then observability, then app delivery.
+// hosts, then observability, the edge and app delivery.
 func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
-		LaneGitHub, LaneGitLab, LaneDatadog, LaneExpo,
+		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo,
 	}
 }
 
@@ -208,6 +209,7 @@ type Desired struct {
 	//     sorted and space-separated (`create:page read:space`).
 	//   - mattermost: the roles, space-separated in Mattermost's own order
 	//     ([config.MattermostRoleSets]).
+	//   - cloudflare: `read` or `operate`, an unset level reading as read.
 	//   - expo: `viewer`, `runner`, `developer` or `release_manager`, an
 	//     unset level reading as viewer.
 	Level string `json:"level,omitempty"`

@@ -9,6 +9,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
+// ErrNoCloudflareLevel refuses keeping a Cloudflare token whose policy is
+// neither level's: a seat names a level, and none of them holds what it holds.
+var ErrNoCloudflareLevel = errors.New("the token's permissions are neither Read nor Operate: " +
+	"save the level it should hold here, and Crewlet narrows it to that")
+
 // ErrNoExpoLevel refuses keeping an Expo robot's permissions when they are no
 // level's: a seat names a level, and none of them holds what it holds.
 var ErrNoExpoLevel = errors.New("the robot's Expo permissions match no level: " +
@@ -45,6 +50,11 @@ func KeptAccess(lane Lane, want Desired, have Observed) (Desired, error) {
 	case LaneDatadog:
 		if len(strings.Fields(have.Level)) > 1 {
 			return Desired{}, ErrSeveralRoles
+		}
+		kept.Level = have.Level
+	case LaneCloudflare:
+		if !slices.Contains(config.CloudflareLevels(), have.Level) {
+			return Desired{}, ErrNoCloudflareLevel
 		}
 		kept.Level = have.Level
 	case LaneExpo:

@@ -1573,7 +1573,12 @@ const (
 	// 5437.3 KiB (+0.9 KiB, 970 bytes): the Executors chunk +0.7 KiB, the
 	// inbox chunk +0.2 KiB, and 44 bytes of the home, live and entry scripts.
 	// 5438 KiB.
-	treeBudget = 5<<20 + 318<<10
+	// The Cloudflare integration (its catalogue entry, story and Agents tab
+	// lane words, and the org builder reading a seat's vendor accounts from
+	// its access blocks) took it from 5437.3 KiB to 5438.6 KiB (+1.3 KiB,
+	// 1300 bytes): the integrations model chunk +1.0 KiB, the catalogue chunk
+	// +0.2 KiB and the settings chunk 72 bytes. 5439 KiB.
+	treeBudget = 5<<20 + 319<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

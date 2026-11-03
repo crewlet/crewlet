@@ -219,6 +219,7 @@ var replaced = []struct {
 	{"mattermost", "mattermost", []key{{"BOT_TOKEN", "MATTERMOST_TOKEN", "", ""}}},
 	{"atlassian", "atlassian", []key{{"TOKEN", "JIRA_API_TOKEN", "", ""}, {"EMAIL", "JIRA_USERNAME", "", ""},
 		{"TOKEN", "CONFLUENCE_API_TOKEN", "", ""}, {"EMAIL", "CONFLUENCE_USERNAME", "", ""}}},
+	{"cloudflare", "cloudflare", []key{{"API_TOKEN", "", "Authorization", "Bearer "}}},
 }
 
 func keysOf(in []catalogue.SeatKey) []key {
@@ -276,6 +277,10 @@ func TestRecognitionMatchesTheSeatBindingsItReplaces(t *testing.T) {
 		{"mcp-server-mattermost", stdio("uvx", "mcp-server-mattermost==0.6.1"), "mattermost", bound(5)},
 		{"mcp-atlassian", stdio("uvx", "mcp-atlassian==0.23.1"), "atlassian", bound(6)},
 		{"mcp-atlassian's image", stdio("docker", "run", "ghcr.io/sooperset/mcp-atlassian:latest"), "atlassian", bound(6)},
+		{"Cloudflare's server", remote("https://mcp.cloudflare.com/mcp"), "cloudflare", bound(7)},
+		{"a host under Cloudflare's server", remote("https://docs.mcp.cloudflare.com/mcp"), "", nil},
+		{"a lookalike of Cloudflare's server", remote("https://mcp.cloudflare.com.example.net/mcp"), "", nil},
+		{"Cloudflare's host spelled on stdio", stdio("curl", "https://mcp.cloudflare.com/mcp"), "", nil},
 		{"a server nobody recognises", stdio("uvx", "some-server==1.0.0"), "", nil},
 		{"an address nobody recognises", remote("https://mcp.example.com/"), "", nil},
 		{"an address that does not parse", remote("://mcp.datadoghq.com"), "", nil},

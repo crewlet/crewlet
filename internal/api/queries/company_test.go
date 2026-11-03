@@ -2473,6 +2473,7 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.Confluence = &config.Confluence{}
 	cfg.Integrations.Datadog = &config.Datadog{Enabled: true, RouteTo: "sre-lead"}
 	cfg.Integrations.Atlassian = &config.Atlassian{OrgID: "acme"}
+	cfg.Integrations.Cloudflare = &config.Cloudflare{Enabled: true}
 	cfg.Integrations.Expo = &config.Expo{Enabled: true}
 
 	body := asMap(t, answer(t, queries.Sources{

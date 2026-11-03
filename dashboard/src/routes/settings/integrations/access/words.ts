@@ -157,6 +157,19 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     tool: "Crewlet's chat transport",
     server: "mattermost",
   },
+  cloudflare: {
+    name: "Cloudflare",
+    access: "Token permissions",
+    turnOn:
+      "Turning it on mints an account API token for the agent with the chosen permissions, limited to the company's zones.",
+    off: "Crewlet disables the agent's API token, so it stops working at once, then deletes it. Turning it back on mints a new token.",
+    remove:
+      "The agent's token is already deleted at Cloudflare, so removing only stops Crewlet tracking it.",
+    rotate:
+      "Crewlet rolls the token to a new value and seals it. Anything still using the old value stops working.",
+    tool: "Cloudflare MCP server, one per agent",
+    server: "cloudflare",
+  },
   expo: {
     name: "Expo",
     access: "Role at Expo",

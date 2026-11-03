@@ -157,6 +157,7 @@ const SURFACE_NAMES: Record<string, string> = {
   github: "GitHub",
   gitlab: "GitLab",
   datadog: "Datadog",
+  cloudflare: "Cloudflare",
   expo: "Expo",
 };
 
@@ -218,6 +219,14 @@ export const CATALOG: Entry[] = [
     vendor: "datadog",
     surfaces: surfacesOf("datadog"),
     doc: "datadog",
+  },
+  {
+    key: "cloudflare",
+    name: "Cloudflare",
+    description: "Zones, cache and DNS, a scoped token per agent.",
+    vendor: "cloudflare",
+    surfaces: surfacesOf("cloudflare"),
+    doc: "cloudflare",
   },
   {
     key: "expo",

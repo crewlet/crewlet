@@ -117,6 +117,16 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity: "Crewlet makes a service account for each agent.",
   },
+  cloudflare: {
+    does: [
+      "Read zone analytics, cache status and DNS",
+      "Check rules and settings across your zones",
+      "Purge the cache and edit cache rules, where you allow it",
+    ],
+    identity: "Crewlet mints a Cloudflare API token for each agent, limited to your zones.",
+    byHand:
+      "Create one account API token at Cloudflare for Crewlet to mint the agents' tokens from. It needs every permission an agent can be given.",
+  },
   expo: {
     does: [
       "Read EAS builds, their logs and submissions",

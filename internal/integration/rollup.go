@@ -80,6 +80,7 @@ var Tools = []Tool{
 	{Key: "github", Surfaces: []ToolSurface{{string(KindGitHub), "GitHub"}}},
 	{Key: "gitlab", Surfaces: []ToolSurface{{string(KindGitLab), "GitLab"}}},
 	{Key: "datadog", Surfaces: []ToolSurface{{string(KindDatadog), "Datadog"}}},
+	{Key: "cloudflare", Surfaces: []ToolSurface{{string(KindCloudflare), "Cloudflare"}}},
 	{Key: "expo", Surfaces: []ToolSurface{{string(KindExpo), "Expo"}}},
 }
 

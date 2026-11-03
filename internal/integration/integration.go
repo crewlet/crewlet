@@ -87,6 +87,10 @@ const (
 	KindGitLab     Kind = "gitlab"
 	KindDatadog    Kind = "datadog"
 
+	// KindCloudflare provisions one account API token per agent and, in this
+	// build, ingests nothing.
+	KindCloudflare Kind = "cloudflare"
+
 	// KindExpo provisions one robot user per agent and, in this build,
 	// ingests nothing.
 	KindExpo Kind = "expo"
@@ -101,11 +105,11 @@ const (
 
 // Kinds is every surface this package knows, in the order an operator reads
 // them: chat first, then the tracker and its wiki, then the code hosts, then
-// observability, then app delivery. A stable order so a status listing does
-// not reshuffle between two reads of the same fleet.
+// observability, the edge and app delivery. A stable order so a status
+// listing does not reshuffle between two reads of the same fleet.
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
-	KindGitHub, KindGitLab, KindDatadog, KindExpo, KindAtlassian,
+	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindAtlassian,
 }
 
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
@@ -133,7 +137,7 @@ var ConvergeOrder = []Kind{
 	// THE ACCOUNTS FIRST, then the products that authenticate as them.
 	KindAtlassian, KindJira, KindConfluence,
 	KindSlack, KindMattermost,
-	KindGitHub, KindGitLab, KindDatadog, KindExpo,
+	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo,
 }
 
 // Valid reports whether k is a surface this build knows.
@@ -228,6 +232,6 @@ func (k Kind) Ingress() Ingress {
 // account, beside a second badge saying the key had not resolved. Both were
 // answers to questions this surface is not asked.
 //
-// Expo is the same in this build: its robots are provisioned, and no build or
-// submission event is routed to a seat.
-func (k Kind) Ingests() bool { return k != KindAtlassian && k != KindExpo }
+// Cloudflare and Expo are the same in this build: their agents' tokens and
+// robots are provisioned, and nothing they send is routed to a seat.
+func (k Kind) Ingests() bool { return k != KindAtlassian && k != KindCloudflare && k != KindExpo }

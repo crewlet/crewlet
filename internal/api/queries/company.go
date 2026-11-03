@@ -364,6 +364,15 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 				"route_to":   in.Datadog.RouteTo,
 			})
 	}
+	if in.Cloudflare != nil {
+		// PROVISIONING ALONE, like the organization below: nothing arrives
+		// from Cloudflare in this build, so there is no delivery secret.
+		detail := map[string]any{}
+		if p := in.Cloudflare.Provisioning; p != nil {
+			detail["account_id"], detail["zones"] = p.AccountID, p.Zones
+		}
+		add("cloudflare", in.Cloudflare.Enabled, nil, detail)
+	}
 	if in.Expo != nil {
 		// PROVISIONING ONLY, like atlassian below: the provisioner token
 		// creates agents' robots and no delivery arrives, so there is no

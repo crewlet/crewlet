@@ -41,7 +41,7 @@ import (
 // `mcp_servers` entry declares it.
 type SeatCredential struct {
 	// Kind is the integration whose seat credential it is.
-	Kind string `yaml:"kind" json:"kind" js:"required;enum=atlassian|datadog|expo|github|gitlab|mattermost|slack" desc:"Integration whose per-seat credential this server reads."`
+	Kind string `yaml:"kind" json:"kind" js:"required;enum=atlassian|cloudflare|datadog|expo|github|gitlab|mattermost|slack" desc:"Integration whose per-seat credential this server reads."`
 
 	// Field is which of the integration's seat credentials: TOKEN or EMAIL
 	// for Atlassian; empty is the integration's credential itself.
@@ -75,7 +75,7 @@ func seatCredentialFields(kind string) []string {
 // SeatCredentialKinds is every integration a server can read a seat
 // credential of.
 func SeatCredentialKinds() []string {
-	return []string{"atlassian", "datadog", "expo", "github", "gitlab", "mattermost", "slack"}
+	return []string{"atlassian", "cloudflare", "datadog", "expo", "github", "gitlab", "mattermost", "slack"}
 }
 
 // SeatCredentialKind is the integration a seat block's lane belongs to:
