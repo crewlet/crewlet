@@ -144,7 +144,8 @@ func boxLinesOf(cat Catalog, lane Lane, handle string) []BoxLine {
 
 // BoxOf is the seat with handle's box as lane needs it: the lines a person
 // adds ([BoxLines]), then the settings the engine supplies while the seat's
-// lane is on, sorted. Nil where there is neither.
+// lane is on, sorted, and the files it writes, by path. Nil where there is
+// none of them.
 func BoxOf(c *config.Company, kind integration.Kind, lane Lane, handle string) *Box {
 	vendor, ok := Lookup(kind)
 	if !ok {
@@ -156,27 +157,40 @@ func BoxOf(c *config.Company, kind integration.Kind, lane Lane, handle string) *
 // boxOf is [BoxOf] for vendor.
 func boxOf(c *config.Company, vendor Vendor, lane Lane, handle string) *Box {
 	lines := boxLinesOf(vendor.Catalog(), lane, handle)
-	env := vendorDefaults(c, roleOf(c, handle), vendor)
-	for _, name := range slices.Sorted(maps.Keys(env)) {
-		lines = append(lines, BoxLine{Name: name, Value: env[name], By: ByCrewlet})
+	set := vendorDefaults(c, roleOf(c, handle), vendor)
+	for _, name := range slices.Sorted(maps.Keys(set.Env)) {
+		lines = append(lines, BoxLine{Name: name, Value: set.Env[name], By: ByCrewlet})
 	}
-	if len(lines) == 0 {
+	var files []BoxFileLine
+	for _, f := range set.Files {
+		files = append(files, BoxFileLine{Path: f.Path, Value: f.Ref, Rewritten: f.Rewritten, By: ByCrewlet})
+	}
+	slices.SortFunc(files, func(a, b BoxFileLine) int { return strings.Compare(a.Path, b.Path) })
+	if len(lines) == 0 && len(files) == 0 {
 		return nil
 	}
-	return &Box{Env: lines}
+	if lines == nil {
+		// ON THE WIRE AS A LIST, never null, for a box the engine fills
+		// with files alone.
+		lines = []BoxLine{}
+	}
+	return &Box{Env: lines, Files: files}
 }
 
-// BoxDefault is one non-secret setting a vendor puts in a seat's box
-// ([BoxDefaulter]): Env set to Value, for the integration Kind.
+// BoxDefault is one thing a vendor puts in a seat's box ([BoxDefaulter]) for
+// the integration Kind: Env set to Value, or, where File is set, a file.
 type BoxDefault struct {
 	Kind  integration.Kind
 	Env   string
 	Value string
+
+	// File is one of the vendor's [BoxSet.Files], with Env and Value empty.
+	File *BoxFile
 }
 
-// BoxDefaults is every setting the registered vendors put in the box of the
-// seat with handle, each for a box-CLI lane the seat has on, sorted by
-// variable. Nil where there are none.
+// BoxDefaults is everything the registered vendors put in the box of the
+// seat with handle, each for a vendor with a lane the seat has on: the
+// settings by variable, then the files by path. Nil where there are none.
 func BoxDefaults(c *config.Company, handle string) []BoxDefault {
 	return boxDefaults(c, handle, Registered())
 }
@@ -186,32 +200,46 @@ func boxDefaults(c *config.Company, handle string, vendors []Vendor) []BoxDefaul
 	role := roleOf(c, handle)
 	var out []BoxDefault
 	for _, v := range vendors {
-		for env, value := range vendorDefaults(c, role, v) {
+		set := vendorDefaults(c, role, v)
+		for env, value := range set.Env {
 			out = append(out, BoxDefault{Kind: v.Kind(), Env: env, Value: value})
+		}
+		for _, f := range set.Files {
+			out = append(out, BoxDefault{Kind: v.Kind(), File: &f})
 		}
 	}
 	slices.SortFunc(out, func(a, b BoxDefault) int {
-		return cmp.Or(strings.Compare(a.Env, b.Env), strings.Compare(string(a.Kind), string(b.Kind)))
+		ar, ak := a.order()
+		br, bk := b.order()
+		return cmp.Or(cmp.Compare(ar, br), strings.Compare(ak, bk), strings.Compare(string(a.Kind), string(b.Kind)))
 	})
 	return out
 }
 
-// vendorDefaults is what v supplies to role's box: nil unless v is a
-// [BoxDefaulter] and role has one of its box-CLI lanes on.
-func vendorDefaults(c *config.Company, role *config.Role, v Vendor) map[string]string {
-	defaulter, ok := v.(BoxDefaulter)
-	if role == nil || !ok || !boxLaneOn(v.Catalog(), role) {
-		return nil
+// order is where d sorts among a seat's defaults: the settings first, by
+// variable, then the files, by path.
+func (d BoxDefault) order() (int, string) {
+	if d.File == nil {
+		return 0, d.Env
 	}
-	return defaulter.BoxDefaults(c, role).Env
+	return 1, d.File.Path
 }
 
-// boxLaneOn reports whether role has on a lane of cat whose tool is a box CLI.
-func boxLaneOn(cat Catalog, role *config.Role) bool {
+// vendorDefaults is what v supplies to role's box: nothing unless v is a
+// [BoxDefaulter] and role has one of its lanes on.
+func vendorDefaults(c *config.Company, role *config.Role, v Vendor) BoxSet {
+	defaulter, ok := v.(BoxDefaulter)
+	if role == nil || !ok || !laneOn(v.Catalog(), role) {
+		return BoxSet{}
+	}
+	return defaulter.BoxDefaults(c, role)
+}
+
+// laneOn reports whether role has one of cat's lanes on. Any lane, since what
+// a vendor's box CLI needs follows the seat at the vendor, whether the lane's
+// tool is that CLI, a server beside it, or both.
+func laneOn(cat Catalog, role *config.Role) bool {
 	for _, spec := range cat.Lanes {
-		if len(spec.BoxEnv) == 0 {
-			continue
-		}
 		if d, _ := DesiredOf(role, spec.Lane); d.Enabled {
 			return true
 		}

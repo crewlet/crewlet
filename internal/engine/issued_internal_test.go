@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -423,5 +424,76 @@ func TestEachIssuersStoryIsToldInItsWords(t *testing.T) {
 	want := "it starts once the agent's fake cloud account is made and the agent's GitHub App is installed"
 	if !m.waiting() || !strings.Contains(m.Error(), want) {
 		t.Errorf("two waits are told as %q, want it to say %q", m.Error(), want)
+	}
+}
+
+// A VENDOR'S BOX FILE IS WRITTEN AT LAUNCH, KEPT BY THE POLL, AND NEVER IN THE
+// ENVIRONMENT. The launch resolves it through the seat's own resolution, so an
+// issued variable is issued, in a step of its own ahead of every other; a
+// person's file at the same path is theirs. It is in neither the run's env nor
+// its box defaults, which are all a sign-in is judged on, and it is scrubbed as
+// a credential. The poll rewrites a file marked rewritten once its token
+// renews, through the refresh that keeps a person's token files, and leaves
+// the rest to the launch.
+func TestAVendorsBoxFileIsWrittenAtLaunchAndKeptByThePoll(t *testing.T) {
+	t.Parallel()
+	e, c, fake := twoIssuers(t)
+	const path, setting = ".config/crewlet/fake-token", "FAKE_CLI_TOKEN_FILE"
+	file := &seataccess.BoxFile{Path: path, Ref: "${" + builderFake + "}", Rewritten: true}
+	e.boxSupply = func(_ *config.Company, handle string) []seataccess.BoxDefault {
+		if handle != "builder" {
+			return nil
+		}
+		return []seataccess.BoxDefault{{Kind: fakeCloud, Env: setting, Value: "/home/user/" + path},
+			{Kind: fakeCloud, File: file}}
+	}
+	builder := c.Org.AgentSeatByHandle("builder")
+	run := e.runEnvironment(t.Context(), c, builder, nil, nil, e.boxDefaults(c.Config, "builder"))
+	if len(run.setup) == 0 || run.setup[0].Name != integrationFilesStep {
+		t.Fatalf("setup = %+v, want the integrations' files first", run.setup)
+	}
+	token := run.setup[0].Files[path]
+	if !strings.HasPrefix(token, "fake_issued_") {
+		t.Fatalf("the vendor's file holds %q, want the issued token", token)
+	}
+	for _, env := range []map[string]string{run.env, run.defaults} {
+		for name, value := range env {
+			if value == token {
+				t.Errorf("the file's token reached the environment as %s", name)
+			}
+		}
+	}
+	if run.defaults[setting] != "/home/user/"+path {
+		t.Errorf("defaults = %v, want the vendor's setting beside its file", run.defaults)
+	}
+	if !slices.Contains(run.secrets, token) {
+		t.Error("the file's token is not scrubbed from the run's output")
+	}
+	mine := []sandbox.SetupStep{{Name: "mine", Files: map[string]string{path: "a person's own"}}}
+	if own := e.runEnvironment(t.Context(), c, builder, nil, mine, e.boxDefaults(c.Config, "builder")); own.setup[0].Name == integrationFilesStep {
+		t.Error("the vendor's file was written over a person's file at the same path")
+	}
+
+	box := sandbox.NewFakeSandbox("box-1")
+	box.Put(path, token)
+	run2 := sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}
+	renew := func() {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		held := fake.held["builder"]
+		held.ExpiresAt = time.Now().Add(time.Minute)
+		fake.held["builder"] = held
+	}
+	renew()
+	e.refreshTokenFiles(t.Context(), nil, run2, box)
+	renewed, _ := box.ReadFile(t.Context(), path)
+	if !strings.HasPrefix(string(renewed), "fake_issued_") || string(renewed) == token {
+		t.Fatalf("the poll left %q in the vendor's file once its token renewed, want the new token", renewed)
+	}
+	file.Rewritten = false
+	renew()
+	e.refreshTokenFiles(t.Context(), nil, run2, box)
+	if again, _ := box.ReadFile(t.Context(), path); string(again) != string(renewed) {
+		t.Error("the poll rewrote a vendor's file the vendor left to the launch")
 	}
 }

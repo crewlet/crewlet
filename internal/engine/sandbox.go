@@ -430,7 +430,10 @@ type runEnv struct {
 // `${NPM_TOKEN}` in an .npmrc are the box's own, expanded there from the run
 // environment the step's env just filled. A file whose whole reference does
 // not resolve is not written where its step lists the path under
-// `optional_keys`, and is otherwise the run's gap like an env value.
+// `optional_keys`, and is otherwise the run's gap like an env value. The
+// integrations' own files ([seataccess.BoxFile]) are a step of their own,
+// ahead of every other, and never a gap: one that does not resolve is said
+// as a box default is.
 //
 // NEW MAPS, never the steps' own: the provider-wide steps are the manager's,
 // shared by every launch on this node, and a body resolved into them would be
@@ -531,7 +534,7 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	// layer here sets is that layer's, and one that does not resolve is left
 	// out and said like an identity fact, never a gap.
 	for _, d := range boxDefaults {
-		if _, set := merged[d.Env]; set {
+		if _, set := merged[d.Env]; set || d.File != nil {
 			continue
 		}
 		if missing := resolver.Missing(d.Value); len(missing) > 0 {
@@ -545,6 +548,32 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		out.defaults[d.Env] = resolver.Value(d.Value)
 	}
 
+	// AND THEIR FILES, written ahead of every step as one of their own, never
+	// into the environment, so none is judged as a sign-in. A path a step
+	// writes is that step's, and a file whose reference does not resolve is
+	// left out and said as a default is; the poll writes a rewritten one
+	// once its credential is issued ([Engine.refreshTokenFiles]).
+	var supplied map[string]string
+	for _, d := range suppliedFiles(setup, boxDefaults) {
+		content, unresolved := secrets.ReadContent(d.File.Ref, resolver.LookupOK)
+		if name, whole := envref.Whole(d.File.Ref); whole && content == "" {
+			unresolved = name
+		}
+		if unresolved != "" {
+			facts.hold(d.File.Path, []string{unresolved}, false, "", false)
+			out.facted = append(out.facted, "integrations."+string(d.Kind))
+			continue
+		}
+		if supplied == nil {
+			supplied = map[string]string{}
+		}
+		supplied[d.File.Path] = content
+		out.secrets = append(out.secrets, content)
+	}
+	if supplied != nil {
+		out.setup = append([]sandbox.SetupStep{{Name: integrationFilesStep, Files: supplied}}, out.setup...)
+	}
+
 	out.gap = gap.missing(seat.Handle(), "the run")
 	out.facts = facts.missing(seat.Handle(), "the run")
 	var held []*credentialMissing
@@ -555,6 +584,30 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	}
 	states := e.mintingStates(ctx, held)
 	out.gap, out.facts = out.gap.judged(states), out.facts.judged(states)
+	return out
+}
+
+// integrationFilesStep names the setup step a launch writes the integrations'
+// box files in ([seataccess.BoxFile]), ahead of every step a person writes.
+const integrationFilesStep = "integration-files"
+
+// suppliedFiles are the files among defaults ([seataccess.BoxDefault.File])
+// whose path no step among steps writes: a person's file is theirs, as a
+// person's variable is. ONE ANSWER for the launch that writes them and the
+// poll that keeps the rewritten ones current.
+func suppliedFiles(steps []sandbox.SetupStep, defaults []seataccess.BoxDefault) []seataccess.BoxDefault {
+	written := map[string]bool{}
+	for _, step := range steps {
+		for path := range step.Files {
+			written[path] = true
+		}
+	}
+	var out []seataccess.BoxDefault
+	for _, d := range defaults {
+		if d.File != nil && !written[d.File.Path] {
+			out = append(out, d)
+		}
+	}
 	return out
 }
 

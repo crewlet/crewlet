@@ -45,6 +45,20 @@ type Box struct {
 	// Env is each variable: the lines a person adds to the seat's box
 	// settings ([ByYou]), then those the engine supplies itself ([ByCrewlet]).
 	Env []BoxLine `json:"env"`
+
+	// Files are the files the engine writes into the box itself
+	// ([ByCrewlet]), by path; omitted where it writes none.
+	Files []BoxFileLine `json:"files,omitempty"`
+}
+
+// BoxFileLine is one file in a seat's box: at Path, relative to the box's
+// home, holding Value, the `${VAR}` reference as configured and never what it
+// resolves to; Rewritten where the completion poll keeps it current.
+type BoxFileLine struct {
+	Path      string    `json:"path"`
+	Value     string    `json:"value"`
+	Rewritten bool      `json:"rewritten"`
+	By        StepActor `json:"by"`
 }
 
 // BoxLine is one variable in a seat's box: Name set to Value. A person's line

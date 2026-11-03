@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // A seat's credential issued at use, by whichever integration issues it.
@@ -435,24 +436,43 @@ func (e *Engine) refreshTokenFiles(
 	e.tokenWaits.tell(ctx, job, story, e.tokenWaitForget(), attrs)
 }
 
-// issuedFiles are the paths among steps' files that hold each variable an
-// integration issues seat, by variable: the files a box keeps an issued token
-// in. Empty where the seat names none, which costs the poll no resolution.
+// issuedFiles are the files a box keeps each variable an integration issues
+// seat in, by variable: those among steps' files whose whole body names it,
+// and the integrations' own files the poll rewrites whose reference is it
+// ([seataccess.BoxFile.Rewritten]). Empty where the seat names none, which
+// costs the poll no resolution.
 func (e *Engine) issuedFiles(c *Company, seat *org.Role, steps []sandbox.SetupStep) map[string][]string {
+	supplied := suppliedFiles(steps, e.boxDefaults(c.Config, seat.Handle()))
 	var out map[string][]string
 	for _, issuer := range e.seatIssuers() {
 		name := issuer.variable(c, seat.Handle())
 		if name == "" {
 			continue
 		}
-		if paths := tokenFiles(steps, name); len(paths) > 0 {
+		paths := tokenFiles(steps, name)
+		for _, d := range supplied {
+			if ref, whole := envref.Whole(d.File.Ref); d.File.Rewritten && whole && ref == name {
+				paths = append(paths, d.File.Path)
+			}
+		}
+		if len(paths) > 0 {
 			if out == nil {
 				out = map[string][]string{}
 			}
-			out[name] = paths
+			slices.Sort(paths)
+			out[name] = slices.Compact(paths)
 		}
 	}
 	return out
+}
+
+// boxDefaults is what the registered vendors put in the box of the seat with
+// handle ([seataccess.BoxDefaults]); [Engine.boxSupply] replaces it in a test.
+func (e *Engine) boxDefaults(c *config.Company, handle string) []seataccess.BoxDefault {
+	if e.boxSupply != nil {
+		return e.boxSupply(c, handle)
+	}
+	return seataccess.BoxDefaults(c, handle)
 }
 
 // writeTokenFiles writes value, the token t issued, into each of paths that

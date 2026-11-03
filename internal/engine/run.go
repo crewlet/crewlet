@@ -56,6 +56,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -101,6 +102,9 @@ type Engine struct {
 	// for a test of the contract they share; nil is the build's
 	// ([Engine.seatIssuers]). See issued.go.
 	issuers []seatIssuer
+	// boxSupply replaces what the registered vendors put in a seat's box,
+	// for a test of a vendor's files; nil is theirs ([Engine.boxDefaults]).
+	boxSupply func(c *config.Company, handle string) []seataccess.BoxDefault
 	// githubPulls reads a pull request for a chat link's preview through
 	// the same agents' apps the participant lookup reads with, rebuilt
 	// with it on every wiring and emptied when GitHub is retired. See

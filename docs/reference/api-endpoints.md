@@ -4144,6 +4144,12 @@ exact `sandbox.env` lines the seat needs, each variable set to the seat's own
 sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
 settings the engine supplies itself, as configured (`"by": "crewlet"`):
 `{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "by": "you"}]}`.
+While the seat's lane is on, `files` lists the files the engine writes into the
+box itself, by path under the box's home, each with its reference as
+configured and never its value, and `rewritten` where the completion poll keeps
+it current: `{"path": ".config/crewlet/token", "value": "${VENDOR_TOKEN_QA}",
+"rewritten": true, "by": "crewlet"}`. It is absent where the engine writes
+none, and `env` is a list, empty or not, wherever `box` is sent.
 With no server, `tool` is `live` or `waiting` only while the seat's box sets
 every one of its own lines exactly so.
 
