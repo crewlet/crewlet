@@ -66,7 +66,7 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 	}
 	res, err := tx.ExecContext(ctx, openChangeSQL, o.ChangeID, o.RepoID, next, o.Title, len(o.Body),
 		string(state), o.SourceRef, o.TargetRef, o.Head, owner, string(kind), operator, string(work.Backend),
-		work.ID, work.Key, work.Project, o.TurnID, o.RunID, at.at(), at.packed, at.packed)
+		work.ID, work.Key, work.Project, o.TurnID, o.RunID, at.at(), at.packed, at.packed, at.at())
 	if err != nil {
 		return 0, fmt.Errorf("code: open change %s at %s: %w", o.ChangeID, at.position, err)
 	}
@@ -196,7 +196,7 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 		next.state, next.mergedVia, next.mergeOID = ChangeStateMerged, MergedViaPush, p.TargetOID
 		next.mergedAt = sql.NullInt64{Int64: at.at(), Valid: true}
 	}
-	next.version, next.position = row.version+1, at.packed
+	next.version, next.position, next.updatedAt = row.version+1, at.packed, at.at()
 	if err := writeChanges(ctx, tx, at.maxVariables, write, []*changeRow{&next}); err != nil {
 		return 0, fmt.Errorf("code: write change %s at %s: %w", changeID, at.position, err)
 	}
@@ -320,7 +320,7 @@ func writeChanges(ctx context.Context, tx store.Execer, maxVariables int, w chan
 				r.head, r.revision, r.owner, string(r.ownerKind), r.operator, string(r.work.Backend), r.work.ID,
 				r.work.Key, r.work.Project, r.turn, r.run, r.openedAt, r.opened, r.closedAt, r.closeReason,
 				r.mergedAt, string(r.mergedVia), r.mergeOID, r.mergedBy, string(r.mergedByKind), r.mergedOperator,
-				r.overrideReason, r.version, r.position}
+				r.overrideReason, r.version, r.position, r.updatedAt}
 		})
 	return err
 }
@@ -478,7 +478,7 @@ func changeNotApplied(ctx context.Context, at applyContext, repoID, changeID, wh
 // where they rewrite the same indexes:
 //
 //   - changeHeadMoved, a push's move of a live change's source: its head and
-//     revision — code_changes_target_idx alone.
+//     revision — code_changes_target_idx, the one index the head is in.
 //   - changeStateMoved, a draft's state, a close, a reopen, and a push's close
 //     of a change whose source it deleted: the state with a close's columns,
 //     and the head and revision that a reopen, or the record's own earlier
@@ -490,14 +490,19 @@ func changeNotApplied(ctx context.Context, at applyContext, repoID, changeID, wh
 //     with a merge's columns — who merged it through its gate, and a person's
 //     override, among them, which no index holds — and the head and revision
 //     — those, and code_changes_merge_idx.
-//   - changeEdited, an edit of the title or the description: no index.
+//   - changeEdited, an edit of the title or the description: no index of its
+//     own.
 //   - changeItemEdited, an edit that sets or clears the work item, beside the
-//     text: code_changes_work_idx alone.
-//   - changeRetargeted, a retarget: code_changes_target_idx alone.
+//     text: code_changes_work_idx.
+//   - changeRetargeted, a retarget: code_changes_target_idx.
 //
-// Every write moves the change's version and position, which no index holds.
+// EVERY WRITE moves the change's version, position and updated_at, the last
+// the key of code_changes_updated_idx (replicated 0142): what a listing
+// narrowed to a window walks. So each kind rewrites that index beside the
+// ones named above — a head move two entries where it rewrote one — the cost
+// of saying when a change last moved, which no column already said.
 // TestAChangeWriteRewritesOnlyTheIndexesItMoves holds each kind to the
-// indexes its plan rewrites, and the push apply's head moves to the one: an
+// indexes its plan rewrites, and the push apply's head moves to those two: an
 // index added on a column a write sets — the head's above all — is a decision
 // that test makes somebody take, never a cost nobody saw.
 type changeWrite string
@@ -507,24 +512,27 @@ type changeWrite string
 const (
 	changeOpened    changeWrite = `ON CONFLICT (id) DO NOTHING`
 	changeHeadMoved changeWrite = `ON CONFLICT (id) DO UPDATE SET head_oid = excluded.head_oid,
-		revision = excluded.revision, version = excluded.version, position = excluded.position`
+		revision = excluded.revision, version = excluded.version,
+		position = excluded.position, updated_at = excluded.updated_at`
 	changeStateMoved changeWrite = `ON CONFLICT (id) DO UPDATE SET state = excluded.state,
 		closed_at = excluded.closed_at, close_reason = excluded.close_reason, head_oid = excluded.head_oid,
-		revision = excluded.revision, version = excluded.version, position = excluded.position`
+		revision = excluded.revision, version = excluded.version,
+		position = excluded.position, updated_at = excluded.updated_at`
 	changeMerged changeWrite = `ON CONFLICT (id) DO UPDATE SET state = excluded.state,
 		merged_at = excluded.merged_at, merged_via = excluded.merged_via, merge_oid = excluded.merge_oid,
 		merged_by = excluded.merged_by, merged_by_kind = excluded.merged_by_kind,
 		merged_operator_id = excluded.merged_operator_id, override_reason = excluded.override_reason,
 		head_oid = excluded.head_oid, revision = excluded.revision, version = excluded.version,
-		position = excluded.position`
+		position = excluded.position, updated_at = excluded.updated_at`
 	changeEdited changeWrite = `ON CONFLICT (id) DO UPDATE SET title = excluded.title,
-		body_bytes = excluded.body_bytes, version = excluded.version, position = excluded.position`
+		body_bytes = excluded.body_bytes, version = excluded.version,
+		position = excluded.position, updated_at = excluded.updated_at`
 	changeItemEdited changeWrite = `ON CONFLICT (id) DO UPDATE SET title = excluded.title,
 		body_bytes = excluded.body_bytes, work_backend = excluded.work_backend, work_id = excluded.work_id,
 		work_key = excluded.work_key, work_project = excluded.work_project, version = excluded.version,
-		position = excluded.position`
+		position = excluded.position, updated_at = excluded.updated_at`
 	changeRetargeted changeWrite = `ON CONFLICT (id) DO UPDATE SET target_ref = excluded.target_ref,
-		version = excluded.version, position = excluded.position`
+		version = excluded.version, position = excluded.position, updated_at = excluded.updated_at`
 )
 
 // The lifecycle's writes beside a change's row. A statement that reads a row
@@ -537,8 +545,8 @@ const (
 	nextChangeSQL = `SELECT next_change FROM code_repos WHERE id = ?`
 	openChangeSQL = `INSERT INTO code_changes (id, repo_id, number, title, body_bytes, state, source_ref, target_ref,
 			head_oid, revision, owner, owner_kind, owner_operator_id, work_backend, work_id, work_key, work_project,
-			created_turn, created_run, opened_at, opened_position, version, position)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+			created_turn, created_run, opened_at, opened_position, version, position, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 		ON CONFLICT (id) DO NOTHING`
 	openedSQL  = `UPDATE code_repos SET next_change = next_change + 1, version = ? WHERE id = ?`
 	touchedSQL = `UPDATE code_repos SET version = ? WHERE id = ?`
@@ -560,5 +568,5 @@ const (
 	// in its order — whole, since a NOT NULL column without a default is one
 	// even a row an upsert finds by its key must bind.
 	insertChangesSQL = `INSERT INTO code_changes (` + changeColumns + `) VALUES `
-	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 )

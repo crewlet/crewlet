@@ -51,13 +51,14 @@ import (
 //     repository's ended entries and its landings below their target's green
 //     row past [QueueHistory], which its own candidates', ejections' and
 //     landings' horizons remove while its queues work (M5-D34).
-//   - a CLOSE_SETTLED ([CloseSettled]) settles the close a landed entry owes
-//     its change's work item (code_queue.close_op, which the land sets
-//     where the enqueue asked it): its home closes the item AS THE ENQUEUER
+//   - a CLOSE_SETTLED ([CloseSettled]) settles the closes landed entries owe
+//     their changes' work items (code_queue.close_op, which the land sets
+//     where the enqueue asked it): its home closes each item AS ITS ENQUEUER
 //     on whichever turn first reads the owed close, and records how the
-//     close ended — a landing answered pending, a home that stopped between
-//     the landing and the close, a tracker that could not answer: each
-//     leaves the close owed for the next turn on any home, never lost.
+//     turn's closes ended, in one record — a landing answered pending, a
+//     home that stopped between the landing and the close, a tracker that
+//     could not answer: each leaves the close owed for the next turn on any
+//     home, never lost.
 //
 // # A train and a landing are built at a drop epoch
 //
@@ -418,22 +419,46 @@ type QueueSweep struct {
 	Through time.Time `json:"through"`
 }
 
-// CloseSettled settles the close a landed entry owes its change's work item
-// (M5-D27, code_queue.close_op): the record of op close_settled on the
-// repository's subject, which the repository's home asks once its close as
-// the entry's enqueuer has ENDED — the item closed, or definitively not —
-// never while the tracker's answer is still unknown, which leaves the close
+// CloseSettled settles the closes landed entries owe their changes' work
+// items (M5-D27, code_queue.close_op): the record of op close_settled on the
+// repository's subject, which the repository's home asks once each close as
+// its entry's enqueuer has ENDED — the item closed, or definitively not —
+// never while the tracker's answer is still unknown, which leaves that close
 // owed for the next turn on whichever home holds the repository.
 //
-// ONE ENTRY A RECORD: a close is one tracker write of its own, as the
-// enqueuer, so its settling is one record beside it, and a failed one names
-// its change in a notice of its own ([CloseSettled.Routing]).
+// EVERY CLOSE A TURN ENDED, IN ONE RECORD: a close is one tracker write of
+// its enqueuer's, but how it ended is the home's to record, and a landing of
+// [MaxLandEntries] changes asking their items closed would otherwise cost the
+// code log as many appends, one after another inside one queue turn, each a
+// decide and an acknowledgement of the committer's. A not_closed close still
+// names its change in a notice of its own: the record carries a routing a
+// change ([CloseSettled.Routing]), as an eject's and a land's do. An entry
+// another settle already cleared is SKIPPED by the decide, never a refusal
+// of the rest; a record none of whose entries owes a close any more is
+// refused stale.
 //
 // BASE FORMAT, under the condition this file's head states; once a build
 // without it has run it takes {Name: "MutationRecord.Op close_settled",
 // Since: 2, Path: []string{"op"}, Equals: "close_settled"}.
 type CloseSettled struct {
-	RepoID  string       `json:"repo_id"`
+	RepoID string `json:"repo_id"`
+	// Settled is how each close ended, an entry once, at most
+	// [MaxOwedCloses] — as the committer records it, only the entries its
+	// snapshot found still owing their close.
+	Settled []SettledClose `json:"settled"`
+	// Routing is whom the record's not_closed closes tell — for each, the
+	// change's authors and its enqueuer, under `merged`, the detail beside it
+	// ([ChangeRouting.NotClosed]) — a routing a change in Settled's order,
+	// STAMPED BY THE COMMITTER and kept within the record's room
+	// ([keptRoutings]); none for a closed one, which tells nobody. Under the
+	// condition this file's head states, it takes {Name:
+	// "CloseSettled.Routing", Since: 2, Op: "close_settled", Path:
+	// []string{"mutation", "routing"}} once a build without it has run.
+	Routing []ChangeRouting `json:"routing,omitempty"`
+}
+
+// SettledClose is how one landed entry's owed close ended.
+type SettledClose struct {
 	EntryID string       `json:"entry_id"`
 	Outcome CloseOutcome `json:"outcome"`
 	// Detail is why a close that ended not_closed was not — the engine's
@@ -441,14 +466,6 @@ type CloseSettled struct {
 	// no longer lets update it, the tracker's refusal) — at most
 	// [MaxCloseDetail] bytes; "" for a closed one.
 	Detail string `json:"detail,omitempty"`
-	// Routing is whom a not_closed settle tells — the change's authors and
-	// its enqueuer, under `merged`, the detail beside it
-	// ([ChangeRouting.NotClosed]) — STAMPED BY THE COMMITTER; nil for a
-	// closed one, which tells nobody. Under the condition this file's head
-	// states, it takes {Name: "CloseSettled.Routing", Since: 2, Op:
-	// "close_settled", Path: []string{"mutation", "routing"}} once a build
-	// without it has run.
-	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // CloseOutcome is how a landed entry's owed close ended — a closed set, in
@@ -477,32 +494,57 @@ func (o CloseOutcome) Valid() bool { return slices.Contains(CloseOutcomes(), o) 
 // sentence a person reads in their Inbox, never a log.
 const MaxCloseDetail = MaxNoticeExcerpt
 
-// validate refuses a settle no home asks: an entry that is no bare UUIDv7,
-// an outcome none of [CloseOutcomes], a closed one carrying a detail or a
+// validate refuses a settle no home asks: no close or more than
+// [MaxOwedCloses], an entry that is no bare UUIDv7 or is named twice, an
+// outcome none of [CloseOutcomes], a closed one carrying a detail or a
 // not_closed one none, a detail past [MaxCloseDetail], a routing its asker
 // set.
 func (c CloseSettled) validate() error {
 	if err := validRepoID("close_settled.repo_id", c.RepoID); err != nil {
 		return err
 	}
-	if err := stampedRouting("close_settled", c.Routing); err != nil {
-		return err
+	if len(c.Routing) > 0 {
+		return stampedRouting("close_settled", &c.Routing[0])
 	}
-	if err := bareUUIDv7("close_settled.entry_id", c.EntryID); err != nil {
-		return err
+	switch n := len(c.Settled); {
+	case n == 0:
+		return badField("close_settled.settled", "a settle settles at least one close")
+	case n > MaxOwedCloses:
+		return badField("close_settled.settled", "%d closes, past the %d one record settles (MaxOwedCloses)",
+			n, MaxOwedCloses)
 	}
-	switch {
-	case !c.Outcome.Valid():
-		return badField("close_settled.outcome", "%q is not one of %s", c.Outcome, words.Or(CloseOutcomes()))
-	case c.Outcome == CloseClosed && c.Detail != "":
-		return badField("close_settled.detail", "a closed item is settled with no reason it was not")
-	case c.Outcome == CloseNotClosed && c.Detail == "":
-		return badField("close_settled.detail", "a close that was not made says why")
-	case len(c.Detail) > MaxCloseDetail:
-		return badField("close_settled.detail", "%d bytes, past the %d a settle's sentence holds "+
-			"(MaxCloseDetail)", len(c.Detail), MaxCloseDetail)
+	named := map[string]bool{}
+	for i, s := range c.Settled {
+		field := fmt.Sprintf("close_settled.settled[%d]", i)
+		if err := bareUUIDv7(field+".entry_id", s.EntryID); err != nil {
+			return err
+		}
+		if named[s.EntryID] {
+			return badField(field+".entry_id", "%s is named twice", s.EntryID)
+		}
+		named[s.EntryID] = true
+		switch {
+		case !s.Outcome.Valid():
+			return badField(field+".outcome", "%q is not one of %s", s.Outcome, words.Or(CloseOutcomes()))
+		case s.Outcome == CloseClosed && s.Detail != "":
+			return badField(field+".detail", "a closed item is settled with no reason it was not")
+		case s.Outcome == CloseNotClosed && s.Detail == "":
+			return badField(field+".detail", "a close that was not made says why")
+		case len(s.Detail) > MaxCloseDetail:
+			return badField(field+".detail", "%d bytes, past the %d a settle's sentence holds "+
+				"(MaxCloseDetail)", len(s.Detail), MaxCloseDetail)
+		}
 	}
 	return nil
+}
+
+// entries is the entries c settles, in its order.
+func (c CloseSettled) entries() []string {
+	ids := make([]string, len(c.Settled))
+	for i, s := range c.Settled {
+		ids[i] = s.EntryID
+	}
+	return ids
 }
 
 // validate refuses a candidate record no home builds ([ErrInvalidProposal],

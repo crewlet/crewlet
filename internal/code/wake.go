@@ -36,7 +36,7 @@ const (
 	// MetaVerdict is a review's verdict, on a wake a review sent.
 	MetaVerdict = "verdict"
 	// MetaNotClosed is why a merged change's work item was not closed, on
-	// the wake a close_settled that ended not_closed sent
+	// the wake a close_settled sent for a close that ended not_closed
 	// ([ChangeRouting.NotClosed]).
 	MetaNotClosed = "not_closed"
 	// MetaWorkBackend, MetaWorkID, MetaWorkKey and MetaWorkProject are the

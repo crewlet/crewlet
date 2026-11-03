@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/compact"
@@ -517,16 +518,16 @@ func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
 		}
 	})
 	// Each other build is asked of its listing on the test's goroutine, and
-	// run on its own until its point holds it; once it has landed, the copy
-	// is let settle where its node does more in the background — a
-	// publication's layer, which the installer places by swapping the copy —
-	// so the expunge that follows plans over a copy no installer is still
-	// placing.
+	// run on its own until its point holds it. Once it has landed, the
+	// expunge that follows is made again while it is busy, with no wait for
+	// what the node does in the background: a publication's layer, which the
+	// installer places by swapping the copy, may swap the one the expunge's
+	// sync pinned, and a plan from that copy is refused busy
+	// (cache.ErrSuperseded), never read as a repository holding no pack.
 	for _, other := range []struct {
-		name   string
-		point  codefault.Point
-		build  func(x *fixture, c *compact.Compactor) func() compact.Outcome
-		settle func(x *fixture)
+		name  string
+		point codefault.Point
+		build func(x *fixture, c *compact.Compactor) func() compact.Outcome
 	}{
 		{"an expunge while a compaction runs", codefault.CompactAfterUpload,
 			func(x *fixture, c *compact.Compactor) func() compact.Outcome {
@@ -535,7 +536,7 @@ func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
 					out, _ := compactWhileBusy(x.t, c, cand)
 					return out
 				}
-			}, func(*fixture) {}},
+			}},
 		{"an expunge while a publication runs", codefault.PublishAfterUpload,
 			func(x *fixture, c *compact.Compactor) func() compact.Outcome {
 				cand := x.publicationCandidate()
@@ -543,7 +544,7 @@ func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
 					out, _ := publishWhileBusy(x.t, c, cand)
 					return out
 				}
-			}, func(x *fixture) { x.awaitInstalled(1) }},
+			}},
 	} {
 		t.Run(other.name, func(t *testing.T) {
 			t.Parallel()
@@ -577,11 +578,52 @@ func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
 			if out := <-done; out != compact.OutcomeApplied {
 				t.Fatalf("the build once let go: %s, want applied", out)
 			}
-			other.settle(x)
 			if out, err := expungeWhileBusy(t, c, x.mustOwe()); out != compact.OutcomeApplied {
 				t.Errorf("the expunge once the build landed: %s, %v; want applied", out, err)
 			}
 		})
+	}
+}
+
+// A PASS OVER A COPY A SWAP REPLACED PLANS NOTHING: a swap between a pass's
+// sync and its read of the live packs leaves the copy it pinned none, which
+// the cache refuses (cache.ErrSuperseded) rather than answer as a repository
+// holding no pack. A purge's expunge, a compaction and a publication are each
+// busy for it — planned over nothing, the expunge would have found the purge
+// served, and a weekly scan the repository clean for a week — and the next
+// pass, syncing past the swap, plans over what the copy serving holds.
+//
+// Mutation: read the refusal as no pack (the expunge's Packs error dropped) →
+// the purge's expunge answers not due, red.
+func TestAPassOverACopyASwapReplacedPlansNothing(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	x.pushN(code.CompactMinMerge, 4<<10)
+	x.leak("feature")
+	x.purge()
+	cc := countedOver(x.node().Cache())
+	cc.superseded = true
+	c, _, l := x.compactorOf(func(o *compact.Options) { o.Cache = cc })
+	if out, err := c.Expunge(t.Context(), x.mustOwe()); out != compact.OutcomeBusy ||
+		!errors.Is(err, cache.ErrSuperseded) {
+		t.Errorf("the purge's expunge over a replaced copy answered %s, %v; want busy", out, err)
+	}
+	if n := l.count("code_expunge_not_due"); n != 0 {
+		t.Errorf("the expunge over a replaced copy judged the repository not due %d times, want none:\n%s", n, l)
+	}
+	if out, err := c.Compact(t.Context(), x.candidate()); out != compact.OutcomeBusy ||
+		!errors.Is(err, cache.ErrSuperseded) {
+		t.Errorf("a compaction over a replaced copy answered %s, %v; want busy", out, err)
+	}
+	if out, err := c.Publish(t.Context(), x.publicationCandidate()); out != compact.OutcomeBusy ||
+		!errors.Is(err, cache.ErrSuperseded) {
+		t.Errorf("a publication over a replaced copy answered %s, %v; want busy", out, err)
+	}
+	cc.mu.Lock()
+	cc.superseded = false
+	cc.mu.Unlock()
+	if out, err := expungeWhileBusy(t, c, x.mustOwe()); out != compact.OutcomeApplied {
+		t.Errorf("the next pass, past the swap, answered %s, %v; want the purge's expunge applied", out, err)
 	}
 }
 

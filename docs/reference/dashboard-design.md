@@ -1349,7 +1349,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/worklet/search` | **Search**: the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/worklet/{KEY}` | **Project**: one project as Worklet's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/worklet/{KEY}-{n}` · `#/worklet/{id}` | **Task**: description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost; and, where the company hosts code and a change names the task as its work item, a **Changes** tab listing every such change | `tab=task\|changes` (the strip is drawn only once a change is found) · `activity=all\|comments\|turns\|changes` · `list=` |
-| `#/code` | **Code › Changes**, Code's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, standing blockers and when it was opened — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer or a need) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `peek=change:{repo}!{n}` |
+| `#/code` | **Code › Changes**, Code's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, open findings and when it last moved — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer, a need or a window) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `window=24h\|7d\|30d` · `peek=change:{repo}!{n}` |
 | `#/code/repos` | **Code › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its page | `status=importing\|active\|archived\|deleted\|purging` (none is importing, active and archived) |
 | `#/code/repos/{name}` | **A repository**: its header (name, description, state, owner, default branch and head, which seats read it, last push, size) and tabs **Overview** (what it holds and the README at its default branch's root), **Files** (a directory's listing or a file's numbered lines at a revision, the lines picked ruled, its **Blame**, its **History** and a **Permalink** at the commit the revision resolved to), **Branches** (its live branches by name, each opening its files), **Commits** (the history at a revision, of a path or of every path, with who pushed each commit), **Pushes** (its push history), **Checks** (every attempt it keeps, newest ended first, each opening in the check pane) and **Settings** (its settings, rules, merge gates and path owners, shown and never edited here: a declared repository's lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=overview\|files\|branches\|commits\|pushes\|checks\|settings` · on Files and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Files, `lens=blame` and `lines=` (`12`, or `12-20`) |
 | `#/code/repos/{name}/commits/{sha}` | **A commit**, by its whole id: its header (subject, short id, repository, author, when it was authored and committed, its parents), who pushed it — the seat or the credential, when and how, and the turn, coding run and work item behind a seat's push, as the engine recorded them — the changes it belongs to (those it merged, and those whose revision it heads), and what it changed against its first parent (a root commit's from git's empty tree) in the one `DiffView` *(hidden where the company hosts no code)*. An abbreviated id is Not Found | `file=` (a path) · `layout=unified\|split` |
@@ -7767,24 +7767,31 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   the changes waiting on somebody — so a page is what the engine READ, can be
   short or empty with a cursor, and is never re-sorted. **The engine keeps no
   index of every change**: a listing names a state, a repository, a work item,
-  a reviewer or what its changes wait on, and is refused naming none. So the
+  a reviewer, what its changes wait on or a window they moved in, and is
+  refused naming none. So the
   section lists the OPEN changes until told otherwise (`state=`, the engine's
   `CHANGE_STATES`, held to `code.ChangeStates`), and **Every state** is offered
-  only where a repository, a work item, a reviewer or a need narrows the walk —
+  only where a repository, a work item, a reviewer, a need or a window narrows
+  the walk —
   said in place, never sent, where nothing does. **Waiting on** is the
   engine's `needs` (`CHANGE_NEEDS`, held to `code.Needs`): on me, on a review,
-  on a fix, on a person. `repo=` is chosen in the bar from the repositories the
+  on a fix, on a person. **Moved** is the engine's `window` (`CHANGE_WINDOWS`,
+  held to `code.ChangeWindows`): the changes that moved within the last day,
+  week or month; with nothing else narrowing the walk the engine walks its two
+  indexes of that instant and the rows come newest move first. `repo=` is chosen in the bar from the repositories the
   reader may read; `owner=`, `reviewer=` and `work=` arrive from a link (the
   peek's owner and work item) and are said in the bar with a Clear. **A row's
   readiness is the engine's judgement**, made again on the read that answered
   it against its own chart (`code.ReadinessOf`): a Meter of the preconditions
   met of how many, drawn as done only when every one is, and titled by the
-  engine's sentence of the first that is not; the **Blockers** are that
-  readiness's standing blockers, named and counted beyond, never a count of
-  rows this screen does not hold; a change no longer live has neither. The
-  listing carries no instant of a change's last record, so the row's time is
-  when it was **Opened**, and no conversation counters, so it counts the
-  standing blockers rather than the open findings. **Needs a person** is a band
+  engine's sentence of the first that is not; a change no longer live has
+  none. **Open findings** is the engine's count of the change's findings none
+  of its authors has answered (`code_conversations.open_findings`), and
+  **Updated** when it last moved: the later of its lifecycle's last record (an
+  open, an edit, a close, a merge, a push that moved its head) and the last
+  thing somebody wrote about it (an ask for review, a comment, a review, an
+  answer to a finding) — never the home's facts, so a target branch that moved
+  re-dates nothing. **Needs a person** is a band
   above the grid: the first five changes the engine's `needs=person` listing
   keeps, each with the sentence of what it waits on — a change whose first
   unmet precondition waits on persons alone, which no agent will be woken to
@@ -7815,7 +7822,11 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   timeline in the order the records landed on the code log — each review with
   its verdict and summary, each thread by its first comment with its replies
   under it, each revision pushed — never by a clock a node read, with the
-  reader's own comment below. **Files** is the revision's files (`rev=`, the
+  reader's own comment below. The engine pages reviews and comments oldest
+  first, so what one page leaves out is the newest: **Load more** under the
+  timeline asks each part's page after the cursor its last one ended at, and
+  the timeline is built over every page loaded, so a reply on a later page
+  joins its root. **Files** is the revision's files (`rev=`, the
   head by default; `since=` reads what changed since an earlier revision, the
   engine's interdiff), a page at a time — **Load more files** asks the page
   after from the cursor the last one ended at — and one file's patch (`file=`) as git wrote it, read
@@ -7825,7 +7836,9 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   page read (`lib/patchPages.ts`); every finding
   the engine placed in that revision (`code.PlaceFindings`, the rule a seat's
   `code_get_change` reads by) is drawn under its last line, every thread on a
-  line of it under its line, and what has no line here — a finding whose own
+  line of it under its line — the findings and comments past their first page
+  loaded by **Load more findings and comments** above the diff, each part's
+  next page at one press — and what has no line here — a finding whose own
   lines changed (outdated), one whose file is gone, a thread on another
   revision — is drawn above the diff under a Disclosure that counts it, never
   dropped. **On the head, a reviewer picks lines by their numbers** and drafts

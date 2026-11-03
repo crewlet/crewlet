@@ -10,6 +10,7 @@
 import {
   CHANGE_NEEDS,
   CHANGE_STATES,
+  CHANGE_WINDOWS,
   CODE_PHRASES,
   COMMAND_OUTCOMES,
   FINDING_CATEGORIES,
@@ -264,6 +265,33 @@ export const CHANGE_NEED_FILTERS: readonly { value: string; label: string }[] = 
   })),
 ];
 
+/** A window a listing of changes narrows to (`contract/code.ts`). */
+export type ChangeWindow = (typeof CHANGE_WINDOWS)[number];
+
+/**
+ * What each window lists, in words — keyed on the contract's set, so a window
+ * the engine grows is a type error here until it has its words.
+ */
+const CHANGE_WINDOW_WORDS: Readonly<Record<ChangeWindow, string>> = {
+  "24h": "Moved in the last day",
+  "7d": "Moved in the last week",
+  "30d": "Moved in the last month",
+};
+
+/**
+ * The listing's windows a reader picks from: none first — the listing
+ * narrowed by no instant — then the engine's, shortest first.
+ */
+export const CHANGE_WINDOW_FILTERS: readonly { value: string; label: string }[] = [
+  { value: "", label: "Any time" },
+  ...CHANGE_WINDOWS.map((window) => ({ value: window, label: CHANGE_WINDOW_WORDS[window] })),
+];
+
+/** Whether a string is a window the engine lists by. */
+export function isChangeWindow(value: string): value is ChangeWindow {
+  return (CHANGE_WINDOWS as readonly string[]).includes(value);
+}
+
 /** Whether a string is a need the engine lists by. */
 export function isChangeNeed(value: string): value is ChangeNeed {
   return (CHANGE_NEEDS as readonly string[]).includes(value);
@@ -295,17 +323,6 @@ export function preconditionWord(kind: string): string {
   return (PRECONDITION_KINDS as readonly string[]).includes(kind)
     ? PRECONDITION_WORDS[kind as KnownPreconditionKind]
     : kind.replace(/_/g, " ");
-}
-
-/**
- * How many standing blockers hold a change back: those its readiness names
- * and those it counts beyond them — none where the blocker precondition is
- * met, or the change is no longer live and has no readiness.
- */
-export function standingBlockers(readiness: CodeReadiness | undefined): number {
-  const blocker = readiness?.preconditions.find((p) => p.kind === "blocker");
-  if (!blocker || blocker.state === "met") return 0;
-  return (blocker.blockers?.length ?? 0) + (blocker.blockers_omitted ?? 0);
 }
 
 /**

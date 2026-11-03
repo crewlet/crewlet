@@ -1499,7 +1499,13 @@ func (t *codeGetRepo) Call(ctx context.Context, args map[string]any) (tools.Resu
 	return t.CallForTurn(ctx, nil, args)
 }
 
-// codeRepoDetail is one repository in detail, as code_get_repo answers it.
+// codeRepoDetail is one repository in detail, as code_get_repo answers it:
+// every field of the repository's detail (code.RepoDetail) a reader acts on,
+// copied by name, so one the detail grows is carried here or named left out
+// with its reason (TestCodeGetRepoCarriesEveryDetailFieldOrSaysWhy) — the
+// purge a person asked for, and an import's end, were each read on the
+// detail and dropped here, so a model that asked for either could not learn
+// how it stood.
 type codeRepoDetail struct {
 	codeRepoRow
 	ManagedBy code.ManagedBy `json:"managed_by"`
@@ -1510,6 +1516,16 @@ type codeRepoDetail struct {
 	LiveBytes int64          `json:"live_bytes"`
 	CreatedAt time.Time      `json:"created_at,omitzero"`
 	DeletedAt time.Time      `json:"deleted_at,omitzero"`
+	// Expunge is where its expunges stand: the one open, a purge a person
+	// asked for and not yet served, and the last one committed — what the
+	// purge's own answer sends its asker here to read.
+	Expunge code.ExpungeState `json:"expunge,omitzero"`
+	// Remotes is where it stands with other hosts: its mirrors as its
+	// settings name them, the import its create filled it from and how that
+	// ended — its error, where it ended short, the engine's own sentence —
+	// and a pull mirror's last sync. Every credential in it is a ${VAR}
+	// reference, never a value.
+	Remotes code.RemoteState `json:"remotes,omitzero"`
 }
 
 // codeBranch is one branch: its name under refs/heads/, and its commit.
@@ -1627,7 +1643,8 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		out.Detail = &codeRepoDetail{codeRepoRow: repoRowOf(d.RepoSummary), ManagedBy: d.ManagedBy,
 			Refs: d.Refs, Branches: d.Branches, Tags: d.Tags, LivePacks: d.LivePacks,
-			LiveBytes: d.LiveBytes, CreatedAt: d.CreatedAt, DeletedAt: d.DeletedAt}
+			LiveBytes: d.LiveBytes, CreatedAt: d.CreatedAt, DeletedAt: d.DeletedAt, Expunge: d.Expunge,
+			Remotes: d.Remotes}
 		// THE RULES ONCE, WHOLE: beside the detail rather than in its row,
 		// which would answer each rule's push half a second time.
 		out.Detail.Protections = nil
@@ -1665,8 +1682,10 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// fit one answer with room to spare, so each list makes progress on every
 	// page (TestEveryRepositoryAtTheDomainsBoundsIsAnswered).
 	read := newForeignRead(turn, c.asker.Seat)
-	// ITS DESCRIPTION IS A NAME somebody chose ([codeListRepos]'s reason).
-	if out.Detail != nil && out.Detail.Description != "" {
+	// ITS DESCRIPTION IS A NAME somebody chose ([codeListRepos]'s reason), and
+	// so is every address its remotes name, a person's setting; an import's
+	// error is the engine's own sentence, naming objects by their ids.
+	if d := out.Detail; d != nil && (d.Description != "" || d.Remotes != (code.RemoteState{})) {
 		namesBy(read)
 	}
 	oneBranch := min(1, len(branches))

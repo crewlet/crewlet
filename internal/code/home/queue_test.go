@@ -68,10 +68,12 @@ type queueRows struct {
 	cancelled []code.CheckFinished
 	// owed is every landed entry still owing its work item's close, as a
 	// landing's apply leaves it (code_queue.close_op), until a settle
-	// clears it; settles every close_settled applied, in order — kept
-	// apart from records, which are the queue's trains and landings.
-	owed    []code.QueueWorkEntry
-	settles []code.CloseSettled
+	// clears it; settles every close a close_settled applied settled, in
+	// order, and settleRecords how many records applied them — kept apart
+	// from records, which are the queue's trains and landings.
+	owed          []code.QueueWorkEntry
+	settles       []code.SettledClose
+	settleRecords int
 	// pending, where set, answers a land pending: its rows applied, as the
 	// committer's would be, but not yet on the asker's.
 	pending bool
@@ -275,13 +277,22 @@ func (r *queueRows) Queue(_ context.Context, p code.QueueProposal) (code.QueueRe
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if s := p.CloseSettled; s != nil {
-		i := slices.IndexFunc(r.owed, func(e code.QueueWorkEntry) bool { return e.EntryID == s.EntryID })
-		if i < 0 {
-			return code.QueueResult{Refusal: code.MergeRefusalStale, Detail: "it owes its work item no close"},
+		// EACH CLOSE STILL OWED SETTLED, every other skipped, and a record
+		// settling none refused stale, as the decide does.
+		var settled []code.SettledClose
+		for _, c := range s.Settled {
+			i := slices.IndexFunc(r.owed, func(e code.QueueWorkEntry) bool { return e.EntryID == c.EntryID })
+			if i >= 0 {
+				r.owed = slices.Delete(r.owed, i, i+1)
+				settled = append(settled, c)
+			}
+		}
+		if len(settled) == 0 {
+			return code.QueueResult{Refusal: code.MergeRefusalStale, Detail: "none owes its work item a close"},
 				nil
 		}
-		r.owed = slices.Delete(r.owed, i, i+1)
-		r.settles = append(r.settles, *s)
+		r.settles = append(r.settles, settled...)
+		r.settleRecords++
 		r.seq++
 		return code.QueueResult{Outcome: statelog.OutcomeApplied, Position: r.position()}, nil
 	}
@@ -456,9 +467,9 @@ func (q *queueTasks) closes() (closed, asked []home.TaskClose) {
 	return slices.Clone(q.closed), slices.Clone(q.asked)
 }
 
-// settled is every close_settled the rows applied, and the closes still
-// owed.
-func (r *queueRows) settled() ([]code.CloseSettled, []code.QueueWorkEntry) {
+// settled is every close a close_settled the rows applied settled, and the
+// closes still owed.
+func (r *queueRows) settled() ([]code.SettledClose, []code.QueueWorkEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.settles), slices.Clone(r.owed)
@@ -1216,6 +1227,63 @@ func TestAFailedCloseIsRetried(t *testing.T) {
 	turn(t, l, rows)
 	if _, after := tasks.closes(); len(after) != len(before) {
 		t.Fatalf("a settled close was asked again: %+v", after[len(before):])
+	}
+}
+
+// A LANDING'S CLOSES ARE SETTLED IN ONE RECORD (M5-D27): a landing of three
+// changes, each asking its work item closed, is three tracker writes, each
+// as its enqueuer under its own step of the landing — and ONE close_settled
+// record of how all three ended, in the landing's order, the one the tracker
+// will not make settled not_closed with its sentence beside the two closed:
+// never a code-log append a change, one after another inside the queue turn.
+//
+// Mutation: settle each close in a record of its own → three records, red.
+func TestALandingsClosesAreSettledInOneRecord(t *testing.T) {
+	t.Parallel()
+	rows := newQueueRows(oid("a"), 1, 4)
+	why := "ENG-2 is a jira work item, which is closed where it lives"
+	entries := rows.enqueue(t, 3)
+	rows.mu.Lock()
+	for i := range rows.entries {
+		rows.entries[i].CloseTask = true
+		rows.entries[i].WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: fmt.Sprintf("task-%d", i),
+			Key: fmt.Sprintf("ENG-%d", i+1)}
+	}
+	rows.mu.Unlock()
+	tasks := &queueTasks{fail: func(c home.TaskClose) error {
+		if c.WorkItem.Key == "ENG-2" {
+			return &home.NotClosed{Why: why}
+		}
+		return nil
+	}}
+	l := queueLoop(t, rows, &queueChains{}, tasks)
+	turn(t, l, rows)
+	train, _ := rows.snapshot()
+	if len(train) != 1 || len(train[0].Commits) != 3 {
+		t.Fatalf("the premise: three changes at depth 1 and batch 4 built %+v, want one candidate of three", train)
+	}
+	rows.ended(train[0].TipOID, "unit", code.CheckStatePassed)
+	turn(t, l, rows)
+
+	if _, asked := tasks.closes(); len(asked) != 3 {
+		t.Fatalf("the landing asked %d closes, want its three changes'", len(asked))
+	}
+	rows.mu.Lock()
+	records := rows.settleRecords
+	rows.mu.Unlock()
+	settles, owed := rows.settled()
+	if records != 1 || len(settles) != 3 || len(owed) != 0 {
+		t.Fatalf("the landing's closes were settled by %d records as %+v with %d still owed, want one record "+
+			"of all three", records, settles, len(owed))
+	}
+	for i, s := range settles {
+		want := code.SettledClose{EntryID: entries[i].EntryID, Outcome: code.CloseClosed}
+		if i == 1 {
+			want.Outcome, want.Detail = code.CloseNotClosed, why
+		}
+		if s != want {
+			t.Errorf("close %d was settled %+v, want %+v", i, s, want)
+		}
 	}
 }
 

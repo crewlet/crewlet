@@ -221,7 +221,7 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	if kind == PartyPerson {
 		next.mergedOperator = m.Principal.OperatorID
 	}
-	next.version, next.position = row.version+1, at.packed
+	next.version, next.position, next.updatedAt = row.version+1, at.packed, at.at()
 	if err = writeChanges(ctx, tx, at.maxVariables, changeMerged, []*changeRow{&next}); err != nil {
 		return 0, fmt.Errorf("code: merge change %s at %s: %w", m.ChangeID, at.position, err)
 	}

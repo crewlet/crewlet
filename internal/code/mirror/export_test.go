@@ -55,7 +55,10 @@ func (m *Mirrors) CutOfWhatTheCopyHolds(ctx context.Context, repoID string, fres
 		return nil, err
 	}
 	defer sc.Remove()
-	held := m.o.Cache.Packs(s)
+	held, err := m.o.Cache.Packs(s)
+	if err != nil {
+		return nil, err
+	}
 	if len(held) == 0 {
 		return nil, fmt.Errorf("the copy of %s holds no pack to fetch again", repoID)
 	}

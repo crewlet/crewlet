@@ -155,7 +155,11 @@ func TestAnAdoptedPackLearnsWhenItArrivedFromItsRow(t *testing.T) {
 	s.Release()
 
 	s = w.sync(t, c, repo)
-	for _, p := range c.Packs(s) {
+	packs, err := c.Packs(s)
+	if err != nil {
+		t.Fatalf("Packs: %v", err)
+	}
+	for _, p := range packs {
 		if p.PackID != row.PackID {
 			continue
 		}

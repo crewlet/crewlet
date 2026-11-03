@@ -8,11 +8,17 @@
  * comment that started its thread, as the engine keeps them (thread order).
  * A comment on a line is drawn where its line is, on the Files tab, and here
  * only as a pointer to it.
+ *
+ * EVERY PAGE THE READER LOADS IS ONE TIMELINE: the engine pages reviews and
+ * comments oldest first, so what one page leaves out is the newest, and Load
+ * more asks each part's page after the one it holds. The timeline is built
+ * over every page loaded, so a reply on a later page joins its root.
  */
 
 import { useState } from "react";
-import { Callout, Stack, Tag, Textarea } from "@crewlethq/ui";
+import { Button, Stack, Tag, Textarea } from "@crewlethq/ui";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
+import { PageFailed } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { changeLive, shortOID, verdictWord } from "~/lib/code.ts";
 import { fmtDateTime } from "~/lib/format.ts";
@@ -26,7 +32,7 @@ import type {
   CodeRevisionRow,
 } from "~/protocol/index.ts";
 import { Readiness } from "../ChangePeek.tsx";
-import { positionBefore, useChangePart } from "./reads.ts";
+import { positionBefore, usePagedComments, usePagedReviews } from "./reads.ts";
 
 /** One entry of the timeline, by the record that made it. */
 type Entry =
@@ -76,10 +82,19 @@ export function Conversation({
   change: CodeChangeDetail;
   revisions: readonly CodeRevisionRow[];
 }) {
-  const reviews = useChangePart(change, "reviews");
-  const comments = useChangePart(change, "comments");
-  const entries = timelineOf(reviews.data?.reviews ?? [], comments.data?.comments ?? [], revisions);
-  const more = Boolean(reviews.data?.next || comments.data?.next);
+  const reviews = usePagedReviews(change);
+  const comments = usePagedComments(change);
+  const entries = timelineOf(reviews.items, comments.items, revisions);
+  const more = reviews.more || comments.more;
+  const paging = reviews.paging || comments.paging;
+  const pageError = reviews.pageError ?? comments.pageError;
+  // BOTH PARTS' NEXT PAGES AT ONE PRESS: the timeline interleaves them by
+  // where each landed on the code log, so one part read further than the
+  // other would draw a gap the reader could not see.
+  const loadMore = () => {
+    if (reviews.more) reviews.next();
+    if (comments.more) comments.next();
+  };
   return (
     <Stack gap={4}>
       {changeLive(change.state) && change.readiness && <Readiness readiness={change.readiness} />}
@@ -99,10 +114,12 @@ export function Conversation({
           ))}
         </ol>
         {more && (
-          <Callout variant="neutral">
-            More was said than one page holds: the newest reviews and comments are not drawn here.
-          </Callout>
+          <Button variant="secondary" onClick={loadMore} disabled={paging} loading={paging}>
+            Load more
+          </Button>
         )}
+        {/* A PAGE THAT FAILED is said beside the press that asks it again. */}
+        {pageError && <PageFailed error={pageError} />}
       </section>
       <CommentComposer change={change} />
     </Stack>

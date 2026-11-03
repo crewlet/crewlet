@@ -28,8 +28,8 @@ import (
 //
 // # A listing walks the one index its filters lead
 //
-// Every listing names a repository, a work item, a state, a reviewer or what
-// its changes wait on ([ReadQuery.State] says why), and walks ONE index,
+// Every listing names a repository, a work item, a state, a reviewer, what
+// its changes wait on or a window they moved in ([ReadQuery.State] says why), and walks ONE index,
 // chosen by its filters in this order ([walkOf]):
 //
 //   - a need of a person: code_mergeability_waits_idx (replicated 0101), the
@@ -49,11 +49,15 @@ import (
 //   - a repository and a state: code_changes_repo_state_idx (replicated
 //     0092), the repository's changes in that state;
 //   - a repository: code_changes_number_idx, the repository's changes;
+//   - a window: code_changes_updated_idx and code_conversations_updated_idx
+//     (replicated 0142) walked in step, the changes that moved within it,
+//     each once at its last move (changewindow.go);
 //   - a state: code_changes_state_idx, the company's changes in that state.
 //
 // NEWEST FIRST, always: a repository's walks by number, which is the order the
 // code log opened its changes in (a number is the apply's); a reviewer's and a
-// person's by the change's id, a UUIDv7 minted when it was opened; every other
+// person's by the change's id, a UUIDv7 minted when it was opened; a window's
+// by each change's last move and then its id; every other
 // by the position
 // of the record that opened each change and then its id, since one record can
 // open several. A filter the walked index does not seek — a repository beside
@@ -141,6 +145,10 @@ const (
 	// readiness waits on a person, newest first by the change's id; its
 	// cursor is the last id a page read.
 	byID
+	// byMove is the changes that moved within a window, newest first by
+	// their last move and then by id ([windowWalk]); its cursor is a
+	// [logCursor] of the two.
+	byMove
 )
 
 // changeWalk is the one index a listing of changes walks, as its filters
@@ -159,15 +167,30 @@ type changeWalk struct {
 	// change waits on; fix keeps a change awaiting its owner's fix alone,
 	// which its conversation's counters say ([needingFixIn]); person keeps
 	// a change whose readiness, as the read judges it, waits on a person
-	// ([Readiness.WaitsPerson]).
-	repo, state, owner, work, live, fix, person bool
+	// ([Readiness.WaitsPerson]). window keeps a change that moved at or
+	// after since, the start of the window the listing names, as a broker
+	// instant (store.EncodeTime) — what a window's own walk seeks too.
+	repo, state, owner, work, live, fix, person, window bool
+	since                                               int64
 }
 
 // walkOf is the walk q's filters choose, repoID the id of the repository q
-// names — "" where it names none. q is a listing [ReadQuery.validate] passed,
-// a need of a fix read as [ReadQuery.fixing] reads it: it names a repository,
-// a work item, a state, a reviewer or a need.
-func walkOf(q ReadQuery, repoID string) changeWalk {
+// names — "" where it names none — and since the start of the window q names
+// as a broker instant (store.EncodeTime), 0 where it names none. q is a
+// listing [ReadQuery.validate] passed, a need of a fix read as
+// [ReadQuery.fixing] reads it: it names a repository, a work item, a state, a
+// reviewer, a need or a window.
+func walkOf(q ReadQuery, repoID string, since int64) changeWalk {
+	w := walkLedBy(q, repoID)
+	if q.Window != "" {
+		w.window, w.since = w.index != changesMovedKey, since
+	}
+	return w
+}
+
+// walkLedBy is [walkOf]'s walk before the window it tests: the one index
+// q's filters lead, a window's own where nothing else leads it.
+func walkLedBy(q ReadQuery, repoID string) changeWalk {
 	named, fix := repoID != "", q.Needs == NeedFix
 	switch {
 	case q.Needs == NeedPerson:
@@ -187,6 +210,12 @@ func walkOf(q ReadQuery, repoID string) changeWalk {
 		return changeWalk{index: changesRepoStateKey, keys: []any{repoID, string(q.State)}, order: byNumber}
 	case named:
 		return changeWalk{index: changesNumberKey, keys: []any{repoID}, order: byNumber, owner: q.Owner != ""}
+	case q.Window != "":
+		// A WINDOW LEADS where no repository, work item, reviewer or need
+		// does — ahead of a state alone, whose index holds every change in
+		// it ever, where the window's hold what moved lately: a state and
+		// an owner are tested on the rows it read.
+		return changeWalk{index: changesMovedKey, order: byMove, state: q.State != "", owner: q.Owner != ""}
 	}
 	return changeWalk{index: changesStateKey, keys: []any{string(q.State)}, order: byOpening}
 }
@@ -216,8 +245,9 @@ func (q ReadQuery) ChangesCursor(s ChangeSummary) string {
 	if q.Repo != "" {
 		repoID = s.RepoID
 	}
-	row := changeRow{id: s.ID, number: s.Number, opened: s.OpenedPosition.Packed()}
-	return prefix + walkOf(q, repoID).cursor(row)
+	row := changeRow{id: s.ID, number: s.Number, opened: s.OpenedPosition.Packed(),
+		moved: store.EncodeTime(s.UpdatedAt)}
+	return prefix + walkOf(q, repoID, 0).cursor(row)
 }
 
 // cursor is where a page that read row last ends, in the walk's order.
@@ -227,6 +257,8 @@ func (w changeWalk) cursor(row changeRow) string {
 		return strconv.FormatInt(row.number, 10)
 	case byID:
 		return row.id
+	case byMove:
+		return movedCursor(row)
 	}
 	return logCursor(row.opened, row.id)
 }
@@ -252,14 +284,38 @@ func (w changeWalk) resume(cursor string) ([]any, bool) {
 func (w changeWalk) keeps(row changeRow, q ReadQuery, repoID string) bool {
 	return (!w.repo || row.repoID == repoID) && (!w.state || row.state == q.State) &&
 		(!w.owner || row.owner == q.Owner) && (!w.work || row.work.Ref() == q.Work) &&
-		(!w.live || row.state.Live())
+		(!w.live || row.state.Live()) && (!w.window || row.moved >= w.since)
 }
 
-// read is one page of the walk's rows: at most limit, after cursor where it
-// is set — every row the statement answered, kept or not — by the walk's two
+// read is one page of the walk's rows — at most limit, after cursor where it
+// is set: every row the statements answered, kept or not, each with what its
+// conversation says of it ([withConversations]) — and the cursor of the page
+// after it, "" where the walk is read to its end. A walk of one index pages
+// after its page's last row where the page was full; a window's walks two
+// ([windowWalk]).
+func (w changeWalk) read(ctx context.Context, tx *sql.Tx, cursor string, limit int) ([]changeRow, string,
+	error) {
+
+	if w.index == changesMovedKey {
+		return windowWalk(ctx, tx, w.since, cursor, limit)
+	}
+	rows, err := w.readIndex(ctx, tx, cursor, limit)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := withConversations(ctx, tx, rows); err != nil {
+		return nil, "", err
+	}
+	if len(rows) == limit {
+		return rows, w.cursor(rows[len(rows)-1]), nil
+	}
+	return rows, "", nil
+}
+
+// readIndex is [changeWalk.read] over the one index the walk leads, by its two
 // statements, each handed on as the constant it is, so the read gate follows
 // every text this issues to the plan it registers (readindex_test.go).
-func (w changeWalk) read(ctx context.Context, tx *sql.Tx, cursor string, limit int) ([]changeRow, error) {
+func (w changeWalk) readIndex(ctx context.Context, tx *sql.Tx, cursor string, limit int) ([]changeRow, error) {
 	switch w.index {
 	case reviewerAsksKey:
 		return w.readByID(ctx, tx, changesAskedSQL, changesAskedAfterSQL, cursor, limit,
@@ -317,10 +373,13 @@ type listedRepo struct {
 	access Access
 }
 
-// summary is row as a listing of changes renders it, from repository l.
+// summary is row as a listing of changes renders it, from repository l: what
+// its conversation says of it where a read set that on the row
+// ([withConversations]), and its lifecycle's last move alone where none did.
 func (l listedRepo) summary(row changeRow) ChangeSummary {
 	return ChangeSummary{ChangeRow: row.wire(), Repo: l.ref.Name, Ref: ChangeRef(l.ref.Name, row.number),
-		Access: l.access.String()}
+		Access: l.access.String(), OpenFindings: row.openFindings,
+		UpdatedAt: store.DecodeTime(max(row.moved, row.updatedAt))}
 }
 
 // readableIn is the repository name names in tx as a read of its changes
@@ -411,9 +470,13 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 		repoID = named.ref.ID
 		repos[repoID] = named
 	}
-	walk := walkOf(q, repoID)
+	var since int64
+	if q.Window != "" {
+		since = store.EncodeTime(r.now().Add(-q.Window.Duration()))
+	}
+	walk := walkOf(q, repoID, since)
 	limit := min(limitOr(q.Limit, defaultChangeLimit), r.pageRows)
-	scanned, err := walk.read(ctx, tx, q.Cursor, limit)
+	scanned, next, err := walk.read(ctx, tx, q.Cursor, limit)
 	if err != nil {
 		return err
 	}
@@ -456,9 +519,7 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 			return nil
 		}
 	}
-	if len(scanned) == limit {
-		out.Next = walk.cursor(scanned[len(scanned)-1])
-	}
+	out.Next = next
 	return nil
 }
 
@@ -623,6 +684,11 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if mergeErr != nil {
 			return mergeErr
 		}
+		said := []changeRow{row}
+		if saidErr := withConversations(ctx, tx, said); saidErr != nil {
+			return saidErr
+		}
+		row = said[0]
 		readiness, readinessErr := readinessIn(ctx, tx, []changeRow{row}, map[string]listedRepo{row.repoID: repo},
 			chart, q.Asker, r.limits().MergeByFloor)
 		if readinessErr != nil {
@@ -796,10 +862,12 @@ func (s *factsScan) row() (*RevisionFactsRow, error) {
 func (q ReadQuery) validateChanges() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
-	case q.Repo == "" && q.Work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "":
-		return refused("state", "a listing of changes names a repository, a work item, a state, a reviewer "+
-			"or what its changes wait on, which the indexes it walks are each led by — no index holds every "+
-			"change the company has, and an owner's changes are kept by state")
+	case q.Repo == "" && q.Work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "" && q.Window == "":
+		return refused("state", "a listing of changes names a repository, a work item, a state, a reviewer, "+
+			"what its changes wait on or a window they moved in, which the indexes it walks are each led by — "+
+			"no index holds every change the company has, and an owner's changes are kept by state")
+	case q.Window != "" && !q.Window.Valid():
+		return refused("window", fmt.Sprintf("%q is not one of %s", q.Window, words.Or(ChangeWindows())))
 	case q.State != "" && !q.State.Valid():
 		return refused("state", fmt.Sprintf("%q is not one of %s", q.State, words.Or(ChangeStates())))
 	case q.Owner != "" && !org.ValidHandle(q.Owner):

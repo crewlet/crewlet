@@ -1722,16 +1722,34 @@ answer that holds every record the code log had committed when it was asked.
   holds; the code tools also take a Worklet item's key, as the change writes
   do, and ask for the identity it resolves to, while an identity (a Worklet
   task's id, bare or under `native:`) is listed as named, with no read of the
-  tracker — a **state**, a **reviewer**
-  or **what its changes wait on**, and may narrow further by an **owner** (a
+  tracker — a **state**, a **reviewer**, **what its changes wait on** or a
+  **window** they moved in, and may narrow further by an **owner** (a
   seat by its handle, or a person by the human seat they hold) and by
   whichever of the others it did not name. One that names none of them is
   refused: no index holds every change the company has, and an owner's
   changes are kept by state, so an owner's are listed in a state, or in a
   repository, or on a work item. A repository's changes are listed by
   number; a reviewer's by the change's id, which is minted as the change is
-  opened; every other listing in the order the records that opened its
-  changes landed on the code log.
+  opened; a window's, where nothing else leads it, by when each change last
+  moved; every other listing in the order the records that opened its
+  changes landed on the code log. Every change it lists says how many of its
+  findings stand open — none of its authors has answered them — and **when it
+  last moved**.
+- **When a change last moved** is the later of two instants, one a subject it
+  moves on: the last record on its repository's subject that changed its row
+  (its open, an edit, a draft, a retarget, a close, a reopen, a landing, a
+  merge, and every push that moved its head, closed it or merged it), and the
+  last one somebody wrote about it on its own (an ask for review, a comment, a
+  thread resolved, a review, an answer to a finding). Its home's facts — a
+  revision's facts, a mergeability — date nothing: a target branch that moves
+  has its home check every live change into it again, and a change listed as
+  moved because its target did would put every change of a busy branch in
+  every day's window. A **window** (`24h`, `7d` or `30d`) lists the changes
+  that moved within the last day, week or month. Named with nothing else an
+  index leads by — no repository, work item, reviewer or need — it walks the
+  two instants' indexes together, newest move first, each change once, and
+  tests a state and an owner on the rows it read; named beside one of those,
+  it is tested on the rows that one's walk read.
 - **The changes waiting on a reviewer** are a listing that names a
   `reviewer` — the changes whose ask of that reviewer still **waits** — or
   `needs=review`, the **live** ones alone, the asker's own where it names no
@@ -6529,9 +6547,12 @@ holds.
   and a close the tracker could not answer are each closed by the next
   turn on whichever home holds the repository, and never lost (an
   archived repository's wait until it is unarchived, since nothing is
-  recorded on one). A close
-  that ENDED is settled by one `close_settled` record on the repository's
-  subject: `closed` (the item closed, or already finished) or
+  recorded on one). The closes
+  a turn ENDED are settled together, by one `close_settled` record on the
+  repository's subject however many changes the landing merged, rather than
+  an append a change one after another inside the turn; a close another
+  home's settle reached first is passed over, the rest recorded. Each ends
+  `closed` (the item closed, or already finished) or
   `not_closed`, for a close no asking again changes — the item is on a
   vendor's tracker, which is closed there by whoever closes it; the
   enqueuer is bound to no seat, has left the chart or may no longer update

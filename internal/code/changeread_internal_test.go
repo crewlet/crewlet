@@ -63,7 +63,7 @@ func TestTheListingsSeekTheirIndexes(t *testing.T) {
 						t.Errorf("%s: validate = %v", name, err)
 						continue
 					}
-					w := walkOf(q, repo)
+					w := walkOf(q, repo, 0)
 					var want string
 					switch {
 					case work != "":
@@ -164,10 +164,10 @@ func TestTheListingsSeekTheirIndexes(t *testing.T) {
 		var first, next []changeRow
 		if err := db.Read(context.Background(), func(tx *sql.Tx) error {
 			var err error
-			if first, err = w.read(context.Background(), tx, "", limit); err != nil || len(first) == 0 {
+			if first, err = w.readIndex(context.Background(), tx, "", limit); err != nil || len(first) == 0 {
 				return err
 			}
-			next, err = w.read(context.Background(), tx, w.cursor(first[len(first)-1]), limit)
+			next, err = w.readIndex(context.Background(), tx, w.cursor(first[len(first)-1]), limit)
 			return err
 		}); err != nil {
 			t.Fatalf("%s's walk: %v", index, err)

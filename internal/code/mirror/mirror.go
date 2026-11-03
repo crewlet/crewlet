@@ -80,7 +80,7 @@ type Estate interface {
 // of what landed.
 type Cache interface {
 	Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error)
-	Packs(s cache.Synced) []code.PackRow
+	Packs(s cache.Synced) ([]code.PackRow, error)
 	NewScratch(ctx context.Context, s cache.Synced, id string) (*cache.Scratch, error)
 	Adopt(ctx context.Context, repoID string, sc *cache.Scratch, packs ...code.PackRef) error
 }

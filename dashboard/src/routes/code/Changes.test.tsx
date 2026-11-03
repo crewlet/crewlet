@@ -85,6 +85,8 @@ function change(repo: string, number: number, extra: Record<string, unknown> = {
     owner_kind: "agent",
     opened_at: "2026-10-27T10:00:00Z",
     opened_position: POSITION,
+    open_findings: 0,
+    updated_at: "2026-10-28T10:00:00Z",
     version: 4,
     position: POSITION,
     repo,
@@ -180,11 +182,14 @@ test("the changes are the engine's listing over REST, open by default, each row 
 // the blocker precondition's named and counted beyond — and a change that is
 // no longer live has neither. Mutation: count blockers from anything but the
 // readiness, and the 3 is not there.
-test("a row's readiness and blockers are the engine's, and a closed change has neither", async () => {
+test("a row's readiness, open findings and last move are the engine's, and a closed change has no readiness", async () => {
   stubFetch((url) =>
     url.pathname === "/query/code_changes" && !url.searchParams.has("limit")
       ? json({
-          changes: [change("web", 42), change("web", 9, { state: "merged", readiness: undefined })],
+          changes: [
+            change("web", 42, { open_findings: 3 }),
+            change("web", 9, { state: "merged", readiness: undefined }),
+          ],
           position: POSITION,
           level: "session",
         })
@@ -199,8 +204,28 @@ test("a row's readiness and blockers are the engine's, and a closed change has n
   const meter = within(grid).getByRole("meter");
   expect(meter.getAttribute("aria-valuenow")).toBe("2");
   expect(meter.getAttribute("aria-valuemax")).toBe("5");
+  // THE ENGINE'S COUNTS, drawn as it sent them: the open findings of each
+  // row, a merged change's none among them, and when each last moved.
+  expect(within(grid).getByRole("columnheader", { name: "Open findings" })).toBeTruthy();
+  expect(within(grid).getByRole("columnheader", { name: "Updated" })).toBeTruthy();
   expect(within(grid).getByText("3")).toBeTruthy();
-  expect(within(grid).getAllByText("Not live").length).toBeGreaterThanOrEqual(2);
+  expect(within(grid).queryByRole("columnheader", { name: "Blockers" })).toBeNull();
+  expect(within(grid).getAllByText("Not live")).toHaveLength(1);
+});
+
+// THE WINDOW IS THE ENGINE'S `window=`, sent as it reads it — and narrows the
+// walk, so every state may be asked beside it. Mutation: drop the window from
+// the parameters, and every state is said in place and never asked.
+test("a window is the engine's window, and lets every state be asked", async () => {
+  const asked = stubFetch((url) =>
+    url.pathname === "/query/code_changes" ? json({ position: POSITION, level: "session" }) : null,
+  );
+  mount(<Changes />, "#/code?window=7d&state=all");
+
+  await waitFor(() => expect(listings(asked).length).toBeGreaterThan(0));
+  const listing = listings(asked)[0]!;
+  expect(listing.searchParams.get("window")).toBe("7d");
+  expect(listing.searchParams.has("state")).toBe(false);
 });
 
 // WHAT A CHANGE WAITS ON IS THE ENGINE'S `needs`, sent as it reads it.
@@ -279,7 +304,15 @@ test("the Needs a person band follows next past a page that kept nothing", async
 
 // THE PARAMETERS ARE THE ENGINE'S FILTERS, and what cannot be asked says why.
 test("a listing's parameters are the engine's filters, and a name no repository has is said", () => {
-  const none = { state: "open", needs: "", repo: "", owner: "", reviewer: "", work: "" };
+  const none = {
+    state: "open",
+    needs: "",
+    repo: "",
+    owner: "",
+    reviewer: "",
+    work: "",
+    window: "",
+  };
   expect(changesParams(none)).toEqual({ params: { state: "open" } });
   expect(changesParams({ ...none, state: "all", repo: "web" })).toEqual({
     params: { repo: "web" },
@@ -290,4 +323,8 @@ test("a listing's parameters are the engine's filters, and a name no repository 
   expect(changesParams({ ...none, repo: "Web" })).toHaveProperty("unasked");
   expect(changesParams({ ...none, needs: "soon" })).toHaveProperty("unasked");
   expect(changesParams({ ...none, state: "all" })).toHaveProperty("unasked");
+  expect(changesParams({ ...none, state: "all", window: "24h" })).toEqual({
+    params: { window: "24h" },
+  });
+  expect(changesParams({ ...none, window: "1y" })).toHaveProperty("unasked");
 });

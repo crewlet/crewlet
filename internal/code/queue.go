@@ -535,7 +535,7 @@ func (p QueueProposal) measure() (int, error) {
 	// committer stamps; a record of several keeps what fits of what is left
 	// ([keptRoutings]).
 	bytes := len(encoded)
-	if p.Dequeue != nil || p.Broken != nil || p.CloseSettled != nil {
+	if p.Dequeue != nil || p.Broken != nil {
 		bytes += MaxRoutingBytes
 	}
 	if bytes > EntryRoom {
@@ -767,7 +767,7 @@ func (p QueueProposal) rows() int {
 	case p.Broken != nil:
 		return brokenDecidedRows
 	case p.CloseSettled != nil:
-		return closeSettledDecidedRows
+		return closeSettledDecidedRows(len(p.CloseSettled.Settled))
 	}
 	return queueDecidedRows
 }

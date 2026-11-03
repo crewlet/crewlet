@@ -67,12 +67,13 @@ func TestARebaseIsOneEngineWriteOfTheSource(t *testing.T) {
 	}
 }
 
-// A REBASE OF AN ENDED CHANGE IS INVALID, never conflict: a closed or merged
-// change never reopens by itself, so a caller told to retry shortly would ask
-// for ever (M5.md §2.10's change_not_open); nothing is written.
+// A REBASE OF AN ENDED CHANGE IS A CONFLICT, as a merge of one is and every
+// code tool's write of one: the change is in a state that refuses the rebase
+// until somebody reopens it, or for good once merged, which internal/mcp's one
+// rule classes conflict, never invalid; nothing is written.
 //
-// Mutation: refuse it as conflict again → red.
-func TestARebaseOfAnEndedChangeIsInvalid(t *testing.T) {
+// Mutation: refuse it as invalid again → red.
+func TestARebaseOfAnEndedChangeIsAConflict(t *testing.T) {
 	t.Parallel()
 	args := map[string]any{"change": "site!7", "expected_head": revHead(3)}
 	for _, state := range []code.ChangeState{code.ChangeStateClosed, code.ChangeStateMerged} {
@@ -81,9 +82,9 @@ func TestARebaseOfAnEndedChangeIsInvalid(t *testing.T) {
 		none := &codeWrites{}
 		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(ended), none)), writerTurn(t),
 			builtin.CodeRebaseChangeTool, args)
-		if writes, _ := none.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+		if writes, _ := none.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalConflict ||
 			len(writes) != 0 {
-			t.Errorf("a rebase of a %s change answered %q as %s, sending %d writes; want invalid and none",
+			t.Errorf("a rebase of a %s change answered %q as %s, sending %d writes; want conflict and none",
 				state, got.Output, tools.RefusalOf(got), len(writes))
 		}
 	}

@@ -8325,6 +8325,19 @@ export interface CodeChangeSummary extends CodeChangeRow {
   access?: string;
   /** Absent for a change that is no longer live, which merges nothing. */
   readiness?: CodeReadiness;
+  /**
+   * How many of its findings stand open — none of its authors has answered
+   * them (`code_conversations.open_findings`); 0 for a change nobody reviewed.
+   */
+  open_findings: number;
+  /**
+   * When it last moved: the later of its lifecycle's last record (an open, an
+   * edit, a close, a merge, a push that moved its head) and the last thing
+   * somebody wrote about it (an ask for review, a comment, a review, an answer
+   * to a finding) — never the home's facts. What `window=` narrows by. A
+   * change read in brief carries its lifecycle's alone.
+   */
+  updated_at: string;
 }
 
 /**

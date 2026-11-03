@@ -15,7 +15,6 @@ import {
   openingLine,
   parseChangeRef,
   preconditionWord,
-  standingBlockers,
 } from "./code.ts";
 
 describe("what a push read in brief left out", () => {
@@ -76,34 +75,6 @@ describe("a change's reference", () => {
 });
 
 describe("a change's readiness, as a row says it", () => {
-  // THE STANDING BLOCKERS ARE THE READINESS'S: those it names and those it
-  // counts beyond them, and none where the precondition is met.
-  test("counts the blockers it names and those beyond, and none once met", () => {
-    const at = (state: string) => ({
-      met: 0,
-      total: 1,
-      first: "",
-      preconditions: [
-        {
-          kind: "blocker",
-          state,
-          detail: "",
-          blockers: [
-            {
-              finding_id: "f",
-              state: "open",
-              cleared_by: { raiser: { handle: "a", kind: "agent" } },
-            },
-          ],
-          blockers_omitted: 4,
-        },
-      ],
-    });
-    expect(standingBlockers(at("unmet"))).toBe(5);
-    expect(standingBlockers(at("met"))).toBe(0);
-    expect(standingBlockers(undefined)).toBe(0);
-  });
-
   // A KIND A NEWER ENGINE JUDGES is said by its own word rather than dropped.
   test("names a precondition this build knows, and one it does not by its kind", () => {
     expect(preconditionWord("approval")).toBe("Approved");

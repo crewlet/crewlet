@@ -866,10 +866,11 @@ func registeredStatements() map[string]statement {
 			[]string{"code_queue_close_owed_idx (repo_id=?)"}},
 		"repositories owing a close": {closeOwedReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"code_queue_close_owed_idx (repo_id>?)", repoKey + " (id=?)"}},
-		"an entry's owed close": {owedEntrySQL, []any{"repo-1", "entry-1"},
-			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
-		"settle an entry's close": {settleCloseSQL, []any{"repo-1", "entry-1"},
-			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"entries named, with their owed closes": {owedNamedSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
+			[]string{"SCAN json_each AS j", "sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"settle entries' closes": {settleClosesSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
+			[]string{"SCAN json_each AS j", "sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
 		"a target's landings": {landingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, 200},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>=?)"}},
 		"a target's green": {greenSQL, []any{"repo-1", "refs/heads/main"},
@@ -1079,6 +1080,22 @@ func registeredStatements() map[string]statement {
 			[]string{revisionKey + " (change_id=?)", factsKey + " (change_id=? AND n=?)"}},
 		"revisions after": {revisionsAfterSQL, []any{"repo-1-change-000001", 2, 200},
 			[]string{revisionKey + " (change_id=? AND n<?)", factsKey + " (change_id=? AND n=?)"}},
+		// A WINDOW'S WALK (changewindow.go): the changes whose lifecycle
+		// moved within it and those somebody spoke of within it, each a
+		// first page and a page after a cursor, newest first, the
+		// conversation's partial index walked and each change sought by its
+		// key; and the conversations of a page's changes, driven from their
+		// list.
+		"changes moved": {changesMovedSQL, []any{1000, 50}, []string{changesMovedKey + " (updated_at>=?)"}},
+		"changes moved after": {changesMovedAfterSQL, []any{1000, 2030, 2030, "repo-1-change-000031", 50},
+			[]string{changesMovedKey + " (updated_at<=? AND updated_at>=?)"}},
+		"changes spoken of": {conversationsMovedSQL, []any{1000, 50},
+			[]string{conversationsMovedKey + " (updated_at>=?)", changeKey + " (id=?)"}},
+		"changes spoken of after": {conversationsMovedAfterSQL,
+			[]any{1000, 2030, 2030, "repo-1-change-000031", 50},
+			[]string{conversationsMovedKey + " (updated_at<=? AND updated_at>=?)", changeKey + " (id=?)"}},
+		"conversations of changes": {conversationsOfSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)"}},
 		"listed repos": {listedReposSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		// THE READS OF A CHANGE'S CONVERSATION (conversationread.go): a
 		// reviewer's standing asks newest first, a first page and a page

@@ -309,13 +309,16 @@ func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 	}
 }
 
-// A MERGE OF AN ENDED CHANGE IS INVALID, never conflict: a closed or merged
-// change never reopens by itself, so a caller told to retry shortly would ask
-// to merge it for ever. It is refused before anything is built, under the
-// committer's own word, change_not_open (M5.md §2.10).
+// A MERGE OF AN ENDED CHANGE IS A CONFLICT, as every code tool's write of one
+// is: the change is in a state that refuses the merge until somebody reopens
+// it (or, merged, for good), which internal/mcp's one rule classes conflict,
+// never invalid — the request names the change it means — nor anything a wait
+// clears. It is refused before anything is built, under the committer's own
+// word, change_not_open, so a surface answering in its own words reads the
+// word and not the sentence.
 //
-// Mutation: refuse it as conflict again → red.
-func TestAMergeOfAnEndedChangeIsInvalid(t *testing.T) {
+// Mutation: refuse it as invalid again → red.
+func TestAMergeOfAnEndedChangeIsAConflict(t *testing.T) {
 	t.Parallel()
 	for _, state := range []code.ChangeState{code.ChangeStateClosed, code.ChangeStateMerged} {
 		ended := siteChange()
@@ -325,9 +328,9 @@ func TestAMergeOfAnEndedChangeIsInvalid(t *testing.T) {
 			writerTurn(t), builtin.CodeMergeChangeTool, mergeArgs())
 		writes, _ := writer.asked()
 		var host *builtin.HostRefusal
-		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || len(writes) != 0 ||
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalConflict || len(writes) != 0 ||
 			!errors.As(got.Cause, &host) || host.Refusal != string(code.MergeRefusalChangeNotOpen) {
-			t.Errorf("a merge of a %s change answered %q (%s, %v) after %d writes, want invalid under "+
+			t.Errorf("a merge of a %s change answered %q (%s, %v) after %d writes, want conflict under "+
 				"change_not_open and none sent", state, got.Output, tools.RefusalOf(got), got.Cause, len(writes))
 		}
 	}

@@ -311,6 +311,7 @@ var contract = []Entry{
 	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"CHANGE_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfAChange"},
 	{"CHANGE_NEEDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryNeedOfAListingOfChanges"},
+	{"CHANGE_WINDOWS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryWindowOfAListingOfChanges"},
 	{"PRECONDITION_KINDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 	{"PRECONDITION_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 	{"FINDING_SEVERITIES", ReadLiteral, "internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords"},

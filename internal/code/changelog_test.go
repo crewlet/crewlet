@@ -66,9 +66,10 @@ import (
 //     theirs; and, the check passed, the train's tested prefix landed in one
 //     land record, routed to the change's authors, whom it tells the change
 //     merged, its source's deletion stamped by the decide;
-//   - close_settled: a queued change's owed close settled closed by its
-//     home once the enqueuer's close of its work item landed (M5-D27),
-//     carrying no routing;
+//   - close_settled: a landing's owed closes settled by its home in one
+//     record once the enqueuers' closes of their work items landed
+//     (M5-D27) — the reference landing's one change's, closed, carrying no
+//     routing;
 //   - check_dispatched: a head's dispatch as its home records it, naming
 //     the head and carrying the attempts it queues — the reference
 //     company's three checks, each its definition carried and required by
@@ -121,7 +122,7 @@ var changeRecordBytes = map[string]int64{
 	"candidate":              1_290,
 	"candidate_check_queued": 1_010,
 	"land":                   1_530,
-	"close_settled":          680,
+	"close_settled":          690,
 	"check_dispatched":       2_290,
 	"check_started":          780,
 	"check_named":            840,
@@ -364,13 +365,15 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 			code.LandEntry{EntryID: enqueued.Enqueue.EntryID, ChangeID: queued, Commit: oidOf("M")}))
 		requireRecorded(t, res, err)
 	})
-	// A QUEUED CHANGE'S CLOSE SETTLED: the record its home appends once the
-	// enqueuer's close of the change's work item has landed, carrying no
-	// routing, since a closed item tells nobody.
+	// A LANDING'S CLOSES SETTLED: the one record its home appends once the
+	// enqueuers' closes of its changes' work items have landed — here the
+	// reference landing's one change, closed, carrying no routing, since a
+	// closed item tells nobody.
 	owing, _, owingEntry, _ := landedOwingClose(t, n, c, w, "owing", open.Open.WorkItem)
 	took("close_settled", func() {
 		res, err := c.ProposeQueue(t.Context(), queueRecord(func(p *code.QueueProposal) {
-			p.CloseSettled = &code.CloseSettled{RepoID: owing, EntryID: owingEntry, Outcome: code.CloseClosed}
+			p.CloseSettled = &code.CloseSettled{RepoID: owing,
+				Settled: []code.SettledClose{{EntryID: owingEntry, Outcome: code.CloseClosed}}}
 		}))
 		requireRecorded(t, res, err)
 	})

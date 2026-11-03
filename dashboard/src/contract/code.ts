@@ -106,6 +106,16 @@ export const CHANGE_STATES = ["draft", "open", "closed", "merged"] as const;
 export const CHANGE_NEEDS = ["review", "fix", "me", "person"] as const;
 
 /**
+ * Every window a listing of changes narrows to (`window=`), shortest first, in
+ * the engine's order (`code.ChangeWindows`): the changes that MOVED within the
+ * last day, week or month — each by the later of its lifecycle's last record
+ * and the last thing somebody said of it, the instant a row's Updated says.
+ * HELD BOTH WAYS, in order, by
+ * `internal/code.TestTheDashboardKnowsEveryWindowOfAListingOfChanges`.
+ */
+export const CHANGE_WINDOWS = ["24h", "7d", "30d"] as const;
+
+/**
  * Every precondition a live change's readiness judges, ONE A KIND, in the
  * order a change moves through them (`code.PreconditionKinds`): it is opened
  * for review, its head is measured, approved by each kind of approval its

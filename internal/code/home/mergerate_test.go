@@ -300,3 +300,99 @@ func TestTheQueueCountsItsRoundsLandingsAndEjections(t *testing.T) {
 			"push's 1", got)
 	}
 }
+
+// A TRAIN ENDED BY AN EJECTION IS COUNTED EJECTED, AND ONCE (M5 §2.10): the
+// two ends the queue worker appends an eject for that are neither a landing
+// nor a bisect each count one round `ejected` and nothing else, and the turn
+// after does not count the same train `abandoned` again —
+//
+//   - a green train whose landing the rows refuse, its first entry
+//     gate_unmet: that entry ejected, the train ended there, and the next
+//     train, of the entry left, built over no abandoned round;
+//   - a train whose base's checks file defines none of its required checks:
+//     every entry ejected check_failed, and the next train, of a change
+//     queued after, built over no abandoned round.
+//
+// Mutation: spell the outcome as another's (roundEjected = "bisected") → no
+// round ejected, red; end neither train (nil in place of endOf at the land's
+// refusal, or at trainDefs) → no round ejected, and the next train reads the
+// old one abandoned, red.
+func TestATrainEndedByAnEjectionCountsItsRoundEjected(t *testing.T) {
+	t.Parallel()
+	loop := func(rows *queueRows) (*home.Loop, func(string) uint64) {
+		t.Helper()
+		c := &clock{now: time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)}
+		rec, err := metrics.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		l, err := home.New(home.Options{Chart: noChart,
+			Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
+			Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: &queueChains{},
+			Tasks: &queueTasks{}, NodeID: "git-a", Share: units(2), Now: c.Now, Metrics: rec})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return l, func(outcome string) uint64 {
+			return counted(rec, metrics.CodeQueueRounds, metrics.Attrs{"outcome": outcome})
+		}
+	}
+	only := func(step string, rounds func(string) uint64) {
+		t.Helper()
+		for outcome, want := range map[string]uint64{"ejected": 1, "landed": 0, "bisected": 0, "abandoned": 0} {
+			if got := rounds(outcome); got != want {
+				t.Errorf("%s: %d rounds %s, want %d", step, got, outcome, want)
+			}
+		}
+	}
+
+	// A LANDING REFUSED: depth 2 at batch 1 is a train of two candidates,
+	// both green; the rows refuse the first entry's landing gate_unmet.
+	refused := newQueueRows(oid("a"), 2, 1)
+	entries := refused.enqueue(t, 2)
+	l, rounds := loop(refused)
+	turn(t, l, refused)
+	train, _ := refused.snapshot()
+	if len(train) != 2 {
+		t.Fatalf("the premise: two changes at depth 2 and batch 1 built %d candidates, want 2", len(train))
+	}
+	for _, cand := range train {
+		refused.ended(cand.TipOID, "unit", code.CheckStatePassed)
+	}
+	refused.mu.Lock()
+	refused.refuse = func(code.Land) *code.QueueResult {
+		return &code.QueueResult{Refusal: code.MergeRefusalGateUnmet, Detail: "would not land",
+			Refused: []code.RefusedEntry{{EntryID: entries[0].EntryID, Refusal: code.MergeRefusalGateUnmet}}}
+	}
+	refused.mu.Unlock()
+	turn(t, l, refused)
+	if _, live := refused.snapshot(); len(live) != 1 || live[0].EntryID != entries[1].EntryID {
+		t.Fatalf("the premise: %+v are live after the refused landing, want the second entry alone", live)
+	}
+	refused.mu.Lock()
+	refused.refuse = nil
+	refused.mu.Unlock()
+	turn(t, l, refused)
+	if train, _ = refused.snapshot(); len(train) != 1 || train[0].Commits[0].EntryID != entries[1].EntryID {
+		t.Fatalf("the premise: the train after the ejection is %+v, want the second entry's alone", train)
+	}
+	only("a landing refused gate_unmet", rounds)
+
+	// A REQUIRED CHECK THE BASE DEFINES NOT: unit is required and the train
+	// base's checks file defines lint alone.
+	undefined := newQueueRows(oid("f"), 2, 1)
+	undefined.file = checksFile("lint")
+	undefined.enqueue(t, 2)
+	l, rounds = loop(undefined)
+	turn(t, l, undefined)
+	turn(t, l, undefined)
+	if _, live := undefined.snapshot(); len(live) != 0 {
+		t.Fatalf("the premise: %+v are live after a train whose base defines no unit, want both ejected", live)
+	}
+	undefined.enqueue(t, 1)
+	turn(t, l, undefined)
+	if train, _ := undefined.snapshot(); len(train) != 1 {
+		t.Fatalf("the premise: the change queued after the ejection built %d candidates, want 1", len(train))
+	}
+	only("a required check the train base defines not", rounds)
+}

@@ -504,26 +504,150 @@ test("the Files tab asks for a diff again only when the change moves", async () 
   await waitFor(() => expect(askedFor("diff")).toBe(3));
 });
 
-// FINDINGS AND COMMENTS PAST ONE PAGE ARE SAID on the Files tab: the pages
-// run oldest first, so what is left off is the newest, and a reviewer who
-// cannot find what they raised re-raises it. Mutation: drop the notice, and
-// this fails.
-test("the Files tab says when the change's findings run past one page", async () => {
+// FINDINGS AND COMMENTS PAST ONE PAGE ARE LOADED on the Files tab as the
+// reader asks: the pages run oldest first, so what is left off is the newest,
+// and a reviewer who cannot find what they raised re-raises it. Load more asks
+// the findings' page after the cursor the first ended at, of the revision on
+// screen, draws the later page's finding on the line ITS page placed it on —
+// leaving the first page's outdated one where it was — and is gone once none
+// is left. Mutation: drop the pager, ask the second page without its cursor,
+// or place a finding from the first page's placings alone, and this fails.
+test("the Files tab loads a change's findings past one page when the reader asks", async () => {
+  const asked: URL[] = [];
   stubEngine(detail(), () => json({}), {
-    findings: () =>
-      json({
+    findings: (url) => {
+      asked.push(url);
+      const later = url.searchParams.get("cursor") === "f-mine";
+      return json({
         position: POSITION,
         level: "session",
         revision: 2,
-        findings: [MINE],
-        placed: { "f-mine": { start: 9, end: 9, outdated: true } },
-        next: "f-mine",
-      }),
+        findings: later
+          ? [{ ...MINE, id: "f-late", title: "The newest finding", line_start: 2, line_end: 2 }]
+          : [MINE],
+        placed: later
+          ? { "f-late": { start: 2, end: 2 } }
+          : { "f-mine": { start: 9, end: 9, outdated: true } },
+        ...(later ? {} : { next: "f-mine" }),
+      });
+    },
   });
   mount("#/code/repos/web/changes/42?tab=files&file=app.go");
+  expect(await screen.findByText("1 outdated on this file")).toBeTruthy();
+  expect(screen.queryByText("The newest finding")).toBeNull();
+  fireEvent.click(await screen.findByRole("button", { name: "Load more findings and comments" }));
+  expect(await screen.findByText("The newest finding")).toBeTruthy();
+  expect(screen.getByText("1 outdated on this file")).toBeTruthy();
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "Load more findings and comments" })).toBeNull(),
+  );
+  const second = asked.find((u) => u.searchParams.get("cursor") === "f-mine")!;
+  expect(second.searchParams.get("revision")).toBe("2");
+});
+
+// A LATER PAGE THAT FAILS IS SAID BESIDE THE PRESS THAT ASKS IT AGAIN, and
+// what the timeline holds stays drawn: a press that did nothing visible left
+// the reader nothing to do but reload. Mutation: drop the notice, and this
+// fails.
+test("the conversation says when its next page could not be read", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviews: (url) =>
+      url.searchParams.get("cursor") === "r1"
+        ? json({ error: "query_failed" }, 500)
+        : json({
+            position: POSITION,
+            level: "session",
+            reviews: [
+              {
+                id: "r1",
+                revision: 1,
+                reviewer: "jane",
+                reviewer_kind: "person",
+                verdict: "comment",
+                summary: "A first look",
+                findings: 0,
+                position: { ...POSITION, seq: 20 },
+                at: "2026-10-28T10:00:00Z",
+              },
+            ],
+            next: "r1",
+          }),
+  });
+  mount();
+  expect(await screen.findByText("A first look")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
   expect(
-    await screen.findByText(/More findings and comments were raised on this change than one page/),
+    await screen.findByText("Could not read the next page (query_failed). Try again."),
   ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+  expect(screen.getByText("A first look")).toBeTruthy();
+});
+
+// THE FILES TAB SAYS IT TOO: a later page of findings that fails is said
+// beside the press that asks it again, and the findings held stay drawn.
+// Mutation: drop the notice, and this fails.
+test("the Files tab says when the findings' next page could not be read", async () => {
+  stubEngine(detail(), () => json({}), {
+    findings: (url) =>
+      url.searchParams.get("cursor") === "f-mine"
+        ? json({ error: "query_failed" }, 500)
+        : json({
+            position: POSITION,
+            level: "session",
+            revision: 2,
+            findings: [MINE],
+            placed: { "f-mine": { start: 9, end: 9, outdated: true } },
+            next: "f-mine",
+          }),
+  });
+  mount("#/code/repos/web/changes/42?tab=files&file=app.go");
+  fireEvent.click(await screen.findByRole("button", { name: "Load more findings and comments" }));
+  expect(
+    await screen.findByText("Could not read the next page (query_failed). Try again."),
+  ).toBeTruthy();
+  expect(screen.getByText("1 outdated on this file")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Load more findings and comments" })).toBeTruthy();
+});
+
+// THE TIMELINE IS EVERY PAGE THE READER LOADED: the engine pages a change's
+// reviews oldest first, so the newest review is on a later page, and Load
+// more draws it in the timeline beside the first. Mutation: draw the first
+// page alone, or say that more exist without reading them, and the newest
+// review is never drawn.
+test("the conversation draws a change's newest review once the reader loads its next page", async () => {
+  const review = (id: string, seq: number, summary: string) => ({
+    id,
+    revision: 1,
+    reviewer: "jane",
+    reviewer_kind: "person",
+    verdict: "comment",
+    summary,
+    findings: 0,
+    position: { ...POSITION, seq },
+    at: "2026-10-28T10:00:00Z",
+  });
+  stubEngine(detail(), () => json({}), {
+    reviews: (url) =>
+      url.searchParams.get("cursor") === "r1"
+        ? json({
+            position: POSITION,
+            level: "session",
+            reviews: [review("r2", 30, "A second look")],
+          })
+        : json({
+            position: POSITION,
+            level: "session",
+            reviews: [review("r1", 20, "A first look")],
+            next: "r1",
+          }),
+  });
+  mount();
+  expect(await screen.findByText("A first look")).toBeTruthy();
+  expect(screen.queryByText("A second look")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+  expect(await screen.findByText("A second look")).toBeTruthy();
+  expect(screen.getByText("A first look")).toBeTruthy();
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Load more" })).toBeNull());
 });
 
 // A CHANGE NO LONGER LIVE takes no review: each control stays drawn, held with

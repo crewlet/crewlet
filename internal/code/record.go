@@ -595,9 +595,10 @@ const (
 	// string(OpQueueSweep)}, with the same companions. It is no gate.
 	OpQueueSweep OpKind = "queue_sweep"
 
-	// OpCloseSettled settles the close a landed queue entry owes its
-	// change's work item, closed or definitively not ([CloseSettled]) — its
-	// home's, as the entry's enqueuer, on the repository's own subject.
+	// OpCloseSettled settles the closes landed queue entries owe their
+	// changes' work items, each closed or definitively not, every close a
+	// turn of their home ended in one record ([CloseSettled]) — made as each
+	// entry's enqueuer, recorded on the repository's own subject.
 	//
 	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
 	// a build without it has run, it takes {Name: "MutationRecord.Op

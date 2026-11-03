@@ -35,11 +35,11 @@ func TestPacksAreTheLiveRowsAPlanWeighs(t *testing.T) {
 	slices.SortFunc(want, func(a, b code.PackRow) int { return strings.Compare(a.PackID, b.PackID) })
 	c := w.open(t)
 	s := w.sync(t, c, repo)
-	if got := c.Packs(s); !slices.Equal(got, want) {
-		t.Errorf("Packs = %+v\nwant the rows %+v", got, want)
+	if got, err := c.Packs(s); err != nil || !slices.Equal(got, want) {
+		t.Errorf("Packs = %+v, %v\nwant the rows %+v", got, err, want)
 	}
-	if got := c.Packs(cache.Synced{}); got != nil {
-		t.Errorf("Packs of a Synced the cache did not hand out = %+v, want nil", got)
+	if got, err := c.Packs(cache.Synced{}); got != nil || !errors.Is(err, cache.ErrInvalid) {
+		t.Errorf("Packs of a Synced the cache did not hand out = %+v, %v, want nil and ErrInvalid", got, err)
 	}
 }
 

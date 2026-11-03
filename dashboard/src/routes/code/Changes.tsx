@@ -15,8 +15,8 @@
  * pages loaded.
  *
  * THE ENGINE KEEPS NO INDEX OF EVERY CHANGE: a listing names a state, a
- * repository, a work item, a reviewer or what its changes wait on, and is
- * refused naming none. So the section asks for the OPEN changes until it is
+ * repository, a work item, a reviewer, what its changes wait on or a window
+ * they moved in, and is refused naming none. So the section asks for the OPEN changes until it is
  * told otherwise, and "Every state" is offered only where something else
  * narrows the walk — and said in place, never sent, where nothing does.
  *
@@ -25,9 +25,18 @@
  * A live change's READINESS is judged by the engine on the read that answered
  * it, against its one chart (`code.ReadinessOf`): its preconditions, how many
  * are met, and the sentence of the first that is not. The row's Meter counts
- * them, its title is that sentence, and the standing blockers are the blocker
- * precondition's — named and counted beyond — never counted here from rows
- * this screen does not hold.
+ * them, and its title is that sentence — never counted here from rows this
+ * screen does not hold.
+ *
+ * # Open findings and Updated are the engine's counts too
+ *
+ * Each row says how many of the change's findings stand open — none of its
+ * authors has answered them — and when it last moved: the later of its
+ * lifecycle's last record and the last thing somebody wrote about it, never
+ * the home's facts, so a target branch that moved re-dates nothing. `window=`
+ * narrows the listing to the changes that moved within the last day, week or
+ * month; with nothing else narrowing the walk the engine walks its two
+ * indexes of that instant, and the rows come newest move first.
  *
  * # Needs a person
  *
@@ -73,9 +82,10 @@ import {
   changeLive,
   changeStateWord,
   firstUnready,
+  CHANGE_WINDOW_FILTERS,
   isChangeNeed,
+  isChangeWindow,
   isRepoName,
-  standingBlockers,
 } from "~/lib/code.ts";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
@@ -126,22 +136,29 @@ interface Filters {
   owner: string;
   reviewer: string;
   work: string;
+  window: string;
 }
 
 /**
  * Whether something beside the state narrows the engine's walk — a
- * repository, a work item, a reviewer or a need — which is what lets a
- * listing name no state.
+ * repository, a work item, a reviewer, a need or a window — which is what
+ * lets a listing name no state.
  */
 export function narrowsTheWalk(f: Filters): boolean {
-  return f.repo !== "" || f.work !== "" || f.reviewer !== "" || isChangeNeed(f.needs);
+  return (
+    f.repo !== "" ||
+    f.work !== "" ||
+    f.reviewer !== "" ||
+    isChangeNeed(f.needs) ||
+    isChangeWindow(f.window)
+  );
 }
 
 /**
  * The listing's parameters for the filters the address names, or a sentence
  * saying why it cannot be asked: a repository's name no repository can have,
- * a need the engine does not list by, or every state where nothing narrows the
- * walk. Said in place, never sent to be refused.
+ * a need or a window the engine does not list by, or every state where
+ * nothing narrows the walk. Said in place, never sent to be refused.
  */
 export function changesParams(f: Filters): { params: CodeParams } | { unasked: string } {
   if (f.repo !== "" && !isRepoName(f.repo)) {
@@ -150,15 +167,18 @@ export function changesParams(f: Filters): { params: CodeParams } | { unasked: s
   if (f.needs !== "" && !isChangeNeed(f.needs)) {
     return { unasked: `“${f.needs}” is not something a change waits on.` };
   }
+  if (f.window !== "" && !isChangeWindow(f.window)) {
+    return { unasked: `“${f.window}” is not a window the changes are listed by.` };
+  }
   if (f.state === EVERY_STATE && !narrowsTheWalk(f)) {
     return {
       unasked:
-        "Every state is listed for one repository, one work item, one reviewer or what the changes wait on: choose one.",
+        "Every state is listed for one repository, one work item, one reviewer, what the changes wait on or a window they moved in: choose one.",
     };
   }
   const params: Record<string, string> = {};
   if (f.state !== EVERY_STATE) params.state = f.state;
-  for (const key of ["needs", "repo", "owner", "reviewer", "work"] as const) {
+  for (const key of ["needs", "repo", "owner", "reviewer", "work", "window"] as const) {
     if (f[key] !== "") params[key] = f[key];
   }
   return { params };
@@ -171,9 +191,10 @@ export function Changes() {
   const [owner, setOwner] = useParam("owner", "", "filter");
   const [reviewer, setReviewer] = useParam("reviewer", "", "filter");
   const [work, setWork] = useParam("work", "", "filter");
+  const [movedIn, setMovedIn] = useParam("window", "", "filter");
   const filters = useMemo(
-    () => ({ state, needs, repo, owner, reviewer, work }),
-    [state, needs, repo, owner, reviewer, work],
+    () => ({ state, needs, repo, owner, reviewer, work, window: movedIn }),
+    [state, needs, repo, owner, reviewer, work, movedIn],
   );
   const asked = useMemo(() => changesParams(filters), [filters]);
   const params = "params" in asked ? asked.params : {};
@@ -232,6 +253,14 @@ export function Changes() {
           options={repoChoices}
           ariaLabel="Repository"
           active={repo !== ""}
+        />
+        <Select
+          width="auto"
+          value={movedIn}
+          onChange={(value) => setMovedIn(String(value))}
+          options={CHANGE_WINDOW_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
+          ariaLabel="Moved"
+          active={movedIn !== ""}
         />
         <Narrowing label="Owner" value={owner} clear={() => setOwner("")} />
         <Narrowing label="Reviewer" value={reviewer} clear={() => setReviewer("")} />
@@ -376,26 +405,22 @@ export function ChangesGrid({
           cell: (c) => <TableNumberCell value={c.revision} format={fmtCount} />,
         },
         {
-          key: "blockers",
-          header: "Blockers",
+          key: "findings",
+          header: "Open findings",
           shrink: true,
           align: "right",
           drop: 2,
-          // A CHANGE THAT IS NO LONGER LIVE HAS NO READINESS, and so no
-          // standing blocker to count: said as nothing rather than as none.
-          cell: (c) =>
-            c.readiness ? (
-              <TableNumberCell value={standingBlockers(c.readiness)} format={fmtCount} />
-            ) : (
-              <EmptyValue label="Not live" />
-            ),
+          // THE ENGINE'S COUNT, of every finding none of the change's authors
+          // has answered — a merged or closed change's included, which still
+          // says what was left unanswered.
+          cell: (c) => <TableNumberCell value={c.open_findings} format={fmtCount} />,
         },
         {
-          key: "opened",
-          header: "Opened",
+          key: "updated",
+          header: "Updated",
           shrink: true,
           drop: 5,
-          cell: (c) => <TableDateCell value={c.opened_at} now={now} />,
+          cell: (c) => <TableDateCell value={c.updated_at} now={now} />,
         },
       ]}
     />
@@ -520,7 +545,14 @@ function emptyTitle(f: Filters): string {
 
 /** Where an empty listing sends the reader next. */
 function emptyHint(f: Filters): string {
-  if (f.needs !== "" || f.repo !== "" || f.owner !== "" || f.reviewer !== "" || f.work !== "") {
+  if (
+    f.needs !== "" ||
+    f.repo !== "" ||
+    f.owner !== "" ||
+    f.reviewer !== "" ||
+    f.work !== "" ||
+    f.window !== ""
+  ) {
     return "Widen the filters to see more.";
   }
   return "A change is opened by a seat's code_open_change, or by a push with the change option.";
