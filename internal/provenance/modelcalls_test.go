@@ -194,6 +194,7 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/runner.TestASentBackSessionIsToldWhatItLacks",
 		"internal/agent/runner.TestACarriedOnSessionIsToldWhatCameAfterItWasSaved",
 		"internal/agent/runner.TestAnAnsweredOrARefusedRunsSessionIsContinuedToldWhatCarriesItOn",
+		"internal/agent/runner.TestASessionContinuedInANewBoxIsToldWhatThatBoxHolds",
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 	}},
 	// THE CONTINUATION OF THE SESSION A CONVERSATION'S LAST TURN LEFT: the
@@ -202,6 +203,7 @@ var modelCalls = map[string]modelCall{
 	// launch's own fresh brief whole, whose fences its own entries hold.
 	"internal/agent/runner/continued.go:baseSession": {tests: []string{
 		"internal/agent/runner.TestAConversationsNextTurnIsToldWhereItBegins",
+		"internal/agent/runner.TestAConversationsNextTurnIsToldWhatItsNewBoxHolds",
 		"internal/agent/runner.TestABaseContinuationArmsAnEmptyGuard",
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 	}},

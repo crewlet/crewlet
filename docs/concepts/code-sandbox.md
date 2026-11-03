@@ -590,7 +590,7 @@ A relaunch that continues no kept session of the turn's own continues the sessio
 | The run | Its brief |
 |---|---|
 | Continues the session in the box it was last worked in | The session's next message: what carries it on, then what it lacks (below) |
-| Continues the session restored into another box | The same, then what a new box changes: a fresh checkout, the work-in-progress branch to check out, the uncommitted work gone, and that the session's absolute paths under the earlier box's home were that box's |
+| Continues the session restored into another box | The same, then what a new box changes: a fresh checkout — for a run offered `code_checkout`, of a repository the box's setup clones, while one the session checked out of this company's code host is not in the box until it checks it out again, at its branch's head ([Repositories on this company's code host](#repositories-on-this-companys-code-host)) — the work-in-progress branch to check out, the uncommitted work gone, and that the session's absolute paths under the earlier box's home were that box's |
 | Continues the session its conversation's last turn left, in a box of its own | Where this turn begins and what a new box changes, then the turn's own brief whole — its fresh brief, or a relaunch's reseed ([below](#a-conversations-next-turn-continues-its-last-turns-session)) |
 | Starts a session of its own | The turn's ask, with the ledger of its earlier rounds, every note the turn has read and what became of the run before it ([What a harness is told](#what-a-harness-is-told)) |
 
@@ -638,7 +638,7 @@ A turn that serves a conversation — the thread, the issue, the pull request or
 
 - that everything above is the conversation as its turns left it, through the base's turn, which ended at its instant, and that a new message has woken it, the task below being this turn's;
 - that what it read above may be stale, and that tools it activated and skills it loaded above were set up anew for this turn — its [skill guard](tool-skills.md#session-scope--why-per-phase-not-per-turn) starts empty, whatever the base's session loaded;
-- that it is in a new box on a fresh checkout, what the session had not committed and pushed gone with the box it was worked in, and that absolute paths under the base's home were that box's;
+- that it is in a new box on a fresh checkout — for a run offered `code_checkout`, of a repository the box's setup clones, while one the session checked out of this company's code host is not in the box until it checks it out again, at its branch's head ([Repositories on this company's code host](#repositories-on-this-companys-code-host)) — what the session had not committed and pushed gone with the box it was worked in, and that absolute paths under the base's home were that box's;
 - and, where the base's capture was cut off, that it may end mid-call.
 
 The launch's record says `continued_conversation`; the run carries the fresh brief beside the lead, for its script to hand a session of its own where its restore fails in the box, and its box says which session it started ([below](#which-session-the-box-started)).
