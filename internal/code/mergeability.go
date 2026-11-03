@@ -93,9 +93,9 @@ import (
 //
 // # Its tables
 //
-// code_mergeability, one row a change (replicated 0104, created again by 0105
-// with the readiness it stores, by 0116 with the checks position it was
-// judged at and by 0128 with the chart), written by the applier
+// code_mergeability, one row a change (replicated 0105, created again by 0106
+// with the readiness it stores, by 0117 with the checks position it was
+// judged at and by 0129 with the chart), written by the applier
 // (apply_mergeability.go) from the records on the change's own subject — its
 // answer cleared by the record on the repository's subject that closes or
 // merges the change ([clearReadiness]) — and removed only with the change by

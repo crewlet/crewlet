@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -219,20 +220,25 @@ func WithMirrorSeams(opts Options, wrap func(mirror.Options) mirror.Options) Opt
 }
 
 // TestGitTransfers is the transfer lane [PinGitLanes] gives a case's node:
-// four, 256 MiB of request spool.
-const TestGitTransfers = 4
+// [brokertest.GitTransfers], the one figure every node fixture's lane is.
+const TestGitTransfers = brokertest.GitTransfers
 
 // PinGitLanes sets b's git.max_transfers to [TestGitTransfers], for every
-// case booting a node that may build a code host. The transfer lane sizes the
-// request spools the cache's room is taken out of (host.SpoolAllowance), and
-// unset it follows the machine's cores — four a core, as memory allows. Beside
-// a broker on the same temporary volume, which claims three quarters of its
-// free space, a sixteen-core machine's 4 GiB of spools left a node no room
-// under 16 GiB free, and its node refused to host code: a property of the
-// machine running the suite, never of the case. Pinned, the room is a quarter
-// of the free space less 768 MiB — the request spools' 256 MiB and the revision
-// facts' patch spools' 512 MiB (query.PatchSpoolAllowance) — which every volume a
-// node boots on has.
+// case booting a node that may build a code host beside a broker that derives
+// its own limit. The transfer lane sizes the request spools the cache's room is
+// taken out of (host.SpoolAllowance), and unset it follows the machine's cores
+// — four a core, as memory allows. Beside a broker on the same temporary
+// volume, which claims three quarters of its free space, a sixteen-core
+// machine's 4 GiB of spools left a node no room under 16 GiB free, and its node
+// refused to host code: a property of the machine running the suite, never of
+// the case. Pinned, the room is a quarter of the free space less 768 MiB — the
+// request spools' 256 MiB and the revision facts' patch spools' 512 MiB
+// (query.PatchSpoolAllowance) — which every volume a node boots on has.
+//
+// A node whose broker [brokertest.StoreIn] sized declares its cache with
+// [brokertest.CodeCacheIn] instead, which pins this lane and a budget: its
+// broker's declared limit claims a fixed sixteen gibibytes of the room, not a
+// share of the free space, and leaves nothing on a smaller disk.
 func PinGitLanes(b *config.Bootstrap) { b.Git.MaxTransfers = TestGitTransfers }
 
 // RequireNodeGit holds the git the suite runs to the node floor
@@ -311,7 +317,7 @@ func SeedStore(t testing.TB, b *config.Bootstrap) {
 // case about how a file reaches the box is about.
 func SeatBoxSetupForTest(e *Engine, defaults []sandbox.SetupStep, handle string) []sandbox.SetupStep {
 	c := e.Company()
-	return e.runEnvironment(context.Background(), c, c.Org.AgentSeatByHandle(handle), seatSandbox(c, handle), defaults).setup
+	return e.runEnvironment(context.Background(), c, c.Org.AgentSeatByHandle(handle), seatSandbox(c, handle), defaults, nil).setup
 }
 
 // ForgetPersonBlinderForTest drops this node's resolved blinder, so the next

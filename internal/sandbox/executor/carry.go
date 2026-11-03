@@ -62,8 +62,9 @@ type sessionRecord struct {
 	// continued says it is the session the run was asked to continue.
 	continued bool
 	// why is why a run asked to continue a session started a new one in its
-	// place, as its script said it ([sandbox.Result.FellBack]); "" for every
-	// other run.
+	// place, as its script said it ([sandbox.Result.FellBack]), the line as
+	// the box holds it: held to its bound where the run's result is built
+	// ([Runner.Collect]), the one reader of it. "" for every other run.
 	why string
 	// release is the harness's `--version`, as it printed it.
 	release string
@@ -77,42 +78,50 @@ type sessionRecord struct {
 // last, as the harness printed it, and a harness that printed more than one line runs
 // on into lines of its own — an `id` there is the harness's text, never the
 // script's. The script writes `why` on one line, whatever the words it
-// quotes held. An id that is not one a harness mints ([validSessionID]) is no id.
+// quotes held. An id that is not one a harness mints
+// ([sandbox.ValidSessionID]) is no id.
+//
+// READ WHERE IT LIES, AND NO FURTHER THAN ITS FOUR KEYS. The record is a file
+// the run's own agent can write, as long as the 32 MiB the engine reads whole
+// ([sandbox.MaxFileBytes]), and it is read on every collection and every take
+// of the box's session. Split into a slice of its lines, with a set of every
+// key it named, a record of empty lines cost sixteen times its size, half a
+// GiB, on each of those reads; walked a line at a time it costs nothing past
+// its own bytes, and the walk ends once the four keys are read, since no later
+// line of one is the record's.
+//
+// AND NOTHING IN IT IS HELD HERE: the take reads the id alone, so `why` is
+// held to its bound by the one reader of it, where the run's result is built
+// ([Runner.Collect], [sandbox.BoundFellBack]), rather than redacted on every
+// read of the record and thrown away by all but one.
 func parseSessionRecord(text string) sessionRecord {
-	var rec sessionRecord
-	seen := map[string]bool{}
-	for _, line := range strings.Split(text, "\n") {
+	var (
+		rec                                         sessionRecord
+		readID, readContinued, readWhy, readRelease bool
+	)
+	for text != "" && (!readID || !readContinued || !readWhy || !readRelease) {
+		var line string
+		line, text, _ = strings.Cut(text, "\n")
 		key, value, _ := strings.Cut(line, " ")
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		value = strings.TrimSpace(value)
-		switch key {
-		case "id":
-			if validSessionID(value) {
+		switch {
+		case key == "id" && !readID:
+			readID = true
+			if sandbox.ValidSessionID(value) {
 				rec.id = value
 			}
-		case "continued":
+		case key == "continued" && !readContinued:
+			readContinued = true
 			rec.continued = value == "yes"
-		case "why":
+		case key == "why" && !readWhy:
+			readWhy = true
 			rec.why = value
-		case "release":
+		case key == "release" && !readRelease:
+			readRelease = true
 			rec.release = value
 		}
 	}
 	return rec
-}
-
-// validSessionID reports whether id has the shape every session id a runner
-// names has — a UUID, `ses_` and hexadecimal digits — loosely: letters,
-// digits, `-` and `_`, at most 128 of them. The record is a file in a box the
-// run's own agent can write, and an id read from it names an archive and is
-// handed to a later run's script.
-func validSessionID(id string) bool {
-	return id != "" && len(id) <= 128 && !strings.ContainsFunc(id, func(r rune) bool {
-		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
-	})
 }
 
 // releasePattern is a release's MAJOR.MINOR.PATCH, wherever a harness's
@@ -121,8 +130,25 @@ func validSessionID(id string) bool {
 var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
 // releaseOf is the release a harness's `--version` printed, "2.1.310", or "" where
-// it printed none this code can read.
-func releaseOf(printed string) string { return releasePattern.FindString(printed) }
+// it printed none this code can read — one longer than the executor log
+// records a release at among them.
+//
+// A RELEASE HAS A LENGTH, AND THE PATTERN DOES NOT: its numbers are runs of
+// digits, and what it reads was printed in the box — the session record's
+// `release` line is a file the run's own agent can write, and `--version` is
+// whatever the box's PATH finds — so a run of digits as long as the file read
+// as a release, which the launch's record carried whole and a capture of the
+// session named, for the log to refuse. So what the pattern finds is held to
+// a release's shape ([sandbox.ValidRelease]), the one the launch's record
+// holds it to again: past the log's bound it is refused, never cut, because a
+// shortened release names another one; and read as none, it is what every
+// reader takes a release it cannot read for: a current one.
+func releaseOf(printed string) string {
+	if release := releasePattern.FindString(printed); sandbox.ValidRelease(release) {
+		return release
+	}
+	return ""
+}
 
 // captured describes the session archive the box's last run packed
 // ([Paths.SessionCapture]), for the session rec names, or nil where there is
@@ -216,18 +242,38 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 			r.harness.Name(), carries.VersionCommand(), res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))}, nil
 	}
 	check := sandbox.CarryCheck{Version: releaseOf(res.Stdout)}
-	switch {
-	case archive.Harness != r.harness.Name():
-		check.Why = fmt.Sprintf("the session was written by %q, and this box runs %s: a session is "+
-			"continued only by the harness that wrote it", archive.Harness, r.harness.Name())
-	case archive.Format != carries.ArchiveFormat():
-		check.Why = fmt.Sprintf("the session's archive is format %d, and this build restores %s's "+
-			"format %d alone", archive.Format, r.harness.Name(), carries.ArchiveFormat())
-	default:
-		check.Continues, check.Why = carries.Continues(check.Version, archive.Version)
+	if restores, why := r.Restores(archive); !restores {
+		check.Why = why
+		return check, nil
 	}
+	check.Continues, check.Why = carries.Continues(check.Version, archive.Version)
 	return check, nil
 }
+
+// Restores reports whether this runner restores archive at all
+// ([sandbox.SessionRestorer]): written by its own harness, in the one format it
+// packs, by a release whose sessions another box continues — everything
+// [Runner.CheckCarry] decides but the box's own release, which only the box can
+// say. The one answer a launch and every reader of whether a session can be
+// continued take ([sandbox.ContinuityOf]), so neither restates the floors.
+func (r *Runner) Restores(archive sandbox.SessionArchive) (bool, string) {
+	carries, ok := r.harness.(carrier)
+	switch {
+	case !ok:
+		return false, r.harness.Name() + " carries no session between boxes"
+	case archive.Harness != r.harness.Name():
+		return false, fmt.Sprintf("the session was written by %q, and this runner drives %s: a session "+
+			"is continued only by the harness that wrote it", archive.Harness, r.harness.Name())
+	case archive.Format != carries.ArchiveFormat():
+		return false, fmt.Sprintf("the session's archive is format %d, and this build restores %s's "+
+			"format %d alone", archive.Format, r.harness.Name(), carries.ArchiveFormat())
+	}
+	// THE WRITER'S FLOOR ALONE: a box release that cannot be read is taken
+	// for a current one, so an empty one asks nothing of the box.
+	return carries.Continues("", archive.Version)
+}
+
+var _ sandbox.SessionRestorer = (*Runner)(nil)
 
 // carriedOlder is the reason a box's release cannot continue a session a newer
 // one wrote, shared by both harnesses: a release reads what it and those before it

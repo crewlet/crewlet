@@ -166,8 +166,7 @@ const (
 	// package doc — so a link is the whole of what a message carries
 	// besides its own text, and eight of them is a hand-off with its
 	// sources rather than a dump. Two kibibytes clears every URL length
-	// any of the eight integration surfaces mints, signed query strings
-	// included.
+	// any integration surface mints, signed query strings included.
 	MaxLinks     = 8
 	MaxLinkBytes = 2 << 10
 

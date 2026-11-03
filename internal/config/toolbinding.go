@@ -34,14 +34,14 @@ import (
 //
 // BOUND WHERE THE ORG MODEL IS BUILT ([Company.organization]), the one place
 // every reader of a seat's tool environment takes it from: the engine starting
-// a seat's server, an executor's box, [MCPServer.Grants] and the org
-// projection.
+// a seat's server, an executor's box, [MCPServer.Grants], the org projection,
+// and a seat's test of an entry, saved or not ([Company.SeatToolEnv]).
 
 // SeatCredential is one seat credential a per-seat server reads, as an
 // `mcp_servers` entry declares it.
 type SeatCredential struct {
 	// Kind is the integration whose seat credential it is.
-	Kind string `yaml:"kind" json:"kind" js:"required;enum=atlassian|datadog|github|gitlab|mattermost|slack" desc:"Integration whose per-seat credential this server reads."`
+	Kind string `yaml:"kind" json:"kind" js:"required;enum=atlassian|cloudflare|datadog|expo|github|gitlab|mattermost|slack" desc:"Integration whose per-seat credential this server reads."`
 
 	// Field is which of the integration's seat credentials: TOKEN or EMAIL
 	// for Atlassian; empty is the integration's credential itself.
@@ -75,7 +75,7 @@ func seatCredentialFields(kind string) []string {
 // SeatCredentialKinds is every integration a server can read a seat
 // credential of.
 func SeatCredentialKinds() []string {
-	return []string{"atlassian", "datadog", "github", "gitlab", "mattermost", "slack"}
+	return []string{"atlassian", "cloudflare", "datadog", "expo", "github", "gitlab", "mattermost", "slack"}
 }
 
 // SeatCredentialKind is the integration a seat block's lane belongs to:
@@ -316,4 +316,23 @@ func (c *Company) bindSeatTools(o *org.Organization) {
 			seat.MCPEnv = env
 		}
 	}
+}
+
+// SeatToolEnv is the block seat handle's instance of server starts with once
+// server is this company's entry by its name, built as the org model builds it,
+// so a seat's test of an unsaved entry gets what its save will hand the seat.
+func (c *Company) SeatToolEnv(server *MCPServer, handle string) map[string]string {
+	with := *c
+	with.MCPServers = slices.Clone(c.MCPServers)
+	if i := slices.IndexFunc(with.MCPServers, func(s MCPServer) bool { return s.Name == server.Name }); i >= 0 {
+		with.MCPServers[i] = *server
+	} else {
+		with.MCPServers = append(with.MCPServers, *server)
+	}
+	o, _ := with.organization()
+	seat := o.AgentSeatByHandle(handle)
+	if seat == nil {
+		return nil
+	}
+	return maps.Clone(seat.MCPEnv[server.Name])
 }

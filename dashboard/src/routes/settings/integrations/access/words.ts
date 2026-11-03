@@ -29,17 +29,51 @@ export interface LaneWords {
   rotate: string;
   /**
    * What a seat's scope is: its column heading, a single item, an empty list,
-   * and where an empty list is literal, the hint under a seat that is on with
-   * none.
+   * where an empty list is literal the hint under a seat that is on with none,
+   * and where the vendor has none to offer, what the picker says instead.
    */
-  scope?: { noun: string; singular: string; empty: string; emptyOn?: string };
+  scope?: { noun: string; singular: string; empty: string; emptyOn?: string; none?: string };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
-  /** The `mcp_servers` entry a seat's tool is started from, as the warning names it. */
-  server: string;
   /** Where a person approves a seat's install at the vendor through a fresh link, its button label. */
   install?: string;
+  /**
+   * Where only a person can make the agent's account at the vendor, and pastes
+   * its token here (Expo's robots): the vendor's nouns the Set up sheet uses.
+   */
+  handoff?: HandoffWords;
+  /**
+   * What the vendor calls a credential the account still holds besides the
+   * sealed one, one of them and several: "An old token", "old tokens".
+   */
+  retired?: { one: string; many: string };
+  /**
+   * On a lane that lets a person keep a turned-off agent's account at the
+   * vendor (`releasable`), the control that does it: "Keep the robot at Expo".
+   */
+  release?: string;
 }
+
+/** The vendor's own words for the account a person makes for an agent, and the controls they press. */
+export interface HandoffWords {
+  /** What the agent's account is called at the vendor, in a sentence: "robot". */
+  account: string;
+  /** The same, as a label: "Robot". */
+  accountLabel: string;
+  /** The control that makes one: "Add robot". */
+  add: string;
+  /** The control on its row that makes its token: "Create token". */
+  mint: string;
+  /** Where its role is changed, in its row's menu: "Edit robot". */
+  edit: string;
+  /** Why the agent needs one of its own, under the sheet's title. */
+  why: string;
+  /** The role never to pick, said under the role to pick. */
+  never: string;
+}
+
+/** What an old credential is called on a lane whose words name none. */
+export const RETIRED_GENERIC = { one: "An old credential", many: "old credentials" };
 
 const GENERIC: LaneWords = {
   name: "the vendor",
@@ -50,7 +84,6 @@ const GENERIC: LaneWords = {
   rotate:
     "Crewlet mints a new credential and revokes the old one. Anything still using the old one stops working.",
   tool: "Its tool server, one per agent",
-  server: "vendor",
 };
 
 export const LANE_WORDS: Record<string, LaneWords> = {
@@ -64,7 +97,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate:
       "Crewlet mints a new application key for the service account and deletes the old one. Anything still using the old key stops working.",
     tool: "Datadog MCP server, one per agent",
-    server: "datadog",
   },
   github: {
     name: "GitHub",
@@ -77,7 +109,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate: "GitHub issues the app's tokens hourly, so there is nothing to rotate.",
     scope: { noun: "Repositories", singular: "repository", empty: "All installed repositories" },
     tool: "GitHub MCP server, one per agent",
-    server: "github",
   },
   gitlab: {
     name: "GitLab",
@@ -90,7 +121,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Crewlet mints a new token for the service account and revokes the old one. Anything still using the old token stops working.",
     scope: { noun: "Projects", singular: "project", empty: "The whole group" },
     tool: "GitLab MCP server, one per agent",
-    server: "gitlab",
   },
   jira: {
     name: "Jira",
@@ -104,7 +134,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Crewlet mints a new API token for the service account and revokes the old one, for Jira and Confluence alike.",
     scope: { noun: "Projects", singular: "project", empty: "No project" },
     tool: "Crewlet's own Jira tools",
-    server: "jira",
   },
   confluence: {
     name: "Confluence",
@@ -118,7 +147,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Crewlet mints a new API token for the service account and revokes the old one, for Jira and Confluence alike.",
     scope: { noun: "Spaces", singular: "space", empty: "No space" },
     tool: "Crewlet's own Confluence tools",
-    server: "confluence",
   },
   slack: {
     name: "Slack",
@@ -131,7 +159,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate:
       "Crewlet revokes the app's bot token. The agent stays off Slack until a person approves the install again.",
     tool: "Slack MCP server, one per agent",
-    server: "slack",
     install: "Install in Slack",
   },
   mattermost: {
@@ -149,7 +176,40 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       emptyOn: "In no channel yet, so it cannot read or post anywhere. Choose its channels.",
     },
     tool: "Crewlet's chat transport",
-    server: "mattermost",
+  },
+  cloudflare: {
+    name: "Cloudflare",
+    access: "Token permissions",
+    turnOn:
+      "Turning it on mints an account API token for the agent with the chosen permissions, limited to the company's zones.",
+    off: "Crewlet disables the agent's API token, so it stops working at once, then deletes it. Turning it back on mints a new token.",
+    remove:
+      "The agent's token is already deleted at Cloudflare, so removing only stops Crewlet tracking it.",
+    rotate:
+      "Crewlet rolls the token to a new value and seals it. Anything still using the old value stops working.",
+    tool: "Cloudflare MCP server, one per agent",
+  },
+  expo: {
+    name: "Expo",
+    access: "Role at Expo",
+    turnOn:
+      "Turning it on asks you to add a robot for the agent at Expo with the chosen role and paste its token here. Crewlet checks the token and keeps it.",
+    off: "Crewlet deletes the agent's sealed token at once, so it loses Expo here. Then you delete its robot at Expo, and Crewlet confirms it once the old token stops working.",
+    remove: "You delete the agent's robot at Expo, so removing only stops Crewlet tracking it.",
+    rotate:
+      "You create a new token for the same robot at Expo and paste it here. Crewlet checks it is the same robot and seals it, then asks you to delete the old token.",
+    tool: "EAS CLI in its box",
+    handoff: {
+      account: "robot",
+      accountLabel: "Robot",
+      add: "Add robot",
+      mint: "Create token",
+      edit: "Edit robot",
+      why: "Each agent acts at Expo as its own robot, so its builds and updates are attributable to it.",
+      never: "Never choose Admin: agents never hold it.",
+    },
+    retired: { one: "An old token", many: "old tokens" },
+    release: "Keep the robot at Expo",
   },
 };
 

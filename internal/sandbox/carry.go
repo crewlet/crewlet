@@ -1,6 +1,13 @@
 package sandbox
 
-import "io"
+import (
+	"context"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/executorkeep"
+)
 
 // A HARNESS'S OWN SESSION, CARRIED BETWEEN BOXES.
 //
@@ -54,6 +61,16 @@ type SessionArchive struct {
 type CarriedSession struct {
 	Archive SessionArchive
 	Body    io.Reader
+
+	// Replace says the archive replaces the box's own copy of the session
+	// even where that copy already holds it (carry.go's digest rule): set for
+	// a session captured from a harness that was CUT OFF ([SessionCapture.Interrupted]),
+	// whose copy in the box it ran in may hold a record its harness never
+	// finished — a half-written transcript line, an OpenCode step that never
+	// settled — which the archive leaves out, or calls made after the capture,
+	// which the brief that continues it lists instead. False keeps a copy that
+	// holds the archive, which is the archive or newer.
+	Replace bool
 }
 
 // CarryCheck is a box's answer to whether a session carried from another box
@@ -71,3 +88,166 @@ type CarryCheck struct {
 	// Why says, in a person's words, why it cannot; "" where it can.
 	Why string
 }
+
+// ValidSessionID reports whether id has the shape every session id a harness
+// mints has — Claude Code's UUID, OpenCode's `ses_` and its characters —
+// loosely: letters, digits, `-` and `_`, at most
+// [executorkeep.SessionIDMaxBytes] of them.
+//
+// ONE RULE, HELD WHEREVER A BOX NAMES A SESSION. The id is the box's word —
+// a line of its session record, or what its harness printed, which its own
+// agent can write as it likes — and it names an archive, is handed to a later
+// run's script, and rides the launch's record, whose fit it may not decide. So
+// a runner refuses any other as it reads the box (internal/sandbox/executor),
+// and the record refuses it again as it is published ([collectedRecord]),
+// whatever runner, or host of another build, read the box.
+func ValidSessionID(id string) bool {
+	return id != "" && len(id) <= executorkeep.SessionIDMaxBytes &&
+		!strings.ContainsFunc(id, func(r rune) bool {
+			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
+		})
+}
+
+// ValidRelease reports whether release has the shape of a harness's release as
+// the engine reads one off its `--version` ("2.1.310"): three runs of digits
+// joined by dots, at most [executorkeep.HarnessVersionMaxBytes] bytes, the
+// most the executor log records one at.
+//
+// A RELEASE HAS A LENGTH, AND ITS NUMBERS DO NOT: they are runs of digits a box
+// printed, so a run as long as the line read as a release. One past the bound
+// is refused, never cut, because a shortened release names another — and read
+// as none, it is what every reader takes a release it cannot read for, a
+// current one. Held where [ValidSessionID] is, for its reasons.
+func ValidRelease(release string) bool {
+	if release == "" || len(release) > executorkeep.HarnessVersionMaxBytes {
+		return false
+	}
+	parts := 0
+	for part := range strings.SplitSeq(release, ".") {
+		parts++
+		if part == "" || strings.ContainsFunc(part, func(r rune) bool { return r < '0' || r > '9' }) {
+			return false
+		}
+	}
+	return parts == 3
+}
+
+// SessionRestorer is a [Runner] that continues a session carried from another
+// box (internal/sandbox/executor's Runner, for a harness it packs and
+// restores): what the launch asks of it before it hands a run a carried session,
+// and what every reader asks that says whether a turn's session can be
+// continued at all ([ContinuityOf]).
+//
+// OPTIONAL, as [SessionTaker] is: a runner that carries no session continues
+// none, and a launch on it starts every relaunch fresh.
+type SessionRestorer interface {
+	// Restores reports whether this runner restores archive at all — written
+	// by its harness, in the one archive format it packs, by a release whose
+	// sessions another box continues — and, where it does not, why: what can
+	// be known of a carried session before any box is asked, the box's own
+	// release aside.
+	Restores(archive SessionArchive) (bool, string)
+
+	// CheckCarry asks box whether its harness can continue archive, a session
+	// packed in another box: [Runner.CheckCarry] in internal/sandbox/executor,
+	// which reads the box harness's release. Three answers: it can, it cannot
+	// (and why), and the box could not be asked, an error.
+	CheckCarry(ctx context.Context, box Sandbox, archive SessionArchive) (CarryCheck, error)
+}
+
+// SessionTaker is a [Runner] whose harness's session a capture takes out of a
+// box (internal/sandbox/executor's Runner, for a harness it packs and restores):
+// the archive the run packed when its harness exited, or one packed now, on
+// demand, for a job that never got to — a stopped job, one its turn's cap
+// ended while it still ran, one lost with its engine whose box is still there.
+//
+// THREE ANSWERS: the session, taken; the zero [TakenSession], where the box
+// holds no session to take — a harness that wrote none, a run whose record
+// names none; and an error, where it holds one that could not be taken — a
+// pack that failed, an archive past its bound — which the capture stamps
+// refused, so a later launch knows the job's session was not kept rather than
+// reading an older capture as its latest.
+//
+// OPTIONAL, as [noteReader] is: a runner that carries no session — a harness not
+// taught to pack one, a test's — keeps nothing, and every capture of its runs
+// is no capture at all.
+type SessionTaker interface {
+	TakeSession(ctx context.Context, box Sandbox, take SessionTake) (TakenSession, error)
+}
+
+// SessionTake is what a capture asks of a box ([SessionTaker]).
+type SessionTake struct {
+	// Pack says the session is packed NOW, by the runner's own pack: a job
+	// still working, which its turn's cap ended or a box would not end, and
+	// which may have gone on since anything it packed. False is a job that
+	// is over: the archive its script packed when its harness exited where it
+	// left one — at its own end, or at the end it was asked for — and one
+	// packed now where it left none (a crash before its pack, a job killed
+	// part way through it, a job lost with its engine). Every pack records
+	// the archive's digest in the box as the script's does, so the box never
+	// takes its own archive for another box's.
+	Pack bool
+
+	// Scrub is every secret the engine itself put in the box, by value — its
+	// login, its environment's credentials ([HandedSecrets]) — which is taken
+	// out of every file of the archive in its raw form and in the form a JSON
+	// string holds it in, before the redaction every text leaving a box
+	// passes.
+	Scrub []string
+
+	// MaxBytes is the largest archive kept (executorkeep.SessionMaxBytes):
+	// one the box describes as larger is refused before a byte of it is read,
+	// and it bounds what the scrub reads out of the archive — the plaintext
+	// it expands to, and each piece of it the scrub holds whole — so an
+	// archive the box's own code wrote cannot cost the engine host more than
+	// that.
+	MaxBytes int64
+}
+
+// TakenSession is a session archive on its way out of its box: described, and
+// streamed as it is to be kept — every value of [SessionTake.Scrub] taken out
+// and every file redacted, each in a way that leaves the file what it was (a
+// JSON document still JSON, a transcript still one JSON value a line).
+//
+// The zero value is a box that holds no session to take.
+type TakenSession struct {
+	// Archive describes the archive as the box packed it; its Size is the
+	// box's archive, before the scrub, which may change it.
+	Archive SessionArchive
+
+	// Body streams the archive scrubbed, a piece at a time. The caller
+	// closes it, which is safe while a Read is in flight and ends one.
+	Body io.ReadCloser
+
+	// Keep records in the box that its own copy of the session holds the
+	// archive Body yielded — the digest a carried archive is compared with
+	// before it is restored ([RunRequest.Carried]) — so that this archive,
+	// carried back into the box it was taken from, is never restored over
+	// the copy that box went on with. It refuses a Body not read to its end,
+	// whose digest is no archive's.
+	Keep func(ctx context.Context) error
+
+	// Context is the WHOLE INPUT of the last request the session's harness
+	// sent its model, cache included, as the archive's own transcript
+	// recorded it — Claude Code's last assistant message's usage, OpenCode's
+	// last settled assistant message's tokens — once Body has been read to
+	// its end: the context a launch that continues the session sends again on
+	// its first request, which that launch's budget floor reads
+	// ([SessionCapture.ContextTokens]). Zero where the transcript recorded
+	// none this build reads, and where Body was not read whole. Nil from a
+	// taker that measures nothing.
+	Context func() int64
+}
+
+// SessionPackWait bounds a runner's on-demand pack of a session in its box
+// ([SessionTake.Pack]).
+//
+// TWO MINUTES: a minute for what a box's harness takes to come up on a
+// contended box (an OpenCode export runs against a private server it starts,
+// which takes about a second and is given a minute — the room a run's own
+// server is given to listen), and a minute for tar and gzip over a session at
+// its bound, which reads some hundreds of mebibytes of JSON at the tens of
+// mebibytes a second a contended box still packs at. A pack that has not
+// finished by then is not going to, and the capture is refused rather than
+// left holding the box.
+const SessionPackWait = 2 * time.Minute

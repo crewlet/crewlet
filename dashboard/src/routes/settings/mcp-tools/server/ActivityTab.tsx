@@ -2,7 +2,8 @@
  * A server's Activity: calls per tool over the last week, every data node's
  * counts summed by the engine, and for an administrator the newest calls with
  * the agent that made each and how it ended, never its arguments or its
- * result. A member reads the counts only.
+ * result, and the calls held for a person's approval with how each was
+ * answered. A member reads the counts only.
  */
 
 import {
@@ -13,13 +14,13 @@ import {
   Text,
   type DataGridColumn,
 } from "@crewlethq/ui";
-import { ChartColumnGlyph, ScrollTextGlyph } from "@crewlethq/icons/glyphs";
-import type { McpCallRow, McpMemberToolUsage } from "~/contract/mcp.ts";
+import { ChartColumnGlyph, HandGlyph, ScrollTextGlyph } from "@crewlethq/icons/glyphs";
+import type { McpApproval, McpCallRow, McpMemberToolUsage } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import type { ServerDetail } from "../api.ts";
 import type { McpData } from "../data.ts";
-import { OUTCOME } from "../words.ts";
+import { approvalWords, OUTCOME } from "../words.ts";
 import { ToolName } from "./ToolsTab.tsx";
 
 export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpData }) {
@@ -100,6 +101,46 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
         ),
     },
   ];
+  const approvalColumns: DataGridColumn<McpApproval>[] = [
+    {
+      key: "at",
+      header: "Asked",
+      shrink: true,
+      sortValue: (a) => a.at,
+      cell: (a) => <RelativeTime value={a.at} />,
+    },
+    {
+      key: "seat",
+      header: "Agent",
+      cell: (a) => (
+        <Text as="span" variant="inherit" truncate>
+          {data.seatName(a.seat)}
+        </Text>
+      ),
+    },
+    { key: "tool", header: "Tool", floor: "16rem", cell: (a) => <ToolName name={a.tool} /> },
+    {
+      key: "answer",
+      header: "Answer",
+      cell: (a) => {
+        const words = approvalWords(a);
+        return (
+          <TableTwoLineCell
+            value={
+              <Tag size="xs" variant={words.tone} appearance="soft">
+                {words.label}
+              </Tag>
+            }
+            detail={a.answered_by ? `by ${data.seatName(a.answered_by)}` : undefined}
+          />
+        );
+      },
+    },
+  ];
+  const approvals =
+    data.answer?.reading === "admin"
+      ? data.answer.approvals.filter((a) => a.server === detail.server.name)
+      : [];
   const quiet =
     detail.reading === "admin" ? detail.calls.coverage.nodes.filter((n) => !n.answered) : [];
   return (
@@ -141,6 +182,24 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
               {listed(quiet.map((n) => n.id))} did not answer, so calls kept there are not listed.
             </Text>
           ) : null}
+        </Card>
+      ) : null}
+      {detail.reading === "admin" ? (
+        <Card padding="none">
+          <Card.Header icon={<HandGlyph size="sm" />} count={approvals.length || undefined}>
+            <Card.Title>Calls held for approval</Card.Title>
+          </Card.Header>
+          <DataGrid<McpApproval>
+            name="approvals"
+            rows={approvals}
+            rowKey={(a) => a.id}
+            columns={approvalColumns}
+            empty={{
+              title: "No call is waiting for approval",
+              hint: "A call to a tool at Needs approval parks its run here until somebody answers it.",
+              icon: "hand",
+            }}
+          />
         </Card>
       ) : null}
     </div>

@@ -226,6 +226,71 @@
         "null"
       ]
     },
+    "Cloudflare": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "provisioning": {
+          "$ref": "#/$defs/CloudflareProvisioning",
+          "description": "The Cloudflare account and the provisioner token the engine mints each agent's token with. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CloudflareProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "description": "Cloudflare account ID (32 hexadecimal characters) the agents' tokens are created in.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "api_token": {
+          "description": "Account API token with Account API Tokens Write, Account Settings Read, Zone Read and every permission an agent level grants.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "zones": {
+          "description": "Zone names the agents' tokens are scoped to. Empty means every zone in the account.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Code": {
       "additionalProperties": false,
       "properties": {
@@ -1112,7 +1177,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Record and replay per-conversation history (default on).",
+          "description": "Record and replay per-conversation history, and keep each executor launch's harness session (default on; off keeps no session, and still records how each turn ended).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -1573,6 +1638,46 @@
         "null"
       ]
     },
+    "Expo": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "provisioning": {
+          "$ref": "#/$defs/ExpoProvisioning",
+          "description": "The Expo account the agents' robot users act for. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ExpoProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "account_name": {
+          "description": "Expo account or organization name, as it appears in expo.dev/accounts/<name>, that the agents' robot users act for.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "GitHub": {
       "additionalProperties": false,
       "properties": {
@@ -1933,6 +2038,10 @@
             "null"
           ]
         },
+        "cloudflare": {
+          "$ref": "#/$defs/Cloudflare",
+          "description": "Cloudflare account and provisioner token, used to mint one account API token per agent. Absent = disabled."
+        },
         "confluence": {
           "$ref": "#/$defs/Confluence",
           "description": "Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."
@@ -1940,6 +2049,10 @@
         "datadog": {
           "$ref": "#/$defs/Datadog",
           "description": "Datadog monitor alerts delivered as inbound events. Absent = disabled."
+        },
+        "expo": {
+          "$ref": "#/$defs/Expo",
+          "description": "Expo account and provisioner token, used to create one Expo robot user per agent. Absent = disabled."
         },
         "forge_app_id": {
           "description": "Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud.",
@@ -2381,6 +2494,39 @@
           },
           "type": [
             "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "MCPLimit": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "false turns this server off for the seat, or for every agent seat beneath the unit; the grant and its values stay. A limit cannot turn a server on, so true is refused.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "tools": {
+          "additionalProperties": {
+            "enum": [
+              "approve",
+              "blocked",
+              "",
+              null
+            ]
+          },
+          "description": "One tool held to a stricter level, keyed by the server's own name for it: approve (each call waits for a person's answer) or blocked (never offered).",
+          "type": [
+            "object",
             "null"
           ]
         }
@@ -3375,6 +3521,16 @@
             "null"
           ]
         },
+        "mcp_limits": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MCPLimit"
+          },
+          "description": "Narrow the MCP servers this agent seat is granted, keyed by server name: off turns one off for the seat, tools holds a tool at approve or blocked. Never widens: the strictest of this, every enclosing unit's and the server's own entry applies.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "name": {
           "description": "Seat name, shown to people; also the source of the auto-derived handle. Nothing references a seat by it.",
           "type": [
@@ -3531,6 +3687,34 @@
         "null"
       ]
     },
+    "RoleCloudflare": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has its own Cloudflare token. Off deletes the token.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): zone, DNS, cache, firewall, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included.",
+          "enum": [
+            "read",
+            "operate",
+            "configure",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleCode": {
       "additionalProperties": false,
       "properties": {
@@ -3626,6 +3810,35 @@
             "number",
             "boolean",
             "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleExpo": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has its own Expo robot user, which a person creates at Expo and pastes the token of. Off clears its sealed token.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "The robot's Expo role. viewer (the default): views all projects. runner: views projects and performs low-risk actions on them. developer: creates builds, publishes updates to unprotected channels and manages credentials. release_manager: developer plus protected channels.",
+          "enum": [
+            "viewer",
+            "runner",
+            "developer",
+            "release_manager",
+            "",
+            null
           ]
         }
       },
@@ -3775,6 +3988,10 @@
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
+        "cloudflare": {
+          "$ref": "#/$defs/RoleCloudflare",
+          "description": "This seat's own Cloudflare account API token: whether it is on and its level."
+        },
         "confluence": {
           "$ref": "#/$defs/RoleConfluence",
           "description": "This seat's Confluence access: whether it is on, its space role and its spaces."
@@ -3782,6 +3999,10 @@
         "datadog": {
           "$ref": "#/$defs/RoleDatadog",
           "description": "This seat's Datadog service account: whether it is on and its role."
+        },
+        "expo": {
+          "$ref": "#/$defs/RoleExpo",
+          "description": "This seat's own Expo robot user: whether it is on and its level."
         },
         "github": {
           "$ref": "#/$defs/RoleGitHub",
@@ -4435,7 +4656,9 @@
           "description": "Integration whose per-seat credential this server reads.",
           "enum": [
             "atlassian",
+            "cloudflare",
             "datadog",
+            "expo",
             "github",
             "gitlab",
             "mattermost",
@@ -5012,6 +5235,16 @@
             ]
           },
           "description": "Credentials inherited by this unit's direct agent members.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "mcp_limits": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MCPLimit"
+          },
+          "description": "Narrow the MCP servers granted to every agent seat beneath this unit, at any depth, keyed by server name: off turns one off for them, tools holds a tool at approve or blocked. Never widens: the strictest of this, every enclosing unit's, the seat's own and the server's entry applies.",
           "type": [
             "object",
             "null"

@@ -42,8 +42,24 @@
 .agent-access-quiet {
   color: var(--color-text-secondary);
 }
+/* Why the engine refused one seat's control, under its row. */
+.agent-access-refused {
+  color: var(--color-feedback-danger-ink);
+}
 .agent-access-menu {
   min-width: 22rem;
+}
+/* The Set up sheet's step under its stepper: the words, the facts and the
+ * vendor's page, stacked; a role over the vendor's own line on what it allows. */
+.agent-access-handoff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.agent-access-handoff-role {
+  display: flex;
+  flex-direction: column;
 }
 /* What a row is waiting on, and a quiet hint, in the row's accessory strip. */
 .agent-access-under {
@@ -89,26 +105,37 @@
 .agent-access-review-seat {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
-  padding-top: var(--spacing-3);
+  gap: var(--spacing-3);
+}
+/* A rule BETWEEN seats only: on the first it drew an empty line under the head. */
+.agent-access-review-seat + .agent-access-review-seat {
+  padding-top: var(--spacing-4);
   border-top: 1px solid var(--color-border-default);
 }
 .agent-access-review-seat h3 {
   margin: 0;
 }
-/* A step in the review: who takes it, in a column of its own, then its label
+/* A step in the review: who takes it, in a gutter of its own, then its label
  * over its note. The mark's box is one line tall, so it sits on the label's
- * first line whether or not a note follows. */
+ * first line whether or not a note follows.
+ *
+ * THE MARK IS OUT OF FLOW, so the words alone give the step its baseline and
+ * the list's number stands on the label's line. In a column of its own the
+ * mark's box was the step's baseline, and every number sat below its label. */
 .agent-access-step {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  column-gap: var(--spacing-2);
+  --agent-access-mark: 1.25rem;
+  position: relative;
+  display: block;
+  padding-inline-start: calc(var(--agent-access-mark) + var(--spacing-2));
 }
 .agent-access-actor {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  inline-size: var(--agent-access-mark);
   /* The label's own register (uilet's body Text), so 1lh is its line. */
   font-size: var(--font-size-sm);
   line-height: var(--font-line-height-normal);

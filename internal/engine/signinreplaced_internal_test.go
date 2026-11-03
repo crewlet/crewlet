@@ -62,6 +62,28 @@ func TestARunRefusedAfterARotationIsRelaunchedOnce(t *testing.T) {
 	}
 }
 
+// A ROUND A REPLACED SIGN-IN CUT OFF IS CARRIED ON IN THE SESSION ITS JOB'S BOX
+// RAN. A job whose launch continued a session its box could not take up ran one
+// of its own, which its box said it started: the relaunch carries the round on
+// in that one, whose transcript holds what the job did and the skills it
+// loaded — never the session the launch chose, which never read them.
+//
+// Mutation: build the carried round from the session the launch chose, and the
+// relaunch continues a session that never read what its guard is armed with.
+func TestARotatedRoundIsCarriedOnInTheSessionItsBoxRan(t *testing.T) {
+	t.Parallel()
+	c, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
+	refused := sandbox.RunEnding{Text: "Failed to authenticate. API Error: 401 {\"type\":\"error\"}",
+		Error: "Failed to authenticate. API Error: 401", At: time.Now()}
+	run := sandbox.PendingRun{TurnID: "t0", AgentHandle: "swe", SessionID: "sess-chosen", SandboxID: "box-1",
+		Launch: sandbox.LaunchRecord{ProviderKey: "plan", SignInID: "an-older-sign-in",
+			FreshSessionID: "sess-own", SessionStart: sandbox.SessionStartFresh}}
+	got := (&Engine{}).signInReplaced(t.Context(), c, resumeInput{Run: run, Ended: refused})
+	if got == nil || got.SessionID != "sess-own" {
+		t.Fatalf("the carried round = %+v, want it in the session the job's box started of its own", got)
+	}
+}
+
 // THE LAUNCH STAMPS THE SIGN-IN THE JOB'S HARNESS IS HANDED on the job's record,
 // so whichever node collects the job can tell a refusal on a replaced
 // credential from an ordinary one.

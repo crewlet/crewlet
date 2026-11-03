@@ -3,7 +3,9 @@ package setupapi
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -100,6 +102,15 @@ func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// EVERY TYPED VALUE IS HELD TO ITS FIELD'S OWN RULE before any vendor is
+	// asked, as saving holds it, so a malformed paste is refused at its field
+	// and never sent: whitespace or an invisible character in a credential,
+	// and a vendor's alphabet where its field declares a shape.
+	if refused := typedRefusal(target, req.Value, req.Values, against); refused != nil {
+		refuseValue(w, refused)
+		return
+	}
+
 	// A FIELD NOTHING CAN CHECK AHEAD answers its own sentence, and no
 	// vendor is asked: see [setup.Requirement.CheckNote].
 	if !target.Checkable {
@@ -158,6 +169,7 @@ func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 		// Nil-safe on a company with no Atlassian block, which declared
 		// nothing.
 		Declared: company.Integrations.Atlassian.Declared(),
+		Zones:    company.Integrations.Cloudflare.ZoneNames(),
 	})
 	switch {
 	case errors.Is(err, setup.ErrUnusableInput):
@@ -232,6 +244,27 @@ func checkedField(kind integration.Kind, seat, field, value string,
 		}
 	}
 	return target, ""
+}
+
+// typedRefusal is the first typed value its field refuses, the checked field's
+// first and then the rest by name, or nil. Every field is one of against, which
+// [checkedField] has already held the request to.
+func typedRefusal(target setup.Requirement, value string, values map[string]string,
+	against []setup.Requirement,
+) *setup.ValueError {
+	if refused := target.Refusal(strings.TrimSpace(value)); refused != nil {
+		return refused
+	}
+	for _, field := range slices.Sorted(maps.Keys(values)) {
+		i := slices.IndexFunc(against, func(r setup.Requirement) bool { return r.Field == field })
+		if field == target.Field || i < 0 {
+			continue
+		}
+		if refused := against[i].Refusal(strings.TrimSpace(values[field])); refused != nil {
+			return refused
+		}
+	}
+	return nil
 }
 
 // dereference resolves a whole `${NAME}` through this node's chain, and

@@ -219,6 +219,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"project", "ENG", agentOnlyOnHuman},
 	{"space", "DOCS", agentOnlyOnHuman},
 	{"mcp_env", "{atlassian: {JIRA_USERNAME: sarah}}", agentOnlyOnHuman},
+	{"mcp_limits", "{atlassian: {enabled: false}}", agentOnlyOnHuman},
 	{"behavioral_guidelines", "[Reply fast]", agentOnlyOnHuman},
 	{"code", "{access: review}", codeAccessOnHuman},
 	{"integrations.github", "{enabled: false}", githubAppOnHuman},
@@ -227,6 +228,8 @@ var humanSeatKeys = []humanSeatKey{
 	{"integrations.gitlab", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.jira", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.confluence", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.cloudflare", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.expo", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 

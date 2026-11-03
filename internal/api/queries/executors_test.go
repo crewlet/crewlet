@@ -214,6 +214,99 @@ func TestAParkedBoxWithNoPauseStampStillReadsAsHeld(t *testing.T) {
 	}
 }
 
+// A RUN WHOSE ENDING IS DECIDED SAYS SO, AND ITS BOX IS NOT ITS ANY MORE. Its
+// record stays until the ending is finished — on a node that records every
+// turn's end, until the turn's captures settle and the executor log takes the
+// end, which can be minutes — and the row read as the run it was: a finished
+// turn as one still resuming, beside a paused, billed box the ending had
+// already reclaimed.
+//
+// Mutation: drop `ending` from runRow, or draw the box off the sandbox id alone,
+// and a check below goes red.
+func TestARunWhoseEndingIsDecidedSaysSoAndItsBoxIsNotItsAnyMore(t *testing.T) {
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
+	})
+	if err := store.AttachSandbox(t.Context(), "t1", sandbox.BoxRef{
+		SandboxID: "box-1", PauseTTLSec: 1800,
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	if err := store.MarkBoxPaused(t.Context(), "t1", runBase); err != nil {
+		t.Fatalf("MarkBoxPaused: %v", err)
+	}
+	rows := askRuns(t, store)
+	if rows[0]["ending"] != nil || rows[0]["box_exists"] != true || rows[0]["paused_at"] == "" {
+		t.Fatalf("a live run's row = ending %v, box %v, paused %v; want no ending, its held box up",
+			rows[0]["ending"], rows[0]["box_exists"], rows[0]["paused_at"])
+	}
+	if _, ok, err := store.DecideEnding(t.Context(), "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Active, Launch: sandbox.EveryLaunch},
+		Reclaim: true, Stop: &sandbox.RunStop{By: "jane"},
+	}); err != nil || !ok {
+		t.Fatalf("DecideEnding = %v, %v", ok, err)
+	}
+	rows = askRuns(t, store)
+	ending, _ := rows[0]["ending"].(map[string]any)
+	if ending == nil || ending["at"] == "" || ending["reason"] != "" || ending["stopped_by"] != "jane" {
+		t.Fatalf("the ended run's row says ending %v, want when it was decided and who stopped it",
+			rows[0]["ending"])
+	}
+	if rows[0]["box_exists"] != false || rows[0]["paused_at"] != "" {
+		t.Fatalf("the ended run's box reads exists %v, held since %v; want it the ending's to reclaim",
+			rows[0]["box_exists"], rows[0]["paused_at"])
+	}
+}
+
+// A PARKED RUN WHOSE ENDING IS DECIDED IS PUT TO NOBODY: it is over, whatever
+// status it was ended in, and takes no answer, so a person's "what is waiting
+// on me" — the board's audience filter, and the home screen's decisions through
+// it — no longer lists it, while the unfiltered board still shows it ending.
+//
+// Mutation: drop the ending from putTo, and the ended question is still put to
+// ana.
+func TestAParkedRunWhoseEndingIsDecidedIsPutToNobody(t *testing.T) {
+	t.Parallel()
+	store := seedRuns(t, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe", CreatedAt: runBase})
+	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToTeam})
+	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
+		Answerers: sandbox.Audience{Handles: []string{"ana"}}, AskedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	cfg, err := config.ParseCompany([]byte(viewerCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Sandbox: store, Company: companySource(t, cfg),
+		Holders: loginDirectory{}, Chart: flatChart{}})
+	ask := func(params map[string]any) []any {
+		t.Helper()
+		got, err := r.Answer(everyGrant(t), "executors", params)
+		if err != nil {
+			t.Fatalf("executors %v: %v", params, err)
+		}
+		return got.(map[string]any)["runs"].([]any)
+	}
+	if mine := ask(map[string]any{"audience": "ana"}); len(mine) != 1 {
+		t.Fatalf("the premise: audience=ana answered %d runs, want the one put to her", len(mine))
+	}
+	if _, ok, err := store.DecideEnding(t.Context(), "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Active, Launch: sandbox.EveryLaunch},
+		Reason:  types.ExecutorFailureSeatRemoved, Reclaim: true,
+	}); err != nil || !ok {
+		t.Fatalf("DecideEnding = %v, %v", ok, err)
+	}
+	if mine := ask(map[string]any{"audience": "ana"}); len(mine) != 0 {
+		t.Fatalf("audience=ana answered %v, want nothing: the run's ending is decided", mine)
+	}
+	all := ask(nil)
+	if len(all) != 1 || all[0].(map[string]any)["ending"] == nil {
+		t.Fatalf("the unfiltered board answered %v, want the run, saying it is ending", all)
+	}
+}
+
 // Telling somebody to "reply in the thread" when the run was started by a
 // schedule tick sends them to a thread that does not exist — and such a run
 // stores no conversation at all, which is what the column has to read.

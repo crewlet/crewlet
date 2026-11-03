@@ -1259,34 +1259,42 @@ type SandboxRunUpdate struct {
 // serves — is told of that run's writes and of no other run's, however busy
 // the fleet.
 //
-// # A record has its LOG beside it
+// # A record has its PARTS beside it
 //
-// A run's bridged tool log — every tool call its box makes over the bridge,
-// each with its arguments and output, up to internal/sandbox's bound of two
-// hundred — is kept beside the record under a key of its own
-// ([SandboxRuns.SandboxRunLog]), never on it. The record is what every
-// reader decides on: every flip of a run is a read-decide-write of it whole,
-// every listing reads every record whole, and every git request of a coding
-// box reads its run's record and every ref answer past its floor writes it.
-// Measured on a full log, the record with the log on it was half a megabyte,
-// and every one of those moved it through the bucket's stream leader; kept
-// beside it, the record is a few kilobytes and only the log's own readers
-// and its appends move the log.
+// The record keeps what a reader decides on; what a job can make large is a
+// PART kept beside it under a key of its own ([SandboxRuns.SandboxRunPart],
+// one of [RunParts]), never on it. The record is what every reader decides
+// on: every flip of a run is a read-decide-write of it whole, every listing
+// reads every record whole, and every git request of a coding box reads its
+// run's record and every ref answer past its floor writes it. Two parts:
 //
-// THE LOG LIVES AND DIES WITH ITS RECORD, and the store, not its caller, is
-// what holds that: a log is written only beside a run that has a record
-// ([SandboxRuns.MutateSandboxRunLog] undoes a write that raced the record's
-// removal), and a delete of the record removes the log with it
-// ([SandboxRuns.MutateSandboxRun]). So a log never outlives its run by
+//   - [RunLog], the run's bridged tool log — every tool call its box makes
+//     over the bridge, each with its arguments and output, up to
+//     internal/sandbox's bound of two hundred. Measured on a full log, the
+//     record with the log on it was half a megabyte, and every one of those
+//     moved it through the bucket's stream leader; kept beside it, the
+//     record is a few kilobytes and only the log's own readers and its
+//     appends move the log.
+//   - [RunHanded], the secrets a job's box was handed, sealed — up to
+//     internal/sandbox's bound of 64 KiB before sealing, which on the record
+//     would have put a launch whose environment holds a large file on every
+//     one of those reads, though only a capture of the job's session and the
+//     next launch's opening read it.
+//
+// A PART LIVES AND DIES WITH ITS RECORD, and the store, not its caller, is
+// what holds that: a part is written only beside a run that has a record
+// ([SandboxRuns.MutateSandboxRunPart] undoes a write that raced the record's
+// removal), and a delete of the record removes every part with it
+// ([SandboxRuns.MutateSandboxRun]). So a part never outlives its run by
 // anything a write does; a node that stops between the record's removal and
-// the log's leaves the log, and [Markers.SweepMarkers] removes it with the
+// a part's leaves the part, and [Markers.SweepMarkers] removes it with the
 // record's marker.
 type SandboxRuns interface {
 	// SandboxRun reads one run's record.
 	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)
 
 	// SandboxRuns returns every record, by turn id — the records ALONE,
-	// never the log beside one.
+	// never a part beside one.
 	//
 	// Every listing this serves — the seat's busy check, the boot recovery
 	// pass, the pause reaper, the clarification match — filters on fields
@@ -1328,12 +1336,12 @@ type SandboxRuns interface {
 	// at its new version — and the record it removed for a Delete; with
 	// false, the record as the last decision read it.
 	//
-	// A DELETE TAKES THE RUN'S LOG WITH IT: the record goes first, at the
-	// version decided on, and then the log, so no reader ever finds a record
-	// whose log was removed under it. Never a log a record stands beside
-	// again by then — the turn launched anew in between, whose launch opens
-	// the log to its own job — so a new run's log is not taken by the
-	// removal of the run before it. A log that could not be removed once the
+	// A DELETE TAKES THE RUN'S PARTS WITH IT: the record goes first, at the
+	// version decided on, and then each part, so no reader ever finds a
+	// record whose part was removed under it. Never a part a record stands
+	// beside again by then — the turn launched anew in between, whose launch
+	// writes its own job's parts — so a new run's part is not taken by the
+	// removal of the run before it. A part that could not be removed once the
 	// record went is still a landed delete — the decision did what it
 	// decided — and is left to the sweep (see the type's doc).
 	MutateSandboxRun(ctx context.Context, turnID string,
@@ -1359,43 +1367,64 @@ type SandboxRuns interface {
 	// state then, so a change made while nobody listened is not lost.
 	WatchSandboxRun(ctx context.Context, turnID string) (<-chan SandboxRunUpdate, error)
 
-	// SandboxRunLog reads the log kept beside turnID's run, as the store's
+	// SandboxRunPart reads the part kept beside turnID's run, as the store's
 	// newest write left it: a log appended a moment ago is in the answer.
-	// Record.Key is the turn id. False is a run with no log — one whose
-	// record has none written yet, or one that is gone.
-	SandboxRunLog(ctx context.Context, turnID string) (Record, bool, error)
+	// Record.Key is the turn id. False is a run with no such part — one
+	// whose record has none written yet, or one that is gone. A part that is
+	// not one of [RunParts] is an error.
+	SandboxRunPart(ctx context.Context, turnID string, part RunPart) (Record, bool, error)
 
-	// MutateSandboxRunLog changes the log beside turnID's run by a decision
-	// taken on the log as it stands, answering the log as the change left it
-	// and whether a change landed — [SandboxRuns.MutateSandboxRun]'s
-	// read-decide-write, on the log's own key.
+	// MutateSandboxRunPart changes the part beside turnID's run by a
+	// decision taken on the part as it stands, answering the part as the
+	// change left it and whether a change landed —
+	// [SandboxRuns.MutateSandboxRun]'s read-decide-write, on the part's own
+	// key.
 	//
-	// decide is handed the log read and whether there is one, and answers
-	// the log's next value whole; an empty answer writes nothing. A write
-	// lands only where the log still stands as decide read it — absent, or
+	// decide is handed the part read and whether there is one, and answers
+	// the part's next value whole; an empty answer writes nothing. A write
+	// lands only where the part still stands as decide read it — absent, or
 	// at the version decide was handed — and is otherwise decided again on
-	// the log as it then stands, within the store's patience, an error
+	// the part as it then stands, within the store's patience, an error
 	// decide returns coming back as it is. The decision never reads the
 	// record: a caller whose condition is on the record keeps the facts it
-	// decides by in the log it writes, so one compare-and-swap of one key
+	// decides by in the part it writes, so one compare-and-swap of one key
 	// holds the condition and the write together.
 	//
-	// ONLY BESIDE A RECORD. A log is written for a run that has a record and
-	// for no other: a write that finds, once it has landed, that the
+	// ONLY BESIDE A RECORD. A part is written for a run that has a record
+	// and for no other: a write that finds, once it has landed, that the
 	// record was removed under it removes what it wrote and answers
 	// (Record{}, false, nil), as a run that is gone answers
-	// MutateSandboxRun. So a write racing the run's end never leaves a log
+	// MutateSandboxRun. So a write racing the run's end never leaves a part
 	// behind it.
 	//
-	// What a write does not do is read the record on an UPDATE: a log a
+	// What a write does not do is read the record on an UPDATE: a part a
 	// removal left behind — its node stopped between the record's removal
-	// and the log's, which a store that removes both in one step never
+	// and the part's, which a store that removes both in one step never
 	// leaves — still takes an update until the sweep removes it. Nothing is
-	// lost by that: every reader of a log comes to it through a record, and
-	// a run's next launch opens the log to its own job whatever it held.
-	MutateSandboxRunLog(ctx context.Context, turnID string,
+	// lost by that: every reader of a part comes to it through a record, and
+	// each part names the job it was written for, which a run's next launch
+	// replaces.
+	MutateSandboxRunPart(ctx context.Context, turnID string, part RunPart,
 		decide func(current Record, found bool) ([]byte, error)) (Record, bool, error)
 }
+
+// RunPart names one part kept beside a sandbox run's record — see
+// [SandboxRuns].
+type RunPart string
+
+const (
+	// RunLog is the run's bridged tool log.
+	RunLog RunPart = "log"
+	// RunHanded is the secrets the run's job's box was handed, sealed.
+	RunHanded RunPart = "handed"
+)
+
+// RunParts is every part a run's record can have beside it: what a delete of
+// the record removes, and what the sweep looks for.
+func RunParts() []RunPart { return []RunPart{RunLog, RunHanded} }
+
+// Valid reports whether p is one of [RunParts].
+func (p RunPart) Valid() bool { return p == RunLog || p == RunHanded }
 
 // SecretRecord is one stored credential, as coordination holds it.
 //
@@ -1735,12 +1764,12 @@ type Markers interface {
 	// record families no clock ages, reporting how many went. A failure
 	// part-way reports the markers already removed beside the error.
 	//
-	// AND A SANDBOX RUN'S LOG WHOSE RECORD IS GONE, written before cutoff:
-	// the one value a removal can leave behind when its node stops between
-	// the record's removal and the log's ([SandboxRuns]). Whether the run
-	// has a record is read after the log is found, so a record written
-	// under the turn again keeps its log, and the log is removed only as it
-	// was found.
+	// AND A PART BESIDE A SANDBOX RUN WHOSE RECORD IS GONE — its log, its
+	// handed set ([RunParts]) — written before cutoff: the one value a
+	// removal can leave behind when its node stops between the record's
+	// removal and the part's ([SandboxRuns]). Whether the run has a record
+	// is read after the part is found, so a record written under the turn
+	// again keeps its parts, and a part is removed only as it was found.
 	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
 }
 

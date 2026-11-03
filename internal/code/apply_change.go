@@ -497,7 +497,7 @@ func changeNotApplied(ctx context.Context, at applyContext, repoID, changeID, wh
 //   - changeRetargeted, a retarget: code_changes_target_idx.
 //
 // EVERY WRITE moves the change's version, position and updated_at, the last
-// the key of code_changes_updated_idx (replicated 0146): what a listing
+// the key of code_changes_updated_idx (replicated 0147): what a listing
 // narrowed to a window walks. So each kind rewrites that index beside the
 // ones named above — a head move two entries where it rewrote one — the cost
 // of saying when a change last moved, which no column already said.

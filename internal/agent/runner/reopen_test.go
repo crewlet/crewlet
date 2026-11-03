@@ -42,16 +42,17 @@ func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 	}
 	spent := runner.Bridged{Aux: auxspend.Spent{Input: 900, Output: 90}, Workers: 1,
 		WorkerInput: 4000, WorkerOutput: 400}
-	surface, meter, err := r.ReopenAgentRun(context.Background(), state, []runner.BridgedCall{
+	reopened, err := r.ReopenAgentRun(context.Background(), state, []runner.BridgedCall{
 		// AS THE ROW HOLDS THEM: in the order they finished.
 		{Call: ledger.Call{Name: "jira_create", Args: map[string]any{"summary": "first"},
 			Result: "created"}, Seq: 2},
 		{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1"},
 			Result: "posted"}, Seq: 1},
-	}, spent)
+	}, spent, false)
 	if err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}
+	surface, meter := reopened.Surface, reopened.Meter
 
 	active := surface.Active()
 	for _, held := range state.ActiveTools {
@@ -93,17 +94,17 @@ func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 func TestARunTakenOverKeepsTheSkillsItLoaded(t *testing.T) {
 	t.Parallel()
 	r, _ := guardedRunner(t, newCapture(), tools.OriginBuiltin)
-	surface, _, err := r.ReopenAgentRun(context.Background(), execstate.State{
+	reopened, err := r.ReopenAgentRun(context.Background(), execstate.State{
 		Version: execstate.Version, Round: 1,
 		ActiveTools: []string{"slack_post", toolname.LoadToolSkill},
 	}, []runner.BridgedCall{
 		{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
 			Result: "Always thread your reply."}, Seq: 1},
-	}, runner.Bridged{})
+	}, runner.Bridged{}, false)
 	if err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}
-	res, err := surface.Execute(context.Background(), llm.ToolCall{
+	res, err := reopened.Surface.Execute(context.Background(), llm.ToolCall{
 		Name: "slack_post", Arguments: map[string]any{"channel": "C1"},
 	})
 	if err != nil {

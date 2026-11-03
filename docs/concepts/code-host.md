@@ -4477,23 +4477,33 @@ and paid from the run's re-syncs (below).
 each lazy fetch of a blob into a blobless clone among them — reads its run's
 record once, from the stream leader of the bucket the fleet keeps runs in,
 and each raise of its floor is one compare-and-set of that record — which
-holds the job's facts and never its bridged tool log, kept beside it under a
-key of its own
+holds the job's facts and never its bridged tool log, nor the sealed secrets
+the job's box was handed, each kept beside it under a key of its own
 ([Code Sandbox](code-sandbox.md#the-runs-record-and-what-it-costs-to-read)).
 Measured on three members with every bucket at three replicas, from a member
 not leading the runs' bucket, for a job parked with a 32 KiB frozen context
-and a full bridge log of 200 calls: the record is 37 931 bytes, the frozen
-context and the 2 KiB brief among them, and a read takes 0.43 ms and a raise
-1.29 ms at the median (0.80 and 2.12 at the 99th percentile). The log beside
-it is 478 378 bytes, and only the calls that use it move it: an append of the
-box's next call takes 13.2 ms (19.6), and 13.8 ms (17.3) for a call that
-moved what the job's bridged calls cost, which also writes the new total to
-the record. With the log on the record, as the
-record kept it before (measured 2026-11-01 on the same machine), the record
-was 516 173 bytes, a read took 5.8 ms and a raise 11.1 ms (7.9 and 26.0), and
-every listing of runs and every flip of one moved the same half mebibyte
-(`BenchmarkABoxRequestOnItsRun`, `internal/coord/kv`, thirty operations each
-on two E-cores of an Intel Core Ultra 7 265U, measured 2026-11-02).
+and a full bridge log of 200 calls, its launch numbered on the record and no
+capture of its session stamped there yet: the record is 37 957 bytes, the
+frozen context and the 2 KiB brief among them, and the 16 of them the
+attach of its box adds to say which brief the job was handed (`"brief":
+"fresh"`; a job whose launch continues no session records no
+`session_start`). A read takes 0.38 ms and a raise 0.90 ms at the median
+(0.61 and 2.40 at the 99th percentile), measured on the benchmark's record,
+which names no box and so was 37 941 bytes. The log
+beside it is 478 374 bytes, and only the calls that use it move it: an append
+of the box's next call takes 10.6 ms (15.6), and 10.8 ms (15.3) for a call
+that moved what the job's bridged calls cost, which also writes the new total
+to the record. The sealed set of secrets beside it is about 0.7 KiB for a
+launch handed a model key, two MCP servers' tokens and its own telemetry and
+code-host tokens (computed from its encoding: 486 bytes of values, sealed and
+named for the job in a 779-byte part), and at most 64 KiB before sealing; only
+a capture and the next launch's opening read it. With the log on the record,
+as the record kept it before (measured 2026-11-01 on the same machine), the
+record was 516 173 bytes, a read took 5.8 ms and a raise 11.1 ms (7.9 and
+26.0), and every listing of runs and every flip of one moved the same half
+mebibyte (`BenchmarkABoxRequestOnItsRun`, `internal/coord/kv`, thirty
+operations each on two E-cores of an Intel Core Ultra 7 265U, measured
+2026-11-03).
 
 **Its transfers are its run's.** Every box's git is charged to the `run` class
 of the [fair share](#fair-share), keyed by its launch, and boxes together hold

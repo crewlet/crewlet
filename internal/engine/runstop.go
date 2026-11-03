@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -47,12 +48,19 @@ import (
 // whoever acquires it, before its mailbox opens. A node with no sandbox runtime
 // has no runs to stop.
 //
-// SYNCHRONOUS, on the caller's frame: a stop is a reclaim of a box and a few
-// writes, bounded by the coordinator's own teardown grace, and the pause it
-// follows is rare — a watch that waits on it delivers the next change a moment
-// later, where a goroutine per stop would have a lifetime nobody owns. What
-// would wait on ANOTHER node — the read of a box on its host — is left to the
-// coordinator's own retry, which it owns ([sandbox.Coordinator.StopSeat]).
+// SYNCHRONOUS, on the caller's frame, which waits on no job: the frame DECIDES
+// each stop — a few writes under the seat's lease — and closes the run's
+// tool-bridge session. A run whose job started in a box is finished by the
+// coordinator's own retry, which it arms at once and owns: the job's end,
+// which is waiting for it (at most [sandbox.JobEndBudget]), the read of what
+// it spent and of its session, the box's reclaim and the stop's announcement
+// — on this node's host or another's, and whatever
+// `conversation_session.enabled` says ([sandbox.Coordinator.StopSeat]). Only a
+// stop with no job to end, a launch stopped before its command was recorded,
+// is finished on the frame, its box reclaimed within the coordinator's
+// teardown grace. The pause it follows is rare — a watch that waits on it
+// delivers the next change a moment later — where a goroutine per stop would
+// have a lifetime nobody owns.
 func (e *Engine) stopSeatRuns(ctx context.Context, seat uuid.UUID, p coord.SeatPause) {
 	if !p.StopRunning {
 		return
@@ -128,38 +136,71 @@ func (e *Engine) closeStopped(ctx context.Context, tel turnTelemetry, stop error
 	e.endSegment(ctx, tel, spend, res, stop, charge)
 }
 
-// closeStoppedTurn closes ON THE RECORD the turn that was parked on a run a
-// person stopped — the coordinator's [sandbox.CoordinatorOptions.CloseStopped].
+// closeStoppedTurn ends the turn of a run a person stopped — the coordinator's
+// [sandbox.CoordinatorOptions.CloseStopped] — and answers how it ended, for the
+// executor log: stopped, by whom and why, whether its reply had reached anybody
+// as the turn's own calls say ([sandbox.RunCalls]), and what the engine told
+// the colleague whose ask the turn took up.
+//
+// A TURN THAT PARKED ON THE RUN IS CLOSED ON THE RECORD FIRST ([Engine.closeParkedTurn]).
+// One that did not — a launch stopped before its turn could park, the turn
+// still in the frame that launched it — is closed on the record by that frame
+// when its park is refused; its colleague's answer and its end are this
+// step's all the same, because only the run's ending records them after the
+// stop's read has kept the job's session.
 //
 // FROM THE ROW ALONE, because this can run on any node that finishes the run's
 // ending — the one that stopped it, or the seat's next holder after a crash —
-// long after the turn's own frames are gone: the parked turn's state says what
-// the turn had done and measured, the row's stop says who stopped it and what
-// the run had spent by then. The turn's telemetry is assembled as a resume
-// assembles it ([Engine.describeResume]), so the closing segment is charged and
-// stated exactly as a resumed segment that the stop reached at its first round
-// would have been.
+// long after the turn's own frames are gone.
 //
-// UNDER THE ENDING'S IDENTITY ([turnTelemetry.closing]): an attempt that
-// repeats the close publishes the same records, and the work item's charge is
-// keyed on the segment, which the tracker's ledger collapses.
-//
-// A STATE THIS BUILD CANNOT READ CLOSES NOTHING and is logged: the run is
-// still ended and announced, and refusing the ending over a turn record would
-// keep a person's stopped run in the store for good.
-func (e *Engine) closeStoppedTurn(ctx context.Context, run sandbox.PendingRun) error {
+// A PARKED STATE THIS BUILD CANNOT READ CLOSES NOTHING ON THE RECORD and is
+// logged, and the turn still ends: its colleague is answered and its end
+// owed, since neither reads the parked state. Refusing the ending over a turn
+// record would keep a person's stopped run in the store for good.
+func (e *Engine) closeStoppedTurn(ctx context.Context, run sandbox.PendingRun,
+	bridged sandbox.RunCalls) (executorkeep.Ending, error) {
+
 	if run.Ending == nil || run.Stop == nil {
-		return nil
+		return executorkeep.Ending{}, fmt.Errorf("engine: run %s's ending is no stop", run.TurnID)
 	}
+	company := e.Company()
+	stop := &stopError{pause: pauseOfStop(*run.Stop), handle: run.AgentHandle}
+	if len(run.ExecuteState) > 0 {
+		if err := e.closeParkedTurn(ctx, company, run, stop); err != nil {
+			return executorkeep.Ending{}, err
+		}
+	}
+	// AND THE COLLEAGUE WHOSE ASK THE TURN TOOK UP, told it was stopped: this
+	// is the turn's end, and the frame that saw the ask answered nothing for
+	// a turn that parked, or that launched and was stopped before it could
+	// (a2a.go). Best effort, never this step's error — the turn is over — and
+	// once: the end this answers is owed on the row, and a repeat of the
+	// ending finds it there.
+	answered := e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, stop)
+	return e.runEnding(company, run, bridged, answered), nil
+}
+
+// closeParkedTurn closes ON THE RECORD the turn that was parked on a run a
+// person stopped: its `stopped` completion and its AgentTurnStopped, under the
+// ending's identity, charged what the run had spent.
+//
+// The turn's telemetry is assembled as a resume assembles it
+// ([Engine.describeResume]), so the closing segment is charged and stated
+// exactly as a resumed segment that the stop reached at its first round would
+// have been, and UNDER THE ENDING'S IDENTITY ([turnTelemetry.closing]): an
+// attempt that repeats the close publishes the same records, and the work
+// item's charge is keyed on the segment, which the tracker's ledger collapses.
+func (e *Engine) closeParkedTurn(ctx context.Context, company *Company, run sandbox.PendingRun,
+	stop *stopError) error {
+
 	state, ok, err := execstate.Decode(run.ExecuteState)
 	if err != nil || !ok {
 		log.WarnContext(ctx, "stopped_turn_not_closed", "turn_id", run.TurnID, "seat", run.AgentHandle,
 			"error", errors.Join(err, errNoParkedState(ok)),
-			"detail", "the run is ended and its stop announced, but its parked turn could not be "+
-				"read to close it on the record")
+			"detail", "the run is ended and its stop announced, and its turn's end is recorded, but its "+
+				"parked turn could not be read to close it on the record")
 		return nil
 	}
-	company := e.Company()
 	if company == nil || company.Org == nil {
 		return fmt.Errorf("engine: closing turn %s, which a person stopped, on a node with no "+
 			"applied company", run.TurnID)
@@ -182,16 +223,9 @@ func (e *Engine) closeStoppedTurn(ctx context.Context, run sandbox.PendingRun) e
 	tel.trace = events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID}
 	tel.startedAt = at
 	tel.closing = &closingIdentity{turnID: run.TurnID, ending: run.Ending.ID, at: at}
-	stop := &stopError{pause: pauseOfStop(*run.Stop), handle: run.AgentHandle}
 	e.closeStopped(ctx, tel, stop, at)
 	e.observe(ctx, tel.stamp(turnStoppedEvent(run.AgentHandle, tel.role, tel.agentID,
 		run.TurnID, run.WorkKey, stop.pause, tel.trace)))
-	// AND THE COLLEAGUE WHOSE ASK THE TURN TOOK UP, told it was stopped: this
-	// close is the turn's end, and the frame that saw the ask answered
-	// nothing for a turn that parked (a2a.go). Best effort, never this
-	// step's error — the turn is closed — and a repeat of the step after a
-	// crash finds the channel its first attempt closed.
-	e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, stop)
 	return nil
 }
 

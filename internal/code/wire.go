@@ -280,7 +280,7 @@ type PackRow struct {
 	// nothing in it reached the repository after it. A push's pack and a
 	// merge's arrived at their own record; every rewrite's output — a
 	// compaction's, an expunge's, a rescue — at the latest of the packs it
-	// replaced, since moving content brings none (replicated 0127). An
+	// replaced, since moving content brings none (replicated 0128). An
 	// expunge on its maintainer's schedule keeps a pack that arrived within
 	// [PruneGrace] whole (internal/code/compact). Zero where it is not known:
 	// a pack a cache adopted before a round served its row. A read's
@@ -497,7 +497,7 @@ func (row PushRow) brief() PushRow {
 // derived from the commits, whose committer header any client may write.
 //
 // THE ROW'S COLUMN HAS NO DOMAIN VALUE AS ITS DEFAULT (the empty string, in
-// replicated 0090), and a row naming no way this build knows is refused by
+// replicated 0091), and a row naming no way this build knows is refused by
 // every reader of it (scanPush): an apply that forgot the column would
 // otherwise read as one way or the other.
 type PushVia string
@@ -665,7 +665,7 @@ type IntroducedQuery struct {
 // push beside it costs the read more pages and never one page more than
 // that. An index on the run would hold an entry for every box push on every
 // data node for the history's 181 days to serve that one read a run
-// (replicated 0097 says what it would cost); BenchmarkRunPushes measures what
+// (replicated 0098 says what it would cost); BenchmarkRunPushes measures what
 // the scan costs instead.
 type RunPushesQuery struct {
 	Run   string            `json:"run"`
@@ -2436,7 +2436,7 @@ type CheckQuery struct {
 	// a page read: a page is full wherever the narrowing holds as many rows
 	// after its place, so what it costs follows what it answers rather than
 	// the history around it. A repository's listing and the window SEEK an
-	// index that leads with the narrowing (replicated 0143): the state, or the
+	// index that leads with the narrowing (replicated 0144): the state, or the
 	// check's name and then the state — a name alone is one seek a state,
 	// merged ([narrowedPlaces]). Their writes are what any index on
 	// code_checks costs: the two over a repository's attempts hold every
@@ -2600,13 +2600,13 @@ type RepoDetail struct {
 // RuleSource is who set one of a repository's rules and when, named by the
 // rule's pattern: the decider of the record that last CHANGED the rule — its
 // push controls or its gate — and that record's instant (code_protections,
-// replicated 0147). A record that carries the rule unchanged, as every
+// replicated 0148). A record that carries the rule unchanged, as every
 // settings change carries every rule, leaves its source as it was
 // ([rulesSourced]).
 //
 // A READ'S ANSWER, never a record's field: the columns are derived from what
 // every record already carries, its envelope's decider and its broker
-// instant, so none of it takes a versionedFields row (0147 states the
+// instant, so none of it takes a versionedFields row (0148 states the
 // condition the derivation holds under).
 type RuleSource struct {
 	Pattern string `json:"pattern"`
@@ -2620,7 +2620,7 @@ type RuleSource struct {
 }
 
 // RemoteState is a repository's other hosts as its row holds them
-// (code_repos, replicated 0122): zero for a repository with no mirror that was
+// (code_repos, replicated 0123): zero for a repository with no mirror that was
 // never imported. A read's answer, never a record's field, so none of it takes
 // a versionedFields row; the records that write the columns name theirs
 // (mirror.go).
@@ -2775,7 +2775,7 @@ type ChangeSummary struct {
 	// close, a merge, a push that moved its head — and the last one somebody
 	// wrote about it on its own subject — an ask for review, a comment, a
 	// review, an answer to a finding — never the home's facts (replicated
-	// 0146). What a listing narrowed to a window ([ReadQuery.Window]) keeps.
+	// 0147). What a listing narrowed to a window ([ReadQuery.Window]) keeps.
 	// A change read in brief ([ReadAnswer.ChangeBrief]) reads no
 	// conversation, and carries its lifecycle's last move alone, and no
 	// count of its findings.
@@ -2825,7 +2825,7 @@ type ConversationRow struct {
 	// SpokenAt is the broker instant of the last record somebody wrote on
 	// the change's subject — an ask for review, a comment, a thread
 	// resolved, a review, an answer to a finding (code_conversations.
-	// updated_at, replicated 0146) — and zero, left out, where every record
+	// updated_at, replicated 0147) — and zero, left out, where every record
 	// on it was the home's or the engine's. Unlike Version, which every
 	// record there moves — a revision's facts and every mergeability its
 	// home records again as the target branch moves among them — it moves

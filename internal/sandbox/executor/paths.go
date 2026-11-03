@@ -46,6 +46,18 @@
 // What each harness's archive holds, and never holds, is the harness's own: see
 // carry.go, [ClaudeCode] and [OpenCode].
 //
+// # A run ends on request
+//
+// The read that takes a stopped or lost job's session first asks the job to
+// end: SIGUSR1 to the run's script, by the pid it recorded in its box before it
+// did anything else ([Paths.JobScript], [Runner.AskEnd]). The script ends its
+// harness — SIGTERM, then SIGKILL after the grace; an OpenCode run first
+// interrupts its session through its own server, so the step in flight is
+// settled in what it exports — packs the session as its own exit packs it,
+// records that it was ended and how ([Paths.JobEnded]), and exits with its
+// harness's status, which the collection never reads as a success
+// ([sandbox.Result.JobEnd]). See end.go.
+//
 // It touches only the [sandbox.Sandbox] interface, so the in-process fake is a
 // faithful substitute and every runner is testable without a real harness.
 package executor
@@ -129,6 +141,15 @@ func (p Paths) SessionCarried() string { return p.WorkDir() + "/session-carried"
 // with it, and by the clear before every run ([Runner.ClearArtifacts]).
 func (p Paths) SessionStaging() string { return p.WorkDir() + "/session-staging" }
 
+// SessionPackStaging is the DIRECTORY a pack made on demand ([Runner.PackCapture])
+// packs a capture in before it moves it over [Paths.SessionCapture]: its own,
+// never [Paths.SessionStaging], because the run's script may still be working
+// in that one — a job its turn's cap ended is packed while it runs, and its
+// script packs into the staging directory the moment its harness exits, which
+// would clear a pack made there under the other's feet. Removed whole by the
+// pack when it is done, and by the clear before every run.
+func (p Paths) SessionPackStaging() string { return p.WorkDir() + "/session-pack-staging" }
+
 // SessionDigests is where a box keeps the digest of every archive of a session
 // its own copy holds — one line, `<session> <cksum of the archive>`, for each
 // archive a run's script packed there ([Paths.SessionCapture]) or restored
@@ -154,6 +175,13 @@ func (p Paths) ClaudeConfigDir() string { return p.Home + "/.claude" }
 // Brief is where the brief is written for a harness that reads it on stdin
 // ([Output.BriefOnStdin]) rather than on its argv.
 func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
+
+// FreshBrief is where a run asked to continue a session has the brief written
+// that a session of its own is handed instead ([sandbox.RunRequest.FreshBrief]):
+// its script points its harness's stdin at it where it finds the session
+// neither held by its box nor restorable, and starts a new one — so a new
+// session is never handed a brief written for a model that remembers.
+func (p Paths) FreshBrief() string { return p.WorkDir() + "/brief-fresh.md" }
 
 // System is where a run's standing instructions ([sandbox.RunRequest.System])
 // are written for its harness to add to its own system prompt: named on Claude
@@ -205,6 +233,23 @@ func (p Paths) Done() string { return p.WorkDir() + "/done" }
 // ExitCode is the wrapper's status, surfaced on collect to explain a crash.
 func (p Paths) ExitCode() string { return p.WorkDir() + "/exit_code" }
 
+// JobScript is where a run's script records, before it does anything else, the
+// end protocol it speaks and its own pid — `1 <pid>` — once it has set the
+// handler that ends its job on SIGUSR1 (end.go): what the read that ends a
+// stopped or lost job sends the request to ([Runner.AskEnd]). Moved into place
+// whole, so a reader finds the record or none; removed by the clear before
+// every run ([Runner.ClearArtifacts]), so a run is never asked through the last
+// one's.
+func (p Paths) JobScript() string { return p.WorkDir() + "/job-script" }
+
+// JobEnded is where a run's script records that its job was ended on request,
+// and how — `asked` (its harness told to stop went), `killed` (it outlived its
+// grace) or `before` (the request came before its harness started) — as soon
+// as its harness is over and before it packs, so the record stands where the
+// pack is cut short; read by the collection ([sandbox.Result.JobEnd]) and
+// removed by the clear before every run.
+func (p Paths) JobEnded() string { return p.WorkDir() + "/job-ended" }
+
 // BinDir is the box's own bin directory, first on the run's PATH
 // ([withBoxBin]): where a setup step installs an executable for the run, a
 // harness among them, without root.
@@ -216,6 +261,15 @@ func (p Paths) BinDir() string { return p.WorkDir() + "/bin" }
 
 // MCPConfig is where the scoped MCP surface is rendered.
 func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
+
+// MCPConfigFresh is where a Claude Code run that continues a session has the
+// MCP surface rendered under the job's other bridge token, for a session its
+// script starts of its own in that one's place
+// ([sandbox.RunRequest.FreshWiring]): the script moves it over [Paths.MCPConfig]
+// where it starts one, and removes it where it continues, in both cases before
+// the harness starts, so the box holds one token when its model can first read
+// a file. Beside mcp.json for the reason mcp.json is where it is.
+func (p Paths) MCPConfigFresh() string { return p.WorkDir() + "/mcp-fresh.json" }
 
 // ClaudeSettings is where a Claude Code run's own settings file is written —
 // the hooks that hand its main agent a person's notes between its steps
@@ -250,6 +304,15 @@ func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
 // every run ([Runner.ClearArtifacts]), so a run configured with fewer values
 // than the last keeps none of the last one's.
 func (p Paths) OpenCodeValues() string { return p.WorkDir() + "/opencode-values" }
+
+// OpenCodeValuesFresh is the directory holding an OpenCode run's values as they
+// are under the job's other bridge token, for a session its script starts of
+// its own in place of the one it continues ([sandbox.RunRequest.FreshWiring]):
+// the same files by the same names, so the configuration's references name
+// either set, which the script moves over [Paths.OpenCodeValues] where it
+// starts one and removes where it continues — before the run's server starts,
+// which is what reads them.
+func (p Paths) OpenCodeValuesFresh() string { return p.WorkDir() + "/opencode-values-fresh" }
 
 // OpenCodeSteerPlugin is the DIRECTORY an OpenCode run's notes plugin is written
 // into, as index.js ([OpenCode.WriteConfig]), and named by the run's

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -55,10 +56,12 @@ func engineCall(opID string) executordomain.Call {
 }
 
 // fullEnding is an ending with every field set.
-func fullEnding() executordomain.Ending {
-	return executordomain.Ending{Outcome: executordomain.OutcomeStopped, Decision: "done",
-		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", CompletedWork: "shipped",
-		BlockedOn: "a review", StoppedBy: "jane", StopReason: "enough", Failure: "a guard"}
+func fullEnding() executorkeep.Ending {
+	return executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
+		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", DeliveryUnknown: true,
+		CompletedWork: "shipped", BlockedOn: "a review", StoppedBy: "jane", StopReason: "enough",
+		Failure: "a guard",
+		Unkept:  &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "refused for space"}}
 }
 
 // sessionOf is one turn's row with every field set, so a field the wire
@@ -70,9 +73,9 @@ func sessionOf(handle, turn, conversationKey string) executordomain.Session {
 		Harness: "claude-code", HarnessVersion: "2.1.0", SessionID: "sess-1",
 		Object:     objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 2, CaptureSeq: 3,
-		Home: "/home/agent", Workspace: "/work", CapturedAt: crossedAt,
-		ReadThrough: atLog(4), Absorbs: []string{endedTurn},
-		EndedAt: crossedAt, EndedAtPosition: atLog(5),
+		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
+		CapturedAt: crossedAt, ReadThrough: atLog(4), Absorbs: []string{endedTurn},
+		BaseTurn: endedTurn, EndedAt: crossedAt, EndedAtPosition: atLog(5),
 		Ending:     &ending,
 		AskExcerpt: "what " + handle + " was asked",
 	}
@@ -85,9 +88,18 @@ func captureOf(turn string) executordomain.NewCapture {
 		Harness: "claude-code", HarnessVersion: "2.1.0", SessionID: "sess-1",
 		Object:     objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 1, CaptureSeq: 2,
-		Home: "/home/agent", Workspace: "/work",
+		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
 		ReadThrough: atLog(4), Absorbs: []string{endedTurn},
 		SeatBudget: 64 << 20,
+	}
+}
+
+// beginOf is a begin of one of swe's turns with every field set.
+func beginOf(turn string) executordomain.NewBegin {
+	return executordomain.NewBegin{
+		Handle: "swe", Turn: turn, ConversationKey: conversation, WorkKey: "wk-1",
+		ReadThrough: atLog(4), Absorbs: []string{endedTurn}, BaseTurn: endedTurn,
+		BaseObject: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(endedTurn)), Size: 42},
 	}
 }
 
@@ -135,6 +147,7 @@ type logbook struct {
 	mu       sync.Mutex
 	heard    []string
 	calls    []executordomain.Call
+	begun    []executordomain.NewBegin
 	captured []executordomain.NewCapture
 	ended    []executordomain.NewEnd
 	writes   []string
@@ -186,15 +199,16 @@ func (l *logbook) Session(_ context.Context, handle, turn string,
 		return executordomain.SessionRead{}, fmt.Errorf("%w: %s's turn %s", executordomain.ErrNotFound,
 			handle, turn)
 	}
-	return executordomain.SessionRead{Session: sessionOf(handle, turn, conversation), Position: atLog(7),
-		Complete: true}, nil
+	return executordomain.SessionRead{Session: sessionOf(handle, turn, conversation), Head: endedTurn,
+		Position: atLog(7), Complete: true}, nil
 }
 
 func (l *logbook) Sessions(_ context.Context, handle, cursor string, limit int,
 	fresh statelog.Freshness) (executordomain.Page, error) {
 	l.asked("sessions", fresh)
 	return executordomain.Page{Sessions: []executordomain.Session{sessionOf(handle, liveTurn, conversation)},
-		Next: fmt.Sprintf("%s+%d", cursor, limit), Position: atLog(8), Complete: true}, nil
+		Heads: map[string]string{conversation: endedTurn},
+		Next:  fmt.Sprintf("%s+%d", cursor, limit), Position: atLog(8), Complete: true}, nil
 }
 
 func (l *logbook) Expired(_ context.Context, cutoff time.Time, limit int) ([]executordomain.Expiry, error) {
@@ -219,6 +233,19 @@ func (l *logbook) SealedKeys(context.Context) (executordomain.SealedCount, error
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return executordomain.SealedCount{Values: maps.Clone(l.sealed)}, nil
+}
+
+func (l *logbook) Begin(_ context.Context, c executordomain.Call,
+	n executordomain.NewBegin) (executordomain.BeginResult, error) {
+	if n.Turn == endedTurn {
+		return executordomain.BeginResult{}, fmt.Errorf("%w: %s's turn %s", executordomain.ErrTurnEnded,
+			n.Handle, n.Turn)
+	}
+	res := l.wrote("begin", c)
+	l.mu.Lock()
+	l.begun = append(l.begun, n)
+	l.mu.Unlock()
+	return executordomain.BeginResult{Result: res, Held: true}, nil
 }
 
 func (l *logbook) Capture(_ context.Context, c executordomain.Call,
@@ -377,6 +404,21 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 	sameHere(t, "an empty count", none, hereNone, err)
 
 	writes, hereWrites := f.client.ExecutorWrites(), local.ExecutorWrites()
+	begin := beginOf(liveTurn)
+	whole(t, "the case's begin", begin)
+	beginCall := engineCall("op-begin")
+	begun, err := writes.Begin(ctx, beginCall, begin)
+	if err != nil || !begun.Held || begun.Outcome != statelog.OutcomeApplied ||
+		begun.OpID != beginCall.OpID || begun.Position != atLog(10) {
+		t.Errorf("begin = (%+v, %v)", begun, err)
+	}
+	hereBegun, err := hereWrites.Begin(ctx, beginCall, begin)
+	sameHere(t, "begin", begun, hereBegun, err)
+	if _, err := writes.Begin(ctx, beginCall, beginOf(endedTurn)); !errors.Is(err,
+		executordomain.ErrTurnEnded) {
+		t.Errorf("a begin of an ended turn's refusal crossed as %v", err)
+	}
+
 	call := engineCall("op-capture")
 	capture := captureOf(liveTurn)
 	whole(t, "the case's capture", capture)
@@ -449,53 +491,91 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 			t.Errorf("end %d ran as %+v, want the engine's %+v", i, got, end)
 		}
 	}
+	for i, got := range book.begun {
+		if !reflect.DeepEqual(got, begin) {
+			t.Errorf("begin %d ran as %+v, want the engine's %+v", i, got, begin)
+		}
+	}
 	for i, got := range book.calls {
-		if got.By != call.By || (got.OpID != call.OpID && got.OpID != endCall.OpID) {
+		if got.By != call.By || (got.OpID != call.OpID && got.OpID != endCall.OpID &&
+			got.OpID != beginCall.OpID) {
 			t.Errorf("write %s ran under %+v, want the engine's own call", book.writes[i], got)
 		}
 	}
 }
 
 // A SEATS-ONLY NODE'S CAPTURE IS RECORDED THROUGH A DATA NODE, and its
-// position is that node's next floor on the executor log.
+// position is that node's next floor on the executor log — and so is a turn's
+// begin.
 //
 // A node without `data` holds no copy and no publisher, and a seat it holds ran
 // its box there: with no route, the session's object is uploaded, nothing
 // names it, and the collector deletes it a day later. The capture runs on the
 // data node under the engine's call whole — its author and the operation the
 // domain derived — and the next read this node sends, on whichever data node
-// answers it, waits to have applied the capture.
+// answers it, waits to have applied the capture. A begin is the record a
+// relaunch reads its turn's own row for, to know whether it holds its base, so
+// the read after it waits for it the same way.
 //
-// Mutation: drop the capture's Observe, or declare executor.session with no
-// domain, and the next read carries no floor.
+// Mutation: drop the capture's or the begin's Observe, or declare
+// executor.session with no domain, and the next read carries no floor.
 func TestASeatsOnlyNodesCaptureIsRecordedThroughADataNode(t *testing.T) {
 	t.Parallel()
-	f := newFleet(t)
-	book := &logbook{}
-	serveExecutor(t, f.start(t), "data-a", book)
-	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-a"} })
-	call := engineCall(executordomain.CaptureOpID(crossedAt, "swe", liveTurn, "launch-1", 1))
+	for name, write := range map[string]struct {
+		call executordomain.Call
+		run  func(ctx context.Context, w ExecutorWrites, call executordomain.Call) (statelog.Result, error)
+	}{
+		"a capture": {
+			call: engineCall(executordomain.CaptureOpID(crossedAt, "swe", liveTurn, "launch-1", 1)),
+			run: func(ctx context.Context, w ExecutorWrites, call executordomain.Call) (statelog.Result, error) {
+				got, err := w.Capture(ctx, call, captureOf(liveTurn))
+				if err == nil && !got.Recorded {
+					return got.Result, fmt.Errorf("the capture answered %+v, unrecorded", got)
+				}
+				return got.Result, err
+			},
+		},
+		"a begin": {
+			call: engineCall(executordomain.BeginOpID(crossedAt, "swe", liveTurn)),
+			run: func(ctx context.Context, w ExecutorWrites, call executordomain.Call) (statelog.Result, error) {
+				got, err := w.Begin(ctx, call, beginOf(liveTurn))
+				if err == nil && !got.Held {
+					return got.Result, fmt.Errorf("the begin answered %+v, holding nothing", got)
+				}
+				return got.Result, err
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			book := &logbook{}
+			serveExecutor(t, f.start(t), "data-a", book)
+			f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-a"} })
 
-	got, err := f.client.ExecutorWrites().Capture(t.Context(), call, captureOf(liveTurn))
-	if err != nil || !got.Recorded || got.Outcome != statelog.OutcomeApplied {
-		t.Fatalf("the capture answered (%+v, %v), want it recorded", got, err)
-	}
-	book.mu.Lock()
-	calls := slices.Clone(book.calls)
-	book.mu.Unlock()
-	if len(calls) != 1 || calls[0] != call {
-		t.Fatalf("the data node ran %+v, want the one capture under the engine's call %+v", calls, call)
-	}
+			got, err := write.run(t.Context(), f.client.ExecutorWrites(), write.call)
+			if err != nil || got.Outcome != statelog.OutcomeApplied {
+				t.Fatalf("%s answered (%+v, %v), want it applied", name, got, err)
+			}
+			book.mu.Lock()
+			calls := slices.Clone(book.calls)
+			book.mu.Unlock()
+			if len(calls) != 1 || calls[0] != write.call {
+				t.Fatalf("the data node ran %+v, want the one write under the engine's call %+v",
+					calls, write.call)
+			}
 
-	if _, err := f.client.ExecutorReads().Session(t.Context(), "swe", liveTurn,
-		statelog.Freshness{Level: statelog.ReadSession}); err != nil {
-		t.Fatalf("the read after the capture: %v", err)
-	}
-	book.mu.Lock()
-	floors := slices.Clone(book.floors)
-	book.mu.Unlock()
-	if !slices.Contains(floors, got.Position) {
-		t.Errorf("the read after the capture waited for %v, want the capture's own %v", floors, got.Position)
+			if _, err := f.client.ExecutorReads().Session(t.Context(), "swe", liveTurn,
+				statelog.Freshness{Level: statelog.ReadSession}); err != nil {
+				t.Fatalf("the read after %s: %v", name, err)
+			}
+			book.mu.Lock()
+			floors := slices.Clone(book.floors)
+			book.mu.Unlock()
+			if !slices.Contains(floors, got.Position) {
+				t.Errorf("the read after %s waited for %v, want its own %v", name, floors, got.Position)
+			}
+		})
 	}
 }
 
@@ -631,7 +711,7 @@ func (c *sessionCopy) Head(ctx context.Context, handle, conversationKey string,
 	for _, turn := range ended {
 		out.Endings = append(out.Endings, executordomain.Session{Handle: handle, Turn: turn,
 			ConversationKey: conversationKey,
-			Ending:          &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}})
+			Ending:          &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}})
 	}
 	return out, nil
 }
@@ -777,7 +857,7 @@ func TestAnUnvouchedExecutorWriteMovesOnUnderTheSameOperation(t *testing.T) {
 	endCall := engineCall(executordomain.EndOpID(crossedAt, "swe", liveTurn))
 	res, err := f.client.ExecutorWrites().End(t.Context(), endCall, executordomain.NewEnd{
 		Handle: "swe", Turn: liveTurn, ConversationKey: conversation,
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}})
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}})
 	var unserved *ErrUnserved
 	if err != nil || errors.As(err, &unserved) || res.Outcome != statelog.OutcomeUnknown ||
 		!res.Unvouched || res.OpID != endCall.OpID {
@@ -814,7 +894,7 @@ func TestAConversationReadWaitsForAnEndAnotherNodeMade(t *testing.T) {
 	ctx := t.Context()
 	if _, err := left.ExecutorWrites().End(ctx, engineCall(executordomain.EndOpID(crossedAt, "swe", liveTurn)),
 		executordomain.NewEnd{Handle: "swe", Turn: liveTurn, ConversationKey: conversation,
-			Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
 		t.Fatalf("end: %v", err)
 	}
 

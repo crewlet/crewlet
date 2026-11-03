@@ -29,18 +29,30 @@ func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Recor
 }
 
 // The bucket's two kinds of key: a run's RECORD is its turn id, one segment
-// ([encodeKey]), and the LOG beside it is the turn id and [runLogSegment], two
-// ([runLogKey]). A subject token path, so the broker tells them apart: a
-// listing of records filters on [runRecordKeys] and never moves a log. The
-// sweep of logs left behind reads them off the marker sweep's own pass of the
-// bucket ([FleetStore.sweepRunLogs]), which walks every key anyway.
-const (
-	runLogSegment = "log"
-	runRecordKeys = "*"
-)
+// ([encodeKey]), and a PART beside it is the turn id and the part's name
+// ([coord.RunPart]), two ([runPartKey]). A subject token path, so the broker
+// tells them apart: a listing of records filters on [runRecordKeys] and never
+// moves a part. The sweep of parts left behind reads them off the marker
+// sweep's own pass of the bucket ([FleetStore.sweepRunParts]), which walks
+// every key anyway.
+const runRecordKeys = "*"
 
-// runLogKey is the key of the log beside turnID's run.
-func runLogKey(turnID string) string { return coord.DocumentKey(turnID, runLogSegment) }
+// runPartKey is the key of part beside turnID's run.
+func runPartKey(turnID string, part coord.RunPart) string {
+	return coord.DocumentKey(turnID, string(part))
+}
+
+// partOf refuses a part [coord.RunParts] does not name, so a caller's typo
+// is an error rather than a key nothing removes.
+func partOf(turnID string, part coord.RunPart) error {
+	switch {
+	case turnID == "":
+		return errors.New("coord/kv: a sandbox run's part needs a turn id")
+	case !part.Valid():
+		return fmt.Errorf("coord/kv: %q is not a part of a sandbox run", part)
+	}
+	return nil
+}
 
 // SandboxRuns returns every record, by turn id — the records alone.
 func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
@@ -49,8 +61,9 @@ func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
 	// failure this bucket exists to end. eachEntryUnder raises on a short
 	// answer rather than returning one, which is what makes that true.
 	//
-	// RECORDS ONLY, filtered by the broker: the logs beside them hold up to
-	// two hundred calls each with their arguments and output, and this
+	// RECORDS ONLY, filtered by the broker: the parts beside them — a log
+	// of up to two hundred calls each with their arguments and output, a
+	// sealed set of secrets — are what the record is kept small of, and this
 	// listing — the busy check, the recovery pass, the pause reaper — never
 	// reads one.
 	var out []coord.Record
@@ -158,10 +171,12 @@ func (f *FleetStore) MutateSandboxRun(ctx context.Context, turnID string,
 			err = f.runs.Purge(ctx, key, jetstream.LastRevision(read.Version))
 			if err == nil {
 				result, changed = read, true
-				// THEN ITS LOG, never before: a delete decided again
-				// on a record reopened under it must find the log
-				// still there. See [FleetStore.removeRunLog].
-				f.removeRunLog(ctx, turnID)
+				// THEN ITS PARTS, never before: a delete decided again
+				// on a record reopened under it must find its parts
+				// still there. See [FleetStore.removeRunPart].
+				for _, part := range coord.RunParts() {
+					f.removeRunPart(ctx, turnID, part)
+				}
 			}
 		case len(change.Put) > 0:
 			var revision uint64
@@ -291,55 +306,57 @@ func sandboxRunState(turnID string, kve jetstream.KeyValueEntry) coord.SandboxRu
 	}}
 }
 
-// SandboxRunLog reads the log beside turnID's run as the stream LEADER holds it
-// ([FleetStore.get]): a replica behind the quorum would hand a resume a log
+// SandboxRunPart reads the part beside turnID's run as the stream LEADER holds
+// it ([FleetStore.get]): a replica behind the quorum would hand a resume a log
 // short of the calls appended a moment ago, and the resumed turn would judge
 // the run on it.
-func (f *FleetStore) SandboxRunLog(ctx context.Context, turnID string) (coord.Record, bool, error) {
-	if turnID == "" {
-		return coord.Record{}, false, errors.New("coord/kv: a sandbox run's log needs a turn id")
+func (f *FleetStore) SandboxRunPart(ctx context.Context, turnID string, part coord.RunPart) (coord.Record, bool, error) {
+	if err := partOf(turnID, part); err != nil {
+		return coord.Record{}, false, err
 	}
-	entry, err := f.get(ctx, f.runs, runLogKey(turnID))
+	entry, err := f.get(ctx, f.runs, runPartKey(turnID, part))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Record{}, false, nil
 	}
 	if err != nil {
-		return coord.Record{}, false, unavailable("read the sandbox run's log", err)
+		return coord.Record{}, false, unavailable("read the sandbox run's "+string(part), err)
 	}
 	return coord.Record{Key: turnID, Value: bytes.Clone(entry.Value()), Version: entry.Revision()}, true, nil
 }
 
-// MutateSandboxRunLog changes the log beside turnID's run by a decision taken
-// on the log as the stream LEADER holds it — [FleetStore.MutateSandboxRun]'s
-// loop, on the log's key and within the same bound.
+// MutateSandboxRunPart changes the part beside turnID's run by a decision
+// taken on the part as the stream LEADER holds it —
+// [FleetStore.MutateSandboxRun]'s loop, on the part's key and within the same
+// bound.
 //
 // AN UPDATE needs nothing more: the record's removal is followed by the
-// log's ([FleetStore.removeRunLog]), so an update lands before that and is
+// part's ([FleetStore.removeRunPart]), so an update lands before that and is
 // removed with it, or after it and loses its race, and is decided again on a
-// log that is gone.
+// part that is gone.
 //
 // A CREATE ASKS FOR THE RECORD ONCE IT HAS LANDED, from the leader, and
 // removes what it wrote where the record is gone. That read is what closes the
-// one race an update cannot lose: the record removed, then its (absent) log,
+// one race an update cannot lose: the record removed, then its (absent) part,
 // then this create. The record read after the create either finds it — and
-// the record's removal, and so the log's, comes after the create and takes it
-// — or finds it gone, and the create is undone here, through the revision it
-// wrote, so a log a later writer put there is untouched.
-func (f *FleetStore) MutateSandboxRunLog(ctx context.Context, turnID string,
+// the record's removal, and so the part's, comes after the create and takes
+// it — or finds it gone, and the create is undone here, through the revision
+// it wrote, so a part a later writer put there is untouched.
+func (f *FleetStore) MutateSandboxRunPart(ctx context.Context, turnID string, part coord.RunPart,
 	decide func(coord.Record, bool) ([]byte, error)) (coord.Record, bool, error) {
 
-	if turnID == "" {
-		return coord.Record{}, false, errors.New("coord/kv: a sandbox run's log needs a turn id")
+	if err := partOf(turnID, part); err != nil {
+		return coord.Record{}, false, err
 	}
 	if decide == nil {
-		return coord.Record{}, false, errors.New("coord/kv: a change to a sandbox run's log needs a decision")
+		return coord.Record{}, false, errors.New("coord/kv: a change to a sandbox run's part needs a decision")
 	}
-	key := runLogKey(turnID)
+	key := runPartKey(turnID, part)
+	what := "the sandbox run's " + string(part)
 	var (
 		result  coord.Record
 		changed bool
 	)
-	settled, err := casRetry(ctx, &f.runTrips, "change the sandbox run's log "+turnID, func() (bool, error) {
+	settled, err := casRetry(ctx, &f.runTrips, "change "+what+" "+turnID, func() (bool, error) {
 		result, changed = coord.Record{}, false
 		read, found := coord.Record{Key: turnID}, true
 		entry, err := f.get(ctx, f.runs, key)
@@ -347,7 +364,7 @@ func (f *FleetStore) MutateSandboxRunLog(ctx context.Context, turnID string,
 		case errors.Is(err, jetstream.ErrKeyNotFound):
 			found = false
 		case err != nil:
-			return false, unavailable("read the sandbox run's log", err)
+			return false, unavailable("read "+what, err)
 		default:
 			read = coord.Record{Key: turnID, Value: bytes.Clone(entry.Value()), Version: entry.Revision()}
 		}
@@ -368,16 +385,16 @@ func (f *FleetStore) MutateSandboxRunLog(ctx context.Context, turnID string,
 			case lostUpdateRace(werr):
 				return false, nil
 			default:
-				return false, unavailable("write the sandbox run's log", werr)
+				return false, unavailable("write "+what, werr)
 			}
 		}
 		revision, err := f.create(ctx, f.runs, key, put)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyExists):
-			// ANOTHER WRITER CREATED IT first: decided again on its log.
+			// ANOTHER WRITER CREATED IT first: decided again on its part.
 			return false, nil
 		case err != nil:
-			return false, unavailable("create the sandbox run's log", err)
+			return false, unavailable("create "+what, err)
 		}
 		_, err = f.get(ctx, f.runs, encodeKey(turnID))
 		switch {
@@ -387,13 +404,13 @@ func (f *FleetStore) MutateSandboxRunLog(ctx context.Context, turnID string,
 			// the record's own successor's and not this one's to remove.
 			if perr := f.runs.Purge(ctx, key, jetstream.LastRevision(revision)); perr != nil &&
 				!lostUpdateRace(perr) {
-				return false, unavailable("remove the log written beside a run that ended", perr)
+				return false, unavailable("remove the "+string(part)+" written beside a run that ended", perr)
 			}
 			return true, nil
 		case err != nil:
 			// The create stands: the record is read again by the sweep,
-			// which removes the log if the run is in fact gone.
-			return false, unavailable("read the sandbox run under its new log", err)
+			// which removes the part if the run is in fact gone.
+			return false, unavailable("read the sandbox run under its new "+string(part), err)
 		}
 		result, changed = coord.Record{Key: turnID, Value: bytes.Clone(put), Version: revision}, true
 		return true, nil
@@ -402,40 +419,40 @@ func (f *FleetStore) MutateSandboxRunLog(ctx context.Context, turnID string,
 	case err != nil:
 		return coord.Record{}, false, err
 	case !settled:
-		return coord.Record{}, false, contended("MutateSandboxRunLog", turnID)
+		return coord.Record{}, false, contended("MutateSandboxRunPart", turnID)
 	}
 	return result, changed, nil
 }
 
-// removeRunLog removes the log beside a run whose record this node has just
+// removeRunPart removes the part beside a run whose record this node has just
 // removed.
 //
-// ASKED FIRST, of the leader: a run that never opened a job has no log, and a
-// purge of a key holding nothing leaves a marker behind for every such run,
-// which the marker sweep and every walk of the bucket would then read. Asking
-// first loses nothing to a create racing it: a create that lands after this
-// read finds the record already gone and removes itself
-// ([FleetStore.MutateSandboxRunLog]).
+// ASKED FIRST, of the leader: a run that never opened a job has no log, nor a
+// handed set, and a purge of a key holding nothing leaves a marker behind for
+// every such run, which the marker sweep and every walk of the bucket would
+// then read. Asking first loses nothing to a create racing it: a create that
+// lands after this read finds the record already gone and removes itself
+// ([FleetStore.MutateSandboxRunPart]).
 //
-// NEVER A LOG BESIDE A RECORD: the run's turn may have been launched again
+// NEVER A PART BESIDE A RECORD: the run's turn may have been launched again
 // between the record's removal and this call, its new record created and the
 // log opened to its job — a log this removal must not take, since no append
-// ever creates one and every call of the new job would be dropped. So the log
-// is read, then the record, and a record there leaves the log to that run:
-// its launch opens the log to its own job, starting afresh whatever an earlier
-// run left. Only a log with no record beside it is purged, and THROUGH THE
-// REVISION READ, so a log written after that read — by a launch whose record
-// came after the record's read — is untouched; that loss reads both again,
-// within the bound every write on the bucket shares ([casRetry]).
+// ever creates one and every call of the new job would be dropped. So the
+// part is read, then the record, and a record there leaves the part to that
+// run: its launch writes its own job's parts, whatever an earlier run left.
+// Only a part with no record beside it is purged, and THROUGH THE REVISION
+// READ, so a part written after that read — by a launch whose record came
+// after the record's read — is untouched; that loss reads both again, within
+// the bound every write on the bucket shares ([casRetry]).
 //
 // A FAILURE IS LOGGED, NOT RETURNED: the record's removal has landed, and an
 // error would tell its caller the decision did not — a caller that retried
-// would find no record and decide nothing. The log is left to the sweep
-// ([FleetStore.sweepRunLogs]), which removes a log whose run has no record.
-func (f *FleetStore) removeRunLog(ctx context.Context, turnID string) {
-	key := runLogKey(turnID)
+// would find no record and decide nothing. The part is left to the sweep
+// ([FleetStore.sweepRunParts]), which removes a part whose run has no record.
+func (f *FleetStore) removeRunPart(ctx context.Context, turnID string, part coord.RunPart) {
+	key := runPartKey(turnID, part)
 	ctx = context.WithoutCancel(ctx)
-	settled, err := casRetry(ctx, &f.runTrips, "remove the sandbox run's log "+turnID, func() (bool, error) {
+	settled, err := casRetry(ctx, &f.runTrips, "remove the sandbox run's "+string(part)+" "+turnID, func() (bool, error) {
 		entry, err := f.get(ctx, f.runs, key)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
@@ -446,7 +463,7 @@ func (f *FleetStore) removeRunLog(ctx context.Context, turnID string) {
 		_, err = f.get(ctx, f.runs, encodeKey(turnID))
 		switch {
 		case err == nil:
-			// A NEW RUN OF THE TURN, whose log this is to manage.
+			// A NEW RUN OF THE TURN, whose part this is to manage.
 			return true, nil
 		case !errors.Is(err, jetstream.ErrKeyNotFound):
 			return false, err
@@ -462,29 +479,30 @@ func (f *FleetStore) removeRunLog(ctx context.Context, turnID string) {
 		}
 	})
 	if err == nil && !settled {
-		err = contended("removeRunLog", turnID)
+		err = contended("removeRunPart", turnID)
 	}
 	if err != nil {
-		log.WarnContext(ctx, "coord_kv_sandbox_run_log_left", "turn_id", turnID, "error", err.Error(),
-			"detail", "the run's record is removed and its log is not; the marker sweep removes it")
+		log.WarnContext(ctx, "coord_kv_sandbox_run_part_left", "turn_id", turnID, "part", string(part),
+			"error", err.Error(),
+			"detail", "the run's record is removed and this part of it is not; the marker sweep removes it")
 	}
 }
 
-// sweepRunLogs removes every log written before cutoff whose run has no
+// sweepRunParts removes every part written before cutoff whose run has no
 // record, off the runs bucket's marker pass, reporting how many messages went
 // — see [coord.Markers].
 //
-// A CANDIDATE IS READ OFF THE PASS: a log whose record key the same pass holds
-// no value for — absent, or a marker. Each is then confirmed against its
+// A CANDIDATE IS READ OFF THE PASS: a part whose record key the same pass
+// holds no value for — absent, or a marker. Each is then confirmed against its
 // record from the LEADER, so a record written under the turn again after the
-// pass keeps its log; and each log is purged THROUGH THE REVISION THE PASS SAW
-// ([leaderPurge]), so a log written again since is untouched.
-func (f *FleetStore) sweepRunLogs(ctx context.Context, pass sweepPass, cutoff time.Time) (int64, error) {
-	what := "the sandbox runs' logs"
+// pass keeps its parts; and each part is purged THROUGH THE REVISION THE PASS
+// SAW ([leaderPurge]), so a part written again since is untouched.
+func (f *FleetStore) sweepRunParts(ctx context.Context, pass sweepPass, cutoff time.Time) (int64, error) {
+	what := "the sandbox runs' parts"
 	keys := make([]string, 0)
 	for key, kve := range pass.keys {
 		segments, ok := coord.DocumentSegments(key)
-		if !ok || len(segments) != 2 || segments[1] != runLogSegment ||
+		if !ok || len(segments) != 2 || !coord.RunPart(segments[1]).Valid() ||
 			kve.Operation() != jetstream.KeyValuePut || !kve.Created().Before(cutoff) {
 			continue
 		}
@@ -508,7 +526,7 @@ func (f *FleetStore) sweepRunLogs(ctx context.Context, pass sweepPass, cutoff ti
 		}
 		n, err := pass.purge.through(ctx, key, pass.keys[key].Revision())
 		if err != nil {
-			return swept, unavailable("sweep "+what, fmt.Errorf("remove the log %q: %w", key, err))
+			return swept, unavailable("sweep "+what, fmt.Errorf("remove the part %q: %w", key, err))
 		}
 		swept += int64(n)
 	}

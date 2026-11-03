@@ -716,6 +716,11 @@ gibibytes of it at boot, so a case passes on a roomy runner and fails on a
 fuller one whatever the change. Only a case whose subject is the derived
 limit, or a refusal below the floor, states a size of its own; one that
 reserves nothing, or only what the broker reports it has left, needs none.
+A node fixture that declares its broker this way declares its code cache
+beside it with `brokertest.CodeCacheIn`, which sets `git.cache_max_bytes` and
+`git.max_transfers`. Left unset, the cache's budget is derived from the room
+the declared broker leaves on the runner's disk, so a node on a smaller
+runner refuses to host code.
 
 A case that starts an engine never runs below `internal/engine`'s
 `startedLeaseTTL`, which is `config.MinLeaseTTL` and the floor `engine.New`

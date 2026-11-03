@@ -243,7 +243,7 @@ type takingResumer struct {
 
 func (r *takingResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	if req.Begin != nil {
-		if err := req.Begin(ctx); err != nil {
+		if err := req.Begin(ctx, sandbox.ResumeCarriesOn); err != nil {
 			return err
 		}
 	}

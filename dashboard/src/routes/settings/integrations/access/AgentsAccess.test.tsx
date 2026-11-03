@@ -3,7 +3,8 @@
  *
  * The invariants: a change is a draft until reviewed, and the review shows
  * the engine's plan and saves against the revision it read; a row's details
- * are five pairs at one size with only the actions the seat can take; a seat
+ * are five pairs at one size, and a sixth where Crewlet sets anything in the
+ * agent's box, with only the actions the seat can take; a seat
  * that is off reads as one sentence; a refusal and a change made by hand each
  * offer their one choice; a reader who may not change access is shown the
  * reading alone; and where the operator manages access, the tab is values
@@ -15,11 +16,17 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { AppAnnouncer } from "~/app/announcer.tsx";
 import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
+import { pick } from "~/testing.tsx";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import {
+  cloudflareAnswer,
   confluenceAnswer,
   datadogAnswer,
+  expoAnswer,
+  expoRetiredAnswer,
+  expoWaitingAnswer,
   githubAnswer,
+  gitlabAnswer,
   jiraAnswer,
   mattermostAnswer,
   offLane,
@@ -33,9 +40,16 @@ const calls = vi.hoisted(() => ({
   save: [] as unknown[],
   act: [] as unknown[],
   install: [] as unknown[],
+  credential: [] as unknown[],
   stepUp: false,
   /** A save refused as stale, once. */
   stale: false,
+  /** The revision the engine's plan is drawn from: the document as it stands now. */
+  planRevision: "rev-7",
+  /** The plans the engine answers, where a case names its own. */
+  plans: null as unknown[] | null,
+  /** The body of a refusal the plan answers instead, once set. */
+  planRefusal: null as Record<string, unknown> | null,
 }));
 
 vi.mock("./api.ts", async (actual) => {
@@ -46,11 +60,15 @@ vi.mock("./api.ts", async (actual) => {
       read: vi.fn(),
       plan: vi.fn(async (kind: string, seats: unknown) => {
         calls.plan.push({ kind, seats });
+        if (calls.planRefusal) {
+          const { RestError } = await import("~/protocol/rest.ts");
+          throw new RestError(400, calls.planRefusal);
+        }
         return {
           kind,
-          revision: "rev-7",
+          revision: calls.planRevision,
           ...(calls.stepUp ? { step_up: true } : {}),
-          plans: [
+          plans: calls.plans ?? [
             {
               handle: "qa",
               lane: "datadog",
@@ -61,6 +79,12 @@ vi.mock("./api.ts", async (actual) => {
                   verb: "create",
                   by: "crewlet",
                   text: "Create the service account crewlet-qa@agents.crewlet.invalid",
+                },
+                {
+                  op: "mint",
+                  verb: "mint",
+                  by: "crewlet",
+                  text: "Mint an application key, sealed as DATADOG_APP_KEY_QA",
                 },
               ],
             },
@@ -80,6 +104,13 @@ vi.mock("./api.ts", async (actual) => {
         calls.install.push({ kind, handle, lane });
         return { url: "https://slack.com/oauth/v2/authorize?state=one-use" };
       }),
+      credential: vi.fn(async (kind: string, handle: string, lane: string, value: string) => {
+        calls.credential.push({ kind, handle, lane, value });
+        return {
+          detail: "Works. Robot crewlet-gophrase-pm, Runner on gophrase. Sealed as EXPO_TOKEN_PM.",
+          access: { ...expoAnswer(), revision: "rev-8" },
+        };
+      }),
       act: vi.fn(
         async (kind: string, handle: string, lane: string, action: string, revision?: string) => {
           calls.act.push({ kind, handle, lane, action, ...(revision ? { revision } : {}) });
@@ -95,8 +126,12 @@ beforeEach(() => {
   calls.save = [];
   calls.act = [];
   calls.install = [];
+  calls.credential = [];
   calls.stepUp = false;
   calls.stale = false;
+  calls.planRevision = "rev-7";
+  calls.plans = null;
+  calls.planRefusal = null;
 });
 afterEach(cleanup);
 
@@ -182,10 +217,11 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
   expect(reload).not.toHaveBeenCalled();
 });
 
-// THE REVIEW, SHORT: the change as one line of chips, then the next sync's
-// steps in order, each said with who takes it before its label, its note at a
-// quieter step, and no lead-in sentence above them.
-test("the review says the change as one line and the steps by who takes them", async () => {
+// THE REVIEW, SHORT: the change as labels and values in one grid, so "On
+// Datadog" and "Role at Datadog" line up, then the next sync's steps in order,
+// each said with who takes it before its label, and no lead-in sentence above
+// them. Mutation: draw the change inline again and the grid goes.
+test("the review lays the change out as labels and values, then the steps by who takes them", async () => {
   draw(datadogAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
@@ -195,11 +231,185 @@ test("the review says the change as one line and the steps by who takes them", a
     within(steps)
       .getAllByRole("listitem")
       .map((li) => li.textContent),
-  ).toEqual(["Crewlet: Create the service account crewlet-qa@agents.crewlet.invalid"]);
+  ).toEqual([
+    "Crewlet: Create the service account crewlet-qa@agents.crewlet.invalid",
+    "Crewlet: Mint an application key, sealed as DATADOG_APP_KEY_QA",
+  ]);
   const review = screen.getByRole("region", { name: "QA on Datadog" });
-  expect(review.querySelector(".crewlet-change-list--inline")).toBeTruthy();
-  expect(within(review).getByText("Off").closest(".crewlet-tag")).toBeTruthy();
+  const change = review.querySelector(".crewlet-change-list")!;
+  expect(change.className).not.toContain("crewlet-change-list--inline");
+  expect(
+    [...change.querySelectorAll(".crewlet-change-list__label")].map((l) => l.textContent),
+  ).toEqual(["On Datadog", "Role at Datadog"]);
   expect(screen.queryByText(/the next sync will:/)).toBeNull();
+});
+
+// A VARIABLE A STEP NAMES IS CODE, the name a reader looks up on the Secrets
+// screen, and the mark beside a step is decoration: who takes it is said in
+// the words. Mutation: render the step's text as plain text and the name is
+// prose again.
+test("a variable a step names is drawn as code, and the mark is hidden", async () => {
+  draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const steps = await screen.findByRole("list", { name: "What the next sync does at Datadog" });
+  expect(within(steps).getByText("DATADOG_APP_KEY_QA").tagName).toBe("CODE");
+  for (const mark of steps.querySelectorAll(".agent-access-actor")) {
+    expect(mark.getAttribute("aria-hidden")).toBe("true");
+  }
+});
+
+// THE DOCUMENT MOVED SINCE THE TAB READ IT: after a first connect, the access
+// migration writes a revision of its own, and a save sent with the tab's older
+// one was refused as stale. The plan names the revision it was drawn from, so
+// the tab reads again before Save is offered, keeping the draft, and saves
+// against the revision it then read. Mutation: drop the comparison and the
+// save goes out with rev-7.
+test("a plan drawn from a newer revision reads the tab again before Save is offered", async () => {
+  calls.planRevision = "rev-8";
+  const { reload, redraw } = draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid");
+  await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  const save = () => screen.getByRole("button", { name: "Save and sync" }) as HTMLButtonElement;
+  expect(save().getAttribute("aria-disabled") === "true" || save().disabled).toBe(true);
+  redraw({ ...datadogAnswer(), revision: "rev-8" });
+  await waitFor(() => expect(calls.plan).toHaveLength(2));
+  await waitFor(() =>
+    expect(save().getAttribute("aria-disabled") === "true" || save().disabled).toBe(false),
+  );
+  fireEvent.click(save());
+  await waitFor(() => expect(calls.save).toHaveLength(1));
+  expect(calls.save[0]).toMatchObject({ ifMatch: "rev-8" });
+  expect(calls.plan[1]).toEqual(calls.plan[0]);
+  expect(reload).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/Somebody changed these agents/)).toBeNull();
+});
+
+// CLOUDFLARE'S ACCOUNT IS THE TOKEN ITSELF: the details name it, the level it
+// holds in the tab's own words, and the variable it is sealed in, never a value.
+test("a Cloudflare seat's details name its token, its permissions and its tool", () => {
+  draw(cloudflareAnswer());
+  details("SRE", "Cloudflare");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on Cloudflare"]')!);
+  expect(facts.getByText("crewlet-gophrase-sre")).toBeTruthy();
+  expect(facts.getByText("Token permissions")).toBeTruthy();
+  expect(facts.getByText("Operate")).toBeTruthy();
+  expect(facts.getByText("CLOUDFLARE_API_TOKEN_SRE")).toBeTruthy();
+  expect(facts.getByText("Live, Cloudflare MCP server, one per agent")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Rotate credential" })).toBeTruthy();
+});
+
+// A LEVEL THE CONNECTION CANNOT GRANT YET is offered, never as a choice that
+// would only fail: disabled, with the engine's reason as its second line.
+test("a Cloudflare level the provisioner cannot grant is offered disabled, saying why", () => {
+  draw(cloudflareAnswer());
+  fireEvent.click(screen.getByRole("combobox", { name: "SRE's Cloudflare access" }));
+  const configure = screen.getByRole("option", { name: /Configure/ });
+  expect(configure.getAttribute("aria-disabled")).toBe("true");
+  expect(configure.textContent).toContain(
+    "The Configure level is unavailable until the provisioner token holds Zone Settings: Edit and Response Compression: Edit",
+  );
+  expect(screen.getByRole("option", { name: /Operate/ }).getAttribute("aria-disabled")).not.toBe(
+    "true",
+  );
+});
+
+test("an off Cloudflare seat says turning it on mints a token limited to the company's zones", () => {
+  draw(cloudflareAnswer());
+  details("PM", "Cloudflare");
+  expect(
+    screen.getByText(
+      "Off. Turning it on mints an account API token for the agent with the chosen permissions, limited to the company's zones.",
+    ),
+  ).toBeTruthy();
+});
+
+// A CLOUDFLARE TOKEN IS DELETED, NOT DISABLED: nothing is left at Cloudflare
+// to turn back on, so the review says a new token is minted instead.
+test("turning a Cloudflare seat off says the token is deleted and a new one minted on return", async () => {
+  draw(cloudflareAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "SRE on Cloudflare" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      /Crewlet disables the agent's API token, so it stops working at once, then deletes it/,
+    ),
+  ).toBeTruthy();
+});
+
+test("rotating a Cloudflare token says it is rolled, and the old value stops working", async () => {
+  draw(cloudflareAnswer());
+  details("SRE", "Cloudflare");
+  fireEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
+  const dialog = screen.getByRole("alertdialog", { name: "Rotate SRE's Cloudflare credential?" });
+  expect(within(dialog).getByText(/rolls the token to a new value/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Rotate credential" }));
+  await waitFor(() =>
+    expect(calls.act).toEqual([
+      { kind: "cloudflare", handle: "sre", lane: "cloudflare", action: "rotate" },
+    ]),
+  );
+});
+
+// AN EXPO SEAT IS A ROBOT USER: the details name it, the role it holds in
+// Expo's own word, the variable its token is sealed in and the CLI it drives.
+test("an Expo seat's details name its robot, its role and the CLI it uses", () => {
+  draw(expoAnswer());
+  details("QA", "Expo");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="QA on Expo"]')!);
+  expect(facts.getByText("crewlet-gophrase-qa")).toBeTruthy();
+  expect(facts.getByText("Role at Expo")).toBeTruthy();
+  expect(facts.getByText("Developer")).toBeTruthy();
+  expect(facts.getByText("EXPO_TOKEN_QA")).toBeTruthy();
+  expect(facts.getByText("Live, EAS CLI in its box, as EXPO_TOKEN")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Rotate credential" })).toBeTruthy();
+  expect(screen.queryByText("No Expo tool for its agents")).toBeNull();
+});
+
+// AN EXPO SEAT'S TOOL IS ITS BOX, NOT A SERVER: one whose sandbox env hands the
+// EAS CLI nothing is told the line to add there, never to declare a server.
+test("an Expo agent with no tool is told to set EXPO_TOKEN in its sandbox env", () => {
+  draw(expoAnswer({ tool: "no_server" }));
+  expect(screen.getByText("No Expo tool for its agents")).toBeTruthy();
+  const advice = screen.getByText(/QA has an account at Expo and nothing to use it with/);
+  expect(advice.textContent).toContain('Add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env');
+  expect(advice.textContent).not.toMatch(/tool server/);
+});
+
+// AN EXPO ROBOT IS DELETED BY A PERSON: Crewlet drops the agent's token at
+// once, and the review says the robot is the person's to delete at Expo.
+test("turning an Expo seat off says the token goes at once and the robot is yours to delete", async () => {
+  draw(expoAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Expo" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      /Crewlet deletes the agent's sealed token at once.*you delete its robot at Expo/,
+    ),
+  ).toBeTruthy();
+});
+
+// AN EXPO ROTATE IS A PASTE: the sheet opens at "Paste it here" for the robot
+// the seat has, and the engine takes the paste as the rotate, so the rotate
+// seat action is never called. Mutation: route rotate to the dialog again.
+test("rotating an Expo token opens the sheet at the paste and never calls the rotate action", async () => {
+  draw(expoAnswer());
+  details("QA", "Expo");
+  fireEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  const sheet = screen.getByRole("dialog", { name: "New token for QA" });
+  fireEvent.change(within(sheet).getByLabelText("Token"), {
+    target: { value: "robot-token-for-tests" },
+  });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Check and save" }));
+  await waitFor(() =>
+    expect(calls.credential).toEqual([
+      { kind: "expo", handle: "qa", lane: "expo", value: "robot-token-for-tests" },
+    ]),
+  );
+  expect(calls.act).toEqual([]);
 });
 
 test("turning a seat off says in the review what that does at the vendor", async () => {
@@ -564,6 +774,8 @@ test("a save refused as stale keeps the draft, reads again and plans again again
   expect(await screen.findByText(/Somebody changed these agents/)).toBeTruthy();
   expect(reload).toHaveBeenCalled();
   expect(screen.getByRole("dialog")).toBeTruthy();
+  // The engine now plans from the revision the colleague's save wrote.
+  calls.planRevision = "rev-8";
   redraw({ ...datadogAnswer(), revision: "rev-8" });
   await waitFor(() => expect(calls.plan).toHaveLength(2));
   expect(calls.plan[1]).toEqual(calls.plan[0]);
@@ -644,4 +856,357 @@ test("the table is the kit's: a named table of real rows, with column headers an
     expect(headers.some((h) => h.includes(label))).toBe(true);
   for (const name of ["PM", "QA", "SRE"])
     expect(screen.getByRole("button", { name: `Show ${name}'s Datadog details` })).toBeTruthy();
+});
+
+// AN EXPO AGENT WAITS ON A PERSON FOR ITS ROBOT: the row says Needs you, and
+// its one control opens the Set up sheet, which holds Expo's page and the
+// paste, so the row offers no "Done, check again" a paste would make pointless.
+// Mutation: drop the lane's handoff words and the row falls back to Open Expo.
+test("an Expo agent waiting on its robot reads Needs you, with Set up opening the sheet", () => {
+  draw(expoWaitingAnswer());
+  expect(screen.getByText("Needs you")).toBeTruthy();
+  expect(screen.getByText("Waiting on a person")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Done, check again" })).toBeNull();
+  expect(screen.queryByRole("link", { name: /Open Expo/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Set up" }));
+  expect(screen.getByRole("dialog", { name: "Set up PM on Expo" })).toBeTruthy();
+});
+
+// THE PASTE GOES TO THE ENGINE FOR THAT SEAT, and the tab draws the answer it
+// returns, which is the seat in sync. Mutation: adopt nothing and the row
+// still reads Needs you behind the sheet.
+test("a pasted token is checked for its seat and the tab draws the engine's answer", async () => {
+  const { onAnswer } = draw(expoWaitingAnswer("mint"));
+  fireEvent.click(screen.getByRole("button", { name: "Paste a new token" }));
+  const sheet = screen.getByRole("dialog", { name: "New token for PM" });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Continue" }));
+  fireEvent.change(within(sheet).getByLabelText("Token"), {
+    target: { value: "robot-token-for-tests" },
+  });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Check and save" }));
+  await waitFor(() =>
+    expect(calls.credential).toEqual([
+      { kind: "expo", handle: "pm", lane: "expo", value: "robot-token-for-tests" },
+    ]),
+  );
+  await waitFor(() => expect(onAnswer).toHaveBeenCalled());
+  const adopted = onAnswer.mock.calls[0]![0] as AccessAnswer;
+  expect(adopted.revision).toBe("rev-8");
+  expect(adopted.kind).toBe("expo");
+  expect(within(sheet).getByText(/^Works\. Robot crewlet-gophrase-pm/)).toBeTruthy();
+});
+
+test("a role changed at Expo is fixed from the row's Fix the role", () => {
+  draw(expoWaitingAnswer("rerole"));
+  fireEvent.click(screen.getByRole("button", { name: "Fix the role" }));
+  expect(screen.getByRole("dialog", { name: "PM's role on Expo" })).toBeTruthy();
+});
+
+// DELETING THE ROBOT AT EXPO IS THE PERSON'S, and nothing is pasted for it:
+// the row names the step, links to Expo and checks again when it is done.
+test("an Expo robot to delete at Expo is a plain wait with Open Expo, not the sheet", () => {
+  const answer = expoWaitingAnswer("mint");
+  const pm = answer.seats[0]!.lanes.expo!;
+  pm.sync!.error = {
+    ...pm.sync!.error!,
+    step: "remove",
+    said: "Delete robot crewlet-gophrase-pm at Expo",
+  };
+  draw(answer);
+  expect(screen.getByText("Delete robot crewlet-gophrase-pm at Expo.")).toBeTruthy();
+  expect(screen.getByRole("link", { name: /Open Expo/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Done, check again" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Set up|Paste/ })).toBeNull();
+});
+
+// EXPO'S TURN-ON IS MOSTLY A PERSON'S, and the review says so step by step:
+// two steps marked with a person, Crewlet's check last, and the footer saying
+// what the marks mean. Mutation: drop the person mark and the steps read as Crewlet's.
+test("turning an Expo agent on reviews the robot and the token as a person's steps", async () => {
+  calls.plans = [
+    {
+      handle: "pm",
+      lane: "expo",
+      steps: [
+        {
+          op: "create",
+          verb: "create",
+          by: "you",
+          text: "Add a robot named `crewlet-gophrase-pm` with the Viewer role at Expo",
+          action_url: "https://expo.dev/accounts/gophrase/settings/access-tokens",
+        },
+        {
+          op: "create",
+          verb: "mint",
+          by: "you",
+          text: "Create an access token for it, then paste it here",
+        },
+        {
+          op: "create",
+          verb: "mint",
+          by: "crewlet",
+          text: "Check the token and seal it as EXPO_TOKEN_PM",
+        },
+      ],
+    },
+  ];
+  draw(expoAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Expo" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const dialog = await screen.findByRole("dialog", { name: "Review changes to Expo" });
+  const steps = await within(dialog).findAllByRole("listitem");
+  expect(steps.map((li) => li.textContent)).toEqual([
+    "A person: Add a robot named crewlet-gophrase-pm with the Viewer role at Expo",
+    "A person: Create an access token for it, then paste it here",
+    "Crewlet: Check the token and seal it as EXPO_TOKEN_PM",
+  ]);
+  expect(within(steps[2]!).getByText("EXPO_TOKEN_PM").tagName).toBe("CODE");
+  expect(
+    within(dialog).getByText("Steps marked with a person need somebody at Expo."),
+  ).toBeTruthy();
+});
+
+// AN OLD TOKEN THAT STILL WORKS IS ONE LINE ON THE ROW: what Expo shows for
+// it and when it was made, Open Expo, and a check that reads it again; the
+// wait that repeats it every pass is not said a second time. Mutation: drop
+// the branch and the row falls back to the wait's sentence alone.
+test("an Expo robot's old token still at Expo reads as one line with its label and date", () => {
+  draw(expoRetiredAnswer());
+  const under = screen
+    .getByText("An old token still works at Expo")
+    .closest(".agent-access-under")!;
+  const line = within(under as HTMLElement).getByText("9f3c1a…");
+  expect(line.tagName).toBe("CODE");
+  expect(line.parentElement!.textContent).toMatch(/^9f3c1a…, created /);
+  expect(
+    within(under as HTMLElement).getByText(/Delete it at Expo\. Crewlet notices once it is gone\./),
+  ).toBeTruthy();
+  expect(
+    within(under as HTMLElement)
+      .getByRole("link", { name: /Open Expo/ })
+      .getAttribute("href"),
+  ).toBe("https://expo.dev/accounts/gophrase/settings/access-tokens");
+  expect(
+    within(under as HTMLElement).getByRole("button", { name: "Done, check again" }),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Delete robot crewlet-gophrase-qa's other tokens/)).toBeNull();
+});
+
+test("several old tokens are counted, and a lane with no words of its own says credentials", () => {
+  draw(expoRetiredAnswer(["9f3c1a…", "41be07…"]));
+  expect(screen.getByText("2 old tokens still work at Expo")).toBeTruthy();
+  expect(screen.getByText(/Delete them at Expo\./)).toBeTruthy();
+  cleanup();
+  const datadog = datadogAnswer();
+  datadog.seats[2]!.lanes.datadog!.observed.retired = [{ label: "app-key-old" }];
+  draw(datadog);
+  expect(screen.getByText("An old credential still works at Datadog")).toBeTruthy();
+  expect(screen.getByText("app-key-old").parentElement!.textContent).toBe("app-key-old");
+});
+
+// KEEPING THE ROBOT IS THE PERSON'S CHOICE on the wait to delete it at Expo,
+// recorded by the engine. Mutation: drop the release words and it is gone.
+test("a robot to delete at Expo can be kept there instead", async () => {
+  const answer = expoWaitingAnswer("mint");
+  const pm = answer.seats[0]!.lanes.expo!;
+  pm.sync!.error = {
+    ...pm.sync!.error!,
+    step: "remove",
+    said: "Delete robot crewlet-gophrase-pm at Expo",
+  };
+  draw(answer);
+  fireEvent.click(screen.getByRole("button", { name: "Keep the robot at Expo" }));
+  await waitFor(() =>
+    expect(calls.act).toEqual([{ kind: "expo", handle: "pm", lane: "expo", action: "release" }]),
+  );
+});
+
+test("keeping the robot is offered only on the wait to delete it", () => {
+  draw(expoWaitingAnswer("mint"));
+  expect(screen.queryByRole("button", { name: "Keep the robot at Expo" })).toBeNull();
+});
+
+// KEEPING THE ACCOUNT IS THE LANE'S TO ALLOW: a lane that says it is not
+// releasable offers no way to keep it, whatever its words. Mutation: drop the
+// lane's flag from the rule and the button comes back.
+test("a lane that does not allow keeping the account offers no button to keep it", () => {
+  const answer = expoWaitingAnswer("mint");
+  answer.options = answer.options.map((o) => ({ ...o, releasable: false }));
+  const pm = answer.seats[0]!.lanes.expo!;
+  pm.sync!.error = {
+    ...pm.sync!.error!,
+    step: "remove",
+    said: "Delete robot crewlet-gophrase-pm at Expo",
+  };
+  draw(answer);
+  expect(screen.getByText("Delete robot crewlet-gophrase-pm at Expo.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Keep the/ })).toBeNull();
+});
+
+// A SCOPE ENTRY IS READ BY ITS NAME: where the vendor names an entry apart from
+// the identifier stored (a project's ID), the picker labels it by name with the
+// identifier beneath, and the review names it too.
+test("a scope entry is picked by its name, with its identifier beneath, and the review names it", async () => {
+  const data = jiraAnswer();
+  data.options[0]!.scope_names = { ENG: "Engineering", OPS: "Operations" };
+  draw(data);
+  const picker = document.querySelector<HTMLElement>(`[aria-label="QA's Jira projects"]`)!;
+  expect(picker.textContent).toContain("Engineering");
+  pick(picker, /Operations/);
+  expect(screen.getByRole("option", { name: /Operations/ }).textContent).toContain("OPS");
+  fireEvent.keyDown(picker, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("option")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const review = await screen.findByRole("dialog");
+  expect(within(review).getByText("Engineering and Operations")).toBeTruthy();
+});
+
+// AN OPEN CONNECTION LISTS NOT ALL IT REACHES (a GitHub installation on every
+// repository, a GitLab group with no project list), so its picker takes a
+// typed entry. The tab once keyed its scope on the list alone and never read
+// scope_open, so neither drew a picker. Mutation: drop the open branch and
+// both go red.
+test.each([
+  {
+    vendor: "GitHub",
+    answer: () => {
+      const data = githubAnswer();
+      data.options[0] = { ...data.options[0]!, scope: undefined, scope_open: true };
+      return data;
+    },
+    field: "QA's GitHub repositories",
+    typed: "gophrase/web",
+    sent: { qa: { github: { scope: ["gophrase/backend", "gophrase/web"] } } },
+  },
+  {
+    vendor: "GitLab",
+    answer: gitlabAnswer,
+    field: "Dev's GitLab projects",
+    typed: "gophrase/infra",
+    sent: { dev: { gitlab: { scope: ["gophrase/backend", "gophrase/infra"] } } },
+  },
+])("an open $vendor connection takes a typed entry", async ({ answer, field, typed, sent }) => {
+  draw(answer());
+  const input = screen.getByRole("combobox", { name: field });
+  fireEvent.change(input, { target: { value: typed } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(screen.getByText("Not saved")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(calls.plan).toHaveLength(1));
+  expect(calls.plan[0]).toMatchObject({ seats: sent });
+});
+
+// A PICKER WITH NOTHING TO OFFER SAYS WHY in its place: the list could not be
+// read, which says nothing about what exists, or it was read and holds none.
+test("a scope list that could not be read, or holds nothing, says so in place of a picker", () => {
+  const data = githubAnswer();
+  data.seats[0]!.lanes.github!.desired.scope = [];
+  data.options[0] = { ...data.options[0]!, scope: undefined, scope_live: false };
+  const { redraw } = draw(data);
+  expect(screen.getByText("Crewlet could not read your repositories")).toBeTruthy();
+  expect(document.querySelector(`[aria-label="QA's GitHub repositories"]`)).toBeNull();
+  redraw({ ...data, options: [{ ...data.options[0]!, scope_live: true }] });
+  expect(screen.getByText("No repositories to choose from")).toBeTruthy();
+});
+
+// A LANE WHERE AN EMPTY SCOPE REACHES NOTHING holds an agent turned on with
+// none at the review, and says under its row what to choose.
+test("an agent turned on with no scope where none reaches nothing is held at the review", () => {
+  const data = githubAnswer();
+  data.options[0] = { ...data.options[0]!, scope_required: true };
+  data.seats.push(seat("pm", "PM", { github: offLane() }));
+  draw(data);
+  fireEvent.click(screen.getByRole("switch", { name: "PM on GitHub" }));
+  expect(
+    screen.getByText(
+      "Not in any repository yet, so it can reach nothing. Choose its repositories.",
+    ),
+  ).toBeTruthy();
+  const review = screen.getByRole("button", { name: "Review changes" });
+  expect(review.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(review);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+// THE ONLY ENTRY THERE IS is taken as a seat is turned on, where an empty scope
+// reaches nothing and the list was read just now, so it shows in the review
+// like any other change. A seat turned on anywhere else takes nothing.
+test("an agent turned on where one entry is all there is takes it", async () => {
+  const data = githubAnswer();
+  data.options[0] = { ...data.options[0]!, scope: ["gophrase/backend"], scope_required: true };
+  data.seats.push(seat("pm", "PM", { github: offLane() }));
+  draw(data);
+  fireEvent.click(screen.getByRole("switch", { name: "PM on GitHub" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(calls.plan).toHaveLength(1));
+  expect(calls.plan[0]).toMatchObject({
+    seats: { pm: { github: { enabled: true, scope: ["gophrase/backend"] } } },
+  });
+  cleanup();
+  calls.plan = [];
+  draw({ ...data, options: [{ ...data.options[0]!, scope: ["a/b", "a/c"] }] });
+  fireEvent.click(screen.getByRole("switch", { name: "PM on GitHub" }));
+  expect(screen.getByRole("button", { name: "Review changes" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+});
+
+// A REFUSAL ABOUT ONE SEAT'S CONTROL closes the review and is said beside that
+// control, which is marked refused and points at the sentence; a change to the
+// seat clears it. Mutation: keep it in the review's banner and this goes red.
+test("a refusal about one seat's projects closes the review and is said beside that picker", async () => {
+  calls.planRefusal = {
+    error: "access_not_offered",
+    detail: "Choose at least one project for qa: an agent in no project can reach nothing",
+    seat: "qa",
+    lane: "jira",
+    field: "scope",
+  };
+  draw(jiraAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Jira" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const said = await screen.findByText(
+    "Choose at least one project for qa: an agent in no project can reach nothing.",
+  );
+  expect(said.getAttribute("role")).toBe("alert");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  const marked = document.querySelector<HTMLElement>(`[aria-describedby="${said.id}"]`)!;
+  expect(marked.getAttribute("aria-invalid")).toBe("true");
+  expect(marked.closest(`[aria-label="QA's Jira projects"]`) ?? marked).toBeTruthy();
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Jira" }));
+  expect(screen.queryByText(/Choose at least one project for qa/)).toBeNull();
+});
+
+// A REFUSAL NAMING NO CONTROL stays in the review, where the save was asked for.
+test("a refusal naming no control stays in the review", async () => {
+  calls.planRefusal = { error: "access_not_offered", detail: "atlassian grants no lane forge" };
+  draw(jiraAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Jira" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const review = await screen.findByRole("dialog");
+  expect(await within(review).findByText("Atlassian grants no lane forge.")).toBeTruthy();
+});
+
+// WHAT CREWLET PUTS IN AN AGENT'S BOX ITSELF is named in its details, beside
+// the lines a person adds, and only where it puts something there.
+test("an agent's details name the settings Crewlet puts in its box, and only those", () => {
+  const data = expoAnswer();
+  const qa = data.seats.find((s) => s.handle === "qa")!.lanes.expo!;
+  qa.box = {
+    env: [
+      ...qa.box!.env,
+      { name: "EXPO_PUBLIC_ACCOUNT", value: "gophrase", by: "crewlet" },
+      { name: "EAS_NO_VCS", value: "1", by: "crewlet" },
+    ],
+  };
+  draw(data);
+  details("QA", "Expo");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="QA on Expo"]')!);
+  expect(facts.getByText("Set by Crewlet")).toBeTruthy();
+  expect(facts.getByText("EXPO_PUBLIC_ACCOUNT and EAS_NO_VCS")).toBeTruthy();
+  expect(facts.getByText("Live, EAS CLI in its box, as EXPO_TOKEN")).toBeTruthy();
+  cleanup();
+  draw(expoAnswer());
+  details("QA", "Expo");
+  expect(screen.queryByText("Set by Crewlet")).toBeNull();
 });

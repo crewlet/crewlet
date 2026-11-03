@@ -1301,7 +1301,7 @@ type changeRow struct {
 	version        int64
 	// position is the packed position of the last record that wrote it, and
 	// updatedAt its broker instant (store.EncodeTime): when the change last
-	// moved on its repository's subject (replicated 0146).
+	// moved on its repository's subject (replicated 0147).
 	position, updatedAt int64
 	// moved and openFindings are what a READ of changes adds from the
 	// change's conversation ([withConversations] on a listing's page, the

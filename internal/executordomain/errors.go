@@ -32,14 +32,16 @@ var (
 		"to name")
 
 	// ErrOverBudget reports a capture the seat's byte budget cannot hold
-	// even with every ended turn's session released: the seat's live turns
-	// already hold it. Nothing was written; the turn's next launch starts
-	// from the session the row already names, or fresh.
+	// even with every ended turn's session released that no live turn holds
+	// as its base: the seat's live turns, and the bases their first reads
+	// hold, already fill it. Nothing was written; the turn's next launch
+	// starts from the session the row already names, or fresh.
 	ErrOverBudget = errors.New("executordomain: the seat's session budget cannot " +
 		"hold this capture")
 
 	// ErrNotDue reports a retention delete of a turn that is no longer past
-	// the cutoff (captured again since it was listed) or no longer there.
+	// the cutoff (captured again since it was listed), one a live turn holds
+	// as its base, or one no longer there.
 	ErrNotDue = errors.New("executordomain: the session is not past its retention")
 
 	// ErrUnreadable reports a session's object that cannot be read back as
@@ -49,11 +51,6 @@ var (
 	// fresh with the account of the turns before it, never as a failed
 	// launch.
 	ErrUnreadable = errors.New("executordomain: the session's object cannot be read")
-
-	// ErrSessionTooLarge reports an archive past [SessionMaxBytes]: nothing
-	// is recorded, and the turn's next launch starts from the session the
-	// row already names, or fresh.
-	ErrSessionTooLarge = errors.New("executordomain: the session is over its size bound")
 
 	// ErrConflict reports a write that lost its compare-and-set every round:
 	// something kept changing the conversation.

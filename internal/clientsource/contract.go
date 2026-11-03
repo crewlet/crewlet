@@ -204,6 +204,9 @@ var contract = []Entry{
 	{"McpAcceptedView", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpListedView", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpReachReason", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
+	{"McpReachLimit", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
+	{"McpToolLimit", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
+	{"McpToolLimitLevel", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpToolLevel", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpRisk", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpInstanceState", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
@@ -211,7 +214,7 @@ var contract = []Entry{
 	{"McpPlacementWarningKind", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpCallOutcome", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpDependants", ReadInterface, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
-	{"McpEnvDependant", ReadInterface, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
+	{"McpBlockDependant", ReadInterface, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
 	{"McpSandboxDependant", ReadInterface, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
 	{"McpHolderKind", ReadUnion, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
 	{"McpCleared", ReadInterface, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
@@ -231,9 +234,16 @@ var contract = []Entry{
 	{"McpCheckedTool", ReadInterface, "internal/api/mcpapi.TestTheTestReadsWhatTheCheckSends"},
 	{"McpProbeAnswer", ReadInterface, "internal/api/mcpapi.TestTheTestReadsWhatTheCheckSends"},
 	{"McpProbeOAuth", ReadInterface, "internal/api/mcpapi.TestTheTestReadsWhatTheCheckSends"},
+	{"McpSignIn", ReadInterface, "internal/api/mcpapi.TestTheSignInReadsWhatTheRoutesSend"},
+	{"McpSignInStatus", ReadUnion, "internal/api/mcpapi.TestTheSignInReadsWhatTheRoutesSend"},
+	{"McpSignOut", ReadInterface, "internal/api/mcpapi.TestTheSignInReadsWhatTheRoutesSend"},
 	{"McpValueAnswer", ReadInterface, "internal/api/mcpapi.TestTheReplaceValueReadsWhatTheRouteSends"},
 	{"McpValueReload", ReadInterface, "internal/api/mcpapi.TestTheReplaceValueReadsWhatTheRouteSends"},
 	{"McpValueRefusal", ReadInterface, "internal/api/mcpapi.TestTheReplaceValueReadsWhatTheRouteSends"},
+	{"McpHeldCall", ReadInterface, "internal/api/queries.TestTheInboxReadsWhatAHeldCallSends"},
+	{"McpApprovalAnswer", ReadInterface, "internal/api/mcpapi.TestTheApprovalReadsWhatTheRouteSends"},
+	{"McpApprovalOutcome", ReadUnion, "internal/api/mcpapi.TestTheApprovalReadsWhatTheRouteSends"},
+	{"McpChangesAnswer", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatTheRouteSends"},
 
 	// tools.ts
 	{"ToolRow", ReadInterface, "internal/api/queries.TestTheCatalogueIsWhatTheToolScreensRead"},
@@ -374,6 +384,7 @@ var contract = []Entry{
 	{"TranscriptEntryKind", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"TranscriptCut", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SessionOutcome", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"SessionContinuesIn", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 
 	// identity.ts
 	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
@@ -750,9 +761,13 @@ var contract = []Entry{
 	{"AccessPermission", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessSeat", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessSeatLane", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessBox", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessBoxLine", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessDesired", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessObserved", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessCredential", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessRetired", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessCredentialAnswer", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessStep", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessStepOutcome", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessFailure", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
@@ -761,6 +776,7 @@ var contract = []Entry{
 	{"AccessPlanAnswer", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessSeatPlan", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessInstallLink", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessRefusal", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessLaneKey", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"GitHubAccess", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessSeatAction", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
@@ -773,6 +789,7 @@ var contract = []Entry{
 	{"AccessCredentialSource", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessManaged", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessManagedBy", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
+	{"AccessRefusalField", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 }
 
 // Contract is every declaration the engine's gates read out of the

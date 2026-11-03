@@ -42,9 +42,9 @@ const ExecutorLogMaxBytes = 512 << 20
 //
 // 128 KiB, measured rather than guessed ([TestEveryRecordAtEveryCapFitsTheDeclaredBound]).
 // The largest record is an `end`: its five prose fields at their caps
-// ([CompletedWorkMaxBytes], [BlockedOnMaxBytes], [StopReasonMaxBytes],
-// [FailureMaxBytes], [AskExcerptMaxBytes], eleven KiB between them) encode to
-// about 66 KiB once JSON escapes every `<`, `>` and `&` to six bytes, and the
+// (internal/executorkeep's CompletedWorkMaxBytes, BlockedOnMaxBytes,
+// StopReasonMaxBytes and FailureMaxBytes, and [AskExcerptMaxBytes], eleven
+// KiB between them) encode to about 66 KiB once JSON escapes every `<`, `>` and `&` to six bytes, and the
 // conversation key, the work key, the short fields and the envelope bring the
 // whole to about 74 KiB; a `capture` at its caps, its [MaxAbsorbs] absorbed
 // turns included, is about 21 KiB. The bound

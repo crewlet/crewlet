@@ -35,7 +35,11 @@ import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { CHECK_PURPOSES, CHECK_STATES, QUEUE_STATES } from "../contract/checks.ts";
-import type { McpMemberServersStatusAnswer, McpServersStatusAnswer } from "../contract/mcp.ts";
+import type {
+  McpHeldCall,
+  McpMemberServersStatusAnswer,
+  McpServersStatusAnswer,
+} from "../contract/mcp.ts";
 import type { ToolRow } from "../contract/tools.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
@@ -890,6 +894,29 @@ export interface ExecutorRow {
   answered_at?: string;
   /** The item the launching turn was charged to; null when it was on none. */
   work_item?: WorkItemRef | null;
+  /**
+   * The run's ending, once it is decided and until its record is gone; null on
+   * a run nobody has ended. Such a run is OVER whatever its `status` still
+   * says: its record waits only for the ending's last steps, which on an engine
+   * that records every turn's end include recording that end once the turn's
+   * captures have settled, and can take minutes. The seat's next work waits
+   * behind it. Absent on a row from an engine that does not say.
+   */
+  ending?: ExecutorEnding | null;
+
+  /**
+   * The call this run holds for a person's approval (ADR-0077), which its
+   * question is about: answered through `POST /mcp-approvals/{id}`, never
+   * `answer_executor`, which refuses it. Absent on a run that holds none.
+   */
+  held_call?: McpHeldCall;
+  /**
+   * What that call would send, opened from its seal: the seat's trail, sent
+   * to an administrator and the seat's lead, who are who may approve it; null
+   * where its seal does not open on the answering node. Absent for every
+   * other reader, and on a run that holds no call.
+   */
+  held_arguments?: Record<string, unknown> | null;
 
   /**
    * What this run called through the MCP bridge, in order.
@@ -916,6 +943,18 @@ export interface ExecutorRow {
   body_withheld?: boolean;
 }
 
+/**
+ * A run's decided ending, as the `executors` board carries it: when it was
+ * decided, the reason it announces (empty for a run whose turn came back,
+ * which announces nothing) and who stopped it, for a person's stop (empty
+ * otherwise).
+ */
+export interface ExecutorEnding {
+  at: string;
+  reason: string;
+  stopped_by: string;
+}
+
 /** One call a bridged run made. */
 export interface BridgeCall {
   name: string;
@@ -936,6 +975,22 @@ export interface BridgeCall {
    *  server name for an `mcp:` one. Absent on a call no tool answered. */
   origin?: string;
   server?: string;
+  /**
+   * A call to a tool at Needs approval that was NOT made: the run recorded it
+   * as its question for a person and parked on their answer. The engine marks
+   * it `failed` too, since nothing it asked for happened, but it is no failure
+   * and is never counted as one. Its arguments are never here: they ride the
+   * run's row sealed beside its question, for whoever may approve it.
+   */
+  held?: boolean;
+  /**
+   * The call a person let be made once its run asked for their approval:
+   * made by the run's resume on the engine host rather than by the job over
+   * its bridge, and recorded among its round's calls. Its arguments and its
+   * result are never here: they rode the run sealed, for the job that carried
+   * the work on, so neither is drawn as empty.
+   */
+  approved?: boolean;
 }
 
 // ---------------------------------------------------------------------------

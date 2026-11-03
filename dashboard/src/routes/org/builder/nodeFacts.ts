@@ -187,7 +187,16 @@ export function unitsLedBy(draft: Draft, handle: string): DraftUnit[] {
 
 /** The tools a seat or unit field depends on, as the company document names their blocks. */
 export type Tool =
-  "github" | "slack" | "mattermost" | "gitlab" | "jira" | "confluence" | "datadog" | "atlassian";
+  | "github"
+  | "slack"
+  | "mattermost"
+  | "gitlab"
+  | "jira"
+  | "confluence"
+  | "datadog"
+  | "atlassian"
+  | "cloudflare"
+  | "expo";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -199,6 +208,8 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   confluence: "Confluence",
   datadog: "Datadog",
   atlassian: "Atlassian",
+  cloudflare: "Cloudflare",
+  expo: "Expo",
 };
 
 /**
@@ -404,17 +415,17 @@ export function toolServersOf(seat: ConfigRole, home: DraftUnit | undefined): Se
 }
 
 /**
- * The `mcp_env` servers each provisioning vendor reads a seat's own account
- * from, as the engine names them: `gitlab.SeatEnv`, `datadog.SeatEnv`, and
- * Atlassian's shared server with its two product servers
- * (`atlassian.ProductAny.servers`). A seat is enrolled with a vendor by
- * holding credentials for one of its servers, and a seat that holds none
- * has no account there, whatever the company has connected.
+ * The seat blocks each provisioning vendor keeps an account for, by their key
+ * under `roles[].integrations` (`config.SeatAccessLanes`): GitLab's and
+ * Datadog's own, and Atlassian's two products over its one account. A seat is
+ * enrolled with a vendor by having one of them on. Its `mcp_env` says nothing
+ * about it: the engine seals each account's credential under a name of its own
+ * and refuses one written there for a managed integration.
  */
-const VENDOR_SERVERS = {
+const VENDOR_LANES = {
   gitlab: ["gitlab"],
   datadog: ["datadog"],
-  atlassian: ["atlassian", "jira", "confluence"],
+  atlassian: ["jira", "confluence"],
 } as const;
 
 /**
@@ -425,17 +436,24 @@ const VENDOR_SERVERS = {
  *
  * NOTHING FOR A SEAT THIS DRAFT CREATED: it was never saved, so no engine
  * made anything for it anywhere. And an account is named only where the seat
- * is enrolled for it (see [VENDOR_SERVERS]), because the provisioners create
- * accounts for enrolled agent seats only; naming one for every seat of a
- * company that connected the tool sends somebody to decommission an account
- * that does not exist.
+ * is enrolled for it (see [VENDOR_LANES]) and the company provisions it,
+ * because the engine creates accounts for those seats only; naming one for
+ * every seat of a company that connected the tool sends somebody to
+ * decommission an account that does not exist.
+ *
+ * NOTHING FOR CLOUDFLARE: a seat's token is all it has there, and the engine
+ * deletes it once the seat is off or gone, so nothing is left to decommission.
+ *
+ * NOTHING FOR EXPO: a seat's robot user is all it has there, and the engine
+ * deletes it once the seat is off or gone, so nothing is left to decommission.
  */
 export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
   if (isMintedKey(seat.key)) return [];
   const company = state.draft.company;
-  const servers = toolServersOf(seat.data, homeUnitOf(state, seat.key));
-  const enrolled = (vendor: keyof typeof VENDOR_SERVERS) =>
-    VENDOR_SERVERS[vendor].some((server) => servers.has(server));
+  const enrolled = (vendor: keyof typeof VENDOR_LANES) =>
+    VENDOR_LANES[vendor].some(
+      (lane) => getPath(seat.data, ["integrations", lane, "enabled"]) === true,
+    );
   const out: string[] = [];
   const github = getPath(seat.data, ["integrations", "github"]);
   if (isRecord(github) && typeof github.app_slug === "string" && github.app_slug !== "") {

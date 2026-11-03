@@ -38,6 +38,51 @@ func realBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	return runner, box
 }
 
+// realBoxUnder is [realBox] whose runs' scripts run under sh ([runsUnder]).
+func realBoxUnder(t *testing.T, sh boxShell) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	runner, box := realBox(t)
+	runsUnder(t, box, sh, "")
+	return runner, box
+}
+
+// runsUnder has every run's script in box run under sh, behind sh's prelude
+// and then prelude, rather than under the sh on PATH: a box image's sh is the
+// image's, and the cases about a run's end are to hold under every one a box
+// may have ([boxShells]).
+//
+// A STAND-IN `sh` IN THE BOX'S BIN DIRECTORY, which the wrapper's PATH puts
+// first for the script's `sh -c`, and which EXECS the shell asked for — so the
+// pid the script publishes for its end request is the shell's own, as a box
+// whose sh is that shell publishes. Anything but a script handed to `-c` goes
+// to the sh this machine has, untouched.
+func runsUnder(t *testing.T, box sandbox.Sandbox, sh boxShell, prelude string) {
+	t.Helper()
+	argv := sh.argv
+	if len(argv) == 0 {
+		argv = []string{"sh"}
+	}
+	words := make([]string, 0, len(argv))
+	for i, word := range argv {
+		if i == 0 {
+			resolved, err := exec.LookPath(word)
+			if err != nil {
+				t.Fatalf("no %s on this machine's PATH to run the script under: %v", word, err)
+			}
+			word = resolved
+		}
+		words = append(words, shQuote(word))
+	}
+	plain, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatalf("no sh on this machine's PATH: %v", err)
+	}
+	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/sh", "#!/bin/sh\n"+
+		`if [ "$1" = -c ] && [ "$#" -eq 2 ]; then exec `+strings.Join(words, " ")+` -c `+
+		shQuote(sh.prelude+prelude)+`"$2"; fi`+"\n"+
+		"exec "+shQuote(plain)+` "$@"`+"\n")
+}
+
 // steerWiring is what an executor run's launch hands its harness for its turn's
 // notes: the bridge's server and its unlisted tool, as the engine names them.
 var steerWiring = sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take",
@@ -144,7 +189,7 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 			t.Parallel()
 			runner := executor.NewClaudeCode()
 			script := startAndScript(t, runner, box(t, runner), req)
-			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE; ")
+			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE DISABLE_AUTO_COMPACT DISABLE_COMPACT; ")
 			launch := strings.Index(script, "claude -p")
 			if unset < 0 || launch < 0 || unset > launch {
 				t.Fatalf("the variables are not unset before the harness starts (unset at %d, harness at %d):\n%s",

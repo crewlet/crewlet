@@ -1,11 +1,13 @@
 package queries
 
 import (
+	"maps"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -51,5 +53,46 @@ func TestAHeldCallsArgumentsAreReadOnlyByWhoMayApproveIt(t *testing.T) {
 	bare := serialiseRun(plain, sandbox.BridgeLog{}, livestate.Reach{Body: true}, src.opened(plain))
 	if slices.ContainsFunc([]string{"held_call", "held_arguments"}, func(k string) bool { _, ok := bare[k]; return ok }) {
 		t.Errorf("a run holding no call carries %v", bare)
+	}
+}
+
+// THE INBOX READS WHAT A HELD CALL SENDS. A parked run's row carries the call
+// it holds for approval (`held_call`), which the Inbox, Home and a seat's
+// work answer through `POST /mcp-approvals/{id}` rather than the run's own
+// answer; the dashboard reads it as `McpHeldCall` (`contract/mcp.ts`). Held
+// both ways: every member the dashboard declares is sent, and every key sent
+// is declared.
+//
+// Mutation: drop `digest` from McpHeldCall, or add a key to the row's
+// `held_call`, and this is red.
+func TestTheInboxReadsWhatAHeldCallSends(t *testing.T) {
+	t.Parallel()
+	held := sandbox.HeldCall{ID: "0190f3a8-0000-7000-8000-000000000002", LaunchID: "launch-2",
+		Server: "github", Tool: "gh_merge_pull_request", Raw: "merge_pull_request",
+		Digest: "sha256:abc", HeldAt: time.Now().UTC()}
+	run := sandbox.PendingRun{TurnID: "t-gate", LaunchID: "launch-2", AgentHandle: "backend-dev",
+		Status: sandbox.StatusAwaiting, HeldCall: &held}
+	row := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Body: true}, Sources{}.opened(run))
+	call, ok := row["held_call"].(map[string]any)
+	if !ok {
+		t.Fatalf("a parked run holding a call carries held_call %v", row["held_call"])
+	}
+	members, err := clientsource.Interface(clientsource.Tree(t), "McpHeldCall")
+	if err != nil {
+		t.Fatalf("%v: this gate cannot run without the dashboard's declaration", err)
+	}
+	declared := map[string]bool{}
+	for _, m := range members {
+		declared[m.Name] = !m.Optional
+	}
+	for _, name := range slices.Sorted(maps.Keys(declared)) {
+		if _, sent := call[name]; !sent && declared[name] {
+			t.Errorf("McpHeldCall declares %s and a held call's row does not send it", name)
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(call)) {
+		if _, ok := declared[key]; !ok {
+			t.Errorf("a held call's row sends %s and McpHeldCall does not declare it", key)
+		}
 	}
 }

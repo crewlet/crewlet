@@ -16,7 +16,7 @@
  */
 
 import type { ReactElement } from "react";
-import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 
 // uilet's PROVIDER, which is the one `app/App.tsx` mounts now. Our own
 // context is no longer supplied anywhere, so a form tested under it would
@@ -566,6 +566,98 @@ test("a literal_in_config refusal is shown against its field", async () => {
   // that is not rendered, the refusal was invisible.
   expect(await screen.findByText(/holds a value at/)).toBeDefined();
   expect(screen.getByText(/integrations.datadog.webhook_token/)).toBeDefined();
+});
+
+// A SAVED LOGIN IS NEVER OFFERED INTO A CREDENTIAL. Chrome ignored
+// autocomplete="off" on the provisioner token's password field and filled the
+// person's own sign-in password, which Connect would then have sealed as the
+// integration's credential. Mutation: pin @crewlethq/ui back to 0.89.1 and the
+// field reads "off" with no password-manager opt-out.
+test("a credential field refuses every saved login", () => {
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Cloudflare",
+          tool: {
+            ...tool,
+            key: "cloudflare",
+            requirements: [
+              req({
+                field: "api_token",
+                label: "Provisioner token",
+                kind: "secret",
+                connect: true,
+                secret_name: "CLOUDFLARE_API_TOKEN",
+                config_path: "integrations.cloudflare.provisioning.api_token",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Cloudflare"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const field = screen.getByLabelText(/Provisioner token/);
+  expect(field.getAttribute("type")).toBe("password");
+  expect(field.getAttribute("autocomplete")).toBe("new-password");
+  expect(field.hasAttribute("data-1p-ignore")).toBe(true);
+  expect(field.getAttribute("data-lpignore")).toBe("true");
+});
+
+// A VALUE THE ENGINE WILL NOT STORE AS TYPED IS SAID BESIDE ITS FIELD, in the
+// engine's words: a line break pasted into a token is invisible in the box,
+// and a banner over the form names no field. Mutation: drop invalid_input from
+// the located refusals and the sentence lands in the banner.
+test("an invalid_input refusal is shown against the field its path names", async () => {
+  const detail = "The token holds a line break. Paste only the token's value.";
+  stubFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          error: "invalid_input",
+          detail,
+          field: "api_token",
+          path: "integrations.cloudflare.provisioning.api_token",
+        }),
+        { status: 400 },
+      ),
+  );
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Cloudflare",
+          tool: {
+            ...tool,
+            key: "cloudflare",
+            requirements: [
+              req({
+                field: "api_token",
+                label: "Provisioner token",
+                kind: "secret",
+                connect: true,
+                secret_name: "CLOUDFLARE_API_TOKEN",
+                config_path: "integrations.cloudflare.provisioning.api_token",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Cloudflare"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const field = screen.getByLabelText(/Provisioner token/);
+  fireEvent.change(field, { target: { value: "cfat_example_value" } });
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  const said = await screen.findByText(detail);
+  const describedBy = (field.getAttribute("aria-describedby") ?? "").split(" ");
+  expect(describedBy).toContain(said.closest("[id]")!.id);
+  expect(screen.queryByRole("alert", { name: detail })).toBeNull();
 });
 
 // THE FORM SAYS WHAT CONNECTING DOES BEFORE IT ASKS FOR ANYTHING.
@@ -2653,6 +2745,8 @@ test("a key check posts the typed value and the form's other values, and shows t
   expect(
     verdict.closest(".crewlet-status")?.querySelector(".crewlet-status-dot--success"),
   ).toBeTruthy();
+  // THE WHOLE SENTENCE, wrapped: a verdict's remedy is at its end.
+  expect(verdict.closest(".crewlet-status")?.classList.contains("crewlet-status--wrap")).toBe(true);
 });
 
 // A SEAT'S KEY IS CHECKED AS THAT SEAT'S. A per-seat app's credential belongs
@@ -2818,6 +2912,51 @@ test("a requirement's check note is part of its help", () => {
   );
   const help = screen.getByText(/Paste the key\./);
   expect(help.textContent).toContain(note);
+});
+
+// A HELP OF SEVERAL LINES KEEPS THEM. Cloudflare's provisioner token says what
+// to create, then its account and zone permissions a line each; drawn as one
+// paragraph the groups ran together. Each line keeps its literals, and the
+// link still ends the last line. Mutation: render the help through marked()
+// alone and there is no line break.
+test("a requirement's help keeps its lines, and its link ends the last one", () => {
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Cloudflare",
+          tool: {
+            ...tool,
+            requirements: [
+              req({
+                field: "api_token",
+                label: "Provisioner token",
+                kind: "secret",
+                connect: true,
+                help:
+                  "An account API token Crewlet mints each agent's token from.\n" +
+                  "Account permissions: Account API Tokens: Edit and Account Settings: Read.\n" +
+                  "Sealed as CLOUDFLARE_API_TOKEN. Create one on your",
+                link_text: "account API tokens page",
+                vendor_url: "https://dash.cloudflare.com/profile/api-tokens",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Cloudflare"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const help = screen.getByText(/Crewlet mints each agent's token from\./).closest("div")!;
+  expect(help.querySelectorAll("br")).toHaveLength(2);
+  expect(help.textContent).toContain("from.Account permissions:");
+  expect(within(help).getByText("CLOUDFLARE_API_TOKEN").tagName).toBe("CODE");
+  within(help).getByRole("link", { name: "account API tokens page" });
+  const last = help.innerHTML.split("<br>").at(-1)!;
+  expect(last).toContain("Create one on your");
+  expect(last).toContain("account API tokens page</a>.");
 });
 
 /**

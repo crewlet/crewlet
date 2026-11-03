@@ -62,6 +62,34 @@ import (
 // marked and its result recorded hands the job that result; one that finds it
 // marked and no result says so, and the call is never made again, since it may
 // or may not have taken effect.
+//
+// IT FINDS THE MARK ON THE ROW ITS CLAIM READ ([HeldResume.Call]), and answers
+// from it before it holds the call to the tools and skills it carries the run
+// on with: those decide whether a call nobody has made may be made now, and a
+// call an earlier attempt made — its relaunch refused after it, say, by the
+// floor of the session it continued — is past deciding. A tool blocked or
+// changed, or a skill made required, while that attempt's answer waited to be
+// tried again must not tell the run a call it made was never made.
+//
+// # The call it makes is a call of its round
+//
+// The resume makes the call on the engine host, not the job over its bridge,
+// and the call is recorded beside every call the round's jobs made ([HeldMade],
+// [BridgeCall.Approved]): answered as the tool answered it, its arguments and
+// output left sealed on the held call. Every reader of whether the turn
+// replied reads the round's log — the collection's own delivery check, a
+// stop's or a loss's account of the turn, a later round's earlier calls — and
+// a call recorded nowhere but in the sealed result read as a reply that never
+// went out: a person told the agent did not answer them, and the next turn
+// invited to post it again.
+//
+// The row and the log are two keys, written in no one step
+// ([PendingStore.RecordHeldResult]): the result goes on the row with the
+// call's entry ([HeldCall.Call]), and the call is appended to the log after
+// it, once by the held call's id ([BridgeCall.HeldID]). An append that never
+// landed loses nothing: an ending reads the call off the row
+// ([PendingStore.TurnLog]), and the reset that opens the next job carries it
+// to that job's opening on the row ([PendingRun.OwedCall]), which appends it.
 
 // The three answers every held call offers, as a [decision.Option] id the
 // person's answer names ([HeldDecision]).
@@ -99,7 +127,10 @@ func heldMismatch(run PendingRun, given types.ExecutorAnswerGiven) bool {
 type HeldResume struct {
 	// TurnID is the run, which every seal of the call is bound to.
 	TurnID string
-	// Call is the held call as the claim read it.
+	// Call is the held call as the claim read it: marked, and its result
+	// recorded, where an earlier attempt at the same answer got that far,
+	// which the resume answers from before it asks anything else of the
+	// call, since nothing clears a mark while the claim holds the row.
 	Call HeldCall
 	// Choice is the answer: [HeldOnce], [HeldAlways] or [HeldDeny].
 	Choice string
@@ -107,8 +138,26 @@ type HeldResume struct {
 	// as the row then holds it and whether this mark is the first: false
 	// means some attempt marked it before, and it is not made again.
 	Mark func(ctx context.Context) (HeldCall, bool, error)
-	// Record records what the call returned, sealed.
-	Record func(ctx context.Context, sealed string) error
+	// Record records what the call came to: its result, sealed, and the
+	// call as its round's log keeps it.
+	Record func(ctx context.Context, made HeldMade) error
+}
+
+// HeldMade is what a held call came to once a person let it be made, as its
+// run's row records it ([PendingStore.RecordHeldResult]).
+type HeldMade struct {
+	// Result is what the call returned, sealed ([CallSeal.SealResult]), for
+	// the job that carries the work on.
+	Result string
+
+	// Call is the call as its round's log keeps it, in the shape every call
+	// a job made over its bridge takes ([BridgeLog.Calls]): whether
+	// it failed, and who answered it — its origin, server, source and a
+	// refusal's class — as the surface that made it said. The store names
+	// it, places it, marks it approved and names its held call
+	// ([BridgeCall.HeldID]); its arguments and output are never written
+	// beside it, since they ride the row sealed.
+	Call BridgeCall
 }
 
 // askedWith is [askedRun] with the claimed run's held call, where its question
@@ -125,8 +174,8 @@ func (c *Coordinator) askedWith(claimed PendingRun, words AnswerWords) *AskedRun
 		Mark: func(ctx context.Context) (HeldCall, bool, error) {
 			return c.pending.MarkHeldCall(ctx, turnID, launch, fence)
 		},
-		Record: func(ctx context.Context, sealed string) error {
-			recorded, err := c.pending.RecordHeldResult(ctx, turnID, launch, sealed, fence)
+		Record: func(ctx context.Context, made HeldMade) error {
+			recorded, err := c.pending.RecordHeldResult(ctx, turnID, launch, made, fence)
 			if err == nil && !recorded {
 				err = fmt.Errorf("%w: run %s", ErrHeldCallUnclaimed, turnID)
 			}
@@ -201,6 +250,13 @@ type HeldCall struct {
 	// and empty for good where the node making it stopped first.
 	Result string    `json:"result,omitempty"`
 	MadeAt time.Time `json:"made_at,omitzero"`
+
+	// Call is the call as its round's log keeps it, written with the
+	// result ([PendingStore.RecordHeldResult]): what the log is appended
+	// after the result, and what the next job's opening appends where that
+	// append never landed ([OwedCall]). Its arguments and output are never
+	// here.
+	Call *BridgeCall `json:"call,omitempty"`
 
 	// Extra is every key of the section this build does not know: see
 	// wirekeys.go.

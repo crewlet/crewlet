@@ -149,12 +149,12 @@ func TestAResumedRunsRepeatSpeltAnotherWayIsTheSameWrite(t *testing.T) {
 		w.write(firstWrite())
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 			buildOpts{calls: calls, register: register(w)})
-		surface, _, err := r.ReopenAgentRun(context.Background(), state(), bridged(), runner.Bridged{})
+		reopened, err := r.ReopenAgentRun(context.Background(), state(), bridged(), runner.Bridged{}, false)
 		if err != nil {
 			t.Fatalf("ReopenAgentRun: %v", err)
 		}
 		seeded(t, calls)
-		res, err := surface.Execute(context.Background(), llm.ToolCall{Name: "set_status",
+		res, err := reopened.Surface.Execute(context.Background(), llm.ToolCall{Name: "set_status",
 			Arguments: map[string]any{"item": "GP-12", "status": "draft"}})
 		if err != nil || res.Failed {
 			t.Fatalf("the repeat answered %+v (%v)", res, err)
@@ -182,14 +182,14 @@ func TestASeededSubmissionIsReadByTheSurfacesUniverse(t *testing.T) {
 		return map[string]any{"outcome": outcome, "summary": "posted the weekly summary",
 			"evidence": "the post is in the channel"}
 	}
-	surface, _, err := r.ReopenAgentRun(context.Background(), state, []runner.BridgedCall{
+	reopened, err := r.ReopenAgentRun(context.Background(), state, []runner.BridgedCall{
 		{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: submission(" Delivered "),
 			Result: "recorded"}, Seq: 1},
-	}, runner.Bridged{})
+	}, runner.Bridged{}, false)
 	if err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}
-	again := surface.ArgsOf(runner.SubmitWorkTool, submission("delivered")).Map()
+	again := reopened.Surface.ArgsOf(runner.SubmitWorkTool, submission("delivered")).Map()
 	if again["outcome"] != "delivered" {
 		t.Fatalf("the surface reads the submission as %v", again)
 	}

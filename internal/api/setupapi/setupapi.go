@@ -91,10 +91,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -429,6 +431,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// seat action that answers something other than the tab.
 	post("POST /setup/integrations/slack/access/seats/{handle}/{lane}/install",
 		authz.EffectCreates, s.accessInstall)
+	// A CREDENTIAL A PERSON CREATED AT THE VENDOR, checked and sealed for one
+	// agent: it rewrites the seat's sealed credential.
+	post("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential",
+		authz.EffectRewrites, s.accessCredential)
 	return errors.Join(failures...)
 }
 
@@ -891,6 +897,18 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		seats = credentialSeats(roster, s.resolve, at, "Datadog", s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
+	case integration.KindCloudflare:
+		block := company.Integrations.Cloudflare
+		summary = cloudflare.Summary()
+		reqs = cloudflare.Requirements(block, s.resolve)
+		at := cloudflareAt()
+		at.Identity = derivedIdentity(func(handle string) string {
+			return cloudflare.TokenName(company.Name, handle)
+		})
+		at.Configured = block != nil
+		seats = credentialSeats(roster, s.resolve, at, "Cloudflare", s.passes.Serves(kind))
+		configured = block != nil
+		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:
 		block := company.Integrations.GitHub
 		summary = github.Summary()
@@ -983,6 +1001,15 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "Mattermost",
 			s.passes.Serves(kind))
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindExpo:
+		// NO ROSTER HERE: no seat names an Expo credential in its document,
+		// and each agent's robot is listed on the integration's Agents tab
+		// from the access ledger.
+		block := company.Integrations.Expo
+		summary = expo.Summary()
+		reqs = expo.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:
@@ -1595,6 +1622,23 @@ func derivedIdentity(name func(handle string) string) func(*org.Role) string {
 	return func(role *org.Role) string {
 		return name(role.Handle())
 	}
+}
+
+// cloudflareAt is a seat's Cloudflare token where the engine binds it, the
+// header Cloudflare's server reads, with the binding's prefix taken off so the
+// sealed reference resolves as the reference it is.
+func cloudflareAt() seatCredentialAt {
+	at := mcpEnvAt([]string{cloudflare.SeatEnv}, cloudflare.CredentialKeys)
+	prefix := ""
+	if b, ok := config.SeatToolBindingFor(cloudflare.Backend); ok && len(b.Keys) > 0 {
+		prefix = b.Keys[0].Prefix
+	}
+	find := at.Find
+	at.Find = func(role *org.Role) (string, string) {
+		stored, where := find(role)
+		return strings.TrimSpace(strings.TrimPrefix(stored, prefix)), where
+	}
+	return at
 }
 
 // mattermostAt is the seat credential of a Mattermost bot, which lives on the
@@ -2359,6 +2403,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	var managed *configapi.ManagedError
 	var unanswered *configapi.ActivationUnknownError
 	var seal *setup.SealError
+	var value *setup.ValueError
 	var entity *configapi.EntityError
 	// THE NAMES SEALED BEFORE THE WRITE FAILED, on every answer to a write
 	// that failed after its first credential was sealed — a lost race, a
@@ -2380,6 +2425,8 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	switch {
 	case errors.As(err, &managed):
 		configapi.RefuseManaged(w, managed)
+	case errors.As(err, &value):
+		refuseValue(w, value)
 	case errors.As(err, &literal):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeLiteralInConfig, map[string]string{
 			"path": literal.Path,
@@ -2725,4 +2772,13 @@ func (s *Service) stateFor(
 		return state, false
 	}
 	return withLoopFindings(state, s.loopFindings(ctx, kind)), true
+}
+
+// refuseValue answers a value its field refuses, before anything was written
+// or sent: the caller's input, located at the field it was typed into, as a
+// literal in the config is. Its sentence never holds a credential.
+func refuseValue(w http.ResponseWriter, value *setup.ValueError) {
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
+		"detail": value.Problem, "field": value.Field, "path": value.ConfigPath,
+	})
 }

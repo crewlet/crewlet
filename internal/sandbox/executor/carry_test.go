@@ -130,7 +130,7 @@ func TestTheWrapperPinsClaudeCodesSessionLayout(t *testing.T) {
 	b := box(t, runner)
 	p := paths(b)
 	script := startAndScript(t, runner, b, sandbox.RunRequest{Brief: "x"})
-	unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE; ")
+	unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE DISABLE_AUTO_COMPACT DISABLE_COMPACT; ")
 	pinned := strings.Index(script, "export CLAUDE_CONFIG_DIR=")
 	start := strings.Index(script, "claude -p ")
 	if unset < 0 || pinned < unset || start < pinned {
@@ -186,13 +186,15 @@ func TestTheProjectDirectoryIsANameClaudeCodeTakes(t *testing.T) {
 // session is forked. A session the box holds is resumed wherever a release
 // filed it — under the pinned project directory, or under the one an older
 // release named after the box's working directory — and one the box does not
-// hold is never resumed: the run starts the session minted for it instead,
-// says why on its error stream and in what it reports, and reports that it did
-// not continue.
+// hold is never resumed: the run starts the session minted for it instead —
+// the one its start named as the session it starts of its own — says why on
+// its error stream and in what it reports, and reports that it did not
+// continue.
 //
 // Mutation: pass --session-id beside --resume, resume a session the box does
-// not hold, look for it under the pinned directory alone, or report no reason,
-// and a row goes red.
+// not hold, look for it under the pinned directory alone, report no reason, or
+// name in the run's handle a session of its own other than the one it falls
+// back to, and a row goes red.
 func TestAFreshRunNamesItsSessionAndAContinuedOneResumesIt(t *testing.T) {
 	t.Parallel()
 	const asked = "0f1e2d3c-4b5a-4968-8776-655443322110"
@@ -240,6 +242,18 @@ func TestAFreshRunNamesItsSessionAndAContinuedOneResumesIt(t *testing.T) {
 			if tc.resume != "" && handle.SessionID != asked {
 				t.Errorf("Start named the session %q, want the one it was asked to continue, %q",
 					handle.SessionID, asked)
+			}
+			// AND THE SESSION ITS SCRIPT STARTS OF ITS OWN in the continued
+			// one's place, which only a run that continues one names: the one
+			// a run that fell back was started under.
+			switch {
+			case tc.resume == "" && handle.FreshSessionID != "":
+				t.Errorf("a fresh run's start named a second session, %q", handle.FreshSessionID)
+			case tc.resume != "" && (handle.FreshSessionID == "" || handle.FreshSessionID == asked):
+				t.Errorf("a continuing run's start named %q as the session it starts of its own", handle.FreshSessionID)
+			case tc.fellBack != "" && starts != handle.FreshSessionID:
+				t.Errorf("the run fell back to %q, and its start named %q as the session it starts of its own",
+					starts, handle.FreshSessionID)
 			}
 			stderr := boxFile(t, b, paths(b).Err())
 			if said := strings.Contains(stderr, "starts a new session"); said != (tc.fellBack != "") ||
@@ -767,10 +781,12 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 // read off what `--version` printed; a capture the box holds is described for
 // the record's session. Only a record's first line of each key is its own,
 // since the release is written last as the harness printed it and may run on, and
-// an id no harness mints is no id.
+// an id no harness mints is no id — the record's, or one the harness reported,
+// whose output is as much the box's as the record is.
 //
 // Mutation: read the last line of a key, take the record's id over the harness's
-// own, or drop the reason, and a case goes red.
+// own, take the harness's whatever it is, drop the reason, or read a release
+// of any length, and a case goes red.
 func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -805,6 +821,18 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 		t.Errorf("the run reads session %q (%v), want its harness's own", res.SessionID, err)
 	}
 
+	// BUT ONLY ONE A HARNESS MINTS: a word the harness's output names that is
+	// no session id gives way to the record's.
+	for _, named := range []string{"../../.credentials.json", strings.Repeat("s", 129)} {
+		b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"`+
+			named+`"}`)
+		if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil ||
+			res.SessionID != "9a8b7c6d-0000-4000-8000-000000000001" {
+			t.Errorf("a harness that named %.40q (%d bytes) as its session read as %.40q (%v), want the record's",
+				named, len(named), res.SessionID, err)
+		}
+	}
+
 	// AN ID NO HARNESS MINTS is no id, and a capture is described for none.
 	b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"done"}`)
 	b.Put(p.SessionRecord(), "id ../../.credentials.json\ncontinued yes\nrelease 2.1.310 (Claude Code)\n")
@@ -822,6 +850,20 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 		res.FellBack != why {
 		t.Errorf("a run that started anew reads continued %v, fell back %q (%v); want %q", res.Continued,
 			res.FellBack, err, why)
+	}
+
+	// A RELEASE PAST WHAT THE EXECUTOR LOG RECORDS is none, on the run and on
+	// the capture it describes, which names its release for the log.
+	b.Put(p.SessionRecord(), "id 9a8b7c6d-0000-4000-8000-000000000001\ncontinued yes\nwhy \nrelease "+
+		strings.Repeat("2", 1<<10)+".1.310 (Claude Code)\n")
+	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil || res.HarnessVersion != "" ||
+		res.Captured == nil || res.Captured.Version != "" {
+		described := -1
+		if res.Captured != nil {
+			described = len(res.Captured.Version)
+		}
+		t.Errorf("a release a KiB long reads as %d bytes, and %d on the capture (%v); want none on either",
+			len(res.HarnessVersion), described, err)
 	}
 
 	// NO CAPTURE, NONE DESCRIBED — and none streamed.

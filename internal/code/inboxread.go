@@ -710,7 +710,7 @@ func noticeCardsIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[
 // change's row is changesByIDSQL's, which the readiness judges too, so a card
 // read reads code_changes once; noticeFindingsSQL reads each change's open agent
 // findings' severities by one covering seek of code_findings_open_agent_idx,
-// which holds those alone (replicated 0136) — never the change's every
+// which holds those alone (replicated 0137) — never the change's every
 // finding of every revision, superseded and dismissed ones included — counted
 // here rather than grouped by the statement, the rows being a page's changes'
 // open agent findings.
@@ -744,7 +744,7 @@ const (
 )
 
 // openAgentFindingsKey is code_findings_open_agent_idx, (change_id, severity,
-// state, raiser_kind) WHERE [openAgentFindings] (replicated 0136): a change's
+// state, raiser_kind) WHERE [openAgentFindings] (replicated 0137): a change's
 // open agent findings alone, every column the read names carried, so its
 // seek is covering.
 const openAgentFindingsKey = "code_findings_open_agent_idx"

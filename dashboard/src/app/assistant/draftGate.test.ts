@@ -146,11 +146,15 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",
   "routes/settings/AccessDialogs.tsx": "modal: an access change, in its dialog",
+  "routes/settings/integrations/access/HandoffSheet.tsx":
+    "modal: an agent's robot token pasted in its sheet, a credential and never a draft",
   "routes/worklet/NewProject.tsx": "modal: a new project's owner and key",
   "routes/worklet/NewTask.tsx": "modal: the one sheet every New task opens",
   "routes/settings/SecretDialog.tsx":
     "modal: a sealed secret's value, a credential and never a draft",
   "routes/settings/TakeBackupDialog.tsx": "modal: a backup's note, in its dialog",
+  "routes/settings/mcp-tools/flows/SignInDialog.tsx":
+    "modal: a sign-in's consent at the vendor; its one field is the callback address, read-only",
   "routes/settings/mcp-tools/flows/RemoveDialog.tsx":
     "modal: which stored values go with a server being removed, in its dialog",
   "routes/settings/mcp-tools/flows/TestDialog.tsx":

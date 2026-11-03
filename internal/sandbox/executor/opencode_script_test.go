@@ -44,10 +44,16 @@ import (
 //   - `api session.get` prints a held session's usage report on one line, and
 //     fails for any other, as OpenCode answers an id it does not hold;
 //   - `session export` prints a held session's export document — its info
-//     and its messages, or FAKE_SESSION_EXPORT where that is set, a document
-//     of a run's whole conversation for a case that reads one back — and
-//     fails for any other, recording in `exported` the
-//     session and whether the server was still serving; `session import` keeps the
+//     and its messages, those `export-messages` in the case's directory holds
+//     where it is there — or FAKE_SESSION_EXPORT where that is set, a
+//     document of a run's whole conversation for a case that reads one back
+//     — through the server or with `--standalone` beside it, and fails for
+//     any other, recording in `exported` the session and whether the server
+//     was still serving; it takes FAKE_SESSION_EXPORT_SLEEP seconds before it
+//     prints where that is set, the file `packing` saying it has begun — a
+//     pack under way that a case can time a signal into, with no stand-in for
+//     a packer such as `gzip`, which a busybox that prefers its own applets
+//     runs past whatever the PATH holds; `session import` keeps the
 //     file it was handed (`imported-session`) and the directory it was told
 //     (`import-directory`), and holds the session the file names and prints
 //     `Imported session: <id>`, as 2.0.32 does — or, where FAKE_IMPORT is
@@ -59,6 +65,10 @@ import (
 //   - `api session.inbox.list` prints FAKE_INBOX, or an empty inbox, and
 //     `api session.inbox.cancel` records in `cancelled` the session, the item
 //     and whether the server was still serving — `serving` or `stopped`;
+//   - `api session.interrupt` records in `interrupted` the session and
+//     whether the server was serving, and answers as 2.0.32 does — which
+//     ends a run working in that session, where FAKE_RUN_UNTIL names
+//     `interrupted`;
 //   - `auth import` keeps what it was given as its database, and `auth export`
 //     prints that database, whether through the server or beside it — taking
 //     FAKE_EXPORT_SLEEP seconds over it where that is set, the file
@@ -68,7 +78,9 @@ import (
 //     FAKE_REFRESH in the database where that is set — a login refreshed
 //     mid-run — and
 //     then works for FAKE_RUN_SLEEP seconds, and until the case's directory holds
-//     the file FAKE_RUN_UNTIL names, before it exits. Where only FAKE_RUN_SLEEP
+//     the file FAKE_RUN_UNTIL names, before it exits — with FAKE_RUN_TERM_EXIT
+//     where a SIGTERM ends it first, as a client given one exits with a status
+//     of its own. Where only FAKE_RUN_SLEEP
 //     is set, the run BECOMES the sleep (`exec`), because every case that sets
 //     it ends the run by a signal, and a shell left in front of the sleep can
 //     swallow one: the fake is a `#!/bin/sh` script, dash catches SIGINT in a
@@ -113,6 +125,10 @@ auth)
 serve)
   printf '%s|%s' "${OPENCODE_PASSWORD:-}" "${OPENCODE_SERVER_PASSWORD:-}" > "$d/serve-env"
   printf '%s' "${OPENCODE_CONFIG_CONTENT-}" > "$d/serve-config"
+  if [ -n "${FAKE_VALUES:-}" ]; then
+    cat "$FAKE_VALUES/v1" > "$d/served-value" 2> /dev/null
+    if [ -e "$FAKE_VALUES-fresh" ]; then echo yes; else echo no; fi > "$d/served-beside-other"
+  fi
   echo $$ > "$d/serve.pid"
   [ "${FAKE_SERVE:-}" != silent ] || exec sleep 60
   if [ "${FAKE_SERVE:-}" = password-first ]; then
@@ -148,15 +164,21 @@ api)
   session.inbox.cancel)
     if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then served=serving; else served=stopped; fi
     echo "${3#sessionID=} ${5#inboxID=} $served" >> "$d/cancelled" ;;
+  session.interrupt)
+    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then served=serving; else served=stopped; fi
+    echo "${3#sessionID=} $served" >> "$d/interrupted"
+    echo '{"interrupted":true}' ;;
   esac ;;
 session)
   case "$2" in
   export)
-    [ "$3" != --server ] || authed
-    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$5 serving" >> "$d/exported"; else echo "$5 stopped" >> "$d/exported"; fi
-    held "$5" || { echo "Error: Session not found: $5" >&2; exit 1; }
+    if [ "$3" = --standalone ]; then id=$4; else [ "$3" != --server ] || authed; id=$5; fi
+    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
+    held "$id" || { echo "Error: Session not found: $id" >&2; exit 1; }
+    if [ -n "${FAKE_SESSION_EXPORT_SLEEP:-}" ]; then : > "$d/packing"; sleep "$FAKE_SESSION_EXPORT_SLEEP"; fi
     if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then printf '%s\n' "$FAKE_SESSION_EXPORT"; else
-      printf '{"info":{"id":"%s","title":"crewlet"},"messages":[{"id":"msg_1","type":"user","text":"fix the flake"}]}\n' "$5"; fi ;;
+      msgs=$(cat "$d/export-messages" 2> /dev/null) || msgs='[{"id":"msg_1","type":"user","text":"fix the flake"}]'
+      printf '{"info":{"id":"%s","title":"crewlet"},"messages":%s}\n' "$id" "$msgs"; fi ;;
   import)
     shift 2; dir=
     while [ $# -gt 1 ]; do case "$1" in --directory) dir=$2; shift 2;; *) shift;; esac; done
@@ -180,6 +202,7 @@ run)
   cat > "$d/brief"
   printf '%s' "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" > "$d/run-password"
   if [ -n "${FAKE_REFRESH+set}" ]; then printf '%s' "$FAKE_REFRESH" > "$d/db"; fi
+  [ -z "${FAKE_RUN_TERM_EXIT:-}" ] || trap 'exit "$FAKE_RUN_TERM_EXIT"' TERM
   : > "$d/refreshed"
   echo '{"type":"text","part":{"text":"done"}}'
   [ -z "${FAKE_RUN_SLEEP:-}" ] || [ -n "${FAKE_RUN_UNTIL:-}" ] || exec sleep "$FAKE_RUN_SLEEP"
@@ -218,6 +241,17 @@ type scriptOpts struct {
 	// the session ([executor.Paths.SessionDigests]), as a box that packed
 	// or restored that export keeps it.
 	ownsCarried bool
+	// freshBrief, where set, is the brief a session of the run's own is
+	// handed, written where [executor.Paths.FreshBrief] names it as a run's
+	// start would have written it ([sandbox.RunRequest.FreshBrief]).
+	freshBrief string
+	// values and freshValues, where set, are the run's first configuration
+	// value under the continued session's bridge token and under a session
+	// of its own's, written where [executor.Paths.OpenCodeValues] and
+	// [executor.Paths.OpenCodeValuesFresh] name them as WriteConfig would have
+	// ([sandbox.RunRequest.FreshWiring]); the fake's server records which it
+	// started on, and whether the other was still in the box.
+	values, freshValues string
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -316,6 +350,25 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			keepDigest(t, paths, session.ID, packed)
 		}
 	}
+	if o.freshBrief != "" {
+		if err := os.WriteFile(paths.FreshBrief(), []byte(o.freshBrief), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var env []string
+	for dir, value := range map[string]string{paths.OpenCodeValues(): o.values,
+		paths.OpenCodeValuesFresh(): o.freshValues} {
+		if value == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "v1"), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env = []string{"FAKE_VALUES=" + paths.OpenCodeValues()}
+	}
 	command := executor.OpenCode{}.Command(o.req, session, paths, "")
 	if o.times != nil {
 		command = executor.OpenCodeCommandTimed(o.req, session, paths, *o.times)
@@ -330,9 +383,9 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	args := append(append([]string{}, argv[1:]...), "-c", script)
 	j.cmd = exec.Command(argv[0], args...) //nolint:gosec // the script under test
 	j.cmd.Dir = dir
-	j.cmd.Env = append([]string{
+	j.cmd.Env = append(append([]string{
 		"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + home, "FAKE_DIR=" + dir,
-	}, o.env...)
+	}, env...), o.env...)
 	j.cmd.Stdin = strings.NewReader(`fix "the" flake`)
 	j.cmd.Stdout, j.cmd.Stderr = &j.stdout, &j.stderr
 	j.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -375,6 +428,24 @@ func startPieces(t *testing.T, sh boxShell, body string) *scriptJob {
 	go func() { j.exited <- j.cmd.Wait() }()
 	t.Cleanup(func() { _ = syscall.Kill(-j.cmd.Process.Pid, syscall.SIGKILL) })
 	return j
+}
+
+// signalScript sends sig to the script ALONE, by the pid it published as its
+// end protocol's ([executor.Paths.JobScript]), as the engine's end request
+// reaches it: the case fails where the script published none, or a pid that is
+// not its own.
+func (j *scriptJob) signalScript(sig syscall.Signal) {
+	j.t.Helper()
+	raw, err := os.ReadFile(j.paths.JobScript())
+	if err != nil {
+		j.t.Fatalf("the script published no end protocol: %v", err)
+	}
+	if want := "1 " + strconv.Itoa(j.cmd.Process.Pid) + "\n"; string(raw) != want {
+		j.t.Fatalf("the script published %q, want %q: its own pid under protocol 1", raw, want)
+	}
+	if err := syscall.Kill(j.cmd.Process.Pid, sig); err != nil {
+		j.t.Fatalf("signalling the script with %v: %v", sig, err)
+	}
 }
 
 // signal sends sig to the script's whole process group, as a teardown does.
@@ -631,9 +702,10 @@ func forEachShell(t *testing.T, test func(t *testing.T, sh boxShell)) {
 // files a run's script leaves there that holds no login: the run's
 // configuration ([scriptConfig], as WriteConfig would have left it), its record
 // of its session, its session's export and the digests of the exports the box
-// holds.
+// holds, and its end protocol's records — its pid, and how it was ended.
 func loginFree(p executor.Paths, name string) bool {
-	for _, path := range []string{p.OpenCodeConfig(), p.SessionRecord(), p.SessionCapture(), p.SessionDigests()} {
+	for _, path := range []string{p.OpenCodeConfig(), p.SessionRecord(), p.SessionCapture(), p.SessionDigests(),
+		p.JobScript(), p.JobEnded()} {
 		if name == filepath.Base(path) {
 			return true
 		}
@@ -1590,5 +1662,148 @@ func TestOpenCodeOneIsRefusedByName(t *testing.T) {
 		if run.callIndex("serve ") >= 0 || run.callIndex("run ") >= 0 {
 			t.Errorf("a 1.x box was driven anyway:\n%s", strings.Join(run.calls, "\n"))
 		}
+	})
+}
+
+// AN ENDED OPENCODE RUN EXPORTS ITS SESSION BEFORE ITS SERVER STOPS. The end
+// request reaches the run's script alone, by the pid it published: the script
+// interrupts its session through its own server first — which settles the step
+// in flight, so the export holds it — then ends the run's client, records the
+// end, and goes on to its own tail while the server still serves: what the
+// plugin admitted and the session never delivered cancelled, the session's
+// usage asked, the session exported through the server, the refreshed login
+// exported through it too, and only then the server stopped. The run's exit is
+// its client's own.
+//
+// Mutations: drop the interrupt, and no step is settled before the export; stop
+// the server before the export, and the export is recorded beside a stopped
+// server.
+func TestAnEndedOpenCodeRunExportsItsSessionBeforeItsServerStops(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		j := startScript(t, scriptOpts{
+			shell: sh,
+			login: seededLogin,
+			req:   sandbox.RunRequest{Steer: steerWiring},
+			// A CLIENT THAT EXITS 7 whichever way it is ended — interrupted,
+			// or told by SIGTERM — so its status is known whichever lands
+			// first.
+			env: []string{"FAKE_REFRESH=" + refreshedLogin, "FAKE_RUN_UNTIL=interrupted",
+				"FAKE_RUN_EXIT=7", "FAKE_RUN_TERM_EXIT=7"},
+			// A sync that never comes round, so only the end's export can have
+			// written the document.
+			times: &executor.OpenCodeTimes{Sync: time.Hour},
+		})
+		j.await("the run to start", func() bool {
+			_, err := os.Stat(filepath.Join(j.dir, "refreshed"))
+			return err == nil
+		})
+		j.signalScript(syscall.SIGUSR1)
+		run := j.waitWithin(promptEnd, "an ended run waited on something its end had already stopped")
+		if run.code != 7 {
+			t.Errorf("exit %d, want the client's own 7:\n%s", run.code, run.stderr)
+		}
+		if ended := readIn(t, run.home+"/.crewlet", "job-ended"); ended != "asked\n" {
+			t.Errorf("the job's end is recorded as %q, want asked", ended)
+		}
+		interrupt := run.callIndex("api --server http://127.0.0.1:4242 session.interrupt ")
+		inbox := run.callIndex("api --server http://127.0.0.1:4242 session.inbox.list ")
+		usage := run.callIndex("api --server http://127.0.0.1:4242 session.get ")
+		exported := run.callIndex("session export --server ")
+		login := run.callIndex("auth export --server ")
+		if interrupt < 0 || inbox < interrupt || usage < inbox || exported < usage || login < exported {
+			t.Fatalf("want the session interrupted, its leftover notes listed, its usage asked, it exported "+
+				"and the login exported, in that order:\n%s", strings.Join(run.calls, "\n"))
+		}
+		if got := readIn(t, run.dir, "interrupted"); !strings.HasSuffix(got, " serving\n") {
+			t.Errorf("the session was interrupted beside a server recorded %q", got)
+		}
+		if got := readIn(t, run.dir, "exported"); !strings.HasSuffix(got, " serving\n") {
+			t.Errorf("the session was exported beside a server recorded %q, want serving", got)
+		}
+		if run.document != refreshedLogin {
+			t.Errorf("after the end the box's login is %q, want the refreshed one", run.document)
+		}
+		if _, err := os.Stat(j.paths.SessionCapture()); err != nil {
+			t.Errorf("the ended run left no capture: %v\n%s", err, run.stderr)
+		}
+		assertServerStopped(t, run.dir)
+		j.assertGroupGone()
+	})
+}
+
+// AN OPENCODE RUN ASKED TO END AS ITS SERVER STARTS GOES AT ONCE: a request
+// that comes while the script waits for its server to say where it listens
+// starts no run, records the job as ended before its harness started, and the
+// script goes — the server it started stopped by its EXIT trap — rather than
+// waiting out the listen bound for a server it will never use.
+//
+// Mutation: drop the request's check in the listen loop, and the script waits
+// out the whole minute.
+func TestAnOpenCodeRunAskedToEndAsItsServerStartsGoesAtOnce(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		j := startScript(t, scriptOpts{shell: sh, env: []string{"FAKE_SERVE=silent"}})
+		j.await("the server to start", func() bool {
+			_, err := os.Stat(filepath.Join(j.dir, "serve.pid"))
+			return err == nil
+		})
+		j.signalScript(syscall.SIGUSR1)
+		run := j.waitWithin(promptEnd, "a run asked to end waited for a server it would never use")
+		if run.code != 143 {
+			t.Errorf("exit %d, want 143:\n%s", run.code, run.stderr)
+		}
+		if ended := readIn(t, run.home+"/.crewlet", "job-ended"); ended != "before\n" {
+			t.Errorf("the job's end is recorded as %q, want before", ended)
+		}
+		if run.callIndex("run ") >= 0 {
+			t.Errorf("a run asked to end before its server listened started one:\n%s",
+				strings.Join(run.calls, "\n"))
+		}
+		if !strings.Contains(readIn(t, run.home+"/.crewlet", "session"), "id ses_") {
+			t.Error("the run asked to end before its server listened recorded no session")
+		}
+		assertServerStopped(t, run.dir)
+		j.assertGroupGone()
+	})
+}
+
+// A SECOND END REQUEST LEAVES THE PACK WHOLE: once a run's end is under way the
+// script ignores the request, so one that comes while it packs — a read that
+// asked again — neither kills the script nor cuts the archive it is writing,
+// and the run's exit is what it would have been.
+//
+// Mutation: put the request back to its default once the end is under way
+// rather than ignoring it, and the second request kills the script mid-pack.
+func TestASecondEndRequestLeavesThePackWhole(t *testing.T) {
+	t.Parallel()
+	t.Run("opencode", func(t *testing.T) {
+		t.Parallel()
+		forEachShell(t, func(t *testing.T, sh boxShell) {
+			j := startScript(t, scriptOpts{shell: sh,
+				env: []string{"FAKE_RUN_UNTIL=interrupted", "FAKE_RUN_EXIT=7", "FAKE_RUN_TERM_EXIT=7",
+					"FAKE_SESSION_EXPORT_SLEEP=1"}})
+			j.await("the run to start", func() bool {
+				_, err := os.Stat(filepath.Join(j.dir, "refreshed"))
+				return err == nil
+			})
+			j.signalScript(syscall.SIGUSR1)
+			j.await("the pack to begin", func() bool {
+				_, err := os.Stat(filepath.Join(j.dir, "packing"))
+				return err == nil
+			})
+			j.signalScript(syscall.SIGUSR1)
+			run := j.waitWithin(promptEnd, "a second request held the run up")
+			if run.code != 7 {
+				t.Errorf("exit %d, want the client's own 7:\n%s", run.code, run.stderr)
+			}
+			raw, err := os.ReadFile(j.paths.SessionCapture())
+			if err != nil {
+				t.Fatalf("the run left no capture: %v\n%s", err, run.stderr)
+			}
+			if doc := string(gunzipped(t, raw)); !strings.HasPrefix(doc, `{"info":{"id":"ses_`) {
+				t.Errorf("the capture is not the session's whole export: %q", doc)
+			}
+		})
 	})
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // A COMPANY APPLIED AFTER BOOT IS SERVED WHOLE: every native surface the API
@@ -143,10 +144,10 @@ func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 	const token = "a-test-token-long-enough-for-tier-a"
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
 		// THE CASE'S OWN, never the machine's: an explicit cache budget and
-		// a pinned transfer lane, so the room this node's disk has and the
-		// cores it runs on decide nothing about whether it hosts code.
-		b.Git.CacheMaxBytes = config.GitCacheMaxBytesFloor
-		b.Git.MaxTransfers = 4
+		// a pinned transfer lane ([brokertest.CodeCacheIn]), so the room this
+		// node's disk has beside the declared broker and the cores it runs on
+		// decide nothing about whether it hosts code.
+		brokertest.CodeCacheIn(&b.Git)
 	})
 	n.reconcile()
 	repo := n.base + "/git/web.git"
@@ -260,8 +261,7 @@ func TestANodeWhoseCodeHostCannotStartSaysSo(t *testing.T) {
 	}
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
 		b.Git.CacheDir = occupied
-		b.Git.CacheMaxBytes = config.GitCacheMaxBytesFloor
-		b.Git.MaxTransfers = 4
+		brokertest.CodeCacheIn(&b.Git)
 	})
 	n.reconcile()
 	n.put(companyYAML + `  - name: Founder

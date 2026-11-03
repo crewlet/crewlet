@@ -738,7 +738,7 @@ func countSeatDays(ctx context.Context, tx *sql.Tx, at applyContext, pushes []Pu
 // answers how many it removed.
 //
 // OLDEST BY POSITION, STOPPING AT THE FIRST INSIDE THE HORIZON. The rows are
-// read in log order (code_pushes_repo_idx, replicated 0083) and taken while
+// read in log order (code_pushes_repo_idx, replicated 0084) and taken while
 // their instant is before the horizon, and the first row that is not ends the
 // read. NEVER A FILTER ON THE INSTANT: the index orders by position, so `at <
 // ?` seeks nothing there, and over position order it would walk the

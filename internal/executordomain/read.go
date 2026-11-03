@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -84,6 +85,13 @@ type Session struct {
 	Home      string
 	Workspace string
 
+	// ContextTokens and Interrupted are the newest capture's: the whole
+	// input of its session's last request, and whether its harness was cut
+	// off ([Capture.ContextTokens], [Capture.Interrupted]). Zero on a row
+	// nothing was captured into, and on one captured by a build before them.
+	ContextTokens int64
+	Interrupted   bool
+
 	// CapturedAt is the broker's instant for the newest capture, zero on a
 	// row nothing was captured into.
 	CapturedAt time.Time
@@ -94,12 +102,19 @@ type Session struct {
 	ReadThrough statelog.Position
 	Absorbs     []string
 
+	// BaseTurn is the ended turn of the conversation whose session the
+	// turn's first read froze to continue, as the turn's `begin` recorded it
+	// ([Begin]); empty where the read named none, the base had moved before
+	// the begin landed, or no begin landed. While the row is live and names
+	// no capture, it HOLDS that turn's row against every release.
+	BaseTurn string
+
 	// EndedAt and EndedAtPosition are the end's broker instant and its
 	// position on the log, both zero while the turn is live; Ending is how
 	// it ended, nil until then.
 	EndedAt         time.Time
 	EndedAtPosition statelog.Position
-	Ending          *Ending
+	Ending          *executorkeep.Ending
 
 	// AskExcerpt is what the turn was asked: somebody else's words.
 	AskExcerpt string `untrusted:"fence"`
@@ -111,6 +126,27 @@ func (s Session) Ended() bool { return s.Ending != nil }
 // HasObject reports a row that names a session's object.
 func (s Session) HasObject() bool { return !s.Object.Key.IsZero() }
 
+// Kept is the row as continuing its turn's kept session reads it
+// ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
+// view of it, which the engine's restore and the read surface both make, so a
+// reader of whether a relaunch would continue the session decides on the
+// fields the relaunch does.
+func (s Session) Kept() executorkeep.TurnRow {
+	return executorkeep.TurnRow{
+		Handle: s.Handle, Turn: s.Turn,
+		Harness: s.Harness, HarnessVersion: s.HarnessVersion, SessionID: s.SessionID,
+		ArchiveFormat: s.ArchiveFormat, LaunchSeq: s.LaunchSeq, CaptureSeq: s.CaptureSeq,
+		Object: s.Object, Ended: s.Ended(),
+	}
+}
+
+// RelaunchRead is the level a relaunch reads its turn's row at, and so the
+// level every reader of whether a relaunch would continue the turn's session
+// decides on (internal/sandbox's ReadContinuityOf): the capture it continues
+// may have been recorded by another node's keep, which this node's copy may
+// not have applied yet.
+func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
+
 // rowScanner is one row, from a query or a query row.
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -119,7 +155,8 @@ type rowScanner interface{ Scan(dest ...any) error }
 const sessionColumns = `agent_handle, turn_id, conversation_key, work_key, harness,
 	harness_version, session_id, object, object_hash, object_size, content_key,
 	archive_format, launch_seq, capture_seq, home, workspace, captured_at,
-	read_through, absorbs, ended_at, end_seq, outcome, delivered, ending, ask_excerpt`
+	read_through, absorbs, ended_at, end_seq, outcome, delivered, ending, ask_excerpt,
+	base_turn, context_tokens, interrupted`
 
 // scanSession reads one row.
 func scanSession(row rowScanner) (Session, error) {
@@ -133,15 +170,16 @@ func scanSession(row rowScanner) (Session, error) {
 		outcome, ending       string
 		absorbs               string
 		delivered             int
+		interrupted           int
 	)
 	if err := row.Scan(&s.Handle, &s.Turn, &s.ConversationKey, &s.WorkKey, &s.Harness,
 		&s.HarnessVersion, &s.SessionID, &object, &hash, &size, &s.ContentKey,
 		&s.ArchiveFormat, &s.LaunchSeq, &s.CaptureSeq, &s.Home, &s.Workspace, &captured,
 		&readThrough, &absorbs, &endedAt, &endSeq, &outcome, &delivered, &ending,
-		&s.AskExcerpt); err != nil {
+		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted); err != nil {
 		return Session{}, err
 	}
-	s.Absorbs = splitAbsorbs(absorbs)
+	s.Absorbs, s.Interrupted = splitAbsorbs(absorbs), interrupted == 1
 	stream := Domain{}.Stream().Name
 	if object.Valid {
 		key, err := objstore.ParseKey(object.String)
@@ -165,7 +203,7 @@ func scanSession(row rowScanner) (Session, error) {
 	if endSeq.Valid {
 		s.EndedAt = store.DecodeTime(endedAt.Int64)
 		s.EndedAtPosition = statelog.Unpack(stream, endSeq.Int64)
-		var e Ending
+		var e executorkeep.Ending
 		if err := json.Unmarshal([]byte(ending), &e); err != nil {
 			return Session{}, fmt.Errorf("executordomain: %s's turn %s's ending: %w",
 				s.Handle, s.Turn, err)
@@ -173,7 +211,7 @@ func scanSession(row rowScanner) (Session, error) {
 		// THE COLUMNS ARE THE ACCOUNT: the outcome as the row was ended
 		// with, and whether a reply went out, which a dedupe merges into
 		// the row rather than into the ending's bytes.
-		e.Outcome, e.Delivered = Outcome(outcome), delivered == 1
+		e.Outcome, e.Delivered = executorkeep.Outcome(outcome), delivered == 1
 		s.Ending = &e
 	}
 	return s, nil
@@ -397,6 +435,13 @@ func checkSeat(handle, conversationKey string) error {
 type SessionRead struct {
 	Session Session
 
+	// Head is the head of the row's conversation as the same read saw it —
+	// the turn whose session that conversation's next turn would continue —
+	// empty where the conversation has none, or the row has no conversation:
+	// so whether the row is its conversation's head is decided from the
+	// snapshot the row was read in, never from a second read.
+	Head string
+
 	// Position is the checkpoint the row was read at, and Complete the
 	// read's own word on whether a record this node could not decode may be
 	// missing from it — which a point read the ladder served never is: such
@@ -434,9 +479,17 @@ func (r *Reader) Session(ctx context.Context, handle, turn string,
 		}
 		return ConversationScope(handle, key, turn), nil
 	}
-	var out *Session
+	var (
+		out  *Session
+		head string
+	)
 	answer, err := r.log.Read(ctx, fresh.Resolved(resolve, false), func(tx *sql.Tx) (readErr error) {
-		out, readErr = oneSession(ctx, tx, sessionStatement, handle, turn)
+		head = ""
+		if out, readErr = oneSession(ctx, tx, sessionStatement, handle, turn); readErr != nil || out == nil {
+			return readErr
+		}
+		heads, readErr := headsOf(ctx, tx, handle, []Session{*out})
+		head = heads[out.ConversationKey]
 		return readErr
 	})
 	switch {
@@ -445,12 +498,50 @@ func (r *Reader) Session(ctx context.Context, handle, turn string,
 	case out == nil:
 		return SessionRead{}, fmt.Errorf("%w: %s's turn %s", ErrNotFound, handle, turn)
 	}
-	return SessionRead{Session: *out, Position: answer.Position, Complete: answer.Complete}, nil
+	return SessionRead{Session: *out, Head: head, Position: answer.Position,
+		Complete: answer.Complete}, nil
+}
+
+// headsOf is the head of every distinct conversation sessions name, keyed by
+// the conversation's key: the turn the conversation's head statement answers
+// ([Reader.Head]'s own), or "" where the conversation has none. A row with no
+// conversation names none, and is not keyed.
+//
+// ONE SEEK PER CONVERSATION, in the caller's transaction, after its rows are
+// read: never the newest ended row among the rows in hand, since the head of a
+// conversation a page shows one turn of may be on no page at all.
+func headsOf(ctx context.Context, tx *sql.Tx, handle string, sessions []Session) (map[string]string, error) {
+	var out map[string]string
+	for _, s := range sessions {
+		if s.ConversationKey == "" {
+			continue
+		}
+		if _, read := out[s.ConversationKey]; read {
+			continue
+		}
+		head, err := oneSession(ctx, tx, headStatement, handle, s.ConversationKey)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[s.ConversationKey] = ""
+		if head != nil {
+			out[s.ConversationKey] = head.Turn
+		}
+	}
+	return out, nil
 }
 
 // Page is one page of a seat's sessions.
 type Page struct {
 	Sessions []Session
+
+	// Heads is the head of every conversation the page's rows name, by the
+	// conversation's key, read in the page's own transaction ([headsOf]):
+	// "" for a conversation with none, and nil for a page naming none.
+	Heads map[string]string
 
 	// Next is the cursor of the page after this one, empty on the last.
 	Next string
@@ -516,7 +607,9 @@ func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 			out.Sessions = out.Sessions[:limit]
 			out.Next = strconv.FormatInt(begun[limit-1], 10)
 		}
-		return nil
+		var headErr error
+		out.Heads, headErr = headsOf(ctx, tx, handle, out.Sessions)
+		return headErr
 	})
 	if err != nil {
 		return Page{}, err
@@ -578,13 +671,30 @@ const (
 		SELECT agent_handle, '', '', at
 		FROM executor_seat_removals WHERE at <= ?
 		ORDER BY at, agent_handle LIMIT ?`
+
+	// heldEverywhereStatement is every base a live turn holds, in every
+	// seat: a pass over the bases' index, which holds only those rows.
+	heldEverywhereStatement = `
+		SELECT agent_handle, base_turn FROM executor_sessions INDEXED BY ` + heldIdx + `
+		WHERE end_seq IS NULL AND launch_seq = 0 AND base_turn <> ''`
 )
+
+// heldTurn is one turn of one seat a live turn holds as its base.
+type heldTurn struct{ handle, turn string }
 
 // Expired nominates at most limit things last touched at or before cutoff, the
 // longest untouched first: turns whose row or (row-less) tombstone is that old,
 // and removed seats whose removal is. It is the retention duty's listing, and
 // reads this node's copy at `stale`: it only nominates, and every delete is
 // decided again in its own snapshot and at the apply.
+//
+// A ROW A LIVE TURN HOLDS AS ITS BASE IS LEFT OUT, however old: its delete
+// would be refused ([expiredIn]), and listed it would fill the duty's page on
+// every pass while it holds, so the rows past it would never be reached. The
+// holds are read in the listing's own transaction, and the rows asked for as
+// many more as there are holds, so a page the held rows would fill still holds
+// limit of the rest — decided here row by row rather than by a subquery of the
+// listing's statement.
 func (r *Reader) Expired(ctx context.Context, cutoff time.Time, limit int) ([]Expiry, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -593,10 +703,19 @@ func (r *Reader) Expired(ctx context.Context, cutoff time.Time, limit int) ([]Ex
 	var out []Expiry
 	_, err := r.log.Read(ctx, stale.Query(DomainScope(), true), func(tx *sql.Tx) error {
 		out = nil
-		for _, query := range []string{
-			expiredRowsStatement, expiredTombsStatement, expiredRemovalsStatement,
+		holds, holdErr := heldEverywhere(ctx, tx)
+		if holdErr != nil {
+			return holdErr
+		}
+		for _, query := range []struct {
+			statement string
+			limit     int
+		}{
+			{expiredRowsStatement, limit + len(holds)},
+			{expiredTombsStatement, limit},
+			{expiredRemovalsStatement, limit},
 		} {
-			rows, queryErr := tx.QueryContext(ctx, query, at, limit)
+			rows, queryErr := tx.QueryContext(ctx, query.statement, at, query.limit)
 			if queryErr != nil {
 				return queryErr
 			}
@@ -608,6 +727,9 @@ func (r *Reader) Expired(ctx context.Context, cutoff time.Time, limit int) ([]Ex
 				if scanErr := rows.Scan(&e.Handle, &e.ConversationKey, &e.Turn, &last); scanErr != nil {
 					_ = rows.Close()
 					return scanErr
+				}
+				if holds[heldTurn{e.Handle, e.Turn}] {
+					continue
 				}
 				e.At = store.DecodeTime(last)
 				out = append(out, e)
@@ -629,6 +751,24 @@ func (r *Reader) Expired(ctx context.Context, cutoff time.Time, limit int) ([]Ex
 	return out, nil
 }
 
+// heldEverywhere is every turn a live turn holds as its base, in every seat.
+func heldEverywhere(ctx context.Context, tx *sql.Tx) (map[heldTurn]bool, error) {
+	rows, err := tx.QueryContext(ctx, heldEverywhereStatement)
+	if err != nil {
+		return nil, err
+	}
+	out := map[heldTurn]bool{}
+	for rows.Next() {
+		var h heldTurn
+		if scanErr := rows.Scan(&h.handle, &h.turn); scanErr != nil {
+			_ = rows.Close()
+			return nil, scanErr
+		}
+		out[h] = true
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
 // unendedStatement is the turns that never ended, the longest untouched
 // first, through the index over exactly those rows.
 const unendedStatement = `
@@ -636,12 +776,13 @@ const unendedStatement = `
 	FROM executor_sessions WHERE end_seq IS NULL AND last_at <= ?
 	ORDER BY last_at, agent_handle, turn_id LIMIT ?`
 
-// Unended nominates at most limit turns that never ended and whose last
-// capture was at or before before, the longest untouched first: the retention
-// duty's listing of turns whose end may have been lost. It reads this node's
-// copy at `stale` and only nominates: the duty leaves out every turn whose run
-// the fleet still holds, and an end it publishes is decided again in its own
-// snapshot, where one that landed since refuses it.
+// Unended nominates at most limit turns that never ended and whose last record
+// (their newest capture, or the begin of a turn that captured nothing) was at
+// or before before, the longest untouched first: the retention duty's listing
+// of turns whose end may have been lost. It reads this node's copy at `stale`
+// and only nominates: the duty leaves out every turn whose run the fleet still
+// holds, and an end it publishes is decided again in its own snapshot, where
+// one that landed since refuses it.
 func (r *Reader) Unended(ctx context.Context, before time.Time, limit int) ([]Expiry, error) {
 	if limit <= 0 {
 		return nil, nil

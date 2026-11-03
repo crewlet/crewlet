@@ -355,6 +355,10 @@ const (
 	CodeSeatRequired Code = "seat_required"
 	// CodeNoSuchSeat is a seat the company does not hold.
 	CodeNoSuchSeat Code = "no_such_seat"
+	// CodeSeatNotGranted is an agent seat an MCP server is not given, named
+	// for a gesture on that seat's instance of it: a test, a restart or a
+	// value. Nothing runs the server as that seat, so there is nothing to act on.
+	CodeSeatNotGranted Code = "seat_not_granted"
 	// CodeLiteralInConfig is a credential the company document carries as a
 	// literal where a ${VAR} pointer belongs, which the setup surface will
 	// not write over.
@@ -1575,6 +1579,8 @@ var codes = map[Code]string{
 	CodeSeatRequired: "Name the seat this is for. The detail says why one is " +
 		"needed.",
 	CodeNoSuchSeat: "The company has no seat by that name.",
+	CodeSeatNotGranted: "That agent is not given this server, so nothing runs it as them. " +
+		"Choose an agent that has it, or give this one the server first.",
 	CodeLiteralInConfig: "This credential is written inline in the " +
 		"configuration, so it wasn't overwritten. Move it to a secret first. " +
 		"The detail names the field.",

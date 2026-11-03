@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
@@ -49,14 +50,16 @@ import (
 // back — and of its log (log-bytes), what each append reads and writes back.
 // A request that fails fails the benchmark.
 //
-// Measured on 2026-11-02, thirty operations an arm and one count, on two
+// Measured on 2026-11-03, thirty operations an arm and one count, on two
 // E-cores of an Intel Core Ultra 7 265U, with the log beside the record: see
 // docs/concepts/code-host.md ("What a box's request costs its run's record")
-// for the figures, both layouts'. With the log on the record, as
-// main's run record kept it (measured 2026-11-01 on the same machine), the
-// record was 516 173 bytes, nearly all of it the log, a read took 5.8 ms at
-// the median (7.9 at the 99th percentile) and a raise 11.1 ms (26.0): every
-// request of a box moved the run's whole tool log, not the request.
+// for the figures, both layouts', and for the size of the sealed set of
+// secrets kept beside the record, which no arm moves. With the log on the
+// record, as main's run record kept it (measured 2026-11-01 on the same
+// machine), the record was 516 173 bytes, nearly all of it the log, a read
+// took 5.8 ms at the median (7.9 at the 99th percentile) and a raise 11.1 ms
+// (26.0): every request of a box moved the run's whole tool log, not the
+// request.
 func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 	ctx := context.Background()
 	fleet := boxRunFleet(b)
@@ -71,7 +74,7 @@ func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 		return len(record.Value)
 	}
 	logBytes := func() int {
-		record, found, err := fleet.SandboxRunLog(ctx, turn)
+		record, found, err := fleet.SandboxRunPart(ctx, turn, coord.RunLog)
 		if err != nil || !found {
 			b.Fatalf("read the run's log: (%v, %v)", found, err)
 		}

@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -418,7 +418,7 @@ func TestAHoldRecordCoversEveryPassInFlight(t *testing.T) {
 // code.MaxCheckLogBytes, an artifact's file or asset of
 // artifacts.MaxTextFileBytes, an assistant conversation's file of
 // wire.FileMaxBytes, a sealed executor session of
-// executordomain.SealedMaxBytes) at the objstore.MiBPace floor — or a legal
+// executorkeep.SealedMaxBytes) at the objstore.MiBPace floor — or a legal
 // upload would finish only to be refused.
 //
 // The controls show the first inequality is held to two nodes' clocks: a grace
@@ -455,7 +455,7 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 		// A SESSION ON ITS SEALED BYTES: what a capture uploads is the
 		// archive sealed, and its key is minted before the first byte, so
 		// the whole upload has to land inside the bound too.
-		{"executordomain.SealedMaxBytes", executordomain.SealedMaxBytes},
+		{"executorkeep.SealedMaxBytes", executorkeep.SealedMaxBytes},
 	} {
 		slowest := objstore.PaceFor(largest.bytes)
 		if slowest >= objstore.RecordWithin {

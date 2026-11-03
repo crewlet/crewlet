@@ -25,7 +25,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { itemPath } from "~/lib/work.ts";
-import { askQuestion } from "~/routes/inbox/model.ts";
+import { askPreview } from "~/routes/inbox/model.ts";
 import type { WorkClaimTotal, WorkMyWork, WorkSummary } from "~/protocol/index.ts";
 import {
   PARTIAL_FIGURE,
@@ -150,7 +150,7 @@ function AskedOfMe() {
                 trailing={<span className="home-tasks-when">{relTime(ask.asked_at, now)}</span>}
               >
                 <span className="home-tasks-stack">
-                  <span className="home-tasks-title">{askQuestion(ask)}</span>
+                  <span className="home-tasks-title">{askPreview(ask)}</span>
                   <span className="home-tasks-meta">
                     <span className="mono">{ask.key}</span>
                     {` · ${index.byHandle.get(ask.asked_by)?.name ?? ask.asked_by}`}

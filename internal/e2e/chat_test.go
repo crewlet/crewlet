@@ -1111,6 +1111,7 @@ func coldEngine(t *testing.T, nodeID, storePath, streamDir string, ring keyring)
 	boot.Node.ID = nodeID
 	boot.Store.Path = storePath
 	brokertest.StoreIn(&boot.Stream, streamDir)
+	brokertest.CodeCacheIn(&boot.Git)
 	ring.hold(&boot)
 
 	n := bootNodeWith(t, nodeOptions(&boot, cfg, nil, ""), model)

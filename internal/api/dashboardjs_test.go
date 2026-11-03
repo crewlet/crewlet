@@ -1257,7 +1257,15 @@ const (
 	// own side above, the two add: the code host's 4.3 KiB over the 378.2 KiB
 	// both sides started from, on main's 381.2 KiB, is about 385.5 KiB, so it
 	// moved to 386 KiB.
-	initialBudget = 386 << 10
+	// Main's kit 0.92.0 (a StatusDot's word that wraps) regroups the kit's
+	// shared code the first paint loads: two small chunks of its own (about
+	// 0.7 and 0.4 KiB gzipped, each its own gzip stream) against about
+	// 0.6 KiB less entry script, and the wrap's rules in the one sheet. It
+	// took main's by about 0.7 KiB, which main's 382 KiB still held. Merged,
+	// the same regrouping took this from about 385.6 KiB to 386.3 KiB, past
+	// 386 KiB by main's own growth alone, so it moved to 387 KiB, which is
+	// 2.11 seconds on that link.
+	initialBudget = 387 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1654,7 +1662,127 @@ const (
 	// file, and a change's reviews and comments asked again only once spoken)
 	// took it to 5416.6 KiB (+1.0 KiB): the DiffView chunk +0.7 KiB and the
 	// Code workspace +0.2 KiB, all of it fetched on opening Code. 5417 KiB.
-	treeBudget = 5<<20 + 297<<10
+	// A team's MCP limits in the Remove dialog (each seat's and unit's
+	// mcp_limits block a removal clears, listed and counted with the other
+	// fields that name the server) took it from 5384.9 KiB to 5385.2 KiB
+	// (+0.2 KiB, 238 bytes), all of it the settings chunk, which the initial
+	// load does not fetch. 5386 KiB.
+	// Settings › MCP & tools' grants, levels, approvals and changed tools
+	// (the Access tab and its grant picker with each agent's team limits, the
+	// Tools tab's levels, default and held-back marks, the Agent access view,
+	// the wizard's Who gets it and Tool approvals steps, the calls held for
+	// approval on a server's page, the review of a server's changed tools)
+	// and a held call answered from the Inbox's decision row took it from
+	// 5385.2 KiB to 5422.9 KiB (+37.7 KiB): the settings chunk +32.0 KiB and
+	// its sheet +1.1 KiB, the Access chunk +1.6 KiB of shared settings code
+	// Rollup moved into it, and the writes chunk +1.5 KiB and the decision
+	// row's +1.4 KiB (the held call's answers and row). The initial load did
+	// not grow. 5423 KiB.
+	// Signing MCP servers in with OAuth and client credentials (the Sign in
+	// and Revoke dialogs, the Connection tab's sign-in card, a client's
+	// secret named as one, the sign-in alarm opening the dialog, and the
+	// wizard's OAuth and client-credentials choices) took it from 5422.9 KiB
+	// to 5436.1 KiB (+13.2 KiB): the settings chunk +11.8 KiB and its sheet
+	// +0.1 KiB, and useLatestHandlers, which the Sign in dialog is the first
+	// settings screen to read, became a chunk of its own (+1.5 KiB) as Rollup
+	// moved 1.2 KiB of shared settings code into the Access chunk. 5437 KiB.
+	// An executor whose ending is decided drawn as ending (the executors
+	// board, a run's page, the Inbox's busy seat and answer fates), and on a
+	// run's page the call a person approved and the call its run held for
+	// that approval each drawn as what it is, took it from 5436.4 KiB to
+	// 5437.3 KiB (+0.9 KiB, 970 bytes): the Executors chunk +0.7 KiB, the
+	// inbox chunk +0.2 KiB, and 44 bytes of the home, live and entry scripts.
+	// 5438 KiB.
+	// Merged with the code host, each measured on its own side (main's from
+	// 5384.9 KiB, the code host's at 5416.6 KiB, 5,546,592 bytes), the two
+	// add: main's MCP grants, levels, held calls, changed tools, sign-in and
+	// ending executors above are +52.4 KiB (53,639 bytes) — the settings
+	// chunk +44.0 KiB and its sheet +1.2 KiB, the Access chunk +2.8 KiB,
+	// useLatestHandlers +1.5 KiB, the writes chunk +1.5 KiB, the decision
+	// row's +1.4 KiB and the Executors chunk +0.7 KiB, less 0.7 KiB net
+	// elsewhere (1.4 KiB out of the shared chunks against 0.7 KiB more in the
+	// inbox, its column, the entry and the one sheet) — and the merge itself
+	// 158 bytes: the changed tools' review drawn in components/DiffView
+	// rather than the package's diffs (151 bytes of the settings chunk) and
+	// 7 bytes of minified names. Measured 5469.1 KiB (5,600,389 bytes). It
+	// moved by main's own 53 KiB, from the code host's 5417 KiB: 5470 KiB.
+	// The Cloudflare integration (its catalogue entry, story and Agents tab
+	// lane words, and the org builder reading a seat's vendor accounts from
+	// its access blocks) took it from 5437.3 KiB to 5438.6 KiB (+1.3 KiB,
+	// 1300 bytes): the integrations model chunk +1.0 KiB, the catalogue chunk
+	// +0.2 KiB and the settings chunk 72 bytes. 5439 KiB.
+	// A session's row saying whether, and where, a relaunch would continue it
+	// (the sentence under its account for a session continued in any box,
+	// only in the box its run parked in, not at all, or not decidable now,
+	// keyed by the engine's set of places a relaunch continues a session in,
+	// SessionContinuesIn, so a place the engine adds is a typecheck failure in
+	// the view) took it from 5438.6 KiB to 5439.3 KiB (+0.7 KiB, 760 bytes),
+	// all of it the agents chunk the view loads in (+281 bytes gzipped): 339
+	// bytes past 5439 KiB. The initial load did not grow. 5440 KiB.
+	// Merged again with those two, measured on the merged tree: main's
+	// +2.0 KiB (2,060 bytes, the 1,300 and the 760 above) took it from
+	// 5469.3 KiB (5,600,519 bytes) to 5471.3 KiB (5,602,579 bytes). It moved
+	// by main's own 2 KiB, from 5470 KiB: 5472 KiB.
+	// The Expo integration (its catalogue entry, story and Agents tab words,
+	// with its box tool remedy, the org builder's Expo facts, and @crewlethq
+	// 0.90.0 for the Expo mark) took it from 5439.3 KiB to 5441.5 KiB (+2.2
+	// KiB, 2228 bytes): the integrations model chunk +1.3 KiB, the icons chunk
+	// +0.6 KiB, the catalogue chunk +0.2 KiB, the settings chunk 67 bytes and
+	// the org builder's nodes chunk 12 bytes. The initial load did not grow.
+	// 5442 KiB.
+	// The Cloudflare connect polish (a setup field's help kept as its lines,
+	// a refused value placed beside its field, Test as listing only the agents
+	// an integration has on, the access review laid out as labels and values
+	// and read again when the document moved, and a variable's bare name drawn
+	// as code) and the kit's move to 0.90.1 (secret fields that refuse saved
+	// logins) took it from 5441.5 KiB to 5443.7 KiB (+2.2 KiB, 2249 bytes):
+	// the settings chunk +1134 bytes, the integrations model chunk +485 bytes
+	// and its sheet +179 bytes, the kit's chunks +313 bytes net, the Problems
+	// chunk +66 bytes, and 72 bytes across the rest. 5444 KiB.
+	// Merged again with those two, measured on the merged tree (main's
+	// Cloudflare configure level and pasted-token checks after them add no
+	// byte to the bundle): main's +4.4 KiB (4,477 bytes, the 2228 and the
+	// 2249 above) came to 4,424 bytes here, 53 fewer in minified names,
+	// taking it from 5471.3 KiB (5,602,579 bytes) to 5475.6 KiB (5,607,003
+	// bytes). It moved by main's own 4 KiB, from 5472 KiB: 5476 KiB.
+	// The kit's move to 0.91.0 (the Scaleway and DigitalOcean marks) took it
+	// from 5443.7 KiB to 5444.6 KiB (+0.9 KiB, 967 bytes): the icons chunk
+	// +1409 bytes for the two marks, less 442 bytes net across the kit's
+	// renamed chunks, the shell page and the stylesheet. 5445 KiB.
+	// Merged again with that, measured on the merged tree: main's +967 bytes
+	// came to 1,022 bytes here, 55 more, taking it
+	// from 5475.6 KiB (5,607,003 bytes) to 5476.6 KiB (5,608,025 bytes). It
+	// moved by main's own 1 KiB, from 5476 KiB: 5477 KiB.
+	//
+	// The Agents tab's generic scope and tool mechanics (scope names, a list
+	// that could not be read, a required scope and its single-entry pre-fill,
+	// an open connection's typed entries, a refusal drawn beside its control,
+	// each seat's box lines from the engine and a lane's two tool routes) took
+	// main's from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, 3165 bytes): the
+	// integrations model chunk +3096 bytes, its sheet +61 bytes and 8 bytes
+	// elsewhere. Merged again with it, main's +3165 bytes came to 3,163 bytes
+	// on the merged tree, taking it from 5476.6 KiB (5,608,025 bytes) to
+	// 5479.7 KiB (5,611,188 bytes). It moved by main's own 3 KiB, from
+	// 5477 KiB: 5480 KiB.
+	// A level an agent cannot be given drawn disabled with its reason, a
+	// setup verdict that wraps, and the kit's move to 0.92.0 (a StatusDot's
+	// word that wraps) took main's from 5447.7 KiB to 5449.2 KiB (+1.5 KiB,
+	// 1529 bytes): the kit +1467 bytes net across its renamed chunks and its
+	// stylesheet, and the access and settings chunks +62 bytes. Merged again
+	// with it, main's +1529 bytes came to 1,508 bytes on the merged tree,
+	// taking it from 5479.7 KiB (5,611,188 bytes) to 5481.1 KiB (5,612,696
+	// bytes). It moved by main's own 2 KiB, from 5480 KiB: 5482 KiB.
+	// The Expo handoff (the Set up sheet a person walks to make each agent's
+	// robot at Expo and paste its token, a rotate through it, the reminder of
+	// an old credential still at the vendor, keeping a turned-off robot, and
+	// the Cloud and Infrastructure group) took main's from 5449.2 KiB to
+	// 5456.5 KiB (+7.3 KiB, 7475 bytes): the integrations model chunk +7310
+	// bytes and its stylesheet +152 bytes, and 13 bytes across the chunks that
+	// import them. The initial load did not grow. Merged again with it, main's
+	// +7475 bytes came to 7,477 bytes on the merged tree, taking it from
+	// 5481.1 KiB (5,612,696 bytes) to 5488.4 KiB (5,620,173 bytes). It moved by
+	// main's own 7 KiB, from 5482 KiB: 5489 KiB.
+	treeBudget = 5<<20 + 369<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

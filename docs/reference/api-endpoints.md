@@ -392,7 +392,7 @@ every other route.
 | `GET` | `/agents/{id}` | Single agent — its `handle`, `agent_id` and `role` (its name), the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`. A role name is NOT accepted: two seats may share one, and a name-addressed answer read one seat's live call and transcript as the other's. A handle no agent seat answers to is `404` |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the seat's handle, which the rest is keyed by, resolves to the derived agent id the diary is keyed by |
 | `GET` | `/agents/{id}/memory/episodes/{episode}` | One episode **whole** — its ask and its account complete, which the memory listing carries the openings of (see [below](#get-agentsidmemoryepisodesepisode)) |
-| `GET` | `/agents/{id}/sessions` | The seat's **executor sessions**, the latest begun first, a page at a time: each turn whose executor captured its harness's session, how the turn ended, what it was asked, and whether its session is still kept. The seat's trail, `audit.seat.read` (see [below](#get-agentsidsessions)) |
+| `GET` | `/agents/{id}/sessions` | The seat's **executor sessions**, the latest begun first, a page at a time: each turn whose executor captured its harness's session, how the turn ended, what it was asked, whether its session is still kept, and whether a relaunch would continue it. The seat's trail, `audit.seat.read` (see [below](#get-agentsidsessions)) |
 | `GET` | `/agents/{id}/sessions/{turn_id}` | One turn's session and a page of its **transcript**, read from its sealed object as its harness recorded it, redacted; an object that is gone or does not open is an answer saying so (see [below](#get-agentsidsessionsturn_id)) |
 | `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
@@ -509,7 +509,7 @@ every other route.
 | `POST` | `/webhooks/datadog` | Receive a Datadog monitor alert, authenticated by a constant-time comparison of `X-Crewlet-Token`. Datadog signs nothing, so the token is the whole check: an unset one answers `503`, and one shorter than 26 characters answers `503` too — see [Datadog](../integrations/datadog.md#verification-is-weaker-here-and-that-is-the-providers-ceiling) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path). Mounted where `CREWLET_SANDBOX_OTEL_RECEIVER_URL` is set, or, for a node's own `direct` boxes, where it runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` — on a node without `ingress` to its own host's loopback alone, as the bridge is |
-| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its harness's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. A call is admitted under any `Host`, a proxy's or tunnel's public name on the node's loopback included. `401` for a token that is forged, expired, or names a run that is over, and for a call to an Ask Crewlet deep-work run held to the engine host's loopback that comes from any other address, or names a `Host` that is neither loopback nor a container runtime's name for the engine host (`host.docker.internal`, `host.containers.internal`); `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status. Mounted only on a node that has a bridge: one given `CREWLET_MCP_BRIDGE_URL`, or one that runs seats and binds `api.port`, for its own `direct` boxes. A node without `ingress` mounts it on `api.port` beside its probes and serves it to its own host's loopback alone, answering any other caller `404 no_route` (see [Probes on a node without ingress](#probes-on-a-node-without-ingress)); on any other node the route is absent |
+| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its harness's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. A call is admitted under any `Host`, a proxy's or tunnel's public name on the node's loopback included. `401` for a token that is forged, expired, or names a run that is over, for a request on a job's other token once its box has said which session it started (a job whose launch continues a session is handed one token per session its box may start: see [Which session the box started](../concepts/code-sandbox.md#which-session-the-box-started)), and for a call to an Ask Crewlet deep-work run held to the engine host's loopback that comes from any other address, or names a `Host` that is neither loopback nor a container runtime's name for the engine host (`host.docker.internal`, `host.containers.internal`); `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status. Mounted only on a node that has a bridge: one given `CREWLET_MCP_BRIDGE_URL`, or one that runs seats and binds `api.port`, for its own `direct` boxes. A node without `ingress` mounts it on `api.port` beside its probes and serves it to its own host's loopback alone, answering any other caller `404 no_route` (see [Probes on a node without ingress](#probes-on-a-node-without-ingress)); on any other node the route is absent |
 | `GET` `POST` `DELETE` | `/mcp/{token}/server/{server}` | One of the seat's MCP servers, served apart from the engine's own tools at `/mcp/{token}` so the run's harness can keep its tools out of each request ([the tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)): that server's tools alone, under the name the company gives it, with what the company says the server is for as its MCP instructions. Every call is the run's, decided and recorded as one at `/mcp/{token}` is. The same token, transport, routing and refusals as `/mcp/{token}`, relayed to the seat's holder the same way; `400` for a server the run's session does not serve |
 | `GET` | `/mcp/{token}/steer/notes?after={seq}` | The run's [notes](../concepts/code-sandbox.md#notes-to-a-running-run): the notes waiting for its turn past the cursor, `{"notes": [{seq, id, inbox, message}]}`, held up to ten seconds while none waits and answered at once when one arrives. `503` with a `Retry-After` once the node is stopping (`draining`) or the run's session has ended here (`unavailable`), the held poll included: its notes wait for the session's next opening. The same token, routing and refusals as the bridge; `404` for a run that has nothing to steer |
 | `POST` | `/mcp/{token}/steer/read` | Record the notes the run's harness put in front of its model, `{"ids": [...]}` (one to ten, at most 64 KiB): `204`, or `503` with a `Retry-After` when the record could not be written, and the notes wait |
@@ -2131,8 +2131,8 @@ before and after (so handing it to another `lead:` is refused), a new `lead:`
 or `manages:` entry has to name something inside it, a seat or unit added
 under a name another object's `lead:` or `manages:` already states has to be
 named only from inside it. A project, space or channel, a seat's email or
-contact identity, a credential, a `${VAR}` in any field and a setting are
-never a lead's. The rule, change by change, is in [Identity and
+contact identity, a credential, a `${VAR}` in any field, a setting and lifting
+or loosening an MCP limit any agent seat is held to are never a lead's. The rule, change by change, is in [Identity and
 Access](../concepts/identity-and-access.md#a-lead-edits-their-own-team).
 
 A write any part of which is not the caller's is refused whole, by the rule
@@ -2175,8 +2175,8 @@ the route accepted never lapses half-way through the write. A
 | `op` | What the write does to the seat or unit: `added`, `removed`, `moved` or `changed` — its fields, or where it sits among its siblings, since order decides which of a seat's managers is its own |
 | `side` | `before` (the revision replaced) or `after` (the one proposed): which document the place was read in |
 | `place` | The key of the unit the change reaches; `""` is the company root, which is nobody's subtree |
-| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only `admin` may write), `credential` (a credential field, compared whole so an `mcp_env` key with nothing under it counts, or a `${VAR}` in any other field, with the field's path in `value`), `key` (a `project`, `space`, `channel`, `email` or `contact` set, cleared or changed, with the field in `value`), or `unchanged` (the `document` itself) |
-| `reason` | The authority table's reason: `not_lead` for a place outside the caller's subtree, the company root included, or `no_grant` for a credential, a key, a setting or an unchanged document |
+| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only `admin` may write), `credential` (a credential field, compared whole so an `mcp_env` key with nothing under it counts, or a `${VAR}` in any other field, with the field's path in `value`), `key` (a `project`, `space`, `channel`, `email` or `contact` set, cleared or changed, with the field in `value`), `grant` (a grant the seat's role carries, `health_tools`, set or cleared, with the field in `value`), `widens` (an [MCP limit](../guides/tools-and-mcp.md#narrowing-a-server-for-a-team) the write lifts or loosens for the seat, by editing a block or moving the seat out from under one, with the limit as the seat is held to it in `value`: `mcp_limits.<server>.enabled` or `mcp_limits.<server>.tools.<tool>`), or `unchanged` (the `document` itself) |
+| `reason` | The authority table's reason: `not_lead` for a place outside the caller's subtree, the company root included, or `no_grant` for a credential, a key, a seat's grant, a widened MCP limit, a setting or an unchanged document |
 | `grants` | The permissions any one of which would admit this part — `admin` for every part a lead is refused |
 
 A lead reads what they may write the same way: `GET /config/roles/{handle}`
@@ -2550,9 +2550,9 @@ and `400 summary_required`.
 
 #### `DELETE /config/mcp-servers/{id}`: remove an MCP server and clear what names it
 
-An MCP server is named by its name from two other places: each seat's and
-unit's `mcp_env` block keyed on it, and each seat's `sandbox.mcp.servers` entry
-listing it. Removing the entry alone leaves those naming nothing, which
+An MCP server is named by its name from three other places: each seat's and
+unit's `mcp_env` block keyed on it, each seat's and unit's `mcp_limits` block
+keyed on it, and each seat's `sandbox.mcp.servers` entry listing it. Removing the entry alone leaves those naming nothing, which
 validation refuses. This route takes the removal **and the clearing of every
 field that names the server** as one write, and can delete the stored values
 only that server read. `config.write` (admin, a recent proof), and
@@ -2571,8 +2571,8 @@ both are sent.
 ```
 
 - **`clear: true`** clears every field that names the server: each `mcp_env`
-  block keyed on it, a seat's or a unit's, and each `sandbox.mcp.servers`
-  entry listing it. A mapping left empty is dropped, and so is a seat's
+  and `mcp_limits` block keyed on it, a seat's or a unit's, and each
+  `sandbox.mcp.servers` entry listing it. A mapping left empty is dropped, and so is a seat's
   `sandbox` that held nothing else. An `mcp_env` block the engine reads by its
   own name (`github`, `gitlab`, `datadog`, `atlassian`, `jira`, `confluence`)
   is the integration's as well as the server's, so it stays.
@@ -2608,13 +2608,16 @@ write.
   "sandbox": [
     {"seat": "pm", "name": "PM", "segments": ["roles", 0, "sandbox", "mcp", "servers", 0]}
   ],
+  "mcp_limits": [
+    {"kind": "unit", "key": "eng", "name": "Eng", "segments": ["units", 0, "mcp_limits", "linear"]}
+  ],
   "secrets": ["LINEAR_ORG", "PM_LINEAR_TOKEN"],
   "oauth": true
 }
 ```
 
-`kind` is `seat` (its `key` the handle) or `unit` (its `key` the unit's key),
-and `name` is the display name. `secrets` lists the values the store holds
+In `mcp_env` and `mcp_limits`, `kind` is `seat` (its `key` the handle) or
+`unit` (its `key` the unit's key), and `name` is the display name. `secrets` lists the values the store holds
 that nothing reads once the server is gone, which is what `delete_secrets` may
 name: a variable a node takes from its environment is never listed, since the
 store holds nothing to delete. Every list is names, never a value. `oauth` is
@@ -2649,7 +2652,7 @@ and who removed it, as `DELETE /secrets/{name}` does.
 Answers: a dry run `200 {valid, base_revision_id, warnings, derived,
 dependants}`, a write `201 {revision_id, epoch, warnings, derived, removed,
 cleared, secrets, oauth}`, where `removed` is the server's name and `cleared` is
-`{mcp_env, sandbox}` as above. Refusals: `404 no_such_entity`,
+`{mcp_env, sandbox, mcp_limits}` as above. Refusals: `404 no_such_entity`,
 `409 revision_advanced`, `403 config_managed` (a managed document),
 `403 unauthorized` for a caller without `secrets.write` (the Dashboard
 Assistant never takes it, so it may remove a server and never its values),
@@ -2673,7 +2676,7 @@ changed. Every node serving the API serves them, because every node opens the fl
 | `POST /setup/integrations/{kind}/provision`, `POST /setup/integrations/github/app` | `admin`: a writing pass is handed a sink that mints and seals, and an app's private key is sealed on its way back |
 | `GET /setup/integrations/{kind}/access`, `POST /setup/integrations/{kind}/access/plan` | `admin` (`setup.read`): the plan writes nothing, so it asks for no proof |
 | `PUT /setup/integrations/{kind}/access` | `admin` (`setup.access.write`) and a proof inside `step_up`. A save that raises an agent to an administration role at the vendor also asks `setup.access.raise`, which needs a **person present**: a machine token is refused `403 token_refused` |
-| `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`, `POST /setup/integrations/slack/access/seats/{handle}/{lane}/install` | `admin` (`setup.connect`) and a proof inside `step_up`; `rotate` also asks `secrets.write`, since it seals a fresh credential; `keep` writes the document as a save does, so it also asks `setup.access.write`, and `setup.access.raise` where what it keeps is an administration role |
+| `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`, `POST /setup/integrations/slack/access/seats/{handle}/{lane}/install`, `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential` | `admin` (`setup.connect`) and a proof inside `step_up`; `rotate` and `credential` also ask `secrets.write`, since each seals a credential; `keep` writes the document as a save does, so it also asks `setup.access.write`, and `setup.access.raise` where what it keeps is an administration role |
 
 **Connecting is `admin`'s and nothing more.** `/setup` performs no write of
 its own — a credential goes through the store `/secrets` serves — so connecting
@@ -2696,8 +2699,9 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `GET` | `/setup/integrations/{kind}/access` | Every agent seat on one integration: what the document asks (`desired`), what the vendor showed on the last sync (`observed`), the last sync, the plan the next sync takes, and whether the agent's tool is live; what each lane offers now; and the integration's notice. The revision it was read at is `revision` and the `ETag`. See [Each agent's access to an integration](#each-agents-access-to-an-integration) |
 | `POST` | `/setup/integrations/{kind}/access/plan` | What a draft would do at the vendor, step by step, writing nothing |
 | `PUT` | `/setup/integrations/{kind}/access` | Save a draft as one revision of the company document, held to the revision the tab was read at, then start the sync. `?dry_run=true` answers the plan and the warnings and writes nothing |
-| `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}` | One action on one agent's account: `rotate`, `remove` (only once the agent is off), `keep` (write the vendor's setting into the document), `restore`, `retry` or `done` |
+| `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}` | One action on one agent's account: `rotate`, `remove` (only once the agent is off), `keep` (write the vendor's setting into the document), `restore`, `retry`, `done` or `release` (keep the account at the vendor) |
 | `POST` | `/setup/integrations/slack/access/seats/{handle}/{lane}/install` | A fresh, single-use link a person follows to approve one agent's Slack app install, while the app waits for it. `{"url": "..."}`, `Cache-Control: no-store`, never stored and never part of a read |
+| `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/credential` | A credential a person created at the vendor and pasted for one agent (Expo's robot token): checked at the vendor, then sealed by the agent's sync. `{"detail", "access"}`, or `400 invalid_input` beside `value` |
 | `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped (`crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle), where a provisioner's `-secret-store` run made that way records `provision`, `models` for a model's credential the Models page wrote, and `mcp` for an MCP server's header or variable [stored from its page](#put-mcp-serversnamevalueskey); see [the secret store](../concepts/secret-store.md#the-design)), and `write_only` (whether no reveal answers the value: one stored from Settings › MCP & tools is); `engine_keys`, a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values`, the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate; and `assistant_values`, Ask Crewlet's sealed values counted the same way (a file a conversation keeps counted by the key its content is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves (each leaves with its conversation), or `null` on a node that runs no Ask Crewlet estate; and `executor_values`, the seats' executor sessions counted the same way (each session a turn's row names counted by the key its object is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves either (each leaves with its row), or `null` on a node that runs no executor log. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator. The longest answer is some 384 KiB — the largest value a write admits, in the characters JSON spells longest — which is what a client reading it must be prepared to take |
@@ -3751,9 +3755,13 @@ What each surface checks, and with what:
 Refusals: `400 invalid_body` for an unknown key; `400 invalid_input` when
 `field` is not a requirement of that surface (or seat) or is not a `secret`,
 when `value` is empty, when a key in `values` is not a field of the surface,
-when a `${NAME}` names no stored secret ("There is no secret NAME."), and when
-the check cannot be made from what was given (Datadog's other key, a site
-address, an organization id), each with a sentence saying what is missing;
+when a `${NAME}` names no stored secret ("There is no secret NAME."), when a
+typed value is one its field refuses, as a save would refuse it (whitespace or
+an invisible character inside a credential, a space inside an address or an
+identifier, a character outside the vendor's alphabet where the field declares
+one), with `field` and `path` and before any vendor is asked, and when the
+check cannot be made from what was given (Datadog's other key, a site address,
+an organization id), each with a sentence saying what is missing;
 `404 unknown_kind`; `404 invalid_input` for a seat that takes no per-seat
 setup; `409 no_active_revision`; `409` under one of the five codes for a
 revision this node [cannot open](#a-revision-this-node-cannot-open-is-refused-whichever-route-reads-it).
@@ -4171,14 +4179,17 @@ link, so the dashboard asks the begin route above for one and submits a form.
 
 ### Each agent's access to an integration
 
-Every integration the engine creates an account per agent on (Slack,
-Mattermost, Atlassian for Jira and Confluence, GitHub, GitLab and Datadog)
-has an Agents tab, and these four routes are what it reads and writes. Each
-agent seat's setting lives in the company document under
+Every integration the engine manages an account or a credential per agent on
+(Slack, Mattermost, Atlassian for Jira and Confluence, GitHub, GitLab, Datadog,
+Cloudflare and Expo) has an Agents tab, and these routes are what it reads and
+writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
-Datadog role id, a GitLab access level, a Jira project role id), GitHub's
-permissions, and the scope it is narrowed to. A lane is the block's key:
+Datadog role id, a GitLab access level, a Jira project role id; Cloudflare's
+`read`, `operate` or `configure`, each a fixed set of permission groups;
+Expo's `viewer`, `runner`, `developer` or `release_manager`, each a fixed set
+of Expo permissions), GitHub's permissions, and the scope it is narrowed to.
+A lane is the block's key:
 `atlassian` has two, `jira` and `confluence`, over one account per agent, and
 every other integration has one named after itself. Jira and Confluence asked
 for by their own names answer `404 no_seat_access`.
@@ -4209,19 +4220,48 @@ answers the name and when it was minted, never the value.
 }
 ```
 
+A level the company's connection cannot grant yet carries `unavailable`, the
+sentence saying what it waits on ("The Configure level is unavailable until the
+provisioner token holds Zone Settings: Edit and Response Compression: Edit"),
+and the tab offers it disabled with that reason.
+
 Each seat lane's `tool` says whether the agent can use its credential through
 a tool right now: `live`, `waiting` (a server reads it and it is not sealed
 yet), `builtin` (Jira and Confluence, whose credential the engine's own tools
 read), `no_server` (no server the company declares reads it), `server_off`
 (every server that reads it is turned off, `enabled: false`) or `off` (the
-seat or its account is off).
+seat or its account is off). A lane whose tool is a CLI in the agent's own box
+(Expo's EAS CLI) also carries `box`, what that box holds for it: in `env`, the
+exact `sandbox.env` lines the seat needs, each variable set to the seat's own
+sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
+settings the engine supplies itself, as configured (`"by": "crewlet"`):
+`{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "by": "you"}]}`.
+With no server, `tool` is `live` or `waiting` only while the seat's box sets
+every one of its own lines exactly so.
 
 `revision` is the company revision the answer was read at, and the `ETag` is
 the same value quoted. An entry of `options` whose vendor did not answer just
 now carries no levels: which of its levels administers is unknown, so a
 turn-on or a change of level on that lane asks the step-up a raise does, and
-the next read asks the vendor again. Each entry of `options` also says whether a person can
-ask for a credential on that lane to be rotated (`rotatable`), and carries
+the next read asks the vendor again. A scoped lane's entry says so (`scoped`)
+whatever its list holds: `scope` is the entries the company's connection
+reaches, or `scope_open` where it does not list them; `scope_names` names an
+entry where the vendor names one apart from its id; and `scope_live` says the
+list is known: written in the company document (GitLab's projects, GitHub's
+repositories, Mattermost's channels, and the Jira projects and Confluence
+spaces the org model names), or read from the vendor just now. An entry
+without it could not be read, so its empty `scope` says nothing about the
+reach. `scope_required` marks a lane whose agent,
+once on, must name at least one scope entry. `tool_server` names the
+`mcp_servers` entry a per-seat tool server for the lane is started from: the
+company's own where it declares one reading the lane's credential (an enabled
+one first), else the name the catalogue's server is conventionally declared
+under. It is absent where no server reads the lane's credential (Expo, whose
+tool is the CLI in the agent's box). Each entry of `options` also says whether a person can
+ask for a credential on that lane to be rotated (`rotatable`), whether they may
+keep at the vendor an account a step waits for them to delete (`releasable`),
+and where they take the lane's own steps at the vendor (`action_url`, which
+each of their steps in a `plan` carries), and carries
 `"managed": "external"` where the engine does not provision the integration
 for the company, which is wherever it does not hold the authority that creates
 an agent's account: Datadog, GitLab or Mattermost without a `provisioning`
@@ -4233,7 +4273,11 @@ apps with. On such a lane a seat's switch still binds its
 tool to the credential handed in from outside Crewlet, its access is managed
 where that credential was issued, and its `observed.credential` names the
 variable the seat holds with `"source": "external"`. A credential Crewlet
-minted says `"source": "minted"`. Where the operator writes the company
+minted says `"source": "minted"`. `observed.retired` lists the credentials an
+account still holds besides the sealed one (`label`, what the vendor shows of
+each, and `since`, when it was created as near as Crewlet knows), where the
+vendor can tell: while it is non-empty on a lane that is on, every pass plans
+the `retire` op, a person's step to delete them at the vendor. Where the operator writes the company
 document (`api.auth.company_writers`), the answer carries
 `"managed_by": "operator"` and the tab is read-only: a save and `keep` are
 refused `403 config_managed`, naming the Seat object as the place to change
@@ -4274,11 +4318,18 @@ it leaves out keeps its setting. Its fields are `enabled`, `level`,
 `permissions` (GitHub only, each `read` or `write`) and `scope`; any other
 field is refused `400 invalid_body`, so a body cannot name a variable. A
 person's seat or a seat the company does not hold is `404 no_such_seat`; a
-lane the integration does not grant, or a level, permission or scope entry the
-vendor does not offer now, is `400 access_not_offered` with the lane, the value
-and what is offered. A live-listed level (a Datadog role, a Jira project role)
+lane the integration does not grant is `400 no_seat_access`, and a level,
+permission or scope entry the vendor does not offer now is
+`400 access_not_offered`, naming the first such `seat`, its `lane`, the
+`field` it is about (`level`, `permissions` or `scope`) and the `detail`, with
+what is `offered` instead where a list says it, or the level a set is
+`required` to hold. A live-listed level (a Datadog role, a Jira project role)
 is judged only when the vendor answered just now; otherwise the sync reports
-an id it does not hold as a finding. A GitLab project is within reach only
+an id it does not hold as a finding. A scope entry is judged the same way, only
+when `scope_live` says the list was read. On a lane with `scope_required`, a
+seat turned on with an empty `scope` is `400 access_not_offered` whatever was
+read; the sync reports a stored one as a finding, and `crewlet validate`
+refuses it in the document at the lane's scope key. A GitLab project is within reach only
 inside the group the company's connection joins agents to, so where the
 connection lists no projects, a project outside that group is
 `400 access_not_offered` too.
@@ -4338,6 +4389,7 @@ acts on one agent's account, and answers the tab:
 | `restore` | Turns back on an account somebody turned off at the vendor, which no sync does unasked, or restores a changed role now rather than on the next pass. On a lane managed outside Crewlet it is `409 access_external` |
 | `retry` | Runs the sync again after a vendor refusal was settled |
 | `done` | Reads the vendor again after a person took a step there (a GitHub App's creation or permission request, a Slack install) |
+| `release` | Keeps at the vendor an account a step waits for a person to delete ("Keep the robot at Expo"): the step closes, the engine stops tracking the account, and the audit records the person's choice. Only on a lane whose options say `releasable`, and only while the lane waits on its `remove` step: `409 invalid_input` otherwise |
 
 Every action but `keep` is carried by a sync, and one asked while a sync of the
 same integration runs is `409 pass_in_flight`. `keep` writes its revision and
@@ -4352,6 +4404,30 @@ agent is on in Slack and its app waits for a person to approve the install
 (`409 invalid_input` otherwise), never stored, never logged and never part of
 `GET`. It writes nothing to the company document, so it is offered where the
 operator writes the document too.
+
+**`POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential`**
+takes `{"value": "<token>"}`: a credential a person created at the vendor for
+one agent, for an integration whose accounts only a person can create (Expo's
+robots). It asks `secrets.write` beside the route's own verb, since it seals a
+credential, before it reads the body; both ask a proof inside `step_up`.
+- **Route checks:** before anything reaches the vendor, an empty value, a
+  `${VAR}` reference, and stray whitespace or invisible characters are each
+  refused as `400 invalid_input` with `"field": "value"`.
+- **Vendor check:** the engine then checks the value at the vendor with reads
+  only. For Expo it checks that the token works, that it is a robot's, that
+  the robot holds a role on the company's account, that the role is the
+  agent's level and not Admin or Owner, and that no other agent has the robot.
+  A refusal is `400 invalid_input` with the vendor's sentence in `detail`, what
+  to do in `hint`, and `"field": "value"`.
+- **Sealing:** a value that passes is sealed by the agent's own sync under the
+  name the engine derives for it, the agent is read back with it, and the
+  answer is `{"detail": "Works. ...", "access": <the Agents tab>}`. The value is
+  never echoed, logged or recorded: the audit line names the seat, the lane,
+  the account and its id, and what the vendor shows of the credential (Expo's
+  token prefix).
+- **Other refusals:** an agent that is not on at the integration is
+  `409 invalid_input`, a kind that takes no pasted credential is
+  `404 no_seat_access`, and a sync in flight is `409 pass_in_flight`.
 
 #### Moving a company onto per-seat access
 
@@ -5658,8 +5734,8 @@ REST route calls, so the two surfaces cannot diverge:
 | `agent_episode` | `{id, episode}` | `GET /agents/{id}/memory/episodes/{episode}`. A seat's trail, so it takes `audit.seat.read`, as `agent_memory` does. ONE EPISODE WHOLE — what the turn was asked and what it did, complete — answered by the seat's holder as `agent_memory` is (`held_by`); `episode: null` for one the seat no longer holds. See [the route](#get-agentsidmemoryepisodesepisode) |
 | `memory_overview` | `{}` | **Decided per seat by `audit.seat.read`**, as `agent_memory` is, and answered for exactly the seats the caller may read — every one for `admin`, a lead's own agents for a lead, none for anybody else; a seat this node cannot decide makes the whole answer `unavailable` rather than a shorter list. Each seat's memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. The seats the caller may read, handle order, no cap. See [the section](#memory_overview) |
 | `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. The ledger is keyed on the seat's handle. An absent `handle` is the caller's own SEAT — a seat's trail is the seat's, so a caller bound to none names one — and a named one is a seat's TRAIL rather than a person's queue, so it takes `audit.seat.read` — the seat's lead, or `admin`. The listing is a page (default 50, at most 200) with `conversations_total` beside it, ANSWERED BY THE SEAT'S HOLDER, as `agent_memory` is and for its reason: the ledger travels with a seat's memory and only the holder's copy is current (`held_by`) — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for) |
-| `executor_sessions` | `{handle, cursor, limit, read_level, …}` | `GET /agents/{id}/sessions`. The seat's EXECUTOR SESSIONS, the latest begun first: a row per turn whose executor captured its harness's session, naming the sealed object in the fleet's object store that holds the session its harness kept when its run ended — the whole record of what the run read, called and wrote — and how the turn ended. A seat's trail, so it takes `audit.seat.read` — the seat, its lead or `admin`, the verb an executor's tail is decided by — and an absent `handle` is the caller's own seat. Read through the estate router, so any node answers, at the caller's freshness (`read_level`; this surface's own when absent). A page of `limit` rows (25 when absent, 100 at most) with `next_cursor`, the cursor of the page after it, absent on the last; `read_level` and `position` say how it was read, and `complete: false` that the answering copy holds a record of the log it could not read. See [the route](#get-agentsidsessions) |
-| `executor_session` | `{handle, turn_id, cursor, read_level, …}` | `GET /agents/{id}/sessions/{turn_id}`. One turn's session and a page of its TRANSCRIPT, its sealed object opened and read as its harness recorded it — entries of `brief`, `note`, `model`, `tool_call`, `tool_result`, `summary` and `unread` — every entry's text redacted at this read. Decided as `executor_sessions` is, and it shows more than the run's live output did: every call's input and each result's text, to an entry's bound. A page holds at most 200 entries and 1 MiB of text, each entry at most 16 KiB, and `cut` says why it ends where it does, `next_cursor` the cursor of the page after it, absent on the last; `read_level`, `position` and `complete` say how the session's row was read. A node decodes at most two transcripts at once, and a question past them waits for a slot, nothing opened, for as long as its caller does. An object the store no longer holds, one that does not open, one that is no archive and one this build does not read are each an answer (`state`) with the engine's sentence (`why`), never a failure. See [the route](#get-agentsidsessionsturn_id) |
+| `executor_sessions` | `{handle, cursor, limit, read_level, …}` | `GET /agents/{id}/sessions`. The seat's EXECUTOR SESSIONS, the latest begun first: a row per turn whose executor captured its harness's session, naming the sealed object in the fleet's object store that holds the session its harness kept when its run ended — the whole record of what the run read, called and wrote — and how the turn ended. A seat's trail, so it takes `audit.seat.read` — the seat, its lead or `admin`, the verb an executor's tail is decided by — and an absent `handle` is the caller's own seat. Read through the estate router, so any node answers, at the caller's freshness (`read_level`; this surface's own when absent). A page of `limit` rows (25 when absent, 100 at most) with `next_cursor`, the cursor of the page after it, absent on the last; `read_level` and `position` say how it was read, and `complete: false` that the answering copy holds a record of the log it could not read. Each row says whether a relaunch of its turn would continue it (`continuable`, `null` where that cannot be said now), where (`continues_in`: `any_box` or `parked_box`) and where not, why (`not_continuable`). See [the route](#get-agentsidsessions) |
+| `executor_session` | `{handle, turn_id, cursor, read_level, …}` | `GET /agents/{id}/sessions/{turn_id}`. One turn's session and a page of its TRANSCRIPT, its sealed object opened and read as its harness recorded it — entries of `brief`, `note`, `model`, `tool_call`, `tool_result`, `summary` and `unread` — every entry's text redacted at this read. Decided as `executor_sessions` is, and it shows more than the run's live output did: every call's input and each result's text, to an entry's bound. A page holds at most 200 entries and 1 MiB of text, each entry at most 16 KiB, and `cut` says why it ends where it does, `next_cursor` the cursor of the page after it, absent on the last; `read_level`, `position` and `complete` say how the session's row was read. A node decodes at most two transcripts at once, and a question past them waits for a slot, nothing opened, for as long as its caller does. An object the store no longer holds, one that does not open, one that is no archive and one this build does not read are each an answer (`state`) with the engine's sentence (`why`), never a failure. Its first page says of the row whether a relaunch would continue the session, and a later page leaves `continuable` null. See [the route](#get-agentsidsessionsturn_id) |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload, and `node`, the node that published it (every stored event carries it, not only this answer's) |
 | `events` | `{limit, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only, since, until, before_id, before_time}` | `GET /events`. `feed_only=true` selects the rows the activity feed carries — every stored type but the ones it keeps out (`auxiliary_spend`), a trace's `agent` siblings included — and is what every read merged with the live feed asks; `true`, `false` or absent, any other word a **400**. `failed` is THREE-VALUED the same way — `true`, `false` or absent, any other word a **400** — and selects by the rule every row's own `failed` is stamped by: a stored `failed` tag, or a type that is itself a failure (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `executor_failed`). It is the event log's "Failures only", applied by the engine so the axis and every page are one set. `suspended` is THREE-VALUED — `true`, `false` or absent for every row, any other word a **400** — and selects by whether a completion record PARKED its turn on its executor in its box: a turn that parks and resumes writes two `agent_turn_completed` records, the first marked `suspended`, so `type=agent_turn_completed&suspended=false` is the turns that ENDED, one record each, and is what a turns axis counts over. `trace_id` selects one trace as a FILTER — paged, windowed and combinable with every other filter, where [`GET /events/trace/{trace_id}`](#routes) is the whole trace oldest first. `channel_id` selects one agent-to-agent conversation's events, by the channel id every A2A event carries (an index seek, migration `0034`). `seat` is a seat's **handle** and selects the events that seat published, resolved on the server to the id every node derives for it — so a seat since removed from the chart still names its history, and a role name, which a rename changes, is never the key; anything that is not a handle, or a person's seat's handle, is a **400** — an empty page would read as a seat that never did anything — and before a company configuration is applied it is **503** `unavailable`, since the id is derived from the company's name. `agent` is the broader question — the **related** filter: every event involving one agent seat, named by any handle it answers to and matched on its agent id, plus every event sharing a trace with one (see [Paging the event history](#paging-the-event-history)). `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered; `work_item` selects every event on one work item — each turn's start, its phases and completions, an executor it launched — named by the item's identity across trackers, `<backend>:<id>` (`native:<task id>`, `jira:<issue id>`), never by its key, which a move rewrites. A value that is not that shape (a key such as `ENG-4`, or either half missing) is a **400** rather than an empty page, because an empty answer reads as "nothing happened on this item". The filter reads the `work_item` COLUMN (migration `0033`), filled from the same payload field as the row's `work_item` tag. Every row answers with its own `work_key` read off the `work_key` COLUMN (migration `0029`) rather than out of its `tags` — the column is what the `work_key` filter reads, so a row and the filter that matched it never disagree about its unit of work |
 | `event_series` | `{bucket, since, until, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only}` | `GET /events/series`. Every bar carries `failed` beside `count` — how many of its rows reported a failure — and the answer a `failed` total beside `total` (see [the event log's time axis](#the-event-logs-time-axis)). THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
@@ -10148,7 +10224,9 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
                   "delivered_to": "chatlet", "completed_work": "…" },
       "ask_excerpt": "…",
       "kept": true,
-      "object_bytes": 41234
+      "object_bytes": 41234,
+      "continuable": false,
+      "not_continuable": "the turn has ended, and no later turn continues its session yet, since a session is continued only by a relaunch of the turn that kept it"
     }
   ],
   "next_cursor": "48121",
@@ -10174,6 +10252,52 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   or the seat's session budget
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object to
   make room for newer ones, keeping how the turn ended.
+- **`continuable`** says whether a relaunch of the turn would continue this
+  session, decided by the one decision a relaunch takes — the turn live and not
+  ending, the newest capture of the job a relaunch would follow kept and named
+  by the row, and a runner that restores its harness, format and release: the
+  runner of the member of the seat's executor chain a relaunch would be
+  launched on now, the first not sitting out its plan
+  ([A relaunch continues the turn's
+  session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session))
+  — over the row as a relaunch reads it. **The member is the one the node
+  holding the seat would pick**, which sits its own spent plans out, off the
+  chain of the revision the turn's relaunch runs on — for a turn whose resumed
+  segment is running there, the revision that segment was admitted under: the
+  node answering asks it, once a page, turn by turn, itself where it holds the
+  seat. **`continues_in`**
+  says where: `any_box`, from that kept capture in whichever box the relaunch
+  gets; or `parked_box`, where the kept capture is not continued but a
+  person's answer would carry the turn's parked run on in the box it parked in,
+  which still holds that box, ran the row's own session there, and runs that
+  member's harness in its cell — on the host of the node holding the seat, for
+  a box on the engine host — continued there and nowhere else, for as long as
+  the box is held; a company that keeps no session
+  (`turn_engine.conversation_session.enabled: false`) continues no kept
+  capture, so only `parked_box` is said there. **`not_continuable`**, in the
+  engine's own words, redacted, is why a relaunch would not continue it, why
+  that cannot be said now, or, for `parked_box`, why no other box would. As
+  far as the engine can know before a
+  box is chosen: whether the box a relaunch gets can take the session up, and
+  whether the seat's budget can carry it, are the launch's to find out. An
+  ended turn's session is always `false`: no later turn continues a session
+  yet; so is one whose run's ending is decided. `null` where it cannot be said
+  now — the turn's run record, or its row read as a relaunch reads it, could
+  not be read; the job a relaunch would follow is still working, or a claim on
+  it has neither taken its final capture nor begun its turn; its capture is
+  still being kept; what a relaunch is launched on cannot be said (every member
+  of the seat's chain sitting out its plan, no node holding the seat, the node
+  holding it not answering); or only the resume of a collected job decides the
+  relaunch, and its turn has not begun (a round lost a second time, or carried
+  on in its box only where its sign-in was replaced) — which `not_continuable`
+  then says. A resumed turn says, as it begins, whether it collects its job or
+  carries the round on, and from then on, its review included, the row is
+  decided on that. A page reads the coordination store once for its runs, and a
+  live turn's record alone where the listing does not hold it, and once more
+  for the seat's lease where a live row asks the node holding the seat, and not
+  at all where every row on it has ended, and is answered whether or not it
+  answers; it reads a row again at `linearizable` only where the page was read
+  below that and the row names another capture than its run's record keeps.
 - **Paged by where each row began**, which nothing moves, so a page never skips
   or repeats a row that was captured again or ended between two reads.
   `next_cursor` is absent on the last page. `complete: false` says the
@@ -10188,7 +10312,10 @@ names.
 
 One turn's session and a page of its **transcript**, `?cursor=` the
 `next_cursor` an earlier page of it handed out. Also served as the
-`executor_session` query, which takes `{handle, turn_id, cursor}`.
+`executor_session` query, which takes `{handle, turn_id, cursor}`. The
+first page (no `cursor`) says of its row whether a relaunch would continue the
+session, as a page of `GET /agents/{id}/sessions` says it; a later page leaves
+`continuable` `null`, saying it is the first page's to say.
 
 ```json
 {
@@ -10204,7 +10331,7 @@ One turn's session and a page of its **transcript**, `?cursor=` the
   ],
   "from": 0,
   "cut": "entries",
-  "next_cursor": "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3.1.200",
+  "next_cursor": "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3.2.200",
   "bounds": { "entries": 200, "bytes": 1048576, "entry_bytes": 16384,
               "line_bytes": 33554432, "read_bytes": 268435456 },
   "read_level": "stale",
@@ -10216,7 +10343,8 @@ One turn's session and a page of its **transcript**, `?cursor=` the
 **The archive is read as its harness recorded it**, through the runner's own
 knowledge of the format it packs: Claude Code's transcript and each subagent's
 own (its sidecar, every entry of which names the subagent in `thread`, after
-the run's own), and OpenCode's session export. Each entry is one of:
+the run's own), and OpenCode's session export, each message by the kind
+OpenCode 2 gives it (its `type`). Each entry is one of:
 
 | `kind` | What it is |
 |---|---|
@@ -10226,11 +10354,16 @@ the run's own), and OpenCode's session export. Each entry is one of:
 | `tool_call` | A tool the model called, its input as JSON, the tool in `tool` |
 | `tool_result` | What the tool answered, `failed` where the harness recorded an error |
 | `summary` | A compaction summary: the harness's own account of the conversation before it, which the model read in its place |
-| `unread` | A part of the record the read could not read — a line past the bound one may hold, one that is no record, a record or a message of no shape the read knows, a transcript that is no plain file in the archive (a link), a message of an export past the bound — said where it was, so a gap never reads as continuity |
+| `unread` | A part of the record the read could not read — a line past the bound one may hold, one that is no record, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a message of an export past the bound — said where it was, so a gap never reads as continuity |
 
 The harness's bookkeeping (a session's title, a snapshot of the files it
 edited, its system notices), the model's thinking and a tool result Claude Code
-spilled to a file are no entry. `at` is when the harness recorded the entry,
+spilled to a file are no entry. Nor are the messages OpenCode writes for itself:
+its notices in the person's turn (a background job's ending, a reminder, an
+instruction file it loaded), an update of the run's instructions, a skill or a
+shell command a person ran in the session, the end of an execution, a switch of
+the session's agent, model or directory, and a compaction that handed the model
+no summary. `at` is when the harness recorded the entry,
 absent where its record says no time, or one outside the years 0 to 9999 —
 all RFC 3339 can spell, and a box's own agent can write any instant into what
 its run packs.
@@ -10589,9 +10722,11 @@ configuration declares whose grant reaches the seat, on or off, in name order:
 `reason` is why, as the server's [`reaches`](#get-mcp-serversname) says it
 (`every_agent`, `unit`, `seat` or `integration`); `tools` is how many tools it
 offers the agent, every tool the live nodes' listings name at a level other
-than `blocked` (a tool refused its name is never listed), the whole listing
-for each agent a per-agent server reaches, and `0` for a server turned off,
-which is granted to nobody; and `state` is the server's own, its row's.
+than `blocked` (a tool refused its name is never listed) but a tool the
+agent's own [limits](../guides/tools-and-mcp.md#narrowing-a-server-for-a-team)
+block for it, the whole listing for each agent a per-agent server reaches, and
+`0` for a server turned off, which is granted to nobody, or one a limit turns
+off for the agent; and `state` is the server's own, its row's.
 `mcp_tools` counts each tool name once, so a name two of the agent's servers
 list counts once; `builtin_tools` is how many of the engine's own tools every
 agent holds, which the budget does not count; and `over_budget` is `mcp_tools`
@@ -10601,7 +10736,11 @@ fleet's listings yet, a moment after it starts, which is not an agent holding
 no tools.
 
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
-see [Per-entity read and write](#per-entity-read-and-write).
+see [Per-entity read and write](#per-entity-read-and-write). A service identity
+(`oauth.grant: client_credentials`) written with no `oauth.client_secret` is
+written reading `${MCP_<SERVER>_OAUTH_CLIENT_SECRET}`, where
+[storing its secret](#put-mcp-serversnamevalueskey) puts it, on an add and on a
+replacement alike.
 
 ### `GET /mcp-catalogue`
 
@@ -10816,6 +10955,15 @@ it under, so a node that drained, died or restarted stops counting at once.
   server is on: a server turned off reaches these seats again once it is
   turned back on. Empty for a server the configuration does not declare
   ([Tools and MCP › Choosing which agents get a server](../guides/tools-and-mcp.md#choosing-which-agents-get-a-server)).
+  Each also carries `limited`, what the seat's own `mcp_limits` and every
+  enclosing unit's hold the server to for it, `null` where none does:
+  `{off, off_by, tools}`, `off` whether a limit turns the server off for the
+  seat (its grant stands) and `off_by` the key of the unit whose limit does
+  (`null` for the seat's own, or where none does), and `tools` every tool a
+  limit holds back, sorted, as `{tool, level, by}`: the server's own name,
+  `approve` or `blocked`, and the unit whose limit holds it (`null` for the
+  seat's own). The tool runs at the stricter of that level and its own
+  ([Tools and MCP › Narrowing a server for a team](../guides/tools-and-mcp.md#narrowing-a-server-for-a-team)).
   An administrator's reading only.
 - `resolved` is what the engine decides about the server from its
   configuration, so a screen never re-derives it, `null` for a server the
@@ -10894,7 +11042,7 @@ server that lists nothing.
   "tool_count": 42,
   "server_info": {"name": "github-mcp-server", "version": "0.31.0", "protocol": "2025-06-18"},
   "instructions": "",
-  "dependants": {"mcp_env": [], "sandbox": [], "secrets": []},
+  "dependants": {"mcp_env": [], "sandbox": [], "mcp_limits": [], "secrets": []},
   "instances": [
     {"seat": "backend-dev", "node": "node-a", "state": "running", "since": "2026-11-01T08:40:00Z",
      "restarts": 1, "tools": 42, "failure": null, "wait": "",
@@ -10922,8 +11070,10 @@ server that lists nothing.
                        "turn_id": "6c1f0e2a-5b7d-4e8f-9a1b-2c3d4e5f6a7b", "tool": "get_issue",
                        "outcome": "answered", "refusal": "", "duration_ms": 412}],
             "coverage": {"nodes": [{"id": "node-a", "answered": true}], "complete": true}},
-  "reaches": [{"seat": "backend-dev", "reason": "integration", "via": "github"},
-              {"seat": "pm", "reason": "integration", "via": "github"}]
+  "reaches": [{"seat": "backend-dev", "reason": "integration", "via": "github",
+               "limited": {"off": false, "off_by": null,
+                           "tools": [{"tool": "delete_issue", "level": "blocked", "by": "eng"}]}},
+              {"seat": "pm", "reason": "integration", "via": "github", "limited": null}]
 }
 ```
 
@@ -11039,7 +11189,8 @@ seat.
 | Status | `error` | When |
 |---|---|---|
 | `404` | `not_found` | The configuration declares no such server |
-| `409` | `conflict` | The server is turned off (`enabled: false`), so nothing runs it; or the seat named is not granted the server |
+| `409` | `conflict` | The server is turned off (`enabled: false`), so nothing runs it |
+| `409` | `seat_not_granted` | The seat named is not granted the server, so nothing runs it as that seat |
 | `400` | `invalid_body` | A `seat` named for a shared server, which runs one instance for the company; or a body with a field the route does not read |
 | `404` | `no_such_seat` | The organization has no agent seat by that handle |
 | `503` | `unavailable` | The node could not record the request; ask again |
@@ -11126,7 +11277,8 @@ record goes when the configuration stops declaring the server.
 | Status | `error` | When |
 |---|---|---|
 | `404` | `not_found` | The configuration declares no such server |
-| `409` | `conflict` | The server is turned off, so nothing runs it to test (test its entry as a draft instead); or the seat named is not granted the server |
+| `409` | `conflict` | The server is turned off, so nothing runs it to test (test its entry as a draft instead) |
+| `409` | `seat_not_granted` | The seat named is not granted the server, so nothing runs it as that seat |
 | `400` | `invalid_body` | A `seat` named for a shared server, none named for a per-agent one, or a body with a field the route does not read |
 | `404` | `no_such_seat` | The organization has no agent seat by that handle |
 | `503` | `unavailable` | The node could not ask the fleet; ask again |
@@ -11179,8 +11331,11 @@ entry the dry run refuses is answered `422 validation_error` with the
 problems a write of it would get. An admitted draft is tested as the dry run
 left it, turned on whatever its `enabled` says, on the nodes the saved entry
 would run on, and answered as [`POST /mcp-servers/{name}/check`](#post-mcp-serversnamecheck)
-answers, with `"draft": true`. **A draft's test is never recorded**: the
-server's latest test is of the entry the company runs.
+answers, with `"draft": true`. Tested for an agent (`seat`), it is started with
+what the saved entry would start that agent's instance with: the agent's own
+values, its unit's, and its own credential at every integration the entry
+reads, bound as the save will bind it. **A draft's test is never recorded**:
+the server's latest test is of the entry the company runs.
 
 ### `POST /mcp-probe`
 
@@ -11271,7 +11426,10 @@ tested by signing in with it. A person's sign-in sends its client's secret only
 when the grant renews, which a test does not do, so `test=true` is refused
 `400 invalid_query` there: store it with `test=false`. A server whose sign-in
 has no secret (no `oauth` block, `client: cimd` or `dcr`) is refused `409
-conflict`, and so is a `seat`: a sign-in is the company's.
+conflict`, and so is a `seat`: a sign-in is the company's. A service
+identity added through `PUT /config/mcp-servers/{name}` with no `client_secret`
+is written reading the variable this route stores it under (refused, as here,
+where another field reads that variable), so storing it next points nothing.
 
 **Which variable.** The key's own variable where it already reads exactly one
 that nothing else in the document reads, so rotating it changes nobody else's
@@ -11336,9 +11494,9 @@ The body is read strictly (`400 invalid_body` for a field it does not read, no
 `value`, an empty one, or one holding a line break or a NUL, since a header's
 or a variable's value is one line), and any other query parameter is `400
 invalid_query`. `404 not_found` for a server the configuration does not
-declare, `404 no_such_seat` for a seat that is not an agent's, `409 conflict`
-for a seat the server is not granted to. **No answer, log line or audit record
-carries the value**, a refusal included: every call is one `mcp_server_acted`
+declare, `404 no_such_seat` for a seat that is not an agent's, and
+`409 seat_not_granted` for a seat the server is not granted to. **No answer,
+log line or audit record carries the value**, a refusal included: every call is one `mcp_server_acted`
 with the action `store_value`, naming the `key` and the `variable`, and a
 test's sentences withhold the values the server was started with.
 
@@ -12011,7 +12169,8 @@ reclaimed, work preserved on a pushed branch) is listed on both.
       "started_at": "2026-06-08T07:12:44+00:00",
       "updated_at": "2026-06-08T07:30:02+00:00",
       "answerable_in_chat": true,
-      "declined_answers": []
+      "declined_answers": [],
+      "ending": null
     }
   ]
 }
@@ -12053,7 +12212,15 @@ alone; every other reader, a seat's lead included, is told the model the job
 runs under and not the entry. `bridge_calls` is always an array on a row the
 store answered — every run's tools reach it over the bridge, so an empty one is
 a run that has called nothing yet — and absent only where the run's body is
-withheld from the reader.
+withheld from the reader. A call a person approved once the run asked for it
+([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs))
+is among them, marked `approved: true`, with no `args` and no `output`: the
+run's resume made it with the arguments the run held sealed, and handed its
+result to the job that carries the work on sealed too. The call the run held
+for that approval comes before it, marked `held: true`, with no `args`, which
+ride the run's row sealed beside its question, and with `failed: true`, since
+nothing it asked for happened: it is the run's question, not a failure, and
+the executors board draws it so.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed
@@ -12061,7 +12228,19 @@ for as a snapshot), not which box it is. `paused_at` is the answer the
 [pause reaper](../concepts/code-sandbox.md#mid-run-clarification-ask_and_wait)
 acts on rather than the raw stamp, so a run parked on a question whose pause
 instant never reached its row still reads as held: that box is being paid for,
-and a board drawing the stamp alone showed it as a live one. `answerable_in_chat` is `false`
+and a board drawing the stamp alone showed it as a live one. Both read as no
+box, and `paused_at` empty, once the run's ending is decided to reclaim it.
+
+`ending` is `null` on a run nobody has ended, and `{at, reason, stopped_by}`
+on one whose ending is decided and not yet finished: when it was decided, the
+reason it announces (empty for a run whose turn came back, which announces
+nothing; `executor_failed` carries why a lost run was lost) and who stopped
+it, for a person's stop. Such a run is over, and its `status` is the one it
+was ended in: its record waits only for the ending's last steps, which on an
+engine that records every turn's end include [recording that
+end](../concepts/turn-engine.md#how-a-turn-ends-on-the-executor-log) once the
+turn's captures have settled, and can take minutes. The seat's next work
+waits behind it. `answerable_in_chat` is `false`
 for a run whose turn was triggered by something other than an inbound
 message — a schedule tick, a task assignment, an A2A wake — because the
 resume path matches an inbound message's conversation identity against
@@ -12082,7 +12261,8 @@ of the units above it). Both are empty on a run that is not parked. See
 [who is asked](../concepts/code-sandbox.md#who-a-question-is-put-to).
 
 `?audience=<name>` narrows the board to the runs whose question is put to
-one person, the name resolved as [a personal
+one person and still waits for them (a run parked on it, its ending not
+decided), the name resolved as [a personal
 question's](#whose-record-a-personal-question-answers-for) is: absent or either
 of your own names is your own record, somebody's **login** is the seat the
 identity directory binds them to — never read as a seat's handle, and asked of
@@ -12558,9 +12738,9 @@ trace anywhere except the provider's own delivery UI.
 }
 ```
 
-`tools` is **one roll-up per tool** this build serves — `slack`, `mattermost`,
-`atlassian` (the organization, Confluence, Jira and the Forge relay),
-`github`, `gitlab`, `datadog` — whether or not the company configured it, so a
+`tools` is **one roll-up per tool** this build serves (`slack`, `mattermost`,
+`atlassian` for the organization, Confluence, Jira and the Forge relay,
+`github`, `gitlab`, `datadog`, `cloudflare`, `expo`), whether or not the company configured it, so a
 reader never invents a state for a missing one. `state` is `attention` (a
 person has to act), `not_connected` (configured and not working yet, with
 nobody owing anything — or this node could not read the status),

@@ -484,3 +484,74 @@ func TestAHarnessEnvSignInTravelsIntoTheRun(t *testing.T) {
 		t.Errorf("the refusal does not name the provider whose key is missing: %v", err)
 	}
 }
+
+// AN INTEGRATION'S BOX DEFAULTS LIE BENEATH THE ENTRY AND NEVER TOUCH ITS
+// SIGN-IN: the entry's own env wins a name, its sign-in is neither stripped nor
+// replaced, a default under one of the harness's sign-in names never reaches
+// the box, and the rest do. Mutation: lay the defaults with the seat's env, and
+// the entry's region is overridden and Claude Code is switched to Vertex.
+func TestBoxDefaultsLieBeneathTheEntryAndNeverTouchItsSignIn(t *testing.T) {
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
+	t.Setenv("ENTRY_KEY", "sk-ant-company")
+	c := companyFor(t, `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    claude:
+      model: claude-sonnet-5
+      auth: {mode: api-key, api_key: "${ENTRY_KEY}"}
+      env: {CLOUD_REGION: eu-west-1}
+roles:
+  - name: Engineer
+    handle: eng
+    llm: claude
+`)
+	seat := seatNamed(t, c, "Engineer")
+	member, err := c.Models.Head(seat, phase.Execute)
+	if err != nil {
+		t.Fatalf("executor chain: %v", err)
+	}
+	run := newExecutorRun(member.Provider.(*harness.Provider), map[string]string{}, map[string]string{
+		"CLOUD_REGION": "fr-par", "CLAUDE_CODE_USE_VERTEX": "1",
+		"ANTHROPIC_API_KEY": "sk-ant-integration", "CLI_ZONE": "fr-par-1",
+	})
+	for name, want := range map[string]string{
+		"CLOUD_REGION": "eu-west-1", "ANTHROPIC_API_KEY": "sk-ant-company", "CLI_ZONE": "fr-par-1",
+	} {
+		if got := run.env[name]; got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+	if value, present := run.env["CLAUDE_CODE_USE_VERTEX"]; present {
+		t.Errorf("a default under a sign-in name reached the box as %q", value)
+	}
+	if _, present := run.signIn["CLI_ZONE"]; present {
+		t.Error("a default is judged as part of the run's sign-in")
+	}
+}
+
+// A CREDENTIAL-SHAPED DEFAULT NEVER SIGNS A HARNESS IN A REMOTE BOX: a cloud
+// CLI's token file path reaches the box, and an OpenCode run with no key of its
+// own is still refused. Mutation: judge the guard on the box's whole env, and
+// the path passes for a credential.
+func TestACredentialShapedDefaultNeverSignsAHarnessIn(t *testing.T) {
+	t.Parallel()
+	c, seat := creditedCompany(t, "opencode")
+	member, err := c.Models.Head(seat, phase.Execute)
+	if err != nil {
+		t.Fatalf("executor chain: %v", err)
+	}
+	const file = "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"
+	run := newExecutorRun(member.Provider.(*harness.Provider), nil,
+		map[string]string{file: "/home/user/.config/crewlet/gcloud-token"})
+	if run.env[file] == "" {
+		t.Fatalf("the default did not reach the box: %v", run.env)
+	}
+	if err := guardOn(t, c, seat, sandbox.E2B, run.env); err != nil {
+		t.Fatalf("the path is not credential-shaped, so this case tests nothing: %v", err)
+	}
+	if err := guardOn(t, c, seat, sandbox.E2B, run.signIn); err == nil {
+		t.Error("a default's token file path signed OpenCode in to a remote box")
+	}
+}

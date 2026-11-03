@@ -496,6 +496,18 @@ func (r PendingRun) lost() bool {
 	return r.Ending != nil && r.Ending.Reason != "" && r.Stop == nil
 }
 
+// endDecided reports whether the turn's end is decided: its run's ending
+// decided ([PendingRun.Ending]), which owes the turn's end next, or that end
+// owed on the row ([PendingRun.OwedEnd]), or already on the executor log
+// ([PendingRun.EndRecorded]). Such a turn is ending, and no relaunch of it
+// follows, whatever its row still holds: every path that ends a turn writes its
+// end before it lets the row go, and EVERY LAUNCH REFUSES A ROW WHOSE ENDING IS
+// DECIDED ([ErrRunEnding]) — from the decision on, before the end is owed, for
+// as long as a stop's read, its announcement or a store's bad moment keeps the
+// ending for its retry. So the decision itself is what ends the turn here,
+// never the owing that follows it.
+func (r PendingRun) endDecided() bool { return r.Ending != nil || len(r.OwedEnd) > 0 || r.EndRecorded }
+
 // answerOwed reports whether a run whose ending is decided still holds a
 // person's answer that has to go back to the seat before its record is deleted:
 // one no turn took, or one the ending says went unused.
@@ -643,6 +655,27 @@ type BridgeCall struct {
 	// call that ended the job, as a submission or an ask does
 	// ([BridgeCall.Ends]).
 	Held bool `json:"held,omitempty"`
+
+	// Approved marks the call a person then let be made: made by the run's
+	// resume on the engine host rather than by the job over its bridge, and
+	// appended after its result was recorded on the row
+	// ([PendingStore.RecordHeldResult], [OwedCall]). A call of its round
+	// like any other, which is what the readers of whether the turn replied
+	// need of it; its arguments and output are never here, and ride the row
+	// sealed on the held call until the next job opens.
+	Approved bool `json:"approved,omitempty"`
+
+	// HeldID names the held call an Approved call was made for
+	// ([HeldCall.ID]): what makes its append to the log ONCE. The call's
+	// result is recorded on the row first and the call appended to the log
+	// after ([PendingStore.RecordHeldResult]) — two keys, which the store
+	// writes in no one step — so every write that appends it — that one, a
+	// retry that records the result again, and the next job's opening that
+	// carries a call whose append never landed ([OwedCall]) — appends it only
+	// where the log does not already hold this id. Empty on every call a job
+	// made over its bridge. Additive on the wire: a build that does not know
+	// it carries it in Extra.
+	HeldID string `json:"held_id,omitempty"`
 
 	// Extra is every key of the call this build does not know, kept verbatim
 	// and written back by every write of the record (wirekeys.go). Filled by
@@ -812,6 +845,55 @@ type PendingRun struct {
 	// and again in every relaunch.
 	LaunchID string `json:"launch_id,omitempty"`
 
+	// LaunchSeq is the launch's ORDINAL in its turn, from 1: minted by the
+	// write that opens each launch ([PendingStore.BeginLaunch]) in the same
+	// write as its LaunchID, one past the launch before it — so every capture
+	// of the turn's session carries a (launch, capture) pair that only grows,
+	// which the executor log orders the turn's captures by and refuses a late
+	// one with ([SessionCapture]). LaunchID cannot: the store mints it at
+	// random. A row an older build wrote reads 0 here, and its next launch
+	// under this build is 1; a job launched under 0 is never captured, since
+	// nothing could order it.
+	LaunchSeq int64 `json:"launch_seq,omitempty"`
+
+	// Capture is the newest capture of the turn's harness session the row
+	// records — begun, landed, refused or unresolved — and Kept the newest
+	// that LANDED, the one the executor log's row names; both nil until the
+	// turn's first ([Coordinator.takeCapture]). The TURN'S, kept by every
+	// relaunch: the turn's end reads them to say whether its newest attempt
+	// was kept, and names the attempt that was not ([unkeptOf]), so the log's
+	// row never goes on naming an older session as the turn's last.
+	// Each is a section of its own with an Extra (wirekeys.go).
+	Capture *SessionCapture `json:"session_capture,omitempty"`
+	Kept    *SessionCapture `json:"session_kept,omitempty"`
+
+	// OwedEnd is the turn's END, decided and not yet on the executor log
+	// ([Coordinator.publishEnd]): the [executorkeep.Ending] as its JSON,
+	// carried whole by every build. Written by whatever ended the turn — its
+	// resumed frame, or the run's own ending for a loss or a stop
+	// ([PendingStore.OweEnd]) — and published by the run's ending before the
+	// row is deleted, which the delete refuses until it is
+	// ([ErrEndOwed]); so the seat's mail waits on it as it waits on every
+	// ending kept for its retry, and the conversation's next turn is never
+	// dispatched before the end it reads is recorded. DECIDED ONCE: a second
+	// path that ends the turn finds this one and records it, rather than an
+	// account of its own — and answers no colleague a second time.
+	//
+	// AN END THIS BUILD CANNOT READ — a key it does not know, an outcome it
+	// does not know — was written by a newer build, and is left owed for a
+	// node that reads it ([Coordinator.publishEnd]), never re-encoded without
+	// what it could not read.
+	OwedEnd json.RawMessage `json:"owed_end,omitempty"`
+
+	// EndRecorded says the executor log has the turn's end: the run's ending
+	// published the end the row owed and cleared it in the same write that set
+	// this ([PendingStore.ClearEnd]). The DURABLE HALF OF "DECIDED ONCE": an
+	// end cleared from OwedEnd would otherwise read as one never decided, and
+	// an attempt at the ending after a crash between the clear and the delete,
+	// or after a delete the store refused for a reply the row still owed,
+	// decided the turn's end again — its colleague answered a second time.
+	EndRecorded bool `json:"end_recorded,omitempty"`
+
 	// Launch is what the launch's own record needs about the job named by
 	// LaunchID — see [LaunchRecord]. Written with LaunchID, whole, on every
 	// launch.
@@ -899,7 +981,14 @@ type PendingRun struct {
 	// UTF-8 and at most [gitref.MaxBranchBytes]), and empty when the ask
 	// named none — never one of the refs the run delivered, which are a pull
 	// request's URL as often as a branch.
-	Branch    string `json:"branch"`
+	Branch string `json:"branch"`
+
+	// SessionID is the harness session the job's launch named before its
+	// harness started — the one it continues, or one minted for it — written by
+	// the attach that names the job's box ([PendingStore.AttachSandbox]) and
+	// by nothing a box says: which session the job's box ran is
+	// [PendingRun.SessionRan], read off this, the launch's other session and
+	// the box's word on its token.
 	SessionID string `json:"session_id"`
 
 	// Question is what the job the row holds asked a person, in one
@@ -925,6 +1014,12 @@ type PendingRun struct {
 	// made twice. A KEY OF ITS OWN AT THE TOP OF THE ROW, carrying the keys a
 	// later build adds inside it ([HeldCall.Extra]).
 	HeldCall *HeldCall `json:"held_call,omitempty"`
+
+	// OwedCall is the call a person approved that the round's log is owed
+	// ([OwedCall]): set by the reset that clears a held call whose result is
+	// recorded ([PendingStore.BeginLaunch]), appended by the opening that
+	// follows, and kept until a job of the round has launched past it.
+	OwedCall *OwedCall `json:"owed_call,omitempty"`
 
 	// ParkedInputTokens and ParkedOutputTokens are what the job that
 	// asked the question cost, recorded with the question.
@@ -1547,10 +1642,98 @@ type BridgeLog struct {
 	// made after its own question was read as the carried-on run's.
 	AnsweredThrough int `json:"answered_through,omitempty"`
 
+	// PriorCalls is every tool the turn's EARLIER rounds called through the
+	// bridge and that succeeded, by name, each once, and PriorCallsElided
+	// that some of their calls were elided from the log before they were
+	// folded in ([BridgeLog.Elided]) — what an opening of the log to a new
+	// round takes out of it, so the run's own ending, for a loss or a stop no
+	// frame of the turn reaches, still knows whether an earlier round
+	// delivered the turn's reply ([turn.Answered] reads names and outcomes
+	// alone). Folded in by the SAME compare-and-swap that starts the new
+	// round's log afresh ([CoordStore.openLog]), so no crash leaves a round's
+	// calls neither in the log nor in the fold; kept by every opening of the
+	// same round, and removed with the log at the run's end.
+	//
+	// ON THE LOG, NEVER THE RECORD: the record is what every reader decides
+	// on and every box-git request reads whole, and the one reader of the
+	// fold is the run's own ending, which reads the log for the round's calls
+	// beside it ([RunCalls]).
+	PriorCalls       []string `json:"prior_calls,omitempty"`
+	PriorCallsElided bool     `json:"prior_calls_elided,omitempty"`
+
 	// Extra is every key of the log this build does not know, kept verbatim
 	// and written back by every write of it (wirekeys.go). Filled by the
 	// decode, never by a caller.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// priorFor is what an opening of the log to a job of round keeps of the turn's
+// earlier rounds ([BridgeLog.PriorCalls]): the fold as it stands for the same
+// round, and for another round the fold with this log's own calls taken into
+// it — the calls of a round the opening replaces.
+func (l BridgeLog) priorFor(round string) ([]string, bool) {
+	if l.Round == round {
+		return l.PriorCalls, l.PriorCallsElided
+	}
+	return foldPriorCalls(l.PriorCalls, l.Calls, l.PriorCallsElided || l.Elided > 0)
+}
+
+// OwedCall is a call a person approved, as its round's log keeps it
+// ([HeldCall.Call]), which the log of that round is owed
+// ([PendingRun.OwedCall]).
+//
+// ON THE ROW, BECAUSE THE LOG IS NOT: the result of a held call is recorded on
+// the row and the call appended to the log after it, two keys the store writes
+// in no one step ([PendingStore.RecordHeldResult]), and the reset that opens
+// the next job clears the held call. Where the append never landed — its write
+// failed, or its node stopped first — the reset carries the call here, in its
+// own write, so the opening that follows appends it; and where that opening
+// fails too, the next relaunch's reset finds it still here, as it finds the
+// round and its cut ([PendingRun.Round], [PendingRun.AnsweredJob]). Dropped by
+// a reset that replaces a job which launched, whose opening therefore landed.
+//
+// THE JSON TAGS ARE A WIRE FORMAT, as the row's are.
+type OwedCall struct {
+	// Round is the round the call was made in ([PendingRun.Round]): only
+	// that round's log is owed it.
+	Round string `json:"round"`
+
+	// Call is the call as the log keeps it, named by its held call
+	// ([BridgeCall.HeldID]), which is what keeps it in the log once.
+	Call BridgeCall `json:"call"`
+
+	// Extra is every key of the section this build does not know: see
+	// wirekeys.go.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// withHeld is l with the call a person approved in run's job that the log is
+// still owed: made, and kept on the row with its result ([HeldCall.Call]),
+// where the write that appends it to the log has not landed — a call of the
+// round all the same, which every reader of the job's calls reads: an ending's
+// account ([PendingStore.TurnLog]) and a resume's ([ResumeRequest.Bridged]).
+// Never another job's: the reset that relaunches the turn carries the row's
+// held call off it ([PendingRun.OwedCall]).
+func (l BridgeLog) withHeld(run PendingRun) BridgeLog {
+	if h := run.HeldCall; h != nil && h.Made() && h.Call != nil {
+		l, _ = l.withApproved(run.Round, *h.Call)
+	}
+	return l
+}
+
+// withApproved is l with call — the call a person approved in round
+// ([BridgeCall.Approved]) — appended where l is that round's log and does not
+// hold it yet ([BridgeCall.HeldID]), and whether it was: placed after every
+// call l holds, as an append over the bridge is.
+func (l BridgeLog) withApproved(round string, call BridgeCall) (BridgeLog, bool) {
+	if l.Round != round || slices.ContainsFunc(l.Calls, func(c BridgeCall) bool {
+		return c.HeldID == call.HeldID
+	}) {
+		return l, false
+	}
+	call.Seq = l.LastSeq() + 1
+	l.Calls, l.Elided = appendBounded(slices.Clone(l.Calls), l.Elided, call)
+	return l, true
 }
 
 // LastSeq is the place of the last bridged call the log records
@@ -1707,6 +1890,55 @@ type PendingStore interface {
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
 
+	// StampCapture records one capture of the turn's harness session on its
+	// row ([PendingRun.Capture], [PendingRun.Kept]), answering whether it was
+	// taken.
+	//
+	// THE PLACE ONLY GROWS, which is what reserves it. A capture placed after
+	// the row's newest is taken, whatever its state — that is how a capture
+	// reserves its place before its archive leaves the box, so two reads of
+	// one run at once never take the same one. A capture at the newest's own
+	// place is taken only where it is the same take's — its job, and the
+	// instant the take stamped it at ([SessionCapture.At]) — and moves that
+	// capture on — begun to an outcome, unresolved to an answer — so a late
+	// write never takes an answer back, and no read settles a place another
+	// read holds. Anything older is refused. And a capture that LANDED is the
+	// turn's kept one wherever it is newer than the kept one, so an
+	// unresolved capture answered after a newer one began still counts.
+	//
+	// A STAMP THE ROW ALREADY HOLDS, the same take's in the same state, is
+	// answered taken, and nothing is written: a store that applied an earlier
+	// ask and whose answer never came back leaves the place its asker's, and
+	// asked again the asker learns so, rather than reading its own
+	// reservation as another read's and leaving it begun with nobody to
+	// settle it.
+	//
+	// ON A ROW IN ANY STATE, its ending decided included: a stop's capture is
+	// taken after the stop is decided and before the box is reclaimed, and
+	// what it came to is a fact about the turn whoever holds the row. A row
+	// that is gone takes nothing and is no error.
+	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
+
+	// OweEnd records on the row the end its turn owes the executor log
+	// ([PendingRun.OwedEnd]), answering the row as it stands after the write
+	// and whether this call wrote it.
+	//
+	// DECIDED ONCE: a row that owes an end already keeps it, and answers it,
+	// so a second path that ends the same turn records the first one's
+	// account; and a row whose end is recorded already
+	// ([PendingRun.EndRecorded]) takes none. ON A ROW IN ANY STATE, its
+	// ending decided included: a loss's or a stop's end is decided by that
+	// ending's own steps. A row that is gone takes nothing and is no error.
+	OweEnd(ctx context.Context, turnID string, ending json.RawMessage) (PendingRun, bool, error)
+
+	// ClearEnd removes the end a row owes once the executor log has taken it
+	// ([PendingRun.OwedEnd]), only where the row still owes exactly owed, so
+	// a clear can never take an end the log has not seen — and marks the end
+	// recorded in the same write ([PendingRun.EndRecorded]), which no later
+	// OweEnd overwrites. A row that is gone or owes another is no error, and
+	// answers false.
+	ClearEnd(ctx context.Context, turnID string, owed json.RawMessage) (bool, error)
+
 	// ClaimForResume atomically flips a run to resumed, when it holds the
 	// tail's launch in one of the tail's statuses.
 	//
@@ -1856,7 +2088,10 @@ type PendingStore interface {
 	// the reply's delivery was spent when it was recorded, so the row is the
 	// only thing still carrying it. The caller lets it go
 	// ([PendingStore.OweHandBack]), hands it back and finishes again. A reply
-	// a turn took has been used, and goes with the run.
+	// a turn took has been used, and goes with the run. NOR, LAST, IS A ROW
+	// THAT OWES THE EXECUTOR LOG ITS TURN'S END ([ErrEndOwed], with the row
+	// as it stands): the row is the end's only record until the log takes it
+	// ([PendingStore.ClearEnd]).
 	Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error)
 
 	// ExpirePause flips a run parked on a clarification to reseed AND
@@ -1906,7 +2141,11 @@ type PendingStore interface {
 	// AttachSandbox records the box and the command a run is using. An
 	// attach naming a command records the job STARTED on the job's record
 	// ([LaunchRecord.Started]) in the same write, and no later write of the
-	// job unsays it: the box and its command may go, the job still ran.
+	// job unsays it: the box and its command may go, the job still ran. And
+	// what the job's box was handed ([BoxRef.Handed]) is written beside the
+	// record once that write has landed ([PendingStore.Handed]); a failure
+	// to write it is not the attach's, which has landed, and leaves the job
+	// with no set, so its captures are refused.
 	//
 	// A REFUSED ATTACH IS AN ERROR, as a refused relaunch is
 	// ([PendingStore.BeginLaunch]), with the same two answers asked in the
@@ -2004,6 +2243,51 @@ type PendingStore interface {
 	// AN ERROR IS THE STORE'S, never "no calls": a resumed turn judged on an
 	// empty log is a turn that did nothing, which the delivery check fails.
 	BridgeLog(ctx context.Context, run PendingRun) (BridgeLog, error)
+
+	// TurnLog reads the calls of run's turn as run's job stands to hold
+	// them, whatever job the log beside the record is on: what an ending
+	// reads to say whether the turn replied ([RunCalls]), and where a
+	// capture places its session ([SessionCapture.BridgeSeq]).
+	//
+	// NOT [PendingStore.BridgeLog], WHICH READS A LOG NOT YET OPENED TO THE
+	// JOB AS EMPTY. That is right for a resume, which must never replay
+	// another job's calls as its own; for an ending it is a false account.
+	// A relaunch writes the row, naming the new job, and opens the log to it
+	// in a second write, and a node that stops between the two — or an
+	// opening that fails — leaves a row whose job the log was never opened
+	// to, which is reaped as lost or stopped by a person as it stands; read
+	// as no calls, a turn whose earlier round posted its reply is recorded
+	// as one that did not. So a log on an earlier job is answered as the
+	// job's opening would leave it ([PendingRun.Round],
+	// [PendingRun.AnsweredJob]): the round's calls where the job carries the
+	// round on, and every earlier round folded into [BridgeLog.PriorCalls].
+	// And the call a person approved that the log is still owed — the job's
+	// own held call with its result recorded ([HeldCall.Call]), or one a
+	// reset carried ([PendingRun.OwedCall]) — is read as the call of its
+	// round it is. A run with no log has made no call.
+	//
+	// AN ERROR IS THE STORE'S, never "no calls", as for BridgeLog.
+	TurnLog(ctx context.Context, run PendingRun) (BridgeLog, error)
+
+	// Handed reads every secret run's job's box was handed, SEALED under the
+	// fleet keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a
+	// capture of the box's session takes out by value. Kept BESIDE the
+	// record, never on it — up to [MaxHandedBytes] before sealing, which
+	// every read of the record would carry though only a capture and the
+	// next launch's opening read it — named for the job it was written for,
+	// written by the attach that names the job's command once that attach
+	// has landed ([PendingStore.AttachSandbox]), and replaced by the next
+	// job's attach, which carries it forward where that job continues in the
+	// same box, since the box still holds what the jobs before it were handed
+	// and the session it resumes holds their lines ([PriorBox.Handed]).
+	//
+	// "" WHERE THE JOB HAS NONE: a launch that could not seal them, an
+	// attach whose write of them did not land, or a set a later job's
+	// replaced — never another job's set, which would scrub a session of
+	// values its box was not handed and leave in the ones it was. Each
+	// refuses every capture of the job rather than keep a session scrubbed
+	// of less than its box was given. An error is the store's.
+	Handed(ctx context.Context, run PendingRun) (string, error)
 
 	// RecordAsk records the question job `launch` asked a person through its
 	// bridge (ADR-0068) onto the fields a parked question is read from
@@ -2192,14 +2476,34 @@ type PendingStore interface {
 	// claim answers [ErrHeldCallUnclaimed]. NOTHING CLEARS THE MARK but the
 	// next job's opening: a claim given back ([PendingStore.ReleaseClaim])
 	// or revived ([PendingStore.ReviveAnswer]) keeps it, so every later
-	// attempt at the same answer finds it.
+	// attempt at the same answer finds it — on the row its own claim returns
+	// ([PendingStore.ClaimForResume]), with the result once one is recorded,
+	// which the attempt answers the call from before it asks whether the
+	// call may be made at all ([HeldResume.Call]).
 	MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error)
 
-	// RecordHeldResult records what the held call a resume marked returned,
-	// sealed ([CallSeal.SealResult]), on the same terms as
-	// [PendingStore.MarkHeldCall], once: a call whose result is recorded is
-	// not written again, and answers true.
-	RecordHeldResult(ctx context.Context, turnID, launch, sealed string, fence Fence) (bool, error)
+	// RecordHeldResult records what the held call a resume marked came to
+	// ([HeldMade]), on the same terms as [PendingStore.MarkHeldCall], once: a
+	// call whose result is recorded is not written again, and answers true.
+	//
+	// THE RESULT, THEN THE CALL: its result, sealed ([CallSeal.SealResult]),
+	// on the held call, under the claim's fence, with the call as the log
+	// keeps it ([HeldCall.Call]: named the held call's tool, stamped with the
+	// instant the result was recorded, marked [BridgeCall.Approved] and named
+	// by [BridgeCall.HeldID], with no arguments and no output); then that
+	// call appended to its round's log ([BridgeLog.Calls]), placed after
+	// every call the log holds, so the job that carries the work on keeps it
+	// with its round. Two keys, which the store writes in no one step, and
+	// the result first because it is what the carrying-on job needs and the
+	// fence guards. A crash between the two, or an append that fails (its
+	// error is answered), leaves the call on the row alone, and nothing
+	// loses it: a call already made answers true here and is appended where
+	// the log lacks its id; an ending reads it off the row
+	// ([PendingStore.TurnLog]); and the reset that opens the next job carries
+	// it on the row to that job's opening, which appends it in its own write
+	// ([PendingRun.OwedCall]). Never twice: every one of those appends only
+	// where the log lacks the held call's id.
+	RecordHeldResult(ctx context.Context, turnID, launch string, made HeldMade, fence Fence) (bool, error)
 
 	// ReviveAnswer gives a claim no resume holds back to the recorded answer
 	// it was taken for: the run returns to [StatusAnswered], owed the resume
@@ -2292,6 +2596,24 @@ type PendingStore interface {
 	// FALSE IS NOT AN ERROR: the record holds another job, already says so,
 	// or is gone.
 	MarkPulled(ctx context.Context, turnID, launch string) (bool, error)
+
+	// MarkSessionStart records which session the job named said its box
+	// started ([LaunchRecord.SessionStart]), reporting whether this call
+	// recorded it. ONCE PER JOB: a job's box starts one session, and the first
+	// record stands. FALSE IS NOT AN ERROR: the record holds another job, has
+	// said already, or is gone. NO FENCE, as MarkPulled takes none: what a box
+	// said it started is a fact about the job, never an ownership decision. A
+	// start that is not [SessionStart.Valid] is an error.
+	MarkSessionStart(ctx context.Context, turnID, launch string, start SessionStart) (bool, error)
+
+	// MarkResumeBegun records on a claimed run what the turn resuming from the
+	// job named does with the job's round, as that turn begins
+	// ([LaunchRecord.ResumeCarry]), reporting whether this call recorded it.
+	// Only while the run is [StatusResumed] on that job, its ending not yet
+	// decided, under a fence no newer lease outranks. FALSE IS NOT AN ERROR:
+	// the run moved on, says it already, or is gone. A carry that is not
+	// [ResumeCarry.Valid] is an error.
+	MarkResumeBegun(ctx context.Context, turnID, launch string, fence Fence, carry ResumeCarry) (bool, error)
 
 	// WatchNotes follows one run's notes: the record's state when the watch
 	// began — [NotesView.Found] false where it has none — then each state it
@@ -2427,9 +2749,12 @@ func (c ConversationRef) preferred(a, b PendingRun) bool {
 // Clarification is what parking a run on the question its job asked records
 // beside it. The question itself is on the row already, written by the ask
 // ([PendingStore.RecordAsk]).
+//
+// NEVER THE SESSION THE COLLECTION READ OFF THE BOX: the session the answer
+// carries the run on in is the one its launch named and its box said it ran
+// ([PendingRun.SessionRan]), and what the collection read is a file in the box
+// the run's model could rewrite.
 type Clarification struct {
-	SessionID string
-
 	// InputTokens and OutputTokens are what the job that asked cost,
 	// carried to the resume its answer drives — see
 	// [PendingRun.ParkedInputTokens].
@@ -2614,6 +2939,21 @@ type BoxRef struct {
 	Harness     string
 	SessionID   string
 	PauseTTLSec float64
+
+	// FreshSessionID is the session of its own a continuing job's script
+	// starts in the continued one's place ([RunHandle.FreshSessionID]),
+	// written by the attach that names the job's command, onto the job's
+	// record ([LaunchRecord.FreshSessionID]).
+	FreshSessionID string
+
+	// Handed is the secrets the launch handed the job's box, sealed
+	// ([PendingStore.Handed]): written beside the record by the attach that
+	// names the job's command, the one write that says the job exists.
+	Handed string
+
+	// Brief is which brief the launch handed the job's run
+	// ([LaunchRecord.Brief]), written with the job's command as Handed is.
+	Brief BriefKind
 }
 
 // PriorBox is the box a relaunch found on its run's row — see
@@ -2633,6 +2973,11 @@ type PriorBox struct {
 	// Since is when the box was first attached to the run
 	// ([PendingRun.BoxSince]): how old its checkouts can be.
 	Since time.Time
+	// Handed is what the job that used the box was handed, sealed
+	// ([PendingStore.Handed]): a job that continues in the box carries it
+	// forward, since the box still holds those values and the session it
+	// resumes their lines ([Coordinator.sealHanded]).
+	Handed string
 }
 
 // KeptBoxMaxAge is how old a turn's box may be, dated from the attach that
@@ -2679,6 +3024,20 @@ func (p PriorBox) ContinuesIn(spec Spec, now time.Time) bool {
 	return p.SandboxID != "" && p.Status == StatusResumed &&
 		p.Placement == string(spec.Placement) && p.Harness == spec.Harness &&
 		!p.Since.IsZero() && now.Sub(p.Since) < KeptBoxMaxAge
+}
+
+// ReachableFrom reports whether node can reach the box at all: one in a cell
+// every node reaches, or one in a cell on an engine host that node launched
+// ([PendingRun.LaunchNode]), whose process tree or container no other node
+// touches — defaultCell standing for the cell of a box whose row names none.
+// The launch's own test of a box it continues in ([Coordinator.hostsPrior]),
+// beside [PriorBox.ContinuesIn], and every reader's that asks it.
+func (p PriorBox) ReachableFrom(node string, defaultCell Placement) bool {
+	cell := Placement(p.Placement)
+	if cell == "" {
+		cell = defaultCell
+	}
+	return !cell.OnEngineHost() || p.LaunchNode == node
 }
 
 // Fence is the ownership token a mutation carries.
@@ -2774,15 +3133,76 @@ type LaunchRecord struct {
 	// refusal, on whichever node collects the job: the identity is keyed by
 	// the fleet keyring, so it compares across nodes and restarts.
 	//
-	// A PEER THAT DOES NOT KNOW IT drops it when it rewrites the row (this
-	// section carries no Extra of its own), and an empty identity is read as
-	// "not recorded", which relaunches nothing: the safe direction.
+	// An empty identity — a launch that had none to name — is read as "not
+	// recorded", which relaunches nothing: the safe direction.
 	SignInID string `json:"sign_in_id,omitempty"`
 
 	// FollowUp is why this job was launched as a follow-up of the job
 	// before it in the same round, where that is a reason the collection
 	// acts on ([FollowUpReason]); empty for every other launch.
 	FollowUp FollowUpReason `json:"follow_up,omitempty"`
+
+	// Brief is which of the three briefs the launch handed the job's run —
+	// one continuing the turn's session in the box it was last worked in, one
+	// continuing it in a box that replaced that one, or one for a session of
+	// its own (restore.go) — written by the attach that names the job's
+	// command ([PendingStore.AttachSandbox]), for the record its collection
+	// publishes beside whether the run did continue the session, which only
+	// its box can say ([Result.Continued]).
+	Brief BriefKind `json:"brief,omitempty"`
+
+	// FreshSessionID is the session of its own the job's script starts in the
+	// continued one's place, where its launch continued one and its box
+	// neither held nor restored it ([RunHandle.FreshSessionID]); empty for a
+	// job whose launch continued none. Written with the job's command, as
+	// Brief is: with SessionStart, what names the session the job's box ran
+	// ([PendingRun.SessionRan]).
+	FreshSessionID string `json:"fresh_session_id,omitempty"`
+
+	// SessionStart is which session the job's box said it started, where its
+	// launch chose to continue one: that session, or one of the job's own its
+	// script started in that one's place, its restore having failed — said by
+	// WHICH of the job's two bridge tokens its harness dialled
+	// (internal/api/mcpbridge), the first time it reached the job's tools and
+	// before any call of its was made, and written once
+	// ([PendingStore.MarkSessionStart]). The one witness of it the run's model
+	// cannot forge: the token of the session the box did not start is gone from
+	// the box before the harness starts, while the record the box's script
+	// writes is a file the model can rewrite ([Result.FellBack], which stays
+	// the collection's record).
+	//
+	// WHAT EVERY LATER REBUILD OF THE RUN'S SKILL GUARD READS: the skills the
+	// launch armed its chosen session's guard with (the parked state's) are
+	// the job's session's only where this is [SessionStartContinued]. Empty —
+	// a launch that continued no session, a box that has not said, or a
+	// record that could not be written — reads as a session of the job's
+	// own, holding none of them: the safe direction, since a guard short of a
+	// skill asks the run to load it again, and one holding a skill the
+	// session never read lets a call through that the skill exists to hold
+	// back. And what names the session the job's box ran, for a relaunch
+	// carrying its round on in that box ([PendingRun.SessionRan]).
+	SessionStart SessionStart `json:"session_start,omitempty"`
+
+	// ResumeCarry is what the turn resuming from this job's collection does
+	// with the job's round, as that turn said it as it began
+	// ([PendingStore.MarkResumeBegun], at [ResumeRequest.Begin]): collects
+	// it, or carries it on. The claim's own: written under the claim whose
+	// turn it is, and cleared by the release that hands that claim back, whose
+	// next claim's turn decides again. Empty before that turn begins — the
+	// claim's read of the job still under way, or its resume still deciding —
+	// and on a claim of a person's answer, which its record says carries the
+	// round on ([PendingRun.Answer]).
+	//
+	// FOR EVERY READER OF WHETHER A RELAUNCH WOULD CONTINUE THE JOB'S SESSION
+	// ([ReadContinuityOf]). A claim's row says nothing else of its turn from
+	// the claim to the turn's end, its review included, when a person most
+	// wants to know, while the turn decided as it began what a relaunch of the
+	// round continues: the box's session at once, where it carries the round
+	// on in the job's box; none of the box's, where it collects the job and
+	// only a review's send-back relaunches the round. Best effort, as a
+	// reader's word: a record that missed it reads as a turn that has not
+	// said, undecided, never as either.
+	ResumeCarry ResumeCarry `json:"resume_carry,omitempty"`
 
 	// Iteration is the turn iteration the launching executor suspended in,
 	// written by [PendingStore.MarkSuspended].
@@ -2874,7 +3294,99 @@ type LaunchRecord struct {
 	// written with the question ([PendingStore.MarkAwaiting]) and paid by
 	// the resume the answer drives, as [PendingRun.ParkedInputTokens] is.
 	Condensed AuxTokens `json:"parked_condensed,omitzero"`
+
+	// Extra is every key of the job's record THIS BUILD DOES NOT KNOW, kept
+	// verbatim and written back by every write that is not a relaunch's — a
+	// later build's fact about the job survives this build's status flips,
+	// leases, bridged calls and notes (wirekeys.go) — and dropped with the
+	// record by the relaunch that replaces it whole, since it is the job's.
+	Extra map[string]json.RawMessage `json:"-"`
 }
+
+// SessionRan is the harness session the job the row holds worked in, for a
+// relaunch that carries the job's round on in the box it ran in — a person's
+// answer, a replaced sign-in — to continue; "" where the row cannot say which.
+//
+// FROM WHAT THE LAUNCH NAMED AND THE TOKEN THE BOX DIALLED, AND NOTHING ELSE.
+// Every runner names its run's session before its harness starts — the one it
+// continues, or one it mints — and, for a run that continues one, the session
+// its script starts of its own in that one's place ([RunHandle.FreshSessionID]);
+// the box says which of the two it started by the bridge token its harness
+// dials ([LaunchRecord.SessionStart]). So the session is the one the launch
+// named where the launch continued none, the continued one where the box said
+// it took it up, and the job's own where the box said it started that. Never a
+// file in the box — the session record the collection reads, the harness's
+// stream — which the run's model could rewrite to name a transcript of its own.
+//
+// UNKNOWN WHERE THE BOX'S WORD NEVER REACHED THE ROW for a launch that continued
+// a session: its box ran one of two sessions, and the row cannot tell which. A
+// relaunch then continues neither by this word: it carries the round on from the
+// turn's kept capture, or in a session of its own. Continuing the launch's
+// choice in place would hand the guard the job's skill loads, made perhaps in
+// the other, for a transcript that never read them.
+//
+// THIS IS THE IN-PLACE RELAUNCH'S WORD ALONE. A kept capture names the session
+// its take read off the box's own record of it ([SessionCapture.SessionID]),
+// the file the run's script writes as its harness exits — as much the box's as
+// the transcript the session is — and a relaunch continuing that capture
+// continues the session it names, in whichever box it gets.
+func (r PendingRun) SessionRan() string {
+	switch r.Launch.SessionStart {
+	case SessionStartFresh:
+		return r.Launch.FreshSessionID
+	case SessionStartContinued:
+		return r.SessionID
+	}
+	if r.Launch.FreshSessionID != "" {
+		return ""
+	}
+	return r.SessionID
+}
+
+// SessionStart is which session a job's box said it started, where its launch
+// chose to continue one ([LaunchRecord.SessionStart]).
+type SessionStart string
+
+const (
+	// SessionStartContinued is the session the launch chose: the box held it
+	// or restored the archive carried into it, and its harness took it up.
+	SessionStartContinued SessionStart = "continued"
+
+	// SessionStartFresh is a session of the job's own, which its script
+	// started in place of the chosen one where the box neither held it nor
+	// could restore it: an archive that did not unpack, an import OpenCode
+	// refused, a release too old to take it up ([Result.FellBack]).
+	SessionStartFresh SessionStart = "fresh"
+)
+
+// Valid reports whether s is a session a box can say it started. A record a
+// newer build wrote may name one this build does not know, which is read as the
+// value it is, and as no continued session.
+func (s SessionStart) Valid() bool { return s == SessionStartContinued || s == SessionStartFresh }
+
+// ResumeCarry is what the turn resuming from a collected job does with the
+// job's round, as it says it as it begins ([LaunchRecord.ResumeCarry]).
+type ResumeCarry string
+
+const (
+	// ResumeCollects is a turn that goes on from the job's work: its review,
+	// whose send-back is the round's only relaunch, and that continues no
+	// session in the job's box.
+	ResumeCollects ResumeCarry = "collects"
+
+	// ResumeCarriesOn is a turn that relaunches the round at once rather than
+	// collecting it: a job lost with its host, or one refused on a sign-in
+	// replaced while it ran, whose round was not yet submitted.
+	ResumeCarriesOn ResumeCarry = "carries_on"
+)
+
+// ResumeCarries are every carry a turn says.
+var ResumeCarries = []ResumeCarry{ResumeCollects, ResumeCarriesOn}
+
+// Valid reports whether c is one this build names. A record a newer build
+// wrote may name another, which is read as the value it is: a turn that began,
+// whose carry this build cannot say.
+func (c ResumeCarry) Valid() bool { return slices.Contains(ResumeCarries, c) }
 
 // FollowUpReason is why a job was launched as a follow-up of the job before it
 // in the same round, where the collection of the new job has to know.

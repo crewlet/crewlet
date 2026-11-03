@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -954,7 +955,7 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 			}, executordomain.NewEnd{
 				Handle: "ceo", Turn: statelog.NewOpID(time.Now(), ""),
 				ConversationKey: "chat:floor-" + key,
-				Ending:          executordomain.Ending{Outcome: executordomain.OutcomeCompleted},
+				Ending:          executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted},
 			})
 			return err
 		},

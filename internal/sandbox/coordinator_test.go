@@ -114,7 +114,13 @@ func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 		beforeBegin(ctx)
 	}
 	if runs && req.Begin != nil {
-		if beginErr := req.Begin(ctx); beginErr != nil {
+		// WHAT THE ENGINE'S TURN SAYS IT DOES WITH THE ROUND: a person's
+		// answer and a loss carry it on, and a completion is collected.
+		carry := ResumeCollects
+		if req.Asked != nil || req.Lost != nil {
+			carry = ResumeCarriesOn
+		}
+		if beginErr := req.Begin(ctx, carry); beginErr != nil {
 			return beginErr
 		}
 	}
@@ -356,6 +362,12 @@ func newCoordRig(t *testing.T) *coordRig {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 	t.Cleanup(coordinator.Stop)
+	// AN END'S WAIT A CASE CAN SIT OUT: a stop's or a loss's read waits for a
+	// job its script was asked to end ([Coordinator.endJob]), and a case
+	// whose job never ends — a poll it fails, a script it leaves running —
+	// would otherwise wait the real two and a quarter minutes for it. A case
+	// about the wait sets its own.
+	coordinator.endWait, coordinator.endPoll = time.Second, 10*time.Millisecond
 	rig.coordinator = coordinator
 	return rig
 }
@@ -4615,4 +4627,51 @@ func TestAnAnnouncementCarriesTheRunsUnitOfWork(t *testing.T) {
 // the one failure that still hands a person's reply back to the inbox.
 func refuseTheRecord(rig *coordRig) {
 	rig.coordinator.pending = &refusingStore{inner: rig.pending, refuse: []string{"RecordAnswer"}}
+}
+
+// A RESUMED TURN SAYS ON ITS RUN WHAT IT DOES WITH THE ROUND, FOR AS LONG AS IT
+// RUNS, AND HANDS IT BACK WITH ITS CLAIM. The turn resuming from a collected job
+// begins by saying what it does with the job's round — collects it, here — and
+// the coordinator records it on the claimed run, so a reader of the run knows,
+// for the whole turn, what a relaunch of the round would continue. A claim
+// handed back takes it with it: the next claim's turn says it again.
+//
+// Mutation: drop the record from the turn's commit, or keep it through the
+// release that hands the claim back, and a case goes red.
+func TestAResumedTurnSaysOnItsRunWhatItDoesWithTheRound(t *testing.T) {
+	t.Parallel()
+	for name, handsBack := range map[string]bool{"a turn that runs": false, "a turn that hands its claim back": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			rig.launch("t1")
+			var said ResumeCarry
+			rig.resumer.mu.Lock()
+			rig.resumer.during = func(ctx context.Context, _ PendingRun) {
+				said = rig.getIn(ctx, "t1").Launch.ResumeCarry
+			}
+			if handsBack {
+				rig.resumer.err, rig.resumer.failsInTurn = errors.New("the turn gave its claim back"), true
+			}
+			rig.resumer.mu.Unlock()
+			payload, ev := rig.completion("t1")
+			err := rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			if said != ResumeCollects {
+				t.Fatalf("while the turn ran its run said %q, want %q", said, ResumeCollects)
+			}
+			if !handsBack {
+				if err != nil {
+					t.Fatalf("OnCompleted: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("the turn that gave its claim back was acknowledged")
+			}
+			if got := rig.get("t1"); got.Status == StatusResumed || got.Launch.ResumeCarry != "" {
+				t.Fatalf("the claim handed back left the run %s saying %q, want it released, saying nothing",
+					got.Status, got.Launch.ResumeCarry)
+			}
+		})
+	}
 }

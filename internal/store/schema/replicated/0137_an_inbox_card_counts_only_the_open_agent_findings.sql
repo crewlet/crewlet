@@ -1,0 +1,33 @@
+-- An inbox card counts only the open agent findings.
+--
+-- A code notice carries the agent findings standing open on its change, by
+-- severity (internal/code's inboxread.go, noticeFindingsSQL), for every
+-- change of the page — and the composed inbox is read on every badge poll and
+-- every Inbox screen. The read had only code_findings_raiser_idx (0101),
+-- (change_id, raiser, state, revision, id), so it sought each change on its
+-- leading column alone and read EVERY finding ever raised on it — the
+-- superseded and dismissed ones of every earlier revision too, since a
+-- superseded finding never leaves the table and every review adds up to 64 —
+-- fetching each one's row for its raiser_kind and severity before it could
+-- drop it. A page of fifty changes cost every review round they ever had.
+--
+-- code_findings_open_agent_idx holds exactly the findings the card counts:
+-- PARTIAL on the open findings an agent raised, keyed on the change and
+-- carrying the severity, so the read is one covering seek a change that
+-- touches nothing else — 0106's code_findings_blockers_idx is the same
+-- answer to the same cost for a change's readiness. Its reader spells the
+-- predicate as the index declares it (internal/code's openAgentFindings),
+-- since the pinned planner takes a partial index only for a statement that
+-- repeats its terms; and a finding leaves it when it is resolved,
+-- dismissed or superseded, so it is no wider than what stands open. The
+-- predicate's two columns ride the key too, one value each across the whole
+-- index: the pinned planner reads a column the statement's WHERE names
+-- from the table's row unless the index holds it, even where the
+-- predicate fixes its value — measured, (change_id, severity) alone
+-- planned a seek that fetched every row it found.
+--
+-- Class: code_findings stays REPRODUCIBLE: an index adds no row, and the
+-- table is written only by the applier from the records on a change's own
+-- subject.
+CREATE INDEX code_findings_open_agent_idx ON code_findings (change_id, severity, state, raiser_kind)
+    WHERE state = 'open' AND raiser_kind = 'agent';    -- a change's open agent findings by severity: an inbox notice's count of them

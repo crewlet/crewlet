@@ -3,6 +3,7 @@ package procgroup
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
@@ -176,6 +177,74 @@ func (l Leader) Current() (bool, error) {
 		return true, nil
 	}
 	return proc.Start == l.Start, nil
+}
+
+// ErrNotMember is a signal [Leader.SignalMember] refused unsent: the pid is no
+// living member of the group the leader names, or that group is no longer the
+// one recorded.
+var ErrNotMember = errors.New("procgroup: not a living member of the recorded process group")
+
+// SignalMember sends sig to ONE process, pid, and only while it is a living
+// member of the group l names and that group is still the one recorded
+// ([Leader.Current]).
+//
+// FOR A PID THE CALLER DID NOT START. A job's own process can tell its engine
+// which of its processes to address — a run's script records its pid in its
+// box so its end can be asked of it, and a direct box's job runs on the engine
+// host as the engine's own user — so the pid is the job's word, and the job
+// can name any process of that user, the engine included. The group it is held
+// to is the engine's own record of the job, read from the kernel when the
+// engine started it, which the job cannot rewrite; so a pid that is not the
+// job's own reaches nobody, and the answer says so ([ErrNotMember]).
+//
+// THE PROCESS IS HELD BEFORE IT IS CHECKED, and the signal goes to what was
+// held. On Linux that is a pidfd ([os.FindProcess], from 5.3), which names the
+// very process it was opened on: a pid that ends and is handed to somebody else
+// between the check and the signal leaves the pidfd naming the process that
+// ended, and its signal reaches nobody. Where the kernel opens none — darwin,
+// a Linux older than 5.3, or a seccomp profile that refuses pidfd_open — the
+// process is the pid, and what is left is the residual every signal of this
+// package's carries: a pid reissued in the instant between the check and the
+// signal.
+//
+// Three answers, as [Leader.Current]'s are: sent; [ErrNotMember], definitive;
+// and any other error, a kernel record that could not be read, which licenses
+// no signal either and is never read as absence. A pid this package addresses
+// no group by — one, and below — is refused unsent everywhere: one is init, or
+// the engine itself when it runs as a container's first process.
+func (l Leader) SignalMember(pid int, sig os.Signal) error {
+	if !addressable(pid) {
+		return fmt.Errorf("%w: pid %d is no process this package signals", ErrNotMember, pid)
+	}
+	return signalMember(l, pid, sig)
+}
+
+// memberOf reports whether pid, which the caller holds, is a living member of
+// the group l names and that group is still the one recorded: [ErrNotMember]
+// where it is not, and the kernel's failure where it could not be asked.
+func (l Leader) memberOf(pid int) error {
+	proc, found, err := inspect(pid)
+	switch {
+	case err != nil:
+		return fmt.Errorf("procgroup: reading the kernel's record of pid %d: %w", pid, err)
+	case !found:
+		return fmt.Errorf("%w: pid %d is no process", ErrNotMember, pid)
+	case proc.Zombie:
+		return fmt.Errorf("%w: pid %d has exited", ErrNotMember, pid)
+	case proc.Group != l.PID:
+		return fmt.Errorf("%w: pid %d is in process group %d, not %d", ErrNotMember, pid, proc.Group, l.PID)
+	}
+	// AND THE GROUP IS STILL THE ONE RECORDED: a group id is a pid too, and a
+	// group the recorded one ended and a later process now leads under the
+	// same id is somebody else's.
+	current, err := l.Current()
+	if err != nil {
+		return err
+	}
+	if !current {
+		return fmt.Errorf("%w: process group %d is no longer the one recorded", ErrNotMember, l.PID)
+	}
+	return nil
 }
 
 // String is the leader as one line: the pid and the start token, separated by

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -51,7 +52,7 @@ func TestACaptureNamesTheObjectItsRowNames(t *testing.T) {
 	}
 
 	ended := e.encode(ConversationSubject(c.Handle, c.ConversationKey, c.Turn), OpEnd,
-		ScopeSet{Subject: true}, ending("ana", "chat:room", turn, "", Ending{Outcome: OutcomeCompleted}))
+		ScopeSet{Subject: true}, ending("ana", "chat:room", turn, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	if got, err := records(ended); err != nil || got != nil {
 		t.Errorf("an end: Records = %+v, %v; want none", got, err)
 	}

@@ -31,21 +31,28 @@ import (
 //
 // THE WHOLE RECORD FITS, and this is its arithmetic. The record's variable
 // text is the report, the failure detail and the transcript (each at most
-// this), the question in its notes (one sentence, [decision.MaxQuestion]
-// bytes), the delivered refs and the refs the run's push record names,
-// together ([MaxDeliveredRefBytes], a pushed ref counted by the line it
-// renders to), and the reason that record could not be read where it could
-// not ([github.com/crewlet/crewlet/internal/events.MaxDiagnosticBytes]);
-// everything else on it is identifiers and counts, a few KiB, and, beside
-// each pushed ref's names, its two whole object ids and its keys, about 140
-// bytes for each of at most [MaxPushedRefs], which a record carries only where
-// the reason is absent and which come to less than the reason's own worst.
-// JSON can grow text six-fold (a control byte becomes \u00XX, `<`, `>` and
-// `&` become \u003c and its kin, an invalid byte becomes \ufffd), so the worst
-// case is (3 × 256 + 16 + 1 + 64) KiB × 6, about 5 MiB, with the ceiling's
-// other 3 MiB to spare. A field added to the record that carries text a box
-// wrote needs its own bound and a line here, or this promise is no longer
-// one.
+// this, measured redacted, as the record carries it: [Coordinator.fitText],
+// [boundTranscript]), the question in its notes (one sentence,
+// [decision.MaxQuestion] bytes), the delivered refs and the refs the run's
+// push record names, together ([MaxDeliveredRefBytes], a pushed ref counted
+// by the line it renders to), the reason that record could not be read where
+// it could not ([github.com/crewlet/crewlet/internal/events.MaxDiagnosticBytes])
+// and two reasons of a KiB each, why the run started a session of its own
+// ([MaxFellBackBytes]) and why its session was not kept ([boundReason]).
+// Everything else on it is identifiers and counts, a few KiB: the two a box
+// names among them held to the shapes a harness gives them
+// ([ValidSessionID], [ValidRelease]) where its runner reads them and again as
+// the record is published — the session it ran, at most 128 bytes, and its
+// harness's release, at most 64 — and, beside each pushed ref's names, its
+// two whole object ids and its keys, about 140 bytes for each of at most
+// [MaxPushedRefs], which a record carries only where the push record's reason
+// is absent and which come to less than that reason's own worst. JSON can
+// grow text six-fold (a control byte becomes \u00XX, `<`, `>` and `&` become
+// \u003c and its kin, an invalid byte becomes \ufffd), so the worst case is
+// (3 × 256 + 16 + 1 + 64 + 2) KiB × 6, 5106 KiB, about 5 MiB, with the
+// ceiling's other 3 MiB to spare. A field added to the record that carries
+// text a box wrote needs its own bound and a line here, or this promise is no
+// longer one.
 //
 // WHAT HAPPENS PAST IT DEPENDS ON WHO READS THE PIECE. The report and the
 // failure detail are what the run's reviewer judges the round on — what it
@@ -257,6 +264,57 @@ func (p RunPart) Valid() bool { return slices.Contains(RunParts, p) }
 // rather than dropped unsaid.
 const MaxDeliveredRefBytes = 16 << 10
 
+// MaxFellBackBytes bounds why a run asked to continue a session started one of
+// its own ([Result.FellBack]), as its runner reads it and as the launch's
+// record carries it.
+//
+// A REASON IS ONE SENTENCE, written by the run's script on one line of its
+// session record: one of the engine's own — the session was not in the box,
+// the box's harness is older than the release that continues a carried one,
+// the archive would not unpack — at most a couple of hundred bytes, the
+// longest naming the box's release; or, for OpenCode, a few words of the
+// engine's and then whatever OpenCode answered the import or the delete with,
+// put on one line, as long as OpenCode made it. A KiB holds each of the
+// engine's sentences whole and the opening of what OpenCode said, where it
+// names its error; the whole of it is on the run's error stream, where the
+// script prints it too. It is the bound the executor log holds a sentence of
+// the same kind to (executorkeep.FailureMaxBytes, UnkeptReasonMaxBytes), and
+// on the record, escaped at JSON's worst, it is 6 KiB of the ceiling's 8 MiB.
+//
+// HELD, BECAUSE THE RECORD IS A FILE IN THE BOX: the run's own agent can
+// write it, so the one line was as long as the file the engine reads whole
+// ([MaxFileBytes]) and the launch's record carried all of it — and a record
+// past the queue's ceiling is refused whole, the launch's spend, report and
+// refs with it.
+const MaxFellBackBytes = 1 << 10
+
+// BoundFellBack is why a run started a session of its own ([Result.FellBack])
+// as everything past its box carries it: redacted whole, then cut to
+// [MaxFellBackBytes] ([boundReason]). Applied where the runner reads the
+// reason out of its box, so the result it hands back — to a node that asked
+// for the read too — carries no more, and again as the launch's record is
+// published ([collectedRecord]), which trusts no runner, nor a host of another
+// build, to have bounded what it hands back.
+func BoundFellBack(why string) string { return boundReason(why, MaxFellBackBytes) }
+
+// boundReason is a reason the launch's record carries in a sentence, REDACTED
+// WHOLE AND THEN CUT to bound bytes on a character, marked where it was cut,
+// the mark inside the bound ([textcut.Within]) — the opening kept, which is
+// where a sentence says what happened. The record's two reasons are held by
+// it: why the run started a session of its own ([MaxFellBackBytes]) and why
+// its session was not kept, at the bound the executor log holds that same
+// reason to (executorkeep.UnkeptReasonMaxBytes, a KiB).
+//
+// REDACTED BEFORE THE CUT, because a reason quotes what a process in the box
+// answered, and the box's environment holds the seat's credentials: a token
+// whose start fell just before the cut would survive as a fragment no pattern
+// recognises. AND CUT AFTER EVERY REDACTION, never before one, because a
+// redaction's marker can be longer than what it replaces, and a cut text
+// redacted again can read a partial marker as a value: so a reader that
+// redacts a reason again holds it to its bound by this whole rule, as the
+// record's publish does.
+func boundReason(why string, bound int) string { return textcut.Within(redact.Secrets(why), bound) }
+
 // MaxCondenseBytes is the most text one [Condenser] call reads: what the
 // engine's compactor takes in one condensation, its compact.MaxChunks first-
 // pass pieces of compact.ChunkBytes each — two MiB. Past it the compactor
@@ -411,13 +469,29 @@ func carriedPart(part RunPart, text string, budget int, why string) string {
 // fitText is the half of [Coordinator.fitResult] a model may write: the
 // report and the failure, each held to its bound and condensed past it by the
 // seat's auxiliary model.
+//
+// EACH MEASURED AS THE RECORD CARRIES IT: REDACTED, the whole of it first,
+// and a model's rewrite of it before the rewrite is measured
+// ([Coordinator.condensed]). A redaction can lengthen a text — a password's
+// value written in pieces between escaped breaks becomes a marker a piece,
+// seven times its bytes — and the record is redacted again as it is
+// published, so a piece measured before its last redaction rode the record at
+// up to seven times its bound: a runner's that redacted nothing, which the
+// coordinator trusts no runner not to hand over, and a rewrite, which no
+// runner ever saw. Redacted here, the publish's own pass is a second one over
+// redacted text, which changes nothing — save the one shape internal/redact's
+// package doc names, a key's piece beside a key's END line that runs on into a
+// password's key, which a second pass can replace with a marker — so the
+// record's arithmetic ([MaxRunTextBytes]) holds whatever the runner did, and
+// the run's report its reviewer reads carries the same text.
 func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result) Result {
 	// THIS COLLECTION'S OWN, counted from nothing: the field is the
 	// coordinator's, and a runner that set it would be charging the turn
 	// for a rewrite nobody made.
 	result.Condensed = AuxTokens{}
-	result.Text = c.fitPart(ctx, run, PartReport, result.Text, MaxRunTextBytes, &result.Condensed)
-	result.Error = c.fitPart(ctx, run, PartFailure, result.Error, MaxRunTextBytes, &result.Condensed)
+	result.Text = c.fitPart(ctx, run, PartReport, redact.Secrets(result.Text), MaxRunTextBytes, &result.Condensed)
+	result.Error = c.fitPart(ctx, run, PartFailure, redact.Secrets(result.Error), MaxRunTextBytes,
+		&result.Condensed)
 	// ONE BUDGET FOR THE RUN'S REFS: what the push record says it pushed
 	// has what its own lines, bounded where the box was read ([boundBox]),
 	// leave of it ([boundPushed]).
@@ -679,6 +753,13 @@ func condensable(text string) string {
 // condensed is the seat's auxiliary model's rewrite of a piece past its
 // budget, or false — said in the log — where none could be had. What the
 // attempt cost is added to spent either way.
+//
+// THE REWRITE IS REDACTED BEFORE IT IS MEASURED, and one the redaction puts
+// past the budget is refused as one that came back too long is, so the
+// whole-lines fallback of the redacted text stands in its place: the model
+// writes new text, which no runner redacted, and measured first, a rewrite
+// the publish's redaction lengthened rode the record past its bound — the
+// rule [boundReason] holds a reason to, a cut after every redaction.
 func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPart, text string,
 	budget int, spent *AuxTokens,
 ) (string, bool) {
@@ -687,10 +768,12 @@ func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPar
 	}
 	rewritten, cost, err := c.condense.Condense(ctx, run, part, text, budget)
 	*spent = spent.Plus(cost)
-	if err == nil && len(rewritten) <= budget {
-		return rewritten, true
+	if err == nil {
+		if rewritten = redact.Secrets(rewritten); len(rewritten) <= budget {
+			return rewritten, true
+		}
 	}
-	detail := "the rewrite came back past the bound"
+	detail := "the rewrite, redacted, came back past the bound"
 	if err != nil {
 		detail = err.Error()
 	}

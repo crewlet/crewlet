@@ -50,10 +50,10 @@ type boxReads struct {
 	// host is this node's coordinator, current: the runtime is published
 	// after the node is built, and replaced never.
 	host func() *sandbox.Coordinator
-	// budget is how long an ask waits for the host: [sandbox.BoxReadBudget],
-	// held on the value so a case can watch a host stay silent without
-	// waiting a minute for it.
-	budget time.Duration
+	// budget is how long an ask of each kind of read waits for the host:
+	// [sandbox.BoxReadBudget], held on the value so a case can watch a host
+	// stay silent without waiting minutes for it.
+	budget func(sandbox.BoxRead) time.Duration
 }
 
 // newBoxReads builds this node's half of the box-read channel over the fleet
@@ -75,9 +75,18 @@ var _ sandbox.BoxReader = (*boxReads)(nil)
 func (b *boxReads) ReadBox(ctx context.Context, run sandbox.PendingRun,
 	read sandbox.BoxRead) (sandbox.Result, bool, error) {
 
+	// THE ASKER'S OWN DEADLINE, where it is sooner than the budget: the host
+	// reads for its share of the time to the request's deadline, and a host
+	// that took the budget for an asker that gives up sooner would go on
+	// reading — taking a session out of the box — for an answer nobody reads,
+	// beside the asker's next attempt at the same read.
+	deadline := time.Now().Add(b.budget(read))
+	if asked, ok := ctx.Deadline(); ok && asked.Before(deadline) {
+		deadline = asked
+	}
 	req := sandbox.BoxReadRequest{
 		Version: sandbox.BoxReadWireVersion, ID: signedask.NewID(),
-		Deadline: time.Now().Add(b.budget),
+		Deadline: deadline,
 		Node:     run.LaunchNode, TurnID: run.TurnID, LaunchID: run.LaunchID,
 		SandboxID: run.SandboxID, Read: read,
 	}
@@ -114,7 +123,7 @@ func (b *boxReads) ReadBox(ctx context.Context, run sandbox.PendingRun,
 		return *rep.Result, rep.Ended, nil
 	}
 	return sandbox.Result{}, false, fmt.Errorf("%w: %s, within %v", sandbox.ErrBoxHostSilent,
-		run.LaunchNode, b.budget)
+		run.LaunchNode, b.budget(read))
 }
 
 // errBoxReadNotHere is a box read addressed to another node: the serve answers

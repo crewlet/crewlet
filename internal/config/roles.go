@@ -141,6 +141,13 @@ type Role struct {
 	// once per seat.
 	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Per-seat MCP credentials: env vars (stdio) or headers (http)."`
 
+	// MCPLimits narrows the MCP servers this agent seat is granted, keyed
+	// by server name: a server turned off for it, a tool held at approve or
+	// blocked. It never widens one: the seat is held to the strictest of its
+	// own block, every enclosing unit's and the server's entry
+	// ([org.MCPLimits], [MCPServer.Grants]).
+	MCPLimits org.MCPLimits `yaml:"mcp_limits,omitempty" json:"mcp_limits,omitempty" desc:"Narrow the MCP servers this agent seat is granted, keyed by server name: off turns one off for the seat, tools holds a tool at approve or blocked. Never widens: the strictest of this, every enclosing unit's and the server's own entry applies."`
+
 	// Sandbox is what this seat's executor box reads beyond the engine-wide
 	// catalogue. See [RoleSandbox].
 	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns. Absent = the engine-wide settings only."`
@@ -401,6 +408,23 @@ func (s *RoleSandbox) validate(path Path) error {
 	return p.err()
 }
 
+// EnvValue is what this seat's own settings set key to in its box, as a launch
+// layers them: its env, else the last of its setup steps that sets key. Nil-safe.
+func (s *RoleSandbox) EnvValue(key string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	if v, ok := s.Env[key]; ok {
+		return v, true
+	}
+	for i := len(s.Setup) - 1; i >= 0; i-- {
+		if v, ok := s.Setup[i].Env[key]; ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // RoleIntegrations is a seat's own identity on external surfaces: the chat
 // apps it speaks as (Slack, Mattermost) and the GitHub App it acts as.
 //
@@ -420,12 +444,15 @@ type RoleIntegrations struct {
 	GitLab     *RoleGitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
 	Jira       *RoleJira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
 	Confluence *RoleConfluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
+	Cloudflare *RoleCloudflare `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"This seat's own Cloudflare account API token: whether it is on and its level."`
+	Expo       *RoleExpo       `yaml:"expo,omitempty" json:"expo,omitempty" desc:"This seat's own Expo robot user: whether it is on and its level."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
 	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
-		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil
+		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil &&
+		r.Cloudflare == nil && r.Expo == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.
@@ -802,6 +829,7 @@ func (r *Role) Seat() *org.Role {
 		LearningEnabled:      r.LearningEnabled,
 		Workers:              append([]string(nil), r.Workers...),
 		MCPEnv:               r.MCPEnv.Clone(),
+		MCPLimits:            r.MCPLimits.Clone(),
 		Placement:            r.Placement.Seat(),
 		Schedules:            append([]org.Schedule(nil), r.Schedules...),
 	}
@@ -948,6 +976,11 @@ type Unit struct {
 	// Human members inherit none: they run no tools and may not carry an
 	// mcp_env at all.
 	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Credentials inherited by this unit's direct agent members."`
+
+	// MCPLimits is what the unit's lead holds MCP servers to for every agent
+	// seat beneath the unit, at any depth: a server turned off, a tool held
+	// at approve or blocked ([org.MCPLimits]). It never widens one.
+	MCPLimits org.MCPLimits `yaml:"mcp_limits,omitempty" json:"mcp_limits,omitempty" desc:"Narrow the MCP servers granted to every agent seat beneath this unit, at any depth, keyed by server name: off turns one off for them, tools holds a tool at approve or blocked. Never widens: the strictest of this, every enclosing unit's, the seat's own and the server's entry applies."`
 
 	// Project and Space are the unit's tracker and knowledge IDENTITY: the
 	// project it files work in, and the container it writes pages in.
@@ -1204,6 +1237,7 @@ func (u *Unit) Unit() *org.Unit {
 		Channel:       u.Channel,
 		KnowledgeRefs: append([]string(nil), u.Knowledge...),
 		MCPEnv:        u.MCPEnv.Clone(),
+		MCPLimits:     u.MCPLimits.Clone(),
 		Schedules:     append([]org.Schedule(nil), u.Schedules...),
 	}
 	unit.Project = strings.TrimSpace(u.Project)

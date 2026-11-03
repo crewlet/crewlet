@@ -3,6 +3,7 @@ package sandboxtest
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 
@@ -24,6 +25,10 @@ var stagedLogCases = []struct {
 		testACarriedOnRoundKeepsItsCallsPastAnOpeningThatFailed},
 	{"ALaunchWhoseOwnRowEndsUnderItsOpeningIsRefused",
 		testALaunchWhoseOwnRowEndsUnderItsOpeningIsRefused},
+	{"AnApprovedCallReachesItsRoundsLogPastAnAppendThatFailed",
+		testAnApprovedCallReachesItsRoundsLogPastAnAppendThatFailed},
+	{"AnEndingReadsTheTurnsCallsPastAnOpeningThatFailed",
+		testAnEndingReadsTheTurnsCallsPastAnOpeningThatFailed},
 }
 
 // stagedRuns is a coordination store's run records with the next write of a
@@ -50,9 +55,15 @@ func (r *stagedRuns) stage(before func(ctx context.Context), fail error) {
 	r.before, r.fail = before, fail
 }
 
-func (r *stagedRuns) MutateSandboxRunLog(ctx context.Context, turnID string,
+// MutateSandboxRunPart stages only the LOG's writes: the attach that starts a
+// job writes its handed set beside the record too, and a stage it consumed
+// would never reach the opening it was armed for.
+func (r *stagedRuns) MutateSandboxRunPart(ctx context.Context, turnID string, part coord.RunPart,
 	decide func(coord.Record, bool) ([]byte, error)) (coord.Record, bool, error) {
 
+	if part != coord.RunLog {
+		return r.records.MutateSandboxRunPart(ctx, turnID, part, decide)
+	}
 	r.mu.Lock()
 	before, fail := r.before, r.fail
 	r.before, r.fail = nil, nil
@@ -63,7 +74,7 @@ func (r *stagedRuns) MutateSandboxRunLog(ctx context.Context, turnID string,
 	if fail != nil {
 		return coord.Record{}, false, fail
 	}
-	return r.records.MutateSandboxRunLog(ctx, turnID, decide)
+	return r.records.MutateSandboxRunPart(ctx, turnID, part, decide)
 }
 
 // A CARRIED-ON ROUND KEEPS ITS CALLS PAST AN OPENING THAT FAILED. A relaunch
@@ -175,6 +186,153 @@ func testALaunchWhoseOwnRowEndsUnderItsOpeningIsRefused(t *testing.T, runs *stag
 			if row, found, err := s.Get(ctx, turn); err != nil || found {
 				t.Fatalf("the stopped run's row after its launch: found %v (ending %+v), %v; want it "+
 					"gone", found, row.Ending, err)
+			}
+		})
+	}
+}
+
+// AN APPROVED CALL REACHES ITS ROUND'S LOG PAST AN APPEND THAT FAILED. The
+// result of a call a person approved is recorded on the row, and the call
+// appended to the log after it: two keys, written in no one step. Where the
+// append fails — or its node stops before it — the call is still the round's:
+// an ending reads it off the row ([sandbox.PendingStore.TurnLog]), the reset
+// that opens the next job carries it to the opening ([sandbox.OwedCall]), and
+// where that opening fails too the retried launch still appends it, once.
+// Read nowhere, the reply a person approved reads as never sent, which every
+// reader of whether the turn replied would report.
+//
+// Mutation: drop the owed call from resetLaunch's opening, and the job that
+// carries the work on keeps no approved call; drop it from the row once the
+// reset has carried it, and the retried launch past a failed opening keeps
+// none; read the row's held call nowhere in TurnLog, and the ending before the
+// relaunch reads no reply.
+func testAnApprovedCallReachesItsRoundsLogPastAnAppendThatFailed(t *testing.T, runs *stagedRuns,
+	s sandbox.PendingStore,
+) {
+	ctx := t.Context()
+	const turn = "t-approved-unlogged"
+	launch := heldParked(t, s, turn)
+	if _, ok, err := s.RecordAnswer(ctx, turn, launch, answerOf("r1", "once"), sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	if _, ok, err := s.ClaimForResume(ctx, turn, sandbox.RecordedAnswerTail(launch), sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	if _, first, err := s.MarkHeldCall(ctx, turn, launch, sandbox.Fence{}); err != nil || !first {
+		t.Fatalf("MarkHeldCall = %v, %v", first, err)
+	}
+	down := errors.New("the coordination store is unreachable")
+	runs.stage(nil, down)
+	if _, err := s.RecordHeldResult(ctx, turn, launch, heldMade("sealed-result"), sandbox.Fence{}); !errors.Is(err, down) {
+		t.Fatalf("a result whose call could not be appended = %v, want the store's error", err)
+	}
+	approved := func(log sandbox.BridgeLog) int {
+		n := 0
+		for _, call := range log.Calls {
+			if call.Approved && call.Name == "tr_close_issue" {
+				n++
+			}
+		}
+		return n
+	}
+	turnLog := func(what string) sandbox.BridgeLog {
+		t.Helper()
+		// The row is read here rather than through mustGet, which takes the
+		// test's own context: one reader reads a row and its log under one.
+		row, found, err := s.Get(ctx, turn)
+		if err != nil || !found {
+			t.Fatalf("the row of %s %s: found %v, %v", turn, what, found, err)
+		}
+		log, err := s.TurnLog(ctx, row)
+		if err != nil {
+			t.Fatalf("TurnLog %s: %v", what, err)
+		}
+		return log
+	}
+	row := mustLogged(t, s, turn)
+	if row.HeldCall == nil || !row.HeldCall.Made() || approved(row.Log) != 0 {
+		t.Fatalf("the failed append left the row's held call %+v and %d approved calls in the log, "+
+			"want the result recorded and the log without the call, or this asserts nothing",
+			row.HeldCall, approved(row.Log))
+	}
+	if got := approved(turnLog("before the relaunch")); got != 1 {
+		t.Fatalf("an ending before the relaunch reads %d approved calls, want the one on the row", got)
+	}
+
+	carried := run(turn)
+	carried.Continues = true
+	runs.stage(nil, down)
+	if _, err := s.BeginLaunch(ctx, carried, sandbox.Fence{}); !errors.Is(err, down) {
+		t.Fatalf("a relaunch whose log could not be opened = %v, want the store's error", err)
+	}
+	if got := approved(turnLog("past the failed opening")); got != 1 {
+		t.Fatalf("an ending past the failed opening reads %d approved calls, want the one the reset "+
+			"carried", got)
+	}
+	if _, err := s.BeginLaunch(ctx, carried, sandbox.Fence{}); err != nil {
+		t.Fatalf("the retried relaunch: %v", err)
+	}
+	if got := approved(mustLogged(t, s, turn).Log); got != 1 {
+		t.Fatalf("the job carrying the work on keeps %d approved calls, want the call once", got)
+	}
+	mustBeginLaunch(t, s, run(turn))
+	if prior := mustLogged(t, s, turn).Log.PriorCalls; !slices.Contains(prior, "tr_close_issue") {
+		t.Fatalf("a later round finds %v of the turn's earlier calls, want the approved call", prior)
+	}
+}
+
+// AN ENDING READS THE TURN'S CALLS PAST AN OPENING THAT FAILED. A relaunch
+// writes the row, naming its job, and opens the log to it in a second write;
+// where that second write fails, or its node stops first, the row names a job
+// the log was never opened to, and such a row is reaped as lost or stopped by
+// a person as it stands. Its ending reads the turn's calls as that opening
+// would have left them ([sandbox.PendingStore.TurnLog]): a new round's earlier
+// rounds folded in, and a carried-on round's calls kept. Read as no calls, a
+// turn whose first round posted its reply is recorded as one that never did,
+// while a resume's read of the same row stays empty
+// ([sandbox.PendingStore.BridgeLog]), never replaying another job's calls.
+//
+// Mutation: answer TurnLog as BridgeLog does for a log on another job, and
+// both endings read no reply.
+func testAnEndingReadsTheTurnsCallsPastAnOpeningThatFailed(t *testing.T, runs *stagedRuns,
+	s sandbox.PendingStore,
+) {
+	for _, tc := range []struct {
+		name      string
+		continues bool
+	}{
+		{"a new round", false},
+		{"the round carried on", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			turn := "t-ending-unopened-" + map[bool]string{false: "new", true: "carried"}[tc.continues]
+			first := mustLaunched(t, s, run(turn))
+			if ok, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: first,
+				Call: sandbox.BridgeCall{Name: "vendor_post", Seq: 1, At: base}}); err != nil || !ok {
+				t.Fatalf("AppendBridgeCall = %v, %v", ok, err)
+			}
+			next := run(turn)
+			next.Continues = tc.continues
+			down := errors.New("the coordination store is unreachable")
+			runs.stage(nil, down)
+			if _, err := s.BeginLaunch(ctx, next, sandbox.Fence{}); !errors.Is(err, down) {
+				t.Fatalf("a relaunch whose log could not be opened = %v, want the store's error", err)
+			}
+			row := mustLogged(t, s, turn)
+			if row.LaunchID == first || len(row.Log.Calls) != 0 || len(row.Log.PriorCalls) != 0 {
+				t.Fatalf("the failed relaunch's row (job %s) reads %+v for a resume, want no call of "+
+					"another job", row.LaunchID, row.Log)
+			}
+			log, err := s.TurnLog(ctx, row.PendingRun)
+			if err != nil {
+				t.Fatalf("TurnLog: %v", err)
+			}
+			kept := slices.ContainsFunc(log.Calls, func(c sandbox.BridgeCall) bool { return c.Name == "vendor_post" })
+			folded := slices.Contains(log.PriorCalls, "vendor_post")
+			if log.Launch != row.LaunchID || (tc.continues && !kept) || (!tc.continues && (!folded || kept)) {
+				t.Fatalf("the ending reads %+v, want vendor_post among the round's calls (carried on) "+
+					"or the turn's earlier ones (a new round)", log)
 			}
 		})
 	}

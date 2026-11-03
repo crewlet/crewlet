@@ -23,6 +23,9 @@ var (
 	githubKeys = []SeatKey{{Field: "APP_TOKEN", Env: "GITHUB_PERSONAL_ACCESS_TOKEN",
 		Header: "Authorization", Prefix: "Bearer "}}
 	datadogKeys = []SeatKey{{Field: "APP_KEY", Env: "DD_APPLICATION_KEY", Header: "DD_APPLICATION_KEY"}}
+	// Cloudflare's remote server reads an account API token as a bearer
+	// header, and has no local counterpart this build binds.
+	cloudflareKeys = []SeatKey{{Field: "API_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
 	// glab reads GITLAB_TOKEN, the community GitLab servers
 	// GITLAB_PERSONAL_ACCESS_TOKEN: one integration, two spellings.
 	glabKeys          = []SeatKey{{Field: "TOKEN", Env: "GITLAB_TOKEN", Header: "Private-Token"}}
@@ -153,14 +156,33 @@ var curated = sync.OnceValue(func() []Entry {
 			ID: "cloudflare", Name: "cloudflare", Title: "Cloudflare", Vendor: "cloudflare",
 			Description: "The Cloudflare API across the company's accounts and zones, through Cloudflare's own server.",
 			Transport:   TransportHTTP, URL: "https://mcp.cloudflare.com/mcp",
-			Headers: []Input{{Name: "Authorization", Required: true, Secret: true,
-				Format:      "Bearer <API token>",
-				Description: "A user or account API token holding the permissions the agents need."}},
-			Auth:        []AuthMethod{AuthOAuth, AuthHeaders},
+			Headers: []Input{{Name: "Authorization", Required: true, Secret: true, FromIntegration: true,
+				Format: "Bearer <API token>",
+				Description: "An account API token: each agent's own where the Cloudflare integration is on. " +
+					"Cloudflare's server refuses a token with an IP address filter."}},
+			Auth:        []AuthMethod{AuthIntegration, AuthOAuth, AuthHeaders},
 			OAuthClient: ClientCIMD,
+			Integration: "cloudflare",
 			Docs:        "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
 			ReadAt:      "2026-11-01",
-			recognise:   []recognition{{match: hostIs("mcp.cloudflare.com")}},
+			recognise:   []recognition{{match: hostIs("mcp.cloudflare.com"), keys: cloudflareKeys}},
+		},
+		{
+			// OAUTH ONLY, AND NO SEAT BINDING: the server is its own
+			// authorization server (scope mcp:access), and whether it takes an
+			// Expo access token as a bearer is undocumented.
+			ID: "expo", Name: "expo", Title: "Expo", Vendor: "expo",
+			Description: "EAS builds, submissions, workflows and updates, app store and crash reports, and the " +
+				"Expo documentation, through Expo's own server.",
+			Transport: TransportHTTP, URL: "https://mcp.expo.dev/mcp",
+			Headers:     []Input{},
+			Auth:        []AuthMethod{AuthOAuth},
+			OAuthClient: ClientCIMD,
+			Prerequisite: "Sign in with an Expo account that is a member of the company's account. " +
+				"search_documentation needs an Expo paid plan, and the simulator tools start billed sessions.",
+			Docs:      "https://docs.expo.dev/eas/ai/mcp/",
+			ReadAt:    "2026-11-02",
+			recognise: []recognition{{match: hostIs("mcp.expo.dev")}},
 		},
 		{
 			ID: "gitlab", Name: "gitlab", Title: "GitLab", Vendor: "gitlab",

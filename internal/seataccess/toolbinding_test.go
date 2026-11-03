@@ -4,8 +4,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
+	_ "github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -80,7 +82,7 @@ func TestTheToolStateComesFromTheResolvedBinding(t *testing.T) {
 			seataccess.LaneSlack, seataccess.ToolLive},
 	}
 	for _, tc := range cases {
-		if got := seataccess.ToolStateOf(tc.c, tc.lane, on("a"), live); got != tc.want {
+		if got := seataccess.ToolStateOf(tc.c, "sre", tc.lane, on("a"), live); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -93,9 +95,10 @@ func TestTheToolStateComesFromTheResolvedBinding(t *testing.T) {
 func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 	t.Parallel()
 	vendors := map[string][]string{
-		"datadog": datadog.CredentialKeys,
-		"gitlab":  gitlab.CredentialKeys,
-		"github":  github.CredentialKeys,
+		"datadog":    datadog.CredentialKeys,
+		"gitlab":     gitlab.CredentialKeys,
+		"github":     github.CredentialKeys,
+		"cloudflare": cloudflare.CredentialKeys,
 	}
 	for _, b := range catalogue.Bindings() {
 		keys, ok := vendors[b.Vendor]
@@ -110,5 +113,85 @@ func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A SEAT'S OWN BOX IS ITS TOOL WHERE IT SETS THE CLI'S VARIABLE TO ITS OWN
+// CREDENTIAL: EXPO_TOKEN exactly "${EXPO_TOKEN_<HANDLE>}", in role.sandbox.env
+// or the seat's own setup, is live once sealed and waiting before; unset or
+// pointing anywhere else is no tool.
+func TestASeatsBoxThatSetsItsCLIsVariableIsItsTool(t *testing.T) {
+	t.Parallel()
+	seat := func(sandbox *config.RoleSandbox) *config.Company {
+		return &config.Company{Roles: []config.Role{{Name: "QA", Handle: "qa", Sandbox: sandbox}}}
+	}
+	env := func(value string) *config.Company {
+		return seat(&config.RoleSandbox{Env: map[string]string{"EXPO_TOKEN": value}})
+	}
+	live := seataccess.Observed{Exists: true, Enabled: true, Level: "viewer",
+		Credential: &seataccess.Credential{Variable: "EXPO_TOKEN_QA"}}
+	waiting := live
+	waiting.Credential = nil
+	for _, tc := range []struct {
+		name string
+		c    *config.Company
+		have seataccess.Observed
+		want seataccess.ToolState
+	}{
+		{"set in its env", env("${EXPO_TOKEN_QA}"), live, seataccess.ToolLive},
+		{"set in its env, not sealed yet", env("${EXPO_TOKEN_QA}"), waiting, seataccess.ToolWaiting},
+		{"set by its own setup step", seat(&config.RoleSandbox{Setup: []config.SandboxSetupStep{{
+			Name: "eas", Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"}}}}), live, seataccess.ToolLive},
+		{"its env winning over a step pointing elsewhere", seat(&config.RoleSandbox{
+			Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"},
+			Setup: []config.SandboxSetupStep{{Name: "eas",
+				Env: map[string]string{"EXPO_TOKEN": "${SHARED_EXPO}"}}}}), live, seataccess.ToolLive},
+		{"another seat's token", env("${EXPO_TOKEN_SRE}"), live, seataccess.ToolNoServer},
+		{"its token inside other text", env("Bearer ${EXPO_TOKEN_QA}"), live, seataccess.ToolNoServer},
+		{"its token under another variable", seat(&config.RoleSandbox{Env: map[string]string{
+			"EAS_TOKEN": "${EXPO_TOKEN_QA}"}}), live, seataccess.ToolNoServer},
+		{"no box settings", seat(nil), live, seataccess.ToolNoServer},
+	} {
+		got := seataccess.ToolStateOf(tc.c, "qa", seataccess.LaneExpo, on("viewer"), tc.have)
+		if got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// A LANE WITH NO BOX VARIABLE IS UNMOVED by a box naming its credential.
+	dd := seat(&config.RoleSandbox{Env: map[string]string{"DD_APP_KEY": "${DATADOG_APP_KEY_QA}"}})
+	if got := seataccess.ToolStateOf(dd, "qa", seataccess.LaneDatadog, on("a"), held("a")); got != seataccess.ToolNoServer {
+		t.Errorf("datadog with its key in the box = %q, want no_server", got)
+	}
+}
+
+// EVERY LANE A SERVER READS NAMES THAT SERVER'S ENTRY: the company's own where
+// it declares one (an enabled one first), else the catalogue's conventional
+// name; Expo, whose hosted server reads no seat credential, names none.
+func TestEveryLaneAServerReadsNamesItsEntry(t *testing.T) {
+	t.Parallel()
+	for lane, want := range map[seataccess.Lane]string{
+		seataccess.LaneGitHub: "github", seataccess.LaneDatadog: "datadog",
+		seataccess.LaneCloudflare: "cloudflare", seataccess.LaneGitLab: "gitlab",
+		seataccess.LaneSlack: "slack", seataccess.LaneMattermost: "mattermost",
+		seataccess.LaneJira: "atlassian", seataccess.LaneConfluence: "atlassian",
+		seataccess.LaneExpo: "",
+	} {
+		if got := seataccess.ToolServerOf(&config.Company{}, lane); got != want {
+			t.Errorf("%s: %q, want %q", lane, got, want)
+		}
+	}
+	bound := []config.SeatCredential{{Kind: "datadog", Key: "DD_APPLICATION_KEY"}}
+	declared := &config.Company{MCPServers: []config.MCPServer{
+		{Name: "dd-off", Transport: config.TransportStdio, Command: "my-datadog-server", Shared: org.Off(),
+			Enabled: org.Off(), SeatCredentials: bound},
+		{Name: "dd-ours", Transport: config.TransportStdio, Command: "my-datadog-server", Shared: org.Off(),
+			SeatCredentials: bound},
+	}}
+	if got := seataccess.ToolServerOf(declared, seataccess.LaneDatadog); got != "dd-ours" {
+		t.Errorf("a declared server: %q, want the enabled one, dd-ours", got)
+	}
+	declared.MCPServers = declared.MCPServers[:1]
+	if got := seataccess.ToolServerOf(declared, seataccess.LaneDatadog); got != "dd-off" {
+		t.Errorf("only a declared server turned off: %q, want dd-off", got)
 	}
 }

@@ -1,7 +1,8 @@
 /**
  * Add an MCP server, or edit one, step by step: where it comes from, its
- * name, how it connects, how it signs in, a test, and a review the engine
- * checks before anything is stored. The engine's problems land on the fields
+ * name, how it connects, how it signs in, who gets it, the level each of its
+ * tools runs at, a test, and a review the engine checks before anything is
+ * stored. The engine's problems land on the fields
  * they are about, each step that holds one marked on the stepper.
  *
  * A PAGE OF ITS OWN, in the list's place, so its steps have the room; adding
@@ -22,7 +23,10 @@
  * THE TEST IS THE ENGINE'S: the draft as a write would leave it, with the
  * values typed for it read through the variables they will be stored under
  * and sealed across the fleet (`POST /mcp-checks`); an edit that changes
- * nothing of the entry tests the saved server instead.
+ * nothing of the entry tests the saved server instead. It is sent without
+ * the draft's levels, which decide how a call runs and never what the server
+ * lists, so the approvals step is handed every tool, a blocked one included,
+ * each with the level the engine starts it at.
  *
  * ENTER MOVES ON from a single-line field, a choice or a step's heading; a
  * multi-line field, a button and an open list keep Enter for themselves (the
@@ -41,6 +45,7 @@ import type {
   McpValueState,
 } from "~/contract/mcp.ts";
 import { listed } from "~/lib/format.ts";
+import { useAccess } from "~/routes/settings/integrations/access/api.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { findOpener, firstInvalid, focusWhenShown, openerNow } from "~/lib/wizardFocus.ts";
 import {
@@ -63,12 +68,15 @@ import {
   fromServer,
   stepOf,
   stepsFor,
+  testsValue,
   valuesOf,
   type Draft,
   type Step,
 } from "./draft.ts";
-import { SourceStep, unavailableReason } from "./SourceStep.tsx";
+import { SourceStep } from "./SourceStep.tsx";
 import {
+  AccessStep,
+  ApprovalsStep,
   ConnectionStep,
   isComplete,
   missingIn,
@@ -76,6 +84,7 @@ import {
   ReviewStep,
   SignInStep,
   TestStep,
+  testersOf,
   type ReviewCheck,
   type TestState,
 } from "./steps.tsx";
@@ -85,6 +94,8 @@ const LABELS: Record<Step, string> = {
   name: "Name",
   connection: "Connection",
   signin: "Sign-in",
+  access: "Who gets it",
+  approvals: "Tool approvals",
   test: "Test",
   review: "Review",
 };
@@ -95,6 +106,8 @@ const LEADS: Record<Step, string> = {
   name: "How the agents and this page name it.",
   connection: "Where the server is, or the command that starts it.",
   signin: "How the engine proves who it is to the server.",
+  access: "One connection for the company or one per agent, and which agents get it.",
+  approvals: "Whether each tool runs, asks a person first, or is blocked.",
   test: "Ask the server who it is and list its tools. No tool is called.",
   review: "Everything this saves. The engine checks it first.",
 };
@@ -148,7 +161,8 @@ export function ServerWizard({
   /** The step the address names, or null for the first. */
   start: Step | null;
   onClose: () => void;
-  onSaved: (name: string) => void;
+  /** After a save: the server's name, and whether a person signs it in next (a new OAuth sign-in). */
+  onSaved: (name: string, signInNext: boolean) => void;
 }) {
   const toast = useToast();
   const lifetime = useLifetimeSignal();
@@ -176,6 +190,22 @@ export function ServerWizard({
   const [storedFor, setStoredFor] = useState<Readonly<Record<string, string>>>({});
   const reach = saved ? (data.reaches(saved.server.name) ?? []) : [];
   const [seat, setSeat] = useState(() => reach[0]?.handle ?? data.agents[0]?.handle ?? "");
+  // A SERVER AN INTEGRATION SIGNS IN is tested only as an agent the integration
+  // has turned on: as any other, the engine refuses it, so the test could only
+  // fail. The seat moves to the first of them, and nothing runs while none is.
+  const bound = draft.signIn === "integration" ? draft.catalogue?.integration || null : null;
+  const access = useAccess(bound);
+  const testers = useMemo(
+    () => testersOf(data.agents, bound, access),
+    // `access` is a new object each render; what it says is its data and error.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data.agents, bound, access.data, access.error],
+  );
+  useEffect(() => {
+    if (draft.shared || !testers || testers.length === 0) return;
+    if (!testers.some((s) => s.handle === seat)) setSeat(testers[0]!.handle);
+  }, [draft.shared, testers, seat]);
+  const testable = draft.shared || (testers?.some((s) => s.handle === seat) ?? false);
   const root = useRef<HTMLDivElement>(null);
   const inflight = useRef<AbortController | null>(null);
 
@@ -192,10 +222,17 @@ export function ServerWizard({
   });
 
   const entity = useMemo(() => entityOf(draft, saved?.entity ?? null), [draft, saved]);
+  // WHAT THE TEST IS SENT: the entry without its levels (see above).
+  const tested = useMemo(() => {
+    const { tools: _levels, ...rest } = entity;
+    return rest;
+  }, [entity]);
   const values = useMemo(() => valuesOf(draft), [draft]);
   const unchanged = saved !== null && canonical(entity) === canonical(saved.entity);
+  // THE SAVED SERVER, as it runs, for an edit that changes nothing of it.
+  const testsSaved = unchanged && Object.keys(values).length === 0;
   const testSeat = draft.shared ? "" : seat;
-  const signature = JSON.stringify({ entity, values, seat: testSeat });
+  const signature = JSON.stringify({ entity: tested, values, seat: testSeat });
 
   const set = useCallback((patch: Partial<Draft>) => {
     setDraft((d) => ({ ...d, ...patch }));
@@ -215,12 +252,16 @@ export function ServerWizard({
   async function runTest() {
     const sig = signature;
     setTest({ kind: "running", for: sig });
-    const answer: McpAnswer<McpCheckAnswer> =
-      unchanged && Object.keys(values).length === 0
-        ? await testServer(draft.name, testSeat)
-        : await testDraft(entity, values, testSeat);
+    const answer: McpAnswer<McpCheckAnswer> = testsSaved
+      ? await testServer(draft.name, testSeat)
+      : await testDraft(tested, values, testSeat);
     if (answer.kind === "ok") {
       setTest({ kind: "done", for: sig, answer: answer.value });
+      // THE TOOLS IT LISTED, for the approvals step: a change of levels is
+      // the draft's own, so it clears no problem and no review. A tool not
+      // offered under its name takes no level (the test says why).
+      const listed = answer.value.tools.filter((t) => !t.refused);
+      if (listed.length > 0) setDraft((d) => ({ ...d, listed }));
       return;
     }
     const found = problemsIn(answer.body);
@@ -278,15 +319,16 @@ export function ServerWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, check.kind]);
 
-  // THE TEST RUNS AS ITS STEP OPENS, once for each version of the draft.
+  // THE TEST RUNS AS ITS STEP OPENS, once for each version of the draft, and
+  // as the approvals step opens with no tools listed yet, to list them.
   useEffect(() => {
-    if (step !== "test") return;
+    if (step !== "test" && !(step === "approvals" && draft.listed.length === 0)) return;
     if (test.kind !== "idle" && test.for === signature) return;
-    if (!draft.shared && !seat) return;
+    if (!testable) return;
     void runTest();
     // `runTest` reads the draft as it stands when the step opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, signature]);
+  }, [step, signature, testable]);
 
   async function save() {
     const screen = lifetime();
@@ -331,7 +373,7 @@ export function ServerWizard({
       const stored: Record<string, string> = { ...storedFor };
       for (const [key, value] of Object.entries(values)) {
         if (stored[key] === value) continue;
-        const answer = await storeValue(name, key, value, { test: draft.shared });
+        const answer = await storeValue(name, key, value, { test: testsValue(draft, key) });
         if (screen.aborted) return;
         if (answer.kind === "ok") {
           stored[key] = value;
@@ -349,14 +391,18 @@ export function ServerWizard({
         return;
       }
       setPartial(null);
+      // A NEW SERVER A PERSON SIGNS IN TO starts once somebody does, which is next.
+      const signInNext = !saved && draft.signIn === "oauth";
       toast.show({
         variant: "success",
         title: saved ? `${name} saved` : `${name} added`,
         message: saved
           ? "It applies with no restart; a running turn finishes first."
-          : "It starts with no restart, and the agents it reaches see its tools on their next turn.",
+          : signInNext
+            ? "Sign in to it next: no agent reaches its tools until somebody does."
+            : "It starts with no restart, and the agents it reaches see its tools on their next turn.",
       });
-      onSaved(name);
+      onSaved(name, signInNext);
     } finally {
       if (!screen.aborted) setSaving(false);
     }
@@ -377,7 +423,7 @@ export function ServerWizard({
     step !== "source"
       ? null
       : draft.catalogue
-        ? unavailableReason(draft.catalogue)
+        ? null
         : draft.source === "catalogue" || draft.source === "community"
           ? "Choose a server, or start from an address."
           : draft.source === "url" && !draft.url.trim()
@@ -538,6 +584,18 @@ export function ServerWizard({
               problems={problems}
               missing={shownMissing}
               editing={editing}
+              callbackUrl={
+                data.answer && "callback_url" in data.answer ? data.answer.callback_url : ""
+              }
+            />
+          ) : null}
+          {step === "access" ? <AccessStep draft={draft} set={set} /> : null}
+          {step === "approvals" ? (
+            <ApprovalsStep
+              draft={draft}
+              set={set}
+              listing={test.kind === "running"}
+              onList={() => void runTest()}
             />
           ) : null}
           {step === "test" ? (
@@ -545,9 +603,10 @@ export function ServerWizard({
               draft={draft}
               test={test}
               current={signature}
-              agents={data.agents}
+              agents={testers}
               seat={seat}
               onSeat={setSeat}
+              ofDraft={!testsSaved}
             />
           ) : null}
           {reviewing ? (

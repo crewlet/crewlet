@@ -173,6 +173,7 @@ func TestAStoppedParkedTurnTellsItsAskerItWasStopped(t *testing.T) {
 	}
 	pause := janeStops()
 	e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
+	stopFinished(t, e, "run-ask")
 	closedAsStopped(t, q, "run-ask")
 
 	got := answersOn(q, channelID)

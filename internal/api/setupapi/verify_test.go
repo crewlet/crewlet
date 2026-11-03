@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,7 @@ type seenCheck struct {
 	field    string
 	values   map[string]string
 	declared atlassianhost.Deployment
+	zones    []string
 }
 
 // recordingProbe answers a fixed verdict and remembers every check.
@@ -52,7 +54,8 @@ type recordingProbe struct {
 }
 
 func (p *recordingProbe) probe(_ context.Context, check setup.Check) (setup.Verdict, error) {
-	seen := seenCheck{field: check.Field, values: map[string]string{}, declared: check.Declared}
+	seen := seenCheck{field: check.Field, values: map[string]string{}, declared: check.Declared,
+		zones: check.Zones}
 	for _, field := range append([]string{check.Field}, p.read...) {
 		seen.values[field] = check.Value(field)
 	}
@@ -384,6 +387,35 @@ func TestAVerifyCarriesTheDeclaredAtlassianDeployment(t *testing.T) {
 	}
 }
 
+// THE COMPANY'S CLOUDFLARE ZONES TRAVEL WITH THE CHECK: a document field with
+// no form field, which the probe checks against the account.
+func TestAVerifyCarriesTheCloudflareZones(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedDocument(t, `{
+  "name": "Acme",
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "integrations": {
+    "cloudflare": {"enabled": true, "provisioning": {
+      "account_id": "0123456789abcdef0123456789abcdef", "api_token": "${CLOUDFLARE_API_TOKEN}",
+      "zones": ["example.com", "example.org"]}}
+  },
+  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
+}`)
+	probe := &recordingProbe{verdict: setup.Works("Works."), read: []string{"account_id"}}
+	s.withProbe(t, integration.KindCloudflare, probe.probe)
+	res := s.do(t, http.MethodPost, "/setup/integrations/cloudflare/verify",
+		verifyBody("api_token", "a-fake-token", ""), nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	seen := probe.seen(t)
+	if !slices.Equal(seen.zones, []string{"example.com", "example.org"}) ||
+		seen.values["account_id"] != "0123456789abcdef0123456789abcdef" {
+		t.Errorf("the probe was handed %+v", seen)
+	}
+}
+
 // THE REQUEST'S OWN FAULTS, each refused by name before any vendor is asked.
 func TestAVerifyRefusesWhatItCannotCheck(t *testing.T) {
 	t.Parallel()
@@ -565,5 +597,66 @@ func TestEveryCredentialIsCheckableOrSaysWhenItIsProved(t *testing.T) {
 	}
 	if seen == 0 {
 		t.Fatal("no credential was walked, so this certified nothing")
+	}
+}
+
+// A TYPED VALUE ITS FIELD REFUSES IS ANSWERED AT THAT FIELD, BEFORE ANY VENDOR
+// IS ASKED, as saving answers it: whitespace or an invisible character in a
+// credential, a character outside a vendor's alphabet where its field declares
+// a shape (Cloudflare's token), and a value typed beside the checked one. The
+// sentence never quotes the credential. Mutation: drop the check from the
+// verify route, and each refused value reaches the probe.
+func TestAVerifyRefusesAMalformedValueBeforeAnyVendorIsAsked(t *testing.T) {
+	t.Parallel()
+	const doc = `{
+  "name": "Acme",
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "integrations": {
+    "cloudflare": {"enabled": true, "provisioning": {
+      "account_id": "0123456789abcdef0123456789abcdef", "api_token": "${CLOUDFLARE_API_TOKEN}"}}
+  },
+  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
+}`
+	for _, tc := range []struct {
+		name        string
+		kind        integration.Kind
+		body        string
+		field, says string
+		// secret is the credential's text, which no answer may carry.
+		secret string
+	}{
+		{"a wrapped Cloudflare paste", integration.KindCloudflare,
+			verifyBody("api_token", "cfat_wrapped paste", ""), "api_token", "1 space", "wrapped"},
+		{"a character no Cloudflare token has", integration.KindCloudflare,
+			verifyBody("api_token", "cfat_bang!token", ""), "api_token", "a character a token never has", "bang"},
+		{"an account ID typed with a space", integration.KindCloudflare,
+			verifyBody("api_token", "cfat_fine_token", `"values": {"account_id": "0123 4567"}`),
+			"account_id", "cannot contain a space", "cfat_fine"},
+	} {
+		s := newSurface(t)
+		s.seedDocument(t, doc)
+		probe := &recordingProbe{verdict: setup.Works("Works.")}
+		s.withProbe(t, tc.kind, probe.probe)
+		res := s.do(t, http.MethodPost, "/setup/integrations/"+string(tc.kind)+"/verify", tc.body, nil)
+		if tc.field == "" {
+			if res.Code != http.StatusOK || len(probe.calls) != 1 {
+				t.Errorf("%s: %d %s, asked %d times; want the probe's verdict", tc.name, res.Code, res.Body,
+					len(probe.calls))
+			}
+			continue
+		}
+		body := decode(t, res)
+		path, _ := body["path"].(string)
+		detail, _ := body["detail"].(string)
+		if res.Code != http.StatusBadRequest || body["error"] != string(httpjson.CodeInvalidInput) ||
+			body["field"] != tc.field || !strings.HasSuffix(path, "."+tc.field) || !strings.Contains(detail, tc.says) {
+			t.Errorf("%s: %d %v, want 400 invalid_input at %s saying %q", tc.name, res.Code, body, tc.field, tc.says)
+		}
+		if strings.Contains(res.Body.String(), tc.secret) {
+			t.Errorf("%s: the refusal quotes the credential: %s", tc.name, res.Body)
+		}
+		if len(probe.calls) != 0 {
+			t.Errorf("%s: the vendor was asked %d times", tc.name, len(probe.calls))
+		}
 	}
 }

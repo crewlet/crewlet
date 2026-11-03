@@ -468,6 +468,14 @@ func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, e
 	if !ok || (!spec.Levels && !spec.Scoped) {
 		return nil, nil
 	}
+	if spec.ScopeRequired && len(d.Scope) == 0 {
+		// NOTHING TO REACH, judged before the vendor is asked anything.
+		return &Failure{
+			Step: VerbScope, Actor: ByYou,
+			Said:   fmt.Sprintf("no %s scope is chosen for this agent, so it can reach nothing", LaneName(lane)),
+			Remedy: "Choose at least one on the integration's Agents tab",
+		}, nil
+	}
 	opts, ok := s.options[lane]
 	if !ok {
 		var err error
@@ -555,7 +563,8 @@ func (s *syncer) take(
 		}
 		res, err := s.sess.Apply(ctx, ApplyInput{
 			Seat: ref, Lane: lane, Step: step, Want: want, Have: have, Record: rec, Sinks: sinks,
-			Prior: slices.Clone(prior),
+			Prior: slices.Clone(prior), HandIn: s.in.Asks[ref.Handle].HandIn, Disconnect: s.in.Disconnect,
+			Release: s.in.Asks[ref.Handle].Release,
 		})
 		if err == nil && res.Waiting != nil {
 			result.Steps = append(result.Steps, StepOutcome{Step: step})
@@ -946,6 +955,10 @@ func LaneName(lane Lane) string {
 		return "Slack"
 	case LaneMattermost:
 		return "Mattermost"
+	case LaneCloudflare:
+		return "Cloudflare"
+	case LaneExpo:
+		return "Expo"
 	default:
 		return string(lane)
 	}

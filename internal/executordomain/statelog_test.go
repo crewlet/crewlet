@@ -3,12 +3,14 @@ package executordomain_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -28,9 +30,12 @@ func TestTheExecutorDomainIsACertifiedDomain(t *testing.T) {
 			// Migrate is nil: these tables ship in the replicated estate's
 			// own migration (0073), so a fresh store already has them.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE is empty: every field this domain
-			// writes is in the base format.
+			// THE VERSIONED-FIELD TABLE, and a record carrying each of its
+			// fields alone: a turn's begin, and a capture's context and its
+			// cut-off — each stamped at version 2, which a build reading 1
+			// retains rather than applies.
 			Fields:     executordomain.VersionedFields(),
+			Carrying:   carryingSuiteRecord,
 			Kinds:      kindNames(),
 			Rows:       executordomain.NewRows,
 			Write:      suiteWrite,
@@ -115,7 +120,7 @@ func captureOf(id string, seq int64) executordomain.Capture {
 		Harness: "claude-code", SessionID: "session-" + id, Object: suiteObject,
 		ObjectHash: string(objstore.HashOf([]byte(id))), ObjectSize: 1024,
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 1, CaptureSeq: seq,
-		SeatBudget: executordomain.SealedMaxBytes,
+		SeatBudget: executorkeep.SealedMaxBytes,
 	}
 }
 
@@ -178,6 +183,53 @@ func suitePayload(kind executordomain.ObjectKind, id string) (
 		executordomain.SeatDelete{V: 1, Handle: id}
 }
 
+// carryingSuiteRecord is a record carrying exactly the versioned field named and
+// no other, with its version left for the domain's encoder to stamp.
+func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
+	const id = "carrying"
+	var (
+		op      executordomain.OpKind
+		scope   executordomain.ScopeSet
+		payload any
+	)
+	switch field.Name {
+	case "RecordEnvelope.Op begin":
+		op, scope, payload = executordomain.OpBegin, executordomain.ScopeSet{Subject: true}, beginOf(id)
+	case "Capture.ContextTokens":
+		c := captureOf(id, 1)
+		c.ContextTokens = 61_000
+		op, scope, payload = executordomain.OpCapture, seatScope(id), c
+	case "Capture.Interrupted":
+		c := captureOf(id, 1)
+		c.Interrupted = true
+		op, scope, payload = executordomain.OpCapture, seatScope(id), c
+	default:
+		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return executordomain.Encode(executordomain.MutationRecord{
+		RecordEnvelope: executordomain.RecordEnvelope{
+			OpID: "suite-carrying", Subject: executordomain.ConversationSubject(id, suiteConversation,
+				suiteTurn(id)),
+			Op: op, CreatedAt: suiteStamped, Gen: 1, Writer: "suite-node", Scope: scope,
+		},
+		Mutation: body, Actor: "suite", ActorKind: iam.ActorSystem,
+	})
+}
+
+// beginOf is the begin of id's turn: its first read, and the base it froze.
+func beginOf(id string) executordomain.Begin {
+	base := suiteTurn("base/" + id)
+	return executordomain.Begin{
+		V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
+		ReadThrough: 1, Absorbs: []string{base}, BaseTurn: base, BaseObject: suiteObject,
+		BaseHash: string(objstore.HashOf([]byte(base))),
+	}
+}
+
 // evictionOf is node's eviction, or its readmission.
 func evictionOf(node string, readmit bool) executordomain.Eviction {
 	return executordomain.Eviction{
@@ -220,7 +272,9 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 
 // suiteWrite is one write through the domain's own production writer, which is
 // where the framework's stamp is kept or lost: a turn's end, which needs no
-// object uploaded first.
+// object uploaded first — one that says its turn's newest capture was not kept,
+// so the field the end's apply decides on is written, stamped and applied by
+// the framework the conformance suite certifies.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	w, err := executordomain.NewWriter(executordomain.WriterDeps{Publisher: pub, DB: db})
 	if err != nil {
@@ -231,7 +285,8 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 		OpID: statelog.NewOpID(time.Now(), "suite"),
 	}, executordomain.NewEnd{
 		Handle: "suite-seat", Turn: uuid.NewString(), ConversationKey: suiteConversation,
-		Ask: "Suite", Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted},
+		Ask: "Suite", Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+			Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "suite: not kept"}},
 	})
 	return err
 }

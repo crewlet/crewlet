@@ -1,5 +1,7 @@
 package config
 
+import "slices"
+
 // PER-SEAT ACCESS, IN THE VENDOR'S OWN TERMS.
 //
 // Each agent seat carries one block per integration the engine manages an
@@ -31,7 +33,61 @@ func SeatAccessOn(enabled *bool) bool { return enabled != nil && *enabled }
 // SeatAccessLanes is every per-seat block, by its key under
 // `roles[].integrations`.
 func SeatAccessLanes() []string {
-	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog"}
+	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo"}
+}
+
+// SeatScope is the key and the entries of r's scope at lane: the containers
+// its access there reaches. Empty for a lane with no scope and for an absent
+// block. The one place a lane's scope is read from the document.
+func (r *Role) SeatScope(lane string) (string, []string) {
+	in := r.Integrations
+	switch lane {
+	case "gitlab":
+		if in.GitLab != nil {
+			return "projects", in.GitLab.Projects
+		}
+	case "jira":
+		if in.Jira != nil {
+			return "projects", in.Jira.Projects
+		}
+	case "confluence":
+		if in.Confluence != nil {
+			return "spaces", in.Confluence.Spaces
+		}
+	case "mattermost":
+		if in.Mattermost != nil {
+			return "channels", in.Mattermost.Channels
+		}
+	case "github":
+		if in.GitHub != nil {
+			return "repos", in.GitHub.Repos
+		}
+	}
+	return "", nil
+}
+
+// SeatScopeRequired reports whether an agent turned on at lane must name at
+// least one scope entry, since one with none would reach nothing. The lane's
+// vendor declares the same (seataccess.LaneSpec.ScopeRequired), and a test
+// holds the two equal.
+func SeatScopeRequired(lane string) bool { return slices.Contains(scopeRequiredLanes, lane) }
+
+// scopeRequiredLanes is every lane whose agents must name a scope entry. None
+// yet.
+var scopeRequiredLanes []string
+
+// checkScopeChosen refuses an agent turned on at lane with no scope entry
+// where required says the lane needs one.
+func checkScopeChosen(p *problems, here Path, role *Role, lane string, required func(string) bool) {
+	if !required(lane) {
+		return
+	}
+	key, entries := role.SeatScope(lane)
+	if len(entries) > 0 {
+		return
+	}
+	p.add(at(here, key), ErrMissing, "required: choose at least one entry for this agent at %s. "+
+		"An agent turned on with none can reach nothing", lane)
 }
 
 // seatEnabled is a seat's `enabled` for lane, and whether the block is there.
@@ -65,6 +121,14 @@ func (r *Role) seatEnabled(lane string) (*bool, bool) {
 	case "mattermost":
 		if in.Mattermost != nil {
 			return in.Mattermost.Enabled, true
+		}
+	case "cloudflare":
+		if in.Cloudflare != nil {
+			return in.Cloudflare.Enabled, true
+		}
+	case "expo":
+		if in.Expo != nil {
+			return in.Expo.Enabled, true
 		}
 	}
 	return nil, false

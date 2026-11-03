@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -110,6 +111,40 @@ func (e *estate) capture(c Capture) (statelog.Position, int) {
 	e.t.Helper()
 	return e.apply(ConversationSubject(c.Handle, c.ConversationKey, c.Turn), OpCapture,
 		seatScope(c.Handle), c)
+}
+
+// begin applies a turn's begin.
+func (e *estate) begin(b Begin) (statelog.Position, int) {
+	e.t.Helper()
+	return e.apply(ConversationSubject(b.Handle, b.ConversationKey, b.Turn), OpBegin,
+		ScopeSet{Subject: true}, b)
+}
+
+// beginning is the begin of turn whose first launch read h: the read's
+// position, what it handed out, and its head as the base, where it names one.
+func beginning(h Head, seat, conversation, turn, work string) Begin {
+	b := Begin{V: 1, Handle: seat, Turn: turn, ConversationKey: conversation, WorkKey: work,
+		ReadThrough: h.Position.Packed(), Absorbs: h.Absorbs()}
+	if h.Session != nil {
+		b.BaseTurn = h.Session.Turn
+		b.BaseObject, b.BaseHash = h.Session.Object.Key.String(), string(h.Session.Object.Hash)
+	}
+	return b
+}
+
+// holds reports whether a live turn of seat holds turn as its base, as every
+// release asks it.
+func (e *estate) holds(seat, turn string) bool {
+	e.t.Helper()
+	var out bool
+	if err := e.db.Read(e.t.Context(), func(tx *sql.Tx) error {
+		var err error
+		out, err = held(e.t.Context(), tx, seat, turn, "")
+		return err
+	}); err != nil {
+		e.t.Fatalf("read whether %s's turn %s is held: %v", seat, turn, err)
+	}
+	return out
 }
 
 // end applies how a turn ended.
@@ -225,7 +260,7 @@ func capturing(seat, conversation, turn string, launch, seq, size, budget int64)
 }
 
 // ending is a turn's end in conversation.
-func ending(seat, conversation, turn, work string, e Ending) End {
+func ending(seat, conversation, turn, work string, e executorkeep.Ending) End {
 	return End{V: 1, Handle: seat, Turn: turn, ConversationKey: conversation,
 		WorkKey: work, AskExcerpt: "fix the build", Ending: e}
 }

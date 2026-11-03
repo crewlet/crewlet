@@ -9,14 +9,20 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// ---- the log beside a sandbox run's record ------------------------------ //
+// ---- the parts beside a sandbox run's record ---------------------------- //
 
 // runLog reads the log beside a run, failing the case on an error.
 func (h *fleetHarness) runLog(turnID string) (coord.Record, bool) {
 	h.t.Helper()
-	record, found, err := h.f.SandboxRunLog(h.ctx, turnID)
+	return h.runPart(turnID, coord.RunLog)
+}
+
+// runPart reads one part beside a run, failing the case on an error.
+func (h *fleetHarness) runPart(turnID string, part coord.RunPart) (coord.Record, bool) {
+	h.t.Helper()
+	record, found, err := h.f.SandboxRunPart(h.ctx, turnID, part)
 	if err != nil {
-		h.t.Fatalf("SandboxRunLog(%s): %v", turnID, err)
+		h.t.Fatalf("SandboxRunPart(%s, %s): %v", turnID, part, err)
 	}
 	return record, found
 }
@@ -25,11 +31,18 @@ func (h *fleetHarness) runLog(turnID string) (coord.Record, bool) {
 // handle.
 func (h *fleetHarness) putRunLog(turnID, value string) (coord.Record, bool) {
 	h.t.Helper()
-	record, changed, err := h.f.MutateSandboxRunLog(h.ctx, turnID, func(coord.Record, bool) ([]byte, error) {
+	return h.putRunPart(turnID, coord.RunLog, value)
+}
+
+// putRunPart writes value as one part beside the run whatever it holds,
+// through f's own handle.
+func (h *fleetHarness) putRunPart(turnID string, part coord.RunPart, value string) (coord.Record, bool) {
+	h.t.Helper()
+	record, changed, err := h.f.MutateSandboxRunPart(h.ctx, turnID, part, func(coord.Record, bool) ([]byte, error) {
 		return []byte(value), nil
 	})
 	if err != nil {
-		h.t.Fatalf("MutateSandboxRunLog(%s): %v", turnID, err)
+		h.t.Fatalf("MutateSandboxRunPart(%s, %s): %v", turnID, part, err)
 	}
 	return record, changed
 }
@@ -48,7 +61,7 @@ func appendMark(mark int) func(coord.Record, bool) ([]byte, error) {
 	}
 }
 
-var runLogCases = []fleetCase{{
+var runPartCases = []fleetCase{{
 	// What the log is kept apart FOR. A box's git request reads its run's
 	// record and a floor raise writes it, and every listing reads every
 	// record: a log that rode any of them — or moved the record's version,
@@ -74,12 +87,27 @@ var runLogCases = []fleetCase{{
 		if string(after.Value) != `{"status":"running"}` || after.Version != before.Version {
 			h.t.Errorf("writing the log moved the record: %+v, was %+v", after, before)
 		}
+		// THE HANDED SET IS A PART OF ITS OWN, kept apart from the record
+		// for the log's reason and from the log, which it never moves.
+		if _, found := h.runPart("turn-1", coord.RunHanded); found {
+			h.t.Fatal("a run nobody handed anything has a handed set")
+		}
+		h.putRunPart("turn-1", coord.RunHanded, `{"sealed":"s"}`)
+		if handed, found := h.runPart("turn-1", coord.RunHanded); !found || string(handed.Value) != `{"sealed":"s"}` {
+			h.t.Errorf("the handed set reads (%s, %v), want what was written", handed.Value, found)
+		}
+		if again, _ := h.runLog("turn-1"); again.Version != written.Version {
+			h.t.Errorf("writing the handed set moved the log: %+v, was %+v", again, written)
+		}
+		if after, _ := h.run("turn-1"); after.Version != before.Version {
+			h.t.Errorf("writing the handed set moved the record: %+v, was %+v", after, before)
+		}
 		runs, err := h.f.SandboxRuns(h.ctx)
 		if err != nil {
 			h.t.Fatalf("SandboxRuns: %v", err)
 		}
 		if len(runs) != 1 || runs[0].Key != "turn-1" || string(runs[0].Value) != `{"status":"running"}` {
-			h.t.Errorf("the listing of records = %+v, want the one record and never its log", runs)
+			h.t.Errorf("the listing of records = %+v, want the one record and never a part of it", runs)
 		}
 	},
 }, {
@@ -92,10 +120,10 @@ var runLogCases = []fleetCase{{
 		h.createRun("turn-1", `{"status":"running"}`)
 		h.putRunLog("turn-1", `{"marks":[1]}`)
 		calls := 0
-		written, changed, err := h.f.MutateSandboxRunLog(h.ctx, "turn-1", func(current coord.Record, found bool) ([]byte, error) {
+		written, changed, err := h.f.MutateSandboxRunPart(h.ctx, "turn-1", coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
 			calls++
 			if calls == 1 {
-				_, ok, werr := h.f.MutateSandboxRunLog(h.ctx, "turn-1", appendMark(2))
+				_, ok, werr := h.f.MutateSandboxRunPart(h.ctx, "turn-1", coord.RunLog, appendMark(2))
 				if err := landedFor("the staged log write", ok, werr); err != nil {
 					return nil, err
 				}
@@ -103,7 +131,7 @@ var runLogCases = []fleetCase{{
 			return appendMark(3)(current, found)
 		})
 		if err != nil || !changed {
-			h.t.Fatalf("MutateSandboxRunLog = (%v, %v), want it landed", changed, err)
+			h.t.Fatalf("MutateSandboxRunPart = (%v, %v), want it landed", changed, err)
 		}
 		if calls != 2 {
 			h.t.Errorf("the decision was asked %d times, want twice: once beaten, once on the newer log", calls)
@@ -128,7 +156,7 @@ var runLogCases = []fleetCase{{
 		for n, node := range nodes {
 			for i := range each {
 				wg.Go(func() {
-					_, ok, werr := node.MutateSandboxRunLog(h.ctx, "turn-1", appendMark(n*each+i))
+					_, ok, werr := node.MutateSandboxRunPart(h.ctx, "turn-1", coord.RunLog, appendMark(n*each+i))
 					if err := landedFor("an append", ok, werr); err != nil {
 						errs <- err
 					}
@@ -155,22 +183,30 @@ var runLogCases = []fleetCase{{
 		}
 	},
 }, {
-	// A log lives and dies with its record: the run's end removes it, and a
-	// record created under the turn again starts with no log rather than
-	// the ended run's calls, which its resume would replay as its own.
-	name: "removing a run removes its log",
+	// A part lives and dies with its record: the run's end removes every
+	// one, and a record created under the turn again starts with none rather
+	// than the ended run's calls, which its resume would replay as its own,
+	// or the secrets its box was handed, which a sealed copy of nothing
+	// still needs.
+	name: "removing a run removes every part of it",
 	fn: func(h *fleetHarness) {
 		h.createRun("turn-1", `{"status":"done"}`)
-		h.putRunLog("turn-1", `{"calls":["submit_work"]}`)
+		for _, part := range coord.RunParts() {
+			h.putRunPart("turn-1", part, `{"calls":["submit_work"]}`)
+		}
 		if !h.removeRun("turn-1") {
 			h.t.Fatal("the removal did not land")
 		}
-		if log, found := h.runLog("turn-1"); found {
-			h.t.Errorf("the ended run's log survived it: %s", log.Value)
+		for _, part := range coord.RunParts() {
+			if held, found := h.runPart("turn-1", part); found {
+				h.t.Errorf("the ended run's %s survived it: %s", part, held.Value)
+			}
 		}
 		h.createRun("turn-1", `{"status":"launching"}`)
-		if log, found := h.runLog("turn-1"); found {
-			h.t.Errorf("a run created again under the turn reads the ended run's log: %s", log.Value)
+		for _, part := range coord.RunParts() {
+			if held, found := h.runPart("turn-1", part); found {
+				h.t.Errorf("a run created again under the turn reads the ended run's %s: %s", part, held.Value)
+			}
 		}
 	},
 }, {
@@ -190,7 +226,7 @@ var runLogCases = []fleetCase{{
 				h.putRunLog(turn, `{"marks":[0]}`)
 			}
 			removed := false
-			written, changed, err := h.f.MutateSandboxRunLog(h.ctx, turn, func(current coord.Record, found bool) ([]byte, error) {
+			written, changed, err := h.f.MutateSandboxRunPart(h.ctx, turn, coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
 				if !removed {
 					removed = true
 					_, ok, werr := h.f.MutateSandboxRun(h.ctx, turn, func(coord.Record) (coord.SandboxRunChange, error) {
@@ -215,7 +251,7 @@ var runLogCases = []fleetCase{{
 }, {
 	name: "a log of a run with no record is never written",
 	fn: func(h *fleetHarness) {
-		written, changed, err := h.f.MutateSandboxRunLog(h.ctx, "turn-none", appendMark(1))
+		written, changed, err := h.f.MutateSandboxRunPart(h.ctx, "turn-none", coord.RunLog, appendMark(1))
 		if err != nil || changed {
 			h.t.Errorf("a log write for a run with no record answered (%+v, %v, %v), want nothing landed",
 				written, changed, err)
@@ -223,11 +259,20 @@ var runLogCases = []fleetCase{{
 		if log, found := h.runLog("turn-none"); found {
 			h.t.Errorf("a run with no record has a log: %s", log.Value)
 		}
-		if _, _, err := h.f.SandboxRunLog(h.ctx, ""); err == nil {
-			h.t.Error("SandboxRunLog read a log with no turn id")
+		if _, _, err := h.f.SandboxRunPart(h.ctx, "", coord.RunLog); err == nil {
+			h.t.Error("SandboxRunPart read a log with no turn id")
 		}
-		if _, _, err := h.f.MutateSandboxRunLog(h.ctx, "", appendMark(1)); err == nil {
-			h.t.Error("MutateSandboxRunLog wrote a log with no turn id")
+		if _, _, err := h.f.MutateSandboxRunPart(h.ctx, "", coord.RunLog, appendMark(1)); err == nil {
+			h.t.Error("MutateSandboxRunPart wrote a log with no turn id")
+		}
+		// A PART NOBODY NAMED is refused rather than written under a key
+		// that neither the record's removal nor the sweep would ever take.
+		h.createRun("turn-1", `{"status":"running"}`)
+		if _, _, err := h.f.MutateSandboxRunPart(h.ctx, "turn-1", "notes", appendMark(1)); err == nil {
+			h.t.Error("MutateSandboxRunPart wrote a part that is not one of coord.RunParts")
+		}
+		if _, _, err := h.f.SandboxRunPart(h.ctx, "turn-1", "notes"); err == nil {
+			h.t.Error("SandboxRunPart read a part that is not one of coord.RunParts")
 		}
 	},
 }}

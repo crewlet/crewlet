@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -197,9 +198,25 @@ type Session struct {
 	// does not hold creates and then answers as if it remembered
 	// ([sandbox.Result.Continued]). "" for a run that continues nothing.
 	Fresh string
+
+	// Replaces says the archive carried in replaces the box's own copy of
+	// the session even where that copy already holds it
+	// ([sandbox.CarriedSession.Replace]): the copy is one its harness was cut
+	// off in. False for a run carried no archive, or one whose box keeps a
+	// copy that holds it.
+	Replaces bool
 }
 
 // resumer is a harness that continues a session an earlier run reported.
+//
+// AND THAT WIRES ITS RUN TO THE SESSION IT STARTED: a run that continues a
+// session is handed the seat's tools under two bridge tokens, that session's
+// and one for a session of its own its script starts in that one's place
+// ([sandbox.RunRequest.FreshWiring]), and a resumer's [Harness.WriteConfig]
+// writes both and its script installs the one of the session it started,
+// removing the other, before its harness starts. A harness that could not would
+// start a session of its own reaching the seat's tools as the continued one, and
+// be held to that session's skill guard.
 type resumer interface{ Resumes() bool }
 
 // carrier is a harness whose session the runner carries between boxes
@@ -224,6 +241,18 @@ type carrier interface {
 	// A release that cannot be read is taken for a current one, as the
 	// notes gate takes it ([claudeNotesGate]).
 	Continues(box, writer string) (bool, string)
+
+	// Pack is the script that packs session NOW, as the run's script packs
+	// it once its harness exits — the same pack, into
+	// [Paths.SessionPackStaging], its digest kept the same way — for a job
+	// that never got to ([Runner.PackCapture]). Run in a login shell with
+	// the box's bin directory first on its PATH, as the run's wrapper runs.
+	Pack(paths Paths, session string) string
+
+	// layout is how the harness's archive is laid out, which is what the
+	// scrub a capture streams it through has to read and write it as
+	// ([scrubArchive]).
+	layout() archiveLayout
 
 	// transcript reads an archive of ArchiveFormat, already decompressed, as
 	// the entries of the session's transcript, handing each to b in the
@@ -462,20 +491,33 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // credit the last one. THE CHECKOUT IS LEFT INTACT — that disk state is the
 // continued context, and it is the whole reason to reuse a box.
 //
+// AND THE END PROTOCOL'S RECORDS: the pid the previous run's script published
+// ([Paths.JobScript]) — a request read through it would go to a process that
+// is not this run's — and the record of how that job was ended
+// ([Paths.JobEnded]), which this run's collection would otherwise read as its
+// own; each with the file it was written beside, which a script killed before
+// its move leaves.
+//
 // AND THE SESSION'S PIECES: the previous run's record of its session, its
 // capture and a carried archive it left — each this run's to write again or
 // to have none of, so a run that packs nothing is never collected with the
 // last run's capture as its own — and the staging directory a script that was
-// killed part way left. NOT THE HARNESS'S OWN SESSION STORE, which is the session
+// killed part way left. And the wiring a run that continued a session was
+// handed for a session of its own ([Paths.MCPConfigFresh],
+// [Paths.OpenCodeValuesFresh]), which its script removes before its harness
+// starts and one killed before it could leaves behind: this run writes its own
+// where it has one, and none is left beside a run that has none.
+// NOT THE HARNESS'S OWN SESSION STORE, which is the session
 // a run in this box continues, nor the digests of the archives that store's
 // copy holds ([Paths.SessionDigests]), which describe it for as long as it is
 // there.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.harness.Output(p)
-	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.System(),
+	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(), p.BaseResult(),
-		p.SessionRecord(), p.SessionCapture(), p.SessionCarried()}
+		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfigFresh(),
+		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
@@ -486,8 +528,9 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// file, removed as it always was. Two statements rather than one joined
 	// by `&&`, so a file that will not go never keeps a directory.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
-		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
-			p.SessionStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()})
+		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
+			p.CommitAttribution(), p.SessionStaging(), p.SessionPackStaging(), p.ClaudeSkillsPlugin(),
+			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()})
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
@@ -522,7 +565,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// restores, the archive it packs — and it was read back from a box a run's
 	// own agent could write, so one that is no id a harness mints is refused
 	// rather than handed to the run's script as a path.
-	if req.Resume != "" && !validSessionID(req.Resume) {
+	if req.Resume != "" && !sandbox.ValidSessionID(req.Resume) {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: the session this run continues, %q, is "+
 			"not a session id a harness names", req.Resume)
 	}
@@ -536,6 +579,13 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	if err := r.refuseSkills(req); err != nil {
 		return sandbox.RunHandle{}, err
+	}
+	// A SECOND WIRING IS A CONTINUING RUN'S ALONE: a run that starts a session
+	// of its own has one session, and the other token written into its box
+	// would be one its model could read and dial as a session it is not in.
+	if req.FreshWiring != nil && req.Resume == "" {
+		return sandbox.RunHandle{}, fmt.Errorf("executor: this run starts a session of its own and was " +
+			"handed a second wiring for one, which only a run that continues a session is handed")
 	}
 	paths := PathsFor(box)
 	// WHAT THE SESSION HAD SPENT, read before the clear removes it: the
@@ -598,6 +648,20 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if req.SkillLoads.Set() {
 		req.SkillLoads.URL = sandbox.EngineAddress(box, req.SkillLoads.URL)
 	}
+	// AND THE SAME THREE UNDER THE JOB'S OTHER TOKEN, for a session the run's
+	// script starts of its own ([sandbox.RunRequest.FreshWiring]): dialled from
+	// the same box, so held to the same addresses. A copy, as req is.
+	if f := req.FreshWiring; f != nil {
+		wired := sandbox.Wiring{MCPServers: sandbox.EngineServers(box, f.MCPServers), Steer: f.Steer,
+			SkillLoads: f.SkillLoads}
+		if wired.Steer.Set() {
+			wired.Steer.URL = sandbox.EngineAddress(box, wired.Steer.URL)
+		}
+		if wired.SkillLoads.Set() {
+			wired.SkillLoads.URL = sandbox.EngineAddress(box, wired.SkillLoads.URL)
+		}
+		req.FreshWiring = &wired
+	}
 	configPath, err := r.harness.WriteConfig(ctx, box, req, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
@@ -621,6 +685,14 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief: %w", err)
 		}
+		// AND THE BRIEF A SESSION OF ITS OWN IS HANDED, for a run that
+		// continues one: its script points its harness at it where it starts
+		// a new session in the one's place ([sandbox.RunRequest.FreshBrief]).
+		if session.Continues && req.FreshBrief != "" {
+			if err = box.WriteFile(ctx, paths.FreshBrief(), []byte(req.FreshBrief)); err != nil {
+				return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief a new session is handed: %w", err)
+			}
+		}
 	}
 
 	// A LOGIN SHELL, and the -l is load-bearing: a harness is commonly
@@ -639,7 +711,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	log.InfoContext(ctx, "harness_started", "harness", r.harness.Name(), "pid", pid,
 		"session", session.ID, "continues", session.Continues, "carried", req.Carried != nil)
-	return sandbox.RunHandle{CommandID: pid, SessionID: session.ID}, nil
+	return sandbox.RunHandle{CommandID: pid, SessionID: session.ID, FreshSessionID: session.Fresh}, nil
 }
 
 // refuseCarried is why req's carried session ([sandbox.RunRequest.Carried])
@@ -1002,9 +1074,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 	// WHICH SESSION THE RUN TOOK UP, as its script recorded before its harness
 	// started ([Paths.SessionRecord]): the session a harness that reported none
-	// ran in, whether it was the one the run was asked to continue, and the
-	// harness's release. A record the box refused is a piece the run did not
-	// report, as any other is.
+	// ran in, whether it was the one the run was asked to continue, why it
+	// started anew where it did — a sentence, held to its bound here, where it
+	// enters the result ([sandbox.BoundFellBack]): the line is the box's, as
+	// long as the record — and the harness's release. A record the box refused
+	// is a piece the run did not report, as any other is.
 	recorded, recordRefusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
 	if err != nil {
 		return sandbox.Result{}, err
@@ -1013,10 +1087,17 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		refused = append(refused, recordRefusal)
 	}
 	rec := parseSessionRecord(recorded)
-	if result.SessionID == "" {
+	// THE HARNESS'S OWN WORD for its session only where it is an id a harness
+	// mints ([sandbox.ValidSessionID]), the record's otherwise: what the harness
+	// printed is a file in the box as much as the record is, and the id rides
+	// the launch's record and is handed to a later run's script (the
+	// assistant's deep work resumes its run by it), so one that is no id is
+	// none, as the record's is.
+	if !sandbox.ValidSessionID(result.SessionID) {
 		result.SessionID = rec.id
 	}
-	result.Continued, result.FellBack, result.HarnessVersion = rec.continued, rec.why, releaseOf(rec.release)
+	result.Continued, result.HarnessVersion = rec.continued, releaseOf(rec.release)
+	result.FellBack = sandbox.BoundFellBack(rec.why)
 	if result.Captured, err = r.captured(ctx, box, paths, rec); err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading the session the box packed: %w", err)
 	}
@@ -1060,6 +1141,27 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	code := strings.TrimSpace(codeText)
 	crashed := code != "" && code != "0"
 
+	// WHETHER THE JOB WAS ENDED ON REQUEST, as its script recorded the moment
+	// its harness was over ([Paths.JobEnded]): a run ended so did not finish,
+	// whatever it wrote and however its harness exited — a harness that
+	// exits 0 on SIGTERM included — so it never reads as a success, and its
+	// failure says so first. A word this build does not know is no end.
+	endedText, refusal, err := readWhole(ctx, box, paths.JobEnded(), "the record of how its job was ended")
+	if err != nil {
+		return sandbox.Result{}, err
+	}
+	if refusal != "" {
+		refused = append(refused, refusal)
+	}
+	if ended := sandbox.JobEnd(strings.TrimSpace(endedText)); ended.Valid() {
+		result.JobEnd = ended
+	}
+	// AND WHETHER ITS HARNESS EXITED CLEANLY, for the session its script
+	// packed after it whatever its status: one killed while the wrapper lived
+	// on — a signal, its memory limit — may end mid-record, and so may one
+	// whose status the box never recorded ([sandbox.Result.HarnessCutOff]).
+	result.HarnessCutOff = code != "0"
+
 	// THE FINDINGS FILE IS THE RESULT CARRIER OF RECORD. The system text asks
 	// the agent to write its report there before stopping, and it survives both
 	// a run whose process group died before its streamed final message was
@@ -1102,7 +1204,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// than a silent stall. The harness's error used to be REPLACED by the
 		// stderr whenever the stderr held anything at all, so a run that
 		// hit its turn cap and printed one warning reported the warning.
-		if crashed {
+		// A run ended on request says its status in saying so (below).
+		if crashed && result.JobEnd == "" {
 			said = append(said, "the harness exited with status "+code)
 		}
 		said = append(said, result.Error)
@@ -1118,7 +1221,15 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// a reader cannot find anywhere else.
 		result.Success = false
 	}
-	result.Error = failureDetail(append(refused, said...), errStream, unread, r.failureBound)
+	// A RUN ENDED ON REQUEST says so before anything else, for the same
+	// reason: nothing it wrote says it was stopped.
+	var sentences []string
+	if result.JobEnd != "" {
+		result.Success = false
+		sentences = append(sentences, endedSentence(result.JobEnd, code))
+	}
+	sentences = append(append(sentences, refused...), said...)
+	result.Error = failureDetail(sentences, errStream, unread, r.failureBound)
 
 	result.Text = redact.Secrets(result.Text)
 	result.Error = redact.Secrets(result.Error)
@@ -1132,6 +1243,72 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// after redacting it again ([sandbox.MaxRunTextBytes]).
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
+}
+
+// endedSentence is what a run's failure opens with where its job was ended on
+// request ([sandbox.Result.JobEnd]), its harness's exit status code where the
+// box recorded one.
+func endedSentence(ended sandbox.JobEnd, code string) string {
+	const opening = "the run was ended on request before it finished: "
+	switch ended {
+	case sandbox.JobEndKilled:
+		return opening + fmt.Sprintf("its harness did not stop within %s and was killed", sandbox.JobStopGrace)
+	case sandbox.JobEndBefore:
+		return opening + "before its harness started"
+	}
+	if code == "" {
+		return opening + "its harness was told to stop"
+	}
+	return opening + "its harness was told to stop and exited " + code
+}
+
+// AskEnd asks the job handle names to end ([sandbox.JobEnder]): the end
+// protocol its script recorded in box ([Paths.JobScript]) read, and its script
+// sent the request through the box ([sandbox.Sandbox.EndJob]).
+//
+// NOTHING IS ASKED OF A SCRIPT THAT RECORDED NO PROTOCOL THIS BUILD SPEAKS —
+// an older build's script, one that has not reached its first line, a record
+// that is not `1 <pid>` with a pid above 1 — and the answer says so
+// ([sandbox.EndUnheard]): the read kills such a job instead. A pid the box
+// says is no process of the job is [sandbox.EndGone], for the same end. The
+// record is the job's own file, read whole and parsed, never handed on as text.
+func (r *Runner) AskEnd(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.EndAsk, error) {
+	paths := PathsFor(box)
+	recorded, refusal, err := readWhole(ctx, box, paths.JobScript(), "the end protocol its script recorded")
+	if err != nil {
+		return "", fmt.Errorf("executor: reading the end protocol the job's script recorded: %w", err)
+	}
+	script, ok := parseJobScript(recorded)
+	if refusal != "" || !ok {
+		return sandbox.EndUnheard, nil
+	}
+	switch err := box.EndJob(ctx, handle.CommandID, script); {
+	case err == nil:
+		return sandbox.EndAsked, nil
+	case errors.Is(err, sandbox.ErrNotJobProcess):
+		log.InfoContext(ctx, "harness_end_unheard", "harness", r.harness.Name(), "pid", script,
+			"error", err.Error())
+		return sandbox.EndGone, nil
+	default:
+		return "", fmt.Errorf("executor: asking %s's script to end its job: %w", r.harness.Name(), err)
+	}
+}
+
+var _ sandbox.JobEnder = (*Runner)(nil)
+
+// parseJobScript reads a script's record of its end protocol
+// ([Paths.JobScript]): `1 <pid>`, one line, the protocol this build speaks and
+// a pid above 1 — false for anything else.
+func parseJobScript(recorded string) (int, bool) {
+	fields := strings.Fields(recorded)
+	if len(fields) != 2 || fields[0] != strconv.Itoa(jobScriptProtocol) {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(fields[1])
+	if err != nil || pid < 2 {
+		return 0, false
+	}
+	return pid, true
 }
 
 // failureDetail composes a run's failure: the engine's own sentences in the

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -237,9 +238,9 @@ func TestASessionNobodyCanReadIsNoSession(t *testing.T) {
 func TestAnArchivePastItsBoundIsRefused(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionStore(t, "k1")
-	big := io.NopCloser(io.LimitReader(zeros{}, executordomain.SessionMaxBytes+1))
+	big := io.NopCloser(io.LimitReader(zeros{}, executorkeep.SessionMaxBytes+1))
 	if _, err := store.Put(t.Context(), "ana", statelog.NewOpID(time.Now(), ""), big); !errors.Is(err,
-		executordomain.ErrSessionTooLarge) {
+		executorkeep.ErrSessionTooLarge) {
 		t.Fatalf("an archive a byte past its bound: %v, want ErrSessionTooLarge", err)
 	}
 }
@@ -257,14 +258,14 @@ func (zeros) Read(p []byte) (int, error) {
 // and what the object store's pacing pin reads.
 func TestTheSealedCapHoldsASessionAtItsBound(t *testing.T) {
 	t.Parallel()
-	if executordomain.SealedMaxBytes < executordomain.SessionMaxBytes {
+	if executorkeep.SealedMaxBytes < executorkeep.SessionMaxBytes {
 		t.Fatalf("the sealed cap %d is below the archive's own %d",
-			executordomain.SealedMaxBytes, executordomain.SessionMaxBytes)
+			executorkeep.SealedMaxBytes, executorkeep.SessionMaxBytes)
 	}
-	if got := secrets.SealedStreamSize(executordomain.SessionMaxBytes,
-		string(bytes.Repeat([]byte("k"), secrets.MaxStreamKeyIDBytes))); got != executordomain.SealedMaxBytes {
+	if got := secrets.SealedStreamSize(executorkeep.SessionMaxBytes,
+		string(bytes.Repeat([]byte("k"), secrets.MaxStreamKeyIDBytes))); got != executorkeep.SealedMaxBytes {
 		t.Fatalf("an archive at its bound seals to %d and the cap is %d", got,
-			executordomain.SealedMaxBytes)
+			executorkeep.SealedMaxBytes)
 	}
 }
 
@@ -277,12 +278,120 @@ func TestTheSealedCapHoldsASessionAtItsBound(t *testing.T) {
 // this fails.
 func TestTheSeatBudgetFloorHoldsOneSessionAtItsBound(t *testing.T) {
 	t.Parallel()
-	if config.SessionBytesPerSeatFloor < executordomain.SealedMaxBytes {
+	if config.SessionBytesPerSeatFloor < executorkeep.SealedMaxBytes {
 		t.Errorf("max_bytes_per_seat accepts %d bytes and one sealed session is up to %d",
-			config.SessionBytesPerSeatFloor, executordomain.SealedMaxBytes)
+			config.SessionBytesPerSeatFloor, executorkeep.SealedMaxBytes)
 	}
 	if config.DefaultSessionBytesPerSeat < config.SessionBytesPerSeatFloor {
 		t.Errorf("the default budget of %d bytes is below the field's own floor of %d",
 			config.DefaultSessionBytesPerSeat, config.SessionBytesPerSeatFloor)
+	}
+}
+
+// A SESSION SEALED TO A SPOOL UPLOADS AS THE OBJECT ITS SEAL MINTED, AND READS
+// BACK AS THE ARCHIVE: the spool — what rests on a node's disk between a take
+// and its keep — holds nothing of the archive in the clear; its size is what
+// the upload stores, under the key the seal minted and bound in; the object
+// opens under the seat and turn it was sealed for and under no other; and an
+// archive past its bound is refused at the seal, before anything is uploaded.
+//
+// Mutation: spool the archive in the clear, mint the upload's key anew, or let
+// the seal pass an archive past its bound, and a check here goes red.
+func TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted(t *testing.T) {
+	t.Parallel()
+	store, backend := sessionStore(t, "k1")
+	turn := statelog.NewOpID(time.Now(), "")
+	plain := archive(t, 2*secrets.StreamChunkBytes+5)
+	var spool bytes.Buffer
+	sealed, err := store.Seal("ana", turn, bytes.NewReader(plain), &spool)
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if bytes.Contains(spool.Bytes(), []byte("transcript-marker:")) {
+		t.Fatal("the spool carries the archive in the clear")
+	}
+	if sealed.Size != int64(spool.Len()) || sealed.ContentKey != "k1" ||
+		sealed.Size != secrets.SealedStreamSize(int64(len(plain)), "k1") {
+		t.Fatalf("the seal answered %+v for a spool of %d bytes", sealed, spool.Len())
+	}
+	spooled := bytes.Clone(spool.Bytes())
+	put, err := store.Upload(t.Context(), sealed, &spool)
+	if err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if put.Object.Key.Name() != sealed.Key.Name() || put.Object.Size != sealed.Size || put.ContentKey != "k1" {
+		t.Fatalf("the upload answered %+v, want the key the seal minted, at the spool's size", put)
+	}
+	if stored := storedBytes(t, backend, put.Object.Key.Name()); !bytes.Equal(stored, spooled) {
+		t.Fatal("the object holds other bytes than the spool")
+	}
+	got, err := readAll(t, store, executordomain.Session{Handle: "ana", Turn: turn, Object: put.Object})
+	if err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("the session read back (%d bytes, %v), want the archive", len(got), err)
+	}
+	if _, err := readAll(t, store, executordomain.Session{Handle: "ben", Turn: turn,
+		Object: put.Object}); !errors.Is(err, executordomain.ErrUnreadable) {
+		t.Errorf("the object named by another seat: %v, want ErrUnreadable", err)
+	}
+	if _, err := store.Seal("ana", turn, io.LimitReader(zeros{}, executorkeep.SessionMaxBytes+1),
+		io.Discard); !errors.Is(err, executorkeep.ErrSessionTooLarge) {
+		t.Errorf("an archive a byte past its bound was sealed: %v, want ErrSessionTooLarge", err)
+	}
+}
+
+// A SPOOLED SESSION OPENS ONLY FOR THE ROW IT WAS FETCHED FOR: a restore fetches
+// the turn's object sealed onto its node's disk, checked against the row by the
+// object store, and opens the spool against the row's own associated data — so
+// the spool reads back as the archive under its own seat and turn, and is
+// ErrUnreadable named by another turn's row, another seat's, or a row naming
+// another object, whatever bytes the spool holds. A row naming an object the
+// store no longer holds fetches nothing and is ErrUnreadable at once.
+//
+// Mutation: open the spool under an associated data that leaves the turn or the
+// seat out, or skip the object store's check in Fetch, and a row goes red.
+func TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor(t *testing.T) {
+	t.Parallel()
+	store, _ := sessionStore(t, "k1")
+	turn := statelog.NewOpID(time.Now(), "")
+	plain := archive(t, 2*secrets.StreamChunkBytes+5)
+	put, err := store.Put(t.Context(), "ana", turn, io.NopCloser(bytes.NewReader(plain)))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	own := executordomain.Session{Handle: "ana", Turn: turn, Object: put.Object}
+	var spool bytes.Buffer
+	if err := store.Fetch(t.Context(), own, &spool); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if bytes.Contains(spool.Bytes(), []byte("transcript-marker:")) {
+		t.Fatal("the spool holds the archive in the clear")
+	}
+	open := func(row executordomain.Session) ([]byte, error) {
+		r, err := store.OpenSpooled(row, bytes.NewReader(spool.Bytes()))
+		if err != nil {
+			return nil, err
+		}
+		return io.ReadAll(r)
+	}
+	if got, err := open(own); err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("the spool opened for its own row read (%d bytes, %v), want the archive", len(got), err)
+	}
+	for name, other := range map[string]executordomain.Session{
+		"another turn": {Handle: "ana", Turn: statelog.NewOpID(time.Now(), ""), Object: put.Object},
+		"another seat": {Handle: "ben", Turn: turn, Object: put.Object},
+		"another object": {Handle: "ana", Turn: turn, Object: objstore.Object{
+			Key: objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)), Hash: put.Object.Hash,
+			Size: put.Object.Size}},
+	} {
+		if _, err := open(other); !errors.Is(err, executordomain.ErrUnreadable) {
+			t.Errorf("the spool opened for %s: %v, want ErrUnreadable", name, err)
+		}
+	}
+	gone := executordomain.Session{Handle: "ana", Turn: turn, Object: objstore.Object{
+		Key: objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)), Hash: put.Object.Hash,
+		Size: put.Object.Size}}
+	var nothing bytes.Buffer
+	if err := store.Fetch(t.Context(), gone, &nothing); !errors.Is(err, executordomain.ErrUnreadable) {
+		t.Errorf("a row naming an object the store does not hold fetched: %v, want ErrUnreadable", err)
 	}
 }

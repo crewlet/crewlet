@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -281,63 +282,350 @@ func TestAClaudeCodeSessionReadsAsTheTranscriptItsHarnessRecorded(t *testing.T) 
 	}
 }
 
-// openCodeExportDoc is the export the fake opencode prints for a run: the
-// brief, a step with the model's reasoning, its words, a call that completed
-// and one that failed, a compaction's summary, and a person's next message —
-// whose `summary` is an object, which is no summary.
-func openCodeExportDoc() string {
-	return `{"info":{"id":"ses_0123456789abcdef0123456789abcdef","title":"crewlet","time":{"created":1793361600000}},` +
-		`"messages":[` +
-		`{"info":{"id":"msg_1","role":"user","time":{"created":1793361600000}},` +
-		`"parts":[{"id":"prt_1","type":"text","text":"Fix the flaky test in ENG-7."}]},` +
-		`{"info":{"id":"msg_2","role":"assistant","time":{"created":1793361601000}},"parts":[` +
-		`{"type":"step-start"},{"type":"reasoning","text":"the race is in the cache"},` +
-		`{"type":"text","text":"Running the tests first."},` +
-		`{"type":"tool","callID":"c1","tool":"bash","state":{"status":"completed",` +
-		`"input":{"command":"go test ./cache/..."},"output":"ok cache 0.2s",` +
-		`"time":{"start":1793361602000,"end":1793361603000}}},` +
-		`{"type":"tool","callID":"c2","tool":"read","state":{"status":"error",` +
-		`"input":{"filePath":"/work/missing.go"},"error":"no such file",` +
-		`"time":{"start":1793361604000,"end":1793361604500}}},` +
-		`{"type":"step-finish","tokens":{"input":10}}]},` +
-		`{"info":{"id":"msg_3","role":"assistant","summary":true,"time":{"created":1793361605000}},` +
-		`"parts":[{"type":"text","text":"The test races on the cache; the lock is taken now."}]},` +
-		`{"info":{"id":"msg_4","role":"user","summary":{"title":"Fix","diffs":[]},` +
-		`"time":{"created":1793361606000}},"parts":[{"type":"text","text":"Carry on."}]}` +
-		`]}`
+// openCodeDoc is an OpenCode export holding messages, each one message of
+// OpenCode 2's `SessionMessage.Info` as JSON: the document `opencode session
+// export` prints, `{"info": …, "messages": […]}`.
+func openCodeDoc(messages ...string) string {
+	return `{"info":{"id":"ses_0123456789abcdef0123456789abcdef","title":"crewlet"},"messages":[` +
+		strings.Join(messages, ",") + `]}`
 }
 
-// AN OPENCODE SESSION READS AS THE TRANSCRIPT ITS EXPORT HOLDS. The export the
-// run's script packed reads a message at a time: a person's text as the
-// brief, the model's as its words, a tool part as its call and — once it
-// settled — its result, a failure marked, and a compaction's message as the
-// summary; the reasoning and the steps' bookkeeping are no entry, and a
-// person's message whose `summary` is an object is still a brief. A call is
-// dated when it started and its result when it ended.
+// openCodeUser is a person's message saying text, as OpenCode 2 exports one.
+func openCodeUser(text string) string {
+	// A STRING ALWAYS ENCODES: json.Marshal fails only on a value no JSON
+	// spells, which a string never is.
+	quoted, _ := json.Marshal(text)
+	return `{"id":"msg_1","type":"user","text":` + string(quoted) + `,"time":{"created":1793361600000}}`
+}
+
+// openCodeFixtureVersions are the OpenCode releases a real export is kept of,
+// testdata/opencode/<version>/export.json: the oldest this build drives, the
+// runner's floor, and the newest 2.x.
+var openCodeFixtureVersions = []string{"2.0.32", "2.2.5"}
+
+// openCodeExportFixture is the export OpenCode version printed for one
+// session: a REAL one, `opencode session export` of a session the release
+// itself ran — `@opencode/cli` installed in a container, its server's provider
+// an OpenAI-compatible stub model API answering a script — byte for byte but
+// for the container's paths, its run directory written as /work and its home
+// as /home/crewlet. The session is a run's brief, and its steps: a call that
+// completed, a read of a missing file that failed, a note steered in while that
+// read ran, a shell command run in the background and its notice, a subagent;
+// then a notice through the server's API, a shell command a person ran, a
+// skill a person activated, the agent switched to plan and back, the model
+// switched, and a compaction asked for; then, on a server started again after
+// the run's instructions changed, a run that answered, one whose provider
+// refused it, one interrupted while a call ran and one while the model was
+// writing a call; and last the session moved to another directory.
+func openCodeExportFixture(t *testing.T, version string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "opencode", version, "export.json"))
+	if err != nil {
+		t.Fatalf("read the fixture: %v", err)
+	}
+	return string(raw)
+}
+
+// openCodeMinted is an id the fixture's session minted as it ran, in what its
+// tools answered — a shell's, a subagent's session, the project's hash — which
+// a case reads past: no two runs of one session mint the same.
+var openCodeMinted = regexp.MustCompile(`\b(?:sh|ses)_[0-9A-Za-z]+|\b[0-9a-f]{40}\b`)
+
+// openCodeBackground is what OpenCode's shell answered a call it ran in the
+// background, the ids it minted read past ([openCodeMinted]): two text items,
+// a line apart. The same words at 2.0.32 and 2.2.5.
+const openCodeBackground = "Command moved to the background (shell ID: <id>).\n" +
+	"Output is streaming to: /work/xdg/data/opencode/shell/<id>/<id>.out\n" +
+	"You will be notified automatically when the command finishes. The notification will include the " +
+	"command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you " +
+	"need the final result to continue. Repeatedly sleeping and reading or searching the output file is " +
+	"polling, not useful work. You may read the current output if it lets you do useful work now, but do " +
+	"not repeatedly check it while waiting for the command to finish. Keep working on anything that does " +
+	"not depend on the result. If you have nothing else to do, end your response; you will be resumed " +
+	"automatically when the command finishes."
+
+// openCodeFixtureTranscript is the transcript the fixture's session reads as
+// on the release version, each entry beside the message it was read from
+// (OpenCode's own messages, which read as none, are named where they fall).
+func openCodeFixtureTranscript(version string) []shown {
+	// THE READ'S FAILURE is OpenCode's own words, which 2.2.5 goes on with.
+	notFound := map[string]string{
+		"2.0.32": "File not found: /nonexistent/missing.go",
+		"2.2.5": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. " +
+			"The nearest folder that does is /.",
+	}[version]
+	subagent := "<subagent sessionID=\"<id>\" state=\"completed\">\nThe cache map is written unlocked.\n</subagent>"
+	steps := func(note []shown) []shown {
+		return slices.Concat([]shown{
+			// A step: its reasoning none, its words, and a call that completed.
+			{kind: executor.EntryModel, text: "Running the tests first."},
+			{kind: executor.EntryToolCall, tool: "shell", text: `{"command":"echo ok-from-shell"}`},
+			{kind: executor.EntryToolResult, tool: "shell", text: "ok-from-shell\n"},
+			// A step whose read failed.
+			{kind: executor.EntryToolCall, tool: "read", text: `{"path":"/nonexistent/missing.go"}`},
+			{kind: executor.EntryToolResult, tool: "read", failed: true, text: notFound},
+		}, note, []shown{
+			// A call run in the background, and a subagent.
+			{kind: executor.EntryToolCall, tool: "shell",
+				text: `{"command":"sleep 2; echo bg-done","background":true}`},
+			{kind: executor.EntryToolResult, tool: "shell", text: openCodeBackground},
+			{kind: executor.EntryToolCall, tool: "subagent",
+				text: `{"agent":"general","description":"find the race","prompt":"Look for the race."}`},
+			{kind: executor.EntryToolResult, tool: "subagent", text: subagent},
+			{kind: executor.EntryModel, text: "Fixed: the cache takes its lock."},
+		})
+	}
+	return slices.Concat(
+		[]shown{{kind: executor.EntryBrief, text: "Fix the flaky test in ENG-7."}},
+		steps([]shown{{kind: executor.EntryNote,
+			text: note("ada", "Target the release branch.")}}),
+		// The execution's end; the background call's notice, and the step it
+		// woke.
+		[]shown{{kind: executor.EntryModel, text: "Fixed: the cache takes its lock."}},
+		// The execution's end; a person's shell command, a skill, the agent
+		// switched to plan and back, the model switched — and the compaction.
+		[]shown{{kind: executor.EntrySummary, text: "## Objective\n- Fix the flaky cache test.\n\n" +
+			"## Work State\n### Completed\n- The cache takes its lock.\n\n## Next Move\n1. (none)"}},
+		// Four notices (the API's, the shell command's, plan mode's on and
+		// off), and the steps the session ran again, its history compacted.
+		steps(nil),
+		// The execution's end; the agent and the model the next run names;
+		// the instructions updated, read by the new server; and the next
+		// runs, each naming its agent and ending its execution: one answered,
+		// one its provider refused, which wrote nothing, one interrupted as a
+		// call ran and one as the model wrote a call.
+		[]shown{
+			{kind: executor.EntryBrief, text: "Carry on."},
+			{kind: executor.EntryModel, text: "Carried on: nothing is left to do."},
+			{kind: executor.EntryBrief, text: "Fail now."},
+			{kind: executor.EntryBrief, text: "Wait for it."},
+			{kind: executor.EntryToolCall, tool: "shell", text: `{"command":"sleep 30; echo woke"}`},
+			{kind: executor.EntryToolResult, tool: "shell", failed: true, text: "Tool execution interrupted"},
+			{kind: executor.EntryBrief, text: "Write slowly."},
+			{kind: executor.EntryToolCall, tool: "write", text: `{}`},
+			{kind: executor.EntryToolResult, tool: "write", failed: true, text: "Tool execution interrupted"},
+		},
+		// The session moved, and the execution's end.
+	)
+}
+
+// AN OPENCODE SESSION READS AS THE TRANSCRIPT ITS EXPORT HOLDS — the export
+// each release this build drives printed for one session, which holds every
+// kind of message OpenCode 2 writes, packed by the run's script and read back:
+// the briefs; the model's words; each tool it called, its input as JSON, and
+// what answered it, a failure marked; the note a person steered in while a call
+// ran, as the note; and the compaction's summary. OpenCode's own messages — its
+// notices in the person's turn, an update of the instructions, a skill and a
+// shell command a person ran, an execution's end, a switched agent, model and
+// directory — the steps' reasoning, and the step its provider refused, which
+// wrote nothing, are no entry. Every entry is dated, as every message of the
+// export says when it was recorded.
 //
-// Mutation: read a user message's summary object as a summary, drop a tool
-// part's result, or read the reasoning, and the case goes red.
+// Mutation: read a message by OpenCode 1.x's `info.role` and `parts`, read a
+// notice, an update, a skill, a shell command or the reasoning as an entry,
+// drop a call's result, or read a failed call's answer without its failure,
+// and the case goes red.
 func TestAnOpenCodeSessionReadsAsTheTranscriptItsExportHolds(t *testing.T) {
 	t.Parallel()
-	got := readOpenCode(t, openCodeCaptureOf(t, openCodeExportDoc()), executor.TranscriptReadBounds())
-	if got.Cut != "" || got.More() {
-		t.Errorf("the read is cut %q, want the whole transcript", got.Cut)
+	for _, version := range openCodeFixtureVersions {
+		t.Run(version, func(t *testing.T) {
+			t.Parallel()
+			got := readOpenCode(t, openCodeCaptureOf(t, openCodeExportFixture(t, version)),
+				executor.TranscriptReadBounds())
+			if got.Cut != "" || got.More() {
+				t.Errorf("the read is cut %q, want the whole transcript", got.Cut)
+			}
+			read := slices.Clone(got.Entries)
+			for i := range read {
+				read[i].Text = openCodeMinted.ReplaceAllString(read[i].Text, "<id>")
+				if read[i].At.IsZero() {
+					t.Errorf("entry %d (%s) is not dated, and its message says when", i, read[i].Kind)
+				}
+			}
+			sameEntries(t, read, openCodeFixtureTranscript(version))
+		})
 	}
-	sameEntries(t, got.Entries, []shown{
-		{kind: executor.EntryBrief, text: "Fix the flaky test in ENG-7."},
-		{kind: executor.EntryModel, text: "Running the tests first."},
-		{kind: executor.EntryToolCall, tool: "bash", text: `{"command":"go test ./cache/..."}`},
-		{kind: executor.EntryToolResult, tool: "bash", text: "ok cache 0.2s"},
-		{kind: executor.EntryToolCall, tool: "read", text: `{"filePath":"/work/missing.go"}`},
-		{kind: executor.EntryToolResult, tool: "read", failed: true, text: "no such file"},
-		{kind: executor.EntrySummary, text: "The test races on the cache; the lock is taken now."},
-		{kind: executor.EntryBrief, text: "Carry on."},
-	})
-	if len(got.Entries) >= 4 {
-		started, ended := time.UnixMilli(1793361602000).UTC(), time.UnixMilli(1793361603000).UTC()
-		if !got.Entries[2].At.Equal(started) || !got.Entries[3].At.Equal(ended) {
-			t.Errorf("the call is dated %s and its result %s, want %s and %s",
-				got.Entries[2].At, got.Entries[3].At, started, ended)
+}
+
+// openCodeStep is an assistant's step holding items, as OpenCode 2.0.32
+// exported one: the step's agent, model, finish, cost and tokens beside its
+// content.
+func openCodeStep(items ...string) string {
+	return `{"id":"msg_2","time":{"created":1793361601000,"streamed":1793361601100,"completed":1793361609000},` +
+		`"type":"assistant","agent":"build","model":{"id":"stub-model","providerID":"stub","variant":"default"},` +
+		`"content":[` + strings.Join(items, ",") + `],"finish":"tool-calls","rawFinish":"tool_calls","cost":0,` +
+		`"tokens":{"input":1001,"output":30,"reasoning":0,"cache":{"read":200,"write":0}}}`
+}
+
+// openCodeCall is a tool item of a step: the call named name, as it stands.
+func openCodeCall(name, state string) string {
+	return `{"type":"tool","id":"call_1","name":"` + name + `","executed":false,"state":` + state +
+		`,"time":{"created":1793361602000,"ran":1793361603000,"completed":1793361604000}}`
+}
+
+// EACH KIND OF OPENCODE MESSAGE READS AS WHAT IT IS, OR AS NOTHING. A person's
+// message is the brief, or a note where it opens with one; an assistant's
+// step is the model's words and each tool it called, and never its reasoning:
+// a completed call is the call and its answer, the answer's text items a line
+// apart and a file in the words a file reads in; a failed call is the call and
+// its failure, marked, with what it answered before it failed; a call OpenCode
+// stopped while it ran, or while the model was still writing it, is the call
+// alone, its input as written so far; and a completed compaction is its
+// summary. Every other kind is OpenCode's own and no entry: a compaction that
+// failed or is still running, a notice in the person's turn — one quoting a
+// note's heading included, as a background job's output can — an update of
+// the instructions, a skill and a shell command a person ran, an execution's
+// end, and a switched agent, model or directory.
+//
+// Each message's shape is one the fixture's real export holds
+// (testdata/opencode), its ids and times the case's own — but for what that
+// session left no example of, written from OpenCode 2.0.32's own schema: a
+// file a call answered with (packages/schema/src/tool.ts:73-79); a call still
+// streaming or running (packages/schema/src/session-message.ts:126-137), where
+// the session interrupted settled each of its calls as failed; a compaction
+// that failed (session-message.ts:269-276); and one still running
+// (session-message.ts:247-254), which an export leaves out
+// (packages/core/src/session/transfer.ts:165-169) and a document a box's own
+// agent wrote can hold all the same.
+//
+// Mutation: read any of OpenCode's own kinds as an entry, search a notice for
+// notes, read a failed or running compaction as a summary, give an unsettled
+// call a result, drop a failure's message or the answer before it, or read the
+// reasoning, and that kind's row goes red.
+func TestEachKindOfOpenCodeMessageReadsAsWhatItIsOrAsNothing(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		message string
+		want    []shown
+	}{
+		"a person's message is the brief": {
+			`{"id":"msg_1","time":{"created":1793361600000},"text":"Fix the flaky test in ENG-7.","files":[],"type":"user"}`,
+			[]shown{{kind: executor.EntryBrief, text: "Fix the flaky test in ENG-7."}}},
+		"a person's message opening with a note is the note": {openCodeUser(note("ada", "Target main.")),
+			[]shown{{kind: executor.EntryNote, text: note("ada", "Target main.")}}},
+		"a step's text is the model's, its reasoning none": {openCodeStep(
+			`{"type":"reasoning","text":"the race is in the cache","state":{"reasoningField":"reasoning_content"},`+
+				`"time":{"created":1793361601200,"completed":1793361601300}}`,
+			`{"type":"text","text":"Running the tests first."}`,
+			`{"type":"citation","text":"an item of a type this build does not know"}`),
+			[]shown{{kind: executor.EntryModel, text: "Running the tests first."}}},
+		"a completed call is the call and its answer": {openCodeStep(openCodeCall("shell",
+			`{"status":"completed","input":{"command":"go test ./cache/..."},"content":[`+
+				`{"type":"text","text":"ok cache 0.2s"},{"type":"text","text":"exit 0"}],`+
+				`"metadata":{"status":"completed","truncated":false,"exit":0}}`)),
+			[]shown{{kind: executor.EntryToolCall, tool: "shell", text: `{"command":"go test ./cache/..."}`},
+				{kind: executor.EntryToolResult, tool: "shell", text: "ok cache 0.2s\nexit 0"}}},
+		"a file a call answered with is said as a file": {openCodeStep(openCodeCall("read",
+			`{"status":"completed","input":{"path":"logo.png"},"content":[`+
+				`{"type":"file","uri":"data:image/png;base64,iVBORw0KGgo=","mime":"image/png","name":"logo.png"},`+
+				`{"type":"file","uri":"file:///work/spec.pdf","mime":"application/pdf"}]}`)),
+			[]shown{{kind: executor.EntryToolCall, tool: "read", text: `{"path":"logo.png"}`},
+				{kind: executor.EntryToolResult, tool: "read", text: "[an image]\n[a file]"}}},
+		"a failed call is its failure, marked, and what it answered first": {openCodeStep(openCodeCall("shell",
+			`{"status":"error","input":{"command":"go vet ./..."},`+
+				`"error":{"type":"tool.execution","message":"the command timed out"},`+
+				`"content":[{"type":"text","text":"vet: checking cache"}]}`)),
+			[]shown{{kind: executor.EntryToolCall, tool: "shell", text: `{"command":"go vet ./..."}`},
+				{kind: executor.EntryToolResult, tool: "shell", failed: true,
+					text: "the command timed out\nvet: checking cache"}}},
+		"a failed call whose failure has no message is its class": {openCodeStep(openCodeCall("shell",
+			`{"status":"error","input":{"command":"true"},"error":{"type":"tool.aborted","message":""}}`)),
+			[]shown{{kind: executor.EntryToolCall, tool: "shell", text: `{"command":"true"}`},
+				{kind: executor.EntryToolResult, tool: "shell", failed: true, text: "tool.aborted"}}},
+		"a call stopped while it ran is the call alone": {openCodeStep(openCodeCall("shell",
+			`{"status":"running","input":{"command":"sleep 600"},"metadata":{}}`)),
+			[]shown{{kind: executor.EntryToolCall, tool: "shell", text: `{"command":"sleep 600"}`}}},
+		"a call stopped while the model wrote it is its input so far": {openCodeStep(openCodeCall("write",
+			`{"status":"streaming","input":"{\"path\":\"cache.go\",\"content\":\"pack"}`)),
+			[]shown{{kind: executor.EntryToolCall, tool: "write", text: `{"path":"cache.go","content":"pack`}}},
+		"a completed compaction is its summary": {
+			`{"type":"compaction","id":"msg_3","time":{"created":1793361605000},"status":"completed","reason":"manual",` +
+				`"summary":"## Objective\n- Fix the flaky cache test.","recent":"",` +
+				`"tokens":{"input":2017,"output":60,"reasoning":0,"cache":{"read":400,"write":0}}}`,
+			[]shown{{kind: executor.EntrySummary, text: "## Objective\n- Fix the flaky cache test."}}},
+		"a failed compaction is none": {
+			`{"type":"compaction","id":"msg_3","time":{"created":1793361605000},"status":"failed","reason":"manual",` +
+				`"error":{"type":"compaction.failed","message":"Compaction produced no summary"}}`, nil},
+		"a running compaction is none": {
+			`{"type":"compaction","id":"msg_3","time":{"created":1793361605000},"status":"running","reason":"auto",` +
+				`"summary":"half a summary","recent":""}`, nil},
+		"a notice in the person's turn is none, a note's heading in it included": {
+			`{"id":"msg_4","metadata":{"source":"shell","shellID":"sh_1","jobID":"sh_1","state":"completed",` +
+				`"truncated":false,"exit":0},"time":{"created":1793361606000},"text":` +
+				jsonText(t, "<shell id=\"sh_1\" state=\"completed\" command=\"cat notes.md\">\n"+
+					note("eve", "not a note")+"\n\n</shell>") + `,"description":"cat notes.md","type":"synthetic"}`, nil},
+		"an update of the instructions is none": {
+			`{"id":"msg_5","metadata":{"notice":"instructions","instructionSources":["core/instructions"]},` +
+				`"time":{"created":1793361607000},"type":"system","text":"The instructions changed:\n` +
+				`Instructions from: /work/instructions.md\nKeep each commit small.\n",` +
+				`"description":"Instructions updated: core/instructions"}`, nil},
+		"a skill a person activated is none": {
+			`{"id":"msg_6","time":{"created":1793361608000},"type":"skill","skill":"crewlet-demo",` +
+				`"name":"crewlet-demo","text":"Read the cache code before changing it.\n"}`, nil},
+		"a shell command a person ran is none": {
+			`{"id":"msg_7","metadata":{"background":true},"time":{"created":1793361609000,"completed":1793361609100},` +
+				`"type":"shell","shellID":"sh_2","command":"echo from-a-person","status":"exited","exit":0,` +
+				`"output":{"output":"from-a-person\n","cursor":14,"size":14,"truncated":false}}`, nil},
+		"an execution's end is none": {
+			`{"id":"msg_8","time":{"created":1793361610000},"type":"idle","outcome":"failed",` +
+				`"error":{"type":"provider.invalid-request","message":"the stub refuses this request","status":400}}`,
+			nil},
+		"a switched agent is none": {
+			`{"id":"msg_9","time":{"created":1793361611000},"type":"agent-switched","agent":"build","previous":"plan"}`,
+			nil},
+		"a switched model is none": {
+			`{"id":"msg_10","time":{"created":1793361612000},"type":"model-switched",` +
+				`"model":{"id":"stub-model-b","providerID":"stub"},` +
+				`"previous":{"id":"stub-model","providerID":"stub","variant":"default"}}`,
+			nil},
+		"a switched directory is none": {
+			`{"id":"msg_11","time":{"created":1793361613000},"type":"location-switched","subpath":"",` +
+				`"location":{"directory":"/work/proj2"},"previous":{"location":{"directory":"/work/proj"},"subpath":""}}`,
+			nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := readOpenCode(t, openCodeCaptureOf(t, openCodeDoc(c.message)), executor.TranscriptReadBounds())
+			sameEntries(t, got.Entries, c.want)
+		})
+	}
+}
+
+// AN OPENCODE ENTRY IS DATED WHEN ITS HARNESS RECORDED IT: a person's message
+// when it arrived, the model's words when their step began, a call when it ran
+// — one that never ran, when the model began it — and its answer when it
+// settled, where the record says when; and otherwise when the step began.
+//
+// Mutation: date a call by when the model began it though it ran, or by its
+// step; date an answer by its call; or date the model's words by when their
+// step settled, and a row goes red.
+func TestAnOpenCodeEntryIsDatedWhenItsHarnessRecordedIt(t *testing.T) {
+	t.Parallel()
+	at := func(ms int64) time.Time { return time.UnixMilli(ms).UTC() }
+	export := openCodeDoc(
+		`{"id":"msg_1","time":{"created":1793361600000},"text":"Fix it.","type":"user"}`,
+		openCodeStep(`{"type":"text","text":"Running the tests first."}`,
+			openCodeCall("shell", `{"status":"completed","input":{"command":"true"},"content":[{"type":"text","text":"ok"}]}`),
+			`{"type":"tool","id":"call_2","name":"write","state":{"status":"streaming","input":"{\"pa"},`+
+				`"time":{"created":1793361605000}}`,
+			`{"type":"tool","id":"call_3","name":"read","state":{"status":"completed","input":{"path":"a"},`+
+				`"content":[{"type":"text","text":"a"}]},"time":{}}`))
+	got := readOpenCode(t, openCodeCaptureOf(t, export), executor.TranscriptReadBounds())
+	want := []time.Time{
+		at(1793361600000), // the brief, when it arrived
+		at(1793361601000), // the model's words, when their step began
+		at(1793361603000), // the call, when it ran
+		at(1793361604000), // its answer, when it settled
+		at(1793361605000), // a call that never ran, when the model began it
+		at(1793361601000), // a call that says neither, when its step began
+		at(1793361601000), // an answer that says not when, when its step began
+	}
+	if len(got.Entries) != len(want) {
+		t.Fatalf("the transcript has %d entries, want %d: %+v", len(got.Entries), len(want), shownOf(got.Entries))
+	}
+	for i, e := range got.Entries {
+		if !e.At.Equal(want[i]) {
+			t.Errorf("entry %d (%s %q) is dated %s, want %s", i, e.Kind, e.Text, e.At, want[i])
 		}
 	}
 }
@@ -359,10 +647,9 @@ func TestAnInstantAnAnswerCannotCarryIsNoTime(t *testing.T) {
 		`{"type":"user","message":{"role":"user","content":"past the year 9999"},"timestamp":"9999-12-31T23:59:59-01:00"}`,
 		`{"type":"user","message":{"role":"user","content":"in range"},"timestamp":"2026-10-30T12:00:00.000Z"}`,
 	}, nil)
-	export := `{"info":{},"messages":[` +
-		`{"info":{"role":"user","time":{"created":253402300800000}},"parts":[{"type":"text","text":"past the year 9999"}]},` +
-		`{"info":{"role":"user","time":{"created":` + strconv.FormatInt(recorded.UnixMilli(), 10) + `}},` +
-		`"parts":[{"type":"text","text":"in range"}]}]}`
+	export := openCodeDoc(
+		`{"type":"user","text":"past the year 9999","time":{"created":253402300800000}}`,
+		`{"type":"user","text":"in range","time":{"created":`+strconv.FormatInt(recorded.UnixMilli(), 10)+`}}`)
 	for name, got := range map[string]executor.Transcript{
 		"claude-code": readClaude(t, claude, executor.TranscriptReadBounds()),
 		"opencode":    readOpenCode(t, openCodeCaptureOf(t, export), executor.TranscriptReadBounds()),
@@ -459,11 +746,8 @@ func TestANoteAPersonSentTheRunReadsAsANote(t *testing.T) {
 		}
 	}
 
-	export := `{"info":{},"messages":[` +
-		`{"info":{"role":"user"},"parts":[{"type":"text","text":"Fix the flake."}]},` +
-		`{"info":{"role":"user"},"parts":[{"type":"text","text":` + jsonText(t, note("ada", "Target main.")) + `}]}` +
-		`]}`
-	open := readOpenCode(t, openCodeCaptureOf(t, export), executor.TranscriptReadBounds())
+	open := readOpenCode(t, openCodeCaptureOf(t, openCodeDoc(openCodeUser("Fix the flake."),
+		openCodeUser(note("ada", "Target main.")))), executor.TranscriptReadBounds())
 	sameEntries(t, open.Entries, []shown{
 		{kind: executor.EntryBrief, text: "Fix the flake."},
 		{kind: executor.EntryNote, text: note("ada", "Target main.")},
@@ -522,13 +806,16 @@ func TestTheLineTheRunsHookPrintedIsANoteAsTheHarnessRecordedIt(t *testing.T) {
 // of Claude Code's record that is JSON but no object — an array, a number — is
 // no record; a person's or the model's record whose message is no object, or
 // whose content is neither text nor a list, has no shape this read knows; and
-// a message of an OpenCode export that is no object, or whose parts are no
-// list, is said too. Each is an entry where it was. A field a release retyped
+// a message of an OpenCode export that is no object, a step whose content is
+// no list, and a message that names no kind, or one OpenCode 2 does not write
+// (a kind a later release adds, or OpenCode 1.x's message, which names none),
+// are said too. Each is an entry where it was. A field a release retyped
 // inside a record is still skipped, the record read.
 //
 // Mutation: tolerate a record that is no object, a message or content of
-// another shape, or parts that are no list, and the entry vanishes; refuse a
-// retyped field and the record that held it does.
+// another shape, content that is no list, or a message of no kind this read
+// knows, and the entry vanishes; refuse a retyped field and the record that
+// held it does.
 func TestARecordOfNoShapeThisReadKnowsIsSaid(t *testing.T) {
 	t.Parallel()
 	described, raw := claudeCaptureOf(t, []string{
@@ -555,32 +842,36 @@ func TestARecordOfNoShapeThisReadKnowsIsSaid(t *testing.T) {
 		{kind: executor.EntryModel, text: "still read"},
 	})
 
-	export := `{"info":{},"messages":["not a message",` +
-		`{"info":{"role":"user"},"parts":{"type":"text","text":"parts of an object"}},` +
-		`{"info":{"role":"user"},"parts":[{"type":"text","text":"read"}]},` +
-		`{"info":{"role":"assistant","time":{"created":"soon"}},"parts":[{"type":"text","text":"retyped"}]}]}`
+	export := openCodeDoc(`"not a message"`,
+		`{"type":"assistant","content":{"type":"text","text":"content of an object"}}`,
+		openCodeUser("read"),
+		`{"type":"assistant","time":{"created":"soon"},"content":[{"type":"text","text":"retyped"}]}`,
+		`{"text":"a message naming no kind"}`,
+		`{"type":7,"text":"a kind that is no string"}`,
+		`{"type":"todo-updated","text":"a kind a later release adds"}`,
+		`{"info":{"role":"user"},"parts":[{"type":"text","text":"OpenCode 1.x's message"}]}`)
 	open := readOpenCode(t, openCodeCaptureOf(t, export), executor.TranscriptReadBounds())
+	noKind := "a message of the export of no kind this read knows was not read"
 	sameEntries(t, open.Entries, []shown{
 		{kind: executor.EntryUnread, text: "a message of the export is not a message, and was not read"},
-		{kind: executor.EntryUnread, text: "a message of the export whose parts are not a list was not read"},
+		{kind: executor.EntryUnread, text: "a message of the export whose content is not a list was not read"},
 		{kind: executor.EntryBrief, text: "read"},
 		{kind: executor.EntryModel, text: "retyped"},
+		{kind: executor.EntryUnread, text: noKind},
+		{kind: executor.EntryUnread, text: noKind},
+		{kind: executor.EntryUnread, text: noKind},
+		{kind: executor.EntryUnread, text: noKind},
 	})
 }
 
 // briefs is an export of n person's messages, `message 0` to `message n-1`.
 func briefs(n int) string {
-	var b strings.Builder
-	b.WriteString(`{"info":{"id":"ses_0123456789abcdef0123456789abcdef"},"messages":[`)
+	messages := make([]string, n)
 	for i := range n {
-		if i > 0 {
-			b.WriteString(",")
-		}
-		fmt.Fprintf(&b, `{"info":{"role":"user","time":{"created":%d}},"parts":[{"type":"text","text":"message %d"}]}`,
-			1793361600000+int64(i)*1000, i)
+		messages[i] = fmt.Sprintf(`{"id":"msg_%d","type":"user","text":"message %d","time":{"created":%d}}`,
+			i, i, 1793361600000+int64(i)*1000)
 	}
-	b.WriteString("]}")
-	return b.String()
+	return openCodeDoc(messages...)
 }
 
 // within is the engine's bounds with the given ones lowered.
@@ -715,8 +1006,9 @@ func TestAnEntryIsRedactedBeforeItIsCut(t *testing.T) {
 	t.Parallel()
 	small := within(func(b *executor.TranscriptBounds) { b.EntryBytes = 64 })
 	tool := func(output string) string {
-		return `{"info":{},"messages":[{"info":{"role":"assistant"},"parts":[{"type":"tool","tool":"bash",` +
-			`"state":{"status":"completed","input":{},"output":` + jsonText(t, output) + `}}]}]}`
+		return openCodeDoc(`{"type":"assistant","content":[{"type":"tool","id":"call_1","name":"shell",` +
+			`"state":{"status":"completed","input":{},"content":[{"type":"text","text":` + jsonText(t, output) +
+			`}]}}]}`)
 	}
 	output := strings.Repeat("x", 50) + " " + plantedToken + " the rest of the output"
 	got := readOpenCode(t, openCodeCaptureOf(t, tool(output)), small)
@@ -979,10 +1271,9 @@ func TestAPartOfTheRecordPastTheBoundIsSaidWhereItWas(t *testing.T) {
 			"subagent's transcript after it", kinds, got.Cut)
 	}
 
-	export := `{"info":{},"messages":[` +
-		`{"info":{"role":"user"},"parts":[{"type":"text","text":"first"}]},` +
-		`{"info":{"role":"assistant"},"parts":[{"type":"text","text":"` + strings.Repeat("y", 4<<10) + `"}]},` +
-		`{"info":{"role":"user"},"parts":[{"type":"text","text":"after"}]}]}`
+	export := openCodeDoc(openCodeUser("first"),
+		`{"type":"assistant","content":[{"type":"text","text":"`+strings.Repeat("y", 4<<10)+`"}]}`,
+		openCodeUser("after"))
 	open := readOpenCode(t, openCodeCaptureOf(t, export), small)
 	if len(open.Entries) != 2 || open.Entries[0].Text != "first" ||
 		open.Entries[1].Kind != executor.EntryUnread || open.Cut != executor.CutRead {
@@ -1088,12 +1379,12 @@ func TestAMalformedArchiveIsSaidInThisPackagesWordsAlone(t *testing.T) {
 		{"an export cut short", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
 			gzipped(t, `{"info":{},"messages":[`), executor.WhyCutShort},
 		{"an export cut after a whole message", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
-			gzipped(t, `{"info":{},"messages":[{"info":{"role":"user"},"parts":[]}`+"\n"), executor.WhyCutShort},
+			gzipped(t, `{"info":{},"messages":[{"type":"user","text":"fix"}`+"\n"), executor.WhyCutShort},
 		{"an export cut after the comma before a message", executor.OpenCodeName,
 			executor.OpenCodeArchiveFormat,
-			gzipped(t, `{"info":{},"messages":[{"info":{"role":"user"},"parts":[]},`), executor.WhyCutShort},
+			gzipped(t, `{"info":{},"messages":[{"type":"user","text":"fix"},`), executor.WhyCutShort},
 		{"an export cut inside a message", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
-			gzipped(t, `{"info":{},"messages":[{"info":{"role":"us`), executor.WhyCutShort},
+			gzipped(t, `{"info":{},"messages":[{"type":"us`), executor.WhyCutShort},
 		{"an export whose list closes on a brace", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
 			gzipped(t, `{"info":{},"messages":[}`), executor.WhyNotExport},
 	} {
@@ -1269,9 +1560,9 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 		t.Errorf("a transcript's line is read to %d, and a run's record to %d", bounds.LineBytes,
 			executor.MaxLineBytes)
 	}
-	if bounds.ReadBytes < 8*executordomain.SessionMaxBytes {
+	if bounds.ReadBytes < 8*executorkeep.SessionMaxBytes {
 		t.Errorf("the read budget %d is under eight archives at their bound of %d", bounds.ReadBytes,
-			executordomain.SessionMaxBytes)
+			executorkeep.SessionMaxBytes)
 	}
 	if n := executor.TranscriptReadsAtOnce; n < 2 || n*3*bounds.LineBytes > 200<<20 {
 		t.Errorf("%d reads at once hold up to %d MiB at their worst, want at least two within 200 MiB",

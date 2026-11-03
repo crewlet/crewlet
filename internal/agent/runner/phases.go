@@ -324,6 +324,15 @@ type RunAsk interface {
 type Resume struct {
 	State execstate.State
 
+	// Continued says the box of the job State parked said it took up the
+	// session its launch continued, by the bridge token its harness dialled
+	// (sandbox.LaunchRecord.SessionStart): the one word on which session the
+	// job ran in that its model could not forge. False where it started a
+	// session of its own in that one's place, where its launch continued none,
+	// and where it said nothing — which every rebuild of the run's skill guard
+	// from State takes for a session of its own ([Resume.parked]).
+	Continued bool
+
 	// Answer is the run's closing text: what its harness said last, which the
 	// phase reports as its prose and the reviewer reads as what the agent
 	// produced.
@@ -374,6 +383,26 @@ type Resume struct {
 	// resumed turn opens every phase with them ([Runner.steered]), and the
 	// collected run's own reads are its record's ([Runner.resumeAgentRun]).
 	Steered []steer.Read
+}
+
+// parked is the job's parked state as the session it ran in holds it: State,
+// whose skills — those its launch armed the guard of the session it chose with
+// ([execstate.State.LoadedSkills]) — are that session's only where its box said
+// it took the session up ([Resume.Continued]). Where the box started one of its
+// own, or said nothing, the session read none of them, and every guard rebuilt
+// for it — the collection's, a relaunch carrying the round on, a send-back that
+// continues the job's session — holds only what the job itself loaded, replayed
+// off its calls ([Runner.rebuiltSurface]).
+//
+// THE SAFE DIRECTION FOR A WORD THAT NEVER CAME: a guard short of a skill
+// refuses a call and asks the run to load the skill again; one holding a skill
+// its session never read lets through a call the skill exists to hold back.
+func (r Resume) parked() execstate.State {
+	state := r.State
+	if !r.Continued {
+		state.LoadedSkills = nil
+	}
+	return state
 }
 
 // BridgedCall is one call an executor run made over the MCP bridge, as the
@@ -523,7 +552,29 @@ type Runner struct {
 	// ([Resume.Steered]), which is every note the turn read before it — the
 	// record is where every read is written. Guarded by mu.
 	steered []steer.Read
+
+	// sent is every record this runner publishes off the path of the request
+	// that occasioned it — the frame stating the fresh brief a run whose box
+	// started a session of its own read ([Runner.sessionStarted]) — each
+	// bounded by its own budget: the runner's goroutines, which [Runner.Sent]
+	// waits for.
+	sent sync.WaitGroup
 }
+
+// Sent waits until every record this runner publishes off a request's path has
+// gone out, or given up within its budget ([startedFrameBudget]): the
+// goroutines are the runner's own, each ended by its budget, and Sent is how a
+// caller that reads what they publish knows they are done — a test, which
+// would otherwise race them.
+//
+// NOTHING ON THE ENGINE'S PATH WAITS HERE, and nothing orders such a record
+// after the round's later ones: the round is closed by its collection, a later
+// segment's runner on whichever node claims the run, which cannot wait on this
+// one. So a frame published while the broker is slow can land after the
+// round's completion, as the record of what the run was handed in the
+// continuation's place; one past its budget is dropped, and the collection
+// still says the run started a session of its own.
+func (r *Runner) Sent() { r.sent.Wait() }
 
 var _ turn.Phases = (*Runner)(nil)
 
@@ -624,7 +675,13 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 func (r *Runner) executorPrompt(ctx context.Context, notes string,
 	history []ledger.Iteration, built *tools.Surface, fresh []steer.Note,
 ) (system, user prompts.Prompt) {
-	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
+	return r.executorSystem(built), r.executorBrief(ctx, notes, history, fresh)
+}
+
+// executorSystem is the executor's system prompt, over the surface it is
+// launched with — see [Runner.executorPrompt].
+func (r *Runner) executorSystem(built *tools.Surface) prompts.Prompt {
+	return prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
 		AvailableTools: built.Universe().Names(),
 
 		ThreadContext:       r.cfg.Context.ThreadContext,
@@ -635,7 +692,14 @@ func (r *Runner) executorPrompt(ctx context.Context, notes string,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
 		Workers:             r.workerCatalogue(),
 	})
-	user = prompts.BuildPhaseUserMessage(prompts.UserMessage{
+}
+
+// executorBrief is the turn's own ask as a run that starts a session of its own
+// reads it — see [Runner.executorPrompt]. It reads no surface, so a launch
+// writes it before its surface is built.
+func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledger.Iteration,
+	fresh []steer.Note) prompts.Prompt {
+	return prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription:     r.taskFor(notes),
 		PriorWork:           r.priorWork(ctx, history),
 		ConversationHistory: r.cfg.Conversation,
@@ -646,7 +710,6 @@ func (r *Runner) executorPrompt(ctx context.Context, notes string,
 		// so its brief does. See [Runner.steered].
 		Steered: append(r.carriedSteers(), renderedNotes(fresh)...),
 	})
-	return system, user
 }
 
 // renderedNotes is notes as the model reads each ([prompts.SteerMessage]).

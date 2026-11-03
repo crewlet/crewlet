@@ -42,6 +42,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // Kind is what sort of value a requirement holds.
@@ -594,6 +595,45 @@ func PointerFor(kind integration.Kind, r Requirement, current string) (name stri
 // a field an operator reads straight off GET /config. A toggle is neither: it
 // is present when it is ON, because reporting `false` as written down would
 // make a paused integration look complete.
+
+// Noun is the field's value as a sentence names it: its label with the first
+// letter lowered, unless the label opens with an acronym ("API key"), or its
+// field's name for a field with no label.
+func (r Requirement) Noun() string {
+	label := strings.TrimSpace(r.Label)
+	if label == "" {
+		return strings.ReplaceAll(r.Field, "_", " ")
+	}
+	if len(label) < 2 || (label[1] >= 'A' && label[1] <= 'Z') {
+		return label
+	}
+	return strings.ToLower(label[:1]) + label[1:]
+}
+
+// ValueProblem is the sentence for a submitted value this field refuses, ""
+// for one it takes. value is trimmed already, and a whole `${VAR}` names a
+// stored value rather than being one, so it is never judged here.
+//
+// A CREDENTIAL IS ONE UNBROKEN LINE: a pasted one with a space, a line break
+// or an invisible character inside is never one a vendor issued
+// ([secrets.StrayProblem]), and its shape, where it has one, holds it to the
+// vendor's alphabet.
+func (r Requirement) ValueProblem(value string) string {
+	if _, isRef := envref.Whole(value); isRef {
+		return ""
+	}
+	switch {
+	case r.Kind == KindSecret:
+		if problem := secrets.StrayProblem(r.Noun(), value); problem != "" {
+			return problem
+		}
+	case r.Kind.Tight() && strings.ContainsAny(value, " \t\r\n"):
+		return fmt.Sprintf("The %s cannot contain a space, and %q has one inside it: an address, "+
+			"an identifier and an email are each a single token, so a space in the middle is a "+
+			"value nothing answers to rather than an untidy one.", r.Noun(), value)
+	}
+	return r.Shape.Problem(r.Noun(), value)
+}
 
 // Tight reports a kind whose value cannot contain whitespace anywhere.
 //

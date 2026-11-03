@@ -91,8 +91,8 @@ import (
 //     broker alone remembered ends its seat's runs like any other.
 //
 //   - A RETIREMENT REMOVES THE SEAT'S EXECUTOR SESSIONS, after its runs and
-//     before its subscriptions ([SeatSessionRetirer]). A session is what the
-//     seat's next turn on a conversation continues, and the grace that keeps a
+//     before its subscriptions ([SeatSessionRetirer]). A session is what a
+//     later launch of the seat's turn continues, and the grace that keeps a
 //     departed seat's mail for a seat made an agent's again within it keeps
 //     its sessions for the same seat; past it no turn of the seat runs again,
 //     and what its sessions hold (a harness's whole transcript, sealed in

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -92,6 +93,16 @@ const ClaudeCodeName = "claude-code"
 // ([claudeCarryFloor]); and every resumed run renders its system prompt afresh
 // ([claudeSnapshotFloor]), so a later launch's standing instructions are the
 // ones it reads.
+//
+// # Its end, on request
+//
+// A run's script records its pid before anything else, once it traps SIGUSR1
+// (end.go), and runs the harness in the background, waited for: the request
+// ends the harness — SIGTERM, then SIGKILL past [sandbox.JobStopGrace] — and the
+// script packs the session as its own exit does ([claudeCapture]), records that
+// it was ended ([Paths.JobEnded]) and exits with the harness's status. A
+// SIGTERM to the job's group is still a teardown's, which the script does not
+// trap: it goes with its harness, as it always did.
 type ClaudeCode struct{}
 
 var _ Harness = ClaudeCode{}
@@ -120,17 +131,21 @@ func (ClaudeCode) NoteInstruction() string { return ClaudeCodeSteerInstruction }
 // starts instead where its box holds that one neither way.
 func (ClaudeCode) Session(req sandbox.RunRequest) Session {
 	if req.Resume != "" {
-		return Session{ID: req.Resume, Continues: true, Fresh: uuid.NewString()}
+		return Session{ID: req.Resume, Continues: true, Fresh: uuid.NewString(),
+			Replaces: req.Carried != nil && req.Carried.Replace}
 	}
 	return Session{ID: uuid.NewString()}
 }
 
 // Command builds the headless `claude -p` invocation: ONE SCRIPT, so the
 // wrapper's redirections — the brief on stdin, the stream, the error file —
-// reach every step of it alike. It reads the box's `claude --version` once
-// ([claudeRelease]) and decides by it what the harness is started with; names the
-// session the harness runs in and records it ([Paths.SessionRecord]); runs the harness;
-// and once the harness has exited, packs its session to be carried to another box
+// reach every step of it alike. It opens with the end protocol (end.go): its
+// pid recorded once it traps the request that ends its job. It reads the box's
+// `claude --version` once ([claudeRelease]) and decides by it what the harness
+// is started with; names the session the harness runs in and records it
+// ([Paths.SessionRecord]); runs the harness, in the background and waited for,
+// so a request can end it ([launchHarness]); and once the harness has exited —
+// by itself or ended — packs its session to be carried to another box
 // ([claudeCapture]), exiting with the harness's own status.
 //
 // Pure and deterministic given its session, so the exact flags can be pinned by
@@ -189,6 +204,14 @@ func (ClaudeCode) Session(req sandbox.RunRequest) Session {
 // the assistant's deep work's included, is told what THIS launch's standing
 // instructions say.
 func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string {
+	return "sh -c " + sandbox.ShellQuote(claudeScript(req, session, paths, configPath, sandbox.JobStopGrace))
+}
+
+// claudeScript is a Claude Code run's script — see [ClaudeCode.Command] —
+// giving its harness stop to go once it is asked to end: [sandbox.JobStopGrace],
+// or a case's shorter one.
+func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPath string,
+	stop time.Duration) string {
 	parts := []string{
 		"claude", "-p",
 		"--output-format", "stream-json", "--verbose",
@@ -229,6 +252,11 @@ func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, 
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	// THE END PROTOCOL BEFORE ANYTHING ELSE, its pid published only once its
+	// request is trapped (end.go): the release gate below runs a harness, which
+	// a request may come during.
+	b.WriteString(endPrologue(paths, stop))
+	b.WriteString(endHarness(""))
 	b.WriteString(claudeRelease)
 	// THE TRANSCRIPT KEPT NEAR ITS SIZE, on a release whose trim loses nothing
 	// ([claudeLocalGCFloor]) — and on an older one never, whatever set it.
@@ -253,18 +281,17 @@ func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, 
 	if len(req.Skills) > 0 {
 		b.WriteString(claudeSkillsGate(paths.ClaudeSkillsPlugin(), anyRequired(req.Skills)))
 	}
-	b.WriteString(claudeSessionGate(session, paths))
+	b.WriteString(claudeSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
 	// THE RECORD, before the harness starts, so a run killed before it reported
 	// anything still says which session it took up, and why it began again
 	// where it did. The release last, as the harness printed it
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		sandbox.ShellQuote(paths.SessionRecord()))
-	line(`%s`, strings.Join(parts, " "))
-	line(`code=$?`)
+	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
-	return "sh -c " + sandbox.ShellQuote(b.String())
+	return b.String()
 }
 
 // claudeRelease opens every Claude Code run's script: it reads the box's
@@ -397,7 +424,19 @@ func claudeNotesGate(settings, notes, plain string) string {
 // minted for it in its place and says why, on its error stream and in its
 // record, rather than resume a session the harness does not hold, which fails the
 // run.
-func claudeSessionGate(session Session, paths Paths) string {
+//
+// AND THE RUN IS WIRED TO THE SESSION IT STARTS, where it was handed a wiring
+// for each (rewired, [sandbox.RunRequest.FreshWiring]): the MCP configuration
+// under the continued session's bridge token where it takes that session up, and
+// the one under the token of a session of its own moved over it where it starts
+// one — the other removed from the box either way, before the harness starts.
+// So the token the harness dials is the box's word to the bridge on which
+// session it started (internal/api/mcpbridge), one the run's model can neither
+// forge nor take back: the box holds no other token by the time the model can
+// read a file. A configuration that cannot be moved into place ends the run
+// before its harness starts, rather than start a session of its own on the
+// continued one's token, whose skill guard it would be held to.
+func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
@@ -437,7 +476,14 @@ func claudeSessionGate(session Session, paths Paths) string {
 	// THE ARCHIVE'S DIGEST, where one was carried in and the box can take it:
 	// the box's copy is kept unless the archive is one it does not hold.
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
-	line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$s $d" %s 2> /dev/null; then h=; fi`, digests)
+	if session.Replaces {
+		// A COPY ITS HARNESS WAS CUT OFF IN is replaced by the archive whatever
+		// it holds: it may end in a record the harness never finished, and
+		// the archive is the session as far as anything after it is told.
+		line(`if [ -n "$h" ] && [ -s %s ]; then h=; fi`, carried)
+	} else {
+		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$s $d" %s 2> /dev/null; then h=; fi`, digests)
+	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
 	line(`  elif ! at %s; then w="this box runs Claude Code $n, older than %s, the oldest that continues a session carried from another box"`,
@@ -450,13 +496,37 @@ func claudeSessionGate(session Session, paths Paths) string {
 	line(`fi`)
 	line(`rm -f %s`, carried)
 	line(`if [ -z "$w" ]; then`)
+	// A TRANSCRIPT CUT OFF MID-LINE is cut back to its last whole record: a
+	// harness killed while it appended leaves a line with no newline, a
+	// record no reader of a JSON-lines transcript can use, and a resume is
+	// documented for a transcript that ends in a whole record — one ending in
+	// a tool call with no result among them, which a resume keeps and
+	// leaves as it is (2.1.265: "an interrupted tool call is kept").
+	line(`  for cf in %s/projects/*/%s; do if [ -s "$cf" ] && [ -n "$(tail -c 1 "$cf")" ]; then cl=$(wc -l < "$cf"); if [ "$cl" -gt 0 ] 2> /dev/null; then head -n $cl "$cf" > "$cf.cut" && mv -f "$cf.cut" "$cf"; fi; fi; done`,
+		q(cfg), q(session.ID+".jsonl"))
+	// AND THE INTERRUPTED TURN LEFT AS IT IS: set, the variable has a resume
+	// run the turn its last process was cut off in again before it reads
+	// this run's brief, repeating a call that may have run already, which the
+	// brief tells the run to check rather than repeat.
+	line(`  unset CLAUDE_CODE_RESUME_INTERRUPTED_TURN`)
 	line(`  set -- "$@" --resume %s`, q(session.ID))
 	line(`  if at %s; then set -- "$@" --system-prompt-snapshot off; fi`, floorArgs(claudeSnapshotFloor))
+	if rewired {
+		line(`  rm -f %s`, q(paths.MCPConfigFresh()))
+	}
 	line(`else`)
 	line(`  s=%s k=no`, q(session.Fresh))
 	line(`  printf '%%s%%s\n' %s "$w" >&2`, q("crewlet: this run was asked to continue the Claude Code session "+session.ID+
 		", and starts a new session, "+session.Fresh+", instead: "))
 	line(`  set -- "$@" --session-id %s`, q(session.Fresh))
+	// A NEW SESSION IS HANDED THE BRIEF WRITTEN FOR ONE, where the run was
+	// given it: the brief on the script's stdin continues a session the
+	// harness no longer holds ([sandbox.RunRequest.FreshBrief]).
+	line(`  [ ! -s %s ] || exec < %s`, q(paths.FreshBrief()), q(paths.FreshBrief()))
+	if rewired {
+		line(`  mv -f %s %s || { echo 'crewlet: the new session could not be wired to the tools of its seat, so the run does not start' >&2; exit 1; }`,
+			q(paths.MCPConfigFresh()), q(paths.MCPConfig()))
+	}
 	line(`fi`)
 	return b.String()
 }
@@ -481,13 +551,19 @@ func claudeSessionGate(session Session, paths Paths) string {
 // its start with the engine's words rather than the harness's. A box without tar
 // and gzip, or a pack that failed, is said on the error stream, and the run's
 // own status is never the pack's.
-func claudeCapture(paths Paths) string {
+func claudeCapture(paths Paths) string { return claudePack(paths, paths.SessionStaging()) }
+
+// claudePack is [claudeCapture] packing in the staging directory staged: the
+// run's script's own, or the one a pack made on demand works in
+// ([Paths.SessionPackStaging]). ONE PACK for both, so a session packed by the
+// run's script and one packed while the run could not are the same archive of
+// the same files, and each keeps its digest.
+func claudePack(paths Paths, staged string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
 	cfg := paths.ClaudeConfigDir()
 	project := "projects/" + claudeProjectDir
-	staged := paths.SessionStaging()
 	line(`if [ -s %s/"$s".jsonl ]; then`, q(cfg+"/"+project))
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
 	line(`    set -- %s/"$s".jsonl`, q(project))
@@ -495,8 +571,12 @@ func claudeCapture(paths Paths) string {
 		q(cfg+"/"+project), q(cfg+"/"+project), q(project))
 	line(`    if [ -d %s/"$s" ] && [ ! -L %s/"$s" ]; then set -- "$@" tasks/"$s"; fi`,
 		q(cfg+"/tasks"), q(cfg+"/tasks"))
-	line(`    rm -rf %s; if mkdir -p %s && tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s && mv -f %s %s; then d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$s" "$d" >> %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(staged), q(staged), q(staged+"/capture"), q(cfg), q(staged+"/error"),
+	// A FILE THE HARNESS APPENDED TO WHILE TAR READ IT — a pack made on demand
+	// of a job still working — is GNU tar's exit 1 and a complete archive of
+	// what it read, which is the session as it stood; any other failure is
+	// none.
+	line(`    rm -rf %s; if mkdir -p %s && { tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s; t=$?; [ "$t" = 0 ] || { [ "$t" = 1 ] && grep -q 'changed as we read it' %s; }; } && mv -f %s %s; then packed=1; d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$s" "$d" >> %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(staged), q(staged), q(staged+"/capture"), q(cfg), q(staged+"/error"), q(staged+"/error"),
 		q(staged+"/capture"), q(paths.SessionCapture()), q(paths.SessionCapture()),
 		q(paths.SessionDigests()), q(staged+"/error"))
 	line(`    rm -rf %s`, q(staged))
@@ -568,18 +648,37 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	if len(req.MCPServers) == 0 {
 		return "", nil
 	}
-	servers := make(map[string]any, len(req.MCPServers))
-	for name, s := range req.MCPServers {
-		servers[name] = claudeCodeMCP(s)
-	}
-	blob, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
-	if err != nil {
+	if err := writeClaudeMCP(ctx, box, paths.MCPConfig(), req.MCPServers); err != nil {
 		return "", err
 	}
-	if err := box.WriteFile(ctx, paths.MCPConfig(), blob); err != nil {
-		return "", err
+	// AND UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the run's script
+	// starts of its own in place of the one it continues
+	// ([sandbox.RunRequest.FreshWiring]), which the script moves over the
+	// first where it starts one ([claudeSessionGate]). The whole of what
+	// differs: the run's hooks name the bridge by its server's name, never its
+	// address.
+	if f := req.FreshWiring; f != nil {
+		if err := writeClaudeMCP(ctx, box, paths.MCPConfigFresh(), f.MCPServers); err != nil {
+			return "", err
+		}
 	}
 	return paths.MCPConfig(), nil
+}
+
+// writeClaudeMCP renders servers into file, in the harness's own .mcp.json
+// vocabulary ([claudeCodeMCP]).
+func writeClaudeMCP(ctx context.Context, box sandbox.Sandbox, file string,
+	servers map[string]sandbox.MCPServer) error {
+
+	rendered := make(map[string]any, len(servers))
+	for name, s := range servers {
+		rendered[name] = claudeCodeMCP(s)
+	}
+	blob, err := json.MarshalIndent(map[string]any{"mcpServers": rendered}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return box.WriteFile(ctx, file, blob)
 }
 
 // claudeCodeMCP is one server in this harness's own .mcp.json vocabulary.
@@ -628,12 +727,14 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 // is its only completion signal and the poll reads nothing of the stream.
 //
 // THE BRIEF ON STDIN, for the reasons [ClaudeCode.Command] gives; the two
-// variables that switch hooks and the bridge off UNSET before the harness starts
-// ([claudeSwitchesOff]); and the session's layout PINNED
+// variables that switch hooks and the bridge off, and the two that switch its
+// compaction off, UNSET before the harness starts ([claudeSwitchesOff],
+// [claudeCompactionOff]); and the session's layout PINNED
 // ([claudeSessionLayout]).
 func (ClaudeCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result(),
-		BriefOnStdin: true, Unset: claudeSwitchesOff, Pin: claudeSessionLayout(paths)}
+		BriefOnStdin: true, Unset: append(append([]string(nil), claudeSwitchesOff...), claudeCompactionOff...),
+		Pin: claudeSessionLayout(paths)}
 }
 
 // claudeProjectDir is the name every Claude Code run in a box files its
@@ -667,7 +768,16 @@ const claudeProjectDir = "crewlet"
 //     session's project directory that a later run reads back without being
 //     handed them — the second, invisible memory the engine's own calls are
 //     kept from (docs/concepts/llm-backends.md, "Between turns"), which a
-//     session carried between boxes would carry too.
+//     session carried between boxes would carry too;
+//   - CLAUDE_CODE_AUTO_COMPACT_WINDOW, [sandbox.ExecutorContextWindow]: the
+//     context the harness compacts its conversation at, which a request of
+//     the run — and of every run that continues its session, sending the
+//     session's whole context again — carries at most. Unset, it is the
+//     model's own window, a million tokens on some, every one of them
+//     charged to the seat's budget on every request; the variable takes
+//     precedence over a window an image or a repository sets, and the two
+//     variables that would switch compaction off altogether are unset beside
+//     it ([claudeCompactionOff]).
 //
 // The transcript's trim (CLAUDE_CODE_TRANSCRIPT_LOCAL_GC) is the script's to
 // set, by release ([claudeLocalGCFloor]).
@@ -676,6 +786,7 @@ func claudeSessionLayout(paths Paths) []Pinned {
 		{Name: "CLAUDE_CONFIG_DIR", Value: paths.ClaudeConfigDir()},
 		{Name: "CLAUDE_CODE_PROJECT_DIR_NAME", Value: claudeProjectDir},
 		{Name: "CLAUDE_CODE_DISABLE_AUTO_MEMORY", Value: "1"},
+		{Name: "CLAUDE_CODE_AUTO_COMPACT_WINDOW", Value: strconv.Itoa(sandbox.ExecutorContextWindow)},
 	}
 }
 
@@ -693,6 +804,23 @@ func (ClaudeCode) ArchiveFormat() int { return claudeArchiveFormat }
 
 // VersionCommand prints a box's Claude Code release ([carrier]).
 func (ClaudeCode) VersionCommand() string { return "claude --version" }
+
+// Pack packs session now, as a run's script packs the session its harness ran
+// in once the harness exits ([carrier], [claudeCapture]): the same members,
+// into its own staging directory, its digest kept — ending [packNothing] where
+// the harness wrote no transcript, and [packFailed] where it did and no archive
+// was made, its error stream saying why ([Runner.PackCapture]).
+func (ClaudeCode) Pack(paths Paths, session string) string {
+	transcript := paths.ClaudeConfigDir() + "/projects/" + claudeProjectDir + "/" + session + ".jsonl"
+	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
+		fmt.Sprintf("[ -s %s ] || exit %d\n", sandbox.ShellQuote(transcript), packNothing) +
+		claudePack(paths, paths.SessionPackStaging()) +
+		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
+}
+
+// layout is a Claude Code archive's: a gzipped tar of the session's files
+// ([claudeArchiveFormat]).
+func (ClaudeCode) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Claude Code release writer
 // can be continued in a box whose Claude Code is release box ([carrier]): the
@@ -720,6 +848,17 @@ func (ClaudeCode) Continues(box, writer string) (bool, string) {
 // --mcp-config server. See [ClaudeCode] for why they are unset rather than
 // refused.
 var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
+
+// claudeCompactionOff is every variable that, set in a run's environment,
+// switches its harness's compaction off: DISABLE_AUTO_COMPACT, automatic and
+// idle compaction, and DISABLE_COMPACT, every compaction (the vendor's
+// environment reference). Set by a seat's role.sandbox.env or by an image, either
+// would let the run's requests grow to its model's own window past the one it
+// is pinned to ([claudeSessionLayout]) — a million tokens on some, every one
+// charged to the seat's budget on every request, and every request of a run
+// that continues the session after it. Unset rather than refused, as
+// [claudeSwitchesOff] is: the run's compaction is the engine's to decide.
+var claudeCompactionOff = []string{"DISABLE_AUTO_COMPACT", "DISABLE_COMPACT"}
 
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }

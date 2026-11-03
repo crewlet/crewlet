@@ -758,7 +758,8 @@ flowchart TD
   surface's, made on somebody's behalf: a seat's tool, a person's request, the
   operator's MCP. The executor log's are the engine's own record of what a
   seat's box did — a session captured, a turn ended, a session past its
-  retention or a removed seat's taken away — so no tool, person or operator
+  retention, a removed seat's taken away, or a turn's first read of its
+  conversation (which no launch records yet) — so no tool, person or operator
   surface can make one, and a build gate fails on any surface's code that
   reaches the writer. Each carries the operation id the log derives for that
   capture or that end, and moves on under it like a tracker write. Its reads are

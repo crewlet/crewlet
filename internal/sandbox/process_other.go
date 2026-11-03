@@ -4,6 +4,9 @@ package sandbox
 
 import (
 	"context"
+	"errors"
+
+	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
 // The local backend is POSIX-only, and deliberately so: every local placement
@@ -28,3 +31,6 @@ const unsupportedReason = "the local sandbox backend needs POSIX process groups 
 func runHost(context.Context, hostCommand) (ExecResult, error) {
 	return ExecResult{}, localErrorf("%s", unsupportedReason)
 }
+
+// askEnd has no signal to send on a platform without them.
+func askEnd(procgroup.Leader, int) error { return errors.ErrUnsupported }

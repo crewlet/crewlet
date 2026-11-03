@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -65,6 +66,23 @@ type Capture struct {
 	Home      string `json:"home,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
 
+	// ContextTokens is the whole input of the last request the session's
+	// harness sent its model, cache included, as its transcript recorded it:
+	// what a launch continuing the session sends again before it reads a word
+	// of its brief, and so what that launch's budget floor is made of. Zero
+	// where the transcript recorded none.
+	//
+	// Interrupted says the session's harness was CUT OFF rather than exiting
+	// cleanly, so its transcript may end mid-call: a launch continuing it
+	// restores it over any copy its box holds and says so in its brief.
+	//
+	// Both were the run record's alone, deleted with the turn, and a launch
+	// continuing a session after its turn ended reads them here. Both are
+	// OMITTED AT THEIR ZERO, which is what keeps a capture recording neither
+	// readable by a build that predates them ([versionedFields]).
+	ContextTokens int64 `json:"context_tokens,omitempty"`
+	Interrupted   bool  `json:"interrupted,omitempty"`
+
 	// ReadThrough is the packed log position the turn's first launch read
 	// its conversation's head at, zero where it read none, and Absorbs the
 	// turns that read handed out in full ([Head.Absorbs]): the head it
@@ -91,6 +109,48 @@ type Capture struct {
 	SeatBudget int64 `json:"seat_budget"`
 }
 
+// Begin records a turn's first read of its conversation, and the base that read
+// froze: the session the turn's launches are to continue while it has kept
+// none of its own. A turn's first launch is to publish it once, under
+// [BeginOpID]; no launch publishes one yet, so no row holds a base until one
+// does.
+//
+// THE BASE IS HELD BY THE TURN'S OWN ROW, never by a record about the base: the
+// applier is a pure function of the record and the rows, so the one place a
+// hold can live where every release is decided against it in log order is a
+// row of the log itself. While the turn's row names the base, is live and has
+// landed no capture, no release takes the base ([held]).
+type Begin struct {
+	V int `json:"v"`
+
+	// Handle, Turn, ConversationKey and WorkKey are the turn's, as its
+	// captures and its end carry them. A begin is only ever about a turn with
+	// a conversation: one with none read no head.
+	Handle          string `json:"handle"`
+	Turn            string `json:"turn"`
+	ConversationKey string `json:"conversation_key"`
+	WorkKey         string `json:"work_key,omitempty"`
+
+	// ReadThrough is the packed position the head was read at ([Head.Position]),
+	// and Absorbs the turns that read handed out that the turn was told of:
+	// what its end absorbs once it has landed a capture ([Capture.ReadThrough]).
+	ReadThrough int64    `json:"read_through"`
+	Absorbs     []string `json:"absorbs,omitempty"`
+
+	// BaseTurn is the head the read named, empty where it named none, and
+	// BaseObject and BaseHash the session that head's row named when it was
+	// read. The apply holds the base only where its row still names exactly
+	// that session; one released, absorbed or deleted since writes the row
+	// holding nothing.
+	BaseTurn   string `json:"base_turn,omitempty"`
+	BaseObject string `json:"base_object,omitempty"`
+	BaseHash   string `json:"base_hash,omitempty"`
+
+	// SeenRemoval is [Capture.SeenRemoval] for the begin: one decided before a
+	// removal of its seat it did not see writes nothing once it lands after.
+	SeenRemoval int64 `json:"seen_removal,omitempty"`
+}
+
 // End records how a turn ended, and is terminal.
 type End struct {
 	V int `json:"v"`
@@ -103,7 +163,7 @@ type End struct {
 	// AskExcerpt is what the turn was asked, cut to [AskExcerptMaxBytes].
 	AskExcerpt string `json:"ask_excerpt,omitempty"`
 
-	Ending Ending `json:"ending"`
+	Ending executorkeep.Ending `json:"ending"`
 
 	// SeenRemoval is [Capture.SeenRemoval] for the end: an end decided
 	// before a removal of its seat it did not see writes nothing once it
@@ -114,9 +174,9 @@ type End struct {
 
 // Delete removes one turn's row and tombstone past the retention, on the
 // turn's conversation's subject. Cutoff is the instant the row's own last
-// instant (its end's, else its newest capture's, else its tombstone's) must be
-// at or before for the delete to apply, so a turn captured again since the
-// duty nominated it stays.
+// instant (its end's, else its newest capture's, else its begin's, else its
+// tombstone's) must be at or before for the delete to apply, so a turn
+// captured again since the duty nominated it stays.
 //
 // ON A SEAT'S SUBJECT, with no turn and no conversation, it is the retention
 // of the seat's removal ([SeatDelete]) instead: the record of where the seat's
@@ -173,6 +233,8 @@ type Generation struct {
 func DecodeMutation(rec MutationRecord) (any, error) {
 	k, op := rec.Subject.Kind, rec.Op
 	switch {
+	case k == KindConversation && op == OpBegin:
+		return decodePayload[Begin](rec)
 	case k == KindConversation && op == OpCapture:
 		return decodePayload[Capture](rec)
 	case k == KindConversation && op == OpEnd:

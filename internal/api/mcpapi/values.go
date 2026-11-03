@@ -415,7 +415,7 @@ func refuseSlot(w http.ResponseWriter, name, seat, key string, err error) {
 		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNoSuchSeat,
 			httpjson.Detail{"detail": "the organization has no agent seat " + quoted(seat)})
 	case errors.Is(err, config.ErrMCPValueNotGranted):
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict,
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeSeatNotGranted,
 			httpjson.Detail{"detail": "seat " + quoted(seat) + " is not granted MCP server " + quoted(name) +
 				", so it runs no instance to store a value for; grant it the server first"})
 	case errors.Is(err, config.ErrMCPValueBound):

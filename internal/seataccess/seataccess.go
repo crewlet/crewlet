@@ -80,15 +80,17 @@ const (
 	LaneConfluence Lane = "confluence"
 	LaneSlack      Lane = "slack"
 	LaneMattermost Lane = "mattermost"
+	LaneCloudflare Lane = "cloudflare"
+	LaneExpo       Lane = "expo"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
 // ([integration.Kinds]): chat, then the tracker and its wiki, then the code
-// hosts, then observability.
+// hosts, then observability, the edge and app delivery.
 func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
-		LaneGitHub, LaneGitLab, LaneDatadog,
+		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo,
 	}
 }
 
@@ -207,6 +209,10 @@ type Desired struct {
 	//     sorted and space-separated (`create:page read:space`).
 	//   - mattermost: the roles, space-separated in Mattermost's own order
 	//     ([config.MattermostRoleSets]).
+	//   - cloudflare: `read`, `operate` or `configure`, an unset level reading
+	//     as read.
+	//   - expo: `viewer`, `runner`, `developer` or `release_manager`, an
+	//     unset level reading as viewer.
 	Level string `json:"level,omitempty"`
 
 	// Permissions is GitHub's per-permission grant; nil elsewhere.
@@ -347,6 +353,11 @@ type Observed struct {
 	// its Observe instead).
 	CredentialGone bool `json:"credential_gone,omitempty"`
 
+	// Retired is every credential the account still holds besides the sealed
+	// one, which a person deletes at the vendor ([OpRetire]). Nil where the
+	// vendor cannot tell.
+	Retired []Retired `json:"retired,omitempty"`
+
 	// CreatedAt is when this engine created the account.
 	CreatedAt time.Time `json:"created_at,omitzero"`
 
@@ -354,6 +365,17 @@ type Observed struct {
 	// vendor by somebody else (D2), cleared once the document and the vendor
 	// agree again.
 	ChangedByHandAt time.Time `json:"changed_by_hand_at,omitzero"`
+}
+
+// Retired is one credential an account holds besides the sealed one.
+type Retired struct {
+	// Label is what a person looks for at the vendor (a token's prefix or
+	// name), drawn as it is.
+	Label string `json:"label"`
+
+	// Since is when it was created at the vendor, as near as Crewlet knows:
+	// the vendor's own date, or when a person handed it in.
+	Since time.Time `json:"since,omitzero"`
 }
 
 // Access is the observed grant in [Desired]'s shape, for comparing the two.

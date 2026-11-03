@@ -7,7 +7,7 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { RestError } from "~/protocol/rest.ts";
-import { accessApi, refusalWords } from "./api.ts";
+import { accessApi, placedRefusal, refusalWords } from "./api.ts";
 import { datadogAnswer } from "./fixtures.ts";
 
 afterEach(() => {
@@ -80,4 +80,22 @@ test("Keep states the revision it read, and the other seat actions state none", 
   expect(new Headers(calls.at(-1)!.init.headers).get("If-Match")).toBe('"rev-7"');
   await accessApi.act("datadog", "sre", "datadog", "retry");
   expect(new Headers(calls.at(-1)!.init.headers).get("If-Match")).toBeNull();
+});
+
+// A REFUSAL ABOUT ONE SEAT'S CONTROL says where it belongs, so the tab draws it
+// beside that control; any other refusal, or one naming no control the tab
+// knows, stays a sentence for the banner.
+test("a refusal about one seat's control says which, in the reader's words", () => {
+  const refusal = (body: Record<string, unknown>) =>
+    new RestError(400, { error: "access_not_offered", detail: "Choose a project", ...body });
+  expect(placedRefusal(refusal({ seat: "qa", lane: "jira", field: "scope" }))).toEqual({
+    seat: "qa",
+    lane: "jira",
+    field: "scope",
+    words: "Choose a project.",
+  });
+  expect(placedRefusal(refusal({ seat: "qa", lane: "jira" }))).toBeNull();
+  expect(placedRefusal(refusal({ seat: "qa", lane: "jira", field: "colour" }))).toBeNull();
+  expect(placedRefusal(new RestError(409, { error: "revision_advanced" }))).toBeNull();
+  expect(placedRefusal(new Error("offline"))).toBeNull();
 });

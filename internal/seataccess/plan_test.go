@@ -50,6 +50,8 @@ func TestPlanDecidesTheOpsEveryVendorShares(t *testing.T) {
 	disabledByUs.Enabled, disabledByUs.DisabledBy = false, seataccess.DisabledByCrewlet
 	noCred := held("a")
 	noCred.Credential = nil
+	leftLive := held("a")
+	leftLive.Retired = []seataccess.Retired{{Label: "old-key"}}
 
 	cases := []struct {
 		name   string
@@ -84,6 +86,15 @@ func TestPlanDecidesTheOpsEveryVendorShares(t *testing.T) {
 			ops: []seataccess.Op{seataccess.OpMint}},
 		{name: "a rotate asked of an account that is on rotates", want: on("a"), have: held("a"),
 			record: applied(on("a")), ask: seataccess.Ask{Rotate: true}, ops: []seataccess.Op{seataccess.OpRotate}},
+		{name: "a credential left live beside the sealed one is the person's to delete", want: on("a"),
+			have: leftLive, record: applied(on("a")), ops: []seataccess.Op{seataccess.OpRetire}},
+		{name: "a credential left live waits for the level to be put right first", want: on("b"),
+			have: leftLive, record: applied(on("a")), ops: []seataccess.Op{seataccess.OpLevel}},
+		{name: "a credential left live on a seat turned off asks nothing more", want: off,
+			have: leftLive, record: applied(on("a")),
+			ops: []seataccess.Op{seataccess.OpDisable, seataccess.OpRevoke}},
+		{name: "a credential left live on an account nobody recorded is never asked for", want: on("a"),
+			have: leftLive},
 		{name: "a remove asked of a seat that is off removes", want: off,
 			have: held("a"), record: applied(on("a")), ask: seataccess.Ask{Remove: true},
 			ops: []seataccess.Op{seataccess.OpRemove}},
@@ -195,6 +206,41 @@ func TestPlanTakesNothingAwayWithoutALedgerRow(t *testing.T) {
 		}
 		if got := ops(plan[dd]); !slices.Equal(got, tc.ops) {
 			t.Errorf("%s: ops = %v, want %v", tc.name, got, tc.ops)
+		}
+	}
+}
+
+// A PERSON'S STEP CARRIES WHERE THEY TAKE IT: the lane's action URL, unless the
+// vendor gave the step one of its own.
+func TestAPersonsStepCarriesTheLanesActionURL(t *testing.T) {
+	t.Parallel()
+	v := seataccesstest.NewVendor(integration.KindDatadog, "APP_KEY")
+	have := held("a")
+	have.Retired = []seataccess.Retired{{Label: "old-key"}}
+	const where = "https://vendor.example/keys"
+	plan, err := seataccess.Plan(v, seataccess.SeatInput{
+		Seat: sre, Want: map[seataccess.Lane]seataccess.Desired{dd: on("a")},
+		Have: map[seataccess.Lane]seataccess.Observed{dd: have}, Record: applied(on("a")),
+		Options: map[seataccess.Lane]seataccess.Options{dd: {Lane: dd, ActionURL: where}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan[dd]) != 1 || plan[dd][0].By != seataccess.ByYou || plan[dd][0].ActionURL != where {
+		t.Fatalf("plan = %+v, want the person's step at %s", plan[dd], where)
+	}
+	plan, err = seataccess.Plan(v, seataccess.SeatInput{
+		Seat: sre, Want: map[seataccess.Lane]seataccess.Desired{dd: on("a")},
+		Have: map[seataccess.Lane]seataccess.Observed{dd: held("a")}, Record: applied(on("a")),
+		Ask:     seataccess.Ask{Rotate: true},
+		Options: map[seataccess.Lane]seataccess.Options{dd: {Lane: dd, ActionURL: where}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range plan[dd] {
+		if step.ActionURL != "" {
+			t.Errorf("Crewlet's step %+v carries the person's action URL", step)
 		}
 	}
 }

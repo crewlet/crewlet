@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -290,11 +291,13 @@ var sentinels = []sentinel{
 	{"executordomain.ErrNotDue", executordomain.ErrNotDue},
 	{"executordomain.ErrNotFound", executordomain.ErrNotFound},
 	{"executordomain.ErrOverBudget", executordomain.ErrOverBudget},
-	{"executordomain.ErrSessionTooLarge", executordomain.ErrSessionTooLarge},
 	{"executordomain.ErrStaleCapture", executordomain.ErrStaleCapture},
 	{"executordomain.ErrTurnEnded", executordomain.ErrTurnEnded},
 	{"executordomain.ErrUnreadable", executordomain.ErrUnreadable},
 	{"executordomain.ErrUploadStale", executordomain.ErrUploadStale},
+	// And the session's bound the log refuses a capture past, which is
+	// internal/executorkeep's: the sandbox that takes a session stops at it too.
+	{"executorkeep.ErrSessionTooLarge", executorkeep.ErrSessionTooLarge},
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 	{"estate.ErrNoGitNode", ErrNoGitNode},

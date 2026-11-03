@@ -207,13 +207,19 @@ func (t *TurnEngine) validate(path Path) error {
 // The cross-turn counterpart of the within-turn prior-work ledger, and
 // deliberately STRUCTURED rather than a transcript replay.
 type ConversationSession struct {
-	// Enabled records and replays completed turns.
+	// Enabled records and replays completed turns, and keeps each executor
+	// launch's harness session in the object store (internal/executordomain).
 	//
 	// On by default: the block is deterministic, bounded, and is the only
-	// context a thin-trigger turn gets. Turning it off restores the
-	// pre-ledger prompt exactly, which is what makes it a safe live kill
-	// switch.
-	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Record and replay per-conversation history (default on)."`
+	// context a thin-trigger turn gets, and each launch's session is kept,
+	// named by its turn's row on the executor log, for a launch that
+	// continues the session to restore. Turning it off restores the
+	// pre-ledger prompt exactly and keeps no session — none is captured or
+	// stamped, and no launch seals what it handed its box for a scrub —
+	// which is what makes it a safe live kill switch. How each turn ended is
+	// still recorded on the executor log either way: that is the account of
+	// the turn, not its session.
+	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Record and replay per-conversation history, and keep each executor launch's harness session (default on; off keeps no session, and still records how each turn ended)."`
 
 	// MaxEntries is what is KEPT per conversation, trimmed at write time.
 	//
@@ -259,7 +265,7 @@ const (
 	// DefaultSessionBytesPerSeat is what an unset max_bytes_per_seat takes:
 	// SIXTY-FOUR MEBIBYTES. A captured session compresses to one or two
 	// mebibytes for a day's work and is bounded at thirty-two
-	// (executordomain.SessionMaxBytes), so 64 MiB holds a live turn's
+	// (executorkeep.SessionMaxBytes), so 64 MiB holds a live turn's
 	// session at that bound beside about twenty ordinary ones, or thirty to
 	// forty ordinary sessions alone — a month of one conversation's head a
 	// working day. (A live turn's capped session never needs the head it
@@ -274,7 +280,7 @@ const (
 	DefaultSessionBytesPerSeat int64 = 64 << 20
 
 	// SessionBytesPerSeatFloor is the least a seat may be given: ONE
-	// SESSION AT ITS BOUND, sealed (executordomain.SealedMaxBytes, a little
+	// SESSION AT ITS BOUND, sealed (executorkeep.SealedMaxBytes, a little
 	// over 32 MiB), rounded up to a whole mebibyte, so a capture the
 	// session bound admits is never one the budget refuses outright. A test
 	// in internal/executordomain holds the two together, since this package
@@ -308,6 +314,11 @@ func (c *ConversationSession) SessionBudget() int64 {
 
 // Records reports whether the ledger is on, applying the true default.
 func (c *ConversationSession) Records() bool { return c.Enabled.Or(true) }
+
+// KeepsSessions reports whether each executor launch's harness session is
+// kept, applying the true default: the same switch the ledger reads, so one
+// gesture turns off everything a conversation carries between turns.
+func (c *ConversationSession) KeepsSessions() bool { return c.Enabled.Or(true) }
 
 func (c *ConversationSession) validate(path Path) error {
 	var p problems

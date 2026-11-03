@@ -5,17 +5,21 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -245,6 +249,32 @@ func (n *writeNode) row(handle, turn string) (object string, ended, found bool) 
 		n.t.Fatalf("read %s's turn %s: %v", handle, turn, err)
 	}
 	return key.String, endSeq.Valid, true
+}
+
+// reader is the domain's reader over this node's rows, served at the position
+// this node has applied through.
+func (n *writeNode) reader() *executordomain.Reader {
+	n.t.Helper()
+	authority, err := statelogtest.LocalReader(executordomain.Domain{}, n.db, n.waiter.Reached())
+	if err != nil {
+		n.t.Fatalf("build the read authority: %v", err)
+	}
+	r, err := executordomain.NewReader(executordomain.ReaderOptions{DB: n.db.Reader(), Log: authority})
+	if err != nil {
+		n.t.Fatalf("build the reader: %v", err)
+	}
+	return r
+}
+
+// session is one turn's row as this node's reader answers it.
+func (n *writeNode) session(handle, turn string) executordomain.Session {
+	n.t.Helper()
+	read, err := n.reader().Session(n.t.Context(), handle, turn,
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		n.t.Fatalf("read %s's turn %s: %v", handle, turn, err)
+	}
+	return read.Session
 }
 
 // nodeWaiter is a node's applier as its publisher sees it: it applies while a
@@ -479,4 +509,250 @@ func TestASeatsRemovalIsForgottenOnlyPastItsCutoff(t *testing.T) {
 		time.Now().Add(time.Hour)); !errors.Is(err, executordomain.ErrNotDue) {
 		t.Errorf("the retention of a removal already forgotten: %v, want ErrNotDue", err)
 	}
+}
+
+// A CAPTURE'S CONTEXT AND CUT-OFF REACH THE ROW: the whole input of its
+// session's last request and whether its harness was cut off, which only the
+// run's record held before and a launch continuing the session after its turn
+// ended reads off the row — the newest capture's, through the insert of a
+// turn's first capture and the update of a later one; and a context below
+// nothing is refused naming the field.
+//
+// Mutation: leave context_tokens and interrupted off updateCaptureStatement
+// and the later capture's account never reaches the row; drop them from the
+// payload Writer.Capture builds and neither capture's does.
+func TestACapturesContextAndCutOffReachTheRow(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openExecutorLog(t), "node-a")
+	turn := newTurnID()
+	cut := newCaptureOf("ana", "chat:a", turn, 1, 1<<20, 64<<20)
+	cut.ContextTokens, cut.Interrupted = 61_000, true
+	if res, err := n.writer.Capture(t.Context(), engineCall(), cut); err != nil || !res.Recorded {
+		t.Fatalf("the first capture answered (%+v, %v)", res, err)
+	}
+	if s := n.session("ana", turn); s.ContextTokens != 61_000 || !s.Interrupted {
+		t.Errorf("the row says %d tokens, cut off %v, want the first capture's 61000 and cut off",
+			s.ContextTokens, s.Interrupted)
+	}
+	clean := newCaptureOf("ana", "chat:a", turn, 2, 1<<20, 64<<20)
+	clean.ContextTokens = 72_000
+	if res, err := n.writer.Capture(t.Context(), engineCall(), clean); err != nil || !res.Recorded {
+		t.Fatalf("the later capture answered (%+v, %v)", res, err)
+	}
+	if s := n.session("ana", turn); s.ContextTokens != 72_000 || s.Interrupted {
+		t.Errorf("the row says %d tokens, cut off %v, want the newest capture's 72000, whole",
+			s.ContextTokens, s.Interrupted)
+	}
+	below := newCaptureOf("ana", "chat:a", turn, 3, 1<<20, 64<<20)
+	below.ContextTokens = -1
+	if _, err := n.writer.Capture(t.Context(), engineCall(), below); !errors.Is(err, executordomain.ErrInvalid) {
+		t.Errorf("a capture of -1 tokens: %v, want ErrInvalid", err)
+	}
+}
+
+// A BEGIN SAYS WHETHER THE LOG HOLDS ITS BASE, read back off the row the apply
+// wrote: a turn's first read of a head that still stands holds it; the same
+// begin asked again under another operation publishes nothing, the first read
+// standing, and still says it holds; and a begin whose base another turn's end
+// absorbed before it landed records its read, holds nothing, and says why.
+//
+// Mutation: answer Held from the outcome alone and the begin whose base had
+// gone is reported holding it.
+func TestABeginSaysWhetherTheLogHoldsItsBase(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openExecutorLog(t), "node-a")
+	ctx := t.Context()
+
+	base, holder := newTurnID(), newTurnID()
+	n.recorded(newCaptureOf("ana", "chat:a", base, 1, 1<<20, 64<<20))
+	n.completed("ana", base, "chat:a")
+	begin := beginFrom(n.headOf("ana", "chat:a"), "ana", holder, "chat:a")
+	first, err := n.writer.Begin(ctx, engineCall(), begin)
+	if err != nil || first.Outcome != statelog.OutcomeApplied || first.Position.Seq == 0 || !first.Held {
+		t.Fatalf("the begin answered (%+v, %v), want it published and holding its base", first, err)
+	}
+	again, err := n.writer.Begin(ctx, engineCall(), begin)
+	if err != nil || again.Position.Seq != 0 || !again.Held {
+		t.Errorf("the begin asked again answered (%+v, %v), want nothing published and the base held",
+			again, err)
+	}
+
+	moved, sibling, late := newTurnID(), newTurnID(), newTurnID()
+	n.recorded(newCaptureOf("ana", "chat:b", moved, 1, 1<<20, 64<<20))
+	n.completed("ana", moved, "chat:b")
+	read := n.headOf("ana", "chat:b")
+	// ANOTHER TURN THAT READ THE SAME HEAD ends first, absorbing it.
+	c := newCaptureOf("ana", "chat:b", sibling, 1, 1<<20, 64<<20)
+	c.ReadThrough, c.Absorbs = read.Position, read.Absorbs()
+	n.recorded(c)
+	n.completed("ana", sibling, "chat:b")
+	gone, err := n.writer.Begin(ctx, engineCall(), beginFrom(read, "ana", late, "chat:b"))
+	if err != nil || gone.Outcome != statelog.OutcomeApplied || gone.Held ||
+		!strings.Contains(gone.Why, "gone") {
+		t.Errorf("the begin whose base was absorbed first answered (%+v, %v), want it applied, "+
+			"holding nothing and saying the base is gone", gone, err)
+	}
+	if s := n.session("ana", late); s.BaseTurn != "" || s.ReadThrough.Packed() != read.Position.Packed() {
+		t.Errorf("the late begin's row names base %q read at %s, want no base and its read at %s",
+			s.BaseTurn, s.ReadThrough, read.Position)
+	}
+}
+
+// A BEGIN THAT HOLDS NOTHING SAYS WHY, read back off the row the apply wrote: a
+// turn whose own capture landed before its begin holds no base — its launches
+// continue that capture's session — though the begin records its read and
+// names the base; and a begin whose base the seat's budget released between
+// the read and the record holds nothing and names none.
+//
+// Mutation: drop beginHolds' landed-capture arm and the late begin, whose row
+// names its base, is reported holding it; let a base whose row names no
+// session stand (drop baseStands' session arm) and the begin landing after the
+// budget released its base names it, and is reported holding it.
+func TestABeginThatHoldsNothingSaysWhy(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openExecutorLog(t), "node-a")
+	ctx := t.Context()
+
+	// A LATE BEGIN: the turn's own first capture, which read nothing, landed
+	// first.
+	base, late := newTurnID(), newTurnID()
+	n.recorded(newCaptureOf("ana", "chat:a", base, 1, 1<<20, 64<<20))
+	n.completed("ana", base, "chat:a")
+	h := n.headOf("ana", "chat:a")
+	n.recorded(newCaptureOf("ana", "chat:a", late, 1, 1<<20, 64<<20))
+	got, err := n.writer.Begin(ctx, engineCall(), beginFrom(h, "ana", late, "chat:a"))
+	if err != nil || got.Outcome != statelog.OutcomeApplied || got.Held ||
+		!strings.Contains(got.Why, "landed a capture") {
+		t.Errorf("the begin landing after its turn's first capture answered (%+v, %v), want it "+
+			"applied, holding nothing and saying the turn landed a capture first", got, err)
+	}
+	if s := n.session("ana", late); s.BaseTurn != base || s.ReadThrough.Packed() != h.Position.Packed() {
+		t.Errorf("the late begin's row names base %q read at %s, want the base %s read at %s",
+			s.BaseTurn, s.ReadThrough, base, h.Position)
+	}
+
+	// A BASE THE BUDGET RELEASED between the read and the begin, on a seat of
+	// its own so its budget counts this case's sessions alone.
+	released, holder := newTurnID(), newTurnID()
+	n.recorded(newCaptureOf("ben", "chat:b", released, 1, 1<<20, 64<<20))
+	n.completed("ben", released, "chat:b")
+	read := n.headOf("ben", "chat:b")
+	// ROOM FOR ANOTHER CONVERSATION'S CAPTURE IS THE UNHELD BASE'S: a
+	// mebibyte beside a mebibyte under a budget of one and a half.
+	n.recorded(newCaptureOf("ben", "chat:c", newTurnID(), 1, 1<<20, 3<<19))
+	if object, _, _ := n.row("ben", released); object != "" {
+		t.Fatalf("the premise: the budget kept the base's session %s", object)
+	}
+	gone, err := n.writer.Begin(ctx, engineCall(), beginFrom(read, "ben", holder, "chat:b"))
+	if err != nil || gone.Outcome != statelog.OutcomeApplied || gone.Held ||
+		!strings.Contains(gone.Why, "no longer names") {
+		t.Errorf("the begin whose base the budget released first answered (%+v, %v), want it "+
+			"applied, holding nothing and saying the base's row no longer names its session", gone, err)
+	}
+	if s := n.session("ben", holder); s.BaseTurn != "" || s.ReadThrough.Packed() != read.Position.Packed() {
+		t.Errorf("the begin's row names base %q read at %s, want no base and its read at %s",
+			s.BaseTurn, s.ReadThrough, read.Position)
+	}
+}
+
+// A HOLDER WHOSE END WAS LOST IS ENDED LOST, AND ITS HOLD LIFTS. A turn whose
+// begin holds a base and which never captured, once the retention duty finds
+// no run of it a day past its begin, is listed as a turn whose end may be lost
+// and ended `lost` through EndLost's own decide — refused not due before its
+// begin's instant — and from then on holds nothing: the base, which the holder
+// never continued and so never absorbed, stays its conversation's head, and
+// the retention's listing, which left it out while it was held, lists it. The
+// lost end's account names no capture, the turn having taken none.
+//
+// Mutation: refuse in EndLost's decide a turn whose row landed no capture and
+// the lost holder is never ended, holding its base until the retention; write
+// a begun row with no instant of its own and EndLost never finds it not due;
+// word the lost end as a day past the turn's last capture and the account of a
+// turn that captured nothing names one.
+func TestAHolderWhoseEndWasLostIsEndedLostAndItsHoldLifts(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openExecutorLog(t), "node-a")
+	ctx := t.Context()
+	base, holder := newTurnID(), newTurnID()
+	n.recorded(newCaptureOf("ana", "chat:a", base, 1, 1<<20, 64<<20))
+	n.completed("ana", base, "chat:a")
+	begun, err := n.writer.Begin(ctx, engineCall(),
+		beginFrom(n.headOf("ana", "chat:a"), "ana", holder, "chat:a"))
+	if err != nil || !begun.Held {
+		t.Fatalf("the premise: the begin answered (%+v, %v), want its base held", begun, err)
+	}
+	later := time.Now().Add(time.Hour)
+	listed := func(turn string) bool {
+		t.Helper()
+		expired, listErr := n.reader().Expired(ctx, later, 10)
+		if listErr != nil {
+			t.Fatalf("list what is past the retention: %v", listErr)
+		}
+		return slices.ContainsFunc(expired, func(e executordomain.Expiry) bool { return e.Turn == turn })
+	}
+	if listed(base) {
+		t.Fatal("the premise: the retention lists the base its holder holds")
+	}
+	lost, err := n.reader().Unended(ctx, later, 10)
+	if err != nil || !slices.ContainsFunc(lost, func(e executordomain.Expiry) bool { return e.Turn == holder }) {
+		t.Fatalf("the turns whose end may be lost are (%+v, %v), want the holder among them", lost, err)
+	}
+	if _, err := n.writer.EndLost(ctx, engineCall(), "ana", "chat:a", holder,
+		time.Now().Add(-time.Hour)); !errors.Is(err, executordomain.ErrNotDue) {
+		t.Errorf("a lost end of the holder before its begin's instant: %v, want ErrNotDue", err)
+	}
+	if _, err := n.writer.EndLost(ctx, engineCall(), "ana", "chat:a", holder, later); err != nil {
+		t.Fatalf("a lost end of the holder past its begin: %v", err)
+	}
+	s := n.session("ana", holder)
+	if !s.Ended() || s.Ending.Outcome != executorkeep.OutcomeLost || s.BaseTurn != base ||
+		strings.Contains(s.Ending.Failure, "capture") {
+		t.Errorf("the holder's row is %+v, want it ended lost, naming the base it was handed and "+
+			"no capture it never took", s)
+	}
+	if !listed(base) {
+		t.Error("the retention still leaves out the base once its holder ended")
+	}
+	if h := n.headOf("ana", "chat:a"); h.Session.Turn != base {
+		t.Errorf("the conversation's head is %s once its holder ended, want the base", h.Session.Turn)
+	}
+}
+
+// recorded captures c through n's writer, and fails the test unless the turn's
+// row was read back naming it.
+func (n *writeNode) recorded(c executordomain.NewCapture) {
+	n.t.Helper()
+	if res, err := n.writer.Capture(n.t.Context(), engineCall(), c); err != nil || !res.Recorded {
+		n.t.Fatalf("capture %s answered (%+v, %v)", c.Turn, res, err)
+	}
+}
+
+// completed ends handle's turn in conversation, completed, through n's writer.
+func (n *writeNode) completed(handle, turn, conversation string) {
+	n.t.Helper()
+	if _, err := n.writer.End(n.t.Context(), engineCall(), executordomain.NewEnd{Handle: handle,
+		Turn: turn, ConversationKey: conversation,
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
+		n.t.Fatalf("end %s: %v", turn, err)
+	}
+}
+
+// headOf is handle's head of conversation as this node reads it, failing the
+// test where the conversation has none.
+func (n *writeNode) headOf(handle, conversation string) executordomain.Head {
+	n.t.Helper()
+	h, err := n.reader().Head(n.t.Context(), handle, conversation,
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil || h.Session == nil {
+		n.t.Fatalf("read %s's head of %s: (%+v, %v)", handle, conversation, h.Session, err)
+	}
+	return h
+}
+
+// beginFrom is the begin of handle's turn whose first launch read h: the read's
+// position, what it handed out, and its head as the base.
+func beginFrom(h executordomain.Head, handle, turn, conversation string) executordomain.NewBegin {
+	return executordomain.NewBegin{Handle: handle, Turn: turn, ConversationKey: conversation,
+		ReadThrough: h.Position, Absorbs: h.Absorbs(), BaseTurn: h.Session.Turn,
+		BaseObject: h.Session.Object}
 }

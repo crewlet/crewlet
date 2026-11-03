@@ -219,6 +219,7 @@ var replaced = []struct {
 	{"mattermost", "mattermost", []key{{"BOT_TOKEN", "MATTERMOST_TOKEN", "", ""}}},
 	{"atlassian", "atlassian", []key{{"TOKEN", "JIRA_API_TOKEN", "", ""}, {"EMAIL", "JIRA_USERNAME", "", ""},
 		{"TOKEN", "CONFLUENCE_API_TOKEN", "", ""}, {"EMAIL", "CONFLUENCE_USERNAME", "", ""}}},
+	{"cloudflare", "cloudflare", []key{{"API_TOKEN", "", "Authorization", "Bearer "}}},
 }
 
 func keysOf(in []catalogue.SeatKey) []key {
@@ -276,6 +277,10 @@ func TestRecognitionMatchesTheSeatBindingsItReplaces(t *testing.T) {
 		{"mcp-server-mattermost", stdio("uvx", "mcp-server-mattermost==0.6.1"), "mattermost", bound(5)},
 		{"mcp-atlassian", stdio("uvx", "mcp-atlassian==0.23.1"), "atlassian", bound(6)},
 		{"mcp-atlassian's image", stdio("docker", "run", "ghcr.io/sooperset/mcp-atlassian:latest"), "atlassian", bound(6)},
+		{"Cloudflare's server", remote("https://mcp.cloudflare.com/mcp"), "cloudflare", bound(7)},
+		{"a host under Cloudflare's server", remote("https://docs.mcp.cloudflare.com/mcp"), "", nil},
+		{"a lookalike of Cloudflare's server", remote("https://mcp.cloudflare.com.example.net/mcp"), "", nil},
+		{"Cloudflare's host spelled on stdio", stdio("curl", "https://mcp.cloudflare.com/mcp"), "", nil},
 		{"a server nobody recognises", stdio("uvx", "some-server==1.0.0"), "", nil},
 		{"an address nobody recognises", remote("https://mcp.example.com/"), "", nil},
 		{"an address that does not parse", remote("://mcp.datadoghq.com"), "", nil},
@@ -346,6 +351,7 @@ func TestAServerIsRecognisedByItsAddressOrItsCommand(t *testing.T) {
 		{remote("https://mcp.atlassian.com/v1/mcp/authv2"), "rovo"},
 		{remote("https://mcp.sentry.dev/mcp/my-org"), "sentry"},
 		{remote("https://docs.mcp.cloudflare.com/mcp"), ""},
+		{remote("https://mcp.expo.dev/mcp"), "expo"},
 		{stdio("uvx", "postgres-mcp==0.3.0", "--access-mode=restricted"), "postgres"},
 		{stdio("npx", "-y", "tavily-mcp@0.2.22"), "tavily"},
 		{stdio("mcp.linear.app"), ""},
@@ -355,5 +361,22 @@ func TestAServerIsRecognisedByItsAddressOrItsCommand(t *testing.T) {
 		if ok != (tc.id != "") || e.ID != tc.id {
 			t.Errorf("%+v is recognised as %q (%v), want %q", tc.launch, e.ID, ok, tc.id)
 		}
+	}
+}
+
+// EXPO'S SERVER SIGNS IN WITH OAUTH AND BINDS NO SEAT'S TOKEN: it is its own
+// authorization server, and an agent's Expo token reaches its box as
+// EXPO_TOKEN instead.
+func TestExpoServerBindsNoSeatCredential(t *testing.T) {
+	t.Parallel()
+	e, ok := catalogue.Recognise(remote("https://mcp.expo.dev/mcp"))
+	if !ok || e.Integration != "" || !slices.Equal(e.Auth, []catalogue.AuthMethod{catalogue.AuthOAuth}) {
+		t.Fatalf("expo = %+v, want an OAuth sign-in and no integration", e)
+	}
+	if _, _, bound := catalogue.SeatKeysFor(remote("https://mcp.expo.dev/mcp")); bound {
+		t.Error("Expo's server binds a seat credential")
+	}
+	if _, bound := catalogue.BindingFor("expo"); bound {
+		t.Error("the expo integration has a recognised tool binding")
 	}
 }

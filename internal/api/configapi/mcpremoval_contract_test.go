@@ -21,7 +21,7 @@ import (
 // value kept carrying the paths that read it, and the closed sets to the
 // engine's own.
 //
-// Mutation: drop `segments` from McpEnvDependant, or `removed` from
+// Mutation: drop `segments` from McpBlockDependant, or `removed` from
 // McpRemovalWritten, or an outcome from McpSecretOutcome, and this is red.
 func TestTheRemoveDialogReadsWhatTheRemovalSends(t *testing.T) {
 	t.Parallel()
@@ -73,18 +73,20 @@ func TestTheRemoveDialogReadsWhatTheRemovalSends(t *testing.T) {
 	}
 
 	dependants := []map[string]any{object(refused["dependants"]), object(checked["dependants"])}
-	var env, box []map[string]any
+	var blocks, box []map[string]any
 	for _, d := range dependants {
-		env = append(env, rows(d["mcp_env"])...)
+		blocks = append(blocks, rows(d["mcp_env"])...)
+		blocks = append(blocks, rows(d["mcp_limits"])...)
 		box = append(box, rows(d["sandbox"])...)
 	}
 	cleared := object(written["cleared"])
 	for iface, sent := range map[string][]map[string]any{
-		"McpRemovalCheck":     {checked},
-		"McpRemovalWritten":   {written},
-		"McpDependants":       dependants,
-		"McpCleared":          {cleared},
-		"McpEnvDependant":     slices.Concat(env, rows(cleared["mcp_env"])),
+		"McpRemovalCheck":   {checked},
+		"McpRemovalWritten": {written},
+		"McpDependants":     dependants,
+		"McpCleared":        {cleared},
+		"McpBlockDependant": slices.Concat(blocks, rows(cleared["mcp_env"]),
+			rows(cleared["mcp_limits"])),
 		"McpSandboxDependant": slices.Concat(box, rows(cleared["sandbox"])),
 		"McpSecretDeletion":   append(rows(written["secrets"]), kept),
 		"McpGrantRevocation":  {object(written["oauth"])},

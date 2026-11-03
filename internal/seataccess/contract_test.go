@@ -3,6 +3,7 @@ package seataccess_test
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -25,6 +26,7 @@ func TestDesiredRoundTripsThroughTheDocument(t *testing.T) {
 		seataccess.LaneConfluence: {Enabled: false, Level: "create:page read:space", Scope: []string{"ENG"}},
 		seataccess.LaneMattermost: {Enabled: true, Level: "system_user system_post_all", Scope: []string{"town-square"}},
 		seataccess.LaneSlack:      {Enabled: true},
+		seataccess.LaneExpo:       {Enabled: true, Level: "release_manager"},
 		seataccess.LaneGitHub: {Enabled: true, Scope: []string{"acme/api"},
 			Permissions: seataccess.Permissions{"contents": seataccess.AccessRead, "workflows": seataccess.AccessWrite}},
 	}
@@ -185,7 +187,7 @@ func TestToolStateOf(t *testing.T) {
 		{"its only server turned off, still off", turnedOff, dd, seataccess.Desired{}, live, seataccess.ToolOff},
 	}
 	for _, tc := range cases {
-		if got := seataccess.ToolStateOf(tc.c, tc.lane, tc.want, tc.have); got != tc.tool {
+		if got := seataccess.ToolStateOf(tc.c, "sre", tc.lane, tc.want, tc.have); got != tc.tool {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.tool)
 		}
 	}
@@ -243,6 +245,29 @@ func TestRegisterRefusesAMismatchedCatalog(t *testing.T) {
 	}
 	mustPanic("a kind with no per-seat access", seataccesstest.NewVendor(integration.KindJira))
 	mustPanic("no credential field", &seataccesstest.Vendor{KindValue: integration.KindDatadog})
+}
+
+// THE REGISTRY REFUSES A BOX VARIABLE THAT READS NO CREDENTIAL, has no name,
+// or is named twice: each would hand a box CLI a line nothing can satisfy.
+func TestRegisterRefusesAMalformedBoxVariable(t *testing.T) {
+	t.Parallel()
+	for name, vars := range map[string][]seataccess.BoxVar{
+		"a field the catalog does not seal": {{Field: "NOPE", Env: "DD_APP_KEY"}},
+		"no variable name":                  {{Field: "APP_KEY", Env: " "}},
+		"one variable named twice": {{Field: "APP_KEY", Env: "DD_APP_KEY"},
+			{Field: "APP_KEY", Env: "DD_APP_KEY"}},
+	} {
+		func() {
+			defer func() {
+				if said, _ := recover().(string); !strings.Contains(said, "each box variable is named once") {
+					t.Errorf("%s: Register said %q", name, said)
+				}
+			}()
+			seataccess.Register(&seataccesstest.Vendor{KindValue: integration.KindDatadog,
+				Creds: []string{"APP_KEY"}, BoxEnv: map[seataccess.Lane][]seataccess.BoxVar{
+					seataccess.LaneDatadog: vars}})
+		}()
+	}
 }
 
 // KINDS AND LANES: Atlassian is the one kind with two lanes.

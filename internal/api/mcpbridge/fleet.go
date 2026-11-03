@@ -94,9 +94,17 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 	// it reads as a path value too ([ServerPattern]). And the notes route's,
 	// served on the opening the token names here, for the same reason never
 	// through its own routing.
+	//
+	// EVERY ROUTE ON THE OPENING HELD HERE, behind the step that holds it to
+	// the session the job's box started ([Bridge.serveBegun]): a relayed
+	// request is as much the run's first as one that reached this node's own
+	// route, and the MCP handler alone would serve it before that is told.
 	mux := http.NewServeMux()
-	mux.Handle(PathPrefix+"{token}", b.streamable)
-	mux.Handle(ServerPattern, b.streamable)
+	streamable := b.heldOnly(func(w http.ResponseWriter, r *http.Request, _ *binding) {
+		b.streamable.ServeHTTP(w, r)
+	})
+	mux.Handle(PathPrefix+"{token}", streamable)
+	mux.Handle(ServerPattern, streamable)
 	mux.Handle(SteerPattern, b.heldOnly(b.serveSteer))
 	mux.Handle(SkillPattern, b.heldOnly(b.serveSkill))
 	relay, err := httprelay.New(httprelay.Options{

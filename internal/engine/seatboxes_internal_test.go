@@ -135,7 +135,7 @@ roles:
 		}
 		var given []string
 		for _, step := range e.runEnvironment(t.Context(), c, seat, seatSandbox(c, handle),
-			manager.DefaultSetup()).setup {
+			manager.DefaultSetup(), nil).setup {
 			given = append(given, step.Name)
 		}
 		for cell, box := range boxes {

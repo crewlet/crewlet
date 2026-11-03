@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -199,6 +200,16 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 	value, _ := levels["additionalProperties"].(map[string]any)
 	if got := closedSet(t, value); strings.Join(got, ",") != strings.Join(strs(MCPToolLevels), ",") {
 		t.Fatalf("MCPToolPolicy.levels' values enum = %v, validators accept %v", got, strs(MCPToolLevels))
+	}
+	// A LIMIT'S LEVEL, which a map holds too and which has no allow: a level
+	// the schema offered and the validator refused would be a limit an
+	// editor passed that no write is admitted with.
+	limit, _ := defs["MCPLimit"].(map[string]any)
+	limitProps, _ := limit["properties"].(map[string]any)
+	limitTools, _ := limitProps["tools"].(map[string]any)
+	limitValue, _ := limitTools["additionalProperties"].(map[string]any)
+	if got := closedSet(t, limitValue); strings.Join(got, ",") != strings.Join(strs(org.ToolLimits), ",") {
+		t.Fatalf("MCPLimit.tools' values enum = %v, validators accept %v", got, strs(org.ToolLimits))
 	}
 	for _, tc := range cases {
 		def, ok := defs[tc.def].(map[string]any)

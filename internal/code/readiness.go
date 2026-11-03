@@ -975,7 +975,7 @@ func readinessEach(ctx context.Context, tx queryer, what, query string, args []a
 }
 
 // blockersKey is code_findings_blockers_idx, (change_id, position, id) WHERE
-// [standingBlockers] (replicated 0105): a change's standing blockers alone,
+// [standingBlockers] (replicated 0106): a change's standing blockers alone,
 // the oldest raised first.
 const blockersKey = "code_findings_blockers_idx"
 

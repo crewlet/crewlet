@@ -2,12 +2,17 @@
  * Settings › MCP & tools' calls: one server whole (`GET /mcp-servers/{name}`),
  * its restart (`POST /mcp-servers/{name}/retry`), its test
  * (`POST /mcp-servers/{name}/check`), a value stored for it
- * (`PUT /mcp-servers/{name}/values/{key}`), turning it off and on again (the
- * entity route, `enabled`), and its removal (`DELETE /config/mcp-servers/{name}`);
+ * (`PUT /mcp-servers/{name}/values/{key}`), turning it off and on again and
+ * who gets it (the entity route, `enabled` and `access`), its tools' levels
+ * (`PUT /mcp-servers/{name}/tools`), its changed tools reviewed
+ * (`POST /mcp-servers/{name}/changes`), and its removal
+ * (`DELETE /config/mcp-servers/{name}`);
  * and for the add and edit wizard, the catalogue (`GET /mcp-catalogue`), an
  * address checked before it is added (`POST /mcp-probe`) and a draft's test
- * (`POST /mcp-checks`). The list is the `mcp_servers_status` question, which
- * `data.ts` asks.
+ * (`POST /mcp-checks`); and a server's OAuth sign-in, started
+ * (`POST /mcp-servers/{name}/oauth`), read while it is going
+ * (`GET /mcp-sign-ins/{id}`) and given up (`DELETE /mcp-servers/{name}/oauth`).
+ * The list is the `mcp_servers_status` question, which `data.ts` asks.
  *
  * EVERY ANSWER IS A VALUE. A refusal comes back as one, with the engine's code
  * and sentence, so a flow branches on what came back rather than catching.
@@ -22,6 +27,7 @@
 
 import type {
   McpCatalogueAnswer,
+  McpChangesAnswer,
   McpCheckAnswer,
   McpMemberServerAnswer,
   McpProbeAnswer,
@@ -29,11 +35,21 @@ import type {
   McpRemovalWritten,
   McpRestartAnswer,
   McpServerAnswer,
+  McpSignIn,
+  McpSignOut,
+  McpToolLevel,
   McpValueAnswer,
 } from "~/contract/mcp.ts";
 import { answerOf, getEntity, outcomeOf, putEntity } from "~/protocol/configWrite.ts";
 import type { ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { isAbort, pathSegment, rest, RestError, type RestResponse } from "~/protocol/rest.ts";
+import { accessEntity, type Access } from "./GrantPicker.tsx";
+
+/**
+ * The key an OAuth client's secret is stored under on
+ * `PUT /mcp-servers/{name}/values/{key}` (`config.MCPValueClientSecret`).
+ */
+export const CLIENT_SECRET = "oauth.client_secret";
 
 /** One server whole, in the reading the caller is answered. */
 export type ServerDetail = McpServerAnswer | McpMemberServerAnswer;
@@ -261,4 +277,101 @@ export async function storeValue(
       },
     }),
   );
+}
+
+/** A change of a server's tool levels: its default, and each tool's own by the server's name for it (null clears). */
+export interface LevelsChange {
+  default?: McpToolLevel | null;
+  levels?: Readonly<Record<string, McpToolLevel | null>>;
+}
+
+/**
+ * `PUT /mcp-servers/{name}/tools`: the levels the change names, written as
+ * one revision under `summary`; every level it leaves out stays. A
+ * configuration write, so the transport asks for a fresh step-up first.
+ */
+export async function setLevels(
+  name: string,
+  change: LevelsChange,
+  summary: string,
+): Promise<McpAnswer<unknown>> {
+  return settle(
+    rest.request("PUT", `/mcp-servers/${pathSegment(name)}/tools`, {
+      body: { ...change, _summary: summary },
+    }),
+  );
+}
+
+/**
+ * Write who gets a server, through the entity route: the entry read with its
+ * own revision's tag and written back with only `access` changed (left out
+ * for every agent), so nothing else the entry carries moves.
+ */
+export async function saveAccess(
+  name: string,
+  access: Access,
+  summary: string,
+  signal?: AbortSignal,
+): Promise<ConfigWriteOutcome | { kind: "missing" }> {
+  const controller = signal ? null : new AbortController();
+  const used = signal ?? controller!.signal;
+  const read = await getEntity("mcp-servers", name, used);
+  if (read.kind !== "entity") return read;
+  const { access: _was, ...entry } = read.entity;
+  const written = accessEntity(access);
+  return putEntity(
+    "mcp-servers",
+    name,
+    written ? { ...entry, access: written } : entry,
+    read.etag,
+    summary,
+    used,
+  );
+}
+
+/** A review of a server's changed tools: each tool by the server's own name, and the digest reviewed (null for a removal). */
+export interface ChangesDecision {
+  accept?: Readonly<Record<string, string | null>>;
+  block?: Readonly<Record<string, string | null>>;
+}
+
+/**
+ * `POST /mcp-servers/{name}/changes`: each change accepted, or kept blocked,
+ * by the digest of the definition reviewed, written under `summary`. A
+ * configuration write, so the transport asks for a fresh step-up first. A
+ * definition the server swapped since the review is `409 stale_version`, and
+ * nothing is written.
+ */
+export async function reviewChanges(
+  name: string,
+  decision: ChangesDecision,
+  summary: string,
+): Promise<McpAnswer<McpChangesAnswer>> {
+  return settle(
+    rest.request("POST", `/mcp-servers/${pathSegment(name)}/changes`, {
+      body: { ...decision, _summary: summary },
+    }),
+  );
+}
+
+/**
+ * `POST /mcp-servers/{name}/oauth`: a sign-in started, answered with the
+ * address the person's browser consents at, once. `conflict` for a server
+ * the engine signs in to as a service identity, which nobody signs in to.
+ */
+export async function startSignIn(name: string): Promise<McpAnswer<McpSignIn>> {
+  return settle(rest.request("POST", `/mcp-servers/${pathSegment(name)}/oauth`, { body: {} }));
+}
+
+/** `GET /mcp-sign-ins/{id}`: where a sign-in is, without its address. */
+export async function readSignIn(id: string, signal: AbortSignal): Promise<McpAnswer<McpSignIn>> {
+  return settle(rest.request("GET", `/mcp-sign-ins/${pathSegment(id)}`, { signal }));
+}
+
+/**
+ * `DELETE /mcp-servers/{name}/oauth`: the grant given up, revoked at the
+ * vendor where it offers that and forgotten here whatever it said.
+ */
+export async function signOut(name: string): Promise<McpAnswer<McpSignOut>> {
+  return settle(rest.request("DELETE", `/mcp-servers/${pathSegment(name)}/oauth`));
 }

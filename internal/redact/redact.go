@@ -406,6 +406,21 @@ const passwordMarker = Marker + "password]"
 // to drift from it.
 var passwordKeys = []string{"password", "passwd", "pwd"}
 
+// NamesPassword reports whether name — the key a structured document names a
+// value by, a JSON object's member — names a password: it holds one of
+// [passwordKeys], whatever its case. What a reader that takes a document apart
+// asks of a key, where the rules read the key in the text itself: one list, so
+// a word added there is a key both readings take a value under.
+func NamesPassword(name string) bool {
+	lower := strings.ToLower(name)
+	for _, key := range passwordKeys {
+		if strings.Contains(lower, key) {
+			return true
+		}
+	}
+	return false
+}
+
 // passwordClose is what closes a password's key before its separator, and
 // passwordSeparator the separator: the quote or the markup a key is written
 // in, and the operator a language assigns or compares it with.
@@ -1312,6 +1327,9 @@ func isSpace(c byte) bool { return c == ' ' || c == '\t' }
 // was the wrapping's syntax taken for one: run on across such a break, more of
 // the generator's texts were redacted other than exactly, and a second pass
 // changed transcripts heavy in password keys.
+//
+// ONE READ OF THE VALUE, HOWEVER MANY BREAKS IT HOLDS: whether a letter or a
+// digit follows a break is read only as far as the first one ([wordAfter]).
 func valueEnd(text string, at int) int {
 	for i := at; i < len(text); i++ {
 		switch c := text[i]; {
@@ -1362,13 +1380,32 @@ func keyAfterBreak(text string, i int) bool {
 }
 
 // wordAfter reports whether text from i to the next space holds a letter or a
-// digit, in any script ([isValue]).
+// digit, in any script, as [wordless] reads one ([isValue]).
+//
+// READ UP TO THE FIRST ONE, AND NO FURTHER: the answer is in it. Read to the
+// space whatever it held, a value written in pieces with no space in it —
+// `pwd=x\nx\nx…`, or a key after every break, `pwd=x\npwd=x\n…` — was read to
+// its end again at every break ([valueEnd]), its breaks times its length:
+// 64 KiB took 0.7 s, and every doubling four times as long, so the 32 MiB a
+// box's file is read whole up to took days. Stopped at the first, a read never
+// passes the next escaped break, whose `n` is a letter, so the reads of a
+// value's breaks lie side by side and the value is read once.
 func wordAfter(text string, i int) bool {
-	j := i
-	for j < len(text) && !valueSpace(text[j]) {
-		j++
+	for i < len(text) && !valueSpace(text[i]) {
+		if c := text[i]; c < utf8.RuneSelf {
+			if isAlnum(rune(c)) {
+				return true
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if wordRune(r, size) {
+			return true
+		}
+		i += size
 	}
-	return !wordless(text[i:j])
+	return false
 }
 
 // trimDebris is s without the debris of its line break — a real CR, an escaped
@@ -1756,6 +1793,25 @@ var (
 // that block's, and a certificate's body is base64 at the same width as a
 // key's.
 var pemArmour = regexp.MustCompile(`-----(?:BEGIN|END) [A-Z0-9][A-Z0-9 ]*-----`)
+
+// Unarmoured is line, trimmed, cut at every PEM armour it holds ([pemArmour]):
+// what of it is left, in order and each trimmed, empty pieces dropped — the
+// whole line where it holds no armour.
+//
+// FOR A READER THAT TAKES TEXT OUT BY VALUE (a kept session's scrub of the
+// secrets the engine handed a box): a key's armour is every key's of its kind,
+// no secret of any one, and the lines this package reads a key's block by
+// ([Secrets]). Taken out by value, every other key of that kind in the text
+// lost the armour the redaction looks for, and its body went unredacted.
+func Unarmoured(line string) []string {
+	var out []string
+	for _, piece := range pemArmour.Split(line, -1) {
+		if piece = strings.TrimSpace(piece); piece != "" {
+			out = append(out, piece)
+		}
+	}
+	return out
+}
 
 // pemArmourAt is [pemArmour] held to begin where it is tried.
 var pemArmourAt = regexp.MustCompile(`^` + pemArmour.String())

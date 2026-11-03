@@ -50,6 +50,8 @@ export const DIRECTORY: { key: string; label: string; lines: Line[] }[] = [
     ],
   },
   { key: "alerts", label: "Observability", lines: [{ kind: "app", key: "datadog" }] },
+  { key: "cloud", label: "Cloud and Infrastructure", lines: [{ kind: "app", key: "cloudflare" }] },
+  { key: "mobile", label: "Mobile apps", lines: [{ kind: "app", key: "expo" }] },
 ];
 
 /** The catalogue entry an app line or a product line stands for. */

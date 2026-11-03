@@ -2513,6 +2513,8 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.Confluence = &config.Confluence{}
 	cfg.Integrations.Datadog = &config.Datadog{Enabled: true, RouteTo: "sre-lead"}
 	cfg.Integrations.Atlassian = &config.Atlassian{OrgID: "acme"}
+	cfg.Integrations.Cloudflare = &config.Cloudflare{Enabled: true}
+	cfg.Integrations.Expo = &config.Expo{Enabled: true}
 
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, cfg),
@@ -2549,12 +2551,18 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 // refused" and "routes nowhere", on an organization whose key had just created
 // every agent's account. Both are null now: "not applicable", which is what
 // the three-valued contract is for and what the screen already hides.
+//
+// Expo is the same in this build: its block names the account its agents'
+// robots act for, and nothing arrives from Expo.
 func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	cfg.Integrations.Atlassian = &config.Atlassian{
 		OrgID: "f1240761-c455-41b5-a7f5-4a64f9c6e729", APIKey: "${ATLASSIAN_API_KEY}",
 	}
+	cfg.Integrations.Expo = &config.Expo{Enabled: true, Provisioning: &config.ExpoProvisioning{
+		AccountName: "example-org",
+	}}
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, cfg),
 		// BOTH KNOWN, so a null here is this surface's own answer rather
@@ -2565,29 +2573,31 @@ func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
-	var org map[string]any
-	for _, row := range rows {
-		if entry, _ := row.(map[string]any); entry["key"] == "atlassian" {
-			org = entry
+	for _, key := range []string{"atlassian", "expo"} {
+		var org map[string]any
+		for _, row := range rows {
+			if entry, _ := row.(map[string]any); entry["key"] == key {
+				org = entry
+			}
 		}
-	}
-	if org == nil {
-		t.Fatal("the Atlassian organization has no row at all")
-	}
-	for _, field := range []string{"secret_present", "secret_usable", "routes"} {
-		if got := org[field]; got != nil {
-			t.Errorf("atlassian %s = %v, want null: the organization receives no "+
-				"delivery, so it has none to verify and none to route", field, got)
+		if org == nil {
+			t.Fatalf("%s has no row at all", key)
 		}
-	}
-	// AND IT ADVERTISES NO ADDRESS. The row's default was `webhook` at
-	// `/webhooks/<kind>`, so the organization named `/webhooks/atlassian`
-	// — a route webhooks.go does not register — as the address to check a
-	// settings page against.
-	for _, field := range []string{"inbound_kind", "inbound_path"} {
-		if got := org[field]; got != nil {
-			t.Errorf("atlassian %s = %v, want null: nothing is ever addressed "+
-				"to the organization, and no such route is served", field, got)
+		for _, field := range []string{"secret_present", "secret_usable", "routes"} {
+			if got := org[field]; got != nil {
+				t.Errorf("%s %s = %v, want null: it receives no delivery, so it has "+
+					"none to verify and none to route", key, field, got)
+			}
+		}
+		// AND IT ADVERTISES NO ADDRESS. The row's default was `webhook` at
+		// `/webhooks/<kind>`, so the organization named `/webhooks/atlassian`,
+		// a route webhooks.go does not register, as the address to check a
+		// settings page against.
+		for _, field := range []string{"inbound_kind", "inbound_path"} {
+			if got := org[field]; got != nil {
+				t.Errorf("%s %s = %v, want null: nothing is ever addressed to it, "+
+					"and no such route is served", key, field, got)
+			}
 		}
 	}
 }

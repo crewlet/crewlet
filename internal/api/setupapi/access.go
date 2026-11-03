@@ -15,10 +15,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -86,12 +89,32 @@ type Access interface {
 	// is not waiting for its install, and an [*AccessRefusal] where the
 	// vendor's own rules refuse one.
 	InstallLink(ctx context.Context, q AccessQuery, handle string) (string, error)
+
+	// HandIn checks a credential a person created at the vendor and pasted
+	// for one agent's lane, then has the seat's sync seal it. [ErrNoHandIn]
+	// where the vendor takes no pasted credential, [ErrNotAwaitingHandIn]
+	// where the agent is not on there, an [*AccessRefusal] where the check
+	// refuses the value, and [ErrAccessSyncInFlight] while a sync runs.
+	HandIn(ctx context.Context, q AccessQuery, handle string, lane seataccess.Lane,
+		value string, by iam.Actor) (seataccess.HandedIn, error)
 }
 
 // ErrNotAwaitingInstall refuses an install link for an agent whose Slack app is
 // not waiting for a person to approve its install. The engine's implementation
 // wraps it.
 var ErrNotAwaitingInstall = errors.New("setupapi: this agent's app is not waiting for an install")
+
+// ErrNoHandIn refuses a pasted credential for a vendor whose credentials the
+// engine mints or a person's install hands over.
+var ErrNoHandIn = errors.New("setupapi: this integration takes no pasted credential")
+
+// ErrNotAwaitingHandIn refuses a pasted credential for an agent that is not on
+// at the integration.
+var ErrNotAwaitingHandIn = errors.New("setupapi: this agent is not waiting for a credential")
+
+// ErrNoSuchAccessSeat refuses a pasted credential for a handle that is no
+// agent seat of the company.
+var ErrNoSuchAccessSeat = errors.New("setupapi: no such agent seat")
 
 // AccessRefusal is a refusal the engine's access half names in the vendor's
 // own terms (a Slack app with no OAuth client yet, a deployment with no public
@@ -529,6 +552,117 @@ func (s *Service) accessInstall(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, seataccess.InstallLink{URL: url})
 }
 
+// accessCredential serves POST
+// /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential: a
+// credential a person created at the vendor for one agent, checked there and
+// then sealed by the seat's sync. The value is never logged or echoed.
+func (s *Service) accessCredential(w http.ResponseWriter, r *http.Request) {
+	kind, ok := accessKind(w, r)
+	if !ok {
+		return
+	}
+	lane := seataccess.Lane(r.PathValue("lane"))
+	handle := r.PathValue("handle")
+	if !slices.Contains(seataccess.LanesOf(kind), lane) {
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSeatAccess, map[string]string{
+			"detail": string(kind) + " grants no lane " + string(lane),
+			"hint":   "one of " + laneList(kind),
+		})
+		return
+	}
+	// A PASTE SEALS A CREDENTIAL, so it is the credential write a rotate is.
+	if !s.mayWriteCredentials(w, r) {
+		return
+	}
+	body, err := httpjson.ReadBody(w, r, MaxBody)
+	if err != nil {
+		httpjson.Refuse(w, err)
+		return
+	}
+	var req struct {
+		Value string `json:"value"`
+	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := decode(body, &req); err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": plainjson.Unreadable("the body", err),
+		})
+		return
+	}
+	if problem := handInProblem(req.Value); problem != "" {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
+			"detail": problem, "field": "value",
+		})
+		return
+	}
+	q, ok := s.accessQuery(w, r, kind)
+	if !ok {
+		return
+	}
+	handed, err := s.access.HandIn(r.Context(), q, handle, lane, req.Value, attributionOf(r))
+	var refusal *AccessRefusal
+	switch {
+	case errors.Is(err, ErrNoHandIn):
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSeatAccess, map[string]string{
+			"detail": string(kind) + " takes no pasted credential",
+		})
+		return
+	case errors.Is(err, ErrNoSuchAccessSeat):
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchSeat, map[string]string{
+			"detail": "no agent seat " + handle + " on " + string(kind),
+		})
+		return
+	case errors.Is(err, ErrNotAwaitingHandIn):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+			"detail": "this agent is not waiting for a token",
+			"hint":   "turn the agent on for " + string(kind) + " and save, then paste its token",
+		})
+		return
+	case errors.Is(err, ErrAccessSyncInFlight):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodePassInFlight, map[string]string{
+			"hint": "a sync of this integration's agents is running; try again when it finishes",
+		})
+		return
+	case errors.As(err, &refusal):
+		httpjson.FailWith(w, refusal.Status, httpjson.CodeInvalidInput, map[string]string{
+			"detail": refusal.Reason, "hint": refusal.Remedy, "field": "value",
+		})
+		return
+	case err != nil:
+		s.accessFault(w, r, kind, "setup_access_credential_unchecked", err)
+		return
+	}
+	// THE AUDIT NAMES THE ACCOUNT AND WHAT THE VENDOR SHOWS OF THE CREDENTIAL,
+	// never the value.
+	log.InfoContext(r.Context(), "setup_access_credential_sealed", "kind", kind, "seat", handle,
+		"lane", lane, "rotate", handed.Rotate, "account", handed.Account, "account_id", handed.AccountID,
+		"credential", handed.Label, "by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+	answer, err := s.access.Answer(r.Context(), q)
+	if err != nil {
+		s.accessFault(w, r, kind, "setup_access_unread", err)
+		return
+	}
+	if s.config.Managed() {
+		answer.ManagedBy = seataccess.ManagedByOperator
+	}
+	w.Header().Set("ETag", `"`+answer.Revision+`"`)
+	httpjson.Write(w, http.StatusOK, seataccess.CredentialAnswer{Detail: handed.Detail, Access: answer})
+}
+
+// handInProblem is why a pasted value cannot be a credential, "" where it can
+// be one: empty, a `${VAR}` rather than the value, or holding stray characters
+// by the rule every pasted credential is held to.
+func handInProblem(value string) string {
+	switch {
+	case strings.TrimSpace(value) == "":
+		return "Paste the token to check."
+	case envref.Has(value):
+		return "Paste the token itself, not a ${VAR} reference: Crewlet seals it under its own name."
+	default:
+		return secrets.StrayProblem("token", value)
+	}
+}
+
 // accessSavePolicy is the save route's policy, declared once so the mount and
 // the handler's own check read one value.
 //
@@ -546,13 +680,13 @@ func accessSavePolicy() authz.Policy {
 // route refuses such a kind with, and what it declares ([authz.Absent]).
 const accessElsewhere = "an agent's access is set on an integration that manages one " +
 	"account per agent (slack, mattermost, atlassian for Jira and Confluence, github, " +
-	"gitlab, datadog); connect one with POST /setup/integrations/{kind}/inputs first"
+	"gitlab, datadog, cloudflare, expo); connect one with POST /setup/integrations/{kind}/inputs first"
 
 // accessAct serves POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}.
 //
 // Every action but `keep` is an ask carried by a sync, which none of them can
-// come from otherwise: a rotate, a remove, a turn back on, a retry and a
-// re-read after a person's step at the vendor. `keep` writes the vendor's state
+// come from otherwise: a rotate, a remove, a turn back on, a retry, a re-read
+// after a person's step at the vendor, and a person keeping an account there. `keep` writes the vendor's state
 // into the document as a revision, so nothing is restored.
 func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 	kind, ok := accessKind(w, r)
@@ -566,7 +700,7 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 	case !action.Valid():
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, map[string]string{
 			"detail": "no seat action " + string(action),
-			"hint":   "one of rotate, remove, keep, restore, retry, done",
+			"hint":   "one of rotate, remove, keep, restore, retry, done, release",
 		})
 		return
 	case !slices.Contains(seataccess.LanesOf(kind), lane):
@@ -637,6 +771,25 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ask.Reenable = true
+	case seataccess.ActionRelease:
+		// ONLY A LANE WHOSE ACCOUNT IS WORTH KEEPING, and only a step waiting
+		// for its deletion: the person's choice, recorded below.
+		if !offerOf(current, lane).Releasable {
+			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+				"detail": string(lane) + " keeps nothing at the vendor a person may choose to keep",
+				"hint":   "delete the old credential at the vendor; the row clears once it stops working",
+			})
+			return
+		}
+		if sync := held.Sync; sync == nil || sync.Outcome != seataccess.OutcomeWaiting ||
+			sync.Error == nil || sync.Error.Step != seataccess.VerbRemove {
+			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+				"detail": seat.Handle + " is not waiting for its account to be deleted at the vendor",
+				"hint":   "keep an account only when the row asks you to delete it",
+			})
+			return
+		}
+		ask.Release = true
 	}
 	// A RETRY AND A RE-READ ASK NOTHING: they run the sync for the one seat.
 	var asks []SeatAsk
@@ -669,6 +822,7 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 	}
 	log.InfoContext(r.Context(), "setup_access_asked",
 		"kind", kind, "seat", seat.Handle, "lane", lane, "action", action,
+		"account", held.Observed.Account, "account_id", held.Observed.AccountID,
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	s.writeAccess(w, r, q)
 }
@@ -855,10 +1009,9 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, company *config.Co
 			}
 			if refusal := notOffered(kind, lane, offers[lane], within(company, lane),
 				draft.Seats[handle][lane]); refusal != nil {
-				refusal["seat"] = handle
-				refusal["lane"] = string(lane)
+				refusal.Seat, refusal.Lane = handle, lane
 				httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeAccessNotOffered,
-					refusal)
+					refusalFields(*refusal))
 				return false
 			}
 		}
@@ -866,17 +1019,24 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, company *config.Co
 	return true
 }
 
-// notOffered is why want is not something o offers on lane, as a refusal's
-// detail, or nil where it is. under is the path every scope entry must sit
+// notOffered is why want is not something o offers on lane, as a refusal
+// naming the part of the setting it is about, or nil where it is. under is the path every scope entry must sit
 // under where the connection does not list its reach, empty where any entry
 // the vendor accepts is within it ([within]).
 //
 // A LEVEL IS JUDGED ON WHAT IS LISTED: a fixed set always, and a live-listed
 // one only when it was read live just now. A live-listed lane the vendor did
 // not answer for holds no list to judge by, and an id it does not hold is the
-// document rules' and the sync's finding rather than a refusal on a guess.
+// document rules' and the sync's finding rather than a refusal on a guess. A
+// scope entry is judged the same way, only where the scope was read
+// ([seataccess.Options.ScopeLive]); an empty scope where the lane requires one
+// is refused whatever was read.
 func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Options,
-	under string, want seataccess.Desired) httpjson.Detail {
+	under string, want seataccess.Desired) *seataccess.OfferRefusal {
+
+	refuse := func(field seataccess.RefusalField, detail string) *seataccess.OfferRefusal {
+		return &seataccess.OfferRefusal{Field: field, Detail: detail}
+	}
 
 	if want.Level != "" && len(o.Levels) > 0 && (o.Live || !liveLevels(kind, lane)) {
 		// A SET OF LEVELS where the lane takes one (Confluence's space
@@ -886,14 +1046,16 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 			for _, level := range o.Levels {
 				offered = append(offered, level.ID+" ("+level.Name+")")
 			}
-			return httpjson.Detail{"detail": fmt.Sprintf("level %q is not one the vendor "+
-				"lists", want.Level), "offered": offered}
+			r := refuse(seataccess.FieldLevel, fmt.Sprintf("level %q is not one the vendor lists", want.Level))
+			r.Offered = offered
+			return r
 		}
 	}
 	if required, missing := o.MissingRequired(want.Level); missing {
-		return httpjson.Detail{"detail": fmt.Sprintf("%s grants nothing else without %s "+
-			"(%s); add it to the set", seataccess.LaneName(lane), required.Name, required.ID),
-			"required": required.ID}
+		r := refuse(seataccess.FieldLevel, fmt.Sprintf("%s grants nothing else without %s "+
+			"(%s); add it to the set", seataccess.LaneName(lane), required.Name, required.ID))
+		r.Required = required.ID
+		return r
 	}
 	for key, grant := range want.Permissions {
 		i := slices.IndexFunc(o.Permissions, func(p seataccess.PermissionSpec) bool {
@@ -905,32 +1067,58 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 			for _, p := range o.Permissions {
 				keys = append(keys, p.Key)
 			}
-			return httpjson.Detail{"detail": fmt.Sprintf("permission %q is not one an "+
-				"agent's app can hold", key), "offered": keys}
+			r := refuse(seataccess.FieldPermissions, fmt.Sprintf("permission %q is not one an "+
+				"agent's app can hold", key))
+			r.Offered = keys
+			return r
 		case !grant.Valid():
-			return httpjson.Detail{"detail": fmt.Sprintf("permission %q is %q, and "+
-				"GitHub grants read or write", key, grant)}
+			return refuse(seataccess.FieldPermissions, fmt.Sprintf("permission %q is %q, and "+
+				"GitHub grants read or write", key, grant))
 		case o.Permissions[i].WriteOnly && grant != seataccess.AccessWrite:
-			return httpjson.Detail{"detail": fmt.Sprintf("GitHub grants %s as write "+
-				"or not at all", o.Permissions[i].Name)}
+			return refuse(seataccess.FieldPermissions, fmt.Sprintf("GitHub grants %s as write "+
+				"or not at all", o.Permissions[i].Name))
 		}
 	}
-	for _, entry := range want.Scope {
-		if !o.Reaches(entry) {
-			return httpjson.Detail{"detail": fmt.Sprintf("%q is outside what the "+
-				"company's connection reaches", entry), "offered": o.Scope}
+	if o.ScopeRequired && want.Enabled && len(want.Scope) == 0 {
+		return refuse(seataccess.FieldScope, fmt.Sprintf("an agent turned on at %s must have at least "+
+			"one scope entry chosen, since one with none can reach nothing", seataccess.LaneName(lane)))
+	}
+	if o.ScopeLive {
+		// A SCOPE IS JUDGED ON WHAT WAS READ, as a live-listed level is: an
+		// unread list holds nothing to judge by, and the sync judges the
+		// entry against the vendor instead of a refusal on a guess.
+		for _, entry := range want.Scope {
+			if !o.Reaches(entry) {
+				r := refuse(seataccess.FieldScope, fmt.Sprintf("%q is outside what the "+
+					"company's connection reaches", entry))
+				r.Offered = o.Scope
+				return r
+			}
 		}
 	}
 	if o.ScopeOpen && under != "" {
 		prefix := strings.ToLower(strings.Trim(under, "/")) + "/"
 		for _, entry := range want.Scope {
 			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(entry)), prefix) {
-				return httpjson.Detail{"detail": fmt.Sprintf("%q is outside %s, the group "+
-					"the company's connection reaches", entry, under)}
+				return refuse(seataccess.FieldScope, fmt.Sprintf("%q is outside %s, the group "+
+					"the company's connection reaches", entry, under))
 			}
 		}
 	}
 	return nil
+}
+
+// refusalFields is r as the refusal envelope's fields, under r's own JSON names
+// (a test holds the two together), each optional one only where it is set.
+func refusalFields(r seataccess.OfferRefusal) httpjson.Detail {
+	out := httpjson.Detail{"seat": r.Seat, "lane": string(r.Lane), "field": string(r.Field), "detail": r.Detail}
+	if len(r.Offered) > 0 {
+		out["offered"] = r.Offered
+	}
+	if r.Required != "" {
+		out["required"] = r.Required
+	}
+	return out
 }
 
 // within is the path a lane's scope entries must sit under where its
