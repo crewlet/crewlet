@@ -31,19 +31,20 @@ import (
 // THE WHOLE RECORD FITS, and this is its arithmetic. The record's variable
 // text is the report, the failure detail and the transcript (each at most
 // this, measured redacted, as the record carries it: [Coordinator.fitText],
-// [boundTranscript]), the question in its notes (one sentence, [decision.MaxQuestion]
-// bytes), the delivered refs ([MaxDeliveredRefBytes]) and two reasons of a
-// KiB each, why the run started a session of its own ([MaxFellBackBytes])
-// and why its session was not kept ([boundReason]); everything else on it is
-// identifiers and counts, a few KiB, the two a box names among them held to
-// the shapes a harness gives them ([ValidSessionID], [ValidRelease]) where
-// its runner reads them and again as the record is published — the session
-// it ran, at most 128 bytes, and its harness's release, at most 64. JSON can
-// grow text six-fold (a control byte becomes \u00XX, `<`, `>` and `&` become
-// \u003c and its kin, an invalid byte becomes \ufffd), so the worst case is
-// (3 × 256 + 16 + 1 + 2) KiB × 6, about 4.6 MiB, with the ceiling's other
-// 3 MiB to spare. A field added to the record that carries text a box wrote
-// needs its own bound and a line here, or this promise is no longer one.
+// [boundTranscript]), the question in its notes (one sentence,
+// [decision.MaxQuestion] bytes), the delivered refs ([MaxDeliveredRefBytes])
+// and two reasons of a KiB each, why the run started a session of its own
+// ([MaxFellBackBytes]) and why its session was not kept ([boundReason]);
+// everything else on it is identifiers and counts, a few KiB, the two a box
+// names among them held to the shapes a harness gives them
+// ([ValidSessionID], [ValidRelease]) where its runner reads them and again as
+// the record is published — the session it ran, at most 128 bytes, and its
+// harness's release, at most 64. JSON can grow text six-fold (a control byte
+// becomes \u00XX, `<`, `>` and `&` become \u003c and its kin, an invalid byte
+// becomes \ufffd), so the worst case is (3 × 256 + 16 + 1 + 2) KiB × 6, about
+// 4.6 MiB, with the ceiling's other 3 MiB to spare. A field added to the
+// record that carries text a box wrote needs its own bound and a line here,
+// or this promise is no longer one.
 //
 // WHAT HAPPENS PAST IT DEPENDS ON WHO READS THE PIECE. The report and the
 // failure detail are what the run's reviewer judges the round on — what it
@@ -476,17 +477,20 @@ func carriedPart(part RunPart, text string, budget int, why string) string {
 // report and the failure, each held to its bound and condensed past it by the
 // seat's auxiliary model.
 //
-// EACH MEASURED AS THE RECORD CARRIES IT: REDACTED, the whole of it first, and
-// a model's rewrite of it before the rewrite is measured ([Coordinator.condensed]).
-// A redaction can lengthen a text — a password's value written in pieces
-// between escaped breaks becomes a marker a piece, seven times its bytes — and
-// the record is redacted again as it is published, so a piece measured before
-// its last redaction rode the record at up to seven times its bound: a
-// runner's that redacted nothing, which the coordinator trusts no runner not to
-// hand over, and a rewrite, which no runner ever saw. Redacted here, the
-// publish's own pass is a second one over redacted text, which leaves it as it
-// is, and the record's arithmetic ([MaxRunTextBytes]) holds whatever the
-// runner did — and the run's report its reviewer reads carries the same text.
+// EACH MEASURED AS THE RECORD CARRIES IT: REDACTED, the whole of it first,
+// and a model's rewrite of it before the rewrite is measured
+// ([Coordinator.condensed]). A redaction can lengthen a text — a password's
+// value written in pieces between escaped breaks becomes a marker a piece,
+// seven times its bytes — and the record is redacted again as it is
+// published, so a piece measured before its last redaction rode the record at
+// up to seven times its bound: a runner's that redacted nothing, which the
+// coordinator trusts no runner not to hand over, and a rewrite, which no
+// runner ever saw. Redacted here, the publish's own pass is a second one over
+// redacted text, which changes nothing — save the one shape internal/redact's
+// package doc names, a key's piece beside a key's END line that runs on into a
+// password's key, which a second pass can replace with a marker — so the
+// record's arithmetic ([MaxRunTextBytes]) holds whatever the runner did, and
+// the run's report its reviewer reads carries the same text.
 func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result) Result {
 	// THIS COLLECTION'S OWN, counted from nothing: the field is the
 	// coordinator's, and a runner that set it would be charging the turn
