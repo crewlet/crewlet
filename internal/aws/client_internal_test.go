@@ -62,6 +62,12 @@ func TestParseConnectionHoldsTheOutputsToOneCompanysStack(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+	if got, err := ParseConnectionValue(" " + testOutputs().String() + "\n"); err != nil || got != testOutputs() {
+		t.Fatalf("the connection value does not round-trip: %v %v", got, err)
+	}
+	if _, err := ParseConnectionValue(testAnchor + "," + testProv); err == nil {
+		t.Error("a value with two ARNs was accepted")
+	}
 	if _, err := ParseConnection("acme", "us-east-2", testOutputs(), "not a bundle"); err == nil {
 		t.Error("a bundle with no key was accepted")
 	}

@@ -13,6 +13,13 @@ import (
 // parameters and needs no S3 hosting: CloudShell deploys it from a heredoc.
 
 const (
+	// StackVersion is the version of the stack this engine renders, tagged on
+	// every resource so the Test can name an outdated stack. Raise it with any
+	// change to what the stack creates.
+	StackVersion = "1"
+	versionTag   = "crewlet:stack-version"
+	// ConnectionOutput is the one output the person copies back.
+	ConnectionOutput = "CrewletConnection"
 	// CloudFormation's TemplateBody cap; above it, deploy needs an S3 bucket.
 	templateBodyLimit = 51200
 	// The provisioner's session lasts an hour; seat sessions chain from it.
@@ -52,7 +59,8 @@ func RenderStack(p StackParams) ([]byte, error) {
 			return nil, fmt.Errorf("%q is not a region name", r)
 		}
 	}
-	tags := []obj{{"Key": "crewlet:managed-by", "Value": "crewlet"}, {"Key": "crewlet:company", "Value": string(p.Company)}}
+	tags := []obj{{"Key": "crewlet:managed-by", "Value": "crewlet"}, {"Key": "crewlet:company", "Value": string(p.Company)},
+		{"Key": versionTag, "Value": StackVersion}}
 	n := func(s string) string { return named(s, p.Company) }
 	managed := func(name, desc string, d obj) obj {
 		return obj{"Type": "AWS::IAM::ManagedPolicy", "Properties": obj{
@@ -99,12 +107,15 @@ func RenderStack(p StackParams) ([]byte, error) {
 		"AWSTemplateFormatVersion": "2010-09-09",
 		"Description":              "Crewlet: the engine's trust anchor, its provisioner and broker roles, the agent boundary and the level policies.",
 		"Resources":                resources,
+		// One value to paste back: the five ARNs CreateSession needs, joined.
 		"Outputs": obj{
-			"TrustAnchorArn":        obj{"Value": obj{"Fn::GetAtt": []string{"TrustAnchor", "TrustAnchorArn"}}},
-			"ProvisionerProfileArn": obj{"Value": obj{"Fn::GetAtt": []string{"ProvisionerProfile", "ProfileArn"}}},
-			"ProvisionerRoleArn":    obj{"Value": obj{"Fn::GetAtt": []string{"ProvisionerRole", "Arn"}}},
-			"SeatProfileArn":        obj{"Value": obj{"Fn::GetAtt": []string{"SeatProfile", "ProfileArn"}}},
-			"BrokerRoleArn":         obj{"Value": obj{"Fn::GetAtt": []string{"BrokerRole", "Arn"}}},
+			ConnectionOutput: obj{"Value": obj{"Fn::Join": []any{",", []any{
+				obj{"Fn::GetAtt": []string{"TrustAnchor", "TrustAnchorArn"}},
+				obj{"Fn::GetAtt": []string{"ProvisionerProfile", "ProfileArn"}},
+				obj{"Fn::GetAtt": []string{"ProvisionerRole", "Arn"}},
+				obj{"Fn::GetAtt": []string{"SeatProfile", "ProfileArn"}},
+				obj{"Fn::GetAtt": []string{"BrokerRole", "Arn"}},
+			}}}},
 		},
 	}
 	var buf bytes.Buffer
@@ -133,7 +144,7 @@ func CloudShellBlock(template []byte, region string, company Company) string {
 	fmt.Fprintf(&b, "cat > %s.json <<'%s'\n%s%s\n", stack, eof, template, eof)
 	fmt.Fprintf(&b, "aws cloudformation deploy --region %s --stack-name %s --template-file %s.json --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset\n",
 		region, stack, stack)
-	fmt.Fprintf(&b, "aws cloudformation describe-stacks --region %s --stack-name %s --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output text | while read k v; do echo \"$k=$v\"; done\n",
-		region, stack)
+	fmt.Fprintf(&b, "aws cloudformation describe-stacks --region %s --stack-name %s --query \"Stacks[0].Outputs[?OutputKey=='%s'].OutputValue\" --output text\n",
+		region, stack, ConnectionOutput)
 	return b.String()
 }

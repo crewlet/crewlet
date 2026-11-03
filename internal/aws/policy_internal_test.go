@@ -274,6 +274,15 @@ func TestTheStackDeploysExactlyWhatTheCheckExpects(t *testing.T) {
 			t.Errorf("%s offers %v, want only %s", profile, arns, role)
 		}
 	}
+	outputs := tpl["Outputs"].(map[string]any)
+	if len(outputs) != 1 || outputs[ConnectionOutput] == nil {
+		t.Fatalf("the stack must output exactly %s, got %v", ConnectionOutput, outputs)
+	}
+	for _, id := range []string{"TrustAnchor", "ProvisionerRole", "BrokerRole", "ProvisionerProfile", "SeatProfile"} {
+		if !strings.Contains(string(compactJSON(props(id)["Tags"])), `"`+versionTag+`","Value":"`+StackVersion+`"`) {
+			t.Errorf("%s is not tagged with the stack version", id)
+		}
+	}
 	if block := CloudShellBlock(raw, "us-east-2", "acme"); !strings.Contains(block, "<<'CREWLET_TEMPLATE_EOF'") ||
 		!strings.Contains(block, "CAPABILITY_NAMED_IAM") || !strings.Contains(block, "--stack-name crewlet-acme ") {
 		t.Fatal("the CloudShell block must use a quoted heredoc, acknowledge named IAM and name the company's stack")

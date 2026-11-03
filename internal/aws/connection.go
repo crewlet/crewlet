@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // Outputs are the company stack's outputs, as CloudShell prints them.
@@ -13,6 +14,26 @@ type Outputs struct {
 	ProvisionerRoleARN    string
 	SeatProfileARN        string
 	BrokerRoleARN         string
+}
+
+// ParseConnectionValue splits the stack's CrewletConnection output: the trust
+// anchor, the provisioner's profile and role, the seats' profile and the
+// broker, joined by commas (no ARN holds one).
+func ParseConnectionValue(v string) (Outputs, error) {
+	parts := strings.Split(strings.TrimSpace(v), ",")
+	if len(parts) != 5 {
+		return Outputs{}, fmt.Errorf("aws: the %s value holds five ARNs joined by commas; copy the whole last line the CloudShell block prints", ConnectionOutput)
+	}
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return Outputs{TrustAnchorARN: parts[0], ProvisionerProfileARN: parts[1], ProvisionerRoleARN: parts[2],
+		SeatProfileARN: parts[3], BrokerRoleARN: parts[4]}, nil
+}
+
+// String is the CrewletConnection value the outputs make.
+func (o Outputs) String() string {
+	return strings.Join([]string{o.TrustAnchorARN, o.ProvisionerProfileARN, o.ProvisionerRoleARN, o.SeatProfileARN, o.BrokerRoleARN}, ",")
 }
 
 // Connection is a company's AWS connection: the stack's outputs, the Region
