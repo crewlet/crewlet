@@ -29,6 +29,26 @@ func ToolFor(lane Lane) *ToolBinding {
 	return &b
 }
 
+// ToolServerOf is the mcp_servers entry lane's per-seat tool server is started
+// from: the company's own where it declares one reading the lane's credential,
+// an enabled one first, else the name the catalogue's server for the lane is
+// conventionally declared under; "" where there is neither.
+func ToolServerOf(c *config.Company, lane Lane) string {
+	if c != nil {
+		servers := c.SeatServersFor(string(lane.Kind()))
+		if i := slices.IndexFunc(servers, (*config.MCPServer).IsEnabled); i >= 0 {
+			return servers[i].Name
+		}
+		if len(servers) > 0 {
+			return servers[0].Name
+		}
+	}
+	if b := ToolFor(lane); b != nil {
+		return b.Server
+	}
+	return ""
+}
+
 // ToolStateOf is whether the seat with handle can use its credential through
 // a tool on lane right now, as the access route reports it: off while the seat
 // or its account is off; live or waiting where a per-seat server reads the

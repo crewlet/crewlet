@@ -415,6 +415,11 @@ type Options struct {
 	// ScopeRequired is [LaneSpec.ScopeRequired].
 	ScopeRequired bool `json:"scope_required,omitempty"`
 
+	// ToolServer is the mcp_servers entry a per-seat tool server for the lane
+	// is started from ([ToolServerOf]), so a remedy can name it; empty where
+	// no server reads the lane's credential.
+	ToolServer string `json:"tool_server,omitempty"`
+
 	// Rotatable is whether a person can ask for a seat's credential on this
 	// lane to be rotated ([LaneSpec.Rotatable]).
 	Rotatable bool `json:"rotatable,omitempty"`
