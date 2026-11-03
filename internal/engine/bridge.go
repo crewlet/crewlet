@@ -133,11 +133,14 @@ func decodeBridgeArgs(raw string) map[string]any {
 // reads the job's record ([bridgeLedger.Settle]), so the record its resume
 // reads holds the job's last calls — a submission whose own append met a
 // store's blip, above all — and the one the session's end makes
-// ([bridgeLedger.End]), the last carry of the session's own. A call that none
-// of those carried is on no record, and the log names it, call by call: a
-// carry the row's next job refused ([bridgeLedger.afterTheirJob]), whichever
-// append made it, and one the store did not take, or a call whose own record
-// failed once the session had ended ([bridgeLedger.unrecorded]).
+// ([bridgeLedger.End]), the last carry of the session's own. ONE AT A TIME
+// ([bridgeLedger.carrying]): a session that ends while the collection's carry
+// is still out ends once that carry is done, and its own carry takes up what
+// that one could not land. A call that none of those carried is on no record,
+// and the log names it, call by call: a carry the row's next job refused
+// ([bridgeLedger.afterTheirJob]), whichever append made it, and one the store
+// did not take, or a call whose own record failed once the session had ended
+// ([bridgeLedger.unrecorded]).
 //
 // ONE PER SESSION, so one per job, and BOUND TO THAT JOB BEFORE ITS BOX EXISTS
 // ([bridgeLedger.bind], handed to [sandbox.LaunchRequest.Opened]): every append
@@ -162,6 +165,18 @@ type bridgeLedger struct {
 	// own, unless a case hands it one it reads ([bridgeLedger.logger]).
 	log *slog.Logger
 
+	// carrying is held by each carry of what the session owes for the whole of
+	// it ([bridgeLedger.carry]), so they are made one at a time — and taken
+	// before mu, never under it. For the session's end above all: its carry
+	// is the session's last, and a carry the run's collection asked for may
+	// still be out as the session ends, holding what the session owes until
+	// the store has refused it. An end that did not wait would find nothing
+	// owed, return while the collection's carry was out — the paths that end a
+	// session go on to read the run's record, or to delete it — and leave what
+	// that carry hands back to no carry at all. Waiting, its own carry takes
+	// up what the collection's could not land.
+	carrying sync.Mutex
+
 	mu sync.Mutex
 	// launch is the job this session's calls are recorded under, as the
 	// store opened it.
@@ -170,10 +185,13 @@ type bridgeLedger struct {
 	// knows, whole, in the order they were made: carried by the next append
 	// that lands, or by [bridgeLedger.Settle] or [bridgeLedger.End].
 	owed []sandbox.OwedAppend
-	// ended is set as the session's end makes its carry ([bridgeLedger.End]):
-	// no carry of the session's own comes after it, so what a call still in
-	// flight fails to record from then on is said to be on no record unless
-	// a later call of the session carries it, never promised a carry.
+	// ended is set as the session's end takes what it carries
+	// ([bridgeLedger.End]) — once any carry still out has handed back what
+	// it could not land: no carry of the session's own comes after it, so
+	// what a call still in flight fails to record from then on is said to be
+	// on no record unless a later call of the session carries it, never
+	// promised a carry. Read as the calls are handed back ([bridgeLedger.owe]),
+	// never as it stood before.
 	ended bool
 }
 
@@ -192,17 +210,19 @@ const (
 )
 
 // settleBudget bounds one carry of what a session still owes
-// ([bridgeLedger.Settle], [bridgeLedger.End]), its retries included: FIVE
-// SECONDS, as the write that records a job's session start is given
-// ([sessionStartRecordBudget]), and for its reason — the carry is that same
-// compare-and-swap of one row, tried [appendAttempts] times about a second
-// apart in all, which a healthy store answers in milliseconds and a store that
-// has not answered in five is in an outage the rest of the bound would not see
-// the end of. And it is waited on: by the collection of the job's run before
-// it reads the job's record, and by whatever ends the session — a run's
-// settle, a stop, the relaunch that replaces the job, the seat leaving this
-// node — none of which should stand for longer on calls the store will not
-// take.
+// ([bridgeLedger.Settle], [bridgeLedger.End]) from its ask, its wait for a
+// carry still out and its retries included: FIVE SECONDS, as the write that
+// records a job's session start is given ([sessionStartRecordBudget]), and for
+// its reason — the carry is that same compare-and-swap of one row, tried
+// [appendAttempts] times, which a healthy store answers in milliseconds and a
+// store that has not answered in five is in an outage the rest of the bound
+// would not see the end of. And it is waited on: by the collection of the
+// job's run before it reads the job's record, and by whatever ends the session
+// — a run's settle, a stop, the relaunch that replaces the job, the seat
+// leaving this node — none of which should stand for longer on calls the store
+// will not take. So a session's end that waits for the collection's carry
+// waits within its own bound, not beside it: the collection asked first, and
+// its bound ends first.
 const settleBudget = 5 * time.Second
 
 // owedDigestPrefix is how much of a call's identity a line naming a call no
@@ -494,42 +514,52 @@ func (l *bridgeLedger) owing() int {
 //   - THE STORE DID NOT TAKE THE CARRY (`bridge_owed_calls_unrecorded`):
 //     every attempt within the bound failed, the store out of reach from the
 //     calls through this carry. They stay owed, for the session's next append
-//     or its next carry — or, where the session has ended, for a call of it
-//     still in flight, and are otherwise on no record.
+//     or its next carry — the session's end's among them, which waits for this
+//     one — or, where the session has ended, for a call of it still in
+//     flight, and are otherwise on no record.
 func (l *bridgeLedger) Settle(ctx context.Context, runID string) bool {
 	return l.carry(ctx, runID, false)
 }
 
 // End is [bridgeLedger.Settle] as the session ends — its last carry of its own
-// ([mcpbridge.Ledger.End]) — and marks the ledger ended before the carry is
-// made, so a call of the session still in flight whose own record fails from
-// here on is said to be on no record unless a later call carries it, rather
-// than promised the session's end's carry, which has been made.
+// ([mcpbridge.Ledger.End]). It waits first for a carry still out — the run's
+// collection's, asked before the session ended — so it carries what that one
+// could not land, and returns only once both are done. And it marks the ledger
+// ended as it takes what it carries, so a call of the session still in flight
+// whose own record fails from then on is said to be on no record unless a
+// later call carries it, rather than promised the session's end's carry, which
+// has been made.
 func (l *bridgeLedger) End(ctx context.Context, runID string) bool {
 	return l.carry(ctx, runID, true)
 }
 
-// carry is [bridgeLedger.Settle], and with ending [bridgeLedger.End].
+// carry is [bridgeLedger.Settle], and with ending [bridgeLedger.End]: ONE AT A
+// TIME ([bridgeLedger.carrying]), within [settleBudget] of its ask, its wait
+// for the carry before it included.
 func (l *bridgeLedger) carry(ctx context.Context, runID string, ending bool) bool {
 	if l == nil || l.store == nil {
 		return false
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleBudget)
+	defer cancel()
+	l.carrying.Lock()
+	defer l.carrying.Unlock()
 	l.mu.Lock()
 	l.ended = l.ended || ending
-	launch, owed, ended := l.launch, l.owed, l.ended
+	launch, owed := l.launch, l.owed
 	l.owed = nil
 	l.mu.Unlock()
 	if launch == "" || len(owed) == 0 {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleBudget)
-	defer cancel()
 	recorded, err := l.appendRetrying(ctx, runID, sandbox.BridgeAppend{Launch: launch, Owed: owed,
 		Spent: l.spent()})
 	switch {
 	case err != nil:
-		l.owe(owed)
-		l.unrecorded(ctx, runID, launch, owed, err, ended)
+		// SAID AS THE SESSION STANDS once they are handed back, as an
+		// append's own failure is: whether a carry of the session's own is
+		// still to come is what the line promises or denies them.
+		l.unrecorded(ctx, runID, launch, owed, err, l.owe(owed))
 		return false
 	case !recorded:
 		l.afterTheirJob(ctx, runID, launch, owed)

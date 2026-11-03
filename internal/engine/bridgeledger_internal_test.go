@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -534,22 +535,31 @@ func readingLedger(store sandbox.PendingStore) (*bridgeLedger, *bytes.Buffer) {
 	return l, &logs
 }
 
-// logLine is the one line of logs whose message is msg, or nil where there is
-// none; a second is a case's failure.
-func logLine(t *testing.T, logs *bytes.Buffer, msg string) map[string]any {
-	t.Helper()
-	var found map[string]any
+// ledgerLines is every line of logs whose message is msg, in the order said.
+func ledgerLines(logs *bytes.Buffer, msg string) []map[string]any {
+	var found []map[string]any
 	for line := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
 		var rec map[string]any
 		if line == "" || json.Unmarshal([]byte(line), &rec) != nil || rec["msg"] != msg {
 			continue
 		}
-		if found != nil {
-			t.Fatalf("the ledger said %q twice:\n%s", msg, logs)
-		}
-		found = rec
+		found = append(found, rec)
 	}
 	return found
+}
+
+// logLine is the one line of logs whose message is msg, or nil where there is
+// none; a second is a case's failure.
+func logLine(t *testing.T, logs *bytes.Buffer, msg string) map[string]any {
+	t.Helper()
+	found := ledgerLines(logs, msg)
+	if len(found) > 1 {
+		t.Fatalf("the ledger said %q %d times:\n%s", msg, len(found), logs)
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	return found[0]
 }
 
 // named is the calls a line names, as it names them.
@@ -648,5 +658,120 @@ func TestACallWhoseRecordFailsOnceItsSessionEndedIsSaidToBeOnNoRecord(t *testing
 		!reflect.DeepEqual(named(line), []string{"post_message at place 4, digest d4d4d4d4"}) {
 		t.Errorf("the call was said as %v, want it named at warning as on no record of an ended session\n%s",
 			line, logs)
+	}
+}
+
+// heldStore fails every bridged append while down, as a coordination store
+// does while its stream elects a leader, and holds the first append asked once
+// hold is set until release closes or that append's own bound ends: a carry
+// caught out by the outage. It keeps every append it was asked for.
+type heldStore struct {
+	sandbox.PendingStore
+	down, hold atomic.Bool
+	entered    chan struct{}
+	release    chan struct{}
+
+	mu    sync.Mutex
+	asked []sandbox.BridgeAppend
+}
+
+func (s *heldStore) AppendBridgeCall(ctx context.Context, _ string, a sandbox.BridgeAppend) (bool, error) {
+	s.mu.Lock()
+	s.asked = append(s.asked, a)
+	s.mu.Unlock()
+	if s.hold.CompareAndSwap(true, false) {
+		close(s.entered)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+		}
+	}
+	if s.down.Load() {
+		return false, errors.New("the coordination store is electing a leader")
+	}
+	return true, nil
+}
+
+// carries is how many of the appends asked of s were carries of the call at
+// place seq: appends naming no call of their own, owing it.
+func (s *heldStore) carries(seq int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, a := range s.asked {
+		if a.Call.Name == "" && slices.ContainsFunc(a.Owed, func(o sandbox.OwedAppend) bool {
+			return o.Call.Seq == seq
+		}) {
+			n++
+		}
+	}
+	return n
+}
+
+// A SESSION'S END WAITS FOR THE CARRY STILL OUT, AND TAKES UP WHAT IT HANDS
+// BACK. The run's collection asks the job's session to carry what it owes; a
+// stop, or the seat leaving this node, ends the same session while that carry
+// is still out, in the outage that made the call owed. The end's carry is the
+// session's last of its own: so it waits for the collection's, carries the
+// call that one hands back, and returns only once it has — the paths that end
+// a session read or delete the run's record next. And each line is true as it
+// is said: the collection's refused carry leaves the call owed to the end's,
+// which comes; the end's, refused as well, says the session has ended and the
+// call is on no record.
+//
+// Mutation: let a carry run beside the one still out (no carrying lock), and
+// the session's end finds nothing owed and returns while the collection's
+// carry is out, and no carry of the session's own takes up the call it hands
+// back.
+func TestASessionsEndWaitsForTheCarryStillOutAndTakesUpWhatItHandsBack(t *testing.T) {
+	t.Parallel()
+	store := &heldStore{entered: make(chan struct{}), release: make(chan struct{})}
+	l, logs := readingLedger(store)
+	store.down.Store(true)
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "post_message"},
+		Seq: 1, Digest: strings.Repeat("a1", 32)}); err == nil {
+		t.Fatal("an append landed while the store was down")
+	}
+	store.hold.Store(true)
+	settled := make(chan bool, 1)
+	go func() { settled <- l.Settle(context.Background(), "run-1") }()
+	<-store.entered
+	type end struct {
+		carried bool
+		// carries is how many carries of the call the store had been asked
+		// for by the time the end returned.
+		carries int
+	}
+	ended := make(chan end, 1)
+	go func() {
+		carried := l.End(context.Background(), "run-1")
+		ended <- end{carried: carried, carries: store.carries(1)}
+	}()
+	close(store.release)
+	if <-settled {
+		t.Fatal("the collection's carry landed while the store was down")
+	}
+	got := <-ended
+	if got.carried {
+		t.Fatal("the session's end's carry landed while the store was down")
+	}
+	// MORE THAN THE COLLECTION'S OWN ATTEMPTS by the time the end returned:
+	// every one of those, and then the end's own carry of what they handed
+	// back.
+	if got.carries <= appendAttempts {
+		t.Errorf("the session's end returned once the store had been asked for %d carries of the owed call, "+
+			"no more than the collection's %d attempts: it returned while that carry was out, and no carry "+
+			"of its own took up what that one handed back", got.carries, appendAttempts)
+	}
+	lines := ledgerLines(logs, "bridge_owed_calls_unrecorded")
+	want := []string{"post_message at place 1, digest a1a1a1a1"}
+	if len(lines) != 2 || lines[0]["session_ended"] != false || lines[1]["session_ended"] != true ||
+		!reflect.DeepEqual(named(lines[0]), want) || !reflect.DeepEqual(named(lines[1]), want) {
+		t.Errorf("the refused carries were said as %v; want the collection's leaving the call owed to the "+
+			"end's carry, and then the end's saying the session ended with the call on no record\n%s",
+			lines, logs)
+	}
+	if n := l.owing(); n != 1 {
+		t.Errorf("the ended session owes %d appends, want the one call, owed to a call in flight alone", n)
 	}
 }

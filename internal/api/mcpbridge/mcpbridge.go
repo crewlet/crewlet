@@ -394,10 +394,12 @@ type Ledger interface {
 	// session comes after that to carry what it owes, and a session that
 	// ended with calls owed would leave them off the run's record even where
 	// the store answers a second later. AND IT IS THE SESSION'S LAST CARRY OF
-	// ITS OWN: a call still in flight as the opening ends records itself
-	// after it, and one whose record then fails is on no record unless a
-	// later call of the session carries it — which the ledger says of it,
-	// rather than promise a carry that is not coming.
+	// ITS OWN, made once a Settle still out as the opening ends is done —
+	// taking up what that one could not land — and returning only after it:
+	// a call still in flight as the opening ends records itself after it, and
+	// one whose record then fails is on no record unless a later call of the
+	// session carries it — which the ledger says of it, rather than promise a
+	// carry that is not coming.
 	End(ctx context.Context, runID string) bool
 }
 
