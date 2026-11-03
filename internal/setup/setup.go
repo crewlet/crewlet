@@ -35,6 +35,7 @@ package setup
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -236,8 +237,16 @@ type Requirement struct {
 	// Mintable reports that the ENGINE can produce this value, so a
 	// person should not be asked for it. A shared webhook token and a
 	// signing secret are both mintable; a third-party app's own API token is
-	// not.
+	// not. How it is minted is its [Requirement.Shape].
 	Mintable bool `json:"mintable,omitempty"`
+
+	// Public is an engine-rendered view of a minted value the company holds,
+	// for a person to copy to the vendor: a key's public half, a
+	// certificate, or a command block holding one. The vendor's requirements
+	// render it from the resolved value, through [PublicOf]; NEVER the value
+	// itself or a private key, which [Requirement.MarshalJSON] refuses to
+	// send. Nil where there is nothing to show.
+	Public *PublicView `json:"public,omitempty"`
 
 	// Checkable reports that this credential can be checked at the vendor
 	// before it is stored, with a read-only call, so a form offers a Test
@@ -365,6 +374,31 @@ type Requirement struct {
 	Effective string `json:"resolved_value,omitempty"`
 }
 
+// PublicView is text a form shows for a person to copy out, drawn as code:
+// Text as the engine rendered it, and Language, how it is highlighted ("sh",
+// "json"). Public material only ([Requirement.Public]).
+type PublicView struct {
+	Text     string `json:"text"`
+	Language string `json:"language"`
+}
+
+// privateKeyBlock matches the armour of a PEM private key of any kind: PKCS#8,
+// an encrypted one, or a key type's own (`EC`, `RSA`).
+var privateKeyBlock = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
+
+// PublicOf is a public view of held, the resolved value it is rendered from,
+// as text drawn in language: refused where text holds held itself or any PEM
+// private key, so a renderer cannot hand a person what the store keeps.
+func PublicOf(held, text, language string) (*PublicView, error) {
+	if held = strings.TrimSpace(held); held != "" && strings.Contains(text, held) {
+		return nil, errors.New("setup: a public view holds the value it was rendered from")
+	}
+	if privateKeyBlock.MatchString(text) {
+		return nil, errors.New("setup: a public view holds a private key")
+	}
+	return &PublicView{Text: text, Language: language}, nil
+}
+
 // FillEffective records what each non-credential reference resolves to.
 //
 // ONE PLACE, in the API layer rather than in each vendor's own Requirements,
@@ -405,6 +439,16 @@ func FillEffective(reqs []Requirement, resolve func(string) (string, bool)) {
 // A METHOD ON THE TYPE rather than a step in the API layer, so nothing can
 // forget it and no future caller can serialise a Requirement any other way.
 func (r Requirement) MarshalJSON() ([]byte, error) {
+	// A PUBLIC VIEW HOLDING A PRIVATE KEY, or the literal a credential's
+	// field stores, is a bug in the vendor that rendered it, and failing the
+	// answer is how it is never sent.
+	if r.Public != nil {
+		literal := strings.TrimSpace(r.Stored)
+		if privateKeyBlock.MatchString(r.Public.Text) ||
+			(r.Kind == KindSecret && literal != "" && !IsReference(literal) && strings.Contains(r.Public.Text, literal)) {
+			return nil, fmt.Errorf("setup: the public view of %s holds a credential", r.Field)
+		}
+	}
 	// An alias, because marshalling the named type here would call this
 	// method again, forever.
 	type wire Requirement
@@ -623,6 +667,8 @@ func (r Requirement) ValueProblem(value string) string {
 		return ""
 	}
 	switch {
+	case r.Kind == KindSecret && r.Shape.Multiline():
+		// A KEY SPANS LINES, so its shape judges it whole below.
 	case r.Kind == KindSecret:
 		if problem := secrets.StrayProblem(r.Noun(), value); problem != "" {
 			return problem

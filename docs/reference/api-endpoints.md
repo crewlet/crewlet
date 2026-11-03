@@ -3488,7 +3488,16 @@ that this input being absent produces, which is what lets a row reporting
 `credential_missing` offer exactly the fields that clear it.
 
 `mintable` means the engine can generate the value, so nobody should be asked
-to invent it. **No route here ever returns a credential.**
+to invent it. **No route here ever returns a credential.** Most minted values
+are a random token; a field that signs takes an ES256 key instead, an ECDSA
+P-256 private key in PKCS#8 PEM, sealed whole and never shown. Where a person
+has to hand the vendor something made from a minted value, the field carries
+`public`: `{"text": ..., "language": "sh"}`, text the engine renders from the
+public half alone (a key set, or a command block holding it), drawn as code to
+copy. A requirement whose public view would hold the value itself or any
+private key is never sent.
+A field that depends on a minted value is `required` only once that value is
+held, so the Save that mints it can leave the dependent field empty.
 
 `checkable` means the credential can be [checked at its
 vendor](#checking-a-credential-before-it-is-stored) before it is stored, so a
