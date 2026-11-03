@@ -9348,12 +9348,15 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   yet; so is one whose run's ending is decided. `null` where it cannot be said
   now — the turn's run record, or its row read as a relaunch reads it, could
   not be read; the job a relaunch would follow is still working, or a claim on
-  it has not yet taken its final capture; its capture is still being kept;
-  what a relaunch is launched on cannot be said (every member of the seat's
-  chain sitting out its plan, no node holding the seat, the node holding it not
-  answering); or only the resume of a collected job decides the relaunch (a
-  round lost a second time, or carried on in its box only where its sign-in was
-  replaced) — which `not_continuable` then says. A page reads the coordination
+  it has neither taken its final capture nor begun its turn; its capture is
+  still being kept; what a relaunch is launched on cannot be said (every member
+  of the seat's chain sitting out its plan, no node holding the seat, the node
+  holding it not answering); or only the resume of a collected job decides the
+  relaunch, and its turn has not begun (a round lost a second time, or carried
+  on in its box only where its sign-in was replaced) — which `not_continuable`
+  then says. A resumed turn says, as it begins, whether it collects its job or
+  carries the round on, and from then on, its review included, the row is
+  decided on that. A page reads the coordination
   store once, and a live turn's record alone where the listing does not hold
   it, and not at all where every row on it has ended, and is answered whether
   or not it answers; it reads a row again at `linearizable` only where the

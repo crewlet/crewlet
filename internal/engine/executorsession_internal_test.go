@@ -701,11 +701,11 @@ func TestAResumedTurnThatPanicsOnceBegunEndsFailed(t *testing.T) {
 			req := sandbox.ResumeRequest{
 				Run: sandbox.PendingRun{TurnID: "run-9", AgentHandle: "swe", WorkKey: "wk-9",
 					WorkSince: time.Now().UTC()},
-				Begin: func(context.Context) error { return nil },
+				Begin: func(context.Context, sandbox.ResumeCarry) error { return nil },
 			}
 			err := e.resumeGuarded(t.Context(), req, func(ctx context.Context, guarded sandbox.ResumeRequest) error {
 				if begins {
-					if beginErr := guarded.Begin(ctx); beginErr != nil {
+					if beginErr := guarded.Begin(ctx, sandbox.ResumeCollects); beginErr != nil {
 						return beginErr
 					}
 				}

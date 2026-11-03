@@ -296,20 +296,23 @@ func TestAResumeThatCannotRunAnnouncesNothing(t *testing.T) {
 }
 
 // begins is a [sandbox.ResumeRequest.Begin] that records each call, how many
-// segment starts had been published when it came, and answers err.
+// segment starts had been published when it came and what the segment said it
+// does with the round, and answers err.
 type begins struct {
-	mu     sync.Mutex
-	calls  int
-	starts []int
-	p      *pub
-	err    error
+	mu      sync.Mutex
+	calls   int
+	starts  []int
+	carries []sandbox.ResumeCarry
+	p       *pub
+	err     error
 }
 
-func (b *begins) begin(context.Context) error {
+func (b *begins) begin(_ context.Context, carry sandbox.ResumeCarry) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.calls++
 	b.starts = append(b.starts, len(startsOf(b.p.published())))
+	b.carries = append(b.carries, carry)
 	return b.err
 }
 
@@ -317,7 +320,12 @@ func (b *begins) begin(context.Context) error {
 // commit — for a recorded answer, the record that this turn took it — is made
 // after every check that can still send the resume back, and before the
 // segment is so much as announced. Through the engine's own resumer, so the
-// commit the coordinator hands over is the one the frame calls.
+// commit the coordinator hands over is the one the frame calls. And it says
+// what the turn does with the round of the job it resumes from, as the runner
+// decides it: a completion's is collected.
+//
+// Mutation: hand the commit any other word than the runner's decision, and a
+// reader of the run is told a collected job's round is carried on.
 func TestAResumeBeginsItsTurnBeforeAnyOfItRuns(t *testing.T) {
 	t.Parallel()
 	e, p := starting(t, refusingModels(t))
@@ -344,6 +352,10 @@ func TestAResumeBeginsItsTurnBeforeAnyOfItRuns(t *testing.T) {
 	if b.starts[0] != 0 {
 		t.Errorf("Begin came after %d segment starts, want before the first: a turn on the "+
 			"record before its commit is one a crash can leave untaken", b.starts[0])
+	}
+	if b.carries[0] != sandbox.ResumeCollects {
+		t.Errorf("a completion's turn began saying it %q its round, want %q", b.carries[0],
+			sandbox.ResumeCollects)
 	}
 	if starts := startsOf(p.published()); len(starts) != 1 {
 		t.Errorf("published %d starts, want the segment's one", len(starts))

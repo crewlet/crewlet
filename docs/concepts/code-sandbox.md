@@ -1353,13 +1353,21 @@ run's ending is decided is ending, from the decision on. **An unknown is never
 a no**: `continuable` is null, with its reason, where the run record or the
 row at the relaunch's level could not be read, and where a relaunch would not
 decide now either — the job it would follow still working, or a claim on it
-whose read has not yet taken its final capture (a claim whose read has is
-decided as any other, its review included); that job's capture still being
-kept; what a relaunch is launched on not to be said (every member of the
-seat's chain sitting out its plan, no node holding the seat, the node holding
-it not answering within two seconds); and a relaunch only the resume of a
-collected job decides — whether its round is carried on in its box, which it
-is where the job's sign-in was replaced while it ran. A page reads the
+whose read is still under way, one that has neither taken the job's final
+capture nor begun its turn; that job's capture still being kept; what a
+relaunch is launched on not to be said (every member of the seat's chain
+sitting out its plan, no node holding the seat, the node holding it not
+answering within two seconds); and a relaunch only the resume of a collected
+job decides, until its turn begins — whether its round is carried on in its
+box, which it is where the job's sign-in was replaced while it ran, and whether
+a round lost a second time is carried on in a session of its own or reviewed
+from the work it submitted. **A resumed turn says what it does with the round
+as it begins**, on the job's record — collects the job, or carries the round on
+— and from then on, its review included, the claim is decided on that, whether
+or not its read took any capture: a turn that collects its job is reviewed, and
+its send-back continues nothing in the job's box; one that carries the round on
+in that box continues it there. A claim of a person's answer reads no box, and
+is decided whatever its job kept. A page reads the
 coordination store once, one listing of the seat's live runs — and one turn's
 record alone for a live row the listing does not hold, a record of a status
 this build does not know or one it could not decode — and not at all where

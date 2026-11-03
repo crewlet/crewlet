@@ -1057,6 +1057,15 @@ func (s *refusingStore) MarkSessionStart(ctx context.Context, turnID, launch str
 	return s.inner.MarkSessionStart(ctx, turnID, launch, start)
 }
 
+func (s *refusingStore) MarkResumeBegun(ctx context.Context, turnID, launch string, fence Fence,
+	carry ResumeCarry) (bool, error) {
+
+	if s.called("MarkResumeBegun") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkResumeBegun(ctx, turnID, launch, fence, carry)
+}
+
 func (s *refusingStore) WatchNotes(ctx context.Context, turnID string) (<-chan NotesView, error) {
 	if s.called("WatchNotes") {
 		return nil, errRefusedCall

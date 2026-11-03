@@ -734,8 +734,8 @@ func (e *Engine) resumeGuarded(ctx context.Context, req sandbox.ResumeRequest,
 
 	var began atomic.Bool
 	if begin := req.Begin; begin != nil {
-		req.Begin = func(ctx context.Context) error {
-			if err := begin(ctx); err != nil {
+		req.Begin = func(ctx context.Context, carry sandbox.ResumeCarry) error {
+			if err := begin(ctx, carry); err != nil {
 				return err
 			}
 			began.Store(true)
@@ -924,9 +924,10 @@ type resumeInput struct {
 	CacheWrite int
 
 	// Begin is the coordinator's commit, called once the segment is certain
-	// to run and before any of it does — see [sandbox.ResumeRequest.Begin].
+	// to run and before any of it does, with what the segment does with the
+	// round of the job it resumes from — see [sandbox.ResumeRequest.Begin].
 	// Nil commits nothing.
-	Begin func(ctx context.Context) error
+	Begin func(ctx context.Context, carry sandbox.ResumeCarry) error
 
 	// Engine is what the engine spent on the job between segments — its
 	// bridged calls and the condensation of its collection — which this
@@ -1117,7 +1118,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// it would be read after a crash as one that never got the answer — and
 	// the reply handed back to the seat a second time.
 	if in.Begin != nil {
-		if beginErr := in.Begin(ctx); beginErr != nil {
+		// AND WHAT THE TURN DOES WITH THE ROUND OF THE JOB IT RESUMES FROM, as
+		// its runner decides it ([runner.Resume.CarriesOn]): for every reader
+		// of whether a relaunch would continue the job's session while the
+		// turn runs ([sandbox.LaunchRecord.ResumeCarry]).
+		carry := sandbox.ResumeCollects
+		if input.Resume.CarriesOn() {
+			carry = sandbox.ResumeCarriesOn
+		}
+		if beginErr := in.Begin(ctx, carry); beginErr != nil {
 			return beginErr
 		}
 	}

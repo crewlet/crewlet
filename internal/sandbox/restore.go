@@ -363,10 +363,13 @@ type ReadContinuity struct {
 // that job still being kept, which a relaunch waits for ([relaunchCaptureWait]);
 // what the relaunch would be launched on not to be said now
 // ([RelaunchTarget.Undecided]); and a relaunch that only the resume of the
-// job's collection decides, as it reads how the job ended — whether a lost
-// round is carried on at all, whether a box whose sign-in was replaced carries
-// its round on. now is the reader's clock, against which a begun capture is in
-// flight ([captureInFlight]).
+// job's collection decides, as it reads how the job ended, until its turn
+// begins and says what it does with the round ([LaunchRecord.ResumeCarry]) —
+// whether a round lost a second time is carried on in a session of its own or
+// reviewed from the work it submitted, and whether a box whose sign-in was
+// replaced carries its round on. Once the turn has said, the row is decided on
+// what it said, its review included. now is the reader's clock, against which a
+// begun capture is in flight ([captureInFlight]).
 //
 // As far as the engine can know before a box is chosen: whether the box a
 // relaunch gets runs a harness release that takes the session up, and whether
@@ -396,10 +399,22 @@ func ReadContinuityOf(row executordomain.Session, run *PendingRun, target Relaun
 		// A ROUND LOST AGAIN is carried on in a session of its own, never from
 		// the state it was lost in — unless its job had submitted its work
 		// before it went, when the round is collected and only a review that
-		// sends it back would continue it: which the job's resume decides.
-		return ReadContinuity{Why: fmt.Sprintf("the job a relaunch would follow (launch %d) was lost a "+
-			"second time in its round, which a relaunch carries on in a session of its own; only a review "+
-			"of work it submitted before it went would continue it, which its resume decides", run.LaunchSeq)}
+		// sends it back would continue it: which the job's resume decides,
+		// and says as its turn begins.
+		switch run.Launch.ResumeCarry {
+		case ResumeCarriesOn:
+			return ReadContinuity{Decided: true, Why: fmt.Sprintf("the job a relaunch would follow "+
+				"(launch %d) was lost a second time in its round, and its resumed turn carries the round on "+
+				"in a session of its own", run.LaunchSeq)}
+		case ResumeCollects:
+			// THE ROUND IS COLLECTED from the work the job submitted, and a
+			// review's send-back continues its kept capture: decided below.
+		default:
+			return ReadContinuity{Why: fmt.Sprintf("the job a relaunch would follow (launch %d) was lost a "+
+				"second time in its round, which a relaunch carries on in a session of its own; only a "+
+				"review of work it submitted before it went would continue it, which its resume decides",
+				run.LaunchSeq)}
+		}
 	}
 	if kept.Continues {
 		return ReadContinuity{Decided: true, Continues: true, In: ContinuesInAnyBox}
@@ -442,16 +457,24 @@ func RereadsRow(row executordomain.Session, run *PendingRun, now time.Time) bool
 // jobWorking reports whether run's job is still working or being collected, so
 // no reader can say yet what a relaunch following it continues: a launch not
 // yet suspended, a job running whose box no collection has read back
-// ([LaunchRecord.Collected]), or a claim whose read has not yet taken the job's
-// final capture. The read that collects a job takes its session first; the
-// claim's row then stays resumed for the whole resumed turn, its review
-// included — which is when a person most wants to know — and is decided as any
-// other once that capture is taken, and settled ([captureInFlight]).
+// ([LaunchRecord.Collected]), or a claim of a job whose read is still under
+// way. The read that collects a job takes its session first, and the claim's
+// turn begins once it has, saying as it does what it does with the round
+// ([LaunchRecord.ResumeCarry]); the claim's row then stays resumed for the
+// whole resumed turn, its review included — which is when a person most wants
+// to know — and is decided as any other from the first of the two on: the
+// job's final capture taken, and settled ([captureInFlight]), or the turn
+// begun, whether or not its read took any capture (the switch off, a box
+// holding no session). A claim of a person's answer reads no box at all: its
+// job was collected when it parked on its question.
 func jobWorking(run PendingRun) bool {
 	switch run.Status {
 	case StatusLaunching:
 		return true
 	case StatusResumed:
+		if run.Answer != nil || run.Launch.ResumeCarry != "" {
+			return false
+		}
 		taken := run.Capture
 		return taken == nil || taken.LaunchSeq != run.LaunchSeq || !taken.Final
 	case StatusRunning:
@@ -467,10 +490,12 @@ type boxCarry int
 const (
 	// boxNot: no relaunch continues it there.
 	boxNot boxCarry = iota
-	// boxContinues: a person's answer's relaunch would.
+	// boxContinues: a person's answer's relaunch would, or the relaunch a
+	// resumed turn carries its round on with at once.
 	boxContinues
 	// boxUndecided: one would where the resume of the job's collection
-	// carries its round on in its box, which only that resume decides.
+	// carries its round on in its box, which only that resume decides, and
+	// has not said yet.
 	boxUndecided
 )
 
@@ -481,9 +506,12 @@ const (
 // WHICH RELAUNCHES DO: a person's answer to the run's question — parked on it,
 // its box reaped while it waited, answered, or that answer's claim under way
 // ([PendingRun.Answer]); and the resume of a collected job whose sign-in was
-// replaced while it ran, which only that resume decides as it reads how the
-// job ended, so a reader is told it cannot be said. Never a lost job's, whose
-// box holds what its harness was cut off in.
+// replaced while it ran, which only that resume decides, as it reads how the
+// job ended, and says as its turn begins ([LaunchRecord.ResumeCarry]): before
+// then a reader is told it cannot be said, and after it, what the turn said —
+// carried on in the box at once, or collected, its review's send-back the
+// round's only relaunch, which continues nothing there. Never a lost job's,
+// whose box holds what its harness was cut off in.
 //
 // BY THE LAUNCH'S OWN TESTS of a box it continues in, asked of the box the
 // record names as the relaunch would find it, its job over by then: the same
@@ -495,14 +523,25 @@ const (
 // session the box ran ([PendingRun.SessionRan]), and a box that ran another
 // session of the turn continues the row's nowhere.
 func inParkedBox(run PendingRun, row executordomain.Session, target RelaunchTarget) (boxCarry, string) {
-	carried := boxContinues
+	carried, undecided := boxContinues, ""
 	switch {
 	case run.Status == StatusAwaiting || run.Status == StatusReseed || run.Status == StatusAnswered ||
 		(run.Status == StatusResumed && run.Answer != nil):
 	case run.Lost != nil:
 		return boxNot, ""
+	case run.Status == StatusResumed && run.Launch.ResumeCarry == ResumeCarriesOn:
+		// THE RESUMED TURN CARRIES THE ROUND ON, relaunching it at once in the
+		// job's box: the job refused on a sign-in replaced while it ran.
+	case run.Status == StatusResumed && run.Launch.ResumeCarry == ResumeCollects:
+		return boxNot, "the resumed turn collects its job, and a review's send-back, the round's only " +
+			"relaunch from it, continues no session in the box the job ran in"
+	case run.Status == StatusResumed && run.Launch.ResumeCarry != "":
+		carried, undecided = boxUndecided, fmt.Sprintf("the resumed turn of its job's collection said "+
+			"what it does with the round as %q, which this build does not read", run.Launch.ResumeCarry)
 	case run.Status == StatusResumed || (run.Status == StatusRunning && run.Launch.Collected):
-		carried = boxUndecided
+		carried, undecided = boxUndecided, "whether the resume of its job's collection carries its "+
+			"round on in the box it ran in, which it does where the job's sign-in was replaced while it "+
+			"ran, is decided as that resume reads how the job ended, and said as its turn begins"
 	default:
 		return boxNot, ""
 	}
@@ -530,12 +569,7 @@ func inParkedBox(run PendingRun, row executordomain.Session, target RelaunchTarg
 		return boxNot, fmt.Sprintf("the box its run ran in is on the host of %s, and %s, which holds "+
 			"the seat, cannot continue in it", run.LaunchNode, target.Node)
 	}
-	if carried == boxUndecided {
-		return carried, "whether the resume of its job's collection carries its round on in the box it " +
-			"ran in, which it does where the job's sign-in was replaced while it ran, is decided as that " +
-			"resume reads how the job ended"
-	}
-	return carried, ""
+	return carried, undecided
 }
 
 // ContinuedSession is the kept session a relaunch of a turn continues: the

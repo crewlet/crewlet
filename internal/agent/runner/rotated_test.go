@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -85,5 +86,41 @@ func TestARoundSubmittedBeforeTheRefusalIsCollected(t *testing.T) {
 	}
 	if n := relauncher.launched(); n != 0 {
 		t.Fatalf("a round its job had submitted was launched again %d times", n)
+	}
+}
+
+// A RESUME SAYS WHETHER IT CARRIES THE ROUND ON BY THE ONE DECISION IT TAKES. A
+// person's answer, a job lost with its host and one refused on a replaced
+// sign-in carry the round on — the latter two unless the round's calls hold its
+// submission since the last answer, when the round is collected — and a
+// completion is collected: what the engine records on the run as the resumed
+// turn begins, for every reader of whether a relaunch would continue the job's
+// session, and so the very branch [runner.Runner.Resume] takes.
+//
+// Mutation: answer a submitted loss or replaced sign-in as carried on, read a
+// submission made before the answer as the round's, or answer an answer as
+// collected, and a case goes red.
+func TestAResumeSaysWhetherItCarriesTheRoundOn(t *testing.T) {
+	t.Parallel()
+	submission := runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool}, Seq: 2}
+	for name, tc := range map[string]struct {
+		resume runner.Resume
+		on     bool
+	}{
+		"a completion":      {},
+		"a person's answer": {resume: runner.Resume{Asked: &runner.Asked{Answer: "yes"}}, on: true},
+		"a loss":            {resume: runner.Resume{Lost: &runner.Lost{}}, on: true},
+		"a loss after the round submitted": {resume: runner.Resume{Lost: &runner.Lost{},
+			Bridged: []runner.BridgedCall{submission}}},
+		"a replaced sign-in": {resume: runner.Resume{Rotated: &runner.Rotated{}}, on: true},
+		"a replaced sign-in after the round submitted": {resume: runner.Resume{Rotated: &runner.Rotated{},
+			Bridged: []runner.BridgedCall{submission}}},
+		"a replaced sign-in whose only submission came before an answer": {on: true,
+			resume: runner.Resume{Rotated: &runner.Rotated{}, Bridged: []runner.BridgedCall{submission},
+				Answered: 2}},
+	} {
+		if got := tc.resume.CarriesOn(); got != tc.on {
+			t.Errorf("%s: the resume carries the round on %v, want %v", name, got, tc.on)
+		}
 	}
 }

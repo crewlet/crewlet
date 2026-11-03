@@ -396,6 +396,12 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 				r.Status, r.Capture, r.Kept = sandbox.StatusResumed, &final, &final
 				r.Answer = &sandbox.RecordedAnswer{EventIDs: []string{"ev-1"}}
 			}},
+		"its answer's claim under way, its job having kept nothing": {target: claudeTarget(),
+			continues: true, inParked: true, why: "kept no capture",
+			run: func(r *sandbox.PendingRun) {
+				r.Status, r.Capture, r.Kept = sandbox.StatusResumed, nil, nil
+				r.Answer = &sandbox.RecordedAnswer{EventIDs: []string{"ev-1"}}
+			}},
 		"a box its pause reclaimed": {target: refusing, why: "is gone",
 			run: func(r *sandbox.PendingRun) { r.Status, r.SandboxID = sandbox.StatusReseed, "" }},
 		"a record naming no session": {target: refusing, why: "names no session",
@@ -521,30 +527,71 @@ func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(
 	}
 }
 
-// A CLAIM WHOSE READ TOOK THE JOB'S FINAL CAPTURE IS DECIDED. The read a claim
-// makes takes the job's session first, and the claim's row stays resumed for
-// the whole resumed turn, its review included — which is when a person most
-// wants to know what a send-back would continue. So once that final capture is
-// taken and kept, the row is decided as any other: continued from it in any box
-// — and while the claim's read has taken nothing yet, it is still undecided.
+// A CLAIM IS DECIDED ONCE ITS READ HAS TAKEN THE JOB'S FINAL CAPTURE, OR ITS
+// TURN HAS SAID WHAT IT DOES. The read a claim makes takes the job's session
+// first, and the claim's row stays resumed for the whole resumed turn, its review
+// included — which is when a person most wants to know what a send-back would
+// continue. So once that final capture is taken and kept, the row is decided as
+// any other: continued from it in any box. And once the turn has begun, saying
+// what it does with the round, so is one whose capture no relaunch's runner
+// restores, and one whose read took no capture at all: a turn that collects its
+// job is reviewed, and its send-back continues nothing in the job's box; one
+// that carries the round on in that box continues it there. Before either, it is
+// still undecided.
 //
-// Mutation: read every resumed row as a job still being collected, and the
-// claim whose capture is kept is undecided.
-func TestAClaimWhoseReadTookTheJobsFinalCaptureIsDecided(t *testing.T) {
+// Mutation: read every resumed row as a job still being collected, read a turn
+// that said what it does as one that has not, or read a collecting turn as one
+// whose relaunch continues in the job's box, and a case goes red.
+func TestAClaimIsDecidedOnceItsReadOrItsTurnHasSaid(t *testing.T) {
 	t.Parallel()
-	row, run := liveSession(executor.ClaudeCodeName)
-	final := *run.Kept
-	final.Final = true
-	run.Status, run.Capture, run.Kept = sandbox.StatusResumed, &final, &final
-	s := continuableSources(t, []executordomain.Session{row}, &stubRuns{runs: []sandbox.PendingRun{run}})
-	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
-	if err != nil {
-		t.Fatalf("executor_sessions: %v", err)
-	}
-	if got := rowsByTurn(t, page)[row.Turn]; got.Continuable == nil || !*got.Continuable ||
-		got.ContinuesIn != sandbox.ContinuesInAnyBox {
-		t.Errorf("a claim whose read took and kept the job's final capture is %s, want continuable in any "+
-			"box", decided(got))
+	refusing := claudeTarget()
+	refusing.Restorer = restoring{harness: executor.ClaudeCodeName, why: "a release no other box resumes"}
+	for name, tc := range map[string]struct {
+		carry  sandbox.ResumeCarry
+		final  bool
+		target sandbox.RelaunchTarget
+		// decided is nil where the row is to be undecided.
+		decided *bool
+		in      sandbox.ContinuesIn
+		why     string
+	}{
+		"its final capture kept, which the relaunch's member restores": {final: true, target: claudeTarget(),
+			decided: ptr(true), in: sandbox.ContinuesInAnyBox},
+		"its turn collecting the job, its capture no other box continues": {final: true, target: refusing,
+			carry: sandbox.ResumeCollects, decided: ptr(false), why: "collects its job"},
+		"its turn carrying the round on in its box": {final: true, target: refusing,
+			carry: sandbox.ResumeCarriesOn, decided: ptr(true), in: sandbox.ContinuesInParkedBox,
+			why: "no other box resumes"},
+		"its turn begun, its read having taken no capture": {target: claudeTarget(),
+			carry: sandbox.ResumeCollects, decided: ptr(true), in: sandbox.ContinuesInAnyBox},
+		"its turn not begun, its capture no other box continues": {final: true, target: refusing,
+			why: "as its turn begins"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			row, run := liveSession(executor.ClaudeCodeName)
+			capture := *run.Kept
+			capture.Final = tc.final
+			run.Status, run.Capture, run.Kept = sandbox.StatusResumed, &capture, &capture
+			run.Launch.ResumeCarry = tc.carry
+			s := continuableSources(t, []executordomain.Session{row}, &stubRuns{runs: []sandbox.PendingRun{run}})
+			s.RelaunchTargets = targetOf(tc.target)
+			page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+			if err != nil {
+				t.Fatalf("executor_sessions: %v", err)
+			}
+			got := rowsByTurn(t, page)[row.Turn]
+			switch {
+			case tc.decided == nil && got.Continuable != nil:
+				t.Errorf("the claim's row is %s, want undecided", decided(got))
+			case tc.decided != nil && (got.Continuable == nil || *got.Continuable != *tc.decided):
+				t.Errorf("the claim's row is %s, want continues %v", decided(got), *tc.decided)
+			case got.ContinuesIn != tc.in:
+				t.Errorf("the claim's row is %s, want it continued in %q", decided(got), tc.in)
+			case !strings.Contains(got.NotContinuable, tc.why):
+				t.Errorf("the claim's row is %s, want it saying %q", decided(got), tc.why)
+			}
+		})
 	}
 }
 

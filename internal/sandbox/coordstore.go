@@ -504,7 +504,10 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			run.Answer = &answer
 		}
 		// Onto THIS job's record, every fact below: the release names the
-		// job the row holds, or it was refused above.
+		// job the row holds, or it was refused above. And what the claim's
+		// turn said it does with the round is the claim's, which this hands
+		// back: the next claim's turn says it again ([LaunchRecord.ResumeCarry]).
+		run.Launch.ResumeCarry = ""
 		if release.Published {
 			run.Launch.Published = true
 		}
@@ -1298,6 +1301,29 @@ func (s *CoordStore) MarkSessionStart(ctx context.Context, turnID, launch string
 			return false
 		}
 		run.Launch.SessionStart = start
+		return true
+	})
+	return marked, err
+}
+
+// MarkResumeBegun records what a claim's resumed turn does with its job's
+// round. See the contract on [PendingStore].
+//
+// THROUGH THE WRITE A LIVE RUN TAKES ([CoordStore.mutate]): a run whose ending
+// is decided is being ended, and no turn of it begins.
+func (s *CoordStore) MarkResumeBegun(ctx context.Context, turnID, launch string, fence Fence,
+	carry ResumeCarry) (bool, error) {
+
+	if !carry.Valid() {
+		return false, fmt.Errorf("sandbox: %q is nothing a resumed turn does with its round; it is one of %s",
+			carry, words.Or(ResumeCarries))
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.Status != StatusResumed || run.LaunchID != launch || outranked(*run, fence) ||
+			run.Launch.ResumeCarry == carry {
+			return false
+		}
+		run.Launch.ResumeCarry = carry
 		return true
 	})
 	return marked, err

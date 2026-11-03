@@ -2180,6 +2180,15 @@ type PendingStore interface {
 	// start that is not [SessionStart.Valid] is an error.
 	MarkSessionStart(ctx context.Context, turnID, launch string, start SessionStart) (bool, error)
 
+	// MarkResumeBegun records on a claimed run what the turn resuming from the
+	// job named does with the job's round, as that turn begins
+	// ([LaunchRecord.ResumeCarry]), reporting whether this call recorded it.
+	// Only while the run is [StatusResumed] on that job, its ending not yet
+	// decided, under a fence no newer lease outranks. FALSE IS NOT AN ERROR:
+	// the run moved on, says it already, or is gone. A carry that is not
+	// [ResumeCarry.Valid] is an error.
+	MarkResumeBegun(ctx context.Context, turnID, launch string, fence Fence, carry ResumeCarry) (bool, error)
+
 	// WatchNotes follows one run's notes: the record's state when the watch
 	// began — [NotesView.Found] false where it has none — then each state it
 	// reaches, as [coord.SandboxRuns.WatchSandboxRun] delivers them, each
@@ -2713,6 +2722,27 @@ type LaunchRecord struct {
 	// carrying its round on in that box ([PendingRun.SessionRan]).
 	SessionStart SessionStart `json:"session_start,omitempty"`
 
+	// ResumeCarry is what the turn resuming from this job's collection does
+	// with the job's round, as that turn said it as it began
+	// ([PendingStore.MarkResumeBegun], at [ResumeRequest.Begin]): collects
+	// it, or carries it on. The claim's own: written under the claim whose
+	// turn it is, and cleared by the release that hands that claim back, whose
+	// next claim's turn decides again. Empty before that turn begins — the
+	// claim's read of the job still under way, or its resume still deciding —
+	// and on a claim of a person's answer, which its record says carries the
+	// round on ([PendingRun.Answer]).
+	//
+	// FOR EVERY READER OF WHETHER A RELAUNCH WOULD CONTINUE THE JOB'S SESSION
+	// ([ReadContinuityOf]). A claim's row says nothing else of its turn from
+	// the claim to the turn's end, its review included, when a person most
+	// wants to know, while the turn decided as it began what a relaunch of the
+	// round continues: the box's session at once, where it carries the round
+	// on in the job's box; none of the box's, where it collects the job and
+	// only a review's send-back relaunches the round. Best effort, as a
+	// reader's word: a record that missed it reads as a turn that has not
+	// said, undecided, never as either.
+	ResumeCarry ResumeCarry `json:"resume_carry,omitempty"`
+
 	// Iteration is the turn iteration the launching executor suspended in,
 	// written by [PendingStore.MarkSuspended].
 	Iteration int `json:"iteration,omitempty"`
@@ -2872,6 +2902,30 @@ const (
 // newer build wrote may name one this build does not know, which is read as the
 // value it is, and as no continued session.
 func (s SessionStart) Valid() bool { return s == SessionStartContinued || s == SessionStartFresh }
+
+// ResumeCarry is what the turn resuming from a collected job does with the
+// job's round, as it says it as it begins ([LaunchRecord.ResumeCarry]).
+type ResumeCarry string
+
+const (
+	// ResumeCollects is a turn that goes on from the job's work: its review,
+	// whose send-back is the round's only relaunch, and that continues no
+	// session in the job's box.
+	ResumeCollects ResumeCarry = "collects"
+
+	// ResumeCarriesOn is a turn that relaunches the round at once rather than
+	// collecting it: a job lost with its host, or one refused on a sign-in
+	// replaced while it ran, whose round was not yet submitted.
+	ResumeCarriesOn ResumeCarry = "carries_on"
+)
+
+// ResumeCarries are every carry a turn says.
+var ResumeCarries = []ResumeCarry{ResumeCollects, ResumeCarriesOn}
+
+// Valid reports whether c is one this build names. A record a newer build
+// wrote may name another, which is read as the value it is: a turn that began,
+// whose carry this build cannot say.
+func (c ResumeCarry) Valid() bool { return slices.Contains(ResumeCarries, c) }
 
 // FollowUpReason is why a job was launched as a follow-up of the job before it
 // in the same round, where the collection of the new job has to know.

@@ -845,14 +845,19 @@ func TestACutOffSessionIsHandedAgainTheNotesItsJobTookLast(t *testing.T) {
 // and only that, in a company that keeps no session. A lost job's box continues
 // nothing. And it is undecided, never a no, wherever a relaunch would not decide
 // now either: a job still working, or a claim whose read has not taken the job's
-// final capture, a capture still being kept, a target that cannot be said, a
-// round lost a second time, and a collected job's resume, which carries its
-// round on in its box only where its sign-in was replaced while it ran.
+// final capture and whose turn has not begun, a capture still being kept, a
+// target that cannot be said, a round lost a second time, and a collected job's
+// resume, which carries its round on in its box only where its sign-in was
+// replaced while it ran — each until the resumed turn says, as it begins, what
+// it does with the round: from then on, its review included, the row is decided
+// on what it said, whether or not its read took a capture. A claim of a
+// person's answer reads no box, and is decided whatever its job kept.
 //
 // Mutation: drop the parked box's half or any test of it — its host, the session
 // it ran — read any undecided state as a no, read a claim whose read took the
-// final capture as one still collecting, or let a box of another harness or
-// cell count as the parked one, and a case goes red.
+// final capture, or whose turn has said what it does, as one still collecting,
+// leave a turn that said it undecided, or let a box of another harness or cell
+// count as the parked one, and a case goes red.
 func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
@@ -908,6 +913,37 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			run: func(r *PendingRun) { r.Status, r.Launch.Collected = StatusRunning, true }},
 		"a collected job's resume, its capture no other box continues": {target: older, whyHolds: "sign-in",
 			run: func(r *PendingRun) { r.Status, r.Launch.Collected = StatusRunning, true }},
+		"a claim whose turn collects the job, its capture no other box continues": {target: older,
+			decided: true, whyHolds: "collects its job", run: func(r *PendingRun) {
+				r.Status, r.Capture, r.Kept, r.Launch.ResumeCarry = StatusResumed, &final, &final, ResumeCollects
+			}},
+		"a claim whose turn carries the round on in its box": {target: older, decided: true,
+			in: ContinuesInParkedBox, whyHolds: "older than", run: func(r *PendingRun) {
+				r.Status, r.Capture, r.Kept, r.Launch.ResumeCarry = StatusResumed, &final, &final, ResumeCarriesOn
+			}},
+		"a claim whose turn began, its read having taken no capture": {target: target, decided: true,
+			in: ContinuesInAnyBox, run: func(r *PendingRun) {
+				r.Status, r.Launch.ResumeCarry = StatusResumed, ResumeCollects
+			}},
+		"a claim whose turn said what this build does not read": {target: older, whyHolds: "does not read",
+			run: func(r *PendingRun) {
+				r.Status, r.Capture, r.Kept, r.Launch.ResumeCarry = StatusResumed, &final, &final, "later"
+			}},
+		"an answer's claim whose job kept no capture": {target: target, decided: true,
+			in: ContinuesInParkedBox, whyHolds: "kept no capture", run: func(r *PendingRun) {
+				r.Status, r.Capture, r.Kept = StatusResumed, nil, nil
+				r.Answer = &RecordedAnswer{EventIDs: []string{"ev-1"}}
+			}},
+		"a round lost a second time, its turn collecting what it submitted": {target: target, decided: true,
+			in: ContinuesInAnyBox, run: func(r *PendingRun) {
+				r.Status, r.RoundLosses, r.Launch.ResumeCarry = StatusResumed, 1, ResumeCollects
+				r.Lost = &JobLoss{Cause: LossBoxGone}
+			}},
+		"a round lost a second time, its turn carrying it on": {target: target, decided: true,
+			whyHolds: "in a session of its own", run: func(r *PendingRun) {
+				r.Status, r.RoundLosses, r.Launch.ResumeCarry = StatusResumed, 1, ResumeCarriesOn
+				r.Lost = &JobLoss{Cause: LossBoxGone}
+			}},
 		"a round lost a second time": {target: target, whyHolds: "lost a second time", run: func(r *PendingRun) {
 			r.Status, r.Launch.Collected, r.RoundLosses = StatusRunning, true, 1
 			r.Lost = &JobLoss{Cause: LossBoxGone}
