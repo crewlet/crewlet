@@ -284,7 +284,7 @@ func (c *Client) CreateSeatRole(ctx context.Context, handle, slug string) (SeatR
 		RoleName: awssdk.String(name), Path: awssdk.String(c.conn.resolve(seatPath)),
 		AssumeRolePolicyDocument: awssdk.String(trust),
 		PermissionsBoundary:      awssdk.String(c.conn.resolve(policyARN(boundaryName))),
-		MaxSessionDuration:       awssdk.Int32(SeatSeconds),
+		MaxSessionDuration:       awssdk.Int32(roleMaxSeconds),
 		Description:              awssdk.String("Managed by Crewlet for agent " + strings.TrimSpace(handle) + ". Do not edit."),
 		Tags: []iamtypes.Tag{
 			{Key: awssdk.String("crewlet:managed-by"), Value: awssdk.String("crewlet")},

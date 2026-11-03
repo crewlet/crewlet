@@ -14,14 +14,20 @@ import (
 )
 
 // awsSeatIssuer issues each agent's AWS session at use: a certificate named
-// for the agent opens the broker, which assumes the agent's own role for an
-// hour. The session is never sealed; the box's credentials file holds it,
+// for the agent opens the broker, which assumes the agent's own role for 15
+// minutes. The session is never sealed; the box's credentials file holds it,
 // rewritten as it renews.
 type awsSeatIssuer struct {
 	issuer *awsint.Issuer
 }
 
 func (awsSeatIssuer) kind() integration.Kind { return integration.KindAWS }
+
+// awsLives is a seat session's: 15 minutes, renewed with 5 left, so a session
+// that survives an off and an on lasts a quarter of an hour at most.
+var awsLives = issuedLives{lifetime: time.Duration(awsint.SeatSeconds) * time.Second, renewBefore: 5 * time.Minute}
+
+func (awsSeatIssuer) lives() issuedLives { return awsLives }
 
 // variable is the agent's session variable while AWS is on and handle is an
 // agent's, issuable now or not.
@@ -51,7 +57,7 @@ func (a awsSeatIssuer) issuing(c *Company, seat *org.Role, env *config.Resolver)
 		if err != nil {
 			return issuedToken{}, err
 		}
-		return issuedToken{Token: token, ExpiresAt: creds.Expires, RenewAt: creds.Expires.Add(-toolTokenLife)}, nil
+		return issuedToken{Token: token, ExpiresAt: creds.Expires, RenewAt: creds.Expires.Add(-awsLives.renewBefore)}, nil
 	}
 }
 

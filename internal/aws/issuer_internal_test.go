@@ -14,13 +14,13 @@ import (
 )
 
 // AN AGENT'S SESSION IS ISSUED ONCE AND KEPT WHILE IT LASTS what a caller asks:
-// the lives the engine's shared paths ask (10 and 50 minutes) are served from
-// one issue, and a session that would run short is issued again.
+// the lives the engine asks of AWS (10 minutes at a launch, 5 at a tool) are
+// served from one issue, and a session that would run short is issued again.
 func TestTheIssuerKeepsASessionWhileItLasts(t *testing.T) {
 	t.Parallel()
 	var issued atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+		exp := time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339)
 		body, _ := io.ReadAll(r.Body)
 		if r.URL.Path == "/sessions" {
 			w.WriteHeader(http.StatusCreated)
@@ -43,18 +43,18 @@ func TestTheIssuerKeepsASessionWhileItLasts(t *testing.T) {
 	clock := time.Now()
 	i := &Issuer{now: func() time.Time { return clock }}
 	ctx := context.Background()
-	first, err := i.session(ctx, client, "sre", 50*time.Minute)
+	first, err := i.session(ctx, client, "sre", 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := i.session(ctx, client, "sre", 10*time.Minute); again.AccessKeyID != first.AccessKeyID || issued.Load() != 1 {
+	if again, _ := i.session(ctx, client, "sre", 5*time.Minute); again.AccessKeyID != first.AccessKeyID || issued.Load() != 1 {
 		t.Errorf("a held session was issued again: %d issues", issued.Load())
 	}
-	clock = clock.Add(55 * time.Minute)
-	if renewed, _ := i.session(ctx, client, "sre", 10*time.Minute); renewed.AccessKeyID == first.AccessKeyID || issued.Load() != 2 {
+	clock = clock.Add(11 * time.Minute)
+	if renewed, _ := i.session(ctx, client, "sre", 5*time.Minute); renewed.AccessKeyID == first.AccessKeyID || issued.Load() != 2 {
 		t.Errorf("a session running short was kept: %d issues", issued.Load())
 	}
-	if _, err := i.session(ctx, client, "sre", 2*time.Hour); err == nil {
+	if _, err := i.session(ctx, client, "sre", 50*time.Minute); err == nil {
 		t.Error("a life longer than a session was promised")
 	}
 }

@@ -15,7 +15,7 @@ import (
 
 // AWS's half of per-seat access. The seat's account is its IAM role, recorded
 // in the ledger by role ID; its access is the Crewlet level policies attached
-// to it; its credential is a session the engine issues at use for an hour,
+// to it; its credential is a session the engine issues at use for 15 minutes,
 // never sealed.
 //
 // DENY-ALL IS WHAT "OFF" MEANS. Off attaches AWS's deny-all policy first,
@@ -35,7 +35,7 @@ func (accessVendor) Kind() integration.Kind { return integration.KindAWS }
 
 // Catalog is AWS's per-seat offer: three fixed levels, no scope (the Regions
 // are the company's, set in the stack), nothing sealed and nothing to rotate,
-// since the session is issued at use for an hour.
+// since the session is issued at use for 15 minutes.
 func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
 		Kind: integration.KindAWS,
@@ -128,7 +128,7 @@ func (accessVendor) Steps(
 			"Delete its IAM role, which ends its sessions at once. CloudTrail keeps its entries")}
 	default:
 		// A mint, rotate, revoke or retire has nothing to take: the session
-		// is issued at use for an hour and never sealed.
+		// is issued at use for 15 minutes and never sealed.
 		return nil
 	}
 	for i := range out {

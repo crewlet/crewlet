@@ -19,10 +19,12 @@ const (
 	// sessionSeconds is how long the provisioner's and the broker's sessions
 	// last: the profile's own cap, an hour.
 	sessionSeconds int32 = 3600
-	// SeatSeconds is a seat session's life: an hour, the most a chained role
-	// session may last, and what the engine's shared issued paths ask of a
-	// credential (a launch is given one good for 50 minutes).
-	SeatSeconds int32 = 3600
+	// SeatSeconds is a seat session's life, STS's minimum: a session issued
+	// before an off that survives an on lasts a quarter of an hour at most.
+	SeatSeconds int32 = 900
+	// roleMaxSeconds is a seat role's maximum session, IAM's minimum for it;
+	// the engine asks for SeatSeconds within it.
+	roleMaxSeconds int32 = 3600
 	// renewBefore renews a cached session this long before it expires.
 	renewBefore = 10 * time.Minute
 )

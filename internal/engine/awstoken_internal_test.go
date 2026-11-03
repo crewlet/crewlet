@@ -130,3 +130,31 @@ func TestASeatsAWSServerIsSignedWithItsOwnSession(t *testing.T) {
 		}
 	}
 }
+
+// EACH ISSUER IS ASKED FOR ITS OWN LIVES: one that declares none keeps the hour
+// the shared paths have always asked (a launch 50 minutes, a tool or a refresh
+// 10), and AWS's 15-minute session is asked for 10 at a launch and 5 at a
+// tool's start, so a session never has to outlast what AWS issues.
+func TestEachIssuerIsAskedForItsOwnLives(t *testing.T) {
+	t.Parallel()
+	gh, aws := livesOf(githubSeatIssuer{}), livesOf(awsSeatIssuer{})
+	for _, tc := range []struct {
+		name      string
+		lives     issuedLives
+		ask, want time.Duration
+	}{
+		{"github at a launch", gh, runTokenLife, 50 * time.Minute},
+		{"github at a tool's start", gh, toolTokenLife, 10 * time.Minute},
+		{"github at a refresh", gh, refreshTokenLife, 10 * time.Minute},
+		{"aws at a launch", aws, runTokenLife, 10 * time.Minute},
+		{"aws at a tool's start", aws, toolTokenLife, 5 * time.Minute},
+		{"aws at a refresh", aws, refreshTokenLife, 5 * time.Minute},
+	} {
+		if got := tc.lives.ask(tc.ask); got != tc.want {
+			t.Errorf("%s: asked for %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if gh != defaultLives || aws.lifetime != 15*time.Minute || aws.renewBefore != 5*time.Minute {
+		t.Errorf("lives: github %+v, aws %+v", gh, aws)
+	}
+}

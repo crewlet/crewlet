@@ -1,5 +1,5 @@
 // Package aws is the AWS integration: each agent seat is its own IAM role in
-// the company's account, reached for an hour at a time and attributable in
+// the company's account, reached for 15 minutes at a time and attributable in
 // CloudTrail to that agent alone, at a level the company chooses.
 //
 // The engine holds no AWS secret. It generates a certificate authority, seals
