@@ -109,8 +109,10 @@ type Capture struct {
 }
 
 // Begin records a turn's first read of its conversation, and the base that read
-// froze: the session the turn's launches continue while it has kept none of its
-// own. Published once per turn, by its first launch, under [BeginOpID].
+// froze: the session the turn's launches are to continue while it has kept
+// none of its own. A turn's first launch is to publish it once, under
+// [BeginOpID]; no launch publishes one yet, so no row holds a base until one
+// does.
 //
 // THE BASE IS HELD BY THE TURN'S OWN ROW, never by a record about the base: the
 // applier is a pure function of the record and the rows, so the one place a
@@ -171,9 +173,9 @@ type End struct {
 
 // Delete removes one turn's row and tombstone past the retention, on the
 // turn's conversation's subject. Cutoff is the instant the row's own last
-// instant (its end's, else its newest capture's, else its tombstone's) must be
-// at or before for the delete to apply, so a turn captured again since the
-// duty nominated it stays.
+// instant (its end's, else its newest capture's, else its begin's, else its
+// tombstone's) must be at or before for the delete to apply, so a turn
+// captured again since the duty nominated it stays.
 //
 // ON A SEAT'S SUBJECT, with no turn and no conversation, it is the retention
 // of the seat's removal ([SeatDelete]) instead: the record of where the seat's

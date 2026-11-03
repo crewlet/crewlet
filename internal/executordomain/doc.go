@@ -1,8 +1,9 @@
 // Package executordomain is the state log's record of each seat's EXECUTOR
 // SESSIONS (ADR-0073): one row per (seat handle, turn) whose executor captured
 // its harness's session, naming the sealed object in the fleet's object
-// store that holds it (ADR-0026), on the `CREWLET_EXECUTOR_LOG` stream and
-// applied into every data node's replicated estate.
+// store that holds it (ADR-0026), or whose first launch recorded its read (a
+// `begin`, which no launch publishes yet), on the `CREWLET_EXECUTOR_LOG`
+// stream and applied into every data node's replicated estate.
 //
 // # Who has to agree on it
 //
@@ -104,26 +105,30 @@
 //
 // # A turn's first read holds its base
 //
-// A turn's launches continue the BASE its first read froze — the head it was
-// handed — for as long as the turn has kept no session of its own: a first
-// job lost with its box, before any capture, is relaunched into that same
-// base, on any node. Every release of an ended row could take it from under
-// that turn: another turn's end that was handed the same head absorbs it, an
-// end of the same unit of work dedupes it, a capture of any conversation of
-// the seat releases it past the budget, and the retention deletes it. The run
-// record that knows the base lives in the coordination store, which the
-// applier cannot read and a writer's decide reads racily, so the hold is put
-// where every release is decided: on the log, as the turn's OWN ROW.
+// A turn's launches are to continue the BASE its first read froze — the head
+// it was handed — for as long as the turn has kept no session of its own: a
+// first job lost with its box, before any capture, relaunched into that same
+// base, on any node. No launch does yet, and none publishes the `begin` below:
+// this package holds the record and the hold, and every release behaves as it
+// did until a launch takes them up. Every release of an ended row could take
+// the base from under that turn: another turn's end that was handed the same
+// head absorbs it, an end of the same unit of work dedupes it, a capture of
+// any conversation of the seat releases it past the budget, and the retention
+// deletes it. The run record that knows the base lives in the coordination
+// store, which the applier cannot read and a writer's decide reads racily, so
+// the hold is put where every release is decided: on the log, as the turn's
+// OWN ROW.
 //
 // So the `begin` writes the turn's row naming the base, and while that row is
-// live and has landed no capture it HOLDS the base: the budget's release, an
-// end's absorption and dedupe and the retention's delete each ask, of the one
-// row they are about to take, whether another live turn holds it, in log
-// order, and skip it if one does. A begin and every end and delete of the
+// live and has landed no capture it HOLDS the base: an end's absorption and
+// dedupe and the retention's delete each ask, of each row they are about to
+// take, whether another live turn holds it, and the budget's release reads the
+// seat's holds once before it walks the seat's ended sessions; each skips a
+// held row, in log order. A begin and every end and delete of the
 // conversation are arbitrated on one subject, so whichever lands first
 // decides: an end first leaves the begin no base to hold, and a begin first
 // is skipped by the end. A capture of another conversation is not arbitrated
-// against the begin, but its apply asks about the hold in log order, and its
+// against the begin, but its apply reads the holds in log order, and its
 // seat-wide scope contains the begin's, so a node that defers one defers the
 // other.
 //
@@ -185,9 +190,10 @@
 // no live run is one whose end was lost — and takes its tombstone with it,
 // which is a departure from the rule that a delete leaves one: by the retention
 // no record decided before the delete can still land ([removeTurn]). A turn
-// whose end was lost holds its session against the seat's budget until the
-// retention duty ends it as lost, a day after its last capture with no run of
-// it live (internal/engine's executor source). A person's removal does not
+// whose end was lost holds its session against the seat's budget, or the base
+// its begin named against every release, until the retention duty ends it as
+// lost, a day after its last record — its newest capture, or its begin — with
+// no run of it live (internal/engine's executor source). A person's removal does not
 // reach these rows in this release, as it did not reach the conversation
 // ledger they replace (ADR-0073).
 package executordomain

@@ -754,12 +754,13 @@ const unendedStatement = `
 	FROM executor_sessions WHERE end_seq IS NULL AND last_at <= ?
 	ORDER BY last_at, agent_handle, turn_id LIMIT ?`
 
-// Unended nominates at most limit turns that never ended and whose last
-// capture was at or before before, the longest untouched first: the retention
-// duty's listing of turns whose end may have been lost. It reads this node's
-// copy at `stale` and only nominates: the duty leaves out every turn whose run
-// the fleet still holds, and an end it publishes is decided again in its own
-// snapshot, where one that landed since refuses it.
+// Unended nominates at most limit turns that never ended and whose last record
+// (their newest capture, or the begin of a turn that captured nothing) was at
+// or before before, the longest untouched first: the retention duty's listing
+// of turns whose end may have been lost. It reads this node's copy at `stale`
+// and only nominates: the duty leaves out every turn whose run the fleet still
+// holds, and an end it publishes is decided again in its own snapshot, where
+// one that landed since refuses it.
 func (r *Reader) Unended(ctx context.Context, before time.Time, limit int) ([]Expiry, error) {
 	if limit <= 0 {
 		return nil, nil

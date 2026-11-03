@@ -19,10 +19,13 @@
 -- While the turn has kept no session of its own (`launch_seq` 0) and has not
 -- ended, its row HOLDS that base: no release takes it — the seat budget's,
 -- an end's absorption or work-key dedupe, the retention's delete — because the
--- turn's relaunch continues it. The hold lifts with the turn's first landed
--- capture or its end, both of which move the row out of the index below. Every
--- release path asks the index about the one row it is about to release, inside
--- the apply, rather than through a subquery of the statement that releases.
+-- turn's relaunch is to continue it. The hold lifts with the turn's first
+-- landed capture or its end, both of which move the row out of the index
+-- below. Each release decides it through the index inside the apply, rather
+-- than through a subquery of the statement that releases: an end's absorption
+-- and dedupe and the retention's delete ask it about each row they would take,
+-- the budget's release reads the seat's holds from it once before it walks the
+-- seat's ended sessions, and the retention's listing reads every hold once.
 --
 -- # What a capture says of its session
 --

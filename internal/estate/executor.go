@@ -21,24 +21,26 @@ import (
 //
 // Nobody asks for a turn's first read to be recorded, a session to be
 // captured, a turn to be ended, a session to be aged out or a removed seat's to
-// be taken away: the engine records what its own runs did. So every write here is ENGINE-ORIGINATED ([originEngine]): the
-// log is in no list of the domains a surface writes ([SurfaceWriteDomains]), so
-// the person's write surfaces have no refusal of it to class and no object of
-// it to name, and its writer facade ([ExecutorWrites]) is the engine's alone,
-// which a gate over the packages serving a person or a model holds.
+// be taken away: the engine records what its own runs did. So every write here
+// is ENGINE-ORIGINATED ([originEngine]): the log is in no list of the domains a
+// surface writes ([SurfaceWriteDomains]), so the person's write surfaces have
+// no refusal of it to class and no object of it to name, and its writer facade
+// ([ExecutorWrites]) is the engine's alone, which a gate over the packages
+// serving a person or a model holds. (No launch records a turn's first read
+// yet: the operation is declared, and the engine's first launch is to take it
+// up.)
 //
 // # Each write is the same operation however often it is asked
 //
 // Every write carries, on its [executordomain.Call], the operation id the
 // domain derives PER EXECUTION — a begin's from its turn, a capture's from its
 // turn, its launch and its ordinal, an end's from its turn, a retention
-// delete's from its turn and the
-// reaper's slot, a removed seat's from the seat and the instant its retirement
-// was marked — and the log's ledger answers a repeat with the first copy's
-// outcome. So every write is an [opIdempotentWrite]: one some data node never
-// answered, or answered unvouched, is asked of the next under the same id, and
-// [ErrOutcomeUnknown] is the caller's to retry under it, never under a fresh
-// one.
+// delete's from its turn and the reaper's slot, a removed seat's from the seat
+// and the instant its retirement was marked — and the log's ledger answers a
+// repeat with the first copy's outcome. So every write is an
+// [opIdempotentWrite]: one some data node never answered, or answered
+// unvouched, is asked of the next under the same id, and [ErrOutcomeUnknown] is
+// the caller's to retry under it, never under a fresh one.
 //
 // # Reads at the caller's level, on this log's floor
 //
@@ -381,7 +383,8 @@ func (x ExecutorReads) Expired(ctx context.Context, cutoff time.Time, limit int)
 }
 
 // Unended answers the turns whose end may have been lost: at most limit that
-// never ended and were last captured at or before before.
+// never ended and whose last record (a capture, or the begin of a turn that
+// captured nothing) was at or before before.
 func (x ExecutorReads) Unended(ctx context.Context, before time.Time, limit int) (
 	[]executordomain.Expiry, error) {
 	return call(ctx, x.r, opExecutorUnended, nil, executorListingArgs{At: before, Limit: limit})
