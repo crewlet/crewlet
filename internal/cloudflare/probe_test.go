@@ -12,9 +12,11 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// check is a Test-button press with what the form holds.
+// check is a Test-button press with what the form holds, against a company
+// naming one zone the fake account has.
 func check(values map[string]string) setup.Check {
-	return setup.Check{Field: "api_token", Value: func(field string) string { return values[field] }}
+	return setup.Check{Field: "api_token", Value: func(field string) string { return values[field] },
+		Zones: []string{zoneExampleName}}
 }
 
 func probe(t *testing.T, f *fakeCloudflare, values map[string]string) (setup.Verdict, error) {
@@ -73,6 +75,9 @@ func TestTheProbeNamesWhatIsWrong(t *testing.T) {
 				func(g cloudflare.GroupRef) bool { return g.ID == groupID("Cache Purge") })
 			f.provisionerOwn = []cloudflare.Policy{own}
 		}, typed, setup.VerifyRefused, `missing "Cache Purge"`},
+		{"a zone the account lacks", func(f *fakeCloudflare) {
+			f.zones = slices.DeleteFunc(f.zones, func(z cloudflare.Zone) bool { return z.Name == zoneExampleName })
+		}, typed, setup.VerifyRefused, `no zone named "example.com"`},
 		{"Cloudflare down", func(f *fakeCloudflare) { f.refuse["verify"] = http.StatusServiceUnavailable }, typed,
 			setup.VerifyUnreachable, "could not say"},
 	} {

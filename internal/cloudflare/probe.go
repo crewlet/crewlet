@@ -20,8 +20,9 @@ const probeCallTimeout = 5 * time.Second
 
 // Probe checks a typed provisioner token against its account before anything
 // stores it, with reads only: the token is active, it can read the account's
-// permission groups and zones, every group an agent level grants resolves,
-// and the token holds each of them itself.
+// permission groups and zones, every zone the company names exists, every
+// group an agent level grants resolves, and the token holds each of them
+// itself.
 //
 // httpClient is nil in production; a test hands one that reaches a fake.
 func Probe(httpClient *http.Client) setup.Probe {
@@ -44,11 +45,16 @@ func Probe(httpClient *http.Client) setup.Probe {
 		}
 		ctx, cancel := context.WithTimeout(ctx, setup.VerifyBudget)
 		defer cancel()
-		in, err := inspect(ctx, client, nil, func(ctx context.Context) (context.Context, context.CancelFunc) {
+		in, err := inspect(ctx, client, check.Zones, func(ctx context.Context) (context.Context, context.CancelFunc) {
 			return context.WithTimeout(ctx, probeCallTimeout)
 		})
 		if err != nil {
 			return probeVerdict(ctx, err, token), nil
+		}
+		if missing := in.cat.missingZones; len(missing) > 0 {
+			return setup.Refused("The token works, but it reads no zone named " + words.And(missing) +
+				" in the account. Correct integrations.cloudflare.provisioning.zones, or give the " +
+				"token access to the zone at Cloudflare."), nil
 		}
 		if len(in.unresolved) > 0 {
 			var parts []string

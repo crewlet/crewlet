@@ -69,6 +69,14 @@ func (r *RoleCloudflare) LevelOrDefault() string {
 	return CloudflareLevelRead
 }
 
+// ZoneNames is the zones the block names, nil-safe: nil is every zone.
+func (c *Cloudflare) ZoneNames() []string {
+	if c == nil || c.Provisioning == nil {
+		return nil
+	}
+	return c.Provisioning.Zones
+}
+
 // cloudflareAccountID is the shape Cloudflare gives every account identifier.
 var cloudflareAccountID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
