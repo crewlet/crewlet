@@ -194,6 +194,7 @@ export const INTEGRATION_TOOLS = {
   github: ["github"],
   gitlab: ["gitlab"],
   datadog: ["datadog"],
+  expo: ["expo"],
 } as const;
 
 /**

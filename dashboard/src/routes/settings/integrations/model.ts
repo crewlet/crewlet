@@ -117,6 +117,16 @@ export const STORIES: Record<string, ToolStory> = {
     ],
     identity: "Crewlet makes a service account for each agent.",
   },
+  expo: {
+    does: [
+      "Read EAS builds, their logs and submissions",
+      "Start builds and publish updates, where you allow it",
+      "Use the EAS CLI as themselves, with no login",
+    ],
+    identity: "Crewlet makes an Expo robot user for each agent, with its own access token.",
+    byHand:
+      "Create an access token for Crewlet with the Admin role on your Expo account, so it can manage the agents' robot users.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */

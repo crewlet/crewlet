@@ -18,6 +18,7 @@ import { AgentsAccess } from "./AgentsAccess.tsx";
 import {
   confluenceAnswer,
   datadogAnswer,
+  expoAnswer,
   githubAnswer,
   jiraAnswer,
   mattermostAnswer,
@@ -194,6 +195,56 @@ test("the review says the change as one line and the steps by who takes them", a
   expect(review.querySelector(".crewlet-change-list--inline")).toBeTruthy();
   expect(within(review).getByText("Off").closest(".crewlet-tag")).toBeTruthy();
   expect(screen.queryByText(/the next sync will:/)).toBeNull();
+});
+
+// AN EXPO SEAT IS A ROBOT USER: the details name it, the role it holds in
+// Expo's own word, the variable its token is sealed in and the CLI it drives.
+test("an Expo seat's details name its robot, its role and the CLI it uses", () => {
+  draw(expoAnswer());
+  details("QA", "Expo");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="QA on Expo"]')!);
+  expect(facts.getByText("crewlet-gophrase-qa")).toBeTruthy();
+  expect(facts.getByText("Role at Expo")).toBeTruthy();
+  expect(facts.getByText("Developer")).toBeTruthy();
+  expect(facts.getByText("EXPO_TOKEN_QA")).toBeTruthy();
+  expect(facts.getByText("Live, EAS CLI in its box, as EXPO_TOKEN")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Rotate credential" })).toBeTruthy();
+  expect(screen.queryByText("No Expo tool for its agents")).toBeNull();
+});
+
+// AN EXPO SEAT'S TOOL IS ITS BOX, NOT A SERVER: one whose sandbox env hands the
+// EAS CLI nothing is told the line to add there, never to declare a server.
+test("an Expo agent with no tool is told to set EXPO_TOKEN in its sandbox env", () => {
+  draw(expoAnswer({ tool: "no_server" }));
+  expect(screen.getByText("No Expo tool for its agents")).toBeTruthy();
+  const advice = screen.getByText(/QA has an account at Expo and nothing to use it with/);
+  expect(advice.textContent).toContain('Add EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"');
+  expect(advice.textContent).not.toMatch(/tool server/);
+});
+
+// AN EXPO ROBOT IS DELETED, NOT DISABLED: nothing is left at Expo to turn
+// back on, so the review says a new robot is created instead.
+test("turning an Expo seat off says the token and the robot are deleted", async () => {
+  draw(expoAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Expo" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      /Crewlet deletes the robot's access token, so it stops working at once/,
+    ),
+  ).toBeTruthy();
+});
+
+test("rotating an Expo token says a new one is created before the old one is deleted", async () => {
+  draw(expoAnswer());
+  details("QA", "Expo");
+  fireEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
+  const dialog = screen.getByRole("alertdialog", { name: "Rotate QA's Expo credential?" });
+  expect(within(dialog).getByText(/creates a new access token for the robot/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Rotate credential" }));
+  await waitFor(() =>
+    expect(calls.act).toEqual([{ kind: "expo", handle: "qa", lane: "expo", action: "rotate" }]),
+  );
 });
 
 test("turning a seat off says in the review what that does at the vendor", async () => {

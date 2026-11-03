@@ -12,7 +12,9 @@
  * (a Datadog role id; a GitLab `access_level` such as "30", or
  * "member_role:<id>"; a Jira project role id; a Confluence space role id, or
  * sorted "<op>:<target>" permissions; Mattermost roles such as "system_user
- * system_post_all_public") and is drawn under the vendor's exact name, which
+ * system_post_all_public"; Expo's `viewer`, `runner`, `developer` or
+ * `release_manager`, each a set of Expo permissions named for the Expo role
+ * that holds them) and is drawn under the vendor's exact name, which
  * `options` carries. Datadog's, Jira's and Confluence's lists are read live
  * from the vendor, so no list of them lives here. GitHub has no levels; a
  * seat holds GitHub App permissions.
@@ -23,7 +25,7 @@ export type GitHubAccess = "read" | "write";
 
 /** One product a seat can be on: Atlassian has two, every other integration one. */
 export type AccessLaneKey =
-  "datadog" | "github" | "gitlab" | "jira" | "confluence" | "slack" | "mattermost";
+  "datadog" | "github" | "gitlab" | "jira" | "confluence" | "slack" | "mattermost" | "expo";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";

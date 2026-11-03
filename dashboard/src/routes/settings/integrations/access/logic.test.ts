@@ -8,10 +8,12 @@ import { describe, expect, test } from "vitest";
 import {
   CONFLUENCE_LANE,
   DATADOG_LANE,
+  EXPO_LANE,
   JIRA_LANE,
   GITHUB_LANE,
   MATTERMOST_LANE,
   datadogAnswer,
+  expoAnswer,
   offLane,
   onLane,
 } from "./fixtures.ts";
@@ -22,6 +24,7 @@ import {
   emptyScopeHint,
   joinLevels,
   levelName,
+  noToolRemedy,
   productOnly,
   refusedLevel,
   scopeApplies,
@@ -117,6 +120,25 @@ test("the tool reads as one value", () => {
   );
   expect(toolWords(DATADOG_LANE, { ...sre(), tool: "server_off" })).toBe(
     "Not running: the datadog tool server is turned off",
+  );
+});
+
+// EXPO'S TOOL IS THE EAS CLI IN THE AGENT'S OWN BOX, with no tool server to
+// start: an on seat reads as the CLI it drives, its level as Expo's role name,
+// and a seat whose sandbox env hands the CLI nothing is told the line to add.
+test("an Expo seat's tool is the EAS CLI in its box, and its level is Expo's role", () => {
+  const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
+  expect(toolWords(EXPO_LANE, qa)).toBe("Live, EAS CLI in its box, as EXPO_TOKEN");
+  expect(toolWords(EXPO_LANE, { ...qa, tool: "no_server" })).toBe(
+    "Not set up: its sandbox env does not set EXPO_TOKEN",
+  );
+  expect(noToolRemedy("expo")).toContain('Add EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"');
+  expect(noToolRemedy("expo")).not.toMatch(/tool server/);
+  expect(noToolRemedy("datadog")).toMatch(/^the company declares no datadog tool server\./);
+  expect(accessWords(EXPO_LANE, qa.observed)).toBe("Developer");
+  expect(availableActions(EXPO_LANE, qa, false, false)).toEqual(["rotate"]);
+  expect(offSentence(EXPO_LANE, offLane("viewer"))).toBe(
+    "Off. Turning it on creates an Expo robot user for the agent with the chosen role, and its own access token.",
   );
 });
 

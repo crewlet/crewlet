@@ -165,6 +165,7 @@ flowchart LR
 | Mattermost | `{username_prefix}{handle}`, and the token description `crewlet-<handle>` | the bot's **display name**, patched to `{role name}{display_name_suffix}` on every pass |
 | GitLab | `{username_prefix}-{handle}`, and the token name `crewlet-<handle>` | — |
 | Datadog | the account address, `crewlet-<handle>@{email_domain}` | — |
+| Expo | the robot user's name, `crewlet-<company>-<handle>`, beside the robot and token IDs the engine records when it creates them | Nothing |
 | Atlassian | the marker inside the display name, `{role} (crewlet:<handle>)` | the `{role}` label in front of the marker |
 
 ## What the loop does, and what it leaves alone
