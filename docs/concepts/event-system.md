@@ -321,7 +321,8 @@ executor_stopped        # a run a person ended by pausing its seat with
                            # recorded, like a loss — but never a failure
 executor_answered       # what an answer to a parked run's question became
                            # (resumed | not_awaiting | gone | declined |
-                           # unoffered), by
+                           # unoffered | too_large, with answer_bytes and
+                           # answer_max_bytes), by
                            # which route
                            # (chat | operator) and from whom. The operator
                            # route travels as an inbox wake

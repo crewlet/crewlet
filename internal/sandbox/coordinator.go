@@ -2389,7 +2389,8 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 //   - The reply is past what the run's row carries as an answer
 //     ([ErrAnswerTooLarge], [MaxAnswerBytes]): [AnswerNotMine]. Nothing was
 //     written, so nothing is owed it but the ordinary message it is, which
-//     keeps every word of it; the run waits on its question.
+//     keeps every word of it; the run waits on its question, and the reply's
+//     author is told so ([types.AnswerTooLarge]).
 //   - The answer could not be recorded: [AnswerDeferred]. The write MAY have
 //     landed, so this is the ambiguous case, resolved towards the run — the
 //     delivery comes back and, if the record did land, is recognised as the
@@ -2453,16 +2454,26 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 			return AnswerNotMine, nil
 		}
 		recorded, won, err := c.recordAnswer(ctx, run, reply)
-		if errors.Is(err, ErrAnswerTooLarge) {
+		if tooLarge, ok := errors.AsType[*AnswerTooLargeError](err); ok {
 			// NO ANSWER THE ROW CAN CARRY ([MaxAnswerBytes]), and so not the
 			// run's: nothing was written, and the reply goes its way as the
 			// ordinary message it is — every word of it reaches the seat,
 			// which a cut answer or a reply dropped at the broker would not.
 			// The run waits on its question.
+			//
+			// AND ITS AUTHOR IS TOLD SO, with what it weighed and what an
+			// answer may ([types.AnswerTooLarge]): the reply was written as
+			// the answer, and a person who reads no word of it being taken
+			// takes the run to be carrying on with it — and the next thing
+			// they say in the conversation, a "any luck?", is what the
+			// question is answered with.
 			log.WarnContext(ctx, "sandbox_answer_too_large", "turn_id", run.TurnID, "agent", handle,
 				"conversation", reply.Conv.Identity, "error", err.Error(),
 				"detail", "a reply past what a run's row carries as its answer is handled as the "+
-					"ordinary message it is, and the run waits on its question")
+					"ordinary message it is, its author is told, and the run waits on its question")
+			by := chatAnswerer(trigger)
+			by.tooLarge = tooLarge
+			c.announceAnswered(ctx, run, types.AnswerViaChat, types.AnswerTooLarge, by)
 			return AnswerNotMine, nil
 		}
 		if errors.Is(err, ErrSeatNotHeld) {
@@ -2936,6 +2947,9 @@ func answeredAs(disposition AnswerDisposition) types.AnswerOutcome {
 type answerer struct {
 	by, kind, operatorID string
 	choice, said         string
+	// tooLarge is what a reply too large to be recorded as the answer
+	// weighed, and what an answer may weigh ([types.AnswerTooLarge]).
+	tooLarge *AnswerTooLargeError
 }
 
 // chatAnswerer is who a chat reply came from: the sender as the transport's
@@ -2969,6 +2983,9 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 		LaunchID: run.LaunchID, Question: run.Question, QuestionContext: run.QuestionContext,
 		Decision: run.Decision, AudienceHandles: slices.Clone(run.AudienceHandles),
 		Choice: by.choice, Answer: by.said,
+	}
+	if by.tooLarge != nil {
+		payload.AnswerBytes, payload.AnswerMaxBytes = by.tooLarge.Weighs, by.tooLarge.May
 	}
 	if !run.AskedAt.IsZero() {
 		payload.AskedAt = run.AskedAt.UTC()

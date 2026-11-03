@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // chatReply is a chat delivery offered as an answer: the conversation it came
@@ -452,17 +453,22 @@ func askedOf(req ResumeRequest) AskedRun {
 	return *req.Asked
 }
 
-// A REPLY PAST WHAT THE ROW CARRIES AS AN ANSWER GOES ITS WAY AS A MESSAGE. A
-// reply is recorded on the run's row as its answer, sealed and with every
-// delivery it was made of, and a batch of long messages in markup weighs
-// megabytes there — once more as the copies a decline would owe. The store
-// refuses such an answer by name (MaxAnswerBytes) before anything is written,
-// and the coordinator hands the reply on as the ordinary message it is: every
-// word of it reaches the seat, the run waits on its question, and nothing
-// retries a record no attempt could land.
+// A REPLY PAST WHAT THE ROW CARRIES AS AN ANSWER GOES ITS WAY AS A MESSAGE, AND
+// ITS AUTHOR IS TOLD. A reply is recorded on the run's row as its answer,
+// sealed and with every delivery it was made of, and a batch of long messages
+// in markup weighs megabytes there — once more as the copies a decline would
+// owe. The store refuses such an answer by name (MaxAnswerBytes) before
+// anything is written, and the coordinator hands the reply on as the ordinary
+// message it is: every word of it reaches the seat, the run waits on its
+// question, and nothing retries a record no attempt could land. And the
+// reply's author is told it was not taken as the answer, with what it weighed
+// and what an answer may: written as the answer, a reply nobody said a word
+// about reads as one the run carries on with, and whatever its author says next
+// in the conversation would answer the question in its place.
 //
 // Mutation: defer the reply as a record that may have landed, and it is held
-// back from the seat and tried again, refused every time.
+// back from the seat and tried again, refused every time; drop the
+// announcement, and its author is told nothing.
 func TestAReplyPastWhatTheRowCarriesAsAnAnswerGoesItsWayAsAMessage(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -481,5 +487,16 @@ func TestAReplyPastWhatTheRowCarriesAsAnAnswerGoesItsWayAsAMessage(t *testing.T)
 	}
 	if n := len(rig.resumer.calls()); n != 0 {
 		t.Fatalf("%d resumes ran on a reply that was never the run's answer", n)
+	}
+	told := rig.answeredRecords()
+	if len(told) != 1 {
+		t.Fatalf("announced %d answers, want the reply's author told once", len(told))
+	}
+	if got := told[0]; got.Outcome != types.AnswerTooLarge || got.Via != types.AnswerViaChat ||
+		got.TurnID != "t1" || got.AnsweredBy == "" || got.AnswerMaxBytes != MaxAnswerBytes ||
+		got.AnswerBytes <= MaxAnswerBytes || got.Answer != "" {
+		t.Errorf("the reply's author was told %+v, want %q on the chat route, by its sender, with what it "+
+			"weighed past the %d an answer may and none of its words", got, types.AnswerTooLarge,
+			MaxAnswerBytes)
 	}
 }
