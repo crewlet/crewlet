@@ -27,7 +27,8 @@ import {
   type IntegrationTool,
   type IntegrationToolState,
 } from "~/contract/integrations.ts";
-import { repoRoot } from "~/test/engineFiles.ts";
+import { headingAnchors, repoRoot } from "~/test/engineFiles.ts";
+import { LANE_WORDS } from "./access/words.ts";
 
 afterEach(cleanup);
 
@@ -189,6 +190,22 @@ test("every Learn more names an engine page, spelled as the site serves it", () 
     const page = join(repoRoot(), "docs", "integrations", `${entry.doc}.md`);
     expect(existsSync(page), `${entry.key}: ${page}`).toBe(true);
     expect(docHref(entry)).toBe(`https://docs.crewlet.ai/engine/latest/integrations/${entry.doc}/`);
+  }
+});
+
+// A LANE'S DOCS LINK OPENS A SECTION ITS PAGE RENDERS. The Agents tab points an
+// empty project list at the section that prepares one, composed from the
+// lane's words, so a renamed heading is a dead anchor nothing else would see.
+// Mutation: rename the heading in the page, or the anchor here, and this goes red.
+test("every docs section a lane links to is a heading on that page", () => {
+  const links = Object.entries(LANE_WORDS).flatMap(([lane, words]) =>
+    words.scope?.noneLink ? [{ lane, ...words.scope.noneLink }] : [],
+  );
+  expect(links.length).toBeGreaterThan(0);
+  for (const { lane, doc, anchor } of links) {
+    const page = join(repoRoot(), "docs", "integrations", `${doc}.md`);
+    expect(existsSync(page), `${lane}: ${page}`).toBe(true);
+    expect(headingAnchors(page).has(anchor), `${lane}: #${anchor}`).toBe(true);
   }
 });
 
