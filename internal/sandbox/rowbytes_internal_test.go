@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -329,13 +330,26 @@ func worstRow(t *testing.T) PendingRun {
 		Condensed: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
 			CacheWrite: math.MaxInt}}
 	state := `"` + plain(ExecuteStateBytes-2) + `"`
+	// THE OWED END AS ITS WRITER PUTS IT ON THE ROW ([owedEnd]): every prose
+	// field past its bound in markup, fitted to the executor log's, and every
+	// other at the log's own bound.
+	end, err := owedEnd(plain(64), executordomain.Ending{Outcome: executordomain.OutcomeCompleted,
+		Decision: plain(executordomain.WordMaxBytes), Delivered: true,
+		DeliveredTo: plain(executordomain.WordMaxBytes), Answer: plain(executordomain.WordMaxBytes),
+		DeliveryUnknown: true, CompletedWork: markup(1 << 20), BlockedOn: markup(1 << 20),
+		StoppedBy: markup(executordomain.ActorMaxBytes), StopReason: markup(1 << 20), Failure: markup(1 << 20),
+		Unkept: &executordomain.Unkept{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
+			Reason: markup(1 << 20)}})
+	if err != nil {
+		t.Fatalf("the worst owed end: %v", err)
+	}
 	run := PendingRun{
 		TurnID: plain(64), WorkKey: plain(64), WorkSince: worstAt,
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
 		SandboxID: plain(128), Harness: plain(32), Placement: plain(64), CommandID: plain(128),
 		Status: StatusAnswered, LaunchID: uuid.NewString(), LaunchSeq: math.MaxInt64,
 		Capture: capture, Kept: capture, Handed: plain(MaxHandedBytes*4/3 + 1<<10),
-		OwedEnd: json.RawMessage(`"` + plain(128<<10) + `"`), EndRecorded: true,
+		OwedEnd: end, EndRecorded: true,
 		PriorCalls: make([]string, MaxPriorCalls), PriorCallsElided: true,
 		Launch: launch, Owner: plain(128), OwnerEpoch: math.MaxInt64,
 		TaskDescription: keptTitle(markup(1 << 20)), Label: keptTitle(markup(1 << 20)),

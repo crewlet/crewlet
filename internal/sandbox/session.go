@@ -1640,10 +1640,18 @@ func turnEndOf(run PendingRun, ending executordomain.Ending) TurnEnd {
 // one a drain is cancelling, and an end that frame could not owe was recorded
 // at once instead — before the turn's captures settled, and without what they
 // came to.
+//
+// FITTED TO THE EXECUTOR LOG'S BOUNDS BEFORE IT RIDES THE ROW
+// ([executordomain.Ending.Fit]): its prose is a model's and a guard's — a
+// reviewer's completed work, a failure's text — which nothing bounds before
+// here, and the row's budget measures an owed end as this writes it, every
+// prose field at its cap escaped at its worst (rowbytes.go,
+// TestTheWholeRowFitsItsBudget). The log fits it the same way when it records
+// it, so what the row owes is what the log will hold.
 func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executordomain.Ending) (bool, error) {
-	raw, err := json.Marshal(ending)
+	raw, err := owedEnd(turnID, ending)
 	if err != nil {
-		return false, fmt.Errorf("sandbox: encoding the end of turn %s: %w", turnID, err)
+		return false, err
 	}
 	ctx, cancel := detached(ctx)
 	defer cancel()
@@ -1654,13 +1662,31 @@ func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executor
 	return len(owing.OwedEnd) > 0 || owing.EndRecorded, nil
 }
 
+// owedEnd is ending as the run's row owes it ([PendingRun.OwedEnd]): fitted to
+// the executor log's bounds, and refused where even fitted it is past the
+// largest record the log takes ([executordomain.MaxRecordBytes]) — which no
+// fitted ending is, the log's own caps test holds, and which the log would
+// refuse it for anyway — so the row never carries an end the log cannot
+// record, nor one past what its budget measured.
+func owedEnd(turnID string, ending executordomain.Ending) (json.RawMessage, error) {
+	raw, err := json.Marshal(ending.Fit())
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: encoding the end of turn %s: %w", turnID, err)
+	}
+	if len(raw) > executordomain.MaxRecordBytes {
+		return nil, fmt.Errorf("sandbox: the end of turn %s weighs %d bytes with its prose fitted, past the "+
+			"%d the executor log records", turnID, len(raw), executordomain.MaxRecordBytes)
+	}
+	return raw, nil
+}
+
 // oweEnd is [Coordinator.OweEnd] for an ending's own step: the row as it stands
 // after the write, owing the end it decided or one decided before it, or
 // having recorded one already.
 func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executordomain.Ending) (PendingRun, error) {
-	raw, err := json.Marshal(ending)
+	raw, err := owedEnd(run.TurnID, ending)
 	if err != nil {
-		return PendingRun{}, fmt.Errorf("sandbox: encoding the end of turn %s: %w", run.TurnID, err)
+		return PendingRun{}, err
 	}
 	owing, _, err := c.pending.OweEnd(ctx, run.TurnID, raw)
 	if err != nil {

@@ -17,7 +17,7 @@ import (
 //
 // EVERY FIELD IS OPTIONAL AND BOUNDED: the engine fills what the way a turn
 // ended establishes, and the writer refuses an engine word past its bound and
-// cuts model-written prose to its own ([Ending.fit]), so an ending never makes
+// cuts model-written prose to its own ([Ending.Fit]), so an ending never makes
 // its record larger than the log's declared bound.
 
 // Outcome is how a turn ended, in the engine's four words.
@@ -124,7 +124,7 @@ func (u Unkept) supersedes(launch, capture int64) bool {
 
 // validate refuses an ending the engine could not mean: an unknown outcome,
 // an engine word past [WordMaxBytes] or not UTF-8. Prose is not refused here;
-// [Ending.fit] cuts it.
+// [Ending.Fit] cuts it.
 func (e Ending) validate() error {
 	if !e.Outcome.Valid() {
 		return invalid("the ending's outcome %q is not one of %s", e.Outcome, words.Or(Outcomes))
@@ -161,10 +161,16 @@ func (e Ending) validate() error {
 	return nil
 }
 
-// fit is the ending with every prose field cut to its bound on a rune
+// Fit is the ending with every prose field cut to its bound on a rune
 // boundary, marked where it was cut ([textcut.Within], so the marker is inside
 // the bound the record is held to).
-func (e Ending) fit() Ending {
+//
+// EXPORTED FOR THE OTHER RECORD AN ENDING RIDES before this log's: a turn's
+// end is owed on its run's row until the run's ending records it here
+// (internal/sandbox's OweEnd), and that row is held to a byte budget that
+// counts an owed end at this log's bound — so the ending is fitted where it
+// is owed, not first where it is recorded.
+func (e Ending) Fit() Ending {
 	e.CompletedWork = textcut.Within(e.CompletedWork, CompletedWorkMaxBytes)
 	e.BlockedOn = textcut.Within(e.BlockedOn, BlockedOnMaxBytes)
 	e.StopReason = textcut.Within(e.StopReason, StopReasonMaxBytes)
@@ -179,7 +185,7 @@ func (e Ending) fit() Ending {
 
 // within reports whether every field of the ending is inside its bound: what
 // the applier holds a record to before it writes one through, so a writer
-// that skipped [Ending.fit] writes nothing rather than an unbounded row.
+// that skipped [Ending.Fit] writes nothing rather than an unbounded row.
 func (e Ending) within() bool {
 	return e.Outcome.Valid() &&
 		len(e.Decision) <= WordMaxBytes && len(e.DeliveredTo) <= WordMaxBytes &&

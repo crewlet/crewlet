@@ -744,7 +744,7 @@ func (w *Writer) End(ctx context.Context, c Call, n NewEnd) (statelog.Result, er
 	p := End{
 		V: baseRecordVersion, Handle: n.Handle, Turn: n.Turn,
 		ConversationKey: n.ConversationKey, WorkKey: n.WorkKey,
-		AskExcerpt: textcut.Within(n.Ask, AskExcerptMaxBytes), Ending: n.Ending.fit(),
+		AskExcerpt: textcut.Within(n.Ask, AskExcerptMaxBytes), Ending: n.Ending.Fit(),
 	}
 	subject := ConversationSubject(n.Handle, n.ConversationKey, n.Turn)
 	scope := ScopeSet{Subject: true}
@@ -816,7 +816,7 @@ func (w *Writer) EndLost(ctx context.Context, c Call, handle, conversationKey, t
 		return statelog.Result{}, err
 	}
 	p := End{V: baseRecordVersion, Handle: handle, Turn: turn,
-		ConversationKey: conversationKey, Ending: n.Ending.fit()}
+		ConversationKey: conversationKey, Ending: n.Ending.Fit()}
 	subject := ConversationSubject(handle, conversationKey, turn)
 	scope := ScopeSet{Subject: true}
 	limit := store.EncodeTime(before)
