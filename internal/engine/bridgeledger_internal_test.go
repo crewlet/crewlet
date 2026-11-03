@@ -29,7 +29,7 @@ import (
 )
 
 // appendingStore is a pending store that records each bridged append and
-// answers it as a row holding job "launch-1" would.
+// answers it as a run's log open for job "launch-1" would.
 type appendingStore struct {
 	sandbox.PendingStore
 	mu      sync.Mutex
@@ -119,12 +119,12 @@ func TestAnUnboundBridgeSessionFilesNothing(t *testing.T) {
 }
 
 // A BRIDGED CALL'S ROW SAYS WHEN IT RAN, FOR HOW LONG, IN WHAT ORDER, WHO
-// ANSWERED AND WHAT IT WAS — everything the bridge measured, in the row's own
+// ANSWERED AND WHAT IT WAS — everything the bridge measured, in the log's own
 // shape, so a resumed executor's record can place its calls on a timeline, in
 // the order the run made them, and name the server each came from — read off
-// the row, which is the only place a collection, often another process, can
+// the log, which is the only place a collection, often another process, can
 // read them; and the identity the bridge admitted it under, which a later
-// segment's call log counts it by whatever the row keeps of its arguments.
+// segment's call log counts it by whatever the log keeps of its arguments.
 //
 // Mutation: drop any of the six from the append, and this goes red.
 func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
@@ -151,15 +151,15 @@ func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	}
 }
 
-// WHAT A ROW KEPT OF A CALL IS WHAT THE RESUMED TURN READS: its identity on the
-// turn's record of the call, and the size of the whole arguments and output
-// where the row kept less, which the collection's replay decides by — and the
-// calls the row dropped, by identity, in the turn's own shape.
+// WHAT THE LOG KEPT OF A CALL IS WHAT THE RESUMED TURN READS: its identity on
+// the turn's record of the call, and the size of the whole arguments and output
+// where the log kept less, which the collection's replay decides by — and the
+// calls the log dropped, by identity, in the turn's own shape.
 //
 // Mutation: drop the digest or either size on the way to the runner, or the
 // tally, and a resumed segment seeds a cut call as another and replays a cut
 // submission as the run's.
-func TestWhatARowKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
+func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 	t.Parallel()
 	got := bridgedCalls([]sandbox.BridgeCall{{Name: "code_commit_files",
 		Args:   `{"content":"(1.0 MiB not kept on the run's record, digest 1a2b3c4d)","path":"a.go"}`,
@@ -210,7 +210,7 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 	}
 }
 
-// A RUN'S SUBMISSION, ONCE ON ITS ROW, TELLS THE WAITER THAT DRIVES IT TO LOOK
+// A RUN'S SUBMISSION, ONCE IN ITS LOG, TELLS THE WAITER THAT DRIVES IT TO LOOK
 // NOW: its harness is about to exit, and its completion is found within seconds of
 // that rather than up to a poll interval later. Only the submission, only one
 // the gate let through, and only one recorded on the run's own job — a
@@ -218,7 +218,7 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 // that is over.
 //
 // Mutation: nudge on every recorded call, on a refused submission or ask, or
-// on one the row did not take, and this goes red.
+// on one the log did not take, and this goes red.
 func TestARecordedSubmissionTellsTheRunsWaiterToLookNow(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -398,18 +398,18 @@ func TestACallTheLogTookIsNeverOwedWhateverBecameOfItsSpend(t *testing.T) {
 }
 
 // A BRIDGED CALL'S RECORD THAT DID NOT LAND IS TRIED AGAIN, AND THEN OWED,
-// WHOLE. The call has run and its answer goes back to the box whatever the row
-// says, but a call missing from the row is one a resumed segment's call log
+// WHOLE. The call has run and its answer goes back to the box whatever the log
+// says, but a call missing from the log is one a resumed segment's call log
 // never counts — and a later call asking for something else then derives its
 // operation id. So a failed append is tried again before the answer goes back,
 // which rides a store's blip; and an append whose every attempt failed is owed
-// as the append it was — the call, kept as the row would keep it, and what its
-// own work absorbed — and carried by the session's next append, which the row
+// as the append it was — the call, kept as the log would keep it, and what its
+// own work absorbed — and carried by the session's next append, which the log
 // lists it from once whether or not one of those attempts landed after all.
 //
 // Mutation: append once and give up, and a blip loses the call; drop a call
 // whose attempts all failed, or owe it by identity alone, and the next append
-// carries nothing the row can list.
+// carries nothing the log can list.
 func TestABridgedCallsRecordThatDidNotLandIsTriedAgainAndThenOwed(t *testing.T) {
 	t.Parallel()
 	blip := &flakyStore{fail: func(attempt int, _ sandbox.BridgeAppend) bool { return attempt == 1 }}
@@ -660,7 +660,7 @@ func TestARunsCollectionHasItsJobsOwedCallsCarriedFirst(t *testing.T) {
 
 // A CARRY THAT CANNOT LAND IS SAID, AND KEPT WHILE IT MIGHT STILL. One the store
 // does not take within its bound is still owed, for the session's next append
-// or its next carry; one the store answers for a row that has moved on — the
+// or its next carry; one the store answers for a log that has moved on — the
 // run's next job replaced this one — is forgotten, since no record of the run
 // will ever take it.
 //
@@ -685,7 +685,7 @@ func TestACarryThatCannotLandIsKeptWhileItMightStill(t *testing.T) {
 }
 
 // movingStore is a pending store whose bridged appends fail while it is down,
-// and which answers an append for a job its row no longer holds once the row
+// and which answers an append for a job its log no longer takes once the log
 // has moved on — a relaunch replaced the job, or the run ended — as the store
 // does: taken, and landed nowhere.
 type movingStore struct {
@@ -751,11 +751,11 @@ func named(rec map[string]any) []string {
 
 // AN OWED CALL NO RECORD WILL TAKE IS NAMED, CALL BY CALL, AT WARNING. Calls
 // whose records did not land are owed to the session's next append or carry,
-// and the row may have moved on before either lands — a relaunch replaced the
+// and the log may have moved on before either lands — a relaunch replaced the
 // job while one of its calls was still in flight, or the run ended. Whichever
-// append then takes them to the row — a carry of the session's, or a later call
+// append then takes them to the log — a carry of the session's, or a later call
 // of the old job, whose own drop is the ordinary end of a job — the store
-// answers it for a job the row does not hold, and the calls it carried are on
+// answers it for a job the log no longer takes, and the calls it carried are on
 // no record of the run: each is named, by its tool, its place and the opening
 // of its identity, so the line says WHICH calls a resumed segment cannot
 // count, and the session forgets them.
@@ -773,7 +773,7 @@ func TestAnOwedCallNoRecordWillTakeIsNamedCallByCall(t *testing.T) {
 		},
 		"carried by the session's carry": func(t *testing.T, l *bridgeLedger) {
 			if l.Settle(t.Context(), "run-1") {
-				t.Fatal("a carry to a row that moved on answered carried")
+				t.Fatal("a carry to a log that moved on answered carried")
 			}
 		},
 	} {

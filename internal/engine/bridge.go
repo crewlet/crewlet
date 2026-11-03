@@ -122,7 +122,7 @@ func decodeBridgeArgs(raw string) map[string]any {
 // and a later call that asks for something else derives that call's operation
 // id. So the append is tried [appendAttempts] times before the call's answer
 // goes back — the box cannot end its run on a call it has no answer to, so a
-// store's blip never costs the record its last calls — and a call that still
+// store's blip never costs the log its last calls — and a call that still
 // did not land is owed WHOLE, as the append it was
 // ([sandbox.BridgeAppend.Owed]): the session's next append carries it, and the
 // log lists it as the call it is, once, however many appends carry it — the
@@ -294,7 +294,7 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 				"is recorded under none; the launch binds a session before its box exists")
 		return nil
 	}
-	// WHAT THE SESSION STILL OWES THE ROW, taken now so no other append of
+	// WHAT THE SESSION STILL OWES THE LOG, taken now so no other append of
 	// it carries the same calls, and handed back below if this one does not
 	// land either.
 	l.mu.Lock()
@@ -305,7 +305,7 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 		Launch: launch,
 		Call: sandbox.BridgeCall{
 			Name: call.Name,
-			// ENCODED HERE, once. The row is JSON in the coordination
+			// ENCODED HERE, once. The log is JSON in the coordination
 			// store, so a decoded map would be re-encoded by the store's
 			// own pass — and a large id survives one round trip through a
 			// json.Number-aware decode and not two through the default one.
@@ -718,7 +718,7 @@ func bridgedOf(s sandbox.EngineSpend) runner.Bridged {
 	}
 }
 
-// encodeArgs renders a call's arguments as the JSON text the row holds.
+// encodeArgs renders a call's arguments as the JSON text the log holds.
 //
 // An UNENCODABLE argument is not an error worth failing a log append over: the
 // call already ran. It records as empty, with the name and outcome intact,
@@ -726,8 +726,8 @@ func bridgedOf(s sandbox.EngineSpend) runner.Bridged {
 //
 // The encoding itself is [tools.RecordArgs], shared with the phase event's
 // own log because the two are one rule; what stays here is the EMPTY
-// spelling, and it differs on purpose — a bridged row carries "" so the screen
-// can say "(none)", where a phase event carries `{}`.
+// spelling, and it differs on purpose — a bridged call's entry carries "" so
+// the screen can say "(none)", where a phase event carries `{}`.
 func encodeArgs(args map[string]any) string {
 	if len(args) == 0 {
 		return ""

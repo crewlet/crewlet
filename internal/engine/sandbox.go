@@ -2619,9 +2619,10 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// from every settle path, so a run that failed before it ever
 		// had a box closes its session too.
 		Ended: e.bridge.Close,
-		// AND CARRIES ITS JOB'S OWED CALLS onto the job's record before the
-		// collection reads it — see [sandbox.CoordinatorOptions.Settle] and
-		// bridge.go's [bridgeLedger.Settle].
+		// AND CARRIES ITS JOB'S OWED CALLS into the run's log, with their
+		// spend onto the job's record, before the resume reads the log —
+		// see [sandbox.CoordinatorOptions.Settle] and bridge.go's
+		// [bridgeLedger.Settle].
 		Settle: e.bridge.Settle,
 		// AND IS SERVED AGAIN wherever the run is taken over while its box
 		// works: this node after a restart, or the seat's next holder —
