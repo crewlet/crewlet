@@ -11,6 +11,7 @@
 
 import type {
   AccessAnswer,
+  AccessBoxFile,
   AccessBoxLine,
   AccessDesired,
   AccessLaneKey,
@@ -21,7 +22,7 @@ import type {
 } from "~/contract/access.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
-import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
+import { GITHUB_ACCESS_NAMES, laneWords, type LaneWords } from "./words.ts";
 
 type Tone = "success" | "neutral" | "warning" | "danger" | "info";
 
@@ -62,8 +63,16 @@ export interface Handoff {
   said: string;
   /** The account to make, or the one the seat already has, by name, where the engine names it. */
   account: string | undefined;
+  /**
+   * The name to give what the person makes at the vendor, at the seat's
+   * level: the engine's `hand_in`, else the account's own name on a lane
+   * where the person makes an account. Never one this screen composes.
+   */
+  name: string | undefined;
   /** The role to give it, in the vendor's word, with the vendor's own line on what it allows. */
   role: { name: string; note: string | undefined } | undefined;
+  /** The level chosen here, by its identifier, whose scopes a person ticks where the vendor has them. */
+  level: string | undefined;
   /** The role the vendor shows now, where it is one of the lane's levels. */
   current: string | undefined;
   /** A token was sealed for the seat before (revoked at the vendor, or being rotated), so this is a new one. */
@@ -74,13 +83,24 @@ export interface Handoff {
 
 const HANDOFF_STEPS: ReadonlySet<string> = new Set<HandoffStep>(["create", "mint", "rerole"]);
 
-/** What the engine says of a seat's account at the vendor: its name, the role chosen, and the role it holds. */
+/**
+ * What the engine says of a seat's account at the vendor: its name, the name
+ * to give what the person makes, the role chosen, and the role it holds.
+ *
+ * THE ACCOUNT NAMES WHAT TO MAKE ONLY WHERE THE PERSON MAKES AN ACCOUNT (an
+ * Expo robot). Where the token is the agent's whole identity, the observed
+ * account is whose token it is ("Miles on gophrase"), never a name to type.
+ */
 function seatFacts(lane: Lane, saved: AccessSeatLane) {
   const level = (id: string | undefined) => lane.levels.find((l) => l.id !== "" && l.id === id);
   const chosen = level(saved.desired.level);
+  const account = saved.observed.account || undefined;
+  const makesAccount = laneWords(lane.key).handoff?.account !== undefined;
   return {
-    account: saved.observed.account || undefined,
+    account,
+    name: saved.hand_in?.name || (makesAccount ? account : undefined),
     role: chosen ? { name: chosen.name, note: chosen.note } : undefined,
+    level: chosen?.id,
     current: level(saved.observed.level)?.name,
   };
 }
@@ -124,6 +144,67 @@ export function rotateHandoffOf(lane: Lane, saved: AccessSeatLane): Handoff | un
     ...seatFacts(lane, saved),
     renew: true,
     rotating: true,
+  };
+}
+
+/**
+ * How to tick one section of the vendor's scope picker for a level's writes:
+ * the whole section, the whole section less the scopes the level does not
+ * hold, or only the writes it needs, whichever asks for fewer clicks.
+ */
+export interface ScopeSection {
+  /** The resource, as the picker's search finds it: `droplet`. */
+  resource: string;
+  /** The writes to tick one by one; empty where the whole section is ticked. */
+  tick: string[];
+  /** Where the whole section is ticked, what to untick in it again. */
+  untick: string[];
+}
+
+/** What a person ticks in the vendor's scope picker for one level, read off the engine's lists. */
+export interface ScopeGuide {
+  /** Reads the bulk select ticks that a token is refused for holding at this level. */
+  refused: string[];
+  /** Reads the bulk select ticks that agents do not need. */
+  unneeded: string[];
+  /** The sections holding the level's writes, in the picker's alphabetical order. */
+  sections: ScopeSection[];
+}
+
+const resourceOf = (scope: string) => scope.slice(0, scope.indexOf(":"));
+const isRead = (scope: string) => scope.endsWith(":read");
+
+/**
+ * The scope picker's steps for a seat at `levelId`, or undefined where the
+ * level names no scopes. A person bulk-selects every read, unticks the reads
+ * the level must not hold, then ticks the level's writes section by section.
+ *
+ * DERIVED, NEVER LISTED HERE. The levels' `grants`, the lane's `refused` and
+ * its `unneeded` together cover every scope the vendor offers (the engine
+ * holds that), so a section's full contents, and so what selecting all of it
+ * also ticks, is known without a copy of the vendor's catalogue. A scope a
+ * higher level grants is refused at this one, as the engine's paste refuses it.
+ */
+export function scopeGuide(lane: Lane, levelId: string | undefined): ScopeGuide | undefined {
+  const at = lane.levels.findIndex((l) => l.id === levelId);
+  const grants = new Set(lane.levels[at]?.grants ?? []);
+  if (grants.size === 0) return undefined;
+  const higher = lane.levels.slice(at + 1).flatMap((l) => l.grants ?? []);
+  const refused = new Set([...(lane.refused ?? []), ...higher].filter((s) => !grants.has(s)));
+  const unneeded = new Set((lane.unneeded ?? []).filter((s) => !grants.has(s)));
+  const offered = new Set([...lane.levels.flatMap((l) => l.grants ?? []), ...refused, ...unneeded]);
+  const writes = [...grants].filter((s) => !isRead(s));
+  const sections = [...new Set(writes.map(resourceOf))].sort().map((resource): ScopeSection => {
+    const tick = writes.filter((s) => resourceOf(s) === resource).sort();
+    const untick = [...offered].filter((s) => resourceOf(s) === resource && !grants.has(s)).sort();
+    return untick.length < tick.length
+      ? { resource, tick: [], untick }
+      : { resource, tick, untick: [] };
+  });
+  return {
+    refused: [...refused].filter(isRead).sort(),
+    unneeded: [...unneeded].filter(isRead).sort(),
+    sections,
   };
 }
 
@@ -399,10 +480,49 @@ export function boxLines(saved: AccessSeatLane): AccessBoxLine[] {
   return (saved.box?.env ?? []).filter((line) => line.by === "you");
 }
 
-/** The settings Crewlet puts in a seat's box itself, by name, or null where it puts none. */
+/**
+ * The settings Crewlet puts in a seat's box itself, its variables by name and
+ * then its files by path, or null where it puts none.
+ */
 export function boxSettings(saved: AccessSeatLane): string | null {
-  const names = (saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name);
+  const names = [
+    ...(saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name),
+    ...crewletFiles(saved).map((f) => f.path),
+  ];
   return names.length > 0 ? andList(names) : null;
+}
+
+/** The files Crewlet writes into a seat's box itself, as the engine sends them. */
+function crewletFiles(saved: AccessSeatLane): AccessBoxFile[] {
+  return (saved.box?.files ?? []).filter((f) => f.by === "crewlet");
+}
+
+/**
+ * What the details say after a seat's credential variable: who provides it,
+ * that Crewlet issues it at use for the lane's period (never sealed, so no
+ * time is a fleet fact), or when it was minted.
+ */
+export function credentialNote(
+  lane: Lane,
+  o: AccessObserved,
+  now: number,
+  words: LaneWords = laneWords(lane.key),
+): string {
+  if (providedExternally(lane, o)) return ", provided externally";
+  if (o.credential?.source === "issued")
+    return words.issued ? `, issued for ${words.issued} at a time, at use` : ", issued at use";
+  return o.credential?.minted_at ? `, minted ${relTime(o.credential.minted_at, now)}` : "";
+}
+
+/** The details' "Set by Crewlet" value: the settings, and the lane's note on them, or null. */
+export function boxSettingsFact(
+  lane: Lane,
+  saved: AccessSeatLane,
+  words: LaneWords = laneWords(lane.key),
+): { settings: string; note?: string } | null {
+  const settings = boxSettings(saved);
+  if (!settings) return null;
+  return words.boxNote ? { settings, note: words.boxNote } : { settings };
 }
 
 /** The tool, as one value: whether it works, and what it works through. */
@@ -419,7 +539,11 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
     case "builtin":
       return through;
     case "waiting":
-      return `Waiting for the credential, ${through}`;
+      // THE ENGINE'S REASON WHERE IT SENDS ONE (a vendor still applying a new
+      // grant), since a wait the person did not cause should say who it is on.
+      return saved.tool_reason
+        ? `Waiting: ${saved.tool_reason}, ${through}`
+        : `Waiting for the credential, ${through}`;
     case "no_server":
       return names && !lane.tool_server
         ? `Not set up: its sandbox env does not set ${names}`

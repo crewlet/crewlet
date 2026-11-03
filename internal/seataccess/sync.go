@@ -319,7 +319,7 @@ func (s *syncer) seat(
 	var removed bool
 	err = walk(s.in.Vendor, SeatInput{
 		Seat: ref, Want: want, Have: have, Record: &rec, Ask: s.in.Asks[h],
-		Options: s.options,
+		Options: s.options, Company: s.in.Open.Config,
 	}, func(lane Lane, w Desired, hv Observed, steps []Step) laneEffect {
 		if f := blocked[lane]; f != nil {
 			s.finish(&rec, lane, w, hv, SyncResult{At: s.now, Outcome: OutcomeFailed, Error: f})
@@ -437,7 +437,7 @@ func (s *syncer) adopt(rec *Record, want map[Lane]Desired, have map[Lane]Observe
 				CreatedByPass: s.in.Pass, State: AccountActive, Adopted: true,
 			}
 		}
-		if rec.Credential == nil && o.Credential != nil {
+		if rec.Credential == nil && o.Credential != nil && (o.Credential.Variable != "" || len(s.cat.Credentials) > 0) {
 			cred := *o.Credential
 			if cred.Variable == "" {
 				cred.Variable = SinkName(s.kind, s.cat.Credentials[0], rec.Handle)
@@ -557,6 +557,7 @@ func (s *syncer) take(
 	}
 	sinks := SinkNames(s.cat, ref.Handle)
 	var prior []StepResult
+	var settling *Settling
 	for i, step := range steps {
 		if i == 0 || steps[i-1].Op != step.Op {
 			prior = nil
@@ -589,6 +590,9 @@ func (s *syncer) take(
 			break
 		}
 		prior = append(prior, res)
+		if res.Settling != nil {
+			settling = res.Settling
+		}
 		done := StepOutcome{Step: step, Done: true}
 		if res.Did != "" {
 			done.Text = res.Did
@@ -596,6 +600,11 @@ func (s *syncer) take(
 		result.Steps = append(result.Steps, done)
 	}
 	s.finish(rec, lane, want, have, result)
+	if settling.active(s.now) && want.Enabled {
+		lr := rec.Lanes[lane]
+		lr.Settling = settling
+		rec.Lanes[lane] = lr
+	}
 	switch result.Outcome {
 	case OutcomeFailed:
 		eff.removed = false
@@ -634,7 +643,7 @@ func (s *syncer) absorb(ctx context.Context, rec *Record, step Step, res StepRes
 		if err := s.forget(ctx, rec, res.Revoked); err != nil {
 			return err
 		}
-		eff.revoked = eff.revoked || slices.Contains(res.Revoked, s.cat.Credentials[0])
+		eff.revoked = eff.revoked || slices.ContainsFunc(res.Revoked, s.cat.isCredential)
 	}
 	if rec.Account != nil {
 		switch {
@@ -728,7 +737,7 @@ func (s *syncer) forget(ctx context.Context, rec *Record, fields []string) error
 			return fmt.Errorf("clear %s: %w", strings.Join(names, ", "), err)
 		}
 	}
-	if slices.Contains(fields, s.cat.Credentials[0]) {
+	if slices.ContainsFunc(fields, s.cat.isCredential) {
 		rec.Credential = nil
 	}
 	return nil
@@ -740,6 +749,10 @@ func (s *syncer) finish(rec *Record, lane Lane, want Desired, have Observed, res
 	lr := rec.Lanes[lane]
 	lr.Sync = &result
 	lr.Observed = have
+	// A GRANT THAT HAS SETTLED, or one for a lane now off, holds nothing.
+	if !lr.Settling.active(s.now) || !want.Enabled {
+		lr.Settling = nil
+	}
 	if result.Outcome == OutcomeOK {
 		applied := want
 		lr.Applied = &applied
@@ -959,6 +972,8 @@ func LaneName(lane Lane) string {
 		return "Cloudflare"
 	case LaneExpo:
 		return "Expo"
+	case LaneDigitalOcean:
+		return "DigitalOcean"
 	default:
 		return string(lane)
 	}

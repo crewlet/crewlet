@@ -15,7 +15,9 @@
  * system_post_all_public"; Cloudflare's `read`, `operate` or `configure`,
  * Crewlet's own sets of permission groups; Expo's `viewer`, `runner`,
  * `developer` or `release_manager`, each a set of Expo permissions named for
- * the Expo role that holds them) and is drawn under the vendor's exact name, which
+ * the Expo role that holds them; DigitalOcean's `read`, `operate` or
+ * `administer`, each a set of DigitalOcean token scopes sent as its `grants`)
+ * and is drawn under the vendor's exact name, which
  * `options` carries. Datadog's, Jira's and Confluence's lists are read live
  * from the vendor, so no list of them lives here. GitHub has no levels; a
  * seat holds GitHub App permissions.
@@ -34,7 +36,8 @@ export type AccessLaneKey =
   | "slack"
   | "mattermost"
   | "cloudflare"
-  | "expo";
+  | "expo"
+  | "digitalocean";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";
@@ -42,8 +45,12 @@ type AccessManaged = "external";
 /** Who wrote the company document instead of the dashboard: the Kubernetes operator. */
 type AccessManagedBy = "operator";
 
-/** Whether Crewlet minted a seat's credential or it was provided from outside Crewlet. */
-type AccessCredentialSource = "minted" | "external";
+/**
+ * Whether Crewlet minted and sealed a seat's credential, it was provided from
+ * outside Crewlet, or Crewlet issues it at use and never seals it (a token
+ * that lasts an hour, issued by each node for its own runs).
+ */
+type AccessCredentialSource = "minted" | "external" | "issued";
 
 /** Who turned an account off: this engine, or somebody at the vendor by hand. */
 type AccessDisabledBy = "crewlet" | "hand";
@@ -68,6 +75,11 @@ interface AccessLevel {
   note?: string;
   /** Why no seat can be given it yet: offered disabled, with this as the reason. */
   unavailable?: string;
+  /**
+   * Every vendor permission the level holds, in the vendor's own names, where a
+   * person grants them by hand at the vendor (DigitalOcean's token scopes).
+   */
+  grants?: string[];
 }
 
 /** One GitHub App permission a seat can hold, in GitHub's own name. */
@@ -109,6 +121,16 @@ export interface AccessOptions {
   rotatable?: boolean;
   /** Where a person takes this lane's steps at the vendor, for a step that names no page of its own. */
   action_url?: string;
+  /**
+   * Every vendor permission no level grants that a pasted credential must not
+   * hold. With `unneeded` and the levels' `grants`, each permission the
+   * vendor offers is in exactly one.
+   */
+  refused?: string[];
+  /** Every vendor permission no level grants that a pasted credential may still hold. */
+  unneeded?: string[];
+  /** The account, organization or team the company connected, as the vendor shows it. */
+  vendor_account?: string;
   /**
    * Whether a person may keep a turned-off agent's account at the vendor
    * rather than delete it there (the `release` action, on its remove wait).
@@ -153,7 +175,8 @@ interface AccessCredential {
   variable: string;
   /** Further variables the same credential seals (an Atlassian account address, a Slack signing secret). */
   others?: string[];
-  minted_at: string;
+  /** When it was sealed. Absent for an issued credential, which each node issues for itself. */
+  minted_at?: string;
   /** Who the pass that sealed it ran for, as the engine names actors. */
   by?: string;
   /** Whether Crewlet minted it or it was provided from outside Crewlet. */
@@ -168,6 +191,10 @@ export interface AccessObserved {
   disabled_by?: AccessDisabledBy;
   /** The account as the vendor names it. */
   account?: string;
+  /**
+   * The vendor's identifier for the account, or an opaque fingerprint where
+   * every seat acts as the same person (DigitalOcean's tokens). Never drawn.
+   */
   account_id?: string;
   level?: string;
   permissions?: Record<string, GitHubAccess>;
@@ -269,6 +296,19 @@ export interface AccessBoxLine {
 export interface AccessBox {
   /** A person's lines first, then the engine's. */
   env: AccessBoxLine[];
+  /** Files the box holds for the CLI (a token file it reads), each naming its variable. */
+  files?: AccessBoxFile[];
+}
+
+/** One file in a seat's executor box: what it holds, by reference, never the value. */
+export interface AccessBoxFile {
+  /** Relative to the box's home directory. */
+  path: string;
+  /** The variable reference the file's whole body is (`${<VARIABLE>_<HANDLE>}`). */
+  value: string;
+  /** Whether the engine rewrites it while a run is live, so it stays current. */
+  rewritten: boolean;
+  by: AccessActor;
 }
 
 export interface AccessSeatLane {
@@ -278,10 +318,22 @@ export interface AccessSeatLane {
   /** What the next sync does for this lane as the document stands. */
   plan: AccessStep[];
   tool: AccessToolState;
+  /** Why the tool is in its state, in the engine's words, where the state alone does not say. */
+  tool_reason?: string;
   /** The desired setting is an administration grant. */
   administers?: boolean;
   /** Where the lane's tool is a CLI in the seat's own box (Expo's EAS CLI), what that box holds for it. */
   box?: AccessBox;
+  /**
+   * Where a person makes the seat's credential at the vendor: the name to give
+   * it at the seat's desired level. Computed by the engine, never read back.
+   */
+  hand_in?: AccessHandIn;
+}
+
+/** What a person makes at the vendor for a seat. */
+interface AccessHandIn {
+  name: string;
 }
 
 export interface AccessSeat {

@@ -177,7 +177,8 @@ func (a *SeatAccessAPI) HandIn(ctx context.Context, q setupapi.AccessQuery, hand
 	if err != nil {
 		return seataccess.HandedIn{}, err
 	}
-	session, err := vendor.Open(ctx, seataccess.OpenInput{Config: q.Company, Org: q.Roster, Env: a.engine.resolver()})
+	session, err := vendor.Open(ctx, seataccess.OpenInput{Config: q.Company, Org: q.Roster, Env: a.engine.resolver(),
+		Derive: a.engine.deriveKey})
 	if errors.Is(err, integration.ErrNotConfigured) {
 		return seataccess.HandedIn{}, fmt.Errorf("%w: %w", setupapi.ErrNotAwaitingHandIn, err)
 	}
@@ -323,7 +324,7 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		// applies once the migration finishes, with nobody asked again.
 		steps := map[seataccess.Lane][]seataccess.Step{}
 		if planned {
-			if steps, err = seataccess.Plan(vendor, seatInput(seat.SeatRef, next, rec, held,
+			if steps, err = seataccess.Plan(vendor, seatInput(q.Company, seat.SeatRef, next, rec, held,
 				offers)); err != nil {
 				return answer, plan, err
 			}
@@ -378,7 +379,7 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 	steps := map[seataccess.Lane][]seataccess.Step{}
 	if planned {
 		var err error
-		if steps, err = seataccess.Plan(vendor, seatInput(ref, want, rec, held, offers)); err != nil {
+		if steps, err = seataccess.Plan(vendor, seatInput(q.Company, ref, want, rec, held, offers)); err != nil {
 			return sa, err
 		}
 	}
@@ -389,11 +390,18 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 			observed.Credential = rec.Credential
 		}
 		d := want[lane]
+		// A CREDENTIAL ISSUED AT USE is the seat's while it is on, though
+		// nothing seals it, so its tool reads live on it like any other.
+		if issued := seataccess.IssuedCredential(q.Kind, lane, ref.Handle, d, observed); issued != nil {
+			observed.Credential = issued
+		}
+		tool, reason := seataccess.ToolOf(q.Company, ref.Handle, lane, d, observed, lr.Settling, time.Now())
 		sa.Lanes[lane] = seataccess.LaneAnswer{
 			Desired: d, Observed: observed, Sync: lr.Sync, Plan: nonNilSteps(steps[lane]),
-			Tool:        seataccess.ToolStateOf(q.Company, ref.Handle, lane, d, observed),
+			Tool: tool, ToolReason: reason,
 			Administers: seataccess.Administers(offers[lane], d),
 			Box:         seataccess.BoxOf(q.Company, q.Kind, lane, ref.Handle),
+			HandIn:      seataccess.HandInOf(vendor, q.Company, ref, lane, d),
 		}
 	}
 	return sa, nil
@@ -418,12 +426,12 @@ func handedIn(sa *seataccess.SeatAnswer, role *config.Role, kind integration.Kin
 // seatInput is one seat's plan input from its document and its ledger record,
 // with what each lane offers now, so a step names a live role as the vendor
 // does rather than by its id.
-func seatInput(ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desired,
+func seatInput(c *config.Company, ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desired,
 	rec seataccess.Record, held bool,
 	offers map[seataccess.Lane]seataccess.Options) seataccess.SeatInput {
 
 	in := seataccess.SeatInput{Seat: ref, Want: want, Have: map[seataccess.Lane]seataccess.Observed{},
-		Options: offers}
+		Options: offers, Company: c}
 	for lane, lr := range rec.Lanes {
 		in.Have[lane] = lr.Observed
 	}
@@ -866,6 +874,7 @@ func (e *Engine) MigrateSeatAccess(ctx context.Context, doc accessmigrate.Docume
 			if !ok {
 				return nil, fmt.Errorf("no %s vendor is registered in this build", kind)
 			}
+			in.Derive = e.deriveKey
 			return vendor.Open(ctx, in)
 		},
 		Env: e.resolver(), Managed: managed,

@@ -151,6 +151,7 @@ func (e *Engine) syncSeatAccess(
 		Vendor: vendor,
 		Open: seataccess.OpenInput{
 			Config: company.Config, Org: company.Org, Env: e.resolver(), Operator: in.operator,
+			Derive: e.deriveKey,
 			// A DRY RUN HANDS NEITHER, so a session rotates and registers
 			// nothing (vendor.go).
 			Sink: in.sink, WebhookBase: in.webhookBase,
@@ -425,9 +426,11 @@ func (e *Engine) seatAccessPlan(c *Company, kind integration.Kind) (*provision.P
 	// integration whose credentials are handed in from outside (D4b), or one
 	// the document has not migrated onto per-seat access, whose sync changes
 	// nothing. A seat's child naming one of its sealed names there waits on
-	// no pass and is reported as the missing secret it is.
+	// no pass and is reported as the missing secret it is. Nor where every
+	// lane's credential is issued at use, which the issuer declares
+	// ([seatIssuer.variable]).
 	if c.Config.SeatCredentialMode(string(kind), e.companyManaged) != config.SeatCredentialEngine ||
-		!c.Config.SeatAccessMigratedFor(string(kind)) {
+		!c.Config.SeatAccessMigratedFor(string(kind)) || len(cat.Credentials) == 0 {
 		return plan, nil
 	}
 	for _, seat := range seataccess.SeatsOf(c.Config) {

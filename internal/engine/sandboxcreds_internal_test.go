@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -488,8 +489,10 @@ func TestAHarnessEnvSignInTravelsIntoTheRun(t *testing.T) {
 // AN INTEGRATION'S BOX DEFAULTS LIE BENEATH THE ENTRY AND NEVER TOUCH ITS
 // SIGN-IN: the entry's own env wins a name, its sign-in is neither stripped nor
 // replaced, a default under one of the harness's sign-in names never reaches
-// the box, and the rest do. Mutation: lay the defaults with the seat's env, and
-// the entry's region is overridden and Claude Code is switched to Vertex.
+// the box, and the rest do. A variable naming a box file is kept apart for the
+// launch, under the same rule, and in neither the env nor the sign-in.
+// Mutation: lay the defaults with the seat's env, and the entry's region is
+// overridden and Claude Code is switched to Vertex.
 func TestBoxDefaultsLieBeneathTheEntryAndNeverTouchItsSignIn(t *testing.T) {
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv("ENTRY_KEY", "sk-ant-company")
@@ -512,10 +515,18 @@ roles:
 	if err != nil {
 		t.Fatalf("executor chain: %v", err)
 	}
-	run := newExecutorRun(member.Provider.(*harness.Provider), map[string]string{}, map[string]string{
+	run := newExecutorRun(member.Provider.(*harness.Provider), runEnv{env: map[string]string{}, defaults: map[string]string{
 		"CLOUD_REGION": "fr-par", "CLAUDE_CODE_USE_VERTEX": "1",
 		"ANTHROPIC_API_KEY": "sk-ant-integration", "CLI_ZONE": "fr-par-1",
-	})
+	}, homePaths: map[string]string{"CLI_TOKEN_FILE": ".config/crewlet/token", "CLAUDE_CODE_USE_VERTEX": ".config/crewlet/x"}})
+	if want := map[string]string{"CLI_TOKEN_FILE": ".config/crewlet/token"}; !maps.Equal(run.homePaths, want) {
+		t.Errorf("the box file variables = %v, want %v: none under a sign-in name", run.homePaths, want)
+	}
+	for _, env := range []map[string]string{run.env, run.signIn} {
+		if value, present := env["CLI_TOKEN_FILE"]; present {
+			t.Errorf("a box file's variable was laid before the box is known, as %q", value)
+		}
+	}
 	for name, want := range map[string]string{
 		"CLOUD_REGION": "eu-west-1", "ANTHROPIC_API_KEY": "sk-ant-company", "CLI_ZONE": "fr-par-1",
 	} {
@@ -543,8 +554,8 @@ func TestACredentialShapedDefaultNeverSignsAHarnessIn(t *testing.T) {
 		t.Fatalf("executor chain: %v", err)
 	}
 	const file = "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"
-	run := newExecutorRun(member.Provider.(*harness.Provider), nil,
-		map[string]string{file: "/home/user/.config/crewlet/gcloud-token"})
+	run := newExecutorRun(member.Provider.(*harness.Provider),
+		runEnv{defaults: map[string]string{file: "/home/user/.config/crewlet/gcloud-token"}})
 	if run.env[file] == "" {
 		t.Fatalf("the default did not reach the box: %v", run.env)
 	}

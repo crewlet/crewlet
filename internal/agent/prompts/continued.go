@@ -113,13 +113,33 @@ func CalledAfter(calls string) string {
 // another machine's. branch is the work-in-progress branch the session pushed,
 // where the engine knows it, and home the earlier box's home, where it knows
 // it; each is the engine's record of the session, defused by the caller.
-func BoxReplaced(branch, home string) string {
+//
+// checkout is the tool the run's surface checks a repository of this
+// company's own code host out with (`code_checkout`, ADR-0093), "" where it
+// offers none: a company that hosts no code. WHERE IT OFFERS ONE, "a FRESH
+// checkout" is true only of a repository the box's setup clones. One the
+// session checked out of the code host is in no box until a checkout
+// gives it, since nothing is cloned at launch, so a new box holds none of
+// them: the run is told to check each out again — the same branch and
+// access, and no base, so it is cloned at the branch's head with everything
+// pushed there (a round carried on is answered its held grant from that head;
+// any other launch resolves the branch's head anew) — rather than told a
+// checkout is in front of it that is not.
+func BoxReplaced(branch, home, checkout string) string {
 	var w strings.Builder
 	w.WriteString("## This run is in a new box" +
-		"\nThe session above was last worked in a box that is gone: you are in a new one, on a" +
-		" FRESH checkout of the repository. Anything it had not committed and pushed went with" +
+		"\nThe session above was last worked in a box that is gone: you are in a new one")
+	if checkout == "" {
+		w.WriteString(", on a FRESH checkout of the repository.")
+	} else {
+		w.WriteString(".")
+	}
+	w.WriteString(" Anything it had not committed and pushed went with" +
 		" that box, and what the session above says about files on disk is what that box held," +
 		" not what this one holds.")
+	if checkout != "" {
+		w.WriteString("\n\n" + checkoutsAgain(checkout))
+	}
 	if branch != "" {
 		w.WriteString("\n\nCheck out the branch `" + branch + "` it pushed, re-read the code" +
 			" there, and redo what is missing from it.")
@@ -129,6 +149,18 @@ func BoxReplaced(branch, home string) string {
 	}
 	w.WriteString("\n\n" + boxPaths(home))
 	return w.String()
+}
+
+// checkoutsAgain is what a run continuing a session in a new box is told of
+// the repositories that session checked out of this company's own code host,
+// where its surface offers checkout, the tool that checks one out: that none
+// is in the box until it is checked out again, and how to check it out at its
+// branch's head. [BoxReplaced] and [BuildNextTurn] tell it in the same words.
+func checkoutsAgain(checkout string) string {
+	return "A repository the session checked out of this company's code host is not in this box" +
+		" until you check it out again with `" + checkout + "`, naming the same branch and access" +
+		" and no `base`: it is cloned at that branch's head, with everything pushed to it. A" +
+		" repository the box's setup clones is a FRESH checkout."
 }
 
 // boxPaths is what a run continuing a session in a new box is told of the
@@ -148,19 +180,27 @@ func boxPaths(home string) string {
 // turn whose session it continues and when it ended, where that session was
 // last worked, and whether its harness was cut off when it was saved. Each is
 // the engine's record of that session, defused by the caller.
+//
+// Checkout is not: it is the tool the run's surface checks a repository of
+// this company's own code host out with, "" where it offers none, which
+// decides what the run is told its new box holds ([BoxReplaced]).
 type NextTurn struct {
 	BaseTurn    string
 	EndedAt     time.Time
 	Home        string
 	Interrupted bool
+	Checkout    string
 }
 
 // BuildNextTurn is the lead of a run that continues the session its
 // conversation's last turn left: the turn boundary the transcript cannot know,
 // that what the session read may be stale and what it set up is set up anew,
-// that its box is a new one on a fresh checkout — a session the conversation's
-// last turn left is continued only in a box of its own (internal/sandbox,
-// restore.go) — and, where its harness was cut off, that it may end mid-call.
+// that its box is a new one — a session the conversation's last turn left is
+// continued only in a box of its own (internal/sandbox, restore.go) — on a
+// fresh checkout, or, where its surface offers the code host's checkout,
+// holding none of the repositories the session checked out of that host, as
+// [BoxReplaced] tells a run — and, where its harness was cut off, that it may
+// end mid-call.
 // The turn's fresh brief follows it, which tells how the conversation's earlier
 // turns ended and what this turn is asked.
 //
@@ -182,10 +222,16 @@ func BuildNextTurn(m NextTurn) string {
 		"\n- **What you read above may be stale:** read it again before relying on it." +
 		"\n- **Tools you activated and skills you loaded above were set up anew for this turn:**" +
 		" activate or load them again before relying on them.")
-	w.WriteString("\n\n## This turn is in a new box" +
-		"\nYou are in a new box, on a FRESH checkout of the repository: anything the session above" +
-		" had not committed and pushed went with the box it was worked in, and what it says about" +
-		" files on disk is what that box held, not what this one holds.")
+	w.WriteString("\n\n## This turn is in a new box\nYou are in a new box")
+	if m.Checkout == "" {
+		w.WriteString(", on a FRESH checkout of the repository")
+	}
+	w.WriteString(": anything the session above had not committed and pushed went with the box it" +
+		" was worked in, and what it says about files on disk is what that box held, not what this" +
+		" one holds.")
+	if m.Checkout != "" {
+		w.WriteString("\n\n" + checkoutsAgain(m.Checkout))
+	}
 	w.WriteString("\n\n" + boxPaths(m.Home))
 	if m.Interrupted {
 		w.WriteString("\n\n" + InterruptedSession)

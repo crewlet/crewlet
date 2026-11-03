@@ -65,6 +65,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -105,14 +106,21 @@ type Engine struct {
 	// per wait of the seats' restart schedule ([Engine.seatRetryDelay],
 	// set in [New]). See githubtoken.go.
 	githubIssuer github.Issuer
+	// issuers replaces the integrations that issue seat credentials at use,
+	// for a test of the contract they share; nil is the build's
+	// ([Engine.seatIssuers]). See issued.go.
+	issuers []seatIssuer
+	// boxSupply replaces what the registered vendors put in a seat's box,
+	// for a test of a vendor's files; nil is theirs ([Engine.boxDefaults]).
+	boxSupply func(c *config.Company, handle string) []seataccess.BoxDefault
 	// githubPulls reads a pull request for a chat link's preview through
 	// the same agents' apps the participant lookup reads with, rebuilt
 	// with it on every wiring and emptied when GitHub is retired. See
 	// githubpulls.go.
 	githubPulls githubPullReader
 	// tokenWaits is what this node's polls have said of the running jobs
-	// whose seat's app issues no token, so each wait is said once per job
-	// rather than on every pass. See githubtoken.go.
+	// whose seat's issued tokens could not be issued, so each wait is said
+	// once per job rather than on every pass. See issued.go.
 	tokenWaits tokenWaits
 
 	// authEvents is this node's authentication audit trail, and
@@ -1608,8 +1616,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// and a bridge URL mounted a bridge whose every minted endpoint failed,
 	// so every executor run's tool calls failed and the run was rescued as
 	// incomplete — each silently, inside a box the engine never hears from
-	// again — and a code host's base would hand every run given repositories
-	// a clone that dials nowhere.
+	// again — and a code host's base would hand every checkout a clone that
+	// dials nowhere.
 	boxURLs := ReadBoxURLs(getenv(environ))
 	if err = boxURLs.Refusal(); err != nil {
 		return nil, fmt.Errorf("engine: a URL a box dials back to the engine: %w", err)

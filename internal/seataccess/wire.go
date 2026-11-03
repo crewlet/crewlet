@@ -4,6 +4,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
@@ -31,6 +32,10 @@ type LaneAnswer struct {
 	// Tool is whether the seat can use its credential through a tool now.
 	Tool ToolState `json:"tool"`
 
+	// ToolReason is why Tool is waiting, in the engine's words, where it
+	// waits on the vendor applying a grant ([Settling]); empty otherwise.
+	ToolReason string `json:"tool_reason,omitempty"`
+
 	// Administers is whether the lane's setting is an administration grant
 	// (D10), for the review's warning.
 	Administers bool `json:"administers,omitempty"`
@@ -38,6 +43,41 @@ type LaneAnswer struct {
 	// Box is what the seat's executor box holds for a CLI there to use the
 	// lane ([BoxOf]); nil where the lane's tool is a server.
 	Box *Box `json:"box,omitempty"`
+
+	// HandIn is what a person makes at the vendor for this lane, where a
+	// person hands its credential in ([HandsIn]); nil elsewhere.
+	HandIn *HandIn `json:"hand_in,omitempty"`
+}
+
+// HandIn is what a person makes at the vendor for a seat.
+type HandIn struct {
+	// Name is the name to give it at the vendor, at the seat's desired
+	// level. Computed by the engine, never read back from the vendor.
+	Name string `json:"name"`
+}
+
+// HandInNamer is a [Vendor] whose seats' credentials a person makes and names
+// at the vendor: the name to give one seat's, at its desired level. Pure.
+type HandInNamer interface {
+	HandInName(c *config.Company, seat SeatRef, lane Lane, want Desired) string
+}
+
+// HandInOf is the lane's [HandIn] for the seat, or nil where vendor names none.
+func HandInOf(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desired) *HandIn {
+	if name := handInName(v, c, seat, lane, want); name != "" {
+		return &HandIn{Name: name}
+	}
+	return nil
+}
+
+// handInName is [HandInNamer]'s name for the seat, "" where v names none or
+// no document was handed.
+func handInName(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desired) string {
+	namer, ok := v.(HandInNamer)
+	if !ok || c == nil {
+		return ""
+	}
+	return namer.HandInName(c, seat, lane, want)
 }
 
 // Box is a seat's executor box as one lane needs it.
@@ -45,11 +85,26 @@ type Box struct {
 	// Env is each variable: the lines a person adds to the seat's box
 	// settings ([ByYou]), then those the engine supplies itself ([ByCrewlet]).
 	Env []BoxLine `json:"env"`
+
+	// Files are the files the engine writes into the box itself
+	// ([ByCrewlet]), by path; omitted where it writes none.
+	Files []BoxFileLine `json:"files,omitempty"`
+}
+
+// BoxFileLine is one file in a seat's box: at Path, relative to the box's
+// home, holding Value, the `${VAR}` reference as configured and never what it
+// resolves to; Rewritten where the completion poll keeps it current.
+type BoxFileLine struct {
+	Path      string    `json:"path"`
+	Value     string    `json:"value"`
+	Rewritten bool      `json:"rewritten"`
+	By        StepActor `json:"by"`
 }
 
 // BoxLine is one variable in a seat's box: Name set to Value. A person's line
 // holds the seat's sealed name as a whole reference (`${EXPO_TOKEN_QA}`); the
-// engine's holds a non-secret setting as configured, a literal or a reference.
+// engine's holds a non-secret setting as configured, a literal or a reference,
+// or one of its files' paths from the box's home (`~/.config/crewlet/token`).
 type BoxLine struct {
 	Name  string    `json:"name"`
 	Value string    `json:"value"`
