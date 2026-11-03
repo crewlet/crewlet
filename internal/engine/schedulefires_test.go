@@ -58,9 +58,11 @@ func fireOf(agent, handle, name, label string, due time.Time) *events.Event {
 // the head the schedule's last run left once for all three, and the merged
 // fire carries it on.
 //
-// Mutation: run each waiting fire as its own turn, take the run's conversation
-// off anything but the fires' identity, or stamp the merged fire with none,
-// and a check goes red.
+// Mutation: run each waiting fire as its own turn, leave the run with no
+// conversation, or merge the fires into one that carries none, and a check
+// goes red. (A fire's partition and its identity are one key, so whether a
+// run's conversation is read off the identity rather than the partition is
+// TestADirectMessagesThreadReplyServesTheBurstsConversation's to hold.)
 func TestFiresOfOneScheduleThatWaitedTogetherRunOnce(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}

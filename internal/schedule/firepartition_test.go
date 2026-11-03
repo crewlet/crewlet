@@ -161,14 +161,17 @@ func TestEachFireOfAScheduleIsOneConversationOfItsRunner(t *testing.T) {
 // schedule a company admits must key a conversation within it, or none of its
 // fires would keep a session or leave an ending. The longest such key is a
 // unit schedule's: the unit's key at the longest the company document's id
-// grammar admits, and a name at org.ScheduleNameMaxBytes once escaped, whether
-// nothing in it escapes, every byte does, or its letters lie outside ASCII; a
-// role schedule's scope is its seat's agent id, shorter. A name one byte longer
-// is refused, at its field, on either.
+// grammar admits, and a name at org.ScheduleNameMaxBytes once escaped as the key
+// spells it — a path segment — whether nothing in it escapes, every byte does,
+// its letters lie outside ASCII, its spaces take three bytes each (a query
+// would spell them in one), its colons one (a query would take three), or
+// spaces pad it that the key keeps and a trim would drop; a role schedule's
+// scope is its seat's agent id, shorter. A name one byte longer is refused, at
+// its field, on either.
 //
 // Mutation: raise org.ScheduleNameMaxBytes past the room the log's bound
-// leaves the name, measure the name unescaped, or widen the unit id grammar,
-// and a check goes red.
+// leaves the name, measure the name unescaped, as url.QueryEscape spells it or
+// trimmed, or widen the unit id grammar, and a check goes red.
 func TestTheLongestScheduleNameFitsTheLogsKey(t *testing.T) {
 	t.Parallel()
 	document := func(unitID, name string) []byte {
@@ -191,6 +194,9 @@ func TestTheLongestScheduleNameFitsTheLogsKey(t *testing.T) {
 		"nothing escaped":       strings.Repeat("s", at),
 		"every byte escaped":    strings.Repeat("/", at/3) + strings.Repeat("s", at%3),
 		"letters outside ASCII": strings.Repeat("é", at/6) + strings.Repeat("s", at%6),
+		"spaces inside":         "a" + strings.Repeat(" ", (at-2)/3) + "b" + strings.Repeat("s", (at-2)%3),
+		"kept in a path":        strings.Repeat(":", at),
+		"padded":                strings.Repeat(" ", 40) + strings.Repeat("s", at-120),
 	} {
 		cfg, err := config.ParseCompany(document(unitID, name))
 		if err != nil {

@@ -128,8 +128,9 @@ func TestDerivedTellsAReplyableConversationFromAnEventFallback(t *testing.T) {
 // reads as a schedule's — a source's key is its source and a colon, which a
 // schedule's prefix is not.
 //
-// Mutation: join the parts unescaped, spell the prefix with a colon, or let
-// [notify.Scheduled] match a source's key, and a check goes red.
+// Mutation: join the parts unescaped, leave the name alone unescaped, escape it
+// as a query does, spell the prefix with a colon, or let [notify.Scheduled]
+// match a source's key, and a check goes red.
 func TestAScheduleConversationIsKnownByItsPrefixAlone(t *testing.T) {
 	standup := notify.ScheduleConversation(types.ScheduleScopeUnit, "eng", "standup")
 	if want := "schedule/unit/eng/standup"; standup != want {
@@ -139,6 +140,13 @@ func TestAScheduleConversationIsKnownByItsPrefixAlone(t *testing.T) {
 	joined := notify.ScheduleConversation(types.ScheduleScopeUnit, "q3", "launch/review")
 	if split == joined {
 		t.Fatalf("two schedules share the conversation %q", split)
+	}
+	// THE NAME IS ESCAPED ON ITS OWN: a slash and a space in it alone are
+	// spelled as a path segment spells them, so no name reads as another
+	// schedule's scope and the key is as long as the name's bound measures.
+	if got, want := notify.ScheduleConversation(types.ScheduleScopeUnit, "eng", "weekly report/Q3"),
+		"schedule/unit/eng/weekly%20report%2FQ3"; got != want {
+		t.Fatalf("a name holding a space and a slash keys %q, want %q", got, want)
 	}
 	for _, key := range []string{standup, split, joined,
 		notify.ScheduleConversation(types.ScheduleScopeRole, "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11", "a b")} {
