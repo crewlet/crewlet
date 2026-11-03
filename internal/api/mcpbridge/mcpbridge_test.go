@@ -993,15 +993,17 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 // record did not land is carried by a later call of its session, and no call
 // comes after the session's end: so the run's close, the relaunch's opening that
 // replaces it and the seat leaving this node each end the session's ledger,
-// which carries what it still owes before they return, and an end that finds
-// the session ended already asks again for nothing. The run's collection asks
+// which carries what it still owes before they return; and an end that finds
+// the opening ended already — a close of a run closed before, or the same
+// opening ended once more — asks again for nothing. The run's collection asks
 // the job's own session to carry too, without ending it; a job the run's
 // opening does not serve is asked for nothing.
 //
 // Mutation: end an opening without ending its ledger, and a session that ends
 // owing calls leaves them off the run's record; end it as the collection's ask
 // does, and a call whose record fails after the end is promised a carry that
-// never comes.
+// never comes; end the ledger on every end of its opening, and an opening
+// ended twice makes its last carry twice.
 func TestEveryWayASessionEndsCarriesWhatItsLedgerOwesOnce(t *testing.T) {
 	t.Parallel()
 	for name, end := range map[string]func(*fixture){
@@ -1023,6 +1025,9 @@ func TestEveryWayASessionEndsCarriesWhatItsLedgerOwesOnce(t *testing.T) {
 			f := newFixture(t)
 			f.open(t)
 			end(f)
+			// THE SAME OPENING ENDED ONCE MORE, which no path of the bridge
+			// does, and which its end has to survive.
+			mcpbridge.EndOpening(f.session)
 			if n, asked := f.ledger.ends(), f.ledger.settles(); n != 1 || asked != 0 {
 				t.Errorf("the ended session's ledger was ended %d times and asked as a collection %d times, "+
 					"want ended once", n, asked)
