@@ -66,10 +66,11 @@ The form offers **Test key** under the provisioner token. It runs read-only call
 |---|---|---|
 | The token is active | `GET /accounts/{account_id}/tokens/verify` | The token is wrong, disabled or expired, or is not a token of this account |
 | It can manage tokens | `GET /accounts/{account_id}/tokens/permission_groups` | It lacks Account API Tokens Write |
-| It can see the zones | `GET /zones?account.id={account_id}` | It lacks Zone Read, or a configured zone is not in the account |
+| It can see the zones | `GET /zones?account.id={account_id}` | It lacks Zone Read, or a zone in `provisioning.zones` is not in the account |
 | Every level resolves | the permission groups read above | A permission group a level names is not offered to this account |
+| It holds what it grants | `GET /accounts/{account_id}/tokens/{token_id}` (its own policy) | The provisioner lacks a permission group a level grants, so a seat token it mints could fall short |
 
-When every stage passes, the result names the account and the number of zones agents will reach, and the token's expiry where it has one. That is the whole claim: whether the provisioner holds every permission it may grant is proved only when the first agent's token is minted, because Cloudflare offers no read-only way to ask.
+When every stage passes, the result names the account and the number of zones agents will reach, and the token's expiry where it has one. The last stage is skipped only when Cloudflare does not show the token its own policy. The first agent's token minted then proves it.
 
 ## Giving each agent its own Cloudflare token
 
@@ -156,6 +157,7 @@ Each pass reads every token this engine manages, including the token of a seat t
 - **A token deleted at Cloudflare** is dropped from the engine's records, and the next pass mints a fresh one if the seat is on.
 - **A token somebody disabled** at Cloudflare is never turned back on by a pass, in case it was incident response. The tab offers **Turn back on** or **Keep off**.
 - **A seat that leaves the document** is treated as off: its token is deleted.
+- **Editing `provisioning.zones`** re-narrows every agent's token on the next pass. In this release each one is reported as `drift_restored`, because the zone list is the company's rather than a seat's.
 
 A refusal names the step that failed, Cloudflare's own reason, what to do about it and who does it, with a link to the account's API tokens page. The step is retried on every pass and on **Retry**.
 
