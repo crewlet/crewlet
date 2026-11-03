@@ -87,6 +87,10 @@ const (
 	KindGitLab     Kind = "gitlab"
 	KindDatadog    Kind = "datadog"
 
+	// KindCloudflare provisions one account API token per agent and, in this
+	// build, ingests nothing.
+	KindCloudflare Kind = "cloudflare"
+
 	// KindAtlassian is the ORGANIZATION, not a third product. Jira and
 	// Confluence are sites this engine reads and writes as an account; this
 	// is where the account itself is created, which no site API can do. It
@@ -97,11 +101,11 @@ const (
 
 // Kinds is every surface this package knows, in the order an operator reads
 // them: chat first, then the tracker and its wiki, then the code hosts, then
-// observability. A stable order so a status listing does not reshuffle
-// between two reads of the same fleet.
+// observability and the edge. A stable order so a status listing does not
+// reshuffle between two reads of the same fleet.
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
-	KindGitHub, KindGitLab, KindDatadog, KindAtlassian,
+	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindAtlassian,
 }
 
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
@@ -129,7 +133,7 @@ var ConvergeOrder = []Kind{
 	// THE ACCOUNTS FIRST, then the products that authenticate as them.
 	KindAtlassian, KindJira, KindConfluence,
 	KindSlack, KindMattermost,
-	KindGitHub, KindGitLab, KindDatadog,
+	KindGitHub, KindGitLab, KindDatadog, KindCloudflare,
 }
 
 // Valid reports whether k is a surface this build knows.
@@ -223,4 +227,7 @@ func (k Kind) Ingress() Ingress {
 // reported it while its organization key was busy creating every agent's
 // account, beside a second badge saying the key had not resolved. Both were
 // answers to questions this surface is not asked.
-func (k Kind) Ingests() bool { return k != KindAtlassian }
+//
+// Cloudflare is the same in this build: its tokens are provisioned, and no
+// notification is routed to a seat.
+func (k Kind) Ingests() bool { return k != KindAtlassian && k != KindCloudflare }
