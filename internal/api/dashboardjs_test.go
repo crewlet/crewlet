@@ -1608,7 +1608,7 @@ const (
 	// (`base_turn`, a link to that session) and whether its reply reached the
 	// party waiting, net of the Memory tab's Conversations section it
 	// replaces, with its thread list and their turns — took it from 5443.7
-	// KiB to 5441.3 KiB (-2.4 KiB, 2452 bytes), all of it the agents chunk the
+	// KiB to 5441.4 KiB (-2.3 KiB, 2378 bytes), all of it the agents chunk the
 	// tab loads in (about 0.3 KiB gzipped). The initial load did not grow: its
 	// files are the same bytes but for the chunk names they list. It moved
 	// down to 5442 KiB, the measured size's next KiB.
