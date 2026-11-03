@@ -143,13 +143,20 @@ func (c *Cache) StageRescue(ctx context.Context, s Synced, id string) (*Scratch,
 // left dropping, sorted by pack id — each row's id, its git checksum, its
 // bundle's bytes, its objects and its state, as [Cache.Packs] reads a live
 // one — what the expunge's commit retires, every one, and what its rescue is
-// charged by. Copied under the entry's lock; nil for a Synced this cache did
-// not hand out.
-func (c *Cache) DroppingPacks(s Synced) []code.PackRow {
-	if c.handedOut(s, "a read of the dropping packs") != nil {
-		return nil
+// charged by. Copied under the entry's lock. Refused [ErrSuperseded] where a
+// swap has replaced the incarnation s pins, which a swap leaves no live set,
+// so no dropping pack, as [Cache.Packs] is: a commit retiring none would be
+// refused for not retiring what its expunge left dropping. [ErrInvalid] for a
+// Synced this cache did not hand out.
+func (c *Cache) DroppingPacks(s Synced) ([]code.PackRow, error) {
+	if err := c.handedOut(s, "a read of the dropping packs"); err != nil {
+		return nil, err
 	}
 	s.entry.mu.Lock()
+	if s.inc.successor != nil {
+		s.entry.mu.Unlock()
+		return nil, fmt.Errorf("%w: %s, read for its dropping packs", ErrSuperseded, s.Dir)
+	}
 	var out []code.PackRow
 	for id, p := range s.inc.live {
 		if p.dropping {
@@ -160,7 +167,7 @@ func (c *Cache) DroppingPacks(s Synced) []code.PackRow {
 	}
 	s.entry.mu.Unlock()
 	slices.SortFunc(out, func(a, b code.PackRow) int { return strings.Compare(a.PackID, b.PackID) })
-	return out
+	return out, nil
 }
 
 // RefTips is every object the scratch's refs name, each once, sorted — the

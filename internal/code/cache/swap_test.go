@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -663,6 +664,42 @@ func TestASwapMovesTheMemoWhole(t *testing.T) {
 	}
 	if lines := w.logs.lines(t, "code_cache_memo_carried"); len(lines) != 1 {
 		t.Errorf("code_cache_memo_carried = %v, want the swap's one line", lines)
+	}
+}
+
+// A READ OF WHAT A SWAP MOVED REFUSES THE COPY IT REPLACED. A swap carries the
+// live set into the next incarnation and leaves the one a reader still holds
+// none, so a plan read from that copy afterwards would see a repository holding
+// no pack: a compaction planned over nothing, a weekly expunge judging clean a
+// repository it never read. Packs and DroppingPacks of a Synced whose copy a
+// swap replaced answer cache.ErrSuperseded instead, and the copy serving, which
+// the next sync pins, reads what the swap carried.
+//
+// Mutation: read the replaced copy's live set again (Packs not asking for its
+// successor) → it answers none and no error, red.
+func TestAReadOfWhatASwapMovedRefusesTheCopyItReplaced(t *testing.T) {
+	t.Parallel()
+	k := newCompactable(t, false)
+	w, c, repo := k.w, k.c, k.repo
+	if before, err := c.Packs(k.held); err != nil || len(before) != len(k.rows) {
+		t.Fatalf("the held copy read %d live packs before the swap (%v), want its %d", len(before), err,
+			len(k.rows))
+	}
+	k.compact(t)
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	if s.Dir == k.held.Dir {
+		t.Fatalf("the compaction answered the copy a reader holds, %s: no swap", s.Dir)
+	}
+	if got, err := c.Packs(k.held); got != nil || !errors.Is(err, cache.ErrSuperseded) {
+		t.Errorf("the replaced copy's live packs = %+v, %v; want none and ErrSuperseded", got, err)
+	}
+	if got, err := c.DroppingPacks(k.held); got != nil || !errors.Is(err, cache.ErrSuperseded) {
+		t.Errorf("the replaced copy's dropping packs = %+v, %v; want none and ErrSuperseded", got, err)
+	}
+	if got, err := c.Packs(s); err != nil || len(got) != len(k.rows)-1 {
+		t.Errorf("the copy serving read %d live packs (%v), want the merge and the pack it left, %d", len(got),
+			err, len(k.rows)-1)
 	}
 }
 

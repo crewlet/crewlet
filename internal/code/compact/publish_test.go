@@ -126,15 +126,18 @@ func (w *watched) Chain(s cache.Synced) cache.Chain {
 	return ch
 }
 
-func (w *watched) Packs(s cache.Synced) []code.PackRow {
-	packs := w.counted.Packs(s)
+func (w *watched) Packs(s cache.Synced) ([]code.PackRow, error) {
+	packs, err := w.counted.Packs(s)
+	if err != nil {
+		return nil, err
+	}
 	w.mu.Lock()
 	edit := w.packsOf
 	w.mu.Unlock()
 	if edit != nil {
-		return edit(packs)
+		return edit(packs), nil
 	}
-	return packs
+	return packs, nil
 }
 
 func (w *watched) AdmitPublication(s cache.Synced, base int, layerObjects, repackObjects int64, limits code.Limits) (

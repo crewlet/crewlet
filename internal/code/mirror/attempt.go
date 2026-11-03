@@ -407,7 +407,16 @@ func (m *Mirrors) cut(ctx context.Context, s cache.Synced, sc *cache.Scratch, fe
 	for _, p := range fetched {
 		list.WriteString("pack-" + p.Checksum + ".pack\n")
 	}
-	for _, p := range m.o.Cache.Packs(s) {
+	// THE PACKS THE REPOSITORY HOLDS, which the cut leaves out: read from a
+	// copy a swap has since replaced, they would read as none, and the cut
+	// would pack again every object the repository already holds — so that
+	// read is refused (cache.ErrSuperseded), and the attempt ends with it, the
+	// next one syncing past the swap.
+	held, err := m.o.Cache.Packs(s)
+	if err != nil {
+		return nil, fmt.Errorf("mirror: list the packs the repository holds: %w", err)
+	}
+	for _, p := range held {
 		list.WriteString("^pack-" + p.GitChecksum + ".pack\n")
 	}
 	slot, err := m.maintenanceSlot(ctx, s.Repo.ID)

@@ -1,11 +1,21 @@
 package cache
 
 import (
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/code"
 )
+
+// ErrSuperseded is a read of what a swap carries — a copy's live packs, its
+// dropping ones — asked of a Synced whose incarnation a swap has since
+// replaced: the swap moved that state into the copy now serving, so the pinned
+// one holds none of it, and an answer from it would read as a repository
+// holding no pack. A pass that meets it is busy: its next sync pins the copy
+// serving and reads what that holds.
+var ErrSuperseded = errors.New("cache: a swap replaced the copy the sync pinned")
 
 // WHAT A COMPACTION ASKS OF THE CACHE. A repository's maintainer merges its
 // small packs (internal/code/compact), and the cache is where it reads them:
@@ -49,11 +59,22 @@ import (
 // judged by the committer against the rows of its own snapshot, which refuses
 // an input that is no longer live, so a plan a little newer than its Seen is
 // at worst one the next poll makes again.
-func (c *Cache) Packs(s Synced) []code.PackRow {
-	if c.handedOut(s, "a compaction's plan") != nil {
-		return nil
+//
+// NEVER FROM A COPY A SWAP REPLACED: a swap moves the live set into the copy
+// serving and leaves the one s pins none, so an answer from it would be a
+// repository holding no pack — a compaction planned over nothing, a weekly
+// expunge's lasting clean scan of packs it never read. Refused
+// [ErrSuperseded] there, which a pass answers busy, its next sync pinning the
+// copy serving. [ErrInvalid] for a Synced this cache did not hand out.
+func (c *Cache) Packs(s Synced) ([]code.PackRow, error) {
+	if err := c.handedOut(s, "a compaction's plan"); err != nil {
+		return nil, err
 	}
 	s.entry.mu.Lock()
+	if s.inc.successor != nil {
+		s.entry.mu.Unlock()
+		return nil, fmt.Errorf("%w: %s, read for its live packs", ErrSuperseded, s.Dir)
+	}
 	out := make([]code.PackRow, 0, len(s.inc.live))
 	for id, p := range s.inc.live {
 		if !p.dropping {
@@ -62,5 +83,5 @@ func (c *Cache) Packs(s Synced) []code.PackRow {
 	}
 	s.entry.mu.Unlock()
 	slices.SortFunc(out, func(a, b code.PackRow) int { return strings.Compare(a.PackID, b.PackID) })
-	return out
+	return out, nil
 }

@@ -418,8 +418,20 @@ func (c *Compactor) cycle(ctx context.Context, cand code.ExpungeCandidate, grace
 	// inputs among them and the due judgment weighs them, while the
 	// repository's merges go on beside the cycle from its first reservation
 	// on — each merge's round swapping the copy, which leaves the one s pins
-	// no live set to read again.
-	live := c.o.Cache.Packs(s)
+	// no live set to read again. A swap between the sync and this read leaves
+	// none to read even once, which the cache refuses rather than answer as a
+	// repository holding no pack (cache.ErrSuperseded): judged clean from
+	// that, the repository would be listed again only a week later, its
+	// unreachable bytes never weighed. The pass is busy, and the next syncs
+	// past it.
+	live, err := c.o.Cache.Packs(s)
+	switch {
+	case errors.Is(err, cache.ErrSuperseded):
+		c.log.Debug("code_expunge_busy", "repo", cand.Name, "reason", reasonSuperseded, "error", err)
+		return OutcomeBusy, err
+	case err != nil:
+		return c.expungeFailed(cand, "packs", err)
+	}
 	// planCapped caps a plan at the bytes of its cut and RESERVES its inputs
 	// ([expungeClaim]): from here the repository's compactions on this node
 	// merge beside the rest of the cycle — its reads, its walk, its build, its
@@ -946,7 +958,15 @@ func (c *Compactor) finish(ctx context.Context, cand code.ExpungeCandidate, open
 			"detail", "the copy's objects/ still holds the inputs of the begin; the next pass syncs again")
 		return OutcomeBusy, cache.ErrInputsLeaving
 	}
-	dropping := c.o.Cache.DroppingPacks(s)
+	dropping, err := c.o.Cache.DroppingPacks(s)
+	switch {
+	case errors.Is(err, cache.ErrSuperseded):
+		c.log.Debug("code_expunge_busy", "repo", cand.Name, "expunge", open.id, "reason", reasonSuperseded,
+			"error", err)
+		return OutcomeBusy, err
+	case err != nil:
+		return c.expungeFailed(cand, "dropping packs", err)
+	}
 	// BEGUN FROM HERE: this node's copy is past the begin, which retired
 	// every input, and the dropping packs are read, so the repository's
 	// compactions here build beside the rescue and the commit as though no

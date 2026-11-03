@@ -351,6 +351,9 @@ type counted struct {
 	admit func(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
 	// publish, where set, answers every publication's admission.
 	publish func(s cache.Synced, layerObjects, repackObjects int64, limits code.Limits) (*cache.Admission, error)
+	// superseded, where set, answers every read of the live packs as the cache
+	// answers one of a copy a swap replaced after the sync pinned it.
+	superseded bool
 }
 
 func countedOver(c *cache.Cache) *counted { return &counted{Cache: c} }
@@ -362,10 +365,14 @@ func (c *counted) Sync(ctx context.Context, repoID string, fresh statelog.Freshn
 	return c.Cache.Sync(ctx, repoID, fresh)
 }
 
-func (c *counted) Packs(s cache.Synced) []code.PackRow {
+func (c *counted) Packs(s cache.Synced) ([]code.PackRow, error) {
 	c.mu.Lock()
 	c.plans++
+	superseded := c.superseded
 	c.mu.Unlock()
+	if superseded {
+		return nil, fmt.Errorf("%w: the case's swap", cache.ErrSuperseded)
+	}
 	return c.Cache.Packs(s)
 }
 

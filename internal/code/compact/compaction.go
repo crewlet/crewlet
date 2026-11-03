@@ -130,7 +130,15 @@ func (c *Compactor) compact(ctx context.Context, cand code.CompactionCandidate, 
 	for cs := range reserved {
 		leftOut[cs] = true
 	}
-	p := plan(c.o.Cache.Packs(s), leftOut, cap, c.bounds)
+	packs, err := c.o.Cache.Packs(s)
+	switch {
+	case errors.Is(err, cache.ErrSuperseded):
+		c.log.Debug("code_compaction_busy", "repo", cand.Name, "reason", reasonSuperseded, "error", err)
+		return OutcomeBusy, err
+	case err != nil:
+		return c.failed(cand, "packs", err)
+	}
+	p := plan(packs, leftOut, cap, c.bounds)
 	if !p.due {
 		if len(reserved) == 0 {
 			c.remember(cand, cap)

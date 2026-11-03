@@ -1341,14 +1341,14 @@ func (u *unreached) Sync(context.Context, string, statelog.Freshness) (cache.Syn
 	return cache.Synced{}, errUnreached
 }
 
-func (u *unreached) Packs(cache.Synced) []code.PackRow {
+func (u *unreached) Packs(cache.Synced) ([]code.PackRow, error) {
 	u.calls.Add(1)
-	return nil
+	return nil, errUnreached
 }
 
-func (u *unreached) DroppingPacks(cache.Synced) []code.PackRow {
+func (u *unreached) DroppingPacks(cache.Synced) ([]code.PackRow, error) {
 	u.calls.Add(1)
-	return nil
+	return nil, errUnreached
 }
 
 func (u *unreached) Chain(cache.Synced) cache.Chain {
