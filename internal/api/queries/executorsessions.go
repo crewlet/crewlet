@@ -620,7 +620,7 @@ func (s Sources) executorSession(ctx context.Context, p Params) (any, error) {
 		// every turn its read handed out, deleting their rows, and an
 		// absorbed row leaves no word of the turn that took it.
 		return nil, fmt.Errorf("%w: %s keeps no executor session of the turn %s: the turn may have "+
-			"recorded none, or its row went — with the end of a later turn of its conversation that was "+
+			"recorded none, or its row went: with the end of a later turn of its conversation that was "+
 			"handed it, past the retention, or with the seat", ErrNotFound, seat.Handle, turn)
 	case err != nil:
 		return nil, executorRefusal(err)
