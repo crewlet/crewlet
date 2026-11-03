@@ -385,7 +385,7 @@ func worstRow(t *testing.T) PendingRun {
 		}
 		worker := []ElidedCall{{Name: fmt.Sprintf("worker_%04d_%s", i, strings.Repeat("<", 300)),
 			Digest: fmt.Sprintf("%064x", i), Calls: 1}}
-		run.appendCall(call, nil, worker)
+		run.appendCall(call, worker)
 	}
 	return run
 }

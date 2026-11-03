@@ -326,9 +326,8 @@ type Resume struct {
 	Bridged []BridgedCall
 
 	// Elided is the round's calls the row does not list, by identity
-	// (sandbox.PendingRun.Elided): a long run's dropped middle, and a call
-	// whose own append never landed until a later one carried it. Calls of
-	// the round all the same, which the turn's call log is seeded with beside
+	// (sandbox.PendingRun.Elided): a long run's dropped middle. Calls of the
+	// round all the same, which the turn's call log is seeded with beside
 	// Bridged ([seedCalls]), the delivery checks count, and the round's record
 	// carries on ([turn.Work.Elided]).
 	Elided []ledger.Elided

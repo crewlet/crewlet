@@ -84,16 +84,19 @@ import (
 // over-counting is safe for the reason above.
 //
 // WHAT A RESUME SEEDS, then, is everything the run's log held that its record
-// keeps an identity of: the calls a bridged run's row lists, the ones it
-// counts without listing (a long run's dropped middle, and a call whose own
-// append never landed but a later call of its job carried), the calls the log
+// keeps an identity of: the calls a bridged run's row lists (a call whose own
+// record did not land among them, once its session carried it), the ones it
+// counts without listing (a long run's dropped middle), the calls the log
 // absorbed from a bridged call's own work (a delegated worker's, [Called],
 // [CallLog.Own]), and the same three for every closed round. An under-count —
 // a call the run made that the seed leaves out — is the hazard this log
 // exists to close. One remains, and it is not a record's bound: a call whose
-// append never landed and that no later call of its job carried — a store
-// out of reach from the call to the job's end, which the bridge logs — is a
-// call no record of the run holds, and no seed can count it.
+// record never landed and that nothing of its session carried — not a later
+// call of its job, not the carry its run's collection asks for, not the last
+// one its session makes as it ends, the store out of reach from the call
+// through every one of them, or the run's record moved on to its next job
+// before one landed — is a call no record of the run holds, and no seed can
+// count it. The bridge logs each such call by name.
 //
 // A DELEGATED WORKER forks the log ([Fork]) and its calls are absorbed back
 // ([Absorb]) once its wave is done. Workers write under the parent's unit of

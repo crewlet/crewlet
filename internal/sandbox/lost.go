@@ -169,6 +169,13 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 					"is not charged; its round is carried on all the same")
 		}
 	}
+	// WHAT ITS SESSION STILL OWED THE JOB'S RECORD, carried before the round
+	// is carried on from it ([CoordinatorOptions.Settle]): the next job's
+	// launch is what ends that session, by which time the record holds the
+	// next job and takes nothing of this one's.
+	if c.settle != nil && c.settle(ctx, run.TurnID, run.LaunchID) {
+		run = c.rereadCalls(ctx, run)
+	}
 	var outcome runOutcome
 	if read {
 		// THE BOX ANSWERED, which ends any run of failed reads behind this

@@ -11316,8 +11316,9 @@ refused after the run's tools closed, or whose arguments did not parse) and on
 a `held` or `approved` call, whose arguments ride the record sealed and are
 never digested in the clear.
 `bridge_calls_elided` counts the calls of the round the log does not list —
-dropped from the middle of a long run's log, or a call whose own record
-reached the run only with a later one — and `bridge_elided_calls` says what
+dropped from the middle of a long run's log; a call whose own record reached
+the run only with a later one is listed, once, as the call it is — and
+`bridge_elided_calls` says what
 they were: one entry per tool and argument digest, `{name, digest, calls,
 failed}`, sent to whom the run's body is sent and always an array beside
 `bridge_calls`. An entry with no `digest` counts calls to its tool whose

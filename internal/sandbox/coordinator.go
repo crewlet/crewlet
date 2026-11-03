@@ -394,7 +394,27 @@ type CoordinatorOptions struct {
 	// THE SESSION'S NOTE INBOX GOES WITH IT, and no note with it: the notes
 	// still waiting are on the run's record, which the ending publishes as
 	// expired before it deletes it ([CoordinatorOptions.SteersExpired]).
+	//
+	// AND THE SESSION CARRIES WHAT IT OWES BEFORE THIS RETURNS: a call whose
+	// own record did not land, which its session carries onto the run's
+	// record as it ends (internal/api/mcpbridge's Ledger.Settle), so the
+	// reads and the deletes that follow an ending see it.
 	Ended func(runID string)
+
+	// Settle asks the bridge session serving a run's job to carry onto the
+	// job's record whatever calls it still owes it — ones whose own record
+	// did not land, which a later call of the session would have carried —
+	// before it returns, and reports whether it carried any. Asked once the
+	// job's box has been read back and before its record is read for what
+	// the job did: a job's LAST call has no later call of its own, and a
+	// submission whose record met a store's blip would otherwise be missing
+	// from the record its resume judges the round by, though the store
+	// answered a second later. Where it carried something, the job's calls
+	// are read again ([Coordinator.collectClaimed]).
+	//
+	// Nil carries nothing, which a coordinator whose runs make no bridged
+	// calls — a test's — has.
+	Settle func(ctx context.Context, runID, launchID string) bool
 
 	// Recovered is told of each run this node takes over still RUNNING in
 	// its box, as it recovers the run's seat ([Coordinator.RecoverSeat]):
@@ -803,6 +823,8 @@ type Coordinator struct {
 	answers  *AnswerSeal
 	condense Condenser
 	ended    func(runID string)
+	// settle is [CoordinatorOptions.Settle].
+	settle func(ctx context.Context, runID, launchID string) bool
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
@@ -1001,6 +1023,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		answers:       opts.Answers,
 		condense:      opts.Condense,
 		ended:         opts.Ended,
+		settle:        opts.Settle,
 		recovered:     opts.Recovered,
 		stopped:       opts.Stopped,
 		closeStopped:  opts.CloseStopped,
@@ -1567,26 +1590,18 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	if err != nil {
 		return run, Result{}, false, c.collectFailed(ctx, run, err)
 	}
+	// THE JOB'S CALLS AS THEY STAND ONCE IT IS OVER, read again where the
+	// claim's read cannot be the whole of them: a run ENDED AT ITS TURN'S CAP
+	// was working until the collection stopped it, and a call it made over
+	// the bridge meanwhile is on the row and not on the claim; and a job whose
+	// session still OWED the record calls has them carried now
+	// ([CoordinatorOptions.Settle]) — its last call, a submission, whose own
+	// record met a store's blip, above all. The resumed turn judges the run
+	// on these, so they are what the run did, all of it.
+	if settled := c.settle != nil && c.settle(ctx, run.TurnID, run.LaunchID); ended || settled {
+		run = c.rereadCalls(ctx, run)
+	}
 	if ended {
-		// A RUN ENDED AT ITS TURN'S CAP was working until the collection
-		// stopped it, and the claim read its row before then: a call it made
-		// over the bridge meanwhile is on the row and not on the claim, and
-		// the resumed turn judges the run on the claim's log. Read back
-		// once the box is stopped, so what the run did is all of it.
-		latest, found, readErr := c.pending.Get(ctx, run.TurnID)
-		switch {
-		case readErr != nil:
-			// The claim's log stands: the turn is judged on the calls it
-			// holds, and the line says the late ones may be missing from it.
-			log.WarnContext(ctx, "sandbox_run_calls_reread_failed",
-				"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", readErr.Error())
-		case found && latest.LaunchID == run.LaunchID:
-			run.BridgeCalls, run.BridgeCallsElided = latest.BridgeCalls, latest.BridgeCallsElided
-			// AND THE TALLIES WITH THE ROUND THEY ARE KEPT FOR, as one:
-			// a tally read against another read's calls names no round.
-			run.ElidedCalls, run.AbsorbedCalls = latest.ElidedCalls, latest.AbsorbedCalls
-			run.TallyRound = latest.TallyRound
-		}
 		// AND NO QUESTION, whatever it asked on its way: a run that is being
 		// stopped is not one a person's answer could continue
 		// ([endedAtDeadline]), so it is collected and resumed like any
@@ -1608,6 +1623,27 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishCollected(ctx, run, result)
 	return run, result, true, nil
+}
+
+// rereadCalls is run with its job's calls read again off its row: the list, the
+// count of the calls it does not list, and the two tallies with the round they
+// are kept for — as one, since a tally read against another read's calls names
+// no round. The run as claimed where the row cannot be read, or no longer holds
+// the job.
+func (c *Coordinator) rereadCalls(ctx context.Context, run PendingRun) PendingRun {
+	latest, found, err := c.pending.Get(ctx, run.TurnID)
+	switch {
+	case err != nil:
+		// The claim's log stands: the turn is judged on the calls it holds,
+		// and the line says the late ones may be missing from it.
+		log.WarnContext(ctx, "sandbox_run_calls_reread_failed",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", err.Error())
+	case found && latest.LaunchID == run.LaunchID:
+		run.BridgeCalls, run.BridgeCallsElided = latest.BridgeCalls, latest.BridgeCallsElided
+		run.ElidedCalls, run.AbsorbedCalls = latest.ElidedCalls, latest.AbsorbedCalls
+		run.TallyRound = latest.TallyRound
+	}
+	return run
 }
 
 // collectFailed answers a collection that could not read its box back: AGAIN,
@@ -4375,6 +4411,12 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			if c.framing(run.TurnID) {
 				return errAwaitsFrame
 			}
+			// THE JOB'S CALLS AS THEY STAND NOW: closing its session above
+			// carried onto the row whatever the session still owed it
+			// ([CoordinatorOptions.Ended]) — a reply whose own record met a
+			// store's blip, above all — and a lost turn's end is decided by
+			// whether those calls replied.
+			run = c.rereadCalls(ctx, run)
 			ending, owes, err := c.endingOfRun(ctx, run)
 			if err != nil {
 				return fmt.Errorf("sandbox: ending run %s, whose stopped turn could not be closed "+

@@ -967,8 +967,7 @@ type AgentPhaseCompleted struct {
 	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
 	// CallsElided is how many calls a collected executor's run made over its
 	// bridge that its run's record did not keep — a long run's dropped
-	// middle, and a call whose own record never landed until a later one
-	// carried it — and ElidedCalls those calls by tool, with how many of each
+	// middle — and ElidedCalls those calls by tool, with how many of each
 	// failed. ToolExecutions lists only the calls the record kept, and this
 	// record outlives the run's: once the run's row is gone, what it dropped
 	// is said here or nowhere. Counted in its round's tool_calls. Absent on

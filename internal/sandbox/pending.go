@@ -697,7 +697,8 @@ type BridgeCall struct {
 }
 
 // BridgeAppend is one finished bridged call as the bridge hands it to the row
-// — see [PendingStore.AppendBridgeCall].
+// — see [PendingStore.AppendBridgeCall] — with the earlier appends of its
+// session that never landed.
 type BridgeAppend struct {
 	// Launch is the job the session serves, as [PendingStore.BeginLaunch]
 	// named it — handed to the session through [LaunchRequest.Opened] before
@@ -705,27 +706,58 @@ type BridgeAppend struct {
 	// REQUIRED: an append naming no job is recorded under none.
 	Launch string
 
+	// Call is the call this append records. ZERO (no name) for an append that
+	// only carries what its session owes ([BridgeAppend.Owed]) — the one a
+	// session makes once its job is over, or as it ends — which names no call
+	// of its own.
 	Call BridgeCall
 
-	// Unrecorded are earlier calls of the job whose own append never landed,
-	// by identity: what the session still owed the row when this call was
-	// made. The row counts them as calls of the round it does not list
-	// ([PendingRun.ElidedCalls], [PendingRun.BridgeCallsElided]), so a
-	// resumed call log seeds them and a reader of whether the turn replied
-	// reads them, where they would otherwise be calls the run made and its
-	// record never heard of.
-	Unrecorded []ElidedCall
-
-	// Absorbed are the calls the run's call log took in from this call's own
-	// work — a delegated worker's calls under a `delegate` — and from the
-	// unrecorded calls', by identity, Failed unset ([PendingRun.AbsorbedCalls]):
-	// calls the row lists nowhere, which a resumed call log must count all
-	// the same.
+	// Absorbed are the calls the run's call log took in from Call's own work
+	// — a delegated worker's calls under a `delegate` — by identity, Failed
+	// unset ([PendingRun.AbsorbedCalls]): calls the row lists nowhere, which a
+	// resumed call log must count all the same.
 	Absorbed []ElidedCall
+
+	// Owed are the session's EARLIER appends of the job that did not land as
+	// far as it knows — every attempt failed, though one may have landed and
+	// lost its answer — each WHOLE, as it was asked: its call and what that
+	// call's own work absorbed ([OwedAppend]). Each one the row does not
+	// already list is listed now, as any call is, with what it absorbed; one
+	// it lists landed after all, and is skipped with what it absorbed, which
+	// landed in the same write. So a call that ran is on the row once, however
+	// many of its session's appends carried it, and a resumed call log seeds
+	// it as the call it was.
+	Owed []OwedAppend
 
 	// Spent is the session's running total: what every bridged call it has
 	// served so far cost the engine.
 	Spent EngineSpend
+}
+
+// OwedAppend is one append of a bridged session that did not land as far as
+// the session knows, as a later append carries it ([BridgeAppend.Owed]): the
+// call, kept as the row would keep it ([OwedCall]), and the identities its own
+// work added to the run's call log.
+type OwedAppend struct {
+	Call     BridgeCall
+	Absorbed []ElidedCall
+}
+
+// OwedCall is call as a session holds it while the row owes it: kept within
+// the most the row could ever keep of it ([keptCall]) — the submission's share
+// for a successful submission, which the row keeps whole while it is the
+// newest, and the ordinary share for every other call. A session owes calls
+// for as long as an outage lasts, and one holding each as the bridge handed it
+// — a commit's megabyte of arguments, an MCP tool's unbounded output — would
+// hold all of them in memory; held this way it holds no more of a call than
+// the row would. Keeping a call is idempotent, so the row keeps the call
+// carried exactly as it would have kept the call appended.
+func OwedCall(call BridgeCall) BridgeCall {
+	budget := MaxBridgeArgsBytes
+	if submitted(call) {
+		budget = MaxSubmissionArgsBytes
+	}
+	return keptCall(call, budget)
 }
 
 // MaxBridgeCalls bounds the durable log of a bridged run in COUNT, and the
@@ -1277,11 +1309,12 @@ type PendingRun struct {
 	BridgeCalls []BridgeCall `json:"bridge_calls,omitempty"`
 
 	// BridgeCallsElided counts the calls of the round that list does not
-	// hold — the ones dropped from its middle, and any whose own append
-	// never landed ([BridgeAppend.Unrecorded]) — so a reader can tell a short
-	// run from a long one whose middle was cut. Reported rather than hidden,
-	// because a log that silently skips is a log that lies about what the
-	// run did.
+	// hold — the ones the count bound dropped from its middle — so a reader
+	// can tell a short run from a long one whose middle was cut. Reported
+	// rather than hidden, because a log that silently skips is a log that
+	// lies about what the run did. A call whose own append did not land is
+	// not one of them: a later append of its session carries it whole and
+	// it is listed ([BridgeAppend.Owed]).
 	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
 
 	// ElidedCalls is WHAT those calls were, by identity — each tool and
@@ -2068,22 +2101,33 @@ type PendingStore interface {
 	// are withheld is kept with neither ([BridgeCall.Withheld]), whatever the
 	// caller handed.
 	//
-	// AND WITH THE IDENTITIES THE APPEND CARRIES, in the same write: earlier
-	// calls of the job whose own append never landed, counted as calls the
-	// row does not list ([BridgeAppend.Unrecorded]), and the calls the run's
-	// call log took in from the call's own work ([BridgeAppend.Absorbed]).
+	// AND WITH WHAT THE APPEND CARRIES, in the same write: the calls the
+	// run's call log took in from the call's own work
+	// ([BridgeAppend.Absorbed]), and the session's earlier appends of the
+	// job that did not land, each whole, listed as the calls they are
+	// ([BridgeAppend.Owed]). An append may carry those alone, naming no call
+	// of its own.
 	//
-	// ONCE, HOWEVER OFTEN IT IS ASKED: an append whose call the row already
-	// holds under the job — its place ([BridgeCall.Seq]), the instant the
-	// bridge handed it over, its name and its identity — is answered
-	// recorded and writes nothing, so a session that tries an append again
-	// after its answer was lost never records the call, or what it carried,
-	// twice.
+	// ONCE, HOWEVER OFTEN IT IS ASKED, AND HOWEVER MANY APPENDS CARRY IT: a
+	// call the row already lists under the job — its place
+	// ([BridgeCall.Seq]), the instant the bridge handed it over, its name and
+	// its identity, all four — is not listed again, and what it absorbed is
+	// not counted again, since both landed in the write that listed it. So a
+	// session that asks an append again after its answer was lost, or carries
+	// it on a later append as owed, never records the call, or what it
+	// carried, twice. A call the count bound has dropped from the middle
+	// since it landed is no longer listed, so a carry of it lists it again
+	// and counts what it absorbed again: an over-count of a resumed call log,
+	// the safe direction, and one that takes some hundred of the job's calls
+	// landing after it before its carry ([appendBounded] drops the oldest of
+	// the tail first) — where a session carries what it owes on its very next
+	// append.
 	//
-	// Reports whether the call was recorded. FALSE IS NOT AN ERROR: it is a
-	// run whose row is gone, or a job that is over — the ordinary shape of a
-	// late call from a box that is shutting down — and the caller must not
-	// fail the box's call over it.
+	// Reports whether every call the append names is recorded: false where
+	// the row does not hold the job. FALSE IS NOT AN ERROR: it is a run whose
+	// row is gone, or a job that is over — the ordinary shape of a late call
+	// from a box that is shutting down — and the caller must not fail the
+	// box's call over it.
 	AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error)
 
 	// RecordAsk records the question job `launch` asked a person through its

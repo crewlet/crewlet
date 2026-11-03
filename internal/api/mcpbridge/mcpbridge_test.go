@@ -81,6 +81,9 @@ type ledger struct {
 	mu    sync.Mutex
 	calls []mcpbridge.Call
 	err   error
+	// settled counts the times the ledger was asked to carry what it owes
+	// ([mcpbridge.Ledger.Settle]).
+	settled int
 }
 
 func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
@@ -91,6 +94,20 @@ func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
 	}
 	l.calls = append(l.calls, c)
 	return nil
+}
+
+func (l *ledger) Settle(context.Context, string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.settled++
+	return false
+}
+
+// settles is how many times the ledger was asked to carry what it owes.
+func (l *ledger) settles() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.settled
 }
 
 func (l *ledger) rows() []mcpbridge.Call {
@@ -896,6 +913,59 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 	if res := callTool(t, dial(t, url), "read_page", map[string]any{}); res.IsError {
 		t.Errorf("the relaunched run cannot dispatch: %s", text(res))
 	}
+}
+
+// EVERY WAY A SESSION ENDS CARRIES WHAT ITS LEDGER OWES, ONCE. A call whose
+// record did not land is carried by a later call of its session, and no call
+// comes after the session's end: so the run's close, the relaunch's opening that
+// replaces it and the seat leaving this node each ask the session's ledger to
+// carry what it still owes before they return, and an end that finds the
+// session ended already asks again for nothing. The run's collection asks the
+// job's own session too, without ending it; a job the run's opening does not
+// serve is asked for nothing.
+//
+// Mutation: end an opening without asking its ledger, and a session that ends
+// owing calls leaves them off the run's record.
+func TestEveryWayASessionEndsCarriesWhatItsLedgerOwesOnce(t *testing.T) {
+	t.Parallel()
+	for name, end := range map[string]func(*fixture){
+		"closed": func(f *fixture) {
+			f.bridge.Close("run-1")
+			f.bridge.Close("run-1")
+		},
+		"replaced by its relaunch": func(f *fixture) {
+			f.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "run-1", Launch: "job-2", Handle: "dev",
+				Role: "Engineer", Surface: f.surface, Ledger: &ledger{}})
+		},
+		"released with its seat": func(f *fixture) {
+			f.bridge.ReleaseSeat(seat())
+			f.bridge.Close("run-1")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			f.open(t)
+			end(f)
+			if n := f.ledger.settles(); n != 1 {
+				t.Errorf("the ended session's ledger was asked to carry what it owes %d times, want once", n)
+			}
+		})
+	}
+	t.Run("asked by its collection", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		f.open(t)
+		f.bridge.Settle(t.Context(), "run-1", "job-2")
+		if n := f.ledger.settles(); n != 0 {
+			t.Errorf("an ask for a job the opening does not serve reached its ledger %d times", n)
+		}
+		f.bridge.Settle(t.Context(), "run-1", "job-1")
+		if n := f.ledger.settles(); n != 1 || f.bridge.Live() != 1 {
+			t.Errorf("the job's own ask reached its ledger %d times and left %d sessions live, want once "+
+				"and the session open", n, f.bridge.Live())
+		}
+	})
 }
 
 // AND ITS TOKEN STOPS WORKING. Closing the transport only ends a connection

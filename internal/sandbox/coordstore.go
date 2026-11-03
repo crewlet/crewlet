@@ -789,7 +789,7 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 		// ([BridgeCall.Withheld]): they ride the row sealed beside it.
 		call.Args, call.Output, call.Held, call.Digest = "", "", false, ""
 		call.Seq = run.LastBridgeSeq() + 1
-		run.appendCall(call, nil, nil)
+		run.appendCall(call, nil)
 		return true
 	})
 	switch {
@@ -1192,44 +1192,72 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 	if a.Launch == "" {
 		return false, nil
 	}
-	call := a.Call
-	if call.At.IsZero() {
-		call.At = s.clock()
+	stamped := func(call BridgeCall) BridgeCall {
+		if call.At.IsZero() {
+			call.At = s.clock()
+		}
+		return call
 	}
 	// SET ON EVERY ASK OF decide, which runs again on a lost race: whether the
-	// row as the last attempt read it holds this call already.
+	// row as the last attempt read it holds the job the append names.
 	held := false
 	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
-		if a.Launch != run.LaunchID {
-			held = false
+		if held = a.Launch == run.LaunchID; !held {
 			return false
 		}
-		// AN APPEND ASKED AGAIN — one that landed and whose answer was lost,
-		// which its session tries again — is answered recorded, writing
-		// nothing: the call, and the identities it carried, are on the row
-		// once. The same call is the same place ([BridgeCall.Seq]) and the
-		// same instant the bridge handed it to the surface, under the same
-		// name and identity, as the row keeps them: a place alone could be
-		// another call's, numbered by a session opened again on the job while
-		// one of the closed session's calls was still in flight, and an
-		// instant alone is not set on a call nothing ran.
-		kept := keptCall(call, MaxBridgeArgsBytes)
-		if held = call.Seq > 0 && slices.ContainsFunc(run.BridgeCalls, func(c BridgeCall) bool {
-			return c.Seq == kept.Seq && c.StartedAt.Equal(kept.StartedAt) && c.Name == kept.Name &&
-				c.Digest == kept.Digest
-		}); held {
+		// WHAT THE SESSION OWED FIRST, in the order it was owed: each call
+		// the row does not list yet, listed with what its own work absorbed
+		// — and one it lists already, which landed after all and lost its
+		// answer, skipped with what it absorbed, which landed beside it.
+		changed := false
+		for _, owed := range a.Owed {
+			if run.lists(owed.Call) {
+				continue
+			}
+			// HELD TO THE LOG'S SHARE OF THE ROW, as the call this append
+			// names is ([PendingRun.appendCall]).
+			run.appendCall(stamped(owed.Call), owed.Absorbed)
+			changed = true
+		}
+		// AND THE CALL ITSELF, where the append names one and the row does
+		// not hold it already: an append ASKED AGAIN — one that landed and
+		// whose answer was lost, which its session tries again — writes
+		// nothing, the call and what it carried being on the row once.
+		if a.Call.Name != "" && !run.lists(a.Call) {
+			run.appendCall(stamped(a.Call), a.Absorbed)
+			changed = true
+		}
+		if !changed {
 			return false
 		}
-		// HELD TO THE LOG'S SHARE OF THE ROW, the call within its own and the
-		// middle dropped by identity, with the identities the append carries
-		// ([PendingRun.appendCall]).
-		run.appendCall(call, a.Unrecorded, a.Absorbed)
 		// Onto THIS job's record: the append names the job the row holds,
 		// or it was dropped above.
 		run.Launch.Bridged = run.Launch.Bridged.Newest(a.Spent)
 		return true
 	})
 	return won || (err == nil && held), err
+}
+
+// lists reports whether the row's log holds call already: the same place
+// ([BridgeCall.Seq]), the same instant the bridge handed it to the surface,
+// and the same name and identity, all as the row keeps them ([keptCall]).
+//
+// ALL FOUR, because each alone is some other call's. A place alone could be a
+// call numbered by a session opened again on the job while one of the closed
+// session's calls was still in flight, which reuses it; an instant alone is
+// not set on a call nothing ran; and the same tool called with other arguments
+// at the same place and instant is another call, as is another tool. A call
+// with no place is never one the row holds: the bridge numbers every call it
+// records.
+func (r PendingRun) lists(call BridgeCall) bool {
+	if call.Seq <= 0 {
+		return false
+	}
+	kept := keptCall(call, MaxBridgeArgsBytes)
+	return slices.ContainsFunc(r.BridgeCalls, func(c BridgeCall) bool {
+		return c.Seq == kept.Seq && c.StartedAt.Equal(kept.StartedAt) && c.Name == kept.Name &&
+			c.Digest == kept.Digest
+	})
 }
 
 // RecordAsk records the question a running job asked. See the contract on

@@ -36,7 +36,10 @@ var bytesCases = []struct {
 	{"ANewRoundFoldsTheDroppedCallsIntoTheTurnsEarlierCalls", testANewRoundFoldsTheDroppedCallsIntoTheTurnsEarlierCalls},
 	{"AParkedStatePastItsShareIsRefused", testAParkedStatePastItsShareIsRefused},
 	{"ARunsTitleIsHeldToItsShare", testARunsTitleIsHeldToItsShare},
-	{"AnAppendCarriesWhatItsSessionOwedAndLandsOnce", testAnAppendCarriesWhatItsSessionOwedAndLandsOnce},
+	{"AnAppendCarriesWhatItsSessionOwedWhole", testAnAppendCarriesWhatItsSessionOwedWhole},
+	{"AnOwedAppendThatLandedIsListedOnce", testAnOwedAppendThatLandedIsListedOnce},
+	{"AnAppendIsTheSameCallOnlyAtItsPlaceInstantNameAndIdentity",
+		testAnAppendIsTheSameCallOnlyAtItsPlaceInstantNameAndIdentity},
 	{"AWithheldCallIsKeptWithoutItsIdentity", testAWithheldCallIsKeptWithoutItsIdentity},
 	{"AnAnswerPastItsShareIsRefused", testAnAnswerPastItsShareIsRefused},
 	{"AHeldCallPastItsShareIsRefused", testAHeldCallPastItsShareIsRefused},
@@ -435,28 +438,53 @@ func testARunsTitleIsHeldToItsShare(t *testing.T, s sandbox.PendingStore) {
 	check("a relaunch")
 }
 
-// AN APPEND CARRIES WHAT ITS SESSION OWED, AND LANDS ONCE. A bridged call whose
-// own append never landed is owed by its session, by identity, and the next
-// append carries it: the row counts it as a call of the round it does not list,
-// beside the dropped middle, so a resumed call log seeds it and a reader of
-// whether the turn replied reads it. The calls a call's own work made — a
-// delegated worker's — ride the same append into a tally of their own, which
-// no reader of the round's deliveries counts. And an append whose answer was
-// lost, asked again, is answered recorded and changes nothing: the call and
-// what it carried are on the row once.
+// callAt is a call the bridge ran at place seq, handed to the surface at
+// started, as an append hands it to the row.
+func callAt(name string, seq int, started time.Time, digest string) sandbox.BridgeCall {
+	return sandbox.BridgeCall{Name: name, Seq: seq, StartedAt: started, Digest: digest}
+}
+
+// listed is how many times the row lists a call at place seq under name.
+func listed(run sandbox.PendingRun, name string, seq int) int {
+	n := 0
+	for _, c := range run.BridgeCalls {
+		if c.Name == name && c.Seq == seq {
+			n++
+		}
+	}
+	return n
+}
+
+// AN APPEND CARRIES WHAT ITS SESSION OWED, WHOLE, AND LANDS ONCE. A bridged
+// call whose own append did not land is owed by its session as the append it
+// was — the call and what its own work absorbed — and a later append carries
+// it: the row LISTS it, as the call it is, beside the call that carried it,
+// so a resumed call log seeds it by its identity, the delivery checks read
+// its outcome, and the board shows it where it was made. An append that names
+// no call of its own — what a session sends once its job is over — carries
+// what it owes all the same. The calls a call's own work made — a delegated
+// worker's — ride the same write into a tally of their own, which no reader of
+// the round's deliveries counts. And an append whose answer was lost, asked
+// again, is answered recorded and changes nothing.
 //
-// Mutation: drop the owed identities, or the absorbed ones, and a resumed run
-// counts fewer calls than its process did; append a repeat again, and both
-// tallies double.
-func testAnAppendCarriesWhatItsSessionOwedAndLandsOnce(t *testing.T, s sandbox.PendingStore) {
+// Mutation: drop the owed appends, or what they absorbed, and a resumed run
+// counts fewer calls than its process did; count an owed call as a call the
+// row does not list, and the board says a call from the middle went missing
+// that the row could have shown; append a repeat again, and the calls and the
+// tally double.
+func testAnAppendCarriesWhatItsSessionOwedWhole(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bytes-owed")
 	launch := mustLaunched(t, s, r)
 	a := sandbox.BridgeAppend{Launch: launch,
-		Call: sandbox.BridgeCall{Name: "delegate", Digest: digestOf(3), Seq: 3, StartedAt: base},
-		Unrecorded: []sandbox.ElidedCall{{Name: "comment_on_work_item", Digest: digestOf(1), Calls: 1},
-			{Name: "read_file", Digest: digestOf(2), Calls: 1, Failed: 1}},
+		Call:     callAt("delegate", 3, base.Add(3*time.Second), digestOf(3)),
 		Absorbed: []sandbox.ElidedCall{{Name: "leave_channel", Digest: digestOf(9), Calls: 1}},
+		Owed: []sandbox.OwedAppend{
+			{Call: callAt("comment_on_work_item", 1, base.Add(time.Second), digestOf(1))},
+			{Call: sandbox.BridgeCall{Name: "read_file", Seq: 2, StartedAt: base.Add(2 * time.Second),
+				Digest: digestOf(2), Failed: true},
+				Absorbed: []sandbox.ElidedCall{{Name: "join_channel", Digest: digestOf(8), Calls: 1}}},
+		},
 	}
 	for attempt := range 2 {
 		if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, a); err != nil || !recorded {
@@ -464,29 +492,142 @@ func testAnAppendCarriesWhatItsSessionOwedAndLandsOnce(t *testing.T, s sandbox.P
 		}
 	}
 	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != 1 || got.BridgeCallsElided != 2 {
-		t.Fatalf("the row lists %d calls and counts %d it does not list, want the one and the two owed",
-			len(got.BridgeCalls), got.BridgeCallsElided)
+	if len(got.BridgeCalls) != 3 || got.BridgeCallsElided != 0 || len(got.Elided()) != 0 {
+		t.Fatalf("the row lists %d calls and counts %d it does not list (%+v), want the call and the two "+
+			"it carried listed, and none unlisted", len(got.BridgeCalls), got.BridgeCallsElided, got.Elided())
 	}
-	elided := got.Elided()
-	if len(elided) != 2 || elided[0].Name != "comment_on_work_item" || elided[1].Failed != 1 || !got.ElisionKnown() {
-		t.Errorf("the owed calls read %+v (known %v), want both by identity and outcome", elided,
-			got.ElisionKnown())
+	for _, want := range []struct {
+		name string
+		seq  int
+	}{{"comment_on_work_item", 1}, {"read_file", 2}, {"delegate", 3}} {
+		if n := listed(got, want.name, want.seq); n != 1 {
+			t.Errorf("the row lists %s at %d %d times, want once", want.name, want.seq, n)
+		}
+	}
+	if !got.BridgeCalls[1].Failed {
+		t.Error("the owed call that failed is listed as a success")
 	}
 	absorbed := got.Absorbed()
-	if len(absorbed) != 1 || absorbed[0].Name != "leave_channel" || absorbed[0].Calls != 1 {
-		t.Errorf("the delegate's own work reads %+v, want the worker's one call", absorbed)
+	if len(absorbed) != 2 || absorbed[0].Name != "join_channel" || absorbed[1].Name != "leave_channel" ||
+		absorbed[0].Calls != 1 || absorbed[1].Calls != 1 {
+		t.Errorf("the calls' own work reads %+v, want each worker's one call", absorbed)
 	}
-	// ANOTHER CALL AT THE SAME PLACE IS NOT THE SAME CALL: a session opened
-	// again on the job numbers its calls after the row's, and a call the
-	// closed session still had in flight can land at a place it reuses.
-	other := sandbox.BridgeAppend{Launch: launch,
-		Call: sandbox.BridgeCall{Name: "read_file", Digest: digestOf(4), Seq: 3, StartedAt: base.Add(time.Second)}}
-	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, other); err != nil || !recorded {
-		t.Fatalf("another call at the same place = %v, %v; want it recorded", recorded, err)
+
+	// A CARRY THAT NAMES NO CALL OF ITS OWN, as a session sends one at its
+	// job's end: what it owed is listed all the same.
+	carry := sandbox.BridgeAppend{Launch: launch, Owed: []sandbox.OwedAppend{
+		{Call: callAt(sandbox.SubmitWorkTool, 4, base.Add(4*time.Second), digestOf(4))}}}
+	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, carry); err != nil || !recorded {
+		t.Fatalf("a carry naming no call = %v, %v; want it recorded", recorded, err)
 	}
-	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 2 {
-		t.Errorf("the row lists %d calls, want both calls made at the one place", len(got.BridgeCalls))
+	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 4 || listed(got, sandbox.SubmitWorkTool, 4) != 1 {
+		t.Errorf("after the carry the row lists %+v, want the owed submission beside the three", got.BridgeCalls)
+	}
+	// AND A CARRY FOR A JOB THE ROW NO LONGER HOLDS is not recorded, and is
+	// said so: a relaunch replaced the job its calls were made in.
+	carry.Launch = "another-job"
+	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, carry); err != nil || recorded {
+		t.Errorf("a carry for another job = %v, %v; want it unrecorded, without an error", recorded, err)
+	}
+}
+
+// AN OWED APPEND THAT LANDED IS LISTED ONCE. A session cannot tell an append
+// that did not land from one that landed and lost every answer — the broker
+// took the write and the connection dropped before its acknowledgement — so it
+// owes both alike, whole, with what they carried, and a later append carries
+// them. The row lists each call it does not hold, and skips the one it does,
+// with what that one absorbed and what it carried: all of it landed in the
+// write that listed it. So a call is listed once, and its work counted once,
+// however many appends carried it.
+//
+// Mutation: list or count an owed call without asking whether the row holds
+// it already, and the landed call is listed twice and its worker's call
+// counted twice.
+func testAnOwedAppendThatLandedIsListedOnce(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bytes-owed-landed")
+	launch := mustLaunched(t, s, r)
+	c0 := sandbox.OwedAppend{Call: callAt("read_page", 5, base.Add(5*time.Second), digestOf(5))}
+	x := sandbox.OwedAppend{Call: callAt("delegate", 7, base.Add(7*time.Second), digestOf(7)),
+		Absorbed: []sandbox.ElidedCall{{Name: "leave_channel", Digest: digestOf(70), Calls: 1}}}
+	// X LANDS, carrying C0 — and its session, its answer lost, owes both.
+	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{Launch: launch,
+		Call: x.Call, Absorbed: x.Absorbed, Owed: []sandbox.OwedAppend{c0}}); err != nil || !recorded {
+		t.Fatalf("X's append = %v, %v; want it recorded", recorded, err)
+	}
+	// Y CARRIES THEM, as its session owed them.
+	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{Launch: launch,
+		Call: callAt("post_message", 8, base.Add(8*time.Second), digestOf(8)),
+		Owed: []sandbox.OwedAppend{c0, x}}); err != nil || !recorded {
+		t.Fatalf("Y's append = %v, %v; want it recorded", recorded, err)
+	}
+	got := mustGet(t, s, r.TurnID)
+	for _, want := range []struct {
+		name string
+		seq  int
+	}{{"read_page", 5}, {"delegate", 7}, {"post_message", 8}} {
+		if n := listed(got, want.name, want.seq); n != 1 {
+			t.Errorf("the row lists %s at %d %d times, want once", want.name, want.seq, n)
+		}
+	}
+	if len(got.BridgeCalls) != 3 || got.BridgeCallsElided != 0 {
+		t.Errorf("the row lists %d calls and counts %d it does not list, want the three and none",
+			len(got.BridgeCalls), got.BridgeCallsElided)
+	}
+	if absorbed := got.Absorbed(); len(absorbed) != 1 || absorbed[0].Calls != 1 {
+		t.Errorf("X's own work is counted %+v, want its worker's one call once", absorbed)
+	}
+}
+
+// AN APPEND IS THE SAME CALL ONLY AT ITS PLACE, INSTANT, NAME AND IDENTITY. The
+// row knows a call it already holds by all four as it keeps them, so an append
+// asked again lands once; and a call that differs from one the row holds in
+// any ONE of them is another call, and is listed beside it. Each has a call
+// behind it that the other three cannot tell apart: a session opened again on
+// the job numbers its calls after the row's last, so a call the closed session
+// had in flight can land at a place the new one reuses (the place alone); a
+// model that makes the same call again in a reopened session makes it at
+// another instant (the instant); and calls made side by side, or one tool
+// after another, are told apart by what they asked for and which tool they
+// named (the identity, the name).
+//
+// Mutation: drop any one of the four from the comparison, and the call that
+// differs from the landed one in it alone is answered as the landed one's
+// retry and never listed.
+func testAnAppendIsTheSameCallOnlyAtItsPlaceInstantNameAndIdentity(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bytes-same-call")
+	launch := mustLaunched(t, s, r)
+	landed := callAt("post_message", 5, base, digestOf(1))
+	appended := func(call sandbox.BridgeCall) {
+		t.Helper()
+		if recorded, err := s.AppendBridgeCall(ctx, r.TurnID,
+			sandbox.BridgeAppend{Launch: launch, Call: call}); err != nil || !recorded {
+			t.Fatalf("append of %+v = %v, %v; want it recorded", call, recorded, err)
+		}
+	}
+	appended(landed)
+	for _, tc := range []struct {
+		what string
+		call sandbox.BridgeCall
+	}{
+		{"another place", callAt("post_message", 6, base, digestOf(1))},
+		{"another instant", callAt("post_message", 5, base.Add(time.Second), digestOf(1))},
+		{"another tool", callAt("read_file", 5, base, digestOf(1))},
+		{"another identity", callAt("post_message", 5, base, digestOf(2))},
+	} {
+		before := len(mustGet(t, s, r.TurnID).BridgeCalls)
+		appended(tc.call)
+		if after := len(mustGet(t, s, r.TurnID).BridgeCalls); after != before+1 {
+			t.Errorf("%s: the row lists %d calls after it, want %d: a call that differs from the landed "+
+				"one in %s alone was taken for its retry", tc.what, after, before+1, tc.what)
+		}
+	}
+	// AND THE LANDED CALL ASKED AGAIN is its retry, listed no more.
+	before := len(mustGet(t, s, r.TurnID).BridgeCalls)
+	appended(landed)
+	if after := len(mustGet(t, s, r.TurnID).BridgeCalls); after != before {
+		t.Errorf("the landed call asked again left %d calls listed, want %d", after, before)
 	}
 }
 

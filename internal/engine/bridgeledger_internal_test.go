@@ -2,17 +2,24 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -261,17 +268,19 @@ func (s *flakyStore) AppendBridgeCall(_ context.Context, _ string, a sandbox.Bri
 	return true, nil
 }
 
-// A BRIDGED CALL'S RECORD THAT DID NOT LAND IS TRIED AGAIN, AND THEN OWED. The
-// call has run and its answer goes back to the box whatever the row says, but a
-// call missing from the row is one a resumed segment's call log never counts —
-// and a later call asking for something else then derives its operation id.
-// So a failed append is tried again before the answer goes back, which rides a
-// store's blip; and a call whose every attempt failed is owed by identity, its
-// own work's calls with it, and carried to the row by the session's next
-// append, counted there as a call of the round the row does not list.
+// A BRIDGED CALL'S RECORD THAT DID NOT LAND IS TRIED AGAIN, AND THEN OWED,
+// WHOLE. The call has run and its answer goes back to the box whatever the row
+// says, but a call missing from the row is one a resumed segment's call log
+// never counts — and a later call asking for something else then derives its
+// operation id. So a failed append is tried again before the answer goes back,
+// which rides a store's blip; and an append whose every attempt failed is owed
+// as the append it was — the call, kept as the row would keep it, and what its
+// own work absorbed — and carried by the session's next append, which the row
+// lists it from once whether or not one of those attempts landed after all.
 //
 // Mutation: append once and give up, and a blip loses the call; drop a call
-// whose attempts all failed, and the next append carries nothing of it.
+// whose attempts all failed, or owe it by identity alone, and the next append
+// carries nothing the row can list.
 func TestABridgedCallsRecordThatDidNotLandIsTriedAgainAndThenOwed(t *testing.T) {
 	t.Parallel()
 	blip := &flakyStore{fail: func(attempt int, _ sandbox.BridgeAppend) bool { return attempt == 1 }}
@@ -289,8 +298,9 @@ func TestABridgedCallsRecordThatDidNotLandIsTriedAgainAndThenOwed(t *testing.T) 
 	l = newBridgeLedger(down, nil)
 	l.bind("launch-1")
 	worker := []toolloop.Called{{Tool: "leave_channel", Digest: "w1"}}
+	started := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
 	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "delegate", Failed: true},
-		Seq: 1, Digest: "d1", Absorbed: worker}); err == nil {
+		Seq: 1, StartedAt: started, Digest: "d1", Absorbed: worker}); err == nil {
 		t.Fatal("an append the store refused every time answered no error")
 	}
 	if len(down.asked) != appendAttempts {
@@ -304,18 +314,187 @@ func TestABridgedCallsRecordThatDidNotLandIsTriedAgainAndThenOwed(t *testing.T) 
 		t.Fatalf("the store took %d appends, want the second call's", len(down.landed))
 	}
 	carried := down.landed[0]
-	wantOwed := []sandbox.ElidedCall{{Name: "delegate", Digest: "d1", Calls: 1, Failed: 1}}
-	wantAbsorbed := []sandbox.ElidedCall{{Name: "leave_channel", Digest: "w1", Calls: 1}}
-	if !reflect.DeepEqual(carried.Unrecorded, wantOwed) || !reflect.DeepEqual(carried.Absorbed, wantAbsorbed) {
-		t.Errorf("the next append carried %+v owed and %+v absorbed, want %+v and %+v", carried.Unrecorded,
-			carried.Absorbed, wantOwed, wantAbsorbed)
+	want := []sandbox.OwedAppend{{
+		Call:     sandbox.BridgeCall{Name: "delegate", Failed: true, Seq: 1, StartedAt: started, Digest: "d1"},
+		Absorbed: []sandbox.ElidedCall{{Name: "leave_channel", Digest: "w1", Calls: 1}},
+	}}
+	if !reflect.DeepEqual(carried.Owed, want) || len(carried.Absorbed) != 0 {
+		t.Errorf("the next append carried %+v owed and %+v absorbed of its own, want %+v and none",
+			carried.Owed, carried.Absorbed, want)
 	}
 	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"},
 		Seq: 3, Digest: "d3"}); err != nil {
 		t.Fatalf("a third append: %v", err)
 	}
-	if again := down.landed[1]; len(again.Unrecorded) != 0 || len(again.Absorbed) != 0 {
-		t.Errorf("the append after the one that carried the owed call carried %+v and %+v again",
-			again.Unrecorded, again.Absorbed)
+	if again := down.landed[1]; len(again.Owed) != 0 {
+		t.Errorf("the append after the one that carried the owed call carried %+v again", again.Owed)
+	}
+}
+
+// outageStore is a pending store whose bridged appends fail while it is down,
+// as a coordination store does while its stream elects a leader, and are the
+// store's own otherwise.
+type outageStore struct {
+	sandbox.PendingStore
+	down atomic.Bool
+}
+
+func (s *outageStore) AppendBridgeCall(ctx context.Context, turnID string, a sandbox.BridgeAppend) (bool, error) {
+	if s.down.Load() {
+		return false, errors.New("the coordination store is electing a leader")
+	}
+	return s.PendingStore.AppendBridgeCall(ctx, turnID, a)
+}
+
+// bridgeEndRig is a run's job open on a real run store, with its bridge
+// session open on a real bridge, the session's ledger the engine's own.
+type bridgeEndRig struct {
+	store  *outageStore
+	bridge *mcpbridge.Bridge
+	ledger *bridgeLedger
+	turnID string
+	launch string
+}
+
+func newBridgeEndRig(t *testing.T) *bridgeEndRig {
+	t.Helper()
+	ctx := t.Context()
+	r := &bridgeEndRig{store: &outageStore{PendingStore: sandbox.NewCoordStore(memory.NewFleet())},
+		turnID: "run-1"}
+	seatID, _ := org.DeriveAgentID("Nimbus", "dev")
+	launch, err := r.store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: r.turnID, AgentID: seatID.String(),
+		AgentHandle: "dev", Role: "Engineer", Harness: "claude-code", CreatedAt: time.Now().UTC()},
+		sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	r.launch = launch.LaunchID
+	if _, err := r.store.MarkSuspended(ctx, r.turnID,
+		sandbox.Suspension{State: json.RawMessage(`{"version":4}`)}); err != nil {
+		t.Fatalf("MarkSuspended: %v", err)
+	}
+	r.bridge, err = mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "test-key"),
+		BaseURL: "https://engine.example.com"})
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	r.bridge.Handler()
+	seat := &org.Role{Name: "Engineer", DeclaredHandle: "dev"}
+	turn := &turnctx.Turn{RunID: r.turnID, Seat: seat,
+		Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{seat}}}
+	r.ledger = newBridgeLedger(r.store, nil)
+	r.ledger.bind(r.launch)
+	if url := r.bridge.Open(ctx, &mcpbridge.Session{RunID: r.turnID, Launch: r.launch, Handle: "dev",
+		Role: "Engineer", Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).ForTurn(turn),
+		Ledger: r.ledger}); url == "" {
+		t.Fatal("the bridge opened no session for the run's job")
+	}
+	return r
+}
+
+// submission is the run's last call as the bridge records it: its submission,
+// made while the store was electing a leader.
+func (r *bridgeEndRig) submission(t *testing.T) {
+	t.Helper()
+	r.store.down.Store(true)
+	defer r.store.down.Store(false)
+	if err := r.ledger.Append(t.Context(), r.turnID, mcpbridge.Call{
+		Call: tools.Call{Name: sandbox.SubmitWorkTool, Args: map[string]any{"outcome": "delivered"},
+			Output: "submitted"},
+		Seq: 1, StartedAt: time.Now().UTC(), Digest: strings.Repeat("d", 64)}); err == nil {
+		t.Fatal("the submission's append landed while the store was down")
+	}
+}
+
+// row is the job's row as the store holds it.
+func (r *bridgeEndRig) row(t *testing.T) sandbox.PendingRun {
+	t.Helper()
+	run, found, err := r.store.Get(t.Context(), r.turnID)
+	if err != nil || !found {
+		t.Fatalf("Get: %v %v", found, err)
+	}
+	return run
+}
+
+// A SESSION THAT ENDS OWING CALLS CARRIES THEM FIRST. A job's last call — its
+// submission — has no later call of its own to carry it, so when its append
+// meets a store's blip, the session's end carries it: the bridge's close of the
+// run waits on the ledger's carry of what it still owes, and the row lists the
+// call once the close returns, though no call came after it.
+//
+// Mutation: end the session without the ledger's carry, and the submission the
+// run made is on no record of it.
+func TestASessionThatEndsOwingCallsCarriesThemFirst(t *testing.T) {
+	t.Parallel()
+	r := newBridgeEndRig(t)
+	r.submission(t)
+	if n := len(r.row(t).BridgeCalls); n != 0 {
+		t.Fatalf("the row lists %d calls before the session ended, want the submission still owed", n)
+	}
+	r.bridge.Close(r.turnID)
+	row := r.row(t)
+	if len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != sandbox.SubmitWorkTool ||
+		row.BridgeCalls[0].Seq != 1 || row.BridgeCallsElided != 0 {
+		t.Errorf("once the session ended the row lists %+v (%d unlisted), want the submission it owed",
+			row.BridgeCalls, row.BridgeCallsElided)
+	}
+	if n := r.ledger.owing(); n != 0 {
+		t.Errorf("the ledger still owes %d appends once its session ended", n)
+	}
+}
+
+// AND THE RUN'S COLLECTION HAS IT CARRIED BEFORE IT READS THE JOB'S RECORD. A
+// job's session lives until its run settles or its next job replaces it, both
+// after the collection has read what the job did; so the collection asks the
+// job's own session to carry what it owes, and the record it reads holds the
+// submission whose append met the blip. A job the session does not serve —
+// the run's next one, or another run's — is owed nothing here.
+//
+// Mutation: answer the collection's ask without the ledger's carry, or carry
+// for a job the session does not serve, and this goes red.
+func TestARunsCollectionHasItsJobsOwedCallsCarriedFirst(t *testing.T) {
+	t.Parallel()
+	r := newBridgeEndRig(t)
+	r.submission(t)
+	if r.bridge.Settle(t.Context(), r.turnID, "another-job") {
+		t.Error("a job the session does not serve was answered as carried")
+	}
+	if n := len(r.row(t).BridgeCalls); n != 0 {
+		t.Fatalf("the row lists %d calls after an ask for another job", n)
+	}
+	if !r.bridge.Settle(t.Context(), r.turnID, r.launch) {
+		t.Fatal("the job's own session carried nothing it owed")
+	}
+	if row := r.row(t); len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != sandbox.SubmitWorkTool {
+		t.Errorf("the record the collection reads lists %+v, want the submission", row.BridgeCalls)
+	}
+	if r.bridge.Live() != 1 {
+		t.Error("the collection's ask ended the job's session, which lives until its run settles")
+	}
+}
+
+// A CARRY THAT CANNOT LAND IS SAID, AND KEPT WHILE IT MIGHT STILL. One the store
+// does not take within its bound is still owed, for the session's next append
+// or its next carry; one the store answers for a row that has moved on — the
+// run's next job replaced this one — is forgotten, since no record of the run
+// will ever take it.
+//
+// Mutation: forget the calls of a carry the store did not take, and a blip that
+// outlasts the collection's ask loses them before the session's end can try.
+func TestACarryThatCannotLandIsKeptWhileItMightStill(t *testing.T) {
+	t.Parallel()
+	r := newBridgeEndRig(t)
+	r.submission(t)
+	r.store.down.Store(true)
+	if r.ledger.Settle(t.Context(), r.turnID) {
+		t.Fatal("a carry the store refused answered carried")
+	}
+	r.store.down.Store(false)
+	if n := r.ledger.owing(); n != 1 {
+		t.Fatalf("the ledger owes %d appends after a carry the store refused, want the submission still", n)
+	}
+	r.ledger.bind("another-job")
+	if r.ledger.Settle(t.Context(), r.turnID) || r.ledger.owing() != 0 {
+		t.Errorf("a carry for a job the row no longer holds left %d owed, want it forgotten", r.ledger.owing())
 	}
 }

@@ -380,6 +380,19 @@ type Ledger interface {
 	// happened, so failing the call would tell a harness to retry
 	// work that has been done.
 	Append(ctx context.Context, runID string, call Call) error
+
+	// Settle carries onto the run's record whatever calls the ledger still
+	// owes it — ones whose own record did not land, which it carries on a
+	// later call's — before it returns, under a context and a bound of its
+	// own, and reports whether it carried any. The bridge asks for it as
+	// the session's opening ENDS ([Bridge.Close], a relaunch's opening
+	// replacing it, [Bridge.ReleaseSeat]): no call of the session comes
+	// after that to carry them, and a session that ended with calls owed
+	// would leave them off the run's record even where the store answers a
+	// second later. And the run's collection asks for it through
+	// [Bridge.Settle] before it reads the job's record, since a job's last
+	// call has no later call of its own.
+	Settle(ctx context.Context, runID string) bool
 }
 
 // Call is one finished bridged call, as the ledger records it.
@@ -939,6 +952,10 @@ func (b *Bridge) routeOf(s *Session) (route, error) {
 // engine cleans up on the completion path, on the failure path and on the
 // boot-recovery sweep, and each of those has to be safe to run over a run the
 // others already finished.
+//
+// AND IT RETURNS ONCE THE SESSION'S LEDGER HAS CARRIED WHAT IT OWES
+// ([Ledger.Settle]), bounded by the ledger: the paths that end a run go on to
+// read its record, or to delete it.
 func (b *Bridge) Close(runID string) {
 	if b == nil {
 		return
@@ -951,6 +968,28 @@ func (b *Bridge) Close(runID string) {
 	}
 	b.mu.Unlock()
 	opened.end()
+}
+
+// Settle asks the session serving job `launch` of a run to carry onto the run's
+// record whatever calls it still owes ([Ledger.Settle]), and reports whether
+// it carried any. For the run's collection, which asks before it reads the
+// job's record: the job is over, so no call of its own will carry them, and
+// its session has not ended yet — a run's session lives until its run settles
+// or its next job replaces it, both after the record is read.
+//
+// THE JOB'S OWN SESSION, or nothing: a run whose opening on this node serves
+// another job — its next one — or none at all owes this job nothing here.
+func (b *Bridge) Settle(ctx context.Context, runID, launch string) bool {
+	if b == nil {
+		return false
+	}
+	b.mu.RLock()
+	opened := b.runs[runID]
+	b.mu.RUnlock()
+	if opened == nil || opened.id != launch || opened.session.Ledger == nil {
+		return false
+	}
+	return opened.session.Ledger.Settle(ctx, runID)
 }
 
 // Live reports how many sessions are open. For the health surface and for a
@@ -1186,9 +1225,15 @@ func (b *Bridge) ReleaseSeat(seat uuid.UUID) {
 		}
 	}
 	b.mu.Unlock()
+	// SIDE BY SIDE: each ending waits on its ledger's carry of what it owes
+	// ([Ledger.Settle]), which a store in an outage holds to the ledger's
+	// bound, and a seat leaving this node waits on the slowest of them rather
+	// than on their sum.
+	var ended sync.WaitGroup
 	for _, opened := range released {
-		opened.end()
+		ended.Go(opened.end)
 	}
+	ended.Wait()
 }
 
 // Reachable reports whether a box's call can reach a session this node opens:
@@ -1503,11 +1548,21 @@ func (o *binding) end() { o.endKeeping(nil) }
 
 // endKeeping is [binding.end], closing the opening's note inbox unless it is
 // keep — the inbox an opening replacing this one serves too.
+//
+// AND IT SETTLES THE SESSION'S LEDGER ([Ledger.Settle]) before it returns,
+// once, by the call that ended it: no call of the opening comes after its end
+// to carry what the ledger owes, and every path that ends one — the run's
+// settle, a stop, a relaunch's opening, the seat leaving this node — goes on
+// to read the run's record, delete it, or hand the run to a node whose ledger
+// owes it nothing. Last, once the opening refuses every new call and its box's
+// sessions are closed, so nothing it owes is still to come but what a call
+// already in flight records itself.
 func (o *binding) endKeeping(keep SteerInbox) {
 	if o == nil {
 		return
 	}
 	o.mu.Lock()
+	first := !o.ended
 	o.ended = true
 	inbox := o.steer
 	o.steer = nil
@@ -1521,6 +1576,9 @@ func (o *binding) endKeeping(keep SteerInbox) {
 				log.Debug("mcp_bridge_session_close", "error", err)
 			}
 		}
+	}
+	if first && o.session.Ledger != nil {
+		o.session.Ledger.Settle(o.ctx, o.session.RunID)
 	}
 }
 
@@ -1817,10 +1875,10 @@ var errNoSeat = errors.New("mcpbridge: this run's tool surface is bound to no " 
 // duplicate-post failure the whole delivery machinery exists to prevent. The
 // ledger does what it can before the answer goes back — the engine's tries the
 // append again, and owes a call it still could not record to the session's
-// next append, by identity — and an error it reports here is logged: a call no
-// record holds costs the reviewer a line of evidence and a resumed segment's
-// call log a count, where a duplicated side effect costs somebody two
-// identical messages.
+// later appends and its carries ([Ledger.Settle]), whole — and an error it
+// reports here is logged: a call no record holds costs the reviewer a line of
+// evidence and a resumed segment's call log a count, where a duplicated side
+// effect costs somebody two identical messages.
 //
 // Under the run's context rather than the request's, so a box that hangs up
 // does not take the row with it.

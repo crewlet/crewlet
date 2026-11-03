@@ -124,10 +124,11 @@ func submitted(calls []ledger.Call) bool {
 }
 
 // roundCalls is the open round's calls as its run's row holds them: the calls
-// it lists ([BridgedCall]), in the order the bridge admitted them, and the
-// identities of the calls it counts without listing — the round's own that it
-// dropped or never heard from until a later call carried them (elided), and
-// the ones its calls' own work made in the run's call log (absorbed).
+// it lists ([BridgedCall]), in the order the bridge admitted them — a call
+// whose own record reached the row only with a later one among them — and the
+// identities of the calls it counts without listing: the round's own that it
+// dropped from the middle (elided), and the ones its calls' own work made in
+// the run's call log (absorbed).
 type roundCalls struct {
 	bridged  []BridgedCall
 	elided   []ledger.Elided

@@ -228,12 +228,11 @@ const (
 	MaxSubmissionCallBytes = MaxBridgeCallBytes - MaxBridgeArgsBytes + MaxSubmissionArgsBytes
 
 	// MaxElidedIdentityBytes bounds the identities of the calls the row does
-	// not list ([PendingRun.ElidedCalls]) — the log's dropped middle, and a
-	// call whose own append never landed — as the row holds them, key
-	// included. SIXTY-FOUR KIB is about 450 distinct identities at a typical
-	// tool name's length, exact; past it identities fold by tool and then
-	// into one count ([ElidedCall]), which costs a resumed call log an
-	// over-count and never an under-count.
+	// not list ([PendingRun.ElidedCalls]) — the log's dropped middle — as the
+	// row holds them, key included. SIXTY-FOUR KIB is about 450 distinct
+	// identities at a typical tool name's length, exact; past it identities
+	// fold by tool and then into one count ([ElidedCall]), which costs a
+	// resumed call log an over-count and never an under-count.
 	MaxElidedIdentityBytes = 64 << 10
 
 	// MaxAbsorbedIdentityBytes bounds the identities of the calls the run's
@@ -332,9 +331,7 @@ func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 // a `submit_work` the surface did not refuse.
 func submitted(call BridgeCall) bool { return call.Name == SubmitWorkTool && !call.Failed }
 
-// appendCall adds one finished call to run's log, with the identities its
-// append carries — unrecorded, earlier calls of the job whose own append never
-// landed, which the row counts as calls it does not list; absorbed, the calls
+// appendCall adds one finished call to run's log, with absorbed — the calls
 // the run's call log took in from the call's own work — and holds the log to
 // its bounds: the count ([MaxBridgeCalls], the middle dropped and its
 // identities kept), and the bytes, every call at its own share and each tally
@@ -353,20 +350,12 @@ func submitted(call BridgeCall) bool { return call.Name == SubmitWorkTool && !ca
 // recorded whole, in a fleet mid-upgrade, is held to its share here rather
 // than carried at whatever size it came. Keeping a call already kept changes
 // nothing ([keptCall]).
-func (r *PendingRun) appendCall(next BridgeCall, unrecorded, absorbed []ElidedCall) {
+func (r *PendingRun) appendCall(next BridgeCall, absorbed []ElidedCall) {
 	dropped, taken := r.Elided(), r.Absorbed()
 	var elided []BridgeCall
 	r.BridgeCalls, r.BridgeCallsElided, elided = appendBounded(r.BridgeCalls, r.BridgeCallsElided, next)
 	for _, call := range elided {
 		dropped = fold(dropped, identity(call), elidedTally)
-	}
-	for _, e := range unrecorded {
-		if e.Calls <= 0 {
-			continue
-		}
-		dropped = fold(dropped, ElidedCall{Name: e.Name, Digest: e.Digest, Calls: e.Calls,
-			Failed: min(e.Failed, e.Calls)}, elidedTally)
-		r.BridgeCallsElided += e.Calls
 	}
 	for _, e := range absorbed {
 		if e.Calls <= 0 {
@@ -413,8 +402,8 @@ func identity(call BridgeCall) ElidedCall {
 // kept of them, each the round's ([PendingRun.TallyRound]):
 //
 //   - [PendingRun.ElidedCalls], calls of the round the row does not list —
-//     the log's dropped middle, and a call whose own append never landed —
-//     which every reader of the round reads as calls it made;
+//     the log's dropped middle — which every reader of the round reads as
+//     calls it made;
 //   - [PendingRun.AbsorbedCalls], calls the run's call log took in from a
 //     bridged call's own work — a delegated worker's — which a resumed call
 //     log counts and no reader of the round's deliveries reads, since the

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -117,10 +118,19 @@ func decodeBridgeArgs(raw string) map[string]any {
 // id. So the append is tried [appendAttempts] times before the call's answer
 // goes back — the box cannot end its run on a call it has no answer to, so a
 // store's blip never costs the record its last calls — and a call that still
-// did not land is owed by identity: the session's next append carries it,
-// counted on the row as a call of the round it does not list
-// ([sandbox.BridgeAppend.Unrecorded]). Only an outage from the call to its
-// job's end leaves it off every record, and the log says so for each.
+// did not land is owed WHOLE, as the append it was
+// ([sandbox.BridgeAppend.Owed]): the session's next append carries it, and the
+// row lists it as the call it is, once, however many appends carry it — the
+// session cannot tell an append that did not land from one whose every answer
+// was lost after it did, and the row can.
+//
+// AND WHAT IS STILL OWED WHEN THE JOB IS OVER is carried by an append that
+// names no call of its own ([bridgeLedger.Settle]): the one the run's
+// collection asks for before it reads the job's record, so the record its
+// resume reads holds the job's last calls — a submission whose own append met
+// a store's blip, above all — and the one the session's end makes, the last
+// chance anything has to carry them. A call that none of those carried is on
+// no record, and the log says so for each: see [bridgeLedger.Settle].
 //
 // ONE PER SESSION, so one per job, and BOUND TO THAT JOB BEFORE ITS BOX EXISTS
 // ([bridgeLedger.bind], handed to [sandbox.LaunchRequest.Opened]): every append
@@ -145,11 +155,10 @@ type bridgeLedger struct {
 	// launch is the job this session's calls are recorded under, as the
 	// store opened it.
 	launch string
-	// owed are this session's calls whose append never landed, by
-	// identity, and owedAbsorbed what their own work added to the run's
-	// call log: carried by the next append that lands.
-	owed         []sandbox.ElidedCall
-	owedAbsorbed []sandbox.ElidedCall
+	// owed are this session's appends that did not land as far as it
+	// knows, whole, in the order they were made: carried by the next append
+	// that lands, or by [bridgeLedger.Settle].
+	owed []sandbox.OwedAppend
 }
 
 // The retry of one bridged call's append ([bridgeLedger]): THREE ATTEMPTS,
@@ -165,6 +174,19 @@ const (
 	appendRetryBase    = 250 * time.Millisecond
 	appendRetryCeiling = time.Second
 )
+
+// settleBudget bounds one carry of what a session still owes
+// ([bridgeLedger.Settle]), its retries included: FIVE SECONDS, as the write
+// that records a job's session start is given ([sessionStartRecordBudget]),
+// and for its reason — the carry is that same compare-and-swap of one row,
+// tried [appendAttempts] times about a second apart in all, which a healthy
+// store answers in milliseconds and a store that has not answered in five is
+// in an outage the rest of the bound would not see the end of. And it is
+// waited on: by the collection of the job's run before it reads the job's
+// record, and by whatever ends the session — a run's settle, a stop, the
+// relaunch that replaces the job, the seat leaving this node — none of which
+// should stand for longer on calls the store will not take.
+const settleBudget = 5 * time.Second
 
 var _ mcpbridge.Ledger = (*bridgeLedger)(nil)
 
@@ -221,10 +243,9 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 	// it carries the same calls, and handed back below if this one does not
 	// land either.
 	l.mu.Lock()
-	owed, owedAbsorbed := l.owed, l.owedAbsorbed
-	l.owed, l.owedAbsorbed = nil, nil
+	owed := l.owed
+	l.owed = nil
 	l.mu.Unlock()
-	absorbed := append(identitiesCalled(call.Absorbed), owedAbsorbed...)
 	a := sandbox.BridgeAppend{
 		Launch: launch,
 		Call: sandbox.BridgeCall{
@@ -254,26 +275,23 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			// what a later segment's call log counts the call by.
 			Digest: call.Digest,
 		},
-		// AND WHAT THE ROW HAS NOT HEARD OF: the session's earlier calls
-		// that never landed, and what this call's own work and theirs added
-		// to the run's call log.
-		Unrecorded: owed,
-		Absorbed:   absorbed,
-		Spent:      l.spent(),
+		// WHAT THIS CALL'S OWN WORK ADDED to the run's call log, and the
+		// session's earlier appends the row has not heard of, whole.
+		Absorbed: identitiesCalled(call.Absorbed),
+		Owed:     owed,
+		Spent:    l.spent(),
 	}
 	recorded, err := l.appendRetrying(ctx, runID, a)
 	if err != nil {
-		// OWED, by identity: the next append of the session carries it.
-		l.mu.Lock()
-		l.owed = append(append(l.owed, owed...), owedIdentity(a.Call))
-		l.owedAbsorbed = append(l.owedAbsorbed, absorbed...)
-		pending := l.owed
-		l.mu.Unlock()
+		// OWED, WHOLE, as kept as the row would keep it: the next append of
+		// the session carries it, and the row lists it once whether this
+		// one landed or not ([sandbox.BridgeAppend.Owed]).
+		l.owe(append(owed, sandbox.OwedAppend{Call: sandbox.OwedCall(a.Call), Absorbed: a.Absorbed}))
 		log.WarnContext(ctx, "bridge_call_owed", "run_id", runID, "launch_id", launch,
-			"tool", call.Name, "owed", len(pending), "error", err.Error(),
+			"tool", call.Name, "owed", l.owing(), "error", err.Error(),
 			"detail", "the call ran and its answer goes back to the box, but the run's row did not "+
-				"take it; the session's next append carries it to the row by identity, and a job "+
-				"that makes none leaves it off its record")
+				"take it; the session's next append carries it to the row, or, once the job is over, "+
+				"the carry its collection asks for and the one its session makes as it ends")
 		return err
 	}
 	if !recorded {
@@ -397,18 +415,93 @@ func (l *bridgeLedger) appendRetrying(ctx context.Context, runID string, a sandb
 	}
 }
 
-// owedIdentity is a call whose append did not land, as the row counts it once
-// a later append carries it: its tool, its identity — none where its
-// arguments are withheld ([sandbox.BridgeCall.Withheld]) — and its outcome.
-func owedIdentity(call sandbox.BridgeCall) sandbox.ElidedCall {
-	owed := sandbox.ElidedCall{Name: call.Name, Digest: call.Digest, Calls: 1}
-	if call.Withheld() {
-		owed.Digest = ""
+// owe hands appends back to what the session owes, AHEAD of whatever it came
+// to owe meanwhile, so the row hears of its calls in the order they were made.
+func (l *bridgeLedger) owe(appends []sandbox.OwedAppend) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.owed = append(slices.Clip(appends), l.owed...)
+}
+
+// owing is how many appends the session owes.
+func (l *bridgeLedger) owing() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.owed)
+}
+
+// Settle carries onto the run's row whatever this session still owes it, in
+// one append that names no call of its own, and reports whether that append
+// landed. See [mcpbridge.Ledger]: the bridge asks for it as the session ends,
+// the last chance anything has to carry the session's calls, and the run's
+// collection asks for it through the bridge before it reads the job's record
+// ([mcpbridge.Bridge.Settle]), so the record its resume reads holds the job's
+// last calls.
+//
+// UNDER A CONTEXT OF ITS OWN ([settleBudget]), never the caller's
+// cancellation: the paths that ask are the ones ending something — a settle,
+// a stop, a drain — whose own context is often already done, and a carry
+// that inherited it would carry nothing at all.
+//
+// WHEN IT CANNOT LAND, said by name, for each of the two ways:
+//
+//   - THE ROW HAS MOVED ON (`bridge_owed_calls_after_their_job`): the store
+//     answered, and its row no longer holds the job the calls were made in —
+//     a relaunch replaced the job before its owed calls were carried (the
+//     relaunch's opening ends this session only once the new job is on the
+//     row), or the run ended and its row is gone. No record of the run will
+//     hear of them, and the session forgets them.
+//   - THE STORE DID NOT TAKE THE CARRY (`bridge_owed_calls_unrecorded`):
+//     every attempt within the bound failed, the store out of reach from the
+//     calls through this carry. They stay owed, for the session's next append
+//     or its next carry; a session that is ending has none, and they are on
+//     no record.
+func (l *bridgeLedger) Settle(ctx context.Context, runID string) bool {
+	if l == nil || l.store == nil {
+		return false
 	}
-	if call.Failed {
-		owed.Failed = 1
+	l.mu.Lock()
+	launch, owed := l.launch, l.owed
+	l.owed = nil
+	l.mu.Unlock()
+	if launch == "" || len(owed) == 0 {
+		return false
 	}
-	return owed
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleBudget)
+	defer cancel()
+	recorded, err := l.appendRetrying(ctx, runID, sandbox.BridgeAppend{Launch: launch, Owed: owed,
+		Spent: l.spent()})
+	switch {
+	case err != nil:
+		l.owe(owed)
+		log.WarnContext(ctx, "bridge_owed_calls_unrecorded", "run_id", runID, "launch_id", launch,
+			"calls", len(owed), "tools", owedTools(owed), "error", err.Error(),
+			"detail", "the calls ran and their answers went back to the box, but the run's row "+
+				"took neither their own appends nor this carry of them within its bound; they stay "+
+				"owed to the session's next append, and a session that is ending leaves them off "+
+				"every record of the run")
+		return false
+	case !recorded:
+		log.WarnContext(ctx, "bridge_owed_calls_after_their_job", "run_id", runID,
+			"launch_id", launch, "calls", len(owed), "tools", owedTools(owed),
+			"detail", "the calls ran, but by the time the store took their carry the run's row no "+
+				"longer held the job they were made in: a relaunch replaced it, or the run ended; "+
+				"they are on no record of the run")
+		return false
+	}
+	log.InfoContext(ctx, "bridge_owed_calls_carried", "run_id", runID, "launch_id", launch,
+		"calls", len(owed))
+	return true
+}
+
+// owedTools names the tools of owed appends, for a line that says which calls
+// no record holds.
+func owedTools(owed []sandbox.OwedAppend) []string {
+	out := make([]string, 0, len(owed))
+	for _, o := range owed {
+		out = append(out, o.Call.Name)
+	}
+	return out
 }
 
 // identitiesCalled is the calls a bridged call's own work added to the run's
