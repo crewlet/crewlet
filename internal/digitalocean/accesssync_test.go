@@ -377,7 +377,7 @@ func TestTheDigitalOceanOfferCarriesItsLists(t *testing.T) {
 		t.Errorf("levels = %+v", o.Levels)
 	}
 	if !slices.Equal(o.Refused, refusedScopes) || !slices.Equal(o.Unneeded, unneededScopes) ||
-		o.VendorAccount != "Example Team" || o.ActionURL != NewTokenURL || !o.Rotatable || o.Releasable {
+		o.VendorAccount != "Example Team" || o.ActionURL != TokensURL || !o.Rotatable || o.Releasable {
 		t.Errorf("options = %+v", o)
 	}
 	spec, _ := accessVendor{}.Catalog().Lane(seataccess.LaneDigitalOcean)
