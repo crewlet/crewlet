@@ -158,13 +158,10 @@ func ClientFor(c *config.Company, env *config.Resolver, hc *http.Client) (*Clien
 	}
 	conn, err := NewConnection(&prov)
 	if errors.Is(err, ErrNotConnected) {
-		return nil, fmt.Errorf("aws: %w: integrations.aws.provisioning.connection is not set yet", integration.ErrNotConfigured)
+		return nil, fmt.Errorf("%w: %w", integration.ErrNotConfigured, err)
 	}
 	if err != nil {
 		return nil, err
-	}
-	if hc == nil {
-		hc = http.DefaultClient
 	}
 	return NewClient(conn, hc), nil
 }

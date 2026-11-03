@@ -8,7 +8,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -18,15 +17,12 @@ import (
 	"time"
 )
 
-// The company's certificate authority: a P-256 key the engine generates,
-// seals and never shows, whose certificate the owner registers as the Roles
-// Anywhere trust anchor. Every CreateSession signs with a fresh in-memory leaf
-// key under a short-lived leaf certificate, so the CA key is the one secret.
+// The company's certificate authority, minted and sealed by setup
+// ([setup.ShapeCertificateAuthority]): every CreateSession signs with a fresh
+// in-memory leaf key under a short-lived leaf certificate, so the CA key is the
+// one secret.
 
 const (
-	// CALifetime outlasts any plausible rotation cadence; a trust anchor
-	// holds two certificates, so a new CA is added beside the old one first.
-	CALifetime = 5 * 365 * 24 * time.Hour
 	// LeafLifetime only has to outlive one CreateSession call; a leaf that
 	// leaks is useless a quarter of an hour later.
 	LeafLifetime = 15 * time.Minute
@@ -54,54 +50,6 @@ type CA struct {
 
 func randomSerial() (*big.Int, error) {
 	return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
-}
-
-// CACommonName names a company's CA; the suffix tells two of its CAs apart
-// during a rotation.
-func CACommonName(company Company) string {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return "crewlet-" + string(company) + "-ca-" + hex.EncodeToString(b)
-}
-
-// GenerateCA mints a CA meeting Roles Anywhere's trust-anchor rules
-// (X.509v3, CA:true, Certificate Sign, SHA-256) and returns the bundle to
-// seal: the key's PEM, then the certificate's.
-func GenerateCA(cn string, now time.Time) (string, error) {
-	if !cnPattern.MatchString(cn) {
-		return "", fmt.Errorf("aws: CA common name %q must match %s", cn, cnPattern)
-	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return "", err
-	}
-	serial, err := randomSerial()
-	if err != nil {
-		return "", err
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: cn, Organization: []string{"Crewlet"}},
-		NotBefore:             now.Add(-notBeforeSkew),
-		NotAfter:              now.Add(CALifetime),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		MaxPathLenZero:        true,
-		SignatureAlgorithm:    x509.ECDSAWithSHA256,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		return "", err
-	}
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return "", err
-	}
-	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})) +
-		string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), nil
 }
 
 // ParseCA reads a sealed bundle back, refusing one whose key is not its

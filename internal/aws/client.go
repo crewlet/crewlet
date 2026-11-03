@@ -11,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 const (
@@ -36,10 +38,19 @@ type Client struct {
 	IAM *iam.Client
 }
 
-// NewClient builds the clients over the engine's transport (internal/httpx).
-// The SDK's standard retryer, raised to the same eight attempts as the Roles
-// Anywhere path, retries throttling and server errors on every IAM and STS call.
-func NewClient(conn *Connection, hc *http.Client) *Client { return newClient(conn, hc, "") }
+// ClientTimeout bounds one request to AWS.
+const ClientTimeout = 30 * time.Second
+
+// NewClient builds the clients over the engine's transport (internal/httpx);
+// hc is nil in production. The SDK's standard retryer, raised to the same
+// eight attempts as the Roles Anywhere path, retries throttling and server
+// errors on every IAM and STS call.
+func NewClient(conn *Connection, hc *http.Client) *Client {
+	if hc == nil {
+		hc = httpx.Client(ClientTimeout)
+	}
+	return newClient(conn, hc, "")
+}
 
 func newClient(conn *Connection, hc *http.Client, base string) *Client {
 	c := &Client{conn: conn, ra: newRolesAnywhere(hc, conn.Region), http: hc, base: base}

@@ -383,6 +383,15 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		}
 		add("expo", in.Expo.Enabled, nil, map[string]any{"account_name": account})
 	}
+	if in.AWS != nil {
+		// NOTHING INBOUND: the row names the stack, by its short name and
+		// home Region, which every name in the account carries.
+		var slug, region string
+		if in.AWS.Provisioning != nil {
+			slug, region = in.AWS.Provisioning.Slug, in.AWS.Provisioning.HomeRegion
+		}
+		add("aws", in.AWS.Enabled, nil, map[string]any{"slug": slug, "home_region": region})
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product. Jira and Confluence are
 		// sites this engine reads as an account; this is where the account

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/sigv4"
 )
 
@@ -31,7 +32,7 @@ func grants(patterns []string, action string) bool {
 
 func testCA(t *testing.T) *CA {
 	t.Helper()
-	bundle, err := GenerateCA("crewlet-test-ca", time.Now())
+	bundle, err := setup.GenerateCertificateAuthority("crewlet-test-ca", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +294,7 @@ func TestTheStackDeploysExactlyWhatTheCheckExpects(t *testing.T) {
 func TestRenderStackRefusesBadInput(t *testing.T) {
 	t.Parallel()
 	ca := testCA(t)
-	bundle, _ := GenerateCA("crewlet-test-ca", time.Now())
+	bundle, _ := setup.GenerateCertificateAuthority("crewlet-test-ca", time.Now())
 	for name, p := range map[string]StackParams{
 		"no pem":      {Company: "acme", CAPEM: "x", IssuerCN: "crewlet-ca", Regions: []string{"us-east-2"}},
 		"private key": {Company: "acme", CAPEM: bundle, IssuerCN: "crewlet-ca", Regions: []string{"us-east-2"}},
@@ -345,7 +346,7 @@ func TestCertificatesMeetTheTrustAnchorRules(t *testing.T) {
 
 func mustBundle(t *testing.T) string {
 	t.Helper()
-	b, err := GenerateCA("crewlet-test-ca", time.Now())
+	b, err := setup.GenerateCertificateAuthority("crewlet-test-ca", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

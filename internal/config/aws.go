@@ -105,6 +105,15 @@ func (p *AWSProvisioning) RegionsOrDefault() []string {
 	return append(out, awsGlobalRegion)
 }
 
+// RegionList is the Regions the block names, nil-safe: nil is the default
+// ([AWSProvisioning.RegionsOrDefault]).
+func (a *AWS) RegionList() []string {
+	if a == nil || a.Provisioning == nil {
+		return nil
+	}
+	return a.Provisioning.Regions
+}
+
 // AWSConnectionOutput is the stack output whose value is pasted back.
 const AWSConnectionOutput = "CrewletConnection"
 

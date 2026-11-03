@@ -2,6 +2,7 @@ package engine
 
 import (
 	"github.com/crewlet/crewlet/internal/atlassian"
+	awsint "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
@@ -36,6 +37,7 @@ func SetupProbes() map[integration.Kind]setup.Probe {
 		integration.KindConfluence: confluence.Probe(nil),
 		integration.KindDatadog:    datadog.Probe(nil),
 		integration.KindExpo:       expo.Probe(nil),
+		integration.KindAWS:        awsint.Probe(nil),
 		integration.KindGitHub:     github.Probe(nil),
 		integration.KindGitLab:     gitlab.Probe(nil),
 		integration.KindJira:       jira.Probe(nil),

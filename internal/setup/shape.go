@@ -3,6 +3,7 @@ package setup
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/whsec"
 	"github.com/crewlet/crewlet/internal/words"
@@ -31,6 +32,12 @@ const (
 	// and underscores alone, such as a Cloudflare API token: a pasted value
 	// holding any other character is not one the vendor issued.
 	ShapeOpaqueToken Shape = "opaque_token"
+
+	// ShapeCertificateAuthority is a certificate authority the engine signs
+	// short-lived client certificates with: a P-256 key, then its
+	// self-signed certificate, both PEM ([GenerateCertificateAuthority]).
+	// Only ever minted, never pasted.
+	ShapeCertificateAuthority Shape = "certificate_authority"
 )
 
 // Problem is the sentence for a pasted value this shape refuses, "" for one it
@@ -69,8 +76,11 @@ func opaqueTokenRune(r rune) bool {
 // bits of entropy, URL-safe and safe to paste into a third-party app's header
 // field, which is where a shared token ends up.
 func (s Shape) Mint(token func() string) (string, error) {
-	if s == ShapeSigningKey {
+	switch s {
+	case ShapeSigningKey:
 		return whsec.Mint()
+	case ShapeCertificateAuthority:
+		return GenerateCertificateAuthority(CertificateAuthorityName(), time.Now())
 	}
 	return token(), nil
 }
