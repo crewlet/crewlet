@@ -64,7 +64,7 @@ stream that tells a box's CLI its tool list changed, and the bridge's
 activations depend on that notice.
 
 **Long-polling the holder over the node's one request subject** holds one of
-that registration's answer slots (`queue.MaxConcurrentAnswers`) for the whole
+that registration's answer slots (`queue.ConcurrentAnswers`) for the whole
 life of each event stream. An event stream lives for as long as its run, so the
 sixty-fifth stream on a node would wait behind the others for hours.
 
