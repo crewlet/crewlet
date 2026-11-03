@@ -79,7 +79,7 @@ const answer: IntegrationsAnswer = {
       label: "Connected",
       reason: "",
     },
-    ...["slack", "mattermost", "github", "cloudflare", "expo"].map((key) => ({
+    ...["slack", "mattermost", "github", "cloudflare", "expo", "digitalocean"].map((key) => ({
       key,
       surfaces: [key],
       state: "not_in_use" as const,
@@ -117,9 +117,16 @@ const listing = {
     { ...tool("gitlab", true), can_provision: true },
     tool("datadog", true),
     tool("confluence", true),
-    ...["slack", "mattermost", "atlassian", "jira", "github", "cloudflare", "expo"].map((k) =>
-      tool(k),
-    ),
+    ...[
+      "slack",
+      "mattermost",
+      "atlassian",
+      "jira",
+      "github",
+      "cloudflare",
+      "expo",
+      "digitalocean",
+    ].map((k) => tool(k)),
   ],
   external_url: { value: "https://engine.example.com", config_path: "api.external_url" },
 } as unknown as SetupListing;
@@ -273,7 +280,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
     ["Code", ["GitHub", "GitLab"]],
     ["Observability", ["Datadog"]],
-    ["Cloud and Infrastructure", ["Cloudflare"]],
+    ["Cloud and Infrastructure", ["Cloudflare", "DigitalOcean"]],
     ["Mobile apps", ["Expo"]],
   ]);
 });

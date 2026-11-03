@@ -196,7 +196,8 @@ export type Tool =
   | "datadog"
   | "atlassian"
   | "cloudflare"
-  | "expo";
+  | "expo"
+  | "digitalocean";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -210,6 +211,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   atlassian: "Atlassian",
   cloudflare: "Cloudflare",
   expo: "Expo",
+  digitalocean: "DigitalOcean",
 };
 
 /**
@@ -436,6 +438,10 @@ const VENDOR_LANES = {
  *
  * NOTHING FOR EXPO: a seat's robot user is all it has there, and the engine
  * deletes it once the seat is off or gone, so nothing is left to decommission.
+ *
+ * NOTHING FOR DIGITALOCEAN: a seat's token is all it has there, and Crewlet
+ * revokes it itself once the seat is off or gone, so nothing is left to
+ * decommission.
  */
 export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
   if (isMintedKey(seat.key)) return [];

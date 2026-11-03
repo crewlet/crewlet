@@ -1,6 +1,7 @@
 /**
  * The Set up sheet, where a person makes an agent's robot at Expo, makes its
- * token there and pastes it here.
+ * token there and pastes it here; or, where the token is the agent's whole
+ * identity (DigitalOcean), makes the token with the level's scopes and pastes it.
  *
  * The invariants: a new agent walks three steps in order, each naming what to
  * press at Expo and where; a token revoked or rotated starts at its token; the
@@ -14,8 +15,17 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { HandoffSheet } from "./HandoffSheet.tsx";
-import { EXPO_LANE, expoAnswer, expoWaitingAnswer, seat } from "./fixtures.ts";
-import { handoffOf, rotateHandoffOf, type Handoff, type HandoffStep } from "./logic.ts";
+import {
+  DIGITALOCEAN_LANE,
+  DO_TOKENS_PAGE,
+  EXPO_LANE,
+  digitaloceanAnswer,
+  digitaloceanWaitingAnswer,
+  expoAnswer,
+  expoWaitingAnswer,
+  seat,
+} from "./fixtures.ts";
+import { handoffOf, rotateHandoffOf, type Handoff, type HandoffStep, type Lane } from "./logic.ts";
 
 afterEach(cleanup);
 
@@ -27,7 +37,22 @@ function handoff(step: HandoffStep, over?: Parameters<typeof expoWaitingAnswer>[
   return handoffOf(EXPO_LANE, expoWaitingAnswer(step, over).seats[0]!.lanes.expo!)!;
 }
 
-function draw(handoff: Handoff, onPaste: (token: string) => Promise<string> = async () => "") {
+/** PM's DigitalOcean handoff as the tab reads it off the engine's wait. */
+function doHandoff(
+  step: "create" | "mint",
+  over?: Parameters<typeof digitaloceanWaitingAnswer>[1],
+): Handoff {
+  return handoffOf(
+    DIGITALOCEAN_LANE,
+    digitaloceanWaitingAnswer(step, over).seats[0]!.lanes.digitalocean!,
+  )!;
+}
+
+function draw(
+  handoff: Handoff,
+  onPaste: (token: string) => Promise<string> = async () => "",
+  lane: Lane = EXPO_LANE,
+) {
   const onClose = vi.fn();
   const onCheck = vi.fn();
   const paste = vi.fn(onPaste);
@@ -35,7 +60,7 @@ function draw(handoff: Handoff, onPaste: (token: string) => Promise<string> = as
     <LayerHost>
       <HandoffSheet
         seat={PM}
-        lane={EXPO_LANE}
+        lane={lane}
         handoff={handoff}
         onClose={onClose}
         onPaste={paste}
@@ -49,8 +74,8 @@ function draw(handoff: Handoff, onPaste: (token: string) => Promise<string> = as
 
 const sheet = () => screen.getByRole("dialog");
 const press = (name: string) => fireEvent.click(within(sheet()).getByRole("button", { name }));
-const steps = () =>
-  within(within(sheet()).getByRole("list", { name: "Setting up PM on Expo" }))
+const steps = (vendor = "Expo") =>
+  within(within(sheet()).getByRole("list", { name: `Setting up PM on ${vendor}` }))
     .getAllByRole("listitem")
     .map((li) => li.textContent ?? "");
 
@@ -218,4 +243,84 @@ test("a step with no page at the vendor draws no Open Expo", () => {
   press("Back");
   const token = within(sheet()).getByRole("region", { name: "Create a new token" });
   expect(within(token).queryByText(/Open Expo/)).toBeNull();
+});
+
+// A DIGITALOCEAN TOKEN IS THE AGENT'S WHOLE IDENTITY, so a new agent walks two
+// steps: the token, made on DigitalOcean's form in the company's team with the
+// name the engine sent and the level's scopes, then the paste. Mutation: walk
+// an account step wherever the step is create, and this sheet has three.
+test("a new DigitalOcean agent makes its token on the form, with the level's scopes", () => {
+  draw(doHandoff("create"), undefined, DIGITALOCEAN_LANE);
+  expect(screen.getByText("Set up PM on DigitalOcean")).toBeTruthy();
+  const walked = steps("DigitalOcean");
+  expect(walked).toHaveLength(2);
+  expect(walked[0]).toContain("Generate its token");
+  expect(walked[1]).toContain("Paste it here");
+
+  const token = within(sheet()).getByRole("region", { name: "Generate its token" });
+  expect(token.textContent).toContain(
+    "In the team menu at the top of the control panel, switch to gophrase. Then choose Generate New Token and fill it in.",
+  );
+  expect(within(token).getByText("crewlet-gophrase-pm-operate")).toBeTruthy();
+  expect(within(token).getByRole("button", { name: "Copy the token's name" })).toBeTruthy();
+  expect(within(token).getByText("Custom Scopes")).toBeTruthy();
+  expect(
+    within(token).getByText("Never choose Full Access or Read Only: Crewlet refuses both."),
+  ).toBeTruthy();
+
+  const ticking = within(token).getByRole("list", { name: "Ticking the DigitalOcean scopes" });
+  const items = within(ticking)
+    .getAllByRole("listitem")
+    .map((li) => li.textContent ?? "");
+  expect(items[0]).toBe("Under Quick bulk scope select, choose Select all Reads.");
+  expect(items[1]).toBe(
+    "Untick these. Crewlet refuses a token that holds any of them: billing:read, security:read.",
+  );
+  expect(items[2]).toBe("Untick these too. Agents do not need them: genai:read.");
+  expect(items[3]).toContain("The whole section, then untick droplet:admin");
+  expect(items[3]).toContain("project:assign_resource");
+  expect(items[3]).toContain(
+    "Never use Select all Creates, Updates or Deletes: they select scopes Crewlet refuses.",
+  );
+  expect(token.textContent).toContain("choose Add scopes and continue");
+  expect(token.textContent).not.toContain("Miles on gophrase");
+  expect(
+    within(token)
+      .getByRole("link", { name: /Open DigitalOcean/ })
+      .getAttribute("href"),
+  ).toBe(DO_TOKENS_PAGE);
+});
+
+// A ROTATE THERE RENEWS IN PLACE: Regenerate Token on the token's own row keeps
+// its name and scopes, so the form and its scopes are not asked for again.
+// Mutation: drop the regenerate words and the rotate walks the whole form.
+test("a DigitalOcean rotate regenerates the token on its row", () => {
+  const sre = digitaloceanAnswer().seats[1]!.lanes.digitalocean!;
+  draw(rotateHandoffOf(DIGITALOCEAN_LANE, sre)!, undefined, DIGITALOCEAN_LANE);
+  expect(screen.getByText("New token for PM")).toBeTruthy();
+  expect(within(sheet()).getByLabelText("Token")).toBeTruthy();
+  press("Back");
+  const token = within(sheet()).getByRole("region", { name: "Regenerate its token" });
+  expect(token.textContent).toContain(
+    "open the menu on the row of crewlet-gophrase-sre-operate and choose Regenerate Token. The token keeps its name and scopes.",
+  );
+  expect(within(token).queryByText("Custom Scopes")).toBeNull();
+});
+
+// WITHOUT THE ENGINE'S NAME, NO NAME: the token's owner is never offered as
+// the name to type, and nothing is there to copy. Mutation: fall back to the
+// observed account and "Miles on gophrase" becomes the token's name.
+test("a DigitalOcean token the engine did not name is offered no name", () => {
+  draw(doHandoff("mint", { named: false }), undefined, DIGITALOCEAN_LANE);
+  expect(screen.getByText("New token for PM")).toBeTruthy();
+  const token = within(sheet()).getByRole("region", { name: "Generate a new token" });
+  expect(within(token).queryByRole("button", { name: /^Copy/ })).toBeNull();
+  expect(token.textContent).not.toContain("Miles on gophrase");
+});
+
+// THE TEAM IS NAMED WHERE THE ENGINE SENT IT, and said plainly where not.
+test("without the team, the sheet says to switch to the team Crewlet is connected to", () => {
+  draw(doHandoff("create"), undefined, { ...DIGITALOCEAN_LANE, vendor_account: undefined });
+  const token = within(sheet()).getByRole("region", { name: "Generate its token" });
+  expect(token.textContent).toContain("switch to the team Crewlet is connected to.");
 });
