@@ -15,10 +15,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -86,12 +89,32 @@ type Access interface {
 	// is not waiting for its install, and an [*AccessRefusal] where the
 	// vendor's own rules refuse one.
 	InstallLink(ctx context.Context, q AccessQuery, handle string) (string, error)
+
+	// HandIn checks a credential a person created at the vendor and pasted
+	// for one agent's lane, then has the seat's sync seal it. [ErrNoHandIn]
+	// where the vendor takes no pasted credential, [ErrNotAwaitingHandIn]
+	// where the agent is not on there, an [*AccessRefusal] where the check
+	// refuses the value, and [ErrAccessSyncInFlight] while a sync runs.
+	HandIn(ctx context.Context, q AccessQuery, handle string, lane seataccess.Lane,
+		value string, by iam.Actor) (seataccess.HandedIn, error)
 }
 
 // ErrNotAwaitingInstall refuses an install link for an agent whose Slack app is
 // not waiting for a person to approve its install. The engine's implementation
 // wraps it.
 var ErrNotAwaitingInstall = errors.New("setupapi: this agent's app is not waiting for an install")
+
+// ErrNoHandIn refuses a pasted credential for a vendor whose credentials the
+// engine mints or a person's install hands over.
+var ErrNoHandIn = errors.New("setupapi: this integration takes no pasted credential")
+
+// ErrNotAwaitingHandIn refuses a pasted credential for an agent that is not on
+// at the integration.
+var ErrNotAwaitingHandIn = errors.New("setupapi: this agent is not waiting for a credential")
+
+// ErrNoSuchAccessSeat refuses a pasted credential for a handle that is no
+// agent seat of the company.
+var ErrNoSuchAccessSeat = errors.New("setupapi: no such agent seat")
 
 // AccessRefusal is a refusal the engine's access half names in the vendor's
 // own terms (a Slack app with no OAuth client yet, a deployment with no public
@@ -527,6 +550,115 @@ func (s *Service) accessInstall(w http.ResponseWriter, r *http.Request) {
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	w.Header().Set("Cache-Control", "no-store")
 	httpjson.Write(w, http.StatusOK, seataccess.InstallLink{URL: url})
+}
+
+// accessCredential serves POST
+// /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential: a
+// credential a person created at the vendor for one agent, checked there and
+// then sealed by the seat's sync. The value is never logged or echoed.
+func (s *Service) accessCredential(w http.ResponseWriter, r *http.Request) {
+	kind, ok := accessKind(w, r)
+	if !ok {
+		return
+	}
+	lane := seataccess.Lane(r.PathValue("lane"))
+	handle := r.PathValue("handle")
+	if !slices.Contains(seataccess.LanesOf(kind), lane) {
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSeatAccess, map[string]string{
+			"detail": string(kind) + " grants no lane " + string(lane),
+			"hint":   "one of " + laneList(kind),
+		})
+		return
+	}
+	// A PASTE SEALS A CREDENTIAL, so it is the credential write a rotate is.
+	if !s.mayWriteCredentials(w, r) {
+		return
+	}
+	body, err := httpjson.ReadBody(w, r, MaxBody)
+	if err != nil {
+		httpjson.Refuse(w, err)
+		return
+	}
+	var req struct {
+		Value string `json:"value"`
+	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := decode(body, &req); err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": plainjson.Unreadable("the body", err),
+		})
+		return
+	}
+	if problem := handInProblem(req.Value); problem != "" {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
+			"detail": problem, "field": "value",
+		})
+		return
+	}
+	q, ok := s.accessQuery(w, r, kind)
+	if !ok {
+		return
+	}
+	handed, err := s.access.HandIn(r.Context(), q, handle, lane, req.Value, attributionOf(r))
+	var refusal *AccessRefusal
+	switch {
+	case errors.Is(err, ErrNoHandIn):
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSeatAccess, map[string]string{
+			"detail": string(kind) + " takes no pasted credential",
+		})
+		return
+	case errors.Is(err, ErrNoSuchAccessSeat):
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchSeat, map[string]string{
+			"detail": "no agent seat " + handle + " on " + string(kind),
+		})
+		return
+	case errors.Is(err, ErrNotAwaitingHandIn):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+			"detail": "this agent is not waiting for a token",
+			"hint":   "turn the agent on for " + string(kind) + " and save, then paste its token",
+		})
+		return
+	case errors.Is(err, ErrAccessSyncInFlight):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodePassInFlight, map[string]string{
+			"hint": "a sync of this integration's agents is running; try again when it finishes",
+		})
+		return
+	case errors.As(err, &refusal):
+		httpjson.FailWith(w, refusal.Status, httpjson.CodeInvalidInput, map[string]string{
+			"detail": refusal.Reason, "hint": refusal.Remedy, "field": "value",
+		})
+		return
+	case err != nil:
+		s.accessFault(w, r, kind, "setup_access_credential_unchecked", err)
+		return
+	}
+	log.InfoContext(r.Context(), "setup_access_credential_sealed", "kind", kind, "seat", handle,
+		"lane", lane, "rotate", handed.Rotate,
+		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+	answer, err := s.access.Answer(r.Context(), q)
+	if err != nil {
+		s.accessFault(w, r, kind, "setup_access_unread", err)
+		return
+	}
+	if s.config.Managed() {
+		answer.ManagedBy = seataccess.ManagedByOperator
+	}
+	w.Header().Set("ETag", `"`+answer.Revision+`"`)
+	httpjson.Write(w, http.StatusOK, map[string]any{"detail": handed.Detail, "access": answer})
+}
+
+// handInProblem is why a pasted value cannot be a credential, "" where it can
+// be one: empty, a `${VAR}` rather than the value, or holding stray characters
+// by the rule every pasted credential is held to.
+func handInProblem(value string) string {
+	switch {
+	case strings.TrimSpace(value) == "":
+		return "Paste the token to check."
+	case envref.Has(value):
+		return "Paste the token itself, not a ${VAR} reference: Crewlet seals it under its own name."
+	default:
+		return secrets.StrayProblem("token", value)
+	}
 }
 
 // accessSavePolicy is the save route's policy, declared once so the mount and

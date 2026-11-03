@@ -6,8 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -111,5 +114,23 @@ func TestTheExpoPassNamesWhatItLacks(t *testing.T) {
 	company.Config.Integrations.Expo.Enabled = false
 	if _, err := (&expoPass{engine: e}).run(t.Context(), setup.PassInput{}); !errors.Is(err, integration.ErrNotConfigured) {
 		t.Errorf("a block switched off = %v, want not configured", err)
+	}
+}
+
+// A PASTE FOR A SEAT THAT IS NOT WAITING FOR ONE IS REFUSED BEFORE EXPO IS
+// ASKED: a handle that is no agent seat, and an agent off at Expo.
+func TestAnExpoPasteIsRefusedForASeatNotWaiting(t *testing.T) {
+	t.Parallel()
+	company := specCompany(t, expoRunDoc)
+	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}}
+	e.epoch.current.Store(company)
+	api := &SeatAccessAPI{engine: e}
+	q := setupapi.AccessQuery{Kind: integration.KindExpo, Company: company.Config, Roster: company.Org}
+	by := iam.Actor{Name: "test"}
+	if _, err := api.HandIn(t.Context(), q, "nobody", seataccess.LaneExpo, "fake-token", by); !errors.Is(err, setupapi.ErrNoSuchAccessSeat) {
+		t.Errorf("an unknown seat = %v", err)
+	}
+	if _, err := api.HandIn(t.Context(), q, "sre", seataccess.LaneExpo, "fake-token", by); !errors.Is(err, setupapi.ErrNotAwaitingHandIn) {
+		t.Errorf("a seat off at Expo = %v", err)
 	}
 }

@@ -431,6 +431,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// seat action that answers something other than the tab.
 	post("POST /setup/integrations/slack/access/seats/{handle}/{lane}/install",
 		authz.EffectCreates, s.accessInstall)
+	// A CREDENTIAL A PERSON CREATED AT THE VENDOR, checked and sealed for one
+	// agent: it rewrites the seat's sealed credential.
+	post("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential",
+		authz.EffectRewrites, s.accessCredential)
 	return errors.Join(failures...)
 }
 

@@ -45,6 +45,10 @@ type fakeAccess struct {
 	unreadAfterSync bool
 	syncs           []setupapi.AccessSync
 	plans           []seataccess.Draft
+	// handInErr is what HandIn answers; handIns are the seats it was asked
+	// about, with what was pasted.
+	handInErr error
+	handIns   []string
 }
 
 func (f *fakeAccess) Answer(_ context.Context, q setupapi.AccessQuery) (seataccess.Answer, error) {
@@ -122,6 +126,17 @@ func (f *fakeAccess) InstallLink(_ context.Context, _ setupapi.AccessQuery,
 		return "", setupapi.ErrNotAwaitingInstall
 	}
 	return "https://slack.com/oauth/v2/authorize?state=fake-" + handle, nil
+}
+
+func (f *fakeAccess) HandIn(_ context.Context, _ setupapi.AccessQuery, handle string,
+	lane seataccess.Lane, value string, _ iam.Actor) (seataccess.HandedIn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.handIns = append(f.handIns, handle+"/"+string(lane)+"="+value)
+	if f.handInErr != nil {
+		return seataccess.HandedIn{}, f.handInErr
+	}
+	return seataccess.HandedIn{Detail: "Works. Robot crewlet-acme-" + handle + "."}, nil
 }
 
 func (f *fakeAccess) lastSync(t *testing.T) setupapi.AccessSync {
@@ -629,5 +644,89 @@ func TestASlackInstallLinkIsMintedOnlyWhileWaiting(t *testing.T) {
 	tab := s.do(t, http.MethodGet, "/setup/integrations/slack/access", "", nil)
 	if strings.Contains(tab.Body.String(), "oauth") {
 		t.Errorf("the tab carries an install link: %s", tab.Body)
+	}
+}
+
+// expoCompany is a company with Expo connected and its QA agent on.
+const expoCompany = `{
+  "name": "Acme",
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "integrations": {"expo": {"enabled": true, "provisioning": {"account_name": "example-org"}}},
+  "roles": [
+    {"name": "QA", "handle": "qa", "llm": "zulu",
+     "integrations": {"expo": {"enabled": true, "level": "runner"}}}
+  ]
+}`
+
+// A PASTED CREDENTIAL IS CHECKED BEFORE IT REACHES THE ENGINE, and every
+// refusal stands beside the field without echoing the value.
+func TestAPastedCredentialIsCheckedBesideItsField(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedDocument(t, expoCompany)
+	const path = "/setup/integrations/expo/access/seats/qa/expo/credential"
+	res := s.do(t, http.MethodPost, path, `{"value": "fake-good-token"}`, nil)
+	body := decode(t, res)
+	if res.Code != http.StatusOK || body["detail"] != "Works. Robot crewlet-acme-qa." || body["access"] == nil {
+		t.Fatalf("a good paste = %d %s", res.Code, res.Body)
+	}
+	if len(s.access.handIns) != 1 || s.access.handIns[0] != "qa/expo=fake-good-token" {
+		t.Fatalf("hand-ins = %v", s.access.handIns)
+	}
+	for _, tc := range []struct{ name, body, says string }{
+		{"empty", `{"value": "  "}`, "Paste the token"},
+		{"a reference", `{"value": "${EXPO_TOKEN_QA}"}`, "not a ${VAR} reference"},
+		{"a wrapped paste", `{"value": "fake-good\ntoken"}`, "line break"},
+		{"an invisible character", `{"value": "fake-good\u200btoken"}`, "invisible character"},
+	} {
+		res := s.do(t, http.MethodPost, path, tc.body, nil)
+		body := decode(t, res)
+		if res.Code != http.StatusBadRequest || body["field"] != "value" ||
+			!strings.Contains(body["detail"].(string), tc.says) {
+			t.Errorf("%s = %d %v", tc.name, res.Code, body)
+		}
+		if strings.Contains(res.Body.String(), "fake-good") {
+			t.Errorf("%s: the answer echoes the value: %s", tc.name, res.Body)
+		}
+	}
+	if len(s.access.handIns) != 1 {
+		t.Errorf("a refused paste reached the engine: %v", s.access.handIns)
+	}
+	if res := s.do(t, http.MethodPost, "/setup/integrations/expo/access/seats/qa/datadog/credential",
+		`{"value": "fake-good-token"}`, nil); res.Code != http.StatusNotFound {
+		t.Errorf("another lane = %d %s, want 404", res.Code, res.Body)
+	}
+}
+
+// THE ENGINE'S ANSWERS MAP TO THE ROUTE'S: a refusal beside the field, a seat
+// not waiting, a kind that takes no paste and a sync in flight.
+func TestAPastedCredentialAnswersTheEnginesRefusals(t *testing.T) {
+	t.Parallel()
+	const path = "/setup/integrations/expo/access/seats/qa/expo/credential"
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   httpjson.Code
+	}{
+		{"a refusal", &setupapi.AccessRefusal{Status: http.StatusBadRequest,
+			Reason: "This robot is a Developer on example-org, and you chose Runner.", Remedy: "Change its role"},
+			http.StatusBadRequest, httpjson.CodeInvalidInput},
+		{"not waiting", setupapi.ErrNotAwaitingHandIn, http.StatusConflict, httpjson.CodeInvalidInput},
+		{"no paste", setupapi.ErrNoHandIn, http.StatusNotFound, httpjson.CodeNoSeatAccess},
+		{"no seat", setupapi.ErrNoSuchAccessSeat, http.StatusNotFound, httpjson.CodeNoSuchSeat},
+		{"in flight", setupapi.ErrAccessSyncInFlight, http.StatusConflict, httpjson.CodePassInFlight},
+	} {
+		s := newSurface(t)
+		s.seedDocument(t, expoCompany)
+		s.access.handInErr = tc.err
+		res := s.do(t, http.MethodPost, path, `{"value": "fake-good-token"}`, nil)
+		body := decode(t, res)
+		if res.Code != tc.status || body["error"] != string(tc.code) {
+			t.Errorf("%s = %d %v, want %d %s", tc.name, res.Code, body, tc.status, tc.code)
+		}
+		if tc.name == "a refusal" && (body["field"] != "value" || body["hint"] != "Change its role.") {
+			t.Errorf("the refusal = %v, want it beside the field with its remedy", body)
+		}
 	}
 }
