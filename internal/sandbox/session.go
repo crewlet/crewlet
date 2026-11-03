@@ -628,8 +628,11 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// ([SessionCapture.BridgeSeq]). Kept beside the row rather than on it
 	// ([BridgeLog]), so a log the store could not read REFUSES the capture:
 	// a session whose place cannot be stated is one a launch that continues
-	// it could not tell what came after, and is not kept.
-	calls, err := c.pending.BridgeLog(ctx, current)
+	// it could not tell what came after, and is not kept. Read as the job
+	// stands to hold it ([PendingStore.TurnLog]), so a log a relaunch has not
+	// yet opened to the row's job places the session where that opening
+	// will number from, never at 0.
+	calls, err := c.pending.TurnLog(ctx, current)
 	if err != nil {
 		return nil, c.refuseUnplaced(ctx, by, run, current, at, 0,
 			fmt.Sprintf("the run's bridged log could not be read: %v", err))

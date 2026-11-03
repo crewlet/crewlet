@@ -915,6 +915,13 @@ func (s *refusingStore) MarkSuspended(ctx context.Context, turnID string, state 
 	return s.inner.MarkSuspended(ctx, turnID, state)
 }
 
+func (s *refusingStore) TurnLog(ctx context.Context, run PendingRun) (BridgeLog, error) {
+	if s.called("TurnLog") {
+		return BridgeLog{}, errRefusedCall
+	}
+	return s.inner.TurnLog(ctx, run)
+}
+
 func (s *refusingStore) BridgeLog(ctx context.Context, run PendingRun) (BridgeLog, error) {
 	if s.called("BridgeLog") {
 		return BridgeLog{}, errRefusedCall

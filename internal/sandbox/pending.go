@@ -646,21 +646,23 @@ type BridgeCall struct {
 
 	// Approved marks the call a person then let be made: made by the run's
 	// resume on the engine host rather than by the job over its bridge, and
-	// recorded in the write that recorded its result
-	// ([PendingStore.RecordHeldResult]). A call of its round like any other,
-	// which is what the readers of whether the turn replied need of it; its
-	// arguments and output are never here, and ride the row sealed on the
-	// held call until the next job opens.
+	// appended after its result was recorded on the row
+	// ([PendingStore.RecordHeldResult], [OwedCall]). A call of its round
+	// like any other, which is what the readers of whether the turn replied
+	// need of it; its arguments and output are never here, and ride the row
+	// sealed on the held call until the next job opens.
 	Approved bool `json:"approved,omitempty"`
 
 	// HeldID names the held call an Approved call was made for
 	// ([HeldCall.ID]): what makes its append to the log ONCE. The call's
 	// result is recorded on the row first and the call appended to the log
 	// after ([PendingStore.RecordHeldResult]) — two keys, which the store
-	// writes in no one step — so the retry that finds the result already
-	// made appends the call only where the log does not already hold this
-	// id. Empty on every call a job made over its bridge. Additive on the
-	// wire: a build that does not know it carries it in Extra.
+	// writes in no one step — so every write that appends it — that one, a
+	// retry that records the result again, and the next job's opening that
+	// carries a call whose append never landed ([OwedCall]) — appends it only
+	// where the log does not already hold this id. Empty on every call a job
+	// made over its bridge. Additive on the wire: a build that does not know
+	// it carries it in Extra.
 	HeldID string `json:"held_id,omitempty"`
 
 	// Extra is every key of the call this build does not know, kept verbatim
@@ -993,6 +995,12 @@ type PendingRun struct {
 	// made twice. A KEY OF ITS OWN AT THE TOP OF THE ROW, carrying the keys a
 	// later build adds inside it ([HeldCall.Extra]).
 	HeldCall *HeldCall `json:"held_call,omitempty"`
+
+	// OwedCall is the call a person approved that the round's log is owed
+	// ([OwedCall]): set by the reset that clears a held call whose result is
+	// recorded ([PendingStore.BeginLaunch]), appended by the opening that
+	// follows, and kept until a job of the round has launched past it.
+	OwedCall *OwedCall `json:"owed_call,omitempty"`
 
 	// ParkedInputTokens and ParkedOutputTokens are what the job that
 	// asked the question cost, recorded with the question.
@@ -1651,6 +1659,50 @@ func (l BridgeLog) priorFor(round string) ([]string, bool) {
 	return foldPriorCalls(l.PriorCalls, l.Calls, l.PriorCallsElided || l.Elided > 0)
 }
 
+// OwedCall is a call a person approved, as its round's log keeps it
+// ([HeldCall.Call]), which the log of that round is owed
+// ([PendingRun.OwedCall]).
+//
+// ON THE ROW, BECAUSE THE LOG IS NOT: the result of a held call is recorded on
+// the row and the call appended to the log after it, two keys the store writes
+// in no one step ([PendingStore.RecordHeldResult]), and the reset that opens
+// the next job clears the held call. Where the append never landed — its write
+// failed, or its node stopped first — the reset carries the call here, in its
+// own write, so the opening that follows appends it; and where that opening
+// fails too, the next relaunch's reset finds it still here, as it finds the
+// round and its cut ([PendingRun.Round], [PendingRun.AnsweredJob]). Dropped by
+// a reset that replaces a job which launched, whose opening therefore landed.
+//
+// THE JSON TAGS ARE A WIRE FORMAT, as the row's are.
+type OwedCall struct {
+	// Round is the round the call was made in ([PendingRun.Round]): only
+	// that round's log is owed it.
+	Round string `json:"round"`
+
+	// Call is the call as the log keeps it, named by its held call
+	// ([BridgeCall.HeldID]), which is what keeps it in the log once.
+	Call BridgeCall `json:"call"`
+
+	// Extra is every key of the section this build does not know: see
+	// wirekeys.go.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// withApproved is l with call — the call a person approved in round
+// ([BridgeCall.Approved]) — appended where l is that round's log and does not
+// hold it yet ([BridgeCall.HeldID]), and whether it was: placed after every
+// call l holds, as an append over the bridge is.
+func (l BridgeLog) withApproved(round string, call BridgeCall) (BridgeLog, bool) {
+	if l.Round != round || slices.ContainsFunc(l.Calls, func(c BridgeCall) bool {
+		return c.HeldID == call.HeldID
+	}) {
+		return l, false
+	}
+	call.Seq = l.LastSeq() + 1
+	l.Calls, l.Elided = appendBounded(slices.Clone(l.Calls), l.Elided, call)
+	return l, true
+}
+
 // LastSeq is the place of the last bridged call the log records
 // ([BridgeCall.Seq]), and zero for a log that records none: where the next
 // opening of the run's job numbers its calls from — the job's own after a
@@ -2150,6 +2202,31 @@ type PendingStore interface {
 	// empty log is a turn that did nothing, which the delivery check fails.
 	BridgeLog(ctx context.Context, run PendingRun) (BridgeLog, error)
 
+	// TurnLog reads the calls of run's turn as run's job stands to hold
+	// them, whatever job the log beside the record is on: what an ending
+	// reads to say whether the turn replied ([RunCalls]), and where a
+	// capture places its session ([SessionCapture.BridgeSeq]).
+	//
+	// NOT [PendingStore.BridgeLog], WHICH READS A LOG NOT YET OPENED TO THE
+	// JOB AS EMPTY. That is right for a resume, which must never replay
+	// another job's calls as its own; for an ending it is a false account.
+	// A relaunch writes the row, naming the new job, and opens the log to it
+	// in a second write, and a node that stops between the two — or an
+	// opening that fails — leaves a row whose job the log was never opened
+	// to, which is reaped as lost or stopped by a person as it stands; read
+	// as no calls, a turn whose earlier round posted its reply is recorded
+	// as one that did not. So a log on an earlier job is answered as the
+	// job's opening would leave it ([PendingRun.Round],
+	// [PendingRun.AnsweredJob]): the round's calls where the job carries the
+	// round on, and every earlier round folded into [BridgeLog.PriorCalls].
+	// And the call a person approved that the log is still owed — the job's
+	// own held call with its result recorded ([HeldCall.Call]), or one a
+	// reset carried ([PendingRun.OwedCall]) — is read as the call of its
+	// round it is. A run with no log has made no call.
+	//
+	// AN ERROR IS THE STORE'S, never "no calls", as for BridgeLog.
+	TurnLog(ctx context.Context, run PendingRun) (BridgeLog, error)
+
 	// Handed reads every secret run's job's box was handed, SEALED under the
 	// fleet keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a
 	// capture of the box's session takes out by value. Kept BESIDE the
@@ -2365,17 +2442,22 @@ type PendingStore interface {
 	// call whose result is recorded is not written again, and answers true.
 	//
 	// THE RESULT, THEN THE CALL: its result, sealed ([CallSeal.SealResult]),
-	// on the held call, under the claim's fence; then the call appended to
-	// the round's log ([BridgeLog.Calls]) under the job's launch, as the
-	// job's own calls are — named the held call's tool, placed after every
-	// call the log holds, stamped with the instant the result was recorded,
-	// marked [BridgeCall.Approved] and named by [BridgeCall.HeldID], with no
-	// arguments and no output — so the job that carries the work on keeps it
+	// on the held call, under the claim's fence, with the call as the log
+	// keeps it ([HeldCall.Call]: named the held call's tool, stamped with the
+	// instant the result was recorded, marked [BridgeCall.Approved] and named
+	// by [BridgeCall.HeldID], with no arguments and no output); then that
+	// call appended to its round's log ([BridgeLog.Calls]), placed after
+	// every call the log holds, so the job that carries the work on keeps it
 	// with its round. Two keys, which the store writes in no one step, and
 	// the result first because it is what the carrying-on job needs and the
-	// fence guards: a crash between the two leaves a result whose call the
-	// next attempt appends, since a call already made answers true here AND
-	// is appended where the log lacks its id, never twice.
+	// fence guards. A crash between the two, or an append that fails (its
+	// error is answered), leaves the call on the row alone, and nothing
+	// loses it: a call already made answers true here and is appended where
+	// the log lacks its id; an ending reads it off the row
+	// ([PendingStore.TurnLog]); and the reset that opens the next job carries
+	// it on the row to that job's opening, which appends it in its own write
+	// ([PendingRun.OwedCall]). Never twice: every one of those appends only
+	// where the log lacks the held call's id.
 	RecordHeldResult(ctx context.Context, turnID, launch string, made HeldMade, fence Fence) (bool, error)
 
 	// ReviveAnswer gives a claim no resume holds back to the recorded answer

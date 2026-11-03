@@ -171,6 +171,26 @@ func (r *NoteRead) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// MarshalJSON writes the owed call with the keys a later build added to it.
+func (o OwedCall) MarshalJSON() ([]byte, error) {
+	type plain OwedCall
+	return marshalCarrying(plain(o), wireKeys(reflect.TypeFor[OwedCall]()), o.Extra)
+}
+
+// UnmarshalJSON reads the owed call and keeps the keys this build does not
+// know.
+func (o *OwedCall) UnmarshalJSON(raw []byte) error {
+	type plain OwedCall
+	p := plain(*o)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[OwedCall]()))
+	if err != nil {
+		return err
+	}
+	*o = OwedCall(p)
+	o.Extra = extra
+	return nil
+}
+
 // MarshalJSON writes the call with the keys a later build added to it.
 func (c BridgeCall) MarshalJSON() ([]byte, error) {
 	type plain BridgeCall

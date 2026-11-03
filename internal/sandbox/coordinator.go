@@ -4477,9 +4477,12 @@ type RunCalls struct {
 
 // runCalls reads run's log for its ending ([RunCalls]): ONE READ PER ENDING, at
 // the step that decides the turn's end, as a resume reads it for its own
-// ([ResumeRequest.Bridged]).
+// ([ResumeRequest.Bridged]) — but the turn's calls whatever job the log is on
+// ([PendingStore.TurnLog]): an ending reaps a row whose relaunch never opened
+// the log to its job as readily as any other, and the calls of its round and
+// of the turn's earlier rounds are the turn's all the same.
 func (c *Coordinator) runCalls(ctx context.Context, run PendingRun) RunCalls {
-	calls, err := c.pending.BridgeLog(ctx, run)
+	calls, err := c.pending.TurnLog(ctx, run)
 	if err != nil {
 		return RunCalls{Unread: err}
 	}

@@ -1295,9 +1295,12 @@ answers it ([ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-
   never makes it again. A tool blocked or changed since the call was held is
   not called, and the run is told why. Once its result is recorded, the call
   is added to the run's calls (the bridged tool log kept beside its record) as
-  the tool answered it and without its arguments or result, once: a later
-  attempt that finds the result already made adds it only where the log lacks
-  it. A reply the approved call made counts as the turn's reply wherever the
+  the tool answered it and without its arguments or result, once. The result
+  and the log are two writes, so the record keeps the call's entry with the
+  result: where the second write never lands, because it failed or its node
+  stopped, a stopped or lost turn's account reads the call off the record,
+  and the relaunch that carries the run on adds it to the log, at most once.
+  A reply the approved call made counts as the turn's reply wherever the
   engine reads whether the turn replied, its delivery check and a stopped or
   lost turn's account among them.
 - **The run carries on where it stopped**, in its own session in the box it
