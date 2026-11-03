@@ -362,8 +362,8 @@ func TestAStateOrACollisionIsToldToAPersonInItsCodesOwnWords(t *testing.T) {
 // alone, with no condition beneath it, reached the dashboard as an unavailable
 // a wait would clear. Nobody has worded the condition for a person yet
 // (ADR-0060), so the answer carries no detail and no `tool_detail`, and its
-// code's own message for a refusal no wait clears stands alone. So is a coding
-// run's record whose seat this node cannot open, sealed under a key it does
+// code's own message for a refusal no wait clears stands alone. So is an executor's
+// record whose seat this node cannot open, sealed under a key it does
 // not hold.
 //
 // Mutation: drop either steer arm from builtin's condition table, or mark it

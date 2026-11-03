@@ -5,8 +5,8 @@
 // # One shape, wherever an agent asks a person
 //
 // An agent asks a person from two places. A seat's turn puts a decision on a
-// work item, as the `ask` comment that carries it (internal/worklet). A coding
-// run that cannot go on without a person's answer parks on it, and its ask
+// work item, as the `ask` comment that carries it (internal/worklet). An executor
+// that cannot go on without a person's answer parks on it, and its ask
 // rides the run's coordination row until somebody answers (internal/sandbox,
 // ADR-0068). The person deciding reads both as one thing, the dashboard draws
 // both with one set of components, and an agent learns one shape for both. So

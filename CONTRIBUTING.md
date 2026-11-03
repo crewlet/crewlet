@@ -1652,7 +1652,7 @@ renders, calls, copies, runs or links:
   leases), the paths a validation error names, or who may call it.
 - **A table or a function it copies a decision from.** Its
   `internal/render/mirror_test.go` fingerprints engine functions by file and
-  name — the coding-run launch, the address checks the boot refuses to start on
+  name — the executor's launch, the address checks the boot refuses to start on
   and the Atlassian host rule among them — and its CRD suite reads the harness
   profiles (`harnessprofile`: each harness's token and key variables and the
   variables that keep it inside a seat's home) from the engine's own refusals. A

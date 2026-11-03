@@ -1551,8 +1551,8 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// at all — nothing was recorded on it, and nothing is here: the
 		// call did not happen as far as any record says.
 		//
-		// IN WORDS OF ITS OWN, never the error's: the caller is the coding
-		// agent in the box, a model, and the error is a Go error's text
+		// IN WORDS OF ITS OWN, never the error's: the caller is the harness
+		// in the box, a model, and the error is a Go error's text
 		// ("toolloop: context canceled") it can do nothing with. The error
 		// goes to this node's log.
 		log.ErrorContext(o.ctx, "mcp_bridge_dispatch_failed",

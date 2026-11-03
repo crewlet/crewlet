@@ -364,7 +364,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	if err != nil {
 		return assistant.DeepOutcome{}, err
 	}
-	run := newCodingRun(t.agent, nil)
+	run := newExecutorRun(t.agent, nil)
 	placement := t.placement
 	if r.Continue != nil && r.Continue.Placement != "" {
 		placement = sandbox.Placement(r.Continue.Placement)

@@ -334,8 +334,8 @@ func seatSetupSteps(steps []org.SandboxSetupStep) []sandbox.SetupStep {
 // node's resolver by the rule every tool server's values are
 // ([resolveServer]): every reference resolved, or why the run lacks it.
 type runEnv struct {
-	// env is the run environment the box's setup commands and its coding
-	// agent are handed — the engine's own facts and the configuration's —
+	// env is the run environment the box's setup commands and its harness
+	// are handed — the engine's own facts and the configuration's —
 	// before the LLM credentials and the telemetry are laid over it.
 	env map[string]string
 
@@ -3537,7 +3537,7 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 	return held
 }
 
-// codingRun is what one coding box is handed to reach a model: the model, the
+// executorRun is what one coding box is handed to reach a model: the model, the
 // credential files a local backend seeds, and the whole run environment.
 //
 // THREE things travel, and they travel differently on purpose:
@@ -3555,13 +3555,13 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 //     fleet state, so pushing them onto somebody else's VM is a materially
 //     larger trust step than the token — which is why the map is offered and
 //     each backend decides, rather than being exported like the rest.
-type codingRun struct {
+type executorRun struct {
 	model string
 	files map[string]string
 	env   map[string]string
 }
 
-// newCodingRun is the [codingRun] of a box run on agent — the executor-chain
+// newExecutorRun is the [executorRun] of a box run on agent — the executor-chain
 // member the launch picked ([agentLauncher.member]) — over seatEnv, the
 // environment the seat's own config assembled ([Engine.runEnvironment]).
 //
@@ -3574,7 +3574,7 @@ type codingRun struct {
 // and its env and sign-in, which that harness reads, are always ones the runner can
 // use — and a launch that fell back past the head runs on the member it fell
 // back to, with that member's environment and login rather than the head's.
-func newCodingRun(agent *harness.Provider, seatEnv map[string]string) codingRun {
+func newExecutorRun(agent *harness.Provider, seatEnv map[string]string) executorRun {
 	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE HARNESS IT IS
 	// WRITTEN FOR. An entry's model is in that harness's own grammar — OpenCode
 	// reads `<provider>/<model>`, Claude Code an alias — so the run is handed
@@ -3586,7 +3586,7 @@ func newCodingRun(agent *harness.Provider, seatEnv map[string]string) codingRun 
 	// URL in the entry's env names, which the run environment carries — a
 	// provider the engine declared beside it would shadow the one the model
 	// names.
-	run := codingRun{
+	run := executorRun{
 		model: agent.ModelArgument(),
 		env:   underlay(seatEnv, entryEnv(agent, seatEnv)),
 		files: agent.SandboxCredentials(),
@@ -3714,7 +3714,7 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 // brought its own credential passes — which is why the check can be a refusal
 // rather than a warning.
 //
-// THE PICKED MEMBER'S ENTRY, the one whose login the box runs under ([newCodingRun]):
+// THE PICKED MEMBER'S ENTRY, the one whose login the box runs under ([newExecutorRun]):
 // a guard that asked the chain's head would wave through a fallback launch on a
 // member with no travelling token, and refuse one whose own entry mints one.
 func sandboxCredentials(agent *harness.Provider, key, seat string, placement sandbox.Placement,
@@ -3758,7 +3758,7 @@ func entrySignsIn(agent *harness.Provider, env map[string]string) bool {
 	// IT JUDGES THE RIGHT HARNESS, and the key it lets through is one the run can
 	// read: the box is handed the entry's model exactly as its runs on this
 	// host name it, so its provider is the one the operator keyed for those,
-	// and the runner is that entry's own harness ([newCodingRun]).
+	// and the runner is that entry's own harness ([newExecutorRun]).
 	// Narrowing it to the variable the model's provider segment "should" use
 	// would need a table of that harness's providers the engine does not ship and
 	// would be wrong anyway: OpenCode's `zai` reads ZHIPU_API_KEY,

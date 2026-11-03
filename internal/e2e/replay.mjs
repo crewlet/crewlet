@@ -313,7 +313,7 @@ if (!sawRoundCap) {
 
 // THE STAGE OF THE TURN A SEAT IS ON — `context`, `phase` or `parked` — which
 // is what tells a seat assembling its context from one mid-phase and from one
-// waiting on a coding run. Every value must be one the client knows, and the
+// waiting on its executor. Every value must be one the client knows, and the
 // capture's turn must have been seen in its phases.
 const STAGES = ["context", "phase", "parked"];
 for (const stage of stages) {

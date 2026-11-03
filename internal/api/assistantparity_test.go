@@ -446,7 +446,7 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 		State: state, Events: eventfan.Solo("node-a", db.Events()), Usage: usage.Reader{Estate: db.Replicated()},
 		Company: companySource(t, company), Coord: coordmemory.New(),
 		Work: stubWorkReader{}, Pages: posturePages{}, WorkSearch: noWorkHits{},
-		Sandbox: noCodingRuns{}, Config: configs,
+		Sandbox: noExecutors{}, Config: configs,
 		Artifacts: &queries.ArtifactsSource{Gate: artifactsGate(estate), Reads: estate},
 		Chat:      parityChat{}, ChatSearch: parityChat{},
 	}}
@@ -464,18 +464,18 @@ func (noWorkHits) Search(context.Context, worklet.SearchQuery) (worklet.SearchAn
 	return worklet.SearchAnswer{Hits: []worklet.Ranked{}}, nil
 }
 
-// noCodingRuns is a node running no executor.
-type noCodingRuns struct{}
+// noExecutors is a node running no executor.
+type noExecutors struct{}
 
-func (noCodingRuns) ListActive(context.Context) ([]sandbox.PendingRun, error) {
+func (noExecutors) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return []sandbox.PendingRun{}, nil
 }
 
-func (noCodingRuns) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+func (noExecutors) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
 	return sandbox.BridgeLog{}, nil
 }
 
-func (noCodingRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+func (noExecutors) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	return sandbox.PendingRun{}, false, nil
 }
 

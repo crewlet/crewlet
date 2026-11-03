@@ -103,8 +103,8 @@ type SandboxProvider struct {
 	// thing for every run, which is the limitation this reshape removes.
 	Local *LocalSandbox `yaml:"local,omitempty" json:"local,omitempty" desc:"The engine host as a backend. Absent = run_in: direct|container is refused."`
 
-	// Fake wires the in-process double: no real box and no real coding
-	// agent, every run completed by the double's own runner. For a
+	// Fake wires the in-process double: no real box and no real harness,
+	// every run completed by the double's own runner. For a
 	// deployment demonstrating the flow, and named in config rather than
 	// inferred so nobody runs one by accident.
 	//

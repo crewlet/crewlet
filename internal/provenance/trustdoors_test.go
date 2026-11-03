@@ -109,7 +109,7 @@ var trustDoors = map[string]trustDoor{
 		// and any answer carrying an executor's question (Executor); every
 		// other route's answer is knowledgeTrust's to decide.
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
-		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
 	"internal/assistant/catalog/reads.go:knowledgeTrust": {either, []string{
 		// Doclet's pages by the hosted rule and a connected knowledge base's
@@ -121,7 +121,7 @@ var trustDoors = map[string]trustDoor{
 		// read by the one rule for a harness's words (Executor).
 		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
 		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
-		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
 	// A repository's bytes, which the engine hosts and nobody a read can
 	// name wrote: read by provenance.Repository through every door, and
@@ -138,10 +138,10 @@ var trustDoors = map[string]trustDoor{
 	// assistant's write that sends it.
 	"internal/agent/builtin/answerexecutor.go:CallForTurn": {vendor, []string{
 		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
-		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
 	"internal/assistant/catalog/writes.go:answersRun": {vendor, []string{
-		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 		"internal/assistant.TestARunAnswersReceiptIsReadAtTheRunsTrust",
 	}},
 	"internal/assistant/prompt.go:pageFence": {hosted, []string{

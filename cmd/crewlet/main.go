@@ -1818,8 +1818,8 @@ type httpSurface struct {
 	assistant *assistantNode
 
 	// bridge is the engine's tool bridge, nil on a node that builds none.
-	// Shut down before any listener, for the assistant's reason: a coding
-	// run's poll for its notes is held open for seconds
+	// Shut down before any listener, for the assistant's reason: an executor's
+	// poll for its notes is held open for seconds
 	// (internal/api/mcpbridge), and a held poll is a request a listener's
 	// grace would otherwise wait out.
 	bridge *mcpbridge.Bridge

@@ -93,13 +93,13 @@ func seatNamed(t *testing.T, c *Company, name string) *org.Role {
 
 // runOn is what seat's executor launches with on the head of its
 // chain, over the given seat environment.
-func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) codingRun {
+func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) executorRun {
 	t.Helper()
 	member, err := c.Models.Head(seat, phase.Execute)
 	if err != nil {
 		t.Fatalf("%s's executor chain: %v", seat.Name, err)
 	}
-	return newCodingRun(member.Provider.(*harness.Provider), seatEnv)
+	return newExecutorRun(member.Provider.(*harness.Provider), seatEnv)
 }
 
 // AN API-KEY ENTRY'S BOX IS HANDED THE KEY ITS OWN CALLS USE, RESOLVED.
@@ -755,7 +755,7 @@ func dayCap(n int) coord.Caps {
 // claim reverts and the completion is delivered again, and each of those
 // passes collected the same finished job and charged it to both counters: the
 // seat's allowance and the company's shrank by one run per retry.
-func TestARetriedCodingRunIsChargedToTheFleetOnce(t *testing.T) {
+func TestARetriedExecutorIsChargedToTheFleetOnce(t *testing.T) {
 	t.Parallel()
 	rig := newChargeRig(t, 1000, 0, 0, &movedSeat{fails: 2})
 	for attempt := range 2 {
@@ -784,7 +784,7 @@ func TestARetriedCodingRunIsChargedToTheFleetOnce(t *testing.T) {
 // at that moment, and the seat's next round was admitted against room the run
 // had already used. Recorded, the next round is refused against the figure
 // that includes it.
-func TestAnOverCapCodingRunIsRecordedOnBothCounters(t *testing.T) {
+func TestAnOverCapExecutorIsRecordedOnBothCounters(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name            string
@@ -814,7 +814,7 @@ func TestAnOverCapCodingRunIsRecordedOnBothCounters(t *testing.T) {
 // coordinator reads the answer as "recorded" rather than as "refused, offer it
 // again". Read the other way, the one company a cap is binding on is charged
 // for its over-cap run once per completion retry.
-func TestAnOverCapCodingRunIsChargedToTheFleetOnce(t *testing.T) {
+func TestAnOverCapExecutorIsChargedToTheFleetOnce(t *testing.T) {
 	t.Parallel()
 	rig := newChargeRig(t, 1000, 500, 0, &movedSeat{fails: 2})
 	for attempt := range 2 {

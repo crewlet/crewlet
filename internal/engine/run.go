@@ -590,8 +590,8 @@ type Engine struct {
 	// derived from the fleet's keyring rather than held.
 	sandboxOtel *sandbox.OtelReceiver
 
-	// bridge serves a running seat's tool surface to its executor's coding
-	// agent over MCP. Nil where neither a bridge URL is configured nor this
+	// bridge serves a running seat's tool surface to its executor's harness
+	// over MCP. Nil where neither a bridge URL is configured nor this
 	// node serves the bridge's route itself — which leaves every executor
 	// launch on this node refused, naming the variable, so a node that runs
 	// seats needs one. leaveBridgeFleet withdraws it from the fleet it

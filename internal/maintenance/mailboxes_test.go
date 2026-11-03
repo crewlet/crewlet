@@ -146,8 +146,8 @@ func (q *gatedQueue) failDeletes(err error) {
 	q.failure = err
 }
 
-// runRetirements records every call a retirement makes to end a seat's coding
-// runs, what it could see at that moment, and can be made to fail.
+// runRetirements records every call a retirement makes to end a seat's executors,
+// what it could see at that moment, and can be made to fail.
 type runRetirements struct {
 	mu      sync.Mutex
 	calls   []runRetirement
@@ -1121,7 +1121,7 @@ func TestAFailedRetirementIsRetriedOnTheNextTick(t *testing.T) {
 // the fleet's run records with nothing able to reach them. They are ended while
 // both subscriptions still exist and while no other node can claim the seat and
 // recover them, and exactly once, for the retired seat alone.
-func TestARetirementEndsTheSeatsCodingRunsBeforeItsSubscriptions(t *testing.T) {
+func TestARetirementEndsTheSeatsExecutorsBeforeItsSubscriptions(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.runs.observe = h.observeRetirement
 	h.removed()

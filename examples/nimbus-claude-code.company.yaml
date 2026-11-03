@@ -266,8 +266,8 @@ providers:
     #     the node's own api.port on loopback, with nothing to set; a
     #     `container` or `e2b` box needs CREWLET_MCP_BRIDGE_URL in the
     #     engine's environment, a URL that box reaches the node at.
-    #     Without one a launch is REFUSED rather than started: a coding
-    #     agent with none of the seat's tools cannot answer anybody,
+    #     Without one a launch is REFUSED rather than started: a harness
+    #     with none of the seat's tools cannot answer anybody,
     #     cannot reach a colleague and cannot submit its work.  In a
     #     fleet that URL is the fleet's, the same on every node: any node
     #     serving the API, a load balancer in front of several included —

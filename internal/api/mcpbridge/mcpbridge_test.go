@@ -927,8 +927,8 @@ func TestOnlyASignedMissIsWorthWarningAbout(t *testing.T) {
 	}
 }
 
-// The handshake says WHICH SEAT this is, because it reaches the coding
-// agent's own logs and a box that cannot tell one bridge from another is a box
+// The handshake says WHICH SEAT this is, because it reaches the harness's
+// own logs and a box that cannot tell one bridge from another is a box
 // whose logs cannot be read.
 func TestTheHandshakeNamesTheSeat(t *testing.T) {
 	t.Parallel()

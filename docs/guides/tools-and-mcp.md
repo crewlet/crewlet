@@ -2382,8 +2382,8 @@ next turn has the new child.
 `${VAR}` a server is started with must resolve to a value before it starts —
 its own `env` or `headers`, its `url`, and, for a seat's child of a per-role
 template, the seat's own `mcp_env` block for it, its unit's block included —
-on the engine host, as a shared server or a seat's child, and in a coding
-agent's box alike. An unresolved one is never handed to the server as an empty
+on the engine host, as a shared server or a seat's child, and in an executor's
+box alike. An unresolved one is never handed to the server as an empty
 string, which a vendor's server either refuses or, worse, starts with and acts
 as nobody; the one exception is a key the server [declares
 optional](#a-key-that-may-go-without-its-value), which is left out instead.

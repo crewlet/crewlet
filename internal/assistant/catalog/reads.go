@@ -991,8 +991,8 @@ func outsideWhere(rows, field string) func(Args, any) provenance.Trust {
 	}
 }
 
-// carriesRunAsk reports whether any row of answer at rows carries a coding
-// run's question at field.
+// carriesRunAsk reports whether any row of answer at rows carries an executor's
+// question at field.
 func carriesRunAsk(answer any, rows, field string) bool {
 	list, _ := cards.Lookup(answer, rows).([]any)
 	for _, row := range list {

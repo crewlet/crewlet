@@ -502,7 +502,7 @@ offers two); a company whose every such entry names its own needs none — as
 long as *something* names a cell, since a backend is only built for a cell
 that is reached.
 
-Coding-agent choice: the harness **is** the harness of the entry the seat's
+Harness choice: the executor's harness **is** the harness of the entry the seat's
 executor launches on (the first member of its `llm` chain that can run one),
 with that entry's model, its `env` and its sign-in, so it needs no extra secret.
 **Claude Code** runs a `claude-code` entry; **OpenCode** — version 2, the

@@ -632,8 +632,8 @@ func (b askedBoxes) Box(ctx context.Context, turn *turnctx.Turn) (builtin.Artifa
 }
 
 // A BOX IS READ FOR A SEAT'S OWN RUN, AND FOR NO OTHER CALLER. A person, or
-// their own assistant, calling through the operator catalogue has no coding
-// run: both box sources are refused `forbidden`, and the node's box source is
+// their own assistant, calling through the operator catalogue has no executor:
+// both box sources are refused `forbidden`, and the node's box source is
 // never asked, whatever box it could hand over. A seat's call on a node that
 // runs no sandbox is refused `unavailable`, never answered as though the seat's
 // run had stopped. Mutation: drop the caller check from fileSources.openBox and

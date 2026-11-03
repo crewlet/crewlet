@@ -363,8 +363,8 @@ func TestACarriedOnRunsCallsAreNumberedAfterTheAskingRuns(t *testing.T) {
 
 // A SESSION'S FIRST CALL, OUTLIVING ITS JOB, IS NOT THE NEXT JOB'S.
 //
-// The case a session that learned its job from the row got wrong: the coding
-// agent opens with a delegate call, which is still running engine-side when the
+// The case a session that learned its job from the row got wrong: the harness
+// opens with a delegate call, which is still running engine-side when the
 // box is collected and the reviewer relaunches the run — the row now holds the
 // next job. A session that had not yet landed an append learned that job's
 // name from the row and filed the late call, and its spend, on the next job's

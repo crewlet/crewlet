@@ -374,12 +374,12 @@ func (m *Manager) DefaultSetup() []SetupStep { return slices.Clone(m.setup) }
 func (m *Manager) BoxTimeout() time.Duration { return m.timeout }
 
 // RunnerFor returns the runner for a harness.
-func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
-	runner, ok := m.runners[codingAgent]
+func (m *Manager) RunnerFor(harness string) (Runner, error) {
+	runner, ok := m.runners[harness]
 	if !ok {
 		return nil, &ConfigError{msg: fmt.Sprintf(
 			"no harness runner registered for %q (have: %s)",
-			codingAgent, words.And(slices.Sorted(maps.Keys(m.runners))))}
+			harness, words.And(slices.Sorted(maps.Keys(m.runners))))}
 	}
 	return runner, nil
 }
@@ -690,8 +690,8 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 // A repository on the engine's code host is never provisioning: the run
 // checks each out itself, with the commands `code_checkout` answers, so the
 // box keeps what an earlier job cloned and is given nothing here.
-func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
-	runner, err := m.RunnerFor(codingAgent)
+func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, harness string) (Sandbox, Runner, error) {
+	runner, err := m.RunnerFor(harness)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -704,14 +704,14 @@ func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID,
 		return nil, nil, err
 	}
 	log.DebugContext(ctx, "sandbox_reconnected", "sandbox_id", sandboxID,
-		"placement", string(placement), "harness", codingAgent)
+		"placement", string(placement), "harness", harness)
 	return box, runner, nil
 }
 
 // Attach reattaches to an existing box for a READER, without resuming it — see
 // [Provider.Attach]. A paused box its backend cannot read is [ErrBoxPaused].
-func (m *Manager) Attach(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
-	runner, err := m.RunnerFor(codingAgent)
+func (m *Manager) Attach(ctx context.Context, placement Placement, sandboxID, harness string) (Sandbox, Runner, error) {
+	runner, err := m.RunnerFor(harness)
 	if err != nil {
 		return nil, nil, err
 	}

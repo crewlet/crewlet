@@ -578,8 +578,8 @@ type RoleSandbox struct {
 	// A POINTER, because there are three states and a float64 has two:
 	// UNSET inherits the provider default, an explicit 0 means never pause.
 	// A plain number would read an unset field as "never pause", so every
-	// seat that said nothing would lose its checkout the moment a coding
-	// agent asked a question.
+	// seat that said nothing would lose its checkout the moment a harness
+	// asked a question.
 	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty"`
 
 	// Setup is this seat's OWN provisioning, applied after the engine-wide

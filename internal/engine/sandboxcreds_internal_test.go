@@ -187,7 +187,7 @@ func TestTheRemedyFollowsTheEntrysAuthMode(t *testing.T) {
 // key the seat brings in role.sandbox.env passes, and so does an inherit-env
 // entry once the engine's environment holds a variable it forwards — the
 // refusal's advice has to be advice that works. Judged on the environment the
-// launch judges, the one [newCodingRun] lays: the seat's own, with the entry's
+// launch judges, the one [newExecutorRun] lays: the seat's own, with the entry's
 // sign-in underneath.
 func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")

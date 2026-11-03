@@ -443,7 +443,7 @@ func TestEveryAppIsANeedAnAudienceMeets(t *testing.T) {
 //
 // Mutation: drop the record from the variant's name, or name it on every
 // sandbox push, and this fails.
-func TestACodingRunsQuestionNamesItsReaderInTheVariant(t *testing.T) {
+func TestAnExecutorsQuestionNamesItsReaderInTheVariant(t *testing.T) {
 	t.Parallel()
 	person := func(login, seat string) Audience {
 		return NewAudience(iam.Principal{Login: login, Kind: iam.KindPerson,

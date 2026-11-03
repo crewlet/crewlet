@@ -435,7 +435,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 // asserted the last two and assumed the first — which was the one that was
 // false, for the whole life of the feature, so the answer ran as an unrelated
 // turn and the box waited out its pause TTL.
-func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
+func TestAnExecutorThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	t.Parallel()
 	n := startCoding(t, codingModeAsk)
 	waitFor(t, "the seat to be claimed", func() bool {

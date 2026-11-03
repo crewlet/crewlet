@@ -286,8 +286,8 @@ type PhaseSteer struct {
 	Boundary SteerBoundary `json:"boundary"`
 }
 
-// AgentTurnStarted opens a turn — or one SEGMENT of it, when a parked coding
-// run is resumed — before its context is assembled and before its first phase.
+// AgentTurnStarted opens a turn — or one SEGMENT of it, when a parked executor
+// is resumed — before its context is assembled and before its first phase.
 //
 // THE ONE EVENT THAT SAYS A TURN EXISTS WHILE IT IS STILL GATHERING CONTEXT.
 // Every other turn event is published from inside a phase or after the last
@@ -398,8 +398,8 @@ type AgentTurnCompleted struct {
 	// turn is on nothing, never null.
 	WorkItem      *WorkItem     `json:"work_item,omitempty"`
 	WorkItemBasis WorkItemBasis `json:"work_item_basis,omitempty"`
-	// Suspended marks a SEGMENT that ended by parking on a detached coding
-	// run rather than a turn that ended. The same turn id completes again
+	// Suspended marks a SEGMENT that ended by parking on a detached executor
+	// rather than a turn that ended. The same turn id completes again
 	// when the run is collected and the loop resumes, so a reader that
 	// took this record for the turn's end would list a parked turn as
 	// finished, with its first segment's duration.

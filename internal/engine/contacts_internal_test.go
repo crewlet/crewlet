@@ -182,7 +182,7 @@ roles:
 
 	// AN EXECUTOR'S QUESTION PUT TO THAT ID IS PUT TO THEM, rather than
 	// falling back to the asking seat's lead chain as a name nobody has.
-	t.Run("a_coding_runs_question_by_that_id_is_put_to_them", func(t *testing.T) {
+	t.Run("an_executors_question_by_that_id_is_put_to_them", func(t *testing.T) {
 		t.Parallel()
 		got := audienceResolver{engine: e}.ResolveAudience(
 			sandbox.PendingRun{TurnID: "t1", AgentHandle: "ceo"}, "U0HANDED")

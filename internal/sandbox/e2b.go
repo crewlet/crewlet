@@ -123,8 +123,8 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 // Kind implements [Provider].
 func (p *E2BProvider) Kind() string { return E2BKind }
 
-// templateFor is the image one run gets: the company's, then the coding
-// agent's own.
+// templateFor is the image one run gets: the company's, then the harness's
+// own.
 //
 // Sizing is a property of the TEMPLATE, so this is also where a box's vCPU,
 // RAM and disk are decided — see providers.sandbox.e2b.template.

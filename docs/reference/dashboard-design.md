@@ -7732,8 +7732,8 @@ it, so a link to one run landed on a board with the run below the fold.
     reference (`web!42`) and opening the change's page; refs past the record's
     bound are counted, and a record that could not be read says why rather than
     reading as nothing pushed.
-  - Beside a peek the board keeps the seat and the task and drops the coding
-    agent, the placement and the box, in that order, saying so in its footer.
+  - Beside a peek the board keeps the seat and the task and drops the harness,
+    the placement and the box, in that order, saying so in its footer.
   - The page reads two sources, and "none" needs BOTH: only when the
     executor's record and the turn both answered and neither holds one does it
     say there is none, headed **No executor**. A source that could not be read is

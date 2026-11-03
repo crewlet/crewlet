@@ -24,7 +24,7 @@
 # SECOND, and true even if that changed: the engine SPAWNS things.
 #
 #   - The local sandbox backend (`providers.sandbox: {type: local}`) runs a
-#     coding agent as a child process tree and applies setup steps that are
+#     seat's executor as a child process tree and applies setup steps that are
 #     shell commands out of the company config.
 #   - Those setup recipes are config, not engine code, and the one this repo
 #     ships (`examples/nimbus.company.yaml`) configures a git credential
@@ -152,7 +152,7 @@ RUN --mount=type=bind,source=scripts/git-pin.env,target=/tmp/git-pin.env \
     test -f /usr/local/share/doc/git/SOURCE; \
     echo "$GIT_NODE_SHA256  /usr/local/share/doc/git/git-$GIT_NODE_VERSION.tar.xz" | sha256sum -c -
 
-# A non-root user, and a HOME it can write: the CLI-agent workspaces, the
+# A non-root user, and a HOME it can write: the harness workspaces, the
 # store file and an embedded stream's directory are all written under paths
 # the engine derives from the running user.
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin crewlet

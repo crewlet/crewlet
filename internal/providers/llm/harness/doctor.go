@@ -838,8 +838,8 @@ func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 		problems = append(problems, fmt.Sprintf(
 			"a seat's executor reaches its tools over an MCP bridge, and a box in "+
 				"the %s cell is not on the node's host, so it dials %s alone — which "+
-				"is unset, so every launch on providers.llm.%s is refused: a coding "+
-				"agent with none of the seat's tools cannot answer anybody or submit "+
+				"is unset, so every launch on providers.llm.%s is refused: a harness "+
+				"with none of the seat's tools cannot answer anybody or submit "+
 				"its work. Set it to a URL that box reaches the node at",
 			orNone(opts.Cell), bridgeURLVar, p.key))
 	}

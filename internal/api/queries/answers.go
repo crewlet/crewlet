@@ -837,8 +837,8 @@ func Register(r *Registry, s Sources) {
 		// ASKED ONLY WHILE SOMEBODY WATCHES: a trace polls it while a
 		// running executor's span is open, and nothing else does. There
 		// is no event and no row behind it — see [Sources.ExecutorTail].
-		// DECIDED ON THE RUN'S SEAT, as that seat's trail: what a coding
-		// agent prints is its transcript, as a phase record's prompt and
+		// DECIDED ON THE RUN'S SEAT, as that seat's trail: what a harness
+		// prints is its transcript, as a phase record's prompt and
 		// response are, so its lead reads it and an admin reads any.
 		r.Register("executor_tail", DecidedBy(authz.ActionSeatTrailRead), s.executorTail)
 	}
