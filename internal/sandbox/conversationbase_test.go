@@ -25,12 +25,15 @@ import (
 // IT KEEPS THE DOMAIN'S RULES THESE CASES TURN ON, and no others: a turn's
 // first landed record keeps its read; a begin holds its base where the base's
 // row still names the session the read saw; a live row that has landed no
-// capture holds its base against an end's absorption; and only a turn that
-// landed a capture absorbs, at its end, the turns its first read handed out.
-// The domain's own suite holds those rules on the real log
-// (internal/executordomain's TestNoReleaseTakesAHeldBase and
-// TestATurnThatNeverCapturedAbsorbsNothing); these cases hold what the
-// coordinators do with them.
+// capture holds its base against an end's absorption; only a turn that landed
+// a capture absorbs, at its end, the turns its first read handed out; and a
+// head read now names the ended turn that read the conversation last
+// ([conversationLog.head]). The domain's own suite holds those rules on the
+// real log (internal/executordomain's TestNoReleaseTakesAHeldBase,
+// TestATurnThatNeverCapturedAbsorbsNothing and
+// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued), and
+// TestTheConversationLogsHeadIsTheTurnThatReadItLast holds this log to the
+// last of them; these cases hold what the coordinators do with them.
 type conversationLog struct {
 	mu       sync.Mutex
 	rows     map[string]logRow
@@ -565,6 +568,54 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 	}
 	if row, ok := logbook.row("b1"); ok {
 		t.Fatalf("T2's end left B1, the head it was handed: %+v", row)
+	}
+}
+
+// THE LOG'S HEAD IS THE DOMAIN'S, so a case that asks it which session a head
+// read made now would name is answered as the domain's head statement answers:
+// of a conversation's ended rows that name a session, the one whose turn read
+// the conversation last, never simply the one that ended last. Turn p read B1
+// and parked; turn a read B1 too, beside it, and ended, absorbing B1; turn b
+// read the conversation after a's end, continued a and ended; and p, answered,
+// ended last of all. The head is b, and p is not. The domain's own suite holds
+// its statement to the same order (internal/executordomain's
+// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued).
+//
+// Mutation: order conversationLog.head by EndedSeq alone and p is named.
+func TestTheConversationLogsHeadIsTheTurnThatReadItLast(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	logbook := newConversationLog()
+	logbook.endedTurn(t, "b1", "s-b1", "B1's transcript")
+	landCapture := func(turn string, read int64, absorbs ...string) {
+		t.Helper()
+		if _, err := logbook.Capture(ctx, CaptureRecord{Handle: "swe", Turn: turn,
+			ConversationKey: "chat:D1", WorkKey: "wk-" + turn,
+			Object: objstore.Object{Key: objstore.KeyAt(time.Now()), Hash: objstore.Hash(strings.Repeat("e", 64)),
+				Size: 3},
+			Stamp: SessionCapture{Harness: "claude-code", SessionID: "s-" + turn, ArchiveFormat: FakeArchiveFormat,
+				LaunchSeq: 1, CaptureSeq: 1},
+			ReadThrough: read, Absorbs: absorbs}); err != nil {
+			t.Fatalf("%s's capture: %v", turn, err)
+		}
+	}
+	landEnd := func(turn string) {
+		t.Helper()
+		if _, err := logbook.End(ctx, EndRecord{Handle: "swe", Turn: turn, ConversationKey: "chat:D1",
+			WorkKey: "wk-" + turn, Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
+			t.Fatalf("%s's end: %v", turn, err)
+		}
+	}
+	first := logbook.readNow()
+	landCapture("p", first, "b1")
+	landCapture("a", first, "b1")
+	landEnd("a")
+	landCapture("b", logbook.readNow(), "a")
+	landEnd("b")
+	landEnd("p")
+	if head := logbook.head("chat:D1"); head != "b" {
+		t.Fatalf("the log names %q the head, want b, which read the conversation last, not p, which "+
+			"ended last", head)
 	}
 }
 
