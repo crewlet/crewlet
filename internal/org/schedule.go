@@ -94,12 +94,17 @@ const DefaultScheduleTimeout = 30 * time.Minute
 // FOUR HUNDRED BYTES: a fire's key spends at most seventy-nine before the name
 // — `schedule/`, a scope of four, a unit's key of at most sixty-four bytes of a
 // grammar no escape touches (a seat's agent id is thirty-six), and two
-// separators — so four hundred leaves the log's bound room to spare and still
-// admits every name a person writes, every Kubernetes object name among them
-// (at most 253 ASCII bytes, none of which escapes); a name of a hundred and
-// thirty-three bytes always fits, whatever it holds.
+// separators — so four hundred leaves the log's bound room to spare. It admits
+// any name of a hundred and thirty-three bytes, whatever it holds; any name of
+// up to four hundred that escapes nothing (ASCII letters and digits, `-`, `.`,
+// `_` and `~`, and the `:`, `@`, `&`, `=`, `+` and `$` a path segment keeps);
+// and so every Kubernetes object name (at most 253 bytes of lowercase letters,
+// digits, `-` and `.`), which is why crewlet-operator's Schedule, named by its
+// object, needs no bound of its own. A longer name that escapes is refused:
+// forty-five Japanese characters are 135 bytes, and 405 escaped.
 // internal/schedule's TestTheLongestScheduleNameFitsTheLogsKey holds the
-// longest key a company admits to the log's bound.
+// longest key a company admits to the log's bound, and
+// TestAScheduleNameIsBoundedAsItsKeySpellsIt this bound to the Kubernetes one.
 const ScheduleNameMaxBytes = 400
 
 // Schedule is recurring work a seat or a unit owns, fired on a cron
@@ -201,13 +206,16 @@ func (s Schedule) faults(owner string) []fieldError {
 		add("name", fmt.Errorf("%s: %w: name must not be empty", owner, ErrInvalidSchedule))
 	}
 	// THE NAME AS IT IS SPELLED IN THE KEY every fire is filed under — the
-	// raw name, escaped — never as it reads: a name of short runes that
-	// each escape to several bytes would otherwise pass here and overrun
-	// the executor log's bound. See [ScheduleNameMaxBytes].
+	// raw name, escaped as a path segment is — never as it reads, as a
+	// query would escape it, or trimmed as name is above: a name of short
+	// runes that each escape to several bytes, of spaces a query writes as
+	// one byte each, or padded with spaces the key keeps would otherwise
+	// pass here and overrun the executor log's bound. See
+	// [ScheduleNameMaxBytes].
 	if escaped := len(url.PathEscape(s.Name)); escaped > ScheduleNameMaxBytes {
 		add("name", fmt.Errorf(
 			"%s: schedule %q: %w: name is %d bytes as the key its fires are filed under spells it, "+
-				"and the limit is %d — shorten it (escaped, a space or a slash takes three bytes, "+
+				"and the limit is %d: shorten it (escaped, a space or a slash takes three bytes, "+
 				"and a letter outside ASCII six or more)",
 			owner, name, ErrInvalidSchedule, escaped, ScheduleNameMaxBytes))
 	}

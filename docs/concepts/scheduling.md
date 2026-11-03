@@ -106,8 +106,13 @@ the name that way, and the log refuses a key longer than 512 bytes rather than
 cut one — a cut key would merge two conversations. The key spends at most 79
 bytes before the name (the `schedule/` prefix, the scope, a unit's key of at
 most 64 bytes or a seat's 36-byte agent id, and two separators), so 400 leaves
-room to spare and admits any name a person writes, every Kubernetes object
-name among them.
+the log's bound room to spare. It admits any name of at most 133 bytes,
+whatever it holds; any name of up to 400 bytes that escapes nothing — ASCII
+letters and digits, `-`, `.`, `_` and `~`, and the `:`, `@`, `&`, `=`, `+` and
+`$` a path segment keeps as they are — and so every Kubernetes object name (at
+most 253 bytes of lowercase letters, digits, `-` and `.`). A longer name that
+escapes is refused: forty-five Japanese characters are 135 bytes, and 405
+escaped.
 
 ### Which clock a schedule fires on
 
