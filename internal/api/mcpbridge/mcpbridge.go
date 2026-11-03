@@ -73,7 +73,10 @@
 // from the run's note inbox, at the harness's own boundaries — see steer.go, "A
 // NOTE INBOX" — and decides nothing about them. A load of one of the run's own
 // skills, which its harness reports, it records as the run's own load of the
-// Tool Skill it stands for — see skills.go.
+// Tool Skill it stands for — see skills.go. And which session the job's box
+// started — the one its launch continued, or one of its own in that one's place
+// — it reads off the token the box dials, one of the job's two, and has the
+// run's skill guard held to it before the run's first call — see started.go.
 //
 // # A run outlives the process that opened its session
 //
@@ -303,6 +306,17 @@ type Session struct {
 	// skills.go. Nil hands none: the skill route answers 404, skill_loaded
 	// records nothing, and load_tool_skill is listed as any other tool.
 	Skills map[string]string
+
+	// Started is told which session the job's box started, the first time a
+	// request of the job reaches an opening of its session, BEFORE that
+	// request is served: fellBack where it came on the job's other token
+	// ([Bridge.FreshEndpoint]) — a session of its own its script started in
+	// place of the one its launch continued — and false on the endpoint
+	// [Bridge.Open] answered. It holds the run's skill guard to that session,
+	// so no call of the run is admitted against the guard of a session it is
+	// not in — see started.go. Nil tells nobody, which a session whose box
+	// is handed one token only (the assistant's deep work) has.
+	Started func(ctx context.Context, fellBack bool)
 
 	mu sync.Mutex
 	// live is the session's current opening: what a token minted at its
@@ -705,11 +719,36 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 		// the same session opened again.
 		previous.endKeeping(opened.steer)
 	}
-	ttl := b.ttl
-	if s.TTL > 0 && s.TTL < ttl {
-		ttl = s.TTL
+	return base + PathPrefix + b.signer.Mint(opened.subject(false), b.ttlOf(s))
+}
+
+// FreshEndpoint is the endpoint of s's live opening under the job's OTHER token:
+// the one its box is wired with where its script starts a session of its own in
+// place of the one its launch continues (internal/sandbox, RunRequest.FreshWiring).
+// A request on it reaches the same opening as one on [Bridge.Open]'s, and says
+// the box started that session of its own ([Session.Started]). "" where s has
+// no live opening, or no base reaches its box — the cases Open answers "" for.
+func (b *Bridge) FreshEndpoint(s *Session) string {
+	if b == nil || s == nil {
+		return ""
 	}
-	return base + PathPrefix + b.signer.Mint(opened.subject(), ttl)
+	s.mu.Lock()
+	opened := s.live
+	s.mu.Unlock()
+	base := b.Reaches(s.OnHost)
+	if opened == nil || base == "" {
+		return ""
+	}
+	return base + PathPrefix + b.signer.Mint(opened.subject(true), b.ttlOf(s))
+}
+
+// ttlOf is how long a token minted for s's opening lasts: the bridge's own
+// bound, or the session's where it is shorter ([Session.TTL]).
+func (b *Bridge) ttlOf(s *Session) time.Duration {
+	if s.TTL > 0 && s.TTL < b.ttl {
+		return s.TTL
+	}
+	return b.ttl
 }
 
 // Reaches is the base URL a box dials this bridge at — this node's own
@@ -738,10 +777,24 @@ func (b *Bridge) Reaches(onHost bool) string {
 // malformed one. "~" is unreserved (RFC 3986 §2.3) and appears in no UUID.
 const subjectSep = "~"
 
+// freshMark closes the first part of the subject of a job's OTHER token: the
+// one its box dials where its script started a session of its own in place of
+// the one its launch continues ([Bridge.FreshEndpoint]). So the session a box
+// started is IN THE TOKEN, under the fleet's signature, and nothing the run's
+// model writes can change it — see started.go.
+//
+// ON THE JOB'S PART rather than as a part of its own, so a node of an older
+// build, which reads no mark, still finds the run's seat in the route that
+// follows and relays the call to the seat's holder as it relays any. "_" is
+// unreserved, and refused in a job's id ([validLaunch]), so the mark is never
+// part of one.
+const freshMark = "_fresh"
+
 // validLaunch reports whether a job id can be the first part of a token's
-// subject: set, and free of the two characters that delimit a token's parts.
+// subject: set, and free of the two characters that delimit a token's parts and
+// of the one that opens the mark of a job's other token ([freshMark]).
 func validLaunch(launch string) bool {
-	return launch != "" && !strings.ContainsAny(launch, subjectSep+".")
+	return launch != "" && !strings.ContainsAny(launch, subjectSep+"._")
 }
 
 // ErrSeatless is a seat's surface bound to no agent seat: every bridged call
@@ -880,15 +933,22 @@ func (b *Bridge) Live() int {
 }
 
 // subject is what a token names: the job its opening serves, where its
-// session lives, and the run.
+// session lives, and the run — and, on the job's other token, that its box
+// started a session of its own in place of the one its launch continued
+// ([freshMark]).
 type subject struct {
 	launch string
+	fresh  bool
 	route  route
 	run    string
 }
 
 func (s subject) String() string {
-	return s.launch + subjectSep + s.route.String() + subjectSep + s.run
+	job := s.launch
+	if s.fresh {
+		job += freshMark
+	}
+	return job + subjectSep + s.route.String() + subjectSep + s.run
 }
 
 // parse verifies a token — this fleet signed it, and it has not expired — and
@@ -899,10 +959,11 @@ func (b *Bridge) parse(token string) (subject, bool) {
 	if raw == "" {
 		return subject{}, false
 	}
-	launch, rest, ok := strings.Cut(raw, subjectSep)
+	job, rest, ok := strings.Cut(raw, subjectSep)
 	if !ok {
 		return subject{}, false
 	}
+	launch, fresh := strings.CutSuffix(job, freshMark)
 	routeText, run, ok := strings.Cut(rest, subjectSep)
 	if !ok || run == "" || !validLaunch(launch) {
 		return subject{}, false
@@ -911,7 +972,7 @@ func (b *Bridge) parse(token string) (subject, bool) {
 	if !ok {
 		return subject{}, false
 	}
-	return subject{launch: launch, route: where, run: run}, true
+	return subject{launch: launch, fresh: fresh, route: where, run: run}, true
 }
 
 // held is this node's live opening of the job a subject names, or nil.
@@ -1162,7 +1223,7 @@ func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)
 			}
 		}
 		if opened != nil && fence(opened.session) == nil {
-			serve(w, r, opened)
+			b.serveBegun(w, r, sub, opened, serve)
 			return
 		}
 		if f := b.fleet.Load(); f != nil {
@@ -1177,7 +1238,7 @@ func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)
 			// FENCED, AND NO FLEET TO DEFER TO: the opening's own answer —
 			// that the run's tools are closed, and that nothing more is
 			// taken from its notes — is the answer.
-			serve(w, r, opened)
+			b.serveBegun(w, r, sub, opened, serve)
 			return
 		}
 		_, reason := b.Miss(r.PathValue("token"))
@@ -1201,8 +1262,24 @@ func (b *Bridge) heldOnly(serve func(http.ResponseWriter, *http.Request, *bindin
 			b.refuse(w, r, sub.run, reason)
 			return
 		}
-		serve(w, r, opened)
+		b.serveBegun(w, r, sub, opened, serve)
 	})
+}
+
+// serveBegun serves a request on the opening its token names once the opening
+// is held to the session the job's box started ([binding.begin]) — the one
+// step every route under the prefix takes before it is served, here or relayed
+// to the node holding the opening — and refuses one on the job's other token
+// once the box has said which it started ([otherSession]).
+func (b *Bridge) serveBegun(w http.ResponseWriter, r *http.Request, sub subject, opened *binding,
+	serve func(http.ResponseWriter, *http.Request, *binding)) {
+
+	//nolint:contextcheck // the session is told under the run's own context, as every call of the run is made, never the request's (started.go)
+	if !opened.begin(sub) {
+		b.refuse(w, r, sub.run, otherSession)
+		return
+	}
+	serve(w, r, opened)
 }
 
 // refuse answers a call no opening will take.
@@ -1307,6 +1384,15 @@ type binding struct {
 	// skillUnsubstituted says once, per opening, that the harness's hook names
 	// no skill it loaded — see [binding.loadSkill].
 	skillUnsubstituted sync.Once
+
+	// startMu holds every request of the opening behind the first, while the
+	// session is told which session the job's box started; started says it
+	// has been, and startedFresh that it was a session of the box's own — see
+	// [binding.begin]. A mutex of its own, never mu, which every call takes:
+	// what the session is told can write the run's record.
+	startMu      sync.Mutex
+	started      bool
+	startedFresh bool
 }
 
 var _ toolsession.Dispatcher = (*binding)(nil)
@@ -1367,8 +1453,12 @@ func newBinding(ctx context.Context, s *Session, where route) *binding {
 // it, and the box's every call was refused for the rest of its run. The job's
 // id is neither: a relaunch mints a new one, and the run's durable row carries
 // it to whichever node opens the job's session again.
-func (o *binding) subject() string {
-	return subject{launch: o.id, route: o.route, run: o.session.RunID}.String()
+//
+// fresh names the job's OTHER token ([Bridge.FreshEndpoint]), the one its box
+// dials where it started a session of its own in place of the one its launch
+// continued.
+func (o *binding) subject(fresh bool) string {
+	return subject{launch: o.id, fresh: fresh, route: o.route, run: o.session.RunID}.String()
 }
 
 // end refuses every later call on the opening and closes every MCP session a

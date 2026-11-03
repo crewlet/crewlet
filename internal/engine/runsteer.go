@@ -415,7 +415,7 @@ func readOf(at steer.Reading) sandbox.NoteRead {
 // readingOf is a record's read as the agent layer states it.
 func readingOf(read sandbox.NoteRead) steer.Reading {
 	return steer.Reading{Phase: types.Phase(read.Phase), Iteration: read.Iteration, Round: read.Round,
-		Boundary: types.SteerBoundary(read.Boundary), Launch: read.Launch, At: read.At}
+		Boundary: types.SteerBoundary(read.Boundary), Launch: read.Launch, At: read.At, Order: read.Order}
 }
 
 // carried is every note run's record holds read, opened, in the order read —

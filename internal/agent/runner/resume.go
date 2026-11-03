@@ -57,7 +57,10 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	if r.cfg.Resume == nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: resume with no parked state")
 	}
-	state := r.cfg.Resume.State
+	// THE JOB'S PARKED STATE AS THE SESSION ITS BOX STARTED HOLDS IT: every
+	// guard rebuilt from it below holds the skills its launch armed only where
+	// the box said it continued that session ([Resume.parked]).
+	state := r.cfg.Resume.parked()
 	// THE NOTES THE TURN HAS READ, off the run's record in the order read —
 	// so the phases after this one open with them as the phases before it
 	// did. See [Resume.Steered].
@@ -71,25 +74,44 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// the seeding reads the universe every later call is admitted against.
 	bridged := inAdmissionOrder(r.cfg.Resume.Bridged)
 
-	// A PERSON'S ANSWER CARRIES THE RUN ON; it is never the run's report.
-	// See [Asked]. And so does a job lost with its host, unless the round it
-	// was lost in was already submitted. See [Lost].
-	logged := bridgedLedger(bridged)
-	if asked := r.cfg.Resume.Asked; asked != nil {
-		return r.continueAgentRun(ctx, history, state, asked, logged)
-	}
-	if lost := r.cfg.Resume.Lost; lost != nil &&
-		!submitted(bridgedLedger(sinceAnswer(bridged, r.cfg.Resume.Answered))) {
-		return r.continueAgentRun(ctx, history, state, lost, logged)
-	}
-	// AND SO DOES A JOB REFUSED ON A SIGN-IN REPLACED WHILE IT RAN, on the
-	// same condition. See [Rotated].
-	if rotated := r.cfg.Resume.Rotated; rotated != nil &&
-		!submitted(bridgedLedger(sinceAnswer(bridged, r.cfg.Resume.Answered))) {
-		return r.continueAgentRun(ctx, history, state, rotated, logged)
+	// A PERSON'S ANSWER CARRIES THE RUN ON, and so do a job lost with its host
+	// and one refused on a sign-in replaced while it ran, each unless its
+	// round was already submitted: see [Resume.carriedRound].
+	if carry := r.cfg.Resume.carriedRound(); carry != nil {
+		return r.continueAgentRun(ctx, history, state, carry, bridged)
 	}
 	return r.resumeAgentRun(ctx, history, state, r.cfg.Resume.Answer, bridged)
 }
+
+// carriedRound is the round this resume carries on rather than collects, nil
+// where it collects the run — THE ONE DECISION [Runner.Resume] takes and
+// [Resume.CarriesOn] reports, so the engine's record of what a resumed segment
+// does with the round is this decision and no copy of it.
+//
+// A PERSON'S ANSWER CARRIES THE RUN ON; it is never the run's report (see
+// [Asked]). And so does a job lost with its host ([Lost]), and one refused on a
+// sign-in replaced while it ran ([Rotated]), unless the round's calls already
+// hold its submission: such a job had finished its work, and the round is
+// collected.
+func (r Resume) carriedRound() carried {
+	if r.Asked != nil {
+		return r.Asked
+	}
+	submittedRound := submitted(bridgedLedger(sinceAnswer(inAdmissionOrder(r.Bridged), r.Answered)))
+	switch {
+	case r.Lost != nil && !submittedRound:
+		return r.Lost
+	case r.Rotated != nil && !submittedRound:
+		return r.Rotated
+	}
+	return nil
+}
+
+// CarriesOn reports whether the resume relaunches the round of the job it
+// resumes from rather than collecting the job ([Resume.carriedRound]): what a
+// segment that resumes from a collected job says of it as it begins, for every
+// reader of its run's record (sandbox.ResumeCarry).
+func (r Resume) CarriesOn() bool { return r.carriedRound() != nil }
 
 // submitted reports whether a round's calls hold a submission its run made:
 // a `submit_work` the bridge did not refuse, which the round's collection

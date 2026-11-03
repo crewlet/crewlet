@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
@@ -23,9 +24,11 @@ import (
 // rows whose endings carry every field, a transcript page that is cut and one
 // that could not be read, entries of every optional key (a subagent's, which
 // only Claude Code's archive has, read as the entry type itself encodes), and
-// the bounds, and the log position both answers carry. And the four closed
-// sets the screen names words for are the engine's: the transcript's states,
-// the entries' kinds, a page's cuts and an ending's outcomes.
+// the bounds, and the log position both answers carry — and a live row a
+// relaunch would continue, which alone says where. And the five closed sets the
+// screen names words for are the engine's: the transcript's states, the
+// entries' kinds, a page's cuts, an ending's outcomes and where a relaunch
+// continues a session.
 //
 // Mutation: rename a JSON key on either answer, add one, or add a state or a
 // kind on one side only, and this names it.
@@ -46,9 +49,14 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	live := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), Harness: "codex"}
-	reads := &stubSessions{rows: []executordomain.Session{read, missing, live}}
+	// A LIVE TURN A RELAUNCH WOULD CONTINUE, which alone sends where it would.
+	continued, continuedRun := liveSession(executor.ClaudeCodeName)
+	reads := &stubSessions{rows: []executordomain.Session{read, missing, live, continued}}
+	sources := sessionSources(t, reads, store)
+	sources.SessionRuns = &stubRuns{runs: []sandbox.PendingRun{continuedRun}}
+	sources.RelaunchTargets = targetOf(claudeTarget())
 	r := queries.NewRegistry()
-	queries.Register(r, sessionSources(t, reads, store))
+	queries.Register(r, sources)
 
 	listed, err := r.Answer(asSeat(t, "ana"), "executor_sessions", nil)
 	if err != nil {
@@ -105,6 +113,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		"TranscriptEntryKind": stringsOf(executor.EntryKinds),
 		"TranscriptCut":       stringsOf(executor.TranscriptCuts),
 		"SessionOutcome":      stringsOf(executordomain.Outcomes),
+		"SessionContinuesIn":  stringsOf(sandbox.ContinuesIns),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {

@@ -16,11 +16,12 @@ import (
 // account of anything the run did. Filed as the run's report — which is what
 // the resume once did with it — the answer reached the turn as a run that
 // ended without submitting, was rescued as incomplete, and never reached the
-// run that asked for it. So the resumed turn relaunches its executor instead:
-// in the asking run's own box, continuing the harness's own conversation with the
-// answer as its next prompt ([Asked.Continuation]), or — where that box is
-// gone — as a fresh run told the question, the answer and the branch beside
-// its brief ([Asked.Reseed]).
+// run that asked for it. So the resumed turn relaunches its executor instead,
+// continuing the harness's own conversation with the answer as its next prompt
+// ([Asked.Continuation]) — the turn's kept capture of it, in whatever box the
+// launch gets (continued.go), or the session the asking run's own box holds —
+// or, where the conversation can be continued in neither, as a fresh run told
+// the question, the answer and the branch beside its brief ([Asked.Reseed]).
 type Asked struct {
 	// Question is what the run asked and Answer the reply; By is who
 	// answered, "" where the route that carried the reply does not say.
@@ -31,7 +32,8 @@ type Asked struct {
 	Branch string
 
 	// SessionID is the asking run's harness session, which a relaunch in its
-	// box continues.
+	// box continues in place where the turn kept no capture of it to restore
+	// (continued.go).
 	SessionID string
 
 	// BoxKept is whether the asking run's box is still there; false once

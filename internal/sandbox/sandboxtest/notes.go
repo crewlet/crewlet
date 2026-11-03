@@ -906,15 +906,18 @@ func testNotesSurviveEveryWriteThatIsNotTheirs(t *testing.T, s sandbox.PendingSt
 // A KEY A LATER BUILD ADDS INSIDE A SECTION SURVIVES EVERY WRITE THIS BUILD
 // MAKES. The record is rewritten whole by every node that touches it, so a
 // field a newer build adds to the notes section, to one note, to where a note
-// was read or to a bridged call is gone the moment this build writes the record
-// back — unless every level that can grow keeps what it does not know. Seeded
-// at each of those four levels at once, as a newer build would write them, and
-// read back off the raw record after every kind of write this build makes:
-// a status write, a lease, a bridged call, a filing, a take, a pull, a claim
-// and its release, a park, and a relaunch's reset that carries the round on.
+// was read, to a bridged call or to the job's own record is gone the moment
+// this build writes the record back — unless every level that can grow keeps
+// what it does not know. Seeded at each of those five levels at once, as a
+// newer build would write them, and read back off the raw record after every
+// kind of write this build makes: a status write, a lease, a bridged call, a
+// filing, a take, a pull, a claim and its release, a park, and a relaunch's
+// reset that carries the round on — which replaces the job's record whole, so
+// the key a later build added to it goes with the job it was about.
 //
 // Mutation: drop any one section's Extra from its decode or its encode, and the
-// key at that level is gone after the first write.
+// key at that level is gone after the first write; carry the job's record's
+// over a relaunch, and the next job reads the last one's fact as its own.
 func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s sandbox.PendingStore,
 	runs coord.SandboxRuns,
 ) {
@@ -939,6 +942,7 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		"a note":            `"high"`,
 		"a note's read":     `"hook"`,
 		"a bridged call":    `{"span":"s-1"}`,
+		"the job's record":  `{"span":"s-2"}`,
 	}
 	if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
 		var row map[string]any
@@ -951,13 +955,16 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		first["priority"] = json.RawMessage(seeded["a note"])
 		first["read"].(map[string]any)["carrier"] = json.RawMessage(seeded["a note's read"])
 		row["bridge_calls"].([]any)[0].(map[string]any)["trace"] = json.RawMessage(seeded["a bridged call"])
+		row["launch_record"].(map[string]any)["trace"] = json.RawMessage(seeded["the job's record"])
 		raw, err := json.Marshal(row)
 		return coord.SandboxRunChange{Put: raw}, err
 	}); err != nil || !ok {
 		t.Fatalf("seed the newer build's keys: %v %v", ok, err)
 	}
 
-	check := func(step string) {
+	// sameJob says the step leaves the job the seed was written under on the
+	// record, whose own record then keeps the later build's key.
+	check := func(step string, sameJob bool) {
 		t.Helper()
 		record, found, err := runs.SandboxRun(ctx, turn)
 		if err != nil || !found {
@@ -978,6 +985,9 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 				Name  string          `json:"name"`
 				Trace json.RawMessage `json:"trace"`
 			} `json:"bridge_calls"`
+			Job struct {
+				Trace json.RawMessage `json:"trace"`
+			} `json:"launch_record"`
 		}
 		if err := json.Unmarshal(record.Value, &row); err != nil {
 			t.Fatalf("%s: %v", step, err)
@@ -995,7 +1005,15 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		if len(row.Calls) > 0 && row.Calls[0].Name == "read_page" {
 			got["a bridged call"] = string(row.Calls[0].Trace)
 		}
+		got["the job's record"] = string(row.Job.Trace)
 		for level, want := range seeded {
+			if level == "the job's record" && !sameJob {
+				if got[level] != "" {
+					t.Errorf("%s carried the key a later build added to the job's record over to the "+
+						"next job: %s", step, got[level])
+				}
+				continue
+			}
 			if compact(t, got[level]) != compact(t, want) {
 				t.Errorf("%s dropped the key a later build added to %s: got %q, want %s",
 					step, level, got[level], want)
@@ -1003,36 +1021,36 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		}
 	}
 
-	check("the seed")
+	check("the seed", true)
 	if err := s.SetStatus(ctx, turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
 		t.Fatal(err)
 	}
-	check("a status write")
+	check("a status write", true)
 	if _, err := s.ClaimOwnership(ctx, turn, "node-b", 2); err != nil {
 		t.Fatal(err)
 	}
-	check("a lease")
+	check("a lease", true)
 	if _, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
 		Call: sandbox.BridgeCall{Name: "write_page"}}); err != nil {
 		t.Fatal(err)
 	}
-	check("a bridged call")
+	check("a bridged call", true)
 	mustFile(t, s, turn, "n-3")
-	check("a filing")
+	check("a filing", true)
 	if _, err := s.TakeNotes(ctx, turn, bridgeTake(launch, "n-2")); err != nil {
 		t.Fatal(err)
 	}
-	check("a take")
+	check("a take", true)
 	if _, err := s.MarkPulled(ctx, turn, launch); err != nil {
 		t.Fatal(err)
 	}
-	check("a pull")
+	check("a pull", true)
 	claimed := mustClaim(t, s, turn)
-	check("the claim")
+	check("the claim", true)
 	mustRelease(t, s, claimed)
-	check("its release")
+	check("its release", true)
 	park(t, s, turn)
-	check("a park")
+	check("a park", true)
 	again := run(turn)
 	again.Continues = true
 	again.BriefNotes = []sandbox.RunNote{{ID: "n-3",
@@ -1040,7 +1058,7 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 	if _, err := s.BeginLaunch(ctx, again, sandbox.Fence{}); err != nil {
 		t.Fatalf("relaunch: %v", err)
 	}
-	check("a relaunch's reset")
+	check("a relaunch's reset", false)
 }
 
 // compact is JSON text without its insignificant space, so a value is compared
