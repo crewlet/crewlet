@@ -72,9 +72,8 @@ interface AccessLevel {
   /** Why no seat can be given it yet: offered disabled, with this as the reason. */
   unavailable?: string;
   /**
-   * Where a person makes the seat's credential and ticks its scopes at the
-   * vendor (DigitalOcean's token scopes, such as `droplet:read`), every scope
-   * the level needs, in the vendor's own spelling.
+   * Every vendor permission the level holds, in the vendor's own names, where a
+   * person grants them by hand at the vendor (DigitalOcean's token scopes).
    */
   grants?: string[];
 }
@@ -119,19 +118,15 @@ export interface AccessOptions {
   /** Where a person takes this lane's steps at the vendor, for a step that names no page of its own. */
   action_url?: string;
   /**
-   * The account, organization or team the company connected at the vendor,
-   * as the vendor shows it (DigitalOcean's team), for a step that says where
-   * to make a seat's credential.
-   */
-  vendor_account?: string;
-  /**
-   * Beside the levels' `grants`, the vendor's scopes no level grants and a
-   * pasted credential is refused for holding. Together with `unneeded` and
-   * every level's `grants`, they cover every scope the vendor offers.
+   * Every vendor permission no level grants that a pasted credential must not
+   * hold. With `unneeded` and the levels' `grants`, each permission the
+   * vendor offers is in exactly one.
    */
   refused?: string[];
-  /** The vendor's scopes no level grants and a pasted credential may still hold: agents do not need them. */
+  /** Every vendor permission no level grants that a pasted credential may still hold. */
   unneeded?: string[];
+  /** The account, organization or team the company connected, as the vendor shows it. */
+  vendor_account?: string;
   /**
    * Whether a person may keep a turned-off agent's account at the vendor
    * rather than delete it there (the `release` action, on its remove wait).
@@ -310,14 +305,13 @@ export interface AccessSeatLane {
   /** Where the lane's tool is a CLI in the seat's own box (Expo's EAS CLI), what that box holds for it. */
   box?: AccessBox;
   /**
-   * On a lane where a person makes the seat's credential at the vendor, the
-   * name to give it there, at the seat's desired level. The name Crewlet asks
-   * for, never one read back from the vendor.
+   * Where a person makes the seat's credential at the vendor: the name to give
+   * it at the seat's desired level. Computed by the engine, never read back.
    */
   hand_in?: AccessHandIn;
 }
 
-/** What a person makes at the vendor for one seat. */
+/** What a person makes at the vendor for a seat. */
 interface AccessHandIn {
   name: string;
 }

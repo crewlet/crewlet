@@ -220,6 +220,7 @@ var replaced = []struct {
 	{"atlassian", "atlassian", []key{{"TOKEN", "JIRA_API_TOKEN", "", ""}, {"EMAIL", "JIRA_USERNAME", "", ""},
 		{"TOKEN", "CONFLUENCE_API_TOKEN", "", ""}, {"EMAIL", "CONFLUENCE_USERNAME", "", ""}}},
 	{"cloudflare", "cloudflare", []key{{"API_TOKEN", "", "Authorization", "Bearer "}}},
+	{"digitalocean", "digitalocean", []key{{"TOKEN", "", "Authorization", "Bearer "}}},
 }
 
 func keysOf(in []catalogue.SeatKey) []key {
@@ -281,6 +282,12 @@ func TestRecognitionMatchesTheSeatBindingsItReplaces(t *testing.T) {
 		{"a host under Cloudflare's server", remote("https://docs.mcp.cloudflare.com/mcp"), "", nil},
 		{"a lookalike of Cloudflare's server", remote("https://mcp.cloudflare.com.example.net/mcp"), "", nil},
 		{"Cloudflare's host spelled on stdio", stdio("curl", "https://mcp.cloudflare.com/mcp"), "", nil},
+		{"DigitalOcean's router", remote("https://mcp.digitalocean.com/mcp"), "digitalocean", bound(8)},
+		{"a DigitalOcean service's own server", remote("https://droplets.mcp.digitalocean.com/mcp"),
+			"digitalocean", bound(8)},
+		{"DigitalOcean's API itself", remote("https://api.digitalocean.com/v2/"), "", nil},
+		{"a lookalike of DigitalOcean's router", remote("https://mcp.digitalocean.com.example.net/mcp"), "", nil},
+		{"DigitalOcean's host spelled on stdio", stdio("curl", "https://mcp.digitalocean.com/mcp"), "", nil},
 		{"a server nobody recognises", stdio("uvx", "some-server==1.0.0"), "", nil},
 		{"an address nobody recognises", remote("https://mcp.example.com/"), "", nil},
 		{"an address that does not parse", remote("://mcp.datadoghq.com"), "", nil},
