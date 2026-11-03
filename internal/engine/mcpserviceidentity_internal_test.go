@@ -377,7 +377,7 @@ func TestATestOfAServiceIdentitySignsInWithWhatItTests(t *testing.T) {
 	v := newServiceVendor(t)
 	a, _, _ := serviceNodes(t, v, "")
 	running := sourceOf(t, a)
-	report := a.testServer(t.Context(), entryOf(a), nil, nil, nil, nil, nil)
+	report := a.testServer(t.Context(), entryOf(a), nil, nil, nil, nil, nil, nil)
 	if !report.Serving() || v.asked() != 1 {
 		t.Fatalf("the saved server's test: %+v, %d asks", report.Failure, v.asked())
 	}
@@ -388,7 +388,7 @@ func TestATestOfAServiceIdentitySignsInWithWhatItTests(t *testing.T) {
 		t.Fatalf("the server was sent %q, want the token issued for the test", carried[len(carried)-1])
 	}
 	wrong := config.NewResolver(config.MapSource{"VENDOR_CLIENT_SECRET": "svc-wrong-0123456789"})
-	report = a.testServer(t.Context(), entryOf(a), nil, wrong, nil, nil, nil)
+	report = a.testServer(t.Context(), entryOf(a), nil, nil, wrong, nil, nil, nil)
 	if report.Serving() || report.Failure.Class != mcp.FailCredentialRejected ||
 		!strings.Contains(report.Failure.Said, "invalid_client") ||
 		strings.Contains(report.Failure.Said, "svc-wrong-0123456789") {

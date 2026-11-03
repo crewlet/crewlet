@@ -134,7 +134,8 @@ func TestAnExpiringProvisionerIsReported(t *testing.T) {
 	}
 }
 
-// A LEVEL CLOUDFLARE CANNOT RESOLVE IS REPORTED BY NAME.
+// A LEVEL CLOUDFLARE CANNOT RESOLVE IS REPORTED BY NAME, and so is every
+// level above it, since each grants what the levels before it do.
 func TestAnUnresolvableLevelIsReported(t *testing.T) {
 	t.Parallel()
 	w := convergedCloudflare(t, t)
@@ -145,9 +146,13 @@ func TestAnUnresolvableLevelIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || findings[0].Subject != "cloudflare level operate" ||
-		!slices.Equal(findings[0].Subjects, []string{"Cache Purge"}) {
-		t.Fatalf("findings = %+v, want the operate level's missing group", findings)
+	if len(findings) != 2 {
+		t.Fatalf("findings = %+v, want the operate and configure levels' missing group", findings)
+	}
+	for i, level := range []string{"operate", "configure"} {
+		if findings[i].Subject != "cloudflare level "+level || !slices.Equal(findings[i].Subjects, []string{"Cache Purge"}) {
+			t.Errorf("finding %d = %+v, want the %s level missing Cache Purge", i, findings[i], level)
+		}
 	}
 }
 

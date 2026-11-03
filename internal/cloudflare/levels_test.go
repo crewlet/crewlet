@@ -20,33 +20,74 @@ func catalogueOf(f *fakeCloudflare) []cloudflare.PermissionGroup {
 	return out
 }
 
-// EVERY LEVEL THE DOCUMENT OFFERS GRANTS GROUPS, operate is read and more, and
-// the provisioner is asked for every group a level grants.
+// EVERY LEVEL THE DOCUMENT OFFERS GRANTS GROUPS, each grants everything the
+// one before it does, configure adds the zone settings and compression rules,
+// no level writes DNS, WAF or SSL, and the provisioner is asked for every group
+// a level grants.
 func TestEveryLevelGrantsAndTheProvisionerHoldsThemAll(t *testing.T) {
 	t.Parallel()
 	if !slices.Equal(cloudflare.Levels(), config.CloudflareLevels()) {
 		t.Fatalf("levels %v, the document offers %v", cloudflare.Levels(), config.CloudflareLevels())
 	}
-	read, _ := cloudflare.Groups(config.CloudflareLevelRead)
-	operate, _ := cloudflare.Groups(config.CloudflareLevelOperate)
-	for _, g := range read {
-		if !slices.Contains(operate, g) {
-			t.Errorf("operate does not grant %s, which read does", g)
-		}
-	}
-	for _, forbidden := range []string{"DNS Write", "Zone Settings Write", "Firewall Services Write"} {
-		if slices.Contains(operate, forbidden) {
-			t.Errorf("operate grants %s, which v1 leaves out", forbidden)
-		}
-	}
 	prov := cloudflare.ProvisionerGroups()
-	for _, g := range slices.Concat(operate, []string{"Account API Tokens Write"}) {
-		if !slices.Contains(prov, g) {
-			t.Errorf("the provisioner is not asked for %s", g)
+	var below []string
+	for _, level := range cloudflare.Levels() {
+		groups, ok := cloudflare.Groups(level)
+		if !ok || len(groups) <= len(below) {
+			t.Fatalf("%s grants %v, which adds nothing to %v", level, groups, below)
 		}
+		for _, g := range below {
+			if !slices.Contains(groups, g) {
+				t.Errorf("%s does not grant %s, which the level below it does", level, g)
+			}
+		}
+		for _, forbidden := range []string{
+			"DNS Write", "Zone WAF Write", "Firewall Services Write", "SSL and Certificates Write", "Page Rules Write",
+		} {
+			if slices.Contains(groups, forbidden) {
+				t.Errorf("%s grants %s, which no level does", level, forbidden)
+			}
+		}
+		for _, g := range groups {
+			if !slices.Contains(prov, g) {
+				t.Errorf("the provisioner is not asked for %s, which %s grants", g, level)
+			}
+		}
+		if cloudflare.LevelName(level) == level || cloudflare.LevelNote(level) == "" {
+			t.Errorf("%s has no name or note a person reads", level)
+		}
+		below = groups
+	}
+	operate, _ := cloudflare.Groups(config.CloudflareLevelOperate)
+	configure, _ := cloudflare.Groups(config.CloudflareLevelConfigure)
+	if slices.Contains(operate, "Zone Settings Write") {
+		t.Error("operate grants Zone Settings Write, which only configure does")
+	}
+	if added := configure[len(operate):]; !slices.Equal(added, []string{"Zone Settings Write", "Response Compression Write"}) {
+		t.Errorf("configure adds %v to operate", added)
+	}
+	if !slices.Contains(prov, "Account API Tokens Write") {
+		t.Error("the provisioner is not asked for Account API Tokens Write")
 	}
 	if _, ok := cloudflare.Groups("admin"); ok {
 		t.Error("an unknown level grants groups")
+	}
+}
+
+// EVERY LEVEL'S POLICY READS BACK AS THAT LEVEL, and never as the one below or
+// above it.
+func TestEachLevelsPolicyReadsBackAsItself(t *testing.T) {
+	t.Parallel()
+	f := newFakeCloudflare()
+	groups := catalogueOf(f)
+	for _, level := range cloudflare.Levels() {
+		policies, err := cloudflare.PoliciesFor(testAccount, groups, f.zones, nil, level)
+		if err != nil {
+			t.Fatalf("%s: %v", level, err)
+		}
+		if got := cloudflare.LevelOfPolicies(testAccount, groups, f.zones, nil, policies); got != level {
+			t.Errorf("the %s policy reads back as %q", level, got)
+		}
 	}
 }
 

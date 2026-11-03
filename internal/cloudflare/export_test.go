@@ -3,6 +3,7 @@ package cloudflare
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -34,4 +35,33 @@ func PoliciesFor(accountID string, groups []PermissionGroup, zones []Zone, confi
 		return nil, err
 	}
 	return cat.policies(g), nil
+}
+
+// LevelAdds is each level's ID and the groups it adds to the levels before
+// it, least access first.
+func LevelAdds() (ids []string, adds [][]string) {
+	for _, l := range levels {
+		ids, adds = append(ids, l.id), append(adds, names(l.adds))
+	}
+	return ids, adds
+}
+
+// ProvisionerOwnGroups is the groups the provisioner holds for itself.
+func ProvisionerOwnGroups() []string { return names(provisionerOwnPermissions) }
+
+// BuilderPath is a group's place in the token builder as the docs page writes
+// it ("Zone, Cache Rules, Read"), or "" for one this integration does not name.
+func BuilderPath(name string) string {
+	for _, p := range provisionerPermissions() {
+		if p.name != name {
+			continue
+		}
+		scope := "Account"
+		if p.zone {
+			scope = "Zone"
+		}
+		resource, access, _ := strings.Cut(p.builder, ": ")
+		return scope + ", " + resource + ", " + access
+	}
+	return ""
 }
