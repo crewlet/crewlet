@@ -25,7 +25,7 @@ import (
 )
 
 // fakeGit is one git node's git half: it records every read it is asked —
-// stamped home or not — and how long the context it was asked under had left,
+// stamped home or not — and the deadline of the context it was asked under,
 // and answers each with an answer naming itself, or unready where it is told
 // to be.
 type fakeGit struct {
@@ -33,9 +33,9 @@ type fakeGit struct {
 
 	mu    sync.Mutex
 	asked []code.GitQuery
-	// left is, for every read asked, what its context had left of its
-	// deadline when the read began; noDeadline where it had none.
-	left []time.Duration
+	// deadlines is, for every read asked, its context's deadline; the zero
+	// time where it had none.
+	deadlines []time.Time
 	// unready answers every read code.ErrGitUnready for this reason, where
 	// set — a SEAT'S read alone where seatsOnly is, as a node behind its
 	// configuration judges no seat and serves a person.
@@ -53,7 +53,7 @@ type fakeGit struct {
 	share *code.GitShare
 
 	// written is every engine write it was asked, stamped home or not, with
-	// what its context had left of its deadline as it began; and ranNothing,
+	// its context's deadline; and ranNothing,
 	// where set, is what it refuses every write with about itself — the
 	// code host stopping, or holding no epoch to sign by — having run
 	// nothing (code.ErrNotServing). A write is otherwise answered as a read
@@ -95,21 +95,17 @@ func (g *fakeGit) previews() []code.MergePreviewQuery {
 	return slices.Clone(g.previewed)
 }
 
-// askedWrite is one engine write a fakeGit was asked, and what its context had
-// left of its deadline as it began (noDeadline where it had none).
+// askedWrite is one engine write a fakeGit was asked, and its context's
+// deadline (the zero time where it had none).
 type askedWrite struct {
-	w    code.EngineWrite
-	left time.Duration
+	w        code.EngineWrite
+	deadline time.Time
 }
 
 func (g *fakeGit) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
-	left := noDeadline
-	if deadline, ok := ctx.Deadline(); ok {
-		left = time.Until(deadline)
-	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.written = append(g.written, askedWrite{w: w, left: left})
+	g.written = append(g.written, askedWrite{w: w, deadline: deadlineOf(ctx)})
 	switch {
 	case g.ranNothing != nil:
 		return code.EngineWriteResult{}, g.ranNothing
@@ -134,18 +130,31 @@ func (g *fakeGit) writes() []askedWrite {
 	return slices.Clone(g.written)
 }
 
-// noDeadline is what a fakeGit records of a read asked under a context with
-// no deadline.
-const noDeadline = time.Duration(-1)
+// servedAnAttempt reports whether deadline — what a git half was served
+// until — is a reply's margin (code.ReplyMargin) before the end of an attempt
+// of whole that the router began between before and after.
+//
+// READ OFF THE DEADLINE THE REQUEST CARRIED, never off the time left when the
+// half began: that also counts the walk's own work and, for a peer's half, the
+// broker's hop and the envelope's checks, which a loaded runner under the
+// race detector stretched past any slack a case could allow (a write asked
+// under a caller's twenty seconds was served with 17.87 s left). The deadline
+// is fixed where the router opens its attempt and travels with the request
+// unchanged, so it is exact whatever the scheduling. Monotonic readings are
+// stripped (Round(0)): a peer's deadline crossed the wire, which carries the
+// wall clock alone.
+func servedAnAttempt(deadline, before, after time.Time, whole time.Duration) bool {
+	if deadline.IsZero() {
+		return false
+	}
+	end := deadline.Round(0).Add(code.ReplyMargin)
+	return !end.Before(before.Round(0).Add(whole)) && !end.After(after.Round(0).Add(whole))
+}
 
 func (g *fakeGit) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	g.mu.Lock()
 	g.asked = append(g.asked, q)
-	left := noDeadline
-	if deadline, ok := ctx.Deadline(); ok {
-		left = time.Until(deadline)
-	}
-	g.left = append(g.left, left)
+	g.deadlines = append(g.deadlines, deadlineOf(ctx))
 	share := g.share
 	g.mu.Unlock()
 	if share != nil {
@@ -188,12 +197,11 @@ func (g *fakeGit) reads() []code.GitQuery {
 	return slices.Clone(g.asked)
 }
 
-// lefts is what each read's context had left of its deadline as it began, in
-// order.
-func (g *fakeGit) lefts() []time.Duration {
+// readDeadlines is each read's context's deadline, in order.
+func (g *fakeGit) readDeadlines() []time.Time {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return slices.Clone(g.left)
+	return slices.Clone(g.deadlines)
 }
 
 // gitHalf is a node's git half as [LocalGit] answers it: node's, and none —
@@ -1503,21 +1511,21 @@ func TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs(t *testing.T) {
 	f := newFleet(t)
 	halves := f.gitNodes(t, []string{"git-a"})
 	half := halves["git-a"]
-	served := Production().GitReadAttempt - code.ReplyMargin
+	attempt := Production().GitReadAttempt
 	for name, r := range map[string]*Router{
 		"asked of the git node by another": f.client,
 		"asked in process by the git node": f.gitRouter(t, "git-a", gitHalf{node: half}),
 	} {
+		before := time.Now()
 		if _, err := r.Code().GitRead(t.Context(), treeOf(repoID(9))); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		lefts := half.lefts()
-		left := lefts[len(lefts)-1]
-		// A SECOND'S SLACK below for the walk's own work before the half
-		// is asked; none above, which no clock gives.
-		if left == noDeadline || left > served || left < served-time.Second {
-			t.Errorf("%s: the git half was served with %v left, want the %v a git read is served for — its "+
-				"attempt less the reply's margin", name, left, served)
+		after := time.Now()
+		deadlines := half.readDeadlines()
+		if got := deadlines[len(deadlines)-1]; !servedAnAttempt(got, before, after, attempt) {
+			t.Errorf("%s: the git half was served until %v after the read returned (the zero time for no "+
+				"deadline: %v), want a git read's attempt of %v, begun during the read, less the reply's "+
+				"margin", name, got.Round(0).Sub(after.Round(0)), got.IsZero(), attempt)
 		}
 	}
 }
@@ -2194,36 +2202,48 @@ func TestAGitWriteIsHeldToItsOwnAttempt(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	half := f.gitNodes(t, []string{"git-a"})["git-a"]
-	served := Production().GitWriteAttempt - code.ReplyMargin
+	attempt := Production().GitWriteAttempt
 	for name, r := range map[string]*Router{
 		"asked of the git node by another": f.client,
 		"asked in process by the git node": f.gitRouter(t, "git-a", gitHalf{node: half}),
 	} {
 		for _, tc := range []struct {
-			// caller is the caller's own deadline, zero for none, and want
-			// what the git half is served with.
-			caller, want time.Duration
+			// caller is the caller's own deadline, zero for none, and
+			// callers whether that deadline, not the router's attempt, is
+			// what the git half is served until a reply's margin before.
+			caller  time.Duration
+			callers bool
 		}{
-			{0, served},
-			{5 * time.Minute, served},
-			{20 * time.Second, 20*time.Second - code.ReplyMargin},
+			{0, false},
+			{5 * time.Minute, false},
+			{20 * time.Second, true},
 		} {
 			ctx, cancel := t.Context(), context.CancelFunc(func() {})
 			if tc.caller > 0 {
 				ctx, cancel = context.WithTimeout(ctx, tc.caller)
 			}
+			before := time.Now()
 			_, err := r.Code().GitWrite(ctx, writeOf(repoID(9)))
+			after := time.Now()
+			callerDeadline := deadlineOf(ctx)
 			cancel()
 			if err != nil {
 				t.Fatalf("%s, its caller's deadline %v: %v", name, tc.caller, err)
 			}
 			writes := half.writes()
-			// A SECOND'S SLACK below for the walk's own work before the half
-			// is asked; none above, which no clock gives.
-			if left := writes[len(writes)-1].left; left == noDeadline || left > tc.want ||
-				left < tc.want-time.Second {
-				t.Errorf("%s, its caller's deadline %v: the git half was served with %v left, want %v", name,
-					tc.caller, left, tc.want)
+			got := writes[len(writes)-1].deadline
+			if tc.callers {
+				if want := callerDeadline.Add(-code.ReplyMargin); !got.Equal(want) {
+					t.Errorf("%s, its caller's deadline %v: the git half was served until %v, want its "+
+						"caller's deadline less the reply's margin, %v", name, tc.caller, got, want)
+				}
+				continue
+			}
+			if !servedAnAttempt(got, before, after, attempt) {
+				t.Errorf("%s, its caller's deadline %v: the git half was served until %v after the write "+
+					"returned (the zero time for no deadline: %v), want the router's git write attempt of %v, "+
+					"begun during the write, less the reply's margin", name, tc.caller,
+					got.Round(0).Sub(after.Round(0)), got.IsZero(), attempt)
 			}
 		}
 	}
