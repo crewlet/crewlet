@@ -615,8 +615,9 @@ export function AgentsAccess({
             setReview(false);
             adopt(answer);
           }}
-          // A SAVE REFUSED AS STALE keeps the draft and reads again; the
-          // review plans it again against the revision that came back.
+          // A DOCUMENT THAT MOVED (a save refused as stale, or a plan drawn
+          // from a newer revision) keeps the draft and reads again; the review
+          // plans it again against the revision that came back.
           onStale={reload}
         />
       )}

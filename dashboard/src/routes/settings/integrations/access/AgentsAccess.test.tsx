@@ -36,6 +36,8 @@ const calls = vi.hoisted(() => ({
   stepUp: false,
   /** A save refused as stale, once. */
   stale: false,
+  /** The revision the engine's plan is drawn from: the document as it stands now. */
+  planRevision: "rev-7",
 }));
 
 vi.mock("./api.ts", async (actual) => {
@@ -48,7 +50,7 @@ vi.mock("./api.ts", async (actual) => {
         calls.plan.push({ kind, seats });
         return {
           kind,
-          revision: "rev-7",
+          revision: calls.planRevision,
           ...(calls.stepUp ? { step_up: true } : {}),
           plans: [
             {
@@ -103,6 +105,7 @@ beforeEach(() => {
   calls.install = [];
   calls.stepUp = false;
   calls.stale = false;
+  calls.planRevision = "rev-7";
 });
 afterEach(cleanup);
 
@@ -223,6 +226,34 @@ test("a variable a step names is drawn as code, and the mark is hidden", async (
   for (const mark of steps.querySelectorAll(".agent-access-actor")) {
     expect(mark.getAttribute("aria-hidden")).toBe("true");
   }
+});
+
+// THE DOCUMENT MOVED SINCE THE TAB READ IT: after a first connect, the access
+// migration writes a revision of its own, and a save sent with the tab's older
+// one was refused as stale. The plan names the revision it was drawn from, so
+// the tab reads again before Save is offered, keeping the draft, and saves
+// against the revision it then read. Mutation: drop the comparison and the
+// save goes out with rev-7.
+test("a plan drawn from a newer revision reads the tab again before Save is offered", async () => {
+  calls.planRevision = "rev-8";
+  const { reload, redraw } = draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid");
+  await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  const save = () => screen.getByRole("button", { name: "Save and sync" }) as HTMLButtonElement;
+  expect(save().getAttribute("aria-disabled") === "true" || save().disabled).toBe(true);
+  redraw({ ...datadogAnswer(), revision: "rev-8" });
+  await waitFor(() => expect(calls.plan).toHaveLength(2));
+  await waitFor(() =>
+    expect(save().getAttribute("aria-disabled") === "true" || save().disabled).toBe(false),
+  );
+  fireEvent.click(save());
+  await waitFor(() => expect(calls.save).toHaveLength(1));
+  expect(calls.save[0]).toMatchObject({ ifMatch: "rev-8" });
+  expect(calls.plan[1]).toEqual(calls.plan[0]);
+  expect(reload).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/Somebody changed these agents/)).toBeNull();
 });
 
 // CLOUDFLARE'S ACCOUNT IS THE TOKEN ITSELF: the details name it, the level it
@@ -638,6 +669,8 @@ test("a save refused as stale keeps the draft, reads again and plans again again
   expect(await screen.findByText(/Somebody changed these agents/)).toBeTruthy();
   expect(reload).toHaveBeenCalled();
   expect(screen.getByRole("dialog")).toBeTruthy();
+  // The engine now plans from the revision the colleague's save wrote.
+  calls.planRevision = "rev-8";
   redraw({ ...datadogAnswer(), revision: "rev-8" });
   await waitFor(() => expect(calls.plan).toHaveLength(2));
   expect(calls.plan[1]).toEqual(calls.plan[0]);
