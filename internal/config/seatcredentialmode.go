@@ -43,6 +43,8 @@ const (
 //     agent's app is made from a manifest whose result the engine records in
 //     the document, so where only the operator writes it the apps are made
 //     outside Crewlet and handed in, however the block reads.
+//   - expo: an enabled block with `provisioning`, whose Admin token creates
+//     each agent's robot user.
 //   - slack: the sealed app-configuration token
 //     (`integrations.slack.app_config_token`) the engine creates each agent's
 //     app with (D11). The block alone grants no authority: an operator renders
@@ -71,6 +73,8 @@ func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMo
 		engine = in.GitHub != nil && in.GitHub.Enabled && in.GitHub.Provisioning != nil && !managed
 	case "slack":
 		engine = in.Slack != nil && strings.TrimSpace(in.Slack.AppConfigToken) != ""
+	case "expo":
+		engine = in.Expo != nil && in.Expo.Enabled && in.Expo.Provisioning != nil
 	}
 	if engine {
 		return SeatCredentialEngine

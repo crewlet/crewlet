@@ -1151,6 +1151,8 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.GitLab != nil
 	case "datadog":
 		return in.Datadog != nil
+	case "expo":
+		return in.Expo != nil
 	case "atlassian":
 		return in.Atlassian != nil
 	default:
