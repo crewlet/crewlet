@@ -12,10 +12,10 @@ import (
 // THE SESSION A CONVERSATION'S NEXT TURN CONTINUES, FROZEN AT ITS FIRST LAUNCH.
 //
 // A turn's dispatch reads its conversation's head once, at `linearizable`
-// (internal/engine): of the conversation's ended turns that left a session, the
-// one that read the conversation last (executordomain.Head), beside the
-// conversation's other ended turns, which the turn's brief is told how they
-// ended. The turn's first launch freezes that read on the
+// (internal/engine): of the conversation's ended turns whose rows still name a
+// session, the one that read the conversation last (executordomain.Head),
+// beside the conversation's other ended turns, which the turn's brief is told
+// how they ended. The turn's first launch freezes that read on the
 // turn's run record ([PendingRun.Base]) — written by [PendingStore.BeginLaunch]
 // on the write that creates the record and by no other, so every relaunch, on
 // whatever node, reads the read the first launch made and never makes another —

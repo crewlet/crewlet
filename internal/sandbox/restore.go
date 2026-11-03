@@ -206,8 +206,8 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 	switch {
 	case run == nil || row.Ended:
 		return SessionContinuity{Why: "the turn has ended, so no relaunch of it continues its session: a " +
-			"session its turn ended with is continued only by its conversation's next turn, where it is the " +
-			"conversation's newest"}
+			"session its turn ended with is continued only by its conversation's next turn, where its turn is " +
+			"the conversation's head, the ended turn with a kept session that read the conversation last"}
 	case run.endDecided():
 		return SessionContinuity{Why: "the turn is ending: its run's ending is decided, and no relaunch " +
 			"of it follows to continue its session"}
@@ -314,11 +314,11 @@ const (
 
 	// ContinuedByNextFire is [ContinuedByNextTurn] of a schedule's
 	// conversation: the schedule's next fire, which continues the session
-	// only where it is the schedule's head on the seat — of the fires that
-	// ended with a session, the one that read the schedule's conversation
-	// last — a schedule is a conversation of each seat that runs it, every
-	// fire a turn of it (internal/notify's ScheduleConversation). The same
-	// decision, told in the schedule's words.
+	// only where it is the schedule's head on the seat — of the ended fires
+	// whose rows still name a session, the one that read the schedule's
+	// conversation last — a schedule is a conversation of each seat that runs
+	// it, every fire a turn of it (internal/notify's ScheduleConversation). The
+	// same decision, told in the schedule's words.
 	ContinuedByNextFire ContinuedBy = "next_fire"
 )
 
