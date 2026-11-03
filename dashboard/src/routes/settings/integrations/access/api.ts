@@ -18,6 +18,7 @@ import type {
   AccessDraftRequest,
   AccessInstallLink,
   AccessPlanAnswer,
+  AccessRefusal,
   AccessRefusalField,
   AccessSeatAction,
 } from "~/contract/access.ts";
@@ -102,11 +103,9 @@ export function refusalWords(err: unknown): string {
   return err instanceof Error ? err.message : "Something went wrong.";
 }
 
-/** A refusal about one seat's control, in the reader's words, which the tab draws beside it. */
-export interface PlacedRefusal {
-  seat: string;
+/** A refusal about one seat's control ([AccessRefusal]), in the reader's words, which the tab draws beside it. */
+export interface PlacedRefusal extends Pick<AccessRefusal, "seat" | "field"> {
   lane: string;
-  field: AccessRefusalField;
   words: string;
 }
 
