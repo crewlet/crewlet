@@ -732,24 +732,37 @@ func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 // limit — is packed by the script, its transcript ending wherever the kill
 // found it: the capture says so, as one the engine packs of a job still working
 // does, and the launch that continues it restores it over the box's copy and
-// tells its run it may end mid-call.
+// tells its run it may end mid-call. The executor log's row says so too, with
+// the context the session's last request carried: the run's record that knew
+// both is deleted with the turn, and a launch continuing the session after the
+// turn ended reads them there.
 //
 // Mutation: read a script-packed session as whole whatever its harness's exit,
-// and the capture is kept as one that ended cleanly.
+// and the capture is kept as one that ended cleanly; leave the cut-off or the
+// context off the stamp recordCapture hands the log, and the capture asked of it
+// says the session ended cleanly, with no context. The engine's word of that
+// stamp onto the log's row is held by
+// TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives.
 func TestASessionItsHarnessDidNotExitCleanlyFromIsCutOff(t *testing.T) {
 	t.Parallel()
 	for name, cutOff := range map[string]bool{"killed": true, "exited cleanly": false} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, _, _ := keepingRig(t)
+			rig, writes, _ := keepingRig(t)
 			rig.launchKept(t, "t1")
 			session := rig.runner.Session
+			session.ContextTokens = 61_000
 			rig.runner.Finish(Result{Success: !cutOff, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
 				Captured: &session.Archive, HarnessCutOff: cutOff})
 			collectHeld(t, rig, "t1")
 			run := rig.get("t1")
 			if run.Kept == nil || run.Kept.Interrupted != cutOff {
 				t.Fatalf("the row keeps %+v, want a capture interrupted %v", run.Kept, cutOff)
+			}
+			if captures := writes.captured(); len(captures) != 1 || captures[0].Stamp.Interrupted != cutOff ||
+				captures[0].Stamp.ContextTokens != 61_000 {
+				t.Errorf("the log was asked to record %+v, want one capture interrupted %v of 61000 tokens",
+					captures, cutOff)
 			}
 			if takes := rig.runner.Takes(); len(takes) != 1 || takes[0].Pack {
 				t.Errorf("the session was taken %+v, want the archive its script packed, as it was", takes)

@@ -232,7 +232,7 @@ const MaxAbandonedChecks = MaxQueueDepth * MaxRequiredChecks
 // abandonedChecksIn is repository repoID's given-up attempts, at most
 // [MaxAbandonedChecks] in the order of code_checks_train_idx: one seek of that
 // index, each attempt's commit sought in code_queue_commit_idx and its
-// candidate in code_queue_dequeued_idx (replicated 0139).
+// candidate in code_queue_dequeued_idx (replicated 0140).
 func abandonedChecksIn(ctx context.Context, tx *sql.Tx, repoID string) ([]AbandonedCheck, error) {
 	rows, err := tx.QueryContext(ctx, abandonedChecksSQL, repoID, MaxAbandonedChecks)
 	if err != nil {
@@ -503,7 +503,7 @@ func owedEntriesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]queueEntry
 }
 
 // The owed closes' reads, by the index partial on exactly them (replicated
-// 0145), its predicate spelled as declared: a repository's, and the active
+// 0146), its predicate spelled as declared: a repository's, and the active
 // repositories holding one, grouped on the index's leading column.
 const (
 	owedClosesSQL = `SELECT ` + entryColumns + `, close_op FROM code_queue INDEXED BY code_queue_close_owed_idx

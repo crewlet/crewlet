@@ -1233,7 +1233,7 @@ type scanner interface{ Scan(dest ...any) error }
 //
 // A ROW NAMING NO WAY THIS BUILD KNOWS IS REFUSED ([ErrInvalid], naming the
 // push), never read as one: its column's default is the empty string rather
-// than a way (replicated 0090), so an apply that forgot to write it is a
+// than a way (replicated 0091), so an apply that forgot to write it is a
 // failed read here, where a default naming a way would have answered every
 // push the engine built as one a client's git sent.
 func scanPush(s scanner) (PushRow, int, error) {
@@ -2825,7 +2825,7 @@ const detailRowSQL = `SELECT drop_epoch, expunge_id, expunge_request, expunge_re
 // position and its instant, so a cursor without it skips or repeats the
 // pushes of a record a page boundary splits. Never by the record's instant,
 // which is the broker's and steps back across a stream leader's change, so it
-// only approximates the order (replicated 0083). The history is the
+// only approximates the order (replicated 0084). The history is the
 // repository's contents, so an asker that may not read the repository is
 // answered [ErrNotPermitted], and one whose ceiling may not [ErrAboveCeiling],
 // as [Reader.repo] answers them.
@@ -2904,7 +2904,7 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 // transaction, so what a seat asks first of a repository — what it is, and
 // its branches — is one read and one barrier.
 //
-// OVER THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0081, its
+// OVER THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0082, its
 // predicate repeated verbatim), never code_refs' key: a range of the key
 // holds every tombstone under the prefix as well, kept RefTombstoneHorizon
 // so a delta learns of a deletion — up to MaxTombstonesPerRepo of them, each
@@ -3055,7 +3055,7 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 // A PAGE IS HELD TO WHAT IT READS, NOT ONLY TO WHAT IT ANSWERS. The run's
 // pushes are a few among every push its repositories took while it ran —
 // other seats', people's, other runs' — and code_pushes_repo_idx carries no
-// run (replicated 0097 says why), so finding them reads each of those rows to
+// run (replicated 0098 says why), so finding them reads each of those rows to
 // test the run it names: its whole record, the overflow pages of a wide one
 // included. Held only to what it answered, a page read every push between
 // one of the run's and the next, however many and however wide — a week of
@@ -3255,7 +3255,7 @@ func cutRunPushCursor(s string) (repo int, position int64, pushID string, ok boo
 // compactionDue serves one page of a `compaction_due` read: the active and
 // archived repositories holding at least q.MinPacks live packs, MOST LIVE PACKS
 // FIRST and then by id, each with the version its row holds — one ranged walk
-// of code_repos_packs_idx (replicated 0087) from its top, keyset on (live
+// of code_repos_packs_idx (replicated 0088) from its top, keyset on (live
 // packs, id) after a cursor, the index's partial predicate repeated verbatim
 // so the planner may use it at all.
 //
@@ -3337,10 +3337,10 @@ func cutDueCursor(s string) (int64, string, bool) {
 // published one — its git checksum one a layer names — counts in the tail
 // until the next publication recounts it, so the listing can name a
 // repository with nothing to publish — which only a plan over its packs can
-// tell, answering it not due ([PublicationCandidate]; replicated 0089 says
+// tell, answering it not due ([PublicationCandidate]; replicated 0090 says
 // why no push recounts).
 //
-// ONE WALK of code_repos_unpublished_idx (replicated 0089), its partial
+// ONE WALK of code_repos_unpublished_idx (replicated 0090), its partial
 // predicate repeated verbatim, which holds exactly the repositories it lists:
 // a repository whose every pack its last recount found covered, and none
 // added since, costs the listing nothing, however many there are. LEAST
@@ -3410,7 +3410,7 @@ func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, ou
 //
 //  1. OPEN: the active and archived repositories with an expunge open or a
 //     purge requested and not served, BY ID — ONE WALK of
-//     code_repos_expunging_idx (replicated 0091), its partial predicate
+//     code_repos_expunging_idx (replicated 0092), its partial predicate
 //     repeated verbatim, which holds exactly those repositories, a handful in
 //     a fleet of any size, every one of which its maintainer finishes or
 //     serves before it plans anything else — keyset on the id after a cursor;
@@ -3420,7 +3420,7 @@ func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, ou
 //     last JUDGED at or before the instant, or never — an expunge committed
 //     in it or a scan of it found clean ([ExpungeScan]), expunge_scanned_at
 //     — LEAST RECENTLY JUDGED FIRST — ONE SEEK of code_repos_expunge_due_idx
-//     (replicated 0138), its partial predicate repeated verbatim, bounded
+//     (replicated 0139), its partial predicate repeated verbatim, bounded
 //     above by the instant, keyset on (expunge_scanned_at, id) after a
 //     cursor. A repository judged within the interval is in no page, so a
 //     steady fleet's listing holds only the repositories owed a scan, on
@@ -3537,7 +3537,7 @@ func cutExpungeCursor(cursor string) (weekly bool, after *expungeAfter, ok bool)
 
 // indexed serves one page of an `indexed` read ([ReadIndexed]): the active
 // and archived repositories searched by index, by name after the cursor —
-// ONE SEEK of code_repos_search_idx (replicated 0106), its partial predicate
+// ONE SEEK of code_repos_search_idx (replicated 0107), its partial predicate
 // repeated verbatim, which holds exactly the repositories a git node's
 // indexer may keep an index of. A FULL LISTING, never a delta from the last
 // poll's, for the compaction's listing's reason.
@@ -3570,7 +3570,7 @@ func (r *Reader) indexed(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Read
 // importsDue serves one page of an `imports_due` read: the repositories being
 // imported, BY ID, each with its source, how many of its chunks have landed
 // and the version its row was read at — ONE WALK of code_repos_importing_idx
-// (replicated 0122), its partial predicate repeated verbatim, which holds
+// (replicated 0123), its partial predicate repeated verbatim, which holds
 // exactly the repositories being imported, keyset on the id after a cursor.
 // A FULL LISTING, never a delta from the last poll's, for the compaction's
 // listing's reason.
@@ -3616,7 +3616,7 @@ func (r *Reader) importsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 // one walk of code_repos_mirror_to_idx, the repositories still live — then
 // every active pull mirror LEAST RECENTLY SYNCED FIRST, by its last sync's
 // instant and then its id — one walk of code_repos_mirrored_idx (replicated
-// 0122) — each partial predicate repeated verbatim, keyset after a cursor that
+// 0123) — each partial predicate repeated verbatim, keyset after a cursor that
 // names its arm: `t:<id>` in the push mirrors', `f:<instant>:<id>` in the
 // pull mirrors'. A page that ends the push arm with room left goes on into
 // the pull arm's first rows.
@@ -3724,7 +3724,7 @@ func cutMirrorsCursor(cursor string) (arm, after string, at int64, ok bool) {
 //
 //  1. DROPS: the object each of the repository's ref drops left whose
 //     record's broker instant is at or after the query's — code_ref_drops'
-//     key, a covering seek (replicated 0088 led it with the instant for this
+//     key, a covering seek (replicated 0089 led it with the instant for this
 //     read).
 //  2. REVISIONS: the head of every revision of every DRAFT OR OPEN change —
 //     code_changes_open_idx, then each change's revisions by their key — the
@@ -4404,7 +4404,7 @@ type dueQuery struct {
 // A STALE READ of this node's rows, in one transaction, of the three columns
 // the pass uses: every step decides again in its own snapshot, so a
 // repository that moved on since the listing is answered there. Each phase
-// is ONE statement over its own partial index (replicated 0079), so a page
+// is ONE statement over its own partial index (replicated 0080), so a page
 // reads the rows it lists — never the repositories deleted inside the
 // retention, nor a repository's settings and rules the pass has no use for:
 // read whole, a listing of ten thousand due repositories was two statements
@@ -4607,7 +4607,7 @@ const (
 	// (refsListing).
 	refsUnderSQL = `SELECT ref, target, position FROM code_refs INDEXED BY ` + liveRefsKey + `
 		WHERE repo_id = ? AND ref > ? AND ref < ? AND target != '' ORDER BY ref LIMIT ?`
-	// THE PUSHES IN LOG ORDER, over code_pushes_repo_idx as replicated 0083
+	// THE PUSHES IN LOG ORDER, over code_pushes_repo_idx as replicated 0084
 	// orders it: those in (?2, ?3] oldest first — an `introduced` read
 	// ascending and a delta's pushes phase — first and after a cursor
 	// (?3 the upper bound, ?4 and ?5 the cursor), and those below ?2 newest

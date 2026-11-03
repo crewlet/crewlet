@@ -15,7 +15,7 @@ import (
 )
 
 // A CHANGE'S CLOSED SETS — the values code_changes holds (replicated migration
-// 0085, the table created again by 0093), each a named string with typed
+// 0086, the table created again by 0094), each a named string with typed
 // constants, Valid, and a function answering the set in order: the one list a
 // validator, a schema and the dashboard's contract read.
 

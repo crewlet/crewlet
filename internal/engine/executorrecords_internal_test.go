@@ -56,7 +56,8 @@ func TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives(t *testi
 	object := objstore.Object{Key: objstore.KeyAt(minted), Hash: objstore.Hash("h"), Size: 42}
 	stamp := sandbox.SessionCapture{Minted: minted, Launch: "launch-2", LaunchSeq: 2, CaptureSeq: 3,
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1", ContentKey: "k1",
-		ArchiveFormat: 1, Home: "/home/agent", Workspace: "/workspace", SeatBudget: 64 << 20}
+		ArchiveFormat: 1, Home: "/home/agent", Workspace: "/workspace", SeatBudget: 64 << 20,
+		ContextTokens: 61_000, Interrupted: true}
 	log := &recordingLog{result: statelog.Result{Outcome: statelog.OutcomeApplied}, recorded: true}
 	records := executorRecords{log: log}
 
@@ -74,7 +75,7 @@ func TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives(t *testi
 	want := executordomain.NewCapture{Handle: "swe", Turn: "t1", ConversationKey: "chat:room", WorkKey: "w1",
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1", Object: object, ContentKey: "k1",
 		ArchiveFormat: 1, LaunchSeq: 2, CaptureSeq: 3, Home: "/home/agent", Workspace: "/workspace",
-		SeatBudget: 64 << 20}
+		SeatBudget: 64 << 20, ContextTokens: 61_000, Interrupted: true}
 	if fmt.Sprintf("%+v", log.capture) != fmt.Sprintf("%+v", want) {
 		t.Errorf("the log was asked to record\n%+v\nwant\n%+v", log.capture, want)
 	}

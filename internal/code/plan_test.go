@@ -67,15 +67,15 @@ import (
 // json_each(?))` in refsNamedSQL and it seeks repo_id alone; drop `position >=
 // ?` from refsDeltaAfterSQL and the page seeks repo_id alone; drop row_bytes
 // from code_pushes_repo_idx and the purge's and the horizon's reads stop
-// covering; order the push listing by `at` again, which replicated 0083 moved
+// covering; order the push listing by `at` again, which replicated 0084 moved
 // out of code_pushes_repo_idx's key, and it sorts every push of the
 // repository; order the purge's walk of a repository's changes by `c.number,
 // r.n` and it sorts every revision the repository holds; write a claim's live
 // states in another order and it seeks code_changes_state_idx; lead
-// code_ref_drops' key with the position again (replicated 0088 moved the
+// code_ref_drops' key with the position again (replicated 0089 moved the
 // instant ahead of it) and the drops' expiry and a purge part sort what they
 // seek rather than read it in order; key code_changes_work_idx by the item
-// alone again (replicated 0096 ordered it) and a work item's listing sorts
+// alone again (replicated 0097 ordered it) and a work item's listing sorts
 // every change the item ever carried.
 func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
@@ -102,7 +102,7 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 		// AND THE ORDER IS THE SEEK'S: a statement whose ORDER BY the index
 		// it seeks does not serve SORTS every row the seek finds before its
 		// LIMIT takes one — a push listing still ordered by the instant
-		// replicated 0083 moved out of code_pushes_repo_idx's key would read
+		// replicated 0084 moved out of code_pushes_repo_idx's key would read
 		// every push of the repository, its 181 days, on every page.
 		// Two-sided: a statement declared to sort that no longer does loses
 		// the declaration.
@@ -307,7 +307,7 @@ const (
 	authorKey     = "sqlite_autoindex_code_change_authors_1"
 	revisionKey   = "sqlite_autoindex_code_revisions_1"
 	bodyKey       = "sqlite_autoindex_code_change_bodies_1"
-	// untestedKey and dequeuedKey are replicated 0139's indexes as a
+	// untestedKey and dequeuedKey are replicated 0140's indexes as a
 	// given-up attempt's tests seek them: its commit among the ones its
 	// target's trains test or landed, and its candidate among the dequeued.
 	untestedKey = "code_queue_commit_idx (repo_id=? AND target_ref=? AND commit_oid=?)"
@@ -460,7 +460,7 @@ func registeredStatements() map[string]statement {
 		// place, each a COVERING seek, so weighing a wide row never reads it
 		// — and then the run's own in exactly that window, the same index's
 		// range with every row it reaches tested for the run, which no index
-		// carries (replicated 0097); never a sort.
+		// carries (replicated 0098); never a sort.
 		"run weigh": {runWeighSQL, []any{"repo-1", 11, "", 50},
 			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position>=?)"}},
 		"run weights": {runWeightsSQL, []any{"repo-1", 11, "", 50},
@@ -1166,7 +1166,7 @@ func registeredStatements() map[string]statement {
 		// change the page names is changesByIDSQL's row (its readiness the
 		// listing's statements), its description by the body's key; each one's open
 		// agent findings, a covering seek of the index partial on them alone
-		// (replicated 0136); the person's marks by
+		// (replicated 0137); the person's marks by
 		// their key; and where the notices of theirs a mark names sit, one
 		// seek of the notice's key a pair of the gesture's list.
 		"an inbox page": {inboxScanSQL, []any{"founder", int64(1) << 62, 0, 0, "[]", 0, "[]", "[]", "", 0,
@@ -1275,7 +1275,7 @@ func registeredStatements() map[string]statement {
 		// listing, by name over code_repos_search_idx.
 		"indexed": {indexedSQL, []any{string(SearchIndexed), "", MaxSnapshotItems},
 			[]string{"code_repos_search_idx (search=? AND name>?)"}},
-		// THE HOME'S LISTINGS OF WHAT IT OWES OTHER HOSTS (replicated 0122's
+		// THE HOME'S LISTINGS OF WHAT IT OWES OTHER HOSTS (replicated 0123's
 		// indexes): the repositories being imported by id, the push mirrors
 		// by id and the pull mirrors least recently synced first — each a
 		// keyset page, its partial predicate repeated verbatim.
@@ -1582,7 +1582,7 @@ func planShapes() map[string]shape {
 // package issues reads YET, by name, with the read its migration's `-- <reader>`
 // comment claims for it — planned here, so the claim is the planner's from the
 // migration that declares the index rather than from whichever change first
-// issues the read. A change's indexes land with its tables (replicated 0085),
+// issues the read. A change's indexes land with its tables (replicated 0086),
 // one migration for the rows rather than one an index, and their reads — the
 // lifecycle's, the listings', a commit's page — are each a change's of its own,
 // and are registered now (changeread.go, commitread.go): what stays a claim is
@@ -1600,18 +1600,18 @@ func planShapes() map[string]shape {
 // sees a claim, which no code issues yet.
 func claimedReads() map[string]statement {
 	return map[string]statement{
-		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0106):
+		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0107):
 		// the indexed repositories in name order, a keyset page at a time —
 		// the walk of a git node that keeps indexes, and of a search across
 		// the company's repositories — its partial predicate repeated
 		// verbatim. Nothing in this build reads a repository by its mode.
-		// THE MERGE QUEUE'S INDEX ITS LATER READERS SEEK (replicated 0109):
+		// THE MERGE QUEUE'S INDEX ITS LATER READERS SEEK (replicated 0110):
 		// a change's landings, a broken landing's authors' and the change
 		// page's. Nothing in this build reads a change's landings.
 		"code_landings_change_idx": {`SELECT repo_id, target_ref, position, ordinal FROM code_landings
 			INDEXED BY code_landings_change_idx WHERE change_id = ? AND change_id != ''`,
 			[]any{"repo-1-change-000001"}, []string{"code_landings_change_idx (change_id=?)"}},
-		// A PERSON'S CODE INBOX (replicated 0108), newest first: the
+		// A PERSON'S CODE INBOX (replicated 0109), newest first: the
 		// composed inbox's code half reads it.
 		"code_notifications_inbox_idx": {`SELECT record_id FROM code_notifications
 			WHERE recipient = ? ORDER BY log_seq DESC LIMIT ?`, []any{"founder", 50},

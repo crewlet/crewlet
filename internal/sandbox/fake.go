@@ -1075,6 +1075,10 @@ type FakeSession struct {
 	// and KeepErr the record of its digest in the box.
 	TakeErr, KeepErr error
 
+	// ContextTokens is the context its transcript records for the session's
+	// last request ([TakenSession.Context]), zero for none.
+	ContextTokens int64
+
 	// kept counts the digests recorded.
 	kept atomic.Int32
 }
@@ -1108,6 +1112,7 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	return TakenSession{
 		Archive: session.Archive,
 		Body:    io.NopCloser(bytes.NewReader(session.Body)),
+		Context: func() int64 { return session.ContextTokens },
 		Keep: func(context.Context) error {
 			if session.KeepErr != nil {
 				return session.KeepErr

@@ -72,7 +72,7 @@ func LimitsOf(c config.Code) Limits {
 // NO PER-SEAT BOUND WITHIN THE OUTSIDE HALF, the product's call too: one
 // outside seat can take that half from the others. Not for want of a count:
 // a ref's row names the seat that set it inside its own namespace
-// (code_refs.seat, replicated 0114, written by [seatOf]), and those are the
+// (code_refs.seat, replicated 0115, written by [seatOf]), and those are the
 // only refs an outside seat can create, so a per-seat count of live refs is
 // one partial index away — over (repo_id, seat), of the rows with a target
 // and a seat — with no counter table. Bytes have no such owner: a pack holds
@@ -545,7 +545,7 @@ const (
 	// change carries: as long as a task's body in Worklet,
 	// the text a change most often carries over from the work it is for.
 	// The one value of a change that outgrows a page, so it is a row of its
-	// own (code_change_bodies, replicated 0093) rather than a column of the
+	// own (code_change_bodies, replicated 0094) rather than a column of the
 	// row every head move reads and rewrites, weighed by its change's
 	// body_bytes, and a purge part counts it toward PurgePartBytes.
 	MaxChangeBodyBytes = 32 << 10
@@ -553,13 +553,13 @@ const (
 	// MaxChangeTitleBytes is the longest title a change carries: ONE LINE a
 	// listing shows whole, as long again as a commit subject git's own
 	// tools wrap at, and short enough beside the refs, the oids and the
-	// handles that code_changes stays inside its page (replicated 0093),
+	// handles that code_changes stays inside its page (replicated 0094),
 	// which every head move reads and rewrites.
 	MaxChangeTitleBytes = 256
 
 	// MaxCloseReasonBytes is the longest reason a close of a change gives —
 	// a sentence or two of why, kept on the change's row beside its title,
-	// which replicated 0093 sizes the row by as it does by the title.
+	// which replicated 0094 sizes the row by as it does by the title.
 	MaxCloseReasonBytes = 1 << 10
 
 	// MaxOverrideReasonBytes is the longest reason a person gives to merge a
@@ -568,7 +568,7 @@ const (
 	// row keeps it. 1 KiB, the close reason's bound, because the row holds
 	// one or the other and never both — a merged change was never closed
 	// since it was last opened, a reopen clearing its close reason — so the
-	// row stays the width replicated 0093 sized it to.
+	// row stays the width replicated 0094 sized it to.
 	MaxOverrideReasonBytes = MaxCloseReasonBytes
 
 	// MaxReviewersPerChange is the most reviewers a change asks at once: the

@@ -1737,7 +1737,15 @@ const (
 	// 2249 above) came to 4,424 bytes here, 53 fewer in minified names,
 	// taking it from 5471.3 KiB (5,602,579 bytes) to 5475.6 KiB (5,607,003
 	// bytes). It moved by main's own 4 KiB, from 5472 KiB: 5476 KiB.
-	treeBudget = 5<<20 + 356<<10
+	// The kit's move to 0.91.0 (the Scaleway and DigitalOcean marks) took it
+	// from 5443.7 KiB to 5444.6 KiB (+0.9 KiB, 967 bytes): the icons chunk
+	// +1409 bytes for the two marks, less 442 bytes net across the kit's
+	// renamed chunks, the shell page and the stylesheet. 5445 KiB.
+	// Merged again with that, measured on the merged tree: main's +967 bytes
+	// came to 1,022 bytes here, 55 more, taking it
+	// from 5475.6 KiB (5,607,003 bytes) to 5476.6 KiB (5,608,025 bytes). It
+	// moved by main's own 1 KiB, from 5476 KiB: 5477 KiB.
+	treeBudget = 5<<20 + 357<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

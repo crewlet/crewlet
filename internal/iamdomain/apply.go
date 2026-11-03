@@ -167,12 +167,12 @@ var _ statelog.Deriver = (*Applier)(nil)
 // DerivationVersion is the rule set this build derives its columns at.
 //
 // 1 is an invitation's `seat_id` (replicated migration 0042); 2 adds a removal
-// tombstone's `seat_id` (0121), the seat its released identifiers name. Each is
+// tombstone's `seat_id` (0122), the seat its released identifiers name. Each is
 // written by the apply from the record, and recomputed by [Applier.Rederive]
 // from the row's own document or claims whenever the checkpoint's rule set
 // differs from this build's — a checkpoint a reanchor created (derivation 0),
 // or rows adopted from a build whose rules differ ([statelog.Deriver]), the
-// rows of a build before 0121 among them, whose tombstones hold the column's
+// rows of a build before 0122 among them, whose tombstones hold the column's
 // default. On rows this build applied it writes nothing. Bumped by any change
 // to what a derived column holds, so a node holding rows derived under another
 // rule set converges on this one.

@@ -392,7 +392,7 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 	// person and carries the record's OP ID rather than its position,
 	// because the apply that writes it is the one that must be able to run
 	// twice and a position changes under a republish. The seat it released
-	// is a column beside the claims as well (replicated migration 0121), the
+	// is a column beside the claims as well (replicated migration 0122), the
 	// claims' own value, because one seat's standing is a seek on it
 	// ([Reader.SeatHolder], [reboundRemovals]) where the claims are a decode
 	// of every tombstone; [Applier.Rederive] recomputes it from the same
@@ -461,7 +461,7 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 // bind whose scope named only its own person wrote where no node holding back
 // an earlier record about the leaver would wait for it.
 //
-// ONE SEEK, whatever the company has removed: `iam_removed_seat_idx` (0121)
+// ONE SEEK, whatever the company has removed: `iam_removed_seat_idx` (0122)
 // is `(seat_id, seat_rebound_by, person_id)`, so the clause is its prefix and
 // [leaversOf]'s order its third column. It read the seat out of every
 // tombstone's claims before, a cost that grew with every removal ever made.

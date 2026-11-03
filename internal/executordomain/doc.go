@@ -1,8 +1,9 @@
 // Package executordomain is the state log's record of each seat's EXECUTOR
 // SESSIONS (ADR-0073): one row per (seat handle, turn) whose executor captured
 // its harness's session, naming the sealed object in the fleet's object
-// store that holds it (ADR-0026), on the `CREWLET_EXECUTOR_LOG` stream and
-// applied into every data node's replicated estate.
+// store that holds it (ADR-0026), or whose first launch recorded its read (a
+// `begin`, which no launch publishes yet), on the `CREWLET_EXECUTOR_LOG`
+// stream and applied into every data node's replicated estate.
 //
 // # Who has to agree on it
 //
@@ -14,8 +15,13 @@
 // which only this domain's applier writes. The bytes are not here at all. A
 // session is tens of mebibytes, so it lives in the object store as one sealed
 // object per capture under a key the store mints, and a row names it; the
-// collector keeps every object a row names and deletes the rest a day after
-// their upload (ADR-0027). The rows are a REQUIRED reference
+// collector keeps every object a row names and deletes one no row names at its
+// first pass once both the object's upload and its key's minting are more than
+// a day old (ADR-0027). NOT a day after the row stops naming it, as the
+// domain's first migration says: an object a day old that the last row stops
+// naming is gone within the hour, which is why a session a live turn still
+// means to continue is held by a row rather than trusted to linger (see "A
+// turn's first read holds its base"). The rows are a REQUIRED reference
 // ([SessionObjectReferences]): the collector's audit reports a session whose
 // object is gone, and every backup carries the sessions the rows name, reading
 // this log past its store copy through the applier's own decoder for the
@@ -35,7 +41,7 @@
 // inside one artifact. So a turn's capture only ever writes its own row, and a
 // conversation's earlier rows go when a later turn's `end` ABSORBS them.
 //
-// # Subjects, scopes and the four records
+// # Subjects, scopes and the five records
 //
 // Every record about a conversation is ARBITRATED ON THE CONVERSATION
 // ([ConversationSubject]: the seat's handle and a digest of the conversation's
@@ -47,6 +53,11 @@
 // record defers every later record its rows could change ([statelog]'s
 // deferral contract).
 //
+//   - `begin` records a turn's first read of its conversation — where it read
+//     the head and the turns the read handed out — and the BASE that read
+//     froze, which the turn's row then holds (see "A turn's first read holds
+//     its base"). A turn's first read stands: a begin landing on a row that
+//     holds one already writes nothing.
 //   - `capture` names a new object for a live turn. It is refused at the
 //     decide for an object minted longer than objstore.RecordWithin ago by the
 //     deciding node's clock, for an ended or tombstoned turn, and for a
@@ -61,10 +72,13 @@
 //   - `end` stamps the turn ended with the engine's account of how it ended
 //     ([executorkeep.Ending]) and tombstones it. With no row (nothing was captured) it
 //     writes an ended row naming no object, so the next turn is still told how
-//     this one ended. With a row it ABSORBS exactly the ended turns its first
-//     launch's read of the conversation handed out ([Head.Absorbs], which the
-//     turn's captures carry), and DEDUPES on a non-empty work key, merging
-//     what the older attempt delivered. The end is authoritative for the
+//     this one ended. With a row that LANDED A CAPTURE it ABSORBS exactly the
+//     ended turns its first launch's read handed out ([Head.Absorbs], which
+//     the turn's begin or its captures carry), and DEDUPES on a non-empty
+//     work key, merging what the older attempt delivered; a turn whose row is
+//     its begin's alone holds no session that could stand in for what it
+//     read, and absorbs and dedupes nothing, as a turn with no row does not.
+//     Neither takes a row a live turn holds. The end is authoritative for the
 //     turn's work key where its captures carried none. And where the turn's
 //     newest capture was NOT KEPT ([executorkeep.Ending.Unkept]: refused, or never
 //     answered) and the row names an older one, the row's object goes: that
@@ -92,6 +106,51 @@
 // shown to the turn after both. A read bounded at [MaxEndings] leaves the
 // oldest out, and they stay for the turn after it rather than being absorbed
 // by an end that was never shown them.
+//
+// # A turn's first read holds its base
+//
+// A turn's launches are to continue the BASE its first read froze — the head
+// it was handed — for as long as the turn has kept no session of its own: a
+// first job lost with its box, before any capture, relaunched into that same
+// base, on any node. No launch does yet, and none publishes the `begin` below:
+// this package holds the record and the hold, and every release behaves as it
+// did until a launch takes them up. Every release of an ended row could take
+// the base from under that turn: another turn's end that was handed the same
+// head absorbs it, an end of the same unit of work dedupes it, a capture of
+// any conversation of the seat releases it past the budget, and the retention
+// deletes it. The run record that knows the base lives in the coordination
+// store, which the applier cannot read and a writer's decide reads racily, so
+// the hold is put where every release is decided: on the log, as the turn's
+// OWN ROW.
+//
+// So the `begin` writes the turn's row naming the base, and while that row is
+// live and has landed no capture it HOLDS the base: an end's absorption and
+// dedupe and the retention's delete each ask, of each row they are about to
+// take, whether another live turn holds it, and the budget's release reads the
+// seat's holds once before it walks the seat's ended sessions; each skips a
+// held row, in log order. A begin and every end and delete of the
+// conversation are arbitrated on one subject, so whichever lands first
+// decides: an end first leaves the begin no base to hold, and a begin first
+// is skipped by the end. A capture of another conversation is not arbitrated
+// against the begin, but its apply reads the holds in log order, and its
+// seat-wide scope contains the begin's, so a node that defers one defers the
+// other.
+//
+// THE HOLD LASTS UNTIL THE HOLDER'S FIRST LANDED CAPTURE, OR ITS END. From its
+// first capture on, a turn's launches continue its own session, which holds
+// everything the base did: that very capture may release the base, which is
+// what lets a seat at its budget's floor take a continued turn's first capture
+// at all, where a hold until the end would have to fit a live session and its
+// base together. A holder whose run is lost with no end recorded is ended
+// `lost` within [LostAfter], so a hold outlives its holder by at most a day
+// and a pass of the retention duty. A skipped row stays an ordinary ended row,
+// which the holder's own end absorbs in its turn, as does the next end whose
+// read showed it — at the cost, while the hold lasts, of a later read showing
+// it a second time.
+//
+// The siblings a read offers are not held, and opening one never holds it: a
+// hold on a session a run opens would be a write the model's read triggers,
+// which ADR-0073 bars. A read of a sibling released meanwhile says so instead.
 //
 // # A removed seat stays removed
 //
@@ -138,9 +197,10 @@
 // no live run is one whose end was lost — and takes its tombstone with it,
 // which is a departure from the rule that a delete leaves one: by the retention
 // no record decided before the delete can still land ([removeTurn]). A turn
-// whose end was lost holds its session against the seat's budget until the
-// retention duty ends it as lost, a day after its last capture with no run of
-// it live (internal/engine's executor source). A person's removal does not
+// whose end was lost holds its session against the seat's budget, or the base
+// its begin named against every release, until the retention duty ends it as
+// lost, a day after its last record — its newest capture, or its begin — with
+// no run of it live (internal/engine's executor source). A person's removal does not
 // reach these rows in this release, as it did not reach the conversation
 // ledger they replace (ADR-0073).
 package executordomain

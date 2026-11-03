@@ -441,7 +441,7 @@ const (
 		 GROUP BY node, agent_id`
 
 	// pageReadsStatement is one page id's reads from a day on, in the
-	// read's order — usage_reads_page_idx's own (replicated 0077) — each
+	// read's order — usage_reads_page_idx's own (replicated 0078) — each
 	// named by its seat's head row of that day, and narrowed to the ways
 	// of reaching it by the %s it is formatted with.
 	pageReadsStatement = `
