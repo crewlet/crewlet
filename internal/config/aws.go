@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // AWS gives each agent seat its own IAM role in the company's account, made by
@@ -62,6 +63,22 @@ const (
 // AWSLevels is every level a seat may name, least access first.
 func AWSLevels() []string {
 	return []string{AWSLevelRead, AWSLevelOperate, AWSLevelAdminister}
+}
+
+// RoleAWS is a seat's own IAM role.
+type RoleAWS struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own IAM role. Off attaches AWS's deny-all policy and detaches its levels; the role and its CloudTrail history stay."`
+
+	// Level is what the role may do; empty is read.
+	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=read|operate|administer" desc:"read (the default): describe and list compute, networking, containers, functions, databases, DNS and CDN, read metrics and CloudWatch Logs, and list object names, with no object, parameter or secret contents. operate: read plus starting, stopping, rebooting and scaling, invoking functions, invalidating the CDN, editing alarms and reading and writing S3 objects. administer: operate plus managing those services whole, which can leave access behind such as key pairs, user data and bucket policies."`
+}
+
+// LevelOrDefault is the seat's level, read where it names none.
+func (r *RoleAWS) LevelOrDefault() string {
+	if r == nil || strings.TrimSpace(r.Level) == "" {
+		return AWSLevelRead
+	}
+	return strings.TrimSpace(r.Level)
 }
 
 // awsGlobalRegion answers AWS's global services, so agents keep it by default.
@@ -233,4 +250,16 @@ func (a *AWS) validate(path Path) error {
 		}
 	}
 	return p.err()
+}
+
+// checkAWS holds a seat's level to the closed set.
+func (c *Company) checkAWS(p *problems, path Path, b *RoleAWS) {
+	if b == nil {
+		return
+	}
+	if level := strings.TrimSpace(b.Level); level != "" && !slices.Contains(AWSLevels(), level) {
+		p.add(at(path, "level"), ErrUnknownValue,
+			"%q is not an AWS level this engine offers; give %s",
+			b.Level, words.Or(AWSLevels()))
+	}
 }

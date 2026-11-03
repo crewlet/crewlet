@@ -250,28 +250,14 @@ func TestCreateSeatRoleIsContainedFromTheStart(t *testing.T) {
 	}
 }
 
-// A RETRIED CREATE CONVERGES on the role it made, and refuses a role of the
-// same name that someone else made with another trust.
-func TestCreateSeatRoleAdoptsOnlyItsOwnRole(t *testing.T) {
+// NOTHING IS ADOPTED BY ITS NAME: a role already there is reported for the
+// caller to judge from its own record, and never read back as made.
+func TestCreateSeatRoleNeverAdoptsByName(t *testing.T) {
 	t.Parallel()
-	slug := SeatSlug("sre")
-	for name, trust := range map[string]string{"ours": seatTrust(t, slug), "foreign": seatTrust(t, "intruder")} {
-		f := &fakeIAM{}
-		f.answer = func(form url.Values) (int, string) {
-			switch form.Get("Action") {
-			case "CreateRole":
-				return iamError(http.StatusConflict, "EntityAlreadyExists")
-			case "GetRole":
-				return iamOK("GetRole", roleXML(form.Get("RoleName"), trust))
-			case "ListAttachedRolePolicies":
-				return iamOK("ListAttachedRolePolicies", "<AttachedPolicies/><IsTruncated>false</IsTruncated>")
-			}
-			return iamOK("ListRolePolicies", "<PolicyNames/><IsTruncated>false</IsTruncated>")
-		}
-		_, err := f.client(t).CreateSeatRole(context.Background(), "sre", slug)
-		if (name == "ours") != (err == nil) {
-			t.Errorf("%s: %v", name, err)
-		}
+	f := &fakeIAM{answer: func(url.Values) (int, string) { return iamError(http.StatusConflict, "EntityAlreadyExists") }}
+	_, err := f.client(t).CreateSeatRole(context.Background(), "sre", SeatSlug("sre"))
+	if !errors.Is(err, ErrRoleExists) || !slices.Equal(f.actions(), []string{"CreateRole"}) {
+		t.Errorf("%v after %v", err, f.actions())
 	}
 }
 

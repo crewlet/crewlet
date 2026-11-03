@@ -19,6 +19,11 @@ var ErrNoCloudflareLevel = errors.New("the token's permissions are not those of 
 var ErrNoExpoLevel = errors.New("the robot's Expo permissions match no level: " +
 	"save the level it should hold here, and Crewlet moves it to that")
 
+// ErrNoAWSLevel refuses keeping an IAM role's policies when they are no
+// level's: a seat names a level, and none of them is what it holds.
+var ErrNoAWSLevel = errors.New("the role's AWS policies match no level: " +
+	"save the level it should hold here, and Crewlet attaches that level's policies")
+
 // ErrSeveralRoles refuses keeping a Datadog account's roles when it holds more
 // than one: a seat names one role, and keeping one of several would take the
 // others away.
@@ -60,6 +65,11 @@ func KeptAccess(lane Lane, want Desired, have Observed) (Desired, error) {
 	case LaneExpo:
 		if !slices.Contains(config.ExpoLevels(), have.Level) {
 			return Desired{}, ErrNoExpoLevel
+		}
+		kept.Level = have.Level
+	case LaneAWS:
+		if !slices.Contains(config.AWSLevels(), have.Level) {
+			return Desired{}, ErrNoAWSLevel
 		}
 		kept.Level = have.Level
 	default:

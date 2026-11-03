@@ -145,6 +145,49 @@ func TestAWSRegionsDefaultToHomeAndUSEast1(t *testing.T) {
 	}
 }
 
+// A SEAT'S LEVEL IS ONE OF THE CLOSED SET, and empty reads as read.
+func TestAnAWSSeatNamesALevelTheEngineOffers(t *testing.T) {
+	t.Parallel()
+	doc := func(level string) string {
+		return "name: Acme\nintegrations:\n  aws:\n" + completeAWS +
+			"\nroles:\n  - {name: SRE, handle: sre, integrations: {aws: {enabled: true" + level + "}}}\n"
+	}
+	for _, refused := range []string{"admin", "write", "READ", "iam_read"} {
+		if _, err := config.ParseCompany([]byte(doc(", level: " + refused))); err == nil ||
+			!strings.Contains(err.Error(), "roles[0].integrations.aws.level") {
+			t.Errorf("level %q = %v, want a refusal naming the seat's level", refused, err)
+		}
+	}
+	for _, level := range config.AWSLevels() {
+		c, err := config.ParseCompany([]byte(doc(", level: " + level)))
+		if err != nil {
+			t.Fatalf("%s was refused: %v", level, err)
+		}
+		if got := c.Roles[0].Integrations.AWS.LevelOrDefault(); got != level {
+			t.Errorf("level = %q, want %q", got, level)
+		}
+	}
+	c, err := config.ParseCompany([]byte(doc("")))
+	if err != nil {
+		t.Fatalf("a seat naming no level was refused: %v", err)
+	}
+	if got := c.Roles[0].Integrations.AWS.LevelOrDefault(); got != config.AWSLevelRead {
+		t.Errorf("an unset level = %q, want read", got)
+	}
+}
+
+// A PERSON SIGNS IN AS THEMSELVES: a human seat carries no IAM role.
+func TestAHumanSeatCarriesNoAWSRole(t *testing.T) {
+	t.Parallel()
+	doc := "name: Acme\nintegrations:\n  aws:\n" + completeAWS +
+		"\nroles:\n  - {name: Founder, handle: founder, kind: human, contact: {slack_user_id: U0FOUNDER}, " +
+		"integrations: {aws: {enabled: false}}}\n"
+	if _, err := config.ParseCompany([]byte(doc)); err == nil ||
+		!strings.Contains(err.Error(), "roles[0].integrations.aws") {
+		t.Errorf("a human seat's aws block = %v, want a refusal naming it", err)
+	}
+}
+
 // THE ENGINE ISSUES A SEAT'S SESSION ONLY WHERE IT HOLDS THE PROVISIONER: an
 // enabled block with provisioning, and nowhere else.
 func TestAWSSeatCredentialsAreTheEnginesOnlyWithAProvisioner(t *testing.T) {

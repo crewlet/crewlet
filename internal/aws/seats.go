@@ -269,11 +269,14 @@ func (c *Client) ReadSeatRole(ctx context.Context, name string) (SeatRole, error
 	return role, nil
 }
 
+// ErrRoleExists is a create refused because a role of the seat's name is
+// already there. Nothing is adopted by its name: the caller decides from its
+// own record whether the role is the one it made.
+var ErrRoleExists = errors.New("aws: a role of that name already exists")
+
 // CreateSeatRole creates the role of the seat whose slug is slug: under the
 // seat path, within the boundary, trusting only the broker in a session whose
 // source identity is the seat's certificate name, and holding no policy yet.
-// A role already there is read back and returned when its trust is the
-// engine's, so a retried create converges.
 func (c *Client) CreateSeatRole(ctx context.Context, handle, slug string) (SeatRole, error) {
 	name := c.conn.Company.SeatRoleName(slug)
 	trust := string(compactJSON(concrete(seatTrustDoc(seatCN(c.conn.Company, slug)), c.conn.vars())))
@@ -298,17 +301,10 @@ func (c *Client) CreateSeatRole(ctx context.Context, handle, slug string) (SeatR
 			Created: awssdk.ToTime(r.CreateDate), Path: awssdk.ToString(r.Path),
 			Boundary: c.conn.resolve(policyARN(boundaryName))}, nil
 	}
-	if !hasCode(err, "EntityAlreadyExists") {
-		return SeatRole{}, fmt.Errorf("aws: create role %s: %w", name, err)
+	if hasCode(err, "EntityAlreadyExists") {
+		return SeatRole{}, fmt.Errorf("%w: %s", ErrRoleExists, name)
 	}
-	role, err := c.ReadSeatRole(ctx, name)
-	if err != nil {
-		return SeatRole{}, err
-	}
-	if role.TrustProblem != "" || role.Boundary != c.conn.resolve(policyARN(boundaryName)) {
-		return SeatRole{}, fmt.Errorf("aws: role %s exists and is not the one Crewlet makes: delete it in IAM, then retry", name)
-	}
-	return role, nil
+	return SeatRole{}, fmt.Errorf("aws: create role %s: %w", name, err)
 }
 
 // Apply makes one change to a seat role. Detaching a policy already gone is

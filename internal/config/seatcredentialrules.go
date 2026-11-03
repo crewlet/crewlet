@@ -74,6 +74,10 @@ func seatFields(kind string) []seatField {
 		// RETIRED_TOKEN is a turned-off seat's token, kept only to see its
 		// robot deleted at Expo, and read by no tool.
 		return []seatField{{"TOKEN", true}, {"RETIRED_TOKEN", false}}
+	case "aws":
+		// The seat session the engine issues at use for 15 minutes, as the
+		// box's credentials file holds it; never sealed.
+		return []seatField{{"CREDENTIALS", false}}
 	default:
 		return nil
 	}

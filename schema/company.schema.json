@@ -2908,6 +2908,34 @@
         "null"
       ]
     },
+    "RoleAWS": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has its own IAM role. Off attaches AWS's deny-all policy and detaches its levels; the role and its CloudTrail history stay.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): describe and list compute, networking, containers, functions, databases, DNS and CDN, read metrics and CloudWatch Logs, and list object names, with no object, parameter or secret contents. operate: read plus starting, stopping, rebooting and scaling, invoking functions, invalidating the CDN, editing alarms and reading and writing S3 objects. administer: operate plus managing those services whole, which can leave access behind such as key pairs, user data and bucket policies.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleAvatar": {
       "additionalProperties": false,
       "properties": {
@@ -3249,6 +3277,10 @@
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
+        "aws": {
+          "$ref": "#/$defs/RoleAWS",
+          "description": "This seat's own IAM role: whether it is on and its level."
+        },
         "cloudflare": {
           "$ref": "#/$defs/RoleCloudflare",
           "description": "This seat's own Cloudflare account API token: whether it is on and its level."
