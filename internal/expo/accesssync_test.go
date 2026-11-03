@@ -481,3 +481,27 @@ func TestKeepingAnExpoRobotClosesItsDeleteStep(t *testing.T) {
 		t.Errorf("record = %+v, want the kept robot no longer tracked", rec)
 	}
 }
+
+// THE BOX READS THE LIVE TOKEN ALONE: Expo's lane binds EXPO_TOKEN to the
+// seat's sealed token and nothing to the retired one, a person makes and
+// re-enables its robot, and config restates the catalog's sealed fields.
+func TestTheExpoCatalogBindsOnlyTheLiveTokenToTheBox(t *testing.T) {
+	t.Parallel()
+	vendor, ok := seataccess.Lookup(integration.KindExpo)
+	if !ok {
+		t.Fatal("the Expo vendor is not registered")
+	}
+	cat := vendor.Catalog()
+	spec, ok := cat.Lane(seataccess.LaneExpo)
+	if !ok || spec.CreatedBy != seataccess.ByYou || spec.EnabledBy != seataccess.ByYou ||
+		!spec.Rotatable || !spec.Releasable {
+		t.Fatalf("lane = %+v, want a robot a person makes, rotatable and releasable", spec)
+	}
+	want := []seataccess.BoxLine{{Name: "EXPO_TOKEN", Value: "${" + sealedQA + "}", By: seataccess.ByYou}}
+	if got := seataccess.BoxLines(integration.KindExpo, seataccess.LaneExpo, "qa"); !slices.Equal(got, want) {
+		t.Fatalf("box lines = %v, want %v", got, want)
+	}
+	if !slices.Equal(config.SeatSealedFields("expo"), cat.Credentials) {
+		t.Fatalf("config restates %v, the catalog %v", config.SeatSealedFields("expo"), cat.Credentials)
+	}
+}
