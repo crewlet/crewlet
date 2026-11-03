@@ -21,7 +21,7 @@ import type {
 } from "~/contract/access.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
-import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
+import { GITHUB_ACCESS_NAMES, laneWords, type LaneWords } from "./words.ts";
 
 type Tone = "success" | "neutral" | "warning" | "danger" | "info";
 
@@ -413,13 +413,30 @@ export function boxSettings(saved: AccessSeatLane): string | null {
 
 /**
  * What the details say after a seat's credential variable: who provides it,
- * that Crewlet issues it at use for an hour (never sealed, so no time is a
- * fleet fact), or when it was minted.
+ * that Crewlet issues it at use for the lane's period (never sealed, so no
+ * time is a fleet fact), or when it was minted.
  */
-export function credentialNote(lane: Lane, o: AccessObserved, now: number): string {
+export function credentialNote(
+  lane: Lane,
+  o: AccessObserved,
+  now: number,
+  words: LaneWords = laneWords(lane.key),
+): string {
   if (providedExternally(lane, o)) return ", provided externally";
-  if (o.credential?.source === "issued") return ", issued for an hour at a time, at use";
+  if (o.credential?.source === "issued")
+    return words.issued ? `, issued for ${words.issued} at a time, at use` : ", issued at use";
   return o.credential?.minted_at ? `, minted ${relTime(o.credential.minted_at, now)}` : "";
+}
+
+/** The details' "Set by Crewlet" value: the settings, and the lane's note on them, or null. */
+export function boxSettingsFact(
+  lane: Lane,
+  saved: AccessSeatLane,
+  words: LaneWords = laneWords(lane.key),
+): { settings: string; note?: string } | null {
+  const settings = boxSettings(saved);
+  if (!settings) return null;
+  return words.boxNote ? { settings, note: words.boxNote } : { settings };
 }
 
 /** The tool, as one value: whether it works, and what it works through. */

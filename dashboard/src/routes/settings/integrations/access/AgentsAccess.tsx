@@ -61,7 +61,7 @@ import { HandoffSheet } from "./HandoffSheet.tsx";
 import {
   accessWords,
   availableActions,
-  boxSettings,
+  boxSettingsFact,
   credentialNote,
   emptyScopeHint,
   handoffOf,
@@ -1089,7 +1089,7 @@ function Details({
   const o = saved.observed;
   const outside = managedOutside(lane);
   // WHAT CREWLET PUTS IN THE SEAT'S BOX ITSELF, beside the lines a person adds.
-  const settings = boxSettings(saved);
+  const settings = boxSettingsFact(lane, saved);
   const buttons =
     actions.length > 0 ? (
       <span className="agent-access-detail-actions">
@@ -1146,7 +1146,15 @@ function Details({
             ],
             ["Tool", toolWords(lane, saved)],
             ...(settings
-              ? [["Set by Crewlet", <span className="mono">{settings}</span>] as const]
+              ? [
+                  [
+                    "Set by Crewlet",
+                    <span key="box">
+                      <span className="mono">{settings.settings}</span>
+                      {settings.note && <>. {settings.note}</>}
+                    </span>,
+                  ] as const,
+                ]
               : []),
             ["Last sync", syncValue(saved, now)],
           ]}
