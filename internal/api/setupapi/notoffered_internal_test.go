@@ -1,6 +1,9 @@
 package setupapi
 
 import (
+	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,8 +33,8 @@ func TestADraftIsJudgedAsTheVendorJudgesIt(t *testing.T) {
 		}}
 	refusal := notOffered(integration.KindAtlassian, seataccess.LaneConfluence, conf, "",
 		seataccess.Desired{Enabled: true, Level: "create:page"})
-	if refusal == nil || refusal["required"] != "read:space" ||
-		!strings.Contains(refusal["detail"].(string), "without View") {
+	if refusal == nil || refusal.Required != "read:space" || refusal.Field != seataccess.FieldLevel ||
+		!strings.Contains(refusal.Detail, "without View") {
 		t.Fatalf("a set without View = %v, want it refused naming View", refusal)
 	}
 	for _, level := range []string{"create:page read:space", ""} {
@@ -57,7 +60,7 @@ func TestAScopeIsJudgedOnWhatWasRead(t *testing.T) {
 	required.ScopeRequired = true
 	refusal := notOffered(integration.KindAtlassian, seataccess.LaneJira, required, "",
 		seataccess.Desired{Enabled: true, Level: "10101"})
-	if refusal == nil || !strings.Contains(refusal["detail"].(string), "can reach nothing") {
+	if refusal == nil || refusal.Field != seataccess.FieldScope || !strings.Contains(refusal.Detail, "can reach nothing") {
 		t.Fatalf("an agent on with no scope = %v, want it refused", refusal)
 	}
 	for name, want := range map[string]seataccess.Desired{
@@ -67,5 +70,34 @@ func TestAScopeIsJudgedOnWhatWasRead(t *testing.T) {
 		if refusal := notOffered(integration.KindAtlassian, seataccess.LaneJira, required, "", want); refusal != nil {
 			t.Errorf("%s: refused: %v", name, refusal)
 		}
+	}
+}
+
+// A REFUSAL'S FIELDS ON THE WIRE ARE THE TYPE THE DASHBOARD'S GATE HOLDS: every
+// one under its JSON name, the optional ones only when set. Mutation: rename a
+// key in refusalFields, and the body no longer matches the gated type.
+func TestARefusalsFieldsAreTheGatedType(t *testing.T) {
+	t.Parallel()
+	full := seataccess.OfferRefusal{Seat: "sre", Lane: seataccess.LaneJira, Field: seataccess.FieldScope,
+		Detail: "d", Offered: []string{"ENG"}, Required: "read:space"}
+	raw, err := json.Marshal(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want map[string]any
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	got := refusalFields(full)
+	if !slices.Equal(slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want))) {
+		t.Fatalf("fields %v, want the type's %v", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+	}
+	bare := refusalFields(seataccess.OfferRefusal{Seat: "sre", Lane: seataccess.LaneJira,
+		Field: seataccess.FieldLevel, Detail: "d"})
+	if _, ok := bare["offered"]; ok {
+		t.Error("an unset offered list was written")
+	}
+	if _, ok := bare["required"]; ok {
+		t.Error("an unset required level was written")
 	}
 }
