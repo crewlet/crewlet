@@ -1180,10 +1180,21 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 	// testing against the same `used` snapshot both pass and both spend,
 	// overshooting by a whole child — and the inner charge is exactly where
 	// that window opens, because it can block.
+	//
+	// THE GATE OPENS ONCE TWO CHARGES ARE HELD AT IT, never after a sleep: the
+	// window is open only while two are, and a sleep, which this replaced,
+	// let a loaded runner bring the children to the gate after it opened, one
+	// at a time, so the case checked nothing it was written for. Two always
+	// come — the round that fits and the one that crosses the slice — and with
+	// the check apart from the record every child makes its call and comes.
+	//
+	// Mutation: record the round on the slice after the parent's charge rather
+	// than with the check (sliceMeter.Spend) — both held children fit, red.
 	w := newWorld(t)
 	m := &meter{}
 	release := make(chan struct{})
-	slow := blockingMeter{inner: countingMeter{m}, gate: release}
+	var held atomic.Int32
+	slow := blockingMeter{inner: countingMeter{m}, gate: release, held: &held}
 	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("answer", 60, 0), nil
 	}}
@@ -1208,10 +1219,17 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 		}
 		done <- res
 	}()
-	// Let every child pile up inside the inner charge before any returns.
-	time.Sleep(30 * time.Millisecond)
+	// Bounded by the children's task timeout, past which none is coming.
+	deadline := time.Now().Add(limits().TaskTimeout)
+	for held.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	got := held.Load()
 	close(release)
 	results := <-done
+	if got < 2 {
+		t.Fatalf("%d charge(s) reached the parent's counter while it held them, want two at once", got)
+	}
 
 	// Every round a child made is on the parent's counter. How many were
 	// made depends on how many children passed the slice's standing check
@@ -2859,9 +2877,14 @@ func userText(req modelView) string {
 type blockingMeter struct {
 	inner toolloop.BudgetMeter
 	gate  chan struct{}
+	// held, when set, counts the charges that have reached the gate.
+	held *atomic.Int32
 }
 
 func (b blockingMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
+	if b.held != nil {
+		b.held.Add(1)
+	}
 	<-b.gate
 	return b.inner.Spend(ctx, tokens)
 }
