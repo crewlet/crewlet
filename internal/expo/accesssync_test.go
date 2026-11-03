@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/expo"
@@ -14,14 +16,21 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
 )
 
-// fakeVendor is the registered Expo vendor, opened against a fake Expo.
+// fakeVendor is the registered Expo vendor, opened against a fake Expo, with
+// a clock a case can move on.
 type fakeVendor struct {
 	seataccess.Vendor
-	hc *http.Client
+	hc    *http.Client
+	clock *atomic.Pointer[time.Time]
 }
 
 func (v fakeVendor) Open(ctx context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
-	return expo.OpenAccess(ctx, v.Vendor, in, v.hc)
+	return expo.OpenAccess(ctx, v.Vendor, in, v.hc, func() time.Time {
+		if at := v.clock.Load(); at != nil {
+			return *at
+		}
+		return time.Now().UTC()
+	})
 }
 
 const sealedQA = "EXPO_TOKEN_QA"
@@ -36,6 +45,7 @@ type syncWorld struct {
 	ledger  *seataccesstest.Ledger
 	sink    *seataccesstest.Sink
 	drift   []seataccess.DriftRestored
+	clock   *atomic.Pointer[time.Time]
 }
 
 func newSyncWorld(t *testing.T, level string) *syncWorld {
@@ -57,11 +67,18 @@ func newSyncWorld(t *testing.T, level string) *syncWorld {
 		Name: "QA", Handle: "qa",
 		Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: &on, Level: level}},
 	}}
+	clock := &atomic.Pointer[time.Time]{}
 	return &syncWorld{
-		t: t, expo: f, company: company,
-		vendor: fakeVendor{Vendor: registered, hc: f.server(t)},
+		t: t, expo: f, company: company, clock: clock,
+		vendor: fakeVendor{Vendor: registered, hc: f.server(t), clock: clock},
 		ledger: seataccesstest.NewLedger(), sink: seataccesstest.NewSink(),
 	}
+}
+
+// later moves the vendor's clock past the window a new robot may go unlisted.
+func (w *syncWorld) later() {
+	at := time.Now().UTC().Add(time.Hour)
+	w.clock.Store(&at)
 }
 
 func (w *syncWorld) seat() *config.RoleExpo { return w.company.Roles[0].Integrations.Expo }
@@ -270,6 +287,7 @@ func TestAnExpoRobotDeletedAtExpoIsReplaced(t *testing.T) {
 	w.expo.mu.Lock()
 	delete(w.expo.robots, old)
 	w.expo.mu.Unlock()
+	w.later()
 	if report := w.sync(); len(report.Findings) != 0 {
 		t.Fatalf("findings = %+v", report.Findings)
 	}
@@ -346,4 +364,43 @@ func sortPerms(perms []expo.Permission) []expo.Permission {
 	out := slices.Clone(perms)
 	slices.Sort(out)
 	return out
+}
+
+// A ROBOT THE LISTING DOES NOT SHOW YET IS STILL THE ONE JUST CREATED: its
+// token is minted on it and sealed, and the next pass finds it and writes
+// nothing, rather than closing the record and creating a second robot.
+func TestAnExpoRobotNotListedYetIsStillTheSeats(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
+	w.expo.lag = 1
+	if report := w.sync(); len(report.Findings) != 0 {
+		t.Fatalf("findings = %+v", report.Findings)
+	}
+	rec := w.record()
+	w.sealed(rec.Account.ID)
+	// The next listing still misses it: a fault to retry, and nothing written.
+	w.expo.lag = 0
+	w.expo.mu.Lock()
+	w.expo.lagged[rec.Account.ID] = 1
+	w.expo.mu.Unlock()
+	writes := len(w.expo.writes())
+	w.sync()
+	if got := w.expo.writes(); len(got) != writes {
+		t.Errorf("a pass that could not list the robot wrote %q", got[writes:])
+	}
+	if report := w.sync(); len(report.Findings) != 0 {
+		t.Fatalf("the pass that lists it again = %+v", report.Findings)
+	}
+	if got := w.expo.writes(); len(got) != writes {
+		t.Errorf("the robot listed again was written %q", got[writes:])
+	}
+	if again := w.record(); again.Account.ID != rec.Account.ID {
+		t.Errorf("the seat moved to robot %s from %s", again.Account.ID, rec.Account.ID)
+	}
+	w.expo.mu.Lock()
+	robots := len(w.expo.robots)
+	w.expo.mu.Unlock()
+	if robots != 1 {
+		t.Errorf("the account holds %d robots, want one", robots)
+	}
 }

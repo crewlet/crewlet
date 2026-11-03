@@ -141,7 +141,7 @@ func TestExpoOptionsAreTheFixedLevels(t *testing.T) {
 		Env: config.NewResolver(config.MapSource{
 			"EXPO_ACCOUNT": testAccountName, "EXPO_ACCESS_TOKEN": provisioner,
 		}),
-	}, f.server(t))
+	}, f.server(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

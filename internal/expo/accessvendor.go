@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -92,14 +93,20 @@ func expoSteps(
 	}
 }
 
+// listingGrace is how long after its creation a robot the account's listing
+// does not show is read as not listed yet rather than gone. A listing normally
+// shows a new robot within seconds; ten minutes covers a slow replica while
+// bounding how long a robot deleted at Expo leaves its seat without one.
+const listingGrace = 10 * time.Minute
+
 // Open builds a session from the company's Expo block.
 func (v accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
-	return v.open(in, nil)
+	return v.open(in, nil, nil)
 }
 
-// open is [accessVendor.Open] with the transport a test supplies; nil takes
-// the default.
-func (accessVendor) open(in seataccess.OpenInput, hc *http.Client) (seataccess.Session, error) {
+// open is [accessVendor.Open] with the transport and clock a test supplies;
+// nil takes the defaults.
+func (accessVendor) open(in seataccess.OpenInput, hc *http.Client, now func() time.Time) (seataccess.Session, error) {
 	if in.Config == nil {
 		return nil, fmt.Errorf("expo: %w: no company document", integration.ErrNotConfigured)
 	}
@@ -121,7 +128,10 @@ func (accessVendor) open(in seataccess.OpenInput, hc *http.Client) (seataccess.S
 	if err != nil {
 		return nil, err
 	}
-	return &accessSession{client: client, account: account, company: in.Config.Name}, nil
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	return &accessSession{client: client, account: account, company: in.Config.Name, now: now}, nil
 }
 
 // accessSession is one pass's connection to Expo.
@@ -129,6 +139,7 @@ type accessSession struct {
 	client  *Client
 	account string
 	company string
+	now     func() time.Time
 
 	// The account's ID, read once per pass where a step writes.
 	mu        sync.Mutex
@@ -163,9 +174,11 @@ func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seatac
 // Observe reads back the robot the ledger records for each seat, by ID, from
 // one listing of the account's robots. A seat with no recorded robot holds
 // none: nothing is adopted by name. A robot whose deletion is scheduled is
-// reported absent.
+// reported absent, and so is one missing from the listing, unless it was
+// created within [listingGrace], which is that seat's fault to retry.
 func (s *accessSession) Observe(ctx context.Context, in seataccess.ObserveInput) (seataccess.Observation, error) {
 	out := seataccess.Observation{}
+	faults := seataccess.SeatFaults{}
 	var byID map[string]Robot
 	for _, handle := range in.Handles() {
 		rec := in.Record(handle)
@@ -185,13 +198,22 @@ func (s *accessSession) Observe(ctx context.Context, in seataccess.ObserveInput)
 			}
 		}
 		robot, found := byID[rec.Account.ID]
-		if !found || robot.Deleting {
+		switch {
+		case found && !robot.Deleting:
+			out[handle] = map[seataccess.Lane]seataccess.Observed{
+				seataccess.LaneExpo: observedOf(robot, handle, rec),
+			}
+		case !found && s.now().Sub(rec.Account.CreatedAt) < listingGrace:
+			// NOT LISTED YET: read as gone, it would be created a second
+			// time and the first robot left holding a live token.
+			faults[handle] = fmt.Errorf("expo: the account's listing does not show robot user %s, "+
+				"created %s, yet", rec.Account.ID, rec.Account.CreatedAt.Format(time.RFC3339))
+		default:
 			out[handle] = map[seataccess.Lane]seataccess.Observed{seataccess.LaneExpo: {}}
-			continue
 		}
-		out[handle] = map[seataccess.Lane]seataccess.Observed{
-			seataccess.LaneExpo: observedOf(robot, handle, rec),
-		}
+	}
+	if len(faults) > 0 {
+		return out, faults
 	}
 	return out, nil
 }
@@ -438,6 +460,13 @@ func (s *accessSession) findRobot(ctx context.Context, id string) (Robot, bool, 
 func (s *accessSession) withRobot(
 	ctx context.Context, in seataccess.ApplyInput, fn func(Robot) (seataccess.StepResult, error),
 ) (seataccess.StepResult, error) {
+	for _, prior := range in.Prior {
+		if prior.AccountID != "" {
+			// A ROBOT THIS OP JUST CREATED is taken as created: a listing read
+			// straight after may not show it yet, and Gone would leak it.
+			return fn(Robot{ID: prior.AccountID, Name: prior.Account})
+		}
+	}
 	id := robotID(in)
 	if id == "" {
 		return seataccess.StepResult{}, fmt.Errorf("expo: %s has no robot user to %s", in.Seat.Handle, in.Step.Verb)

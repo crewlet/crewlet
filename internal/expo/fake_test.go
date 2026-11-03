@@ -69,6 +69,9 @@ type fakeExpo struct {
 	emptyValue bool
 	// noViewer answers the viewer query with a null actor.
 	noViewer bool
+	// lag leaves a robot it creates out of this many listings after.
+	lag    int
+	lagged map[string]int
 
 	ops []string
 	rw  *httpxtest.Rewriter
@@ -80,6 +83,7 @@ func newFakeExpo() *fakeExpo {
 		viewerPerms: []expo.Permission{expo.PermissionAdmin, expo.PermissionView},
 		appCount:    3,
 		robots:      map[string]*fakeRobot{},
+		lagged:      map[string]int{},
 		tokens:      map[string]*fakeToken{},
 		refuse:      map[string]fakeRefusal{},
 		limited:     map[string]int{},
@@ -267,6 +271,9 @@ func (f *fakeExpo) serve(w http.ResponseWriter, r *http.Request) {
 		robot := &fakeRobot{id: "robot-" + strconv.Itoa(f.seq), name: name,
 			perms: permsOf(vars["permissions"]), created: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)}
 		f.robots[robot.id] = robot
+		if f.lag > 0 {
+			f.lagged[robot.id] = f.lag
+		}
 		f.data(w, map[string]any{"robot": map[string]any{"createRobotForAccount": map[string]any{
 			"id": robot.id, "displayName": robot.name, "created": robot.created}}})
 	case "CrewletRenameRobot":
@@ -359,6 +366,10 @@ func (f *fakeExpo) accountQuery(w http.ResponseWriter, op string, vars map[strin
 	case "CrewletRobots":
 		ids := make([]string, 0, len(f.robots))
 		for id := range f.robots {
+			if f.lagged[id] > 0 {
+				f.lagged[id]--
+				continue
+			}
 			ids = append(ids, id)
 		}
 		slices.Sort(ids)

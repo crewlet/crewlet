@@ -26,9 +26,9 @@ func Requirements(in *config.Expo, resolve func(string) (string, bool)) []setup.
 			Required:   true,
 			Connect:    true,
 			Format:     "the name in expo.dev/accounts/<name>",
-			Help:       "The account or organization your projects belong to, as shown in its",
-			LinkText:   "account settings",
-			VendorURL:  "https://expo.dev/settings",
+			Help:       "The account or organization your projects belong to, as it is named on your",
+			LinkText:   "Expo dashboard",
+			VendorURL:  "https://expo.dev/",
 			Blocks:     integration.FindingCredentialMissing,
 		},
 		{
