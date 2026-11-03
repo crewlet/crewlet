@@ -1116,8 +1116,15 @@ func pollAndConfirm(ctx context.Context, client *http.Client, route string, seen
 }
 
 // watchedFor is a run store that tells a case when every watch of a run's notes
-// open on it has handed its follower a view holding one note: the moment the
-// follower's view — what the tool loop's Waiting reads — has it too.
+// open on it has handed its follower a view holding one note, and the follower
+// has taken it: the moment the follower's view — what the tool loop's Waiting
+// reads — has it too.
+//
+// TAKEN, NOT JUST HANDED OVER: a follower opens a view's notes and stores it
+// between two receives, so the same view is handed to it again, and that send
+// completes only once the first is its view. Marked as the first send
+// completed, the case went on while the follower was still opening the note,
+// and a review that asked Waiting in that gap read no note.
 type watchedFor struct {
 	sandbox.PendingStore
 	note string
@@ -1154,6 +1161,11 @@ func (w *watchedFor) WatchNotes(ctx context.Context, turnID string) (<-chan sand
 			if slices.ContainsFunc(view.Steer.Notes, func(n sandbox.RunNote) bool {
 				return n.ID == w.note && n.Waiting()
 			}) {
+				select {
+				case out <- view:
+				case <-ctx.Done():
+					return
+				}
 				w.mu.Lock()
 				if _, open := w.active[id]; open {
 					w.active[id] = true
