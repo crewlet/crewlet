@@ -4368,8 +4368,11 @@ repository it cannot reach.
 
 **The token is a backstop, the run's row the authority.** A token is valid
 seven days (`host.RunTokenTTL`), longer than any job a person would leave
-running, since an executor has no wall-clock limit and an expiry would fail
-its only durable output, its last push. What admits a box is its run's row on
+running, since an executor has no wall-clock limit of its own — only a
+scheduled turn's run is ended, by the completion poll, once its schedule's
+`timeout_seconds` has passed since the fire's turn began
+([Scheduling](scheduling.md#hard-wall-clock-timeout)) — and an expiry would
+fail its only durable output, its last push. What admits a box is its run's row on
 the fleet's coordination store, read on every request: a run that ended, was
 reaped or launched again — a later launch of the same turn — is
 refused the moment its row says so, whatever its token's expiry.
