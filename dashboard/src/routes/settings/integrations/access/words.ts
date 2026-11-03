@@ -211,6 +211,18 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     retired: { one: "An old token", many: "old tokens" },
     release: "Keep the robot at Expo",
   },
+  aws: {
+    name: "AWS",
+    access: "Permissions policies",
+    turnOn:
+      "Turning it on creates an IAM role for the agent, limited by the Crewlet boundary, and attaches the chosen level's policies. Crewlet signs the agent in as that role for 15 minutes at a time.",
+    off: "Crewlet attaches AWS's deny-all policy to the agent's role and detaches its level policies, so it stops within about 2 minutes of saving. The role and its CloudTrail history stay, so turning it back on keeps the same identity.",
+    remove:
+      "Crewlet deletes the agent's IAM role, which ends its sessions at once. CloudTrail keeps its entries.",
+    rotate:
+      "AWS issues the agent's credentials for 15 minutes at a time, so there is nothing to rotate.",
+    tool: "AWS MCP Server, one per agent",
+  },
 };
 
 /** The line a read-only Agents tab shows when the Kubernetes operator manages access. */
