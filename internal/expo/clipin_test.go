@@ -27,7 +27,7 @@ func TestEveryEASCLILaunchNamesThePinnedRelease(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if d.IsDir() || !(strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".yaml")) {
+			if d.IsDir() || !strings.HasSuffix(path, ".md") && !strings.HasSuffix(path, ".yaml") {
 				return nil
 			}
 			body, err := os.ReadFile(path)
