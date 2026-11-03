@@ -1803,7 +1803,12 @@ const (
 	// Reading a box file's type where the details list it, and the public
 	// view taking the shell's ceiling, took it to 5,618,606 bytes (+3). It
 	// stays at 5487 KiB.
-	treeBudget = 5<<20 + 367<<10
+	// Google Cloud (its catalogue entry, its Agents tab words with the link
+	// to preparing a project, the issued period and the note on gcloud, and
+	// the org builder's leftover service account) and the kit's move to
+	// 0.93.0 (the Google Cloud mark) took it from 5,618,606 bytes to
+	// 5,621,039 bytes (+2,433 bytes, 5489.3 KiB). 5490 KiB.
+	treeBudget = 5<<20 + 370<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

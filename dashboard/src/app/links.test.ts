@@ -27,6 +27,7 @@ import { join, relative } from "node:path";
 import { expect, test } from "vitest";
 import { resolve } from "./routes.ts";
 import { segmentsOf } from "~/test/routes.ts";
+import { headingAnchors, slug } from "~/test/engineFiles.ts";
 
 const REPO = join(process.cwd(), "..");
 
@@ -181,20 +182,6 @@ test("every dashboard address printed outside the dashboard resolves to a screen
 
 const DESIGN_DOC = join(REPO, "docs", "reference", "dashboard-design.md");
 
-/**
- * GitHub's anchor for a heading — the same rule `internal/docsgate` pins: the
- * rendered text lower-cased, keeping letters, marks, digits, connectors,
- * spaces and hyphens, each space a hyphen.
- */
-function slug(heading: string): string {
-  return heading
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/<[^>]+>/g, "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
-    .replace(/ /g, "-");
-}
-
 test("the slug is GitHub's", () => {
   expect(slug("`window=` — one vocabulary for every time range")).toBe(
     "window--one-vocabulary-for-every-time-range",
@@ -204,25 +191,8 @@ test("the slug is GitHub's", () => {
   expect(slug("The `budget_meters` push")).toBe("the-budget_meters-push");
 });
 
-/** Every anchor the design doc renders, numbered on repetition, outside fences. */
-function designAnchors(): Set<string> {
-  const out = new Set<string>();
-  const seen = new Map<string, number>();
-  let fenced = false;
-  for (const line of readFileSync(DESIGN_DOC, "utf8").split("\n")) {
-    if (/^\s{0,3}(```|~~~)/.test(line)) {
-      fenced = !fenced;
-      continue;
-    }
-    const m = fenced ? null : /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
-    if (!m) continue;
-    const s = slug(m[1]!);
-    const n = seen.get(s) ?? 0;
-    out.add(n > 0 ? `${s}-${n}` : s);
-    seen.set(s, n + 1);
-  }
-  return out;
-}
+/** Every anchor the design doc renders. */
+const designAnchors = (): Set<string> => headingAnchors(DESIGN_DOC);
 
 test("every pointer at a design-doc heading names one it carries", () => {
   const anchors = designAnchors();

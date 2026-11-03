@@ -80,6 +80,7 @@ import {
   type ReconcileFinding,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
+import { integrationDocHref } from "./docs.ts";
 import type { Model, Tool } from "./model.ts";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
@@ -120,22 +121,9 @@ export interface Entry {
   doc: string;
 }
 
-/**
- * Where the engine's documentation is published: the newest release's copy
- * (`/engine/latest/`; main is `/engine/next/`, an older line `/engine/vX.Y/`).
- * See `docs/index.md`.
- */
-const DOCS_BASE = "https://docs.crewlet.ai/engine/latest/";
-
-/**
- * The published address of an integration's own page.
- *
- * WITH ITS TRAILING SLASH, because every page on the site is a directory: the
- * slashless spelling answers a redirect to this one, a round trip on every
- * click before the page loads.
- */
+/** The published address of an integration's own page. See [integrationDocHref]. */
 export function docHref(entry: Entry): string {
-  return `${DOCS_BASE}integrations/${entry.doc}/`;
+  return integrationDocHref(entry.doc);
 }
 
 /**
@@ -159,6 +147,7 @@ const SURFACE_NAMES: Record<string, string> = {
   datadog: "Datadog",
   cloudflare: "Cloudflare",
   expo: "Expo",
+  google_cloud: "Google Cloud",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -235,6 +224,14 @@ export const CATALOG: Entry[] = [
     vendor: "expo",
     surfaces: surfacesOf("expo"),
     doc: "expo",
+  },
+  {
+    key: "google_cloud",
+    name: "Google Cloud",
+    description: "Projects, VMs, GKE, Cloud Run and Cloud SQL, a service account per agent.",
+    vendor: "google-cloud",
+    surfaces: surfacesOf("google_cloud"),
+    doc: "google-cloud",
   },
 ];
 

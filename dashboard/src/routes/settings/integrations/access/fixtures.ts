@@ -3,8 +3,9 @@
  * suites: GoPhrase's Datadog (SRE on the Datadog Admin Role, its tool live,
  * the rest off), its GitHub (every agent on, with the app permissions its
  * old tier registered), its GitLab (Dev a Developer in a group that lists no
- * projects), its Cloudflare (SRE able to purge, the rest off) and its Expo
- * (QA's robot a Developer, the rest off), built from the fields a case names.
+ * projects), its Cloudflare (SRE able to purge, the rest off), its Expo
+ * (QA's robot a Developer, the rest off) and its Google Cloud (SRE an
+ * Operator on production, the rest off), built from the fields a case names.
  *
  * Times are relative to the moment the fixture is built, so "1d ago" reads
  * the same on every run.
@@ -126,6 +127,37 @@ const EXPO_OPTIONS: AccessOptions = {
   ],
 };
 
+/** Google Cloud's three fixed levels, each a set of Google's predefined roles, over the projects set up for Crewlet. */
+const GOOGLE_CLOUD_OPTIONS: AccessOptions = {
+  lane: "google_cloud",
+  tool_server: "google-cloud-monitoring",
+  live: false,
+  levels: [
+    {
+      id: "viewer",
+      name: "Viewer",
+      note: "Browser, Cloud SQL Viewer, Compute Viewer, Kubernetes Engine Viewer, DNS Reader, Logs Viewer, MCP Tool User, Monitoring Viewer, Cloud Run Viewer and Storage Bucket Viewer on each chosen project.",
+    },
+    {
+      id: "operator",
+      name: "Operator",
+      administers: true,
+      note: "Viewer's roles, plus Monitoring Editor, Cloud Run Jobs Executor, Storage Object User and Crewlet Operator (restart and scale only).",
+    },
+    {
+      id: "administer",
+      name: "Administer",
+      administers: true,
+      note: "Operator's roles, plus Cloud SQL Admin, Compute Instance Admin (v1), Compute Network Admin, Compute Security Admin, Kubernetes Engine Cluster Admin, DNS Administrator and Storage Admin. It can create access that outlives the agent's token: SSH keys or startup scripts on VMs, database users and certificates, and bucket or DNS zone policies.",
+    },
+  ],
+  scoped: true,
+  scope: ["gophrase-prod", "gophrase-staging"],
+  scope_names: { "gophrase-prod": "GoPhrase Production", "gophrase-staging": "GoPhrase Staging" },
+  scope_live: true,
+  scope_required: true,
+};
+
 const laneOf = (options: AccessOptions): Lane =>
   lanesOf({ kind: options.lane, revision: "", syncing: false, options: [options], seats: [] })[0]!;
 
@@ -179,6 +211,7 @@ export const GITLAB_LANE = laneOf(GITLAB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
 export const CLOUDFLARE_LANE = laneOf(CLOUDFLARE_OPTIONS);
 export const EXPO_LANE = laneOf(EXPO_OPTIONS);
+export const GOOGLE_CLOUD_LANE = laneOf(GOOGLE_CLOUD_OPTIONS);
 
 /** A lane that is on and in sync, holding what `over` says. */
 export function onLane(over: Partial<AccessSeatLane> & { variable: string }): AccessSeatLane {
@@ -568,6 +601,65 @@ export function neutralAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
             created_at: ago(DAY),
           },
           box: neutralBox("SRE"),
+          ...sre,
+        }),
+      }),
+    ],
+  };
+}
+
+/** The lines Crewlet puts in a Google Cloud seat's box for gcloud, as the engine sends them. */
+const googleCloudBox = (handle: string): AccessBox => ({
+  env: [
+    {
+      name: "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
+      value: "~/.config/crewlet/gcloud-token",
+      by: "crewlet",
+    },
+    { name: "CLOUDSDK_CORE_PROJECT", value: "gophrase-prod", by: "crewlet" },
+  ],
+  files: [
+    {
+      path: ".config/crewlet/gcloud-token",
+      value: `\${GOOGLE_CLOUD_ACCESS_TOKEN_${handle}}`,
+      rewritten: true,
+      by: "crewlet",
+    },
+  ],
+});
+
+/**
+ * Google Cloud with SRE's service account an Operator on production, its token
+ * issued at use and its MCP server bound, and PM off at the default level.
+ * `options` replaces the lane's offer, for the cases about the project list.
+ */
+export function googleCloudAnswer(
+  sre?: Partial<AccessSeatLane>,
+  options?: Partial<AccessOptions>,
+): AccessAnswer {
+  return {
+    kind: "google_cloud",
+    revision: "rev-7",
+    syncing: false,
+    last_sync_at: ago(4 * MIN),
+    options: [{ ...GOOGLE_CLOUD_OPTIONS, ...options }],
+    seats: [
+      seat("pm", "PM", { google_cloud: offLane("viewer") }),
+      seat("sre", "SRE", {
+        google_cloud: onLane({
+          variable: "GOOGLE_CLOUD_ACCESS_TOKEN_SRE",
+          desired: { enabled: true, level: "operator", scope: ["gophrase-prod"] },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet-sre-3f9a@gophrase-crewlet-id.iam.gserviceaccount.com",
+            account_id: "104829377165514428863",
+            level: "operator",
+            scope: ["gophrase-prod"],
+            credential: { variable: "GOOGLE_CLOUD_ACCESS_TOKEN_SRE", source: "issued" },
+            created_at: ago(DAY),
+          },
+          box: googleCloudBox("SRE"),
           ...sre,
         }),
       }),
