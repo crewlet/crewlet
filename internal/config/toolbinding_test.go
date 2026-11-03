@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -231,5 +232,64 @@ func TestAnExternalCredentialIsBoundFromWhereTheSeatNamesIt(t *testing.T) {
 	}
 	if got := sre.MCPEnv["dd"]["DD_APPLICATION_KEY"]; got != "${SRE_OWN_DD_KEY}" {
 		t.Errorf("the Datadog server reads %q, want the seat's own value left alone", got)
+	}
+}
+
+// A SEAT'S BLOCK FOR AN ENTRY NOT SAVED YET IS THE ONE ITS SAVE BINDS, for a
+// recognised server and a declared one alike: the seat's own credential under
+// the key the entry reads, beside the seat's other values, exactly as the org
+// model holds it once the entry is saved, and nothing bound for a seat that is
+// off. The company asked is left as it was.
+func TestASeatsBlockForAnUnsavedEntryIsTheOneItsSaveBinds(t *testing.T) {
+	t.Parallel()
+	on, off := true, false
+	declared := stdio("metrics", "my-datadog-server")
+	declared.SeatCredentials = []config.SeatCredential{{Kind: "datadog", Key: "DD_APPLICATION_KEY"}}
+	cfg := &config.Company{
+		Name: "acme",
+		Integrations: config.Integrations{
+			Cloudflare: &config.Cloudflare{Enabled: true, Provisioning: &config.CloudflareProvisioning{
+				AccountID: "0123456789abcdef0123456789abcdef", APIToken: "${CLOUDFLARE_API_TOKEN}"}},
+			Datadog: &config.Datadog{Enabled: true, Provisioning: &config.DatadogProvisioning{
+				Site: "datadoghq.com", APIKey: "${DD_API_KEY}", AppKey: "${DD_APP_KEY}"}},
+		},
+		Roles: []config.Role{
+			{Name: "SRE", Handle: "sre", MCPEnv: map[string]map[string]string{"cloudflare": {"X-Team": "edge"}},
+				Integrations: config.RoleIntegrations{
+					Cloudflare: &config.RoleCloudflare{Enabled: &on}, Datadog: &config.RoleDatadog{Enabled: &on}}},
+			{Name: "Designer", Handle: "designer", Integrations: config.RoleIntegrations{
+				Cloudflare: &config.RoleCloudflare{Enabled: &off}, Datadog: &config.RoleDatadog{Enabled: &off}}},
+		},
+	}
+	for _, tc := range []struct {
+		entry      config.MCPServer
+		key, bound string
+	}{
+		{remote("cloudflare", "https://mcp.cloudflare.com/mcp"), "Authorization",
+			"Bearer ${" + envref.SealedName("cloudflare", "API_TOKEN", "sre") + "}"},
+		{declared, "DD_APPLICATION_KEY", "${" + envref.SealedName("datadog", "APP_KEY", "sre") + "}"},
+	} {
+		got := cfg.SeatToolEnv(&tc.entry, "sre")
+		if got[tc.key] != tc.bound {
+			t.Errorf("%s: the seat's block %v, want %s bound to %s", tc.entry.Name, got, tc.key, tc.bound)
+		}
+		saved := *cfg
+		saved.MCPServers = []config.MCPServer{tc.entry}
+		o, err := saved.Organization()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := o.AgentSeatByHandle("sre").MCPEnv[tc.entry.Name]; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: unsaved %v, saved %v", tc.entry.Name, got, want)
+		}
+		if got := cfg.SeatToolEnv(&tc.entry, "designer"); got[tc.key] != "" {
+			t.Errorf("%s: a seat that is off was bound: %v", tc.entry.Name, got)
+		}
+	}
+	if got := cfg.SeatToolEnv(new(remote("cloudflare", "https://mcp.cloudflare.com/mcp")), "sre"); got["X-Team"] != "edge" {
+		t.Errorf("the seat's own value was dropped: %v", got)
+	}
+	if len(cfg.MCPServers) != 0 {
+		t.Errorf("asking added %v to the company", cfg.MCPServers)
 	}
 }

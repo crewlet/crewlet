@@ -644,7 +644,7 @@ func TestAValueTestSendsTheGrantOnlyToTheAddressThisNodeRuns(t *testing.T) {
 
 	moved := a.Company().Config.MCPServers[0]
 	moved.URL = elsewhere.URL + "/mcp"
-	report := a.testServer(t.Context(), &moved, nil, nil, nil, nil, a.testBearer(t.Context(), "vendor"))
+	report := a.testServer(t.Context(), &moved, nil, nil, nil, nil, nil, a.testBearer(t.Context(), "vendor"))
 	if report.Serving() || reached.Load() == 0 || sent.Load() != "" {
 		t.Fatalf("an entry moved ahead of the apply was tested with %q; want no token at the new address",
 			sent.Load())
@@ -653,7 +653,7 @@ func TestAValueTestSendsTheGrantOnlyToTheAddressThisNodeRuns(t *testing.T) {
 	// THE ADDRESS THIS NODE RUNS is sent the grant's token: the vendor's own
 	// server, which refuses every request, says what it was presented.
 	here := a.Company().Config.MCPServers[0]
-	a.testServer(t.Context(), &here, nil, nil, nil, nil, a.testBearer(t.Context(), "vendor"))
+	a.testServer(t.Context(), &here, nil, nil, nil, nil, nil, a.testBearer(t.Context(), "vendor"))
 	v.mu.Lock()
 	presented := slices.Clone(v.presented)
 	v.mu.Unlock()

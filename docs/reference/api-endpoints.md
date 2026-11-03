@@ -10340,8 +10340,11 @@ entry the dry run refuses is answered `422 validation_error` with the
 problems a write of it would get. An admitted draft is tested as the dry run
 left it, turned on whatever its `enabled` says, on the nodes the saved entry
 would run on, and answered as [`POST /mcp-servers/{name}/check`](#post-mcp-serversnamecheck)
-answers, with `"draft": true`. **A draft's test is never recorded**: the
-server's latest test is of the entry the company runs.
+answers, with `"draft": true`. Tested for an agent (`seat`), it is started with
+what the saved entry would start that agent's instance with: the agent's own
+values, its unit's, and its own credential at every integration the entry
+reads, bound as the save will bind it. **A draft's test is never recorded**:
+the server's latest test is of the entry the company runs.
 
 ### `POST /mcp-probe`
 
