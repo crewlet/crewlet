@@ -370,3 +370,36 @@ func TestAnEndingDecidedBeforeTheNextHoldersFenceIsFinishedByIt(t *testing.T) {
 		t.Fatal("the next holder holds its seat behind a run that is gone")
 	}
 }
+
+// A RUN GONE BEFORE THE NEXT HOLDER'S FENCE IS NOT TAKEN OVER. The seat's last
+// holder, not yet aware its lease lapsed, stops a running job and finishes the
+// stop on its own frame — the box reclaimed, the record deleted — between the
+// next holder's listing of the seat's runs and that holder's fence of the row.
+// The fence found no row to move, and the run listed as running was taken over
+// all the same: counted as holding, it held the next holder's mail behind a run
+// that no longer existed, with nothing left to recount the seat.
+//
+// Mutation: take over a run the fence did not land on as listed whatever the
+// store still holds of it ([Coordinator.fenceRun]), and the next holder counts
+// its seat held for a run that is gone.
+func TestARunGoneBeforeTheNextHoldersFenceIsNotTakenOver(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	store := &listsThen{PendingStore: rig.pending}
+	store.arm(func() {
+		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+			t.Errorf("the old holder's stop: %v", err)
+		}
+		if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+			t.Errorf("the premise: the old holder finished its stop, record and all (found %v, %v)",
+				found, err)
+		}
+	})
+	next := reaper(t.Context(), t, rig, store, 2, nil)
+	if held, waits := next.coordinator.SeatRuns("swe"); held || waits {
+		t.Fatalf("the next holder counts its seat held (%v) or waiting on an answer (%v) for a run "+
+			"that is gone", held, waits)
+	}
+}

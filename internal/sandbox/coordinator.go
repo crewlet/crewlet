@@ -4766,6 +4766,13 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 // served and never read again — the stopped job ran on in its box, its turn's
 // end never reached the log, and the seat was held until it moved.
 //
+// A RUN GONE BEFORE THE FENCE IS NOT TAKEN OVER EITHER. The fence finds no row
+// to move — the last holder finished what it ended, record and all, between
+// the listing and the fence — and the run it listed was taken over as listed
+// all the same: counted as holding, it held the seat's mail behind a run that
+// no longer existed, with nothing left to recount the seat. So a fence that
+// does not land reads the row again too.
+//
 // A FENCE OR A READ THAT FAILS LEAVES THE RUN AS LISTED, as the claim's reap
 // does ([Coordinator.fenceClaim]): an ending decided in that window waits for
 // the seat's next holder, whose own recovery finds it decided.
@@ -4779,8 +4786,13 @@ func (c *Coordinator) fenceRun(ctx context.Context, run PendingRun, owner string
 			"detail", "the run could not be fenced to this node's lease; it is taken over as listed")
 		return run, true, false
 	case !won:
-		// A NEWER LEASE than this node's owns the run, or it is gone: taken
-		// over as listed, its box's calls not served here.
+		// NOT FENCED: gone since the listing, which is not taken over at
+		// all, or a NEWER LEASE than this node's owns it — taken over as
+		// listed, its box's calls not served here, as is a run this read
+		// cannot tell about.
+		if _, found, readErr := c.pending.Get(ctx, run.TurnID); readErr == nil && !found {
+			return PendingRun{}, false, true
+		}
 		return run, false, false
 	}
 	latest, found, err := c.pending.Get(ctx, run.TurnID)
