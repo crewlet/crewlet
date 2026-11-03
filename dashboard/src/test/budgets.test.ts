@@ -31,6 +31,15 @@
  *    otherwise (a bare number is that bound too), a budget beside the
  *    suite's that nobody here chose;
  *  - `vi.setConfig`, which moves the budgets from inside a suite;
+ *  - an awaited TICK: `Promise.resolve()` of nothing or of a value that is
+ *    no promise, or such a value itself (`await null`). One tick or a loop
+ *    of them is a wait's budget in microtask hops rather than milliseconds,
+ *    chosen by the case rather than by what it waits for: outside `act` a
+ *    guess at how many hops a screen's answers take, right until a hook
+ *    gains an `await` and a case asserting an absence passes on a screen
+ *    that has not drawn yet; inside an awaited `act`, a count that never
+ *    decides anything (`settle.ts` says why). `afterMicrotasks()` and
+ *    `settled(...)` wait for what it stood for;
  *  - and `asyncUtilTimeout`, `testTimeout` or `hookTimeout` named anywhere
  *    under `src/` but the one place each is set.
  *
@@ -168,12 +177,51 @@ function seenWhole(node: Node): boolean {
   );
 }
 
+/**
+ * Whether `node` is spelled as a value that cannot be a promise: a literal,
+ * a template, `undefined` or a `void`. Awaiting one is a tick and nothing
+ * else.
+ */
+function noPromise(node: Node): boolean {
+  return (
+    node.type === "Literal" ||
+    node.type === "TemplateLiteral" ||
+    (node.type === "Identifier" && node.name === "undefined") ||
+    (node.type === "UnaryExpression" && node.operator === "void")
+  );
+}
+
+/**
+ * Whether `await argument` is a TICK: what it awaits is no promise, or a
+ * promise `Promise.resolve` settled on nothing or on a value that is no
+ * promise, so it waits for the microtasks already queued and for no work at
+ * all. `Promise.resolve(x)` of anything else passes: it adopts `x` when `x`
+ * is a promise, and a reader cannot tell from here.
+ */
+function isTick(argument: Node): boolean {
+  if (noPromise(argument)) return true;
+  if (argument.type !== "CallExpression") return false;
+  const callee = argument.callee as Node;
+  const args = argument.arguments as Node[];
+  return (
+    callee.type === "MemberExpression" &&
+    (callee.object as Node).type === "Identifier" &&
+    (callee.object as Node).name === "Promise" &&
+    memberName(callee) === "resolve" &&
+    (args.length === 0 || (args.length === 1 && noPromise(args[0]!)))
+  );
+}
+
 /** Every budget `text` names of its own, as `line — what`. */
 export function ownBudgets(text: string, lang: Lang, path: string): string[] {
   const line = lineOf(text);
   const found: string[] = [];
   const at = (node: Node, what: string) => found.push(`${line(node.start)} — ${what}`);
   walk(parse(text, lang), (node) => {
+    if (node.type === "AwaitExpression") {
+      if (isTick(node.argument as Node)) at(node, "an awaited tick, a wait counted in hops");
+      return;
+    }
     if (node.type === "Property") {
       const key = keyOf(node);
       if (key !== null && BUDGET_KEYS.has(key) && HOME.get(key) !== path) at(node, `sets ${key}`);
@@ -237,7 +285,8 @@ test("no case, hook or wait in the tree names a budget of its own", () => {
   expect(
     offenders,
     "these set a budget beside the suite's one (vitest.config.ts, test/setup.ts) — split " +
-      "the case or make it cheaper instead",
+      "the case or make it cheaper instead, and wait for what a tick stood for with " +
+      "afterMicrotasks() or settled() (test/settle.ts)",
   ).toEqual([]);
 });
 
@@ -296,6 +345,13 @@ test.each([
   ["a config move", "vi.setConfig({ testTimeout: 60_000 });"],
   ["the wait budget set elsewhere", "configure({ asyncUtilTimeout: 30_000 });"],
   ["a run budget named in a suite", "const config = { hookTimeout: 1 };"],
+  ["ticks counted in a loop", "for (let i = 0; i < 8; i++) await Promise.resolve();"],
+  ["a tick inside an act", "await act(async () => { await Promise.resolve(); });"],
+  ["a bare tick", "await Promise.resolve();"],
+  ["a tick settled on a value", "await Promise.resolve(0);"],
+  ["a tick settled on undefined", "await Promise.resolve(undefined);"],
+  ["an await of no promise", "await null;"],
+  ["an await of a void", "await void 0;"],
 ])("%s is refused", (_shape, snippet) => {
   expect(ownBudgets(snippet, "ts", "app/a.test.ts")).toHaveLength(1);
 });
@@ -318,6 +374,12 @@ test.each([
   ["a production timeout passed along", "request('POST', '/backup', { timeoutMs: 1800000 });"],
   ["a fetch's own timeout field", "const answer = { timeout: true };"],
   ["a rule's comment", "// test('a', () => {}, 30_000) is refused\nconst a = 1;"],
+  ["a wait for the microtasks' work", "await afterMicrotasks();"],
+  ["a wait until nothing more is asked", "await settled(() => sent.length);"],
+  ["an empty act, a task boundary", "await act(async () => {});"],
+  ["a stub answering a settled promise", "const noWait = () => Promise.resolve();"],
+  ["a promise adopted", "await Promise.resolve(answer);"],
+  ["a tick named in a comment", "// await Promise.resolve() is refused\nconst a = 1;"],
 ])("%s passes", (_shape, snippet) => {
   expect(ownBudgets(snippet, "ts", "app/a.test.ts")).toEqual([]);
 });
