@@ -747,7 +747,7 @@ func TestEveryBridgedCallIsRecordedWhereAResumeCanReadIt(t *testing.T) {
 // A RECORDED CALL CARRIES THE IDENTITY IT WAS ADMITTED UNDER. The run's call
 // log counts a call by the digest of its canonical arguments, and the record
 // a later segment seeds that log from keeps a call's arguments only in part
-// past its share of the run's row — so the record carries the digest the
+// past its share of the run's tool log — so the record carries the digest the
 // admission counted, taken here before anything is cut: the canonical form's,
 // whatever spelling the model sent. The call is sent in a spelling the surface
 // rewrites — a null its schema does not declare, which the canonical form

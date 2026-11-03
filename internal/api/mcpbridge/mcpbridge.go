@@ -233,10 +233,10 @@ type Session struct {
 	Launch string
 
 	// LastSeq is the place, in its run's order, of the last call the run's
-	// row records from before this opening — zero for a round's first job,
-	// and the highest [Call.Seq] the row records for a job opened again
+	// log records from before this opening — zero for a round's first job,
+	// and the highest [Call.Seq] the log records for a job opened again
 	// after a recovery, or for a job continuing one that asked a person,
-	// whose calls the row keeps as the same round's. This opening numbers
+	// whose calls the log keeps as the same round's. This opening numbers
 	// its calls after it, so the order a resume reads the run's calls in
 	// runs on across the recovery or the question rather than starting again
 	// at one beside the calls before it.
