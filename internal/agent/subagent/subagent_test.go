@@ -1439,11 +1439,29 @@ func TestAParentRefusalOutranksTheSlicesOwn(t *testing.T) {
 
 // --- batch mechanics -------------------------------------------------------
 
+// A BATCH RUNS AT MOST MAXPARALLEL CHILDREN AT ONCE, AND THAT MANY TOGETHER.
+//
+// THE CHILDREN MEET INSIDE THEIR MODEL CALLS: each waits there until
+// MaxParallel of them are inside at once, so a cap that lets them run together
+// is seen to, whatever the runner's load. A sleep in each, which this replaced,
+// overlapped them only if the second child came through its harness run's setup
+// while the first still slept; on a loaded race runner it did not, and a cap
+// working as it should read as one that serialises. The wait is bounded by the
+// child's own task timeout, a hang guard and never a measurement: the first
+// child to reach it alone gives the meeting up for every child after it, so a
+// batch that never runs MaxParallel together fails here rather than hangs.
+//
+// Mutations: MaxParallel 1, or runGraph running its wave's tasks one after
+// another — the children never meet, red.
 func TestABatchRunsAtMostMaxParallelChildrenAtOnce(t *testing.T) {
 	t.Parallel()
+	const maxParallel = 2
 	w := newWorld(t)
 	var live, peak atomic.Int32
-	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
+	met := make(chan struct{})
+	var meet sync.Once
+	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ modelView) (llmtest.Response, error) {
+		defer live.Add(-1)
 		cur := live.Add(1)
 		for {
 			was := peak.Load()
@@ -1451,12 +1469,19 @@ func TestABatchRunsAtMostMaxParallelChildrenAtOnce(t *testing.T) {
 				break
 			}
 		}
-		time.Sleep(25 * time.Millisecond)
-		live.Add(-1)
+		if cur >= maxParallel {
+			meet.Do(func() { close(met) })
+		}
+		select {
+		case <-met:
+		case <-ctx.Done():
+			meet.Do(func() { close(met) })
+			return llmtest.Response{}, ctx.Err()
+		}
 		return answer("answer", 1, 1), nil
 	}}
 	cfg := baseConfig(t, w, p)
-	cfg.Limits.MaxParallel = 2
+	cfg.Limits.MaxParallel = maxParallel
 	cfg.ParentRemaining = 0
 
 	var tasks []subagent.Task
@@ -1468,11 +1493,13 @@ func TestABatchRunsAtMostMaxParallelChildrenAtOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := peak.Load(); got > 2 {
-		t.Errorf("peak concurrency %d exceeds MaxParallel 2", got)
-	} else if got < 2 {
+	switch got := peak.Load(); {
+	case got > maxParallel:
+		t.Errorf("peak concurrency %d exceeds MaxParallel %d", got, maxParallel)
+	case got < maxParallel:
 		// The counterfactual for a cap that is really just serialisation.
-		t.Errorf("peak concurrency %d — the children never overlapped", got)
+		t.Errorf("peak concurrency %d — the children never ran %d together inside their task timeout", got,
+			maxParallel)
 	}
 	// Children beyond the cap run as earlier ones finish, rather than being
 	// dropped.
