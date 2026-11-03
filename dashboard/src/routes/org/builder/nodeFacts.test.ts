@@ -286,6 +286,37 @@ describe("credentials", () => {
     expect(vendorIdentities(state, sre.node)).toEqual([]);
   });
 
+  // A SCALEWAY APPLICATION LEAVES WITH ITS SEAT: the engine deletes the seat's
+  // key, policy and IAM application once it is off or gone, so a seat that is
+  // on at Scaleway has nothing there to decommission.
+  test("a Scaleway seat names no account to decommission", () => {
+    const doc = fixtureCompany();
+    doc.integrations = {
+      ...doc.integrations,
+      scaleway: {
+        enabled: true,
+        provisioning: {
+          organization_id: "33333333-3333-4333-8333-333333333333",
+          access_key: "SCWXXXXXXXXXXXXXXXXX",
+          secret_key: "${SCALEWAY_SECRET_KEY}",
+        },
+      },
+    };
+    doc.units![0]!.children![0]!.roles![0]!.integrations = {
+      scaleway: {
+        enabled: true,
+        level: "operate",
+        projects: ["11111111-1111-4111-8111-111111111111"],
+      },
+    };
+    const state = keyedState(doc);
+    const sre = locate(state.draft, "seat:sre");
+    if (sre?.kind !== "seat") throw new Error("seat:sre");
+    expect(isConnected(doc, "scaleway")).toBe(true);
+    expect(TOOL_NAMES.scaleway).toBe("Scaleway");
+    expect(vendorIdentities(state, sre.node)).toEqual([]);
+  });
+
   // The labels are a map, which the fact once printed as "[object Object]".
   test("a placement reads as the node it pins and the labels a node must carry", () => {
     expect(placementSummary({ node: "node-a" })).toBe("Pinned to node node-a");
