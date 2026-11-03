@@ -1016,6 +1016,62 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	}
 }
 
+// CODE_GET_REPO ANSWERS WHERE A REPOSITORY'S PURGE AND ITS IMPORT STAND. A
+// purge's answer sends whoever asked for it to the repository's detail to read
+// when it was served, and an import tells nobody how it ended but the
+// repository's detail: so the detail answers the expunge (a purge asked and
+// not yet served, and the last one committed) and the remotes (a mirror's
+// address, and the import's source, its chunks and the sentence it ended
+// short on), every credential a ${VAR} reference as the row holds it.
+//
+// Mutation: leave Expunge out of code_get_repo's detail, or Remotes → red.
+func TestCodeGetRepoAnswersWhereAPurgeAndAnImportStand(t *testing.T) {
+	t.Parallel()
+	host := newCodeHost()
+	host.detail.Expunge = code.ExpungeState{Request: "purge-7", Requested: codeAt(9),
+		ExpungedAt: time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC), DroppedObjects: 12, DroppedBytes: 4096}
+	host.detail.Remotes = code.RemoteState{
+		MirrorFrom: &code.MirrorSource{URL: "https://forge.example.com/up/site.git", Credential: "${SITE_TOKEN}"},
+		Import: &code.ImportState{Source: code.ImportSource{URL: "https://forge.example.com/up/site.git",
+			Credential: "${SITE_TOKEN}"}, Chunks: 3, DoneAt: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC),
+			Error: "blob 0123abcd is 9 bytes, past code.limits.max_blob_bytes (8)"},
+	}
+	got, _ := callCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), builtin.CodeGetRepoTool,
+		map[string]any{"repo": "site"})
+	var answer struct {
+		Detail struct {
+			Expunge struct {
+				Request        string    `json:"request"`
+				ExpungedAt     time.Time `json:"expunged_at"`
+				DroppedObjects int64     `json:"dropped_objects"`
+			} `json:"expunge"`
+			Remotes struct {
+				MirrorFrom struct {
+					URL        string `json:"url"`
+					Credential string `json:"credential"`
+				} `json:"mirror_from"`
+				Import struct {
+					Chunks int64  `json:"chunks"`
+					Error  string `json:"error"`
+				} `json:"import"`
+			} `json:"remotes"`
+		} `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("code_get_repo answered %q: %v", got.Output, err)
+	}
+	if e := answer.Detail.Expunge; e.Request != "purge-7" || e.ExpungedAt.IsZero() || e.DroppedObjects != 12 {
+		t.Errorf("code_get_repo answered the expunge %+v, want the purge asked and the last one committed", e)
+	}
+	r := answer.Detail.Remotes
+	if r.MirrorFrom.URL != "https://forge.example.com/up/site.git" || r.MirrorFrom.Credential != "${SITE_TOKEN}" {
+		t.Errorf("code_get_repo answered the pull mirror %+v, want its address and its variable's name", r.MirrorFrom)
+	}
+	if r.Import.Chunks != 3 || !strings.Contains(r.Import.Error, "max_blob_bytes") {
+		t.Errorf("code_get_repo answered the import %+v, want its chunks and why it ended short", r.Import)
+	}
+}
+
 // CODE_GET_REPO'S FIRST CALL IN A TURN IS ONE READ: its first page of branches
 // carries the repository in detail, so that page resolves the repository too —
 // one linearizable read and one barrier, not a read of kind repo and then the
@@ -1635,7 +1691,8 @@ func widestGate(t *testing.T) code.MergeGate {
 // gitref's longest — every byte one that any JSON encoder writes as two — with
 // a merge gate of code.MaxGateBytes: half a mebibyte, eight tool answers.
 // code_list_repos lists such a repository with its rules, which carry no gate
-// there, and lists every repository after it; code_get_repo answers its detail, a page of
+// there, and lists every repository after it; code_get_repo answers its detail
+// — its remotes and its expunge at their widest among it — a page of
 // its branches and as many of its rules as fit, and the rest of the rules a
 // page at a time through protections_next, every rule once, in order and with
 // its gate — each answer within ToolAnswerBytes, and each making progress on
@@ -1664,6 +1721,30 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 		d.Protections = append(d.Protections, rule)
 		d.Gates = append(d.Gates, code.RuleGate{Pattern: rule.Pattern, Gate: gate})
 	}
+	// ITS REMOTES AND ITS EXPUNGE AT THEIR WIDEST TOO, which the detail answers
+	// beside its row: each address at code.MaxRemoteURLBytes and each variable at
+	// code.MaxCredentialRefBytes, a push mirror's every ref pattern at its
+	// longest, and an import's sentence — the engine's, a few hundred bytes at
+	// most, held here at a kilobyte.
+	remote := func() (string, string) {
+		return wide(code.MaxRemoteURLBytes), wide(code.MaxCredentialRefBytes)
+	}
+	from, fromVar := remote()
+	to, toVar := remote()
+	source, sourceVar := remote()
+	d.Remotes = code.RemoteState{
+		MirrorFrom: &code.MirrorSource{URL: from, Credential: fromVar},
+		MirrorTo:   &code.MirrorTarget{URL: to, Credential: toVar, As: "agent-cto"},
+		Import: &code.ImportState{Source: code.ImportSource{URL: source, Credential: sourceVar}, Chunks: 1 << 20,
+			DoneAt: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC), Error: wide(1024)},
+		MirrorSyncedAt: time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC),
+	}
+	for i := range code.MaxMirrorRefs {
+		head := fmt.Sprintf("refs/heads/%02d", i)
+		d.Remotes.MirrorTo.Refs = append(d.Remotes.MirrorTo.Refs, head+wide(gitref.MaxRefNameBytes-len(head)))
+	}
+	d.Expunge = code.ExpungeState{Open: "e" + wide(35), Request: "p" + wide(35), Requested: codeAt(9),
+		ExpungedAt: time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC), DroppedObjects: 1 << 40, DroppedBytes: 1 << 50}
 	host.detail = d
 	for i := range 100 {
 		host.refs[fmt.Sprintf("refs/heads/%03d", i)+wide(gitref.MaxBranchBytes-3)] = mainOID
