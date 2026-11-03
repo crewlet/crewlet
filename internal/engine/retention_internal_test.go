@@ -1148,7 +1148,7 @@ func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
 		recorder.Add(metrics.StatelogBarriersApplied, uint64(3*census.Expected()+1),
 			metrics.Attrs{"domain": name, "stream": entry.Domain.Stream().Name})
 	}
-	if len(want) < 8 {
+	if len(want) < 9 {
 		t.Fatalf("%d registered log(s) take barriers, want at least the tracker's, "+
 			"the knowledge base's, the identity estate's, the artifacts log's, the "+
 			"artifact datastore's, the assistant's, chat's, the executor log's and the "+

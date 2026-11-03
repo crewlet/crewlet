@@ -291,10 +291,11 @@ func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 8 {
+	if claims < 9 {
 		t.Fatalf("the register holds %d identity-claiming domain(s), want the "+
 			"tracker, the pages, the identity estate, the artifacts, the "+
-			"artifact datastore, the assistant, chat and the executor log", claims)
+			"artifact datastore, the assistant, chat, the executor log and the "+
+			"code log", claims)
 	}
 
 	// CONTROL, both ways round.
@@ -343,11 +344,11 @@ func TestAGenerationRecordIsKeptExactlyWhereIdentityIsClaimed(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 8 {
+	if claims < 9 {
 		t.Fatalf("the register holds %d identity-claiming domain(s) keeping a "+
 			"generation record, want the tracker, the pages, the identity "+
-			"estate, the artifacts, the artifact datastore, the assistant, chat "+
-			"and the executor log", claims)
+			"estate, the artifacts, the artifact datastore, the assistant, chat, "+
+			"the executor log and the code log", claims)
 	}
 
 	// CONTROL, both ways round.
