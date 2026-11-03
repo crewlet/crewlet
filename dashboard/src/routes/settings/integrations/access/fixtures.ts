@@ -73,6 +73,7 @@ const EXPO_OPTIONS: AccessOptions = {
   lane: "expo",
   live: false,
   rotatable: true,
+  releasable: true,
   action_url: EXPO_TOKENS_PAGE,
   levels: [
     { id: "viewer", name: "Viewer", note: "View all projects" },

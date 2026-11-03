@@ -96,6 +96,11 @@ export interface AccessOptions {
   /** Where a person takes this lane's steps at the vendor, for a step that names no page of its own. */
   action_url?: string;
   /**
+   * Whether a person may keep a turned-off agent's account at the vendor
+   * rather than delete it there (the `release` action, on its remove wait).
+   */
+  releasable?: boolean;
+  /**
    * The lane's access is a SET of levels rather than one (Confluence's space
    * permissions by operation, on a site without space roles): a seat's level
    * is the chosen ids, sorted and space-separated.

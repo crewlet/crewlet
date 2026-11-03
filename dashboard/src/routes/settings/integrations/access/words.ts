@@ -56,8 +56,8 @@ export interface LaneWords {
    */
   retired?: { one: string; many: string };
   /**
-   * Where a person deletes the agent's account at the vendor after it is
-   * turned off, the control that keeps it there instead: "Keep the robot at Expo".
+   * On a lane that lets a person keep a turned-off agent's account at the
+   * vendor (`releasable`), the control that does it: "Keep the robot at Expo".
    */
   release?: string;
 }

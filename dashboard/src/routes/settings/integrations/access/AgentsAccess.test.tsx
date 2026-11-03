@@ -994,3 +994,20 @@ test("keeping the robot is offered only on the wait to delete it", () => {
   draw(expoWaitingAnswer("mint"));
   expect(screen.queryByRole("button", { name: "Keep the robot at Expo" })).toBeNull();
 });
+
+// KEEPING THE ACCOUNT IS THE LANE'S TO ALLOW: a lane that says it is not
+// releasable offers no way to keep it, whatever its words. Mutation: drop the
+// lane's flag from the rule and the button comes back.
+test("a lane that does not allow keeping the account offers no button to keep it", () => {
+  const answer = expoWaitingAnswer("mint");
+  answer.options = answer.options.map((o) => ({ ...o, releasable: false }));
+  const pm = answer.seats[0]!.lanes.expo!;
+  pm.sync!.error = {
+    ...pm.sync!.error!,
+    step: "remove",
+    said: "Delete robot crewlet-gophrase-pm at Expo",
+  };
+  draw(answer);
+  expect(screen.getByText("Delete robot crewlet-gophrase-pm at Expo.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Keep the/ })).toBeNull();
+});

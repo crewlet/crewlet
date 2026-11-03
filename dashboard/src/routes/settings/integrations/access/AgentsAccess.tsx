@@ -912,8 +912,12 @@ function laneMessage({
     if (!todo) return null;
     const install = laneWords(lane.key).install;
     // KEEPING THE ACCOUNT AT THE VENDOR IS THE PERSON'S CHOICE on the wait to
-    // delete it there, which Crewlet records rather than waits on.
-    const release = error?.step === "remove" ? laneWords(lane.key).release : undefined;
+    // delete it there, where the lane allows it; Crewlet records it rather
+    // than waits on.
+    const release =
+      error?.step === "remove" && lane.releasable
+        ? (laneWords(lane.key).release ?? `Keep the account at ${lane.name}`)
+        : undefined;
     // A HANDOFF IS ONE BUTTON THAT OPENS ITS SHEET, which holds the vendor's
     // page, the account to make and the paste; nothing to check again here.
     const handoff = busy ? undefined : handoffOf(lane, saved);
