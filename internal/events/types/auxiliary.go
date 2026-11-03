@@ -64,10 +64,9 @@ const (
 	AuxStageTurn AuxStage = "turn"
 
 	// AuxStageReflection is spent AFTER a turn, on the seat's behalf:
-	// the reflection workers, and the conversation ledger's account of
-	// the turn. Drawn beside the turn and counted on the seat's day, and
-	// never in the turn's own total or on its work item — it is how much
-	// the seat had to remember, not what the work cost.
+	// the reflection workers. Drawn beside the turn and counted on the
+	// seat's day, and never in the turn's own total or on its work item —
+	// it is how much the seat had to remember, not what the work cost.
 	AuxStageReflection AuxStage = "reflection"
 
 	// AuxStageBackground is spent on no turn: the episode compaction,
@@ -156,7 +155,7 @@ const auxCondensePrefix = "condense_"
 // import that one; internal/compact's own suite holds the two lists equal in
 // both directions.
 var auxCondenseKinds = []string{
-	"conversation", "thread", "argument", "tool_error", "produced",
+	"thread", "argument", "tool_error", "produced",
 	"source", "task", "answer", "outcome", "report",
 }
 

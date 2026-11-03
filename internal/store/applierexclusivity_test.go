@@ -658,11 +658,11 @@ var allowedReplicatedWriter = []allowance{
 		Prefix: "internal/learning/memsync/codec.go", Kind: notReplicated,
 		Why: "Builds its INSERT from the carried row's own table name, so the " +
 			"walk cannot resolve which table it writes and reports a computed " +
-			"one. The registry that name comes from is a closed list of SEVEN " +
+			"one. The registry that name comes from is a closed list of SIX " +
 			"node-estate tables — agent_diary, episodes, counterparty_profiles, " +
-			"synthesized_skills and its versions, agent_onboarding_markers, " +
-			"conversation_sessions — every one placed in nodeEstatePlacements " +
-			"one file over. It never names a replicated table.",
+			"synthesized_skills and its versions, agent_onboarding_markers — " +
+			"every one placed in nodeEstatePlacements one file over. It never " +
+			"names a replicated table.",
 	},
 
 	// -----------------------------------------------------------------

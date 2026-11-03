@@ -141,25 +141,28 @@ describe("a prompt with headings", () => {
   });
 
   it("nests a ledger's entries inside the block that wrote them", () => {
-    // The executor's user message writes one `###` per prior turn inside its
-    // conversation block. Hoisted to the outline, those read as blocks of the
-    // message in their own right, sitting between it and the ask.
+    // The executor's user message writes one `###` per earlier round inside
+    // its prior-work block. Hoisted to the outline, those read as blocks of
+    // the message in their own right, sitting between it and the ask.
     draw({
       system: "",
       user: [
-        "## Earlier in this conversation",
-        "Do not repeat a reply you already gave.",
+        "## Already done earlier in this turn",
+        "Every call below marked `→ success` ALREADY RAN.",
         "",
-        "### 2026-08-20T09:30",
-        "You replied: shipped it",
+        "### Iteration 1",
+        "Produced: shipped it",
         "",
         "## Task",
         "any update?",
       ].join("\n"),
     });
-    expect(rows().map((r) => r.split(/\d/)[0])).toEqual(["Earlier in this conversation", "Task"]);
-    const sub = within(reader()).getByText("2026-08-20T09:30");
-    expect(sub.closest(".prompt-sub")?.textContent).toContain("You replied: shipped it");
+    expect(rows().map((r) => r.split(/\d/)[0])).toEqual([
+      "Already done earlier in this turn",
+      "Task",
+    ]);
+    const sub = within(reader()).getByText("Iteration 1");
+    expect(sub.closest(".prompt-sub")?.textContent).toContain("Produced: shipped it");
   });
 
   it("sizes a section in UTF-8 bytes, its heading line and everything under it included", () => {

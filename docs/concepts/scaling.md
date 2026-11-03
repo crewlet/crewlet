@@ -154,12 +154,12 @@ flowchart TD
   operator's MCP. The executor log's are the engine's own record of what a
   seat's box did — a session captured, a turn ended, a session past its
   retention, a removed seat's taken away, or a turn's first read of its
-  conversation (which no launch records yet) — so no tool, person or operator
+  conversation — so no tool, person or operator
   surface can make one, and a build gate fails on any surface's code that
   reaches the writer. Each carries the operation id the log derives for that
   capture or that end, and moves on under it like a tracker write. Its reads are
-  ordinary reads at the level the caller asks: a launch reads the conversation
-  it continues at `linearizable`, because a seat that moved to this node holds
+  ordinary reads at the level the caller asks: a turn's dispatch reads the
+  conversation it continues at `linearizable`, because a seat that moved to this node holds
   no floor for the end its last turn published through another one
   ([Read Consistency](../guides/consistency.md#which-logs-can-be-read-at-linearizable)).
 - **Every request and every answer is signed.** A data node runs a write as

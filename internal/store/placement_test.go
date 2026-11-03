@@ -219,13 +219,6 @@ var nodeEstatePlacements = []placement{
 			"rows, and it goes where they go.",
 	},
 	{
-		Table: "conversation_sessions",
-		Why: "What a seat already said in one thread, recorded by the node " +
-			"that ran the turn. Read back only by that seat's next turn on " +
-			"whichever node holds it, deduped on the work key, so a missing " +
-			"row costs a repeated summary rather than a wrong answer.",
-	},
-	{
 		Table: "scheduled_runs",
 		Why: "This node's audit row for the fires it ran. The half the FLEET " +
 			"has to agree on — 'may I start this fire' — is in coordination, " +

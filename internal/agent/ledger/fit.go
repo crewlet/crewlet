@@ -179,9 +179,8 @@ func renderArgs(args map[string]any, opts FormatOptions) string {
 // WITHOUT HTML ESCAPING, through [plainjson.Marshal], whose package doc says
 // why that is not `json.Marshal`. A ledger line has two audiences and the
 // escaping is wrong for both: a model re-reads it every round, where `&` costs
-// six bytes and `<` reads as noise; and a person reads it on the seat screen,
-// where the line is rendered as the conversation ledger's `tool_calls`.
-// Neither is an HTML document.
+// six bytes and `<` reads as noise; and a person reads it on the dashboard, in
+// the prompt the round was sent. Neither is an HTML document.
 func marshal(v map[string]any) string {
 	text, err := plainjson.Marshal(v, "")
 	if err != nil {

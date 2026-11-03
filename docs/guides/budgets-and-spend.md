@@ -62,31 +62,39 @@ ceiling below that floor never has it left, so on a seat that runs an executor,
 or on a company that has one, it is refused when the document is validated,
 at the ceiling: raise it to the floor, or lower the floor (`0` turns it off).
 
-**A relaunch that continues its turn's session needs room for that session.**
-Within a turn, a send-back, a person's answer, a lost job or a replaced sign-in
+**A launch that continues a session needs room for that session.** Within a
+turn, a send-back, a person's answer, a lost job or a replaced sign-in
 [continues the turn's harness session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)
-where it can, and a continued run sends the session's whole context again
-before it reads a word of its brief. So its launch needs the larger of the floor
+where it can; a conversation's next turn
+[continues the session its last turn left](../concepts/code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session);
+and a continued run sends the session's whole context again before it reads a
+word of its brief. So its launch needs the larger of the floor
 and that context with the brief that continues it: the whole input of the
 session's last request, cache included, recorded when the session was captured,
 and the estimate of the brief it is handed — a 60 000-token session handed a
 2 000-token continuation needs 62 000 left in every capped window. That holds
-for a run continued in its own box as much as for one restored into another; a
-session no capture measured (keeping switched off) has no known context, and
-its launch needs the floor alone. A continued launch is always a relaunch — a
-resumed segment's — so below its figure it is held, or for an answer turned
-back, exactly as above, never parked, and its reason names what the figure is
-made of. A session whose figure is past the smallest ceiling of the seat's or
-the company's capped windows, which no window turning over ever leaves room for,
-is not continued: the relaunch starts a session of its own on the floor. A seat
+for a run continued in its own box as much as for one restored into another,
+and for the session a conversation's last turn left, whose context is what that
+turn's capture recorded; a session no capture measured (keeping switched off)
+has no known context, and its launch needs the floor alone. A relaunch below
+its figure is held, or for an answer turned back, exactly as above. A turn's
+first launch below its figure **parks the seat's mail on that figure**, never on
+the floor alone: a window with room for a fresh run and not for the session
+would read as having room, and hand the delivery straight back into the same
+refusal. A colleague's ask waiting behind such a park is still owed its answer.
+Either way the reason names what the figure is made of. A session whose figure
+is past the smallest ceiling of the seat's or the company's capped windows,
+which no window turning over ever leaves room for, is not continued: the launch
+starts a session of its own on the floor. A seat
 with no capped window continues a session of any size.
 
 **And it pays for its context on every request.** Every request a harness makes
 sends its whole conversation, and every one is charged its whole input, the
 cache's share included ([Cache share](#cache-share)): a run that continues a
 60 000-token session and makes 20 requests is charged about 1.2 million input
-tokens for that context alone, most of them cache reads, where the same run
-started fresh begins at its
+tokens for that context alone, most of them cache reads — a conversation's next
+turn as much as a relaunch, so every turn of a long conversation starts from
+what its last turn left — where the same run started fresh begins at its
 harness's own prompt, its standing instructions and its brief and grows from
 there. A session's context is bounded by its harness's compaction for that
 reason. Every Claude Code run compacts its conversation at 100 000 tokens
@@ -140,8 +148,8 @@ case it is recorded, as after any refusal.
 
 The same holds wherever the engine turns work away on a window that is already
 full before making a call: a seat's delivery parked until the window turns
-over, a person's `answer_knowledge` question refused, a reflection pass or a
-conversation entry's rewrites declined. Each is the gate's refusal, recorded as
+over, a person's `answer_knowledge` question refused, a reflection pass
+declined. Each is the gate's refusal, recorded as
 the window's `refused_at` on the scope a charge would have been refused by —
 the company's before the seat's — so a window that an executor's launch, a background
 pass or a person's answers filled says when it last turned work away rather
@@ -257,7 +265,7 @@ Each call states its **stage** — whose cost it is — and its **purpose**:
 | Stage | What spent it (purposes) | Charged to | In the turn's cost and its task's spend |
 |---|---|---|---|
 | `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what its executor cost between two parts of the turn — the executor's bridged tools and the condensing of a collected launch's report or failure (`condense_report`, `condense_tool_error`) | the seat and the company | **yes** — what its executor cost between two parts of the turn is paid by the part that resumes from it |
-| `reflection` | The learning workers after the turn (`persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`) and the conversation ledger's account of it | the seat and the company | no — drawn beside the turn in its Reflection lane: it is what the seat remembers, not what the work cost |
+| `reflection` | The learning workers after the turn (`persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`) | the seat and the company | no — drawn beside the turn in its Reflection lane: it is what the seat remembers, not what the work cost |
 | `background` | The episode compaction, clustered synthesis and skill promotion passes (`episode_compaction`, `skill_clustering`, `skill_promotion`), and the probe of a model entry at its usage limit when it is tried again, one for every seat parked on it, charged to the parked seat it runs as (`provider_probe`) | the seat and the company (the company alone for a unit a person leads) | no, there is no turn |
 | `operator` | A person's question answered on the operator surface (`answer_knowledge`, and `condense_source` for a page too long to read whole) | the company alone: a person has no seat budget | no — no turn |
 

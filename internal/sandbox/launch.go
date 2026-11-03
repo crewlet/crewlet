@@ -230,17 +230,31 @@ type LaunchRequest struct {
 	// answer, or how the job before it was cut off, and where its work is.
 	Continue *Continuation
 
-	// Session is the turn's kept session this job continues, in whatever box
-	// it gets — the kept capture of the job before's session, as the
-	// launch's caller chose it before it built the run's surface and briefs
-	// ([Coordinator.ContinuedCapture]) — with the briefs that continue it in
-	// the box it was last worked in and in any other. Set on every relaunch
-	// whose job before left a kept capture that can be continued: a
-	// reviewer's send-back as much as a round carried on. Nil starts a
-	// session of its own, or continues one in place (Continue). The launch
-	// takes it up, or says why not and starts fresh with Brief: see
+	// Session is the session this job continues, in whatever box it gets —
+	// the kept capture of the job before's session, as the launch's caller
+	// chose it before it built the run's surface and briefs
+	// ([Coordinator.ContinuedCapture]), or the session the turn's
+	// conversation's last turn left ([SessionContinuation.Base]) — with the
+	// briefs that continue it in the box it was last worked in and in any
+	// other. Set on every relaunch whose job before left a kept capture that
+	// can be continued — a reviewer's send-back as much as a round carried on
+	// — and on every launch that may continue the conversation's session: a
+	// turn's first, and a relaunch of a turn that has kept nothing yet. Nil
+	// starts a session of its own, or continues one in place (Continue). The
+	// launch takes it up, or says why not and starts fresh with Brief: see
 	// restore.go.
 	Session *SessionContinuation
+
+	// Base is the read the turn's FIRST launch made of its conversation — the
+	// head the turn's launches continue while it has kept no session of its
+	// own, and the turns the read handed out that the turn's brief told
+	// ([ConversationBase]) — set by that launch alone: nil on every relaunch,
+	// and for a turn that read no conversation. The launch freezes it on the
+	// record it creates ([PendingRun.Base]), which every relaunch reads, and
+	// records it on the executor log as the turn's begin, whose row then
+	// holds the base against every release while the turn has kept nothing
+	// ([Coordinator.recordBegin]).
+	Base *ConversationBase
 
 	// Decided is told how the launch decided its run takes up a session —
 	// which of the three briefs it hands the run, and whether the session
@@ -507,6 +521,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// Who asked, for the park that resolves a question's audience:
 		// that frame sees no trigger.
 		Requester: req.Turn.Requester,
+		// THE TURN'S READ OF ITS CONVERSATION, frozen by the write that
+		// creates the record and kept by every reset: a relaunch continues
+		// the base this read named, never one read again — see
+		// [LaunchRequest.Base].
+		Base: req.Base,
 		// And the colleague's ask the turn answers, for the segment that
 		// ends it: that frame sees no trigger either.
 		ColleagueAsk: req.Turn.ColleagueAsk,
@@ -558,6 +577,18 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fenceErr
 		}
+	}
+	// THE TURN'S FIRST READ, RECORDED ON THE EXECUTOR LOG once the record that
+	// froze it exists and the fence has passed: the turn's row then holds the
+	// base against every release while the turn has kept nothing, which is
+	// what lets a relaunch on any node continue it after a sibling ended
+	// ([Coordinator.recordBegin]). Asked for a bounded while on this frame,
+	// and never a refusal of the launch: a begin the log does not hold in
+	// time leaves the launch continuing no base, and one that lands later
+	// holds no longer than the turn's first capture or its end.
+	begun := false
+	if req.Base != nil {
+		begun = c.recordBegin(ctx, req, opened)
 	}
 	// THE JOB IS NAMED BEFORE ITS BOX EXISTS, so nothing the box does can be
 	// filed under a job that is not its own — see [LaunchRequest.Opened] —
@@ -626,11 +657,13 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	}
 
 	// THE TURN'S SESSION, CONTINUED in whatever box this job got — its kept
-	// capture restored where the box does not hold it — or the job before's
-	// own session in the box it lives in, or none: see restore.go. The run
-	// carries the brief its session needs, and the one a session of its own
-	// does, for its script to hand over the one its restore's outcome chose.
-	continued := c.continueSession(ctx, req, opened, box, runner, reused)
+	// capture restored where the box does not hold it, or, in a box of its
+	// own, the session its conversation's last turn left while the turn has
+	// kept none — or the job before's own session in the box it lives in, or
+	// none: see restore.go. The run carries the brief its session needs, and
+	// the one a session of its own does, for its script to hand over the one
+	// its restore's outcome chose.
+	continued := c.continueSession(ctx, req, opened, box, runner, reused, begun)
 	defer continued.release()
 	if req.Decided != nil {
 		req.Decided(continued.decision())

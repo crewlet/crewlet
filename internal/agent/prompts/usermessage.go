@@ -37,31 +37,12 @@ const PriorWorkHeader = "## Already done earlier in this turn" +
 	" delivery ADDS to it — reply in its thread, edit the item — rather than" +
 	" re-sending it, and is not a duplicate."
 
-// ConversationHistoryHeader introduces this seat's own earlier TURNS on the
-// same thread / issue / item.
-//
-// The staleness warning is stronger here than in the prior-work ledger, and
-// deliberately so: within a turn a read is minutes old, but across turns it
-// can be a week old, and a model told to trust it will state last Tuesday's
-// state as current.
-const ConversationHistoryHeader = "## Earlier in this conversation" +
-	"\nYour own earlier turns on this same thread / issue / item, oldest" +
-	" first — what YOU already said and did here." +
-	"\n- **Do not repeat a reply you already gave:** say the new thing or" +
-	" say nothing." +
-	"\n- **`(read)` calls may be stale:** re-run any whose data you need" +
-	" now rather than reusing a remembered value." +
-	"\n- **Everything else already took effect:** follow up on it rather" +
-	" than re-issuing it." +
-	"\n- **This is history, not the current state:** where it and the task" +
-	" below disagree, the task wins."
-
 // UserMessage is the per-round content of an executor turn.
 //
-// This is the half of the prompt that is ALLOWED to move. Both ledgers grow
-// as a turn iterates, so putting either in a system prompt would invalidate
-// the provider's prefix cache on every loop — which is the whole reason the
-// system prompts above take no ledger at all.
+// This is the half of the prompt that is ALLOWED to move. The prior-work
+// ledger grows as a turn iterates, so putting it in a system prompt would
+// invalidate the provider's prefix cache on every loop — which is the whole
+// reason the system prompts above take no ledger at all.
 //
 // The reviewer does not use it: its evidence is assembled once per round and
 // is a system-prompt fact, not something that accumulates as its own loop
@@ -78,10 +59,13 @@ type UserMessage struct {
 	// actually happens.
 	PriorWork string
 
-	// ConversationHistory is prior TURNS of this same conversation — empty
-	// on its first turn and whenever the trigger has no reproducible
-	// conversation key.
-	ConversationHistory string
+	// Endings is how this conversation's earlier turns ended, rendered whole
+	// with its own heading by [BuildConversationEndings] — empty on a
+	// conversation's first turn, on a turn that serves no conversation, and
+	// in a company that keeps no session. Rendered once, at the turn's
+	// dispatch, and frozen on its park, so every brief of the turn carries
+	// the same bytes.
+	Endings string
 
 	// Steered is every note a person sent this turn that the brief carries,
 	// each rendered by [SteerMessage]: the ones the turn has already read, in
@@ -97,38 +81,39 @@ type UserMessage struct {
 
 // taskHeader introduces the ask.
 //
-// A HEADING, like the two ledgers it sits between, and that is the whole of
-// the change from the bare "Task:" label it replaces — the word is the same
-// word. The label was the one block of this message that was not a section of
-// it, so under any structural reading of the document the ask belonged to
-// whatever heading preceded it: with a conversation block present, the newest
-// thing anybody said was filed inside "Earlier in this conversation", whose
-// own text points at "the task below" as a sibling. The dashboard's prompt
-// outline reads the same structure and drew the same wrong picture.
+// A HEADING, like the two blocks it sits between, and that is the whole of the
+// change from the bare "Task:" label it replaces — the word is the same word.
+// The label was the one block of this message that was not a section of it,
+// so under any structural reading of the document the ask belonged to
+// whatever heading preceded it: with the conversation's earlier turns told
+// above it, the newest thing anybody said was filed inside that account,
+// whose own text points at "the task below" as a sibling. The dashboard's
+// prompt outline reads the same structure and drew the same wrong picture.
 const taskHeader = "## Task"
 
 // BuildPhaseUserMessage renders the executor's user message.
 //
-// The three parts run oldest to newest — earlier turns of this conversation,
-// then the ask, then earlier rounds of THIS turn (which happened after the
-// ask arrived) — so the most recent context sits nearest the model's answer.
-// All three are top-level headings: they are peers, and a reader that nests
-// them gets the ask wrong.
+// The three parts run oldest to newest — how this conversation's earlier
+// turns ended, then the ask, then earlier rounds of THIS turn (which happened
+// after the ask arrived) — so the most recent context sits nearest the
+// model's answer. All three are top-level headings: they are peers, and a
+// reader that nests them gets the ask wrong.
 //
 // The TASK IS ONE SECTION of the outline, whatever it carries. It is a
 // trigger's whole body — a chat notification with the engine's own "## Triage"
 // and "## Thread context" written into it, a pull request whose description
 // opens on its own "# Title" — and every heading in it belongs to the ask, not
-// beside it. The ledgers are one section each for the same reason: their
-// entries are "###" lines, and a reply quoted in one can hold anything.
+// beside it. The endings and the ledger are one section each for the same
+// reason: their entries are "###" lines, and an account quoted in one can
+// hold anything.
 func BuildPhaseUserMessage(m UserMessage) Prompt {
 	task := m.TaskDescription
 	if task == "" {
 		task = "(no description)"
 	}
 	b := NewBuilder("\n\n")
-	if m.ConversationHistory != "" {
-		b.Heading("conversation_history", ConversationHistoryHeader+"\n"+m.ConversationHistory)
+	if m.Endings != "" {
+		b.Heading("conversation_endings", m.Endings)
 	}
 	b.Heading("task", taskHeader+"\n"+task)
 	if m.PriorWork != "" {

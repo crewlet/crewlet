@@ -106,27 +106,26 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   judge extends)
   onboarding_max_tool_rounds_ceiling: 20  # hard ceiling for onboarding rounds across extensions (2x base 10)
   extension_round_step: 8               # max rounds the judge may grant per extension call
-  conversation_session:                 # what this seat already said in ONE thread / issue / PR,
-                                        #   carried into that conversation's next turn
-                                        #   (see concepts/conversation-sessions.md)
-    enabled: true                       # feature gate — a live kill switch; off restores the
-                                        #   pre-ledger prompt exactly AND keeps no executor
-                                        #   session (none is captured); how each turn ended
-                                        #   is still recorded on the executor log, which is
-                                        #   the turn's account, not its session (see
-                                        #   concepts/code-sandbox.md)
-    max_entries: 20                     # entries KEPT per conversation, trimmed at write
-                                        #   time. A second bound applies at RENDER time:
-                                        #   the injected block drops whole oldest entries,
-                                        #   saying how many, once it would exceed 24k
-                                        #   characters
-    retention_days: 30                  # matches the event store's horizon; applied at next start
-                                        #   (the executor sessions' retention reads it
-                                        #   off the fleet's revision at every pass)
+  conversation_session:                 # each executor launch's session, kept and continued
+                                        #   by the turn's relaunches and by its conversation's
+                                        #   next turn — ONE thread / issue / PR — which is
+                                        #   also told how the conversation's earlier turns
+                                        #   ended (see concepts/conversation-sessions.md)
+    enabled: true                       # a live kill switch; off keeps and continues no
+                                        #   executor session, reads no conversation's head
+                                        #   and tells no turn how its earlier turns ended;
+                                        #   how each turn ended is still recorded on the
+                                        #   executor log, which is the turn's account, not
+                                        #   its session (see concepts/code-sandbox.md)
+    retention_days: 30                  # days a seat's sessions are kept past their turn's
+                                        #   last record — the event store's horizon; read
+                                        #   off the fleet's revision at every reaper pass,
+                                        #   so a change is honoured at the next one
     max_bytes_per_seat: 67108864        # object-store bytes one seat's captured executor
                                         #   sessions may hold (33 MiB..64 GiB); past it a
                                         #   capture releases the seat's oldest ENDED
-                                        #   turns' sessions, keeping how each ended
+                                        #   turns' sessions, keeping how each ended, never
+                                        #   one a live turn was handed to continue
 
 learning:                               # optional — agent-learning subsystem
                                         #   Every pass here calls the seat's auxiliary
@@ -1233,9 +1232,9 @@ stream:
                                     #   TAKES 512 MiB, sized by the turns the
                                     #   seats run rather than by the disk, and
                                     #   scaled down as far as 64 MiB where the
-                                    #   broker is short: about eighteen days of
+                                    #   broker is short: about seventeen days of
                                     #   a completely blocked trim at the
-                                    #   reference company's ~29 MB a day, and
+                                    #   reference company's ~32 MB a day, and
                                     #   at 64 MiB about two, short of min_age —
                                     #   past ~30 seats on a small host, set it.
                                     #   Crossing it refuses the append, and the

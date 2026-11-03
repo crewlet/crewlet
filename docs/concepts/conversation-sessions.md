@@ -1,272 +1,212 @@
 # Conversation Sessions
 
 A seat that answered a Jira comment on Monday and is woken by a follow-up on
-Wednesday used to arrive with no memory of Monday. Everything the engine
-carried across turns was either *agent-scoped and similarity-addressed*
-(episodes, the diary) or *content-free* (thread follows, the completion
-ledger) — nothing was keyed to the conversation itself.
+Wednesday **continues the session Monday's turn left**: its executor's harness
+picks up the transcript where that turn's run stopped — what it was asked,
+every call it made and what came back, what it replied — and is told only what
+no transcript can say: how the conversation's earlier turns ended, that a new
+turn begins here, and that its box is new.
 
-The **conversation session ledger** closes that. Every completed turn appends
-a structured entry to its conversation, and the next turn of that same
-conversation gets those entries back as an `## Earlier in this conversation`
-block on the executor's user message.
-
-It is the cross-turn counterpart of the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds),
-and it deliberately follows the same doctrine one scope wider.
-
----
-
-## What it is not
-
-**Not a transcript replay.** Within a turn, a relaunch continues the turn's own
-harness session where it stopped (Claude Code's `--resume`, OpenCode's
-`--session`) — a person's answer to a run parked on a question, a reviewer's
-send-back, a lost job, a replaced sign-in — from the copy its box holds or from
-the kept capture of the job it follows, restored into whichever box the launch
-gets
-([Code Sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)); where it
-cannot, a fresh run is told what it needs instead. That is right for one turn's
-work, carried on. It is wrong here: a conversation's next turn
-arrives against a thread that has **moved**, and replaying raw prior context
-invites acting on state that is no longer true.
-
-**Not episodic memory.** Episodes answer *"have I done something like this
-before?"* by embedding similarity across every conversation. This answers
-*"what did I already say here?"* by identity. They share a write site and
-nothing else:
-
-| | Episodes | Conversation sessions |
-|---|---|---|
-| Keyed by | agent + vector similarity | agent + `conversation_key` (the conversation identity) |
-| Holds | two ≤2000-char summaries, tool names | plan, reasoning, calls, the reply, the verdict |
-| Retrieval | cosine top-3, `done` only, no recency | the newest N of *this* conversation |
-| On thin triggers | prefetch gated **off** | always rendered |
-| Compaction | clusters collapse per-turn detail | none; trimmed by count and age |
-
-The last row of that table is the sharpest difference. A Slack thread reply or
-a Jira comment webhook is a *pointer*, and the engine's thin-trigger gate
-skips all three aux-LLM prefetches on exactly those turns — the ones that
-continue an existing conversation. The session block is deterministic (no
-embedding, no aux LLM), so it renders there regardless.
-
-**It is not the same thing as [the thread block](agent-runtime.md#the-thread-a-turn-was-woken-in), and neither replaces the other.** `## The thread so far` is what *everyone* said on the chat surface, read back live from the vendor. A conversation session is what *this seat* said and did, across turns, recorded by the engine — the plan, the tool calls, the reply and the reviewer's verdict, none of which is visible in a chat thread. A seat reading only the thread cannot tell which of its own replies it has already reasoned through; a seat reading only the ledger does not know what the other five people in the thread have said since. Chat is also only one surface: a Jira comment, a GitHub review and a scheduled fire all have a conversation session and no thread to read.
-
-**Not a second, invisible memory.** The [harness workspace](llm-backends.md#isolation-the-part-that-actually-matters)
-deletes a harness's own sessions before and after every call, precisely so
-that one task's context cannot leak into the next through a channel nobody can
-see. This ledger is the inverse shape of what that rule rejects: engine-owned
-rather than tool-private, scoped to one conversation rather than leaking
-across tasks, and rendered into the prompt as a visible block — so the context
-it adds is stated in the turn that uses it, where a person reading that turn
-can see it, rather than applied out of sight.
+Every launch's harness session is kept: taken out of its box when the run
+ends, sealed into the fleet's [object store](object-store.md) and named by the
+turn's row of the `executor` state log
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md);
+[Code Sandbox](code-sandbox.md#each-launchs-session-kept)). The turn's own
+relaunches continue it, and so does the next turn of its conversation — the
+thread, the issue, the pull request or the work item its trigger named.
 
 ---
 
-## What an entry holds
+## What continues what
 
-Built at turn end from data already in hand — there is no summarisation call,
-because a summariser that drops the line naming the reply the seat already
-sent re-creates the duplicate-answer bug in a place nothing else can catch.
+| Launch | Continues |
+|---|---|
+| A relaunch of a turn whose job before left a kept capture | That capture, in any box ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
+| A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, its newest ended turn whose row still names a kept session, restored into a box of the launch's own |
+| A relaunch of a turn that has kept no session of its own — its first job lost with its box, its capture refused or unanswered — in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation |
+| Anything else | A session of its own, the reason logged as `executor_session_not_continued` |
 
-- **Triggered by** — the ask the turn was given, verbatim. For a coalesced
-  conversation that is the whole merged digest — its header, each earlier
-  message with its sender, and the latest message in full — because the entry
-  is the store's only record of what the turn was answering, and keeping only
-  the last constituent would make a five-message thread read back as one
-- **You set out to** — the executor's own summary of what it did
-- **You called** — the tool-call lines, writes always recorded, reads marked `(read)`
-- **You replied** — the turn's final text, and **only when the turn actually
-  reached the party waiting on it**
-- **You did NOT reply** — the same text when nothing did. A turn can end with
-  real work behind it and no way to say so: the round budget ran out, the loop
-  broke, the reviewer closed it anyway. The text is kept because the conclusion
-  is real context for the next turn; what it must never do is read as a reply.
-  Filed as one, it made the failure seal itself — the seat's next turn on the
-  thread read back that it had already announced work nobody had been told
-  about, and answered the follow-up against that. The line is spelled out
-  rather than left implicit in a missing **You replied**, because "no reply
-  line" is something the reader has to notice while "nobody received this" is
-  something it has to act on
-- **Reviewer** — `completed_work`, the prose on what already landed
-- **You ended that turn blocked** — what stopped it, taken from the executor's
-  own `evidence` on a `blocked` round and empty on every other outcome. A turn
-  that put a question to somebody and ended there records `done` exactly like one
-  that finished the work, so without this the seat's next turn on the thread
-  cannot tell *"I answered this"* from *"I asked about this and I am waiting"* —
-  and read as the first, a question the seat asked becomes work it believes it
-  delivered. It is also precisely the turn that reads the line: the reply to that
-  question is what wakes the seat, so the message in front of it is usually the
-  answer
-- **Turn ended** — only when the decision was not `done`
+A turn that serves no conversation — a colleague's ask, a generic source's
+wake, a scheduled fire — continues nothing from an earlier turn: its own
+relaunches continue its session, and its next wake starts fresh.
 
-The reviewer's *other* field, `turn.Review.Notes`, is deliberately **not**
-carried. It is what the executor's next round is shown when the decision is
-`self_iterate`, and is written as an instruction to that round: *"the next
-round should retry posting X"*. Replayed into a later turn it stops being
-history and becomes a standing order the reviewer never issued, aimed at a
-round that already came and went. Nothing is lost by dropping it: the calls
-that failed are in the tool lines and the verdict is in **Turn ended**.
+## What the engine adds
 
-Every field is written **verbatim**, apart from a tool *argument* or a failed
-call's error past the [ledger budgets](turn-engine.md#what-the-ledger-budgets-and-why),
-which is **rewritten** to fit by the seat's auxiliary model before the row is
-written — never cut. Where no rewrite can be had it is named by its size and a
-digest instead, and the call line beside it still says which tool ran and
-whether it worked: the model failed, or the seat or the company has no token
-budget left. The rewrite is
-[reflection-stage spend](../guides/budgets-and-spend.md#auxiliary-spend), so it
-waits on the gate the reflection pass waits on, and a turn the budget ended
-pays for none. Nothing else is touched at write time, and that is
-deliberate: this row is the store's only record of the turn, so a trigger
-trimmed on the way in is not a shortened entry, it is the only copy. How much
-of it a later turn is *shown* is a read-side decision — see Cost below — and
-answering that display question at write time destroyed the data.
+Everything a seat did and said in the conversation is in the session it
+continues. The engine adds three things a transcript cannot know, and nothing
+else ([Code Sandbox](code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)
+has the mechanism):
 
-### Reads stay marked, never merged
+- **How the conversation's earlier turns ended.** Every brief of the turn —
+  the fresh brief, a relaunch's reseed, and the brief a continued session is
+  handed after its lead — carries `## How this conversation's earlier turns
+  ended` above `## Task`: for each turn, oldest first, its outcome and its
+  reviewer's last word; whether its reply reached the party waiting and on
+  what surface, or that whether it did is not known; what its reviewer said
+  landed; what blocked it; who stopped it and why; what failed, as the engine
+  recorded it; that its newest session was not kept, and why; the engine's
+  answer to a colleague's ask it took up; and what it was asked. Its rules: a
+  reply that reached the party waiting is said and is not said again; one that
+  did not may still be owed; everything else a turn did already took effect,
+  to follow up rather than redo; and this is history, not the current state —
+  where it and the task disagree, the task wins.
+- **Where the new turn begins.** A continued session is handed a lead first:
+  everything above is the conversation as its turns left it, through the
+  base's turn and the instant it ended; a new message has woken it; what it
+  read above may be stale; and tools it activated and skills it loaded above
+  were set up anew — its [skill guard](tool-skills.md#session-scope--why-per-phase-not-per-turn)
+  starts empty, whatever the base's session loaded.
+- **That its box is new.** A base is continued only in a box of the launch's
+  own, so the lead says it is on a fresh checkout, that what the session had
+  not committed and pushed went with the box it was worked in, and that
+  absolute paths under the base's home were that box's.
 
-Inherited wholesale from the within-turn ledger, and **stronger** here: a read
-from last Tuesday is stale by construction. Tool *results* are never carried,
-reads render with a `(read)` marker, and the block's header tells the model it
-may re-run exactly those. Telling it not to repeat a `jira_get_issue` would
-push it to invent the data instead.
+**No reply text.** The turn's own reply is in the session that continues it;
+a session started fresh is told whether the reply reached anybody and what
+landed, and the surface's own context — the thread block, the item's comments
+— shows the reply itself. The engine records no second copy of what a seat
+said to put beside the transcript: two histories of one conversation are two
+answers to "what did I already do here", free to disagree.
+
+**Fenced.** Every account in the block is somebody's words — what the turn was
+asked, what its reviewer and executor wrote, a stop's reason, what a box or a
+store said when something broke — so each is fenced under the turn's token,
+and the name of whoever stopped a turn is defused in place
+([ADR-0040](https://github.com/crewlet/crewlet/blob/main/adr/0040-content-a-model-reads-carries-its-provenance.md)).
+The block is rendered once, at the turn's dispatch, and every later brief of
+the turn carries it byte for byte.
 
 ---
 
-## Which turns are recorded
+## Read once, frozen, held
 
-A turn is appended when all of these hold:
+**Read once, at the turn's dispatch.** A turn with a conversation reads it once,
+as its dispatch starts it, at `linearizable` through the
+[estate router](../guides/satellite-nodes.md), so an end another node
+published is in the copy that answers: the head, and the conversation's other
+ended turns no ended turn was shown — the newest sixteen, the rest counted —
+with the siblings that ended beside the head with a session of their own. No
+launch of the turn reads it again, so a turn of the same conversation that ends
+meanwhile moves nothing. A read that fails, or that the read ladder refuses,
+fails open: the turn runs with no endings and continues nothing, logged as
+`executor_conversation_unread`.
 
-- it **completed** — a crashed turn has nothing coherent to record;
-- it was not a segment that parked on its executor's run — the segment that ends the turn records once, for real;
-- its trigger has a **reproducible conversation identity** (see below);
-- it has a **work key** — the constituent-trigger identity used for dedupe.
+**Bounded by whole endings.** The block always tells the head, then the others
+newest first while they fit **24 000 bytes** — about six thousand tokens — and
+counts the rest, never cutting inside a turn's ending; a head whose accounts
+alone would not fit is told without them, saying so. The bytes are counted as
+the turn's run record carries the block, escapes included, so an account that
+quotes code or markup is told in fewer turns rather than taking more of the
+record.
 
-A turn that ended `failed` on a guard breach **is** recorded. "I tried this and
-it did not land" is exactly what the conversation's next turn must not
-rediscover the hard way.
+**Frozen at the first launch.** The turn's first launch writes the read onto the
+run's record it creates — where it was read, the turns its brief told, and the
+head as the turn's base — and every relaunch builds from that record, in any
+box on any node. The rendered block rides the run's parked state, so every
+fresh fallback of every later segment is told the same endings.
 
-### Identity
+**Held on the log.** The first launch records its read on the executor log as the
+turn's `begin`, and from then until the turn's first landed capture or its
+end, **no release takes the base**: not the seat's session budget, not a
+sibling turn's end, not the retention. A turn whose run is gone with no end
+recorded is ended `lost` a day after its last record, which lifts its hold; a
+first launch abandoned once its record was written ends its turn at once.
 
-The row is keyed on `(agent_handle, conversation_key)` and deduped on
-`work_key` — **never** `turn_id`. A turn id names ONE RUN
-([two identities](turn-engine.md#a-turns-two-identities)), and one trigger
-legitimately runs more than once: a turn that broke before reaching outside
-the engine is redelivered, and two nodes completing one trigger mint two runs
-besides. A turn-keyed row would *record* each of those instead of collapsing
-them, and the next turn would read its own reply twice.
+**A turn's end absorbs what its brief told.** Once a turn of the conversation
+that kept a session of its own ends, the turns its brief told — the head it
+was handed, whether or not it could continue it, and the endings it was told —
+are gone from the log, their sessions released: the new turn's session holds
+the head's transcript and its own, and its brief told the rest. A turn the
+bound left out is not absorbed, and the next turn is told it. Siblings are
+told and absorbed, never continued or held.
 
-The row still **carries** the run id beside the key, because that is what it
-renders: the seat reads "(turn a1b2c3d4)" back on its next turn of the thread,
-and that has to name an execution somebody can open.
+## When a turn starts fresh
 
-The dedupe index is **partial**, over `work_key <> ''`: an empty work key is
-the documented "a turn with no ledgerable trigger", and those turns are
-legitimately distinct rows that must never collide onto one.
+The turn is handed the brief a session of its own gets — which still carries
+the endings — and, but for the first, the reason is logged as
+`executor_session_not_continued`:
 
-Separately, each row carries an `entry_id` its writer mints — the row's name
-across the fleet, so [memory replication](seat-ownership.md#a-seats-memory-follows-it)
-can carry the ledger with the seat. It is not a second dedupe: the table's
-`id` is an `AUTOINCREMENT` that starts at 1 on every node and means nothing
-off the one that wrote it, and `entry_id` says nothing about what a row
-*means* — two unkeyed turns get two ids and stay two rows.
-
-`conversation_key` holds the **conversation identity**: the `{source}:{local}`
-grammar of [the event system](event-system.md#inbox-batching--coalescing) —
-`jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`, and `work:task:<id>`
-for a task in Worklet, which is named by its id because its key
-is not one task for ever: two tasks can hold one key, and a move re-keys a task
-without ending its thread. It is the durable
-thread, NOT the partition key the seat's inbox coalesces on. The two are the
-same string for every source but chat, and for chat they differ on exactly one
-surface: **a direct message is one conversation however it is threaded**, so it
-keys on the bare channel (`slack:D1`) while a reply inside it still partitions
-on its thread. Keying this row on the partition instead is what made the ledger
-silently empty on the surface it was written for — a DM's first turn was filed
-under the channel, its thread reply looked up the thread, and the seat re-read
-its own 1:1 line as a first turn.
-
-A trigger with no derivable conversation — a scheduled fire, a task assignment,
-an A2A wake — keys as `event:{uuid}`, which no later message can reproduce;
-those are not recorded, because the row could never be read back.
-
-Two seats legitimately serve one conversation (a lead and its report on one
-ticket) and each keeps its own ledger.
+- the conversation has no head: its first turn, or every earlier turn's
+  session released, absorbed or past the retention;
+- the head was not read: the turn has no conversation key, the switch is off,
+  or the read failed;
+- no member of the seat's chain restores the base's harness, format and
+  release, or the launch picked a member that runs another harness;
+- the base's context fits no capped window of the seat — where it fits one
+  that is full right now, the seat's mail waits instead ([Cost](#cost));
+- the `begin` record did not hold the base, or the log did not answer it
+  within fifteen seconds;
+- the box's harness cannot take the session up, the store no longer holds its
+  object, or the restore fails in the box;
+- or the launch reuses the box its turn's earlier job ran in, whose own
+  session is that job's to continue in place.
 
 ---
 
-## What the next turn sees
+## Where a session lives
 
-The block is resolved **once** at turn start and frozen for the whole turn —
-the same rule the turn-start prefetches follow, so a `self_iterate` loop cannot
-invalidate the provider prompt cache. It rides the **user** message, never the
-frozen system prefix, alongside the prior-work ledger:
+**On the executor log, the same on every data node.** A turn's row — its
+conversation, how it ended, and the session it kept — is a row of the
+`executor` state log, a replicated domain every data node derives identically
+from one ordered stream ([Where state lives](architecture.md#5-where-state-lives));
+a node without `data` reads it through the estate router. The session's bytes are one sealed object in the
+fleet's [object store](object-store.md). So a seat that moves between nodes
+finds its conversations' sessions wherever it lands, and a turn launched on
+any node continues them.
 
-```
-## Earlier in this conversation
-…your prior turns, oldest first…
+**Keyed by the seat and the conversation.** A row is the seat's, under its
+handle, and its conversation's: `conversation_key` is the
+**conversation identity** the trigger was stamped with — the `{source}:{local}`
+grammar of [the event system](event-system.md#inbox-batching--coalescing),
+`jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`, `work:task:<id>` —
+never the partition key the seat's inbox coalesces on. The two are the same
+string for every source but chat, and for chat they differ on exactly one
+surface: **a direct message is one conversation however it is threaded**, so
+a DM's turns key on the bare channel (`slack:D1`) while a reply inside it still
+partitions on its thread, and the reply's turn continues the burst's session.
 
-## Task
-…the newest thing said…
+Two seats serving one conversation — a lead and its report on one ticket —
+each continue their own sessions, never each other's.
 
-## Already done earlier in this turn
-…the within-turn ledger, on iterations after the first…
-```
+## Reading it
 
-All three are headings at the same level, because they are peers: the ask was
-a bare `Task:` label once, and under a structural reading of the message that
-filed the newest thing anybody said *inside* the conversation history above it.
-
-Oldest to newest top to bottom — the ask is the newest thing *said*, and the
-within-turn ledger below it is the newest thing *done*, so the most recent
-context sits nearest the model's answer. The header states the contract
-explicitly: do not repeat a reply already given,
-`(read)` calls may be stale, everything else already took effect, and where
-the history and the task disagree the task wins.
-
-Review does **not** receive the block. It judges *this* turn's record —
-what the executor said it set out to do against what the tool log says ran —
-and its duplicate-delivery rule is already served by the within-turn ledger;
-feeding it prior turns invites judging work this turn never promised.
+A seat's sessions are its **Sessions**, under its profile's Memory tab
+([A seat's profile](../reference/dashboard-design.md#a-seats-profile)), and
+[`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions):
+one row per turn, from its first launch where the turn read its conversation
+and from its first capture otherwise, the latest begun first, with how it
+ended, what it was asked, whether its session is kept and, where not, why —
+and **which launch would continue it** (`continued_by`: `relaunch` for a live
+turn's, `next_turn` for an ended turn's), whether it would and where, decided
+by the decision that launch takes. A row that is not its conversation's head
+names the turn whose session the conversation's next turn is handed instead,
+and `base_turn` names the session a turn's first launch was handed, so a
+conversation's line of sessions reads from row to row. A turn's transcript is
+`GET /agents/{id}/sessions/{turn_id}`. Rows go as the turns that were handed
+them end, with the retention, and with their seat
+([Reading a seat's sessions](code-sandbox.md#reading-a-seats-sessions)).
 
 ---
 
 ## Cost
 
-The block is re-sent on every executor and reviewer round, and every round's
-input is charged to the token budget whole, cache reads included, so its cost
-multiplies by rounds used. Two
-things bound that product, and which one applies where is the whole design:
+**A continued turn sends its session's context first**, and every request of its
+run carries that context, mostly read from the prompt cache and every token of
+it counted against the seat's windows. It is bounded by the harness's own
+compaction — Claude Code's pinned window of 100,000 tokens, OpenCode's near its
+model's own — so a conversation's session, however many turns it spans, never
+makes a request much larger than one turn's
+([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)).
 
-- **`max_entries`, at write time** — how many turns of a conversation are kept
-  at all. A chat DM is one conversation for the whole channel, so its ledger
-  never stops receiving entries.
-- **`ledger.InjectedMaxChars` (24 000 bytes), at render time** — how much
-  reaches one prompt. Past it the **newest entries render whole** in three
-  quarters of the room, and the older ones are **condensed** by the seat's
-  auxiliary model into one account in the last quarter, under a heading that
-  says how many turns it stands for and that it is a rewrite. Only where no
-  rewrite can be had are the older entries left out — and the block then says
-  how many. The newest always survives however long it is. An entry carries
-  the seat's own reply, which is unbounded — a turn that produced a document
-  puts that document in the row — so without this a busy conversation
-  eventually exceeds the model's context and the turn cannot run at all.
-  Dropping was the old behaviour, and it told a seat on a long thread that it
-  had delivered nothing in the turns it could no longer see.
+**Its first launch is held to that context.** The launch needs the larger of
+`turn_engine.executor_min_budget_tokens` and the base's context with the lead
+and the brief beside it. A base no capped window can ever carry starts fresh; a
+first launch refused only because a window is full right now **parks the seat's
+mail on that figure** until a window has room for it, as a held resume does
+([Budgets and Spend](../guides/budgets-and-spend.md#budget-windows)).
 
-Never a cut *inside* an entry, and never at write time. The stored row is the
-only copy of that turn, and a half-recorded reply reads as the whole of what
-the seat said — which is how a seat repeats a reply it cannot see it already
-gave. Two config knobs (`injected_max_entries`, `injected_max_chars`) used to
-be documented here; neither was ever threaded to a caller, so both validated,
-defaulted and described a truncation that did not happen. The `prompt.size`
-telemetry event is where the delta shows up fleet-wide — read its
-`user_bytes`, which is where this block lands, rather than its approximation:
-that figure also carries the tool-definition array, which is usually larger
-than the ledger and moves for reasons of its own.
-
-Against that: the re-recon it displaces costs the read itself, on every turn
-of the conversation — and recovers only what was *posted*, never the agent's own
-intent or the results it gathered.
+**The endings ride every brief of the turn**, at most 24 000 bytes, and nothing
+else is added: a continued session is not re-told what it holds.
 
 ---
 
@@ -275,116 +215,54 @@ intent or the results it gathered.
 ```yaml
 turn_engine:
   conversation_session:
-    enabled: true            # the feature gate — a live kill switch; off also
-                             #   keeps no executor session (code-sandbox.md)
-    max_entries: 20          # kept per conversation, trimmed at write time.
-                             #   What ONE PROMPT shows is bounded separately,
-                             #   at render, by ledger.InjectedMaxChars — see
-                             #   Cost above
-    retention_days: 30       # matches the event store's own horizon
-    max_bytes_per_seat: 67108864  # object-store bytes one seat's captured
-                             #   executor sessions may hold (33 MiB..64 GiB)
+    enabled: true                 # keep and continue sessions, and tell a
+                                  #   conversation's next turn how its earlier
+                                  #   turns ended; a live kill switch
+    retention_days: 30            # days a seat's sessions are kept past their
+                                  #   turn's last record, read at every pass
+    max_bytes_per_seat: 67108864  # object-store bytes one seat's sessions
+                                  #   may hold (33 MiB..64 GiB)
 ```
 
 Nested under `turn_engine` rather than beside it, which is load-bearing: it
-rides the live the turn-engine settings cell, so it hot-reloads through the
-existing turn-engine diff handler with no extra apply-config wiring. Setting
-`enabled: false` restores the previous prompt exactly — which is why it is
-safe to leave on — and keeps no executor launch's harness session either
-([Code Sandbox](code-sandbox.md#each-launchs-session-kept)): nothing is captured,
-while how each turn ended is still recorded on the executor log.
+rides the live turn-engine settings cell, so it hot-reloads through the
+existing turn-engine diff handler with no extra apply-config wiring.
 
-`retention_days` is the one retention an operator sets rather than the engine
-(a company running quarter-long tickets has a real reason to keep more). It is
-read when the maintenance worker is built, so a change lands at the next
-process start, and it is floored at the sweep interval so a hostile value
-cannot undercut the worker's own invariant.
+**`enabled: false`** keeps no executor launch's session — nothing is captured
+or stamped ([Code Sandbox](code-sandbox.md#each-launchs-session-kept)) —
+continues none, reads no conversation's head and tells no turn how its
+conversation's earlier turns ended: one switch for everything a conversation
+carries between turns. How each turn ended is still recorded on the executor
+log, so turning it back on finds the conversation's endings.
 
-The same two settings bound each seat's captured **executor sessions**: the
-harness's own transcript of a turn, sealed into the
-[object store](object-store.md) and named by the turn's row of the `executor`
-log
-([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)),
-so a later launch of the same turn, in any box on any node, continues it
-([Code Sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)); a
-conversation's next turn starts a session of its own. The trash reaper deletes a session untouched for
-`retention_days`, never one whose turn's run is still live, reading the value
-off the revision the fleet runs at every hourly pass rather than at start; a
-turn that never ended, a day past its last capture with no run of it live, it
-first ends as `lost`, so a lost end holds the seat's budget for a day rather
-than for the whole retention.
-`max_bytes_per_seat` is the most one seat's sessions may hold: past it a
+**`retention_days`** is how long a seat's sessions are kept past their turn's
+last record: the trash reaper deletes a row, and the session it names, that no
+later turn took up first, reading the value off the revision the fleet runs at
+every hourly pass — a revision that moves it is honoured at the next pass, not
+the next start — and never deletes one whose turn's run is still live or whose
+session a live turn holds. A turn that never ended, a day past its last record
+with no run of it live, it first ends as `lost`, so a lost end holds the seat's
+budget for a day rather than for the whole retention. A conversation quiet for
+longer than the retention starts its next turn fresh.
+
+**`max_bytes_per_seat`** is the most one seat's sessions may hold: past it a
 capture releases the seat's oldest ended sessions first, keeping how each turn
 ended, and a capture the seat's live turns leave no room for is refused, so
-that turn's next launch starts fresh. The default, 64 MiB, holds a live turn's
-session at its 32 MiB bound beside about twenty ordinary ones (a day's work
-compresses to one or two mebibytes); the least it accepts, 33 MiB, is one
-session at that bound once sealed, and every seat's sessions share the object
-store with the company's files, so a company of forty seats or more on the
-default `nats` bucket belongs on S3 (`store.objects.backend`).
-
----
-
-## Storage
-
-One row per recorded turn in `conversation_sessions`, deduped by a plain
-partial unique index over `work_key <> ''` and an ordinary
-`ON CONFLICT DO NOTHING` (`internal/store/schema/node/0005_turn_ledgers.sql`).
-
-`episodes` reaches the same guarantee by the other route — a NULLable
-`work_key` under a plain unique index, so `ON CONFLICT` can name it
-(`0002_learning.sql`). Two shapes for one rule, and the difference is only
-what `ON CONFLICT` can target: aiming it at a partial index is a parse error
-unless the predicate is repeated verbatim.
-
-Bounded twice: `max_entries` trims on write (a chat DM keys on the whole
-channel rather than a thread, so its ledger never stops receiving entries),
-and the [maintenance worker](scaling.md) sweeps past `retention_days`.
-
-Every field of a recorded entry is stored **verbatim** apart from the tool
-arguments and errors past the [ledger budgets](turn-engine.md#what-the-ledger-budgets-and-why),
-which are rewritten to fit — never cut — or, where no rewrite can be had, named
-by size and digest. This row is the store's only record of
-the turn, so a field cut at write time would not be a shortened rendering — it
-would be the only copy. Bounding what a
-*prompt* shows is a separate decision, made at render time; see Cost above.
-
-**Failure never stops a turn.** A write that fails is swallowed — it happens on
-a completed turn's tail, where there is nothing left to tell. A read that fails
-*raises*, and the caller decides: the turn engine renders no history (exactly
-the pre-ledger prompt) and logs that it could not read it. Swallowing it in the
-store would make "unreadable" and "nothing said yet" one answer, and a seat
-would run without its history with nothing anywhere to say why.
-
-The ledger lives in the store of the node running the seat, which every node
-opens, so it is never replicated: a seat that moves between nodes simply arrives
-with no history, which is the same fail-open answer.
-
----
-
-## Reading it
-
-**There is no read surface, deliberately.** The ledger is prompt context: the
-engine renders it into the next turn of the same conversation and nothing else
-consumes it.
-
-A dashboard tab and a `/conversations` endpoint did exist, and both were
-removed. They were a viewer for somebody ELSE's threads — a Slack channel, a
-Jira issue — reconstructed from what the engine happened to record about them,
-always a worse version of the thread than the surface it lives on, and a
-conversations screen in this product is meant to be Crewlet's own messaging
-when there is one to show. Keeping a half-view until then would have promised
-a chat system the engine does not have.
-
-The entries reach a person through the prompt they shape, and through the
-`conversation_key` shown on a phase, which names the external thread a turn
-served so a reader can go to it.
+that turn's next launch starts fresh. A session a live turn's first launch was
+handed is held until that turn keeps a session of its own or ends, so it
+counts beside the seat's live turns for as long. The default, 64 MiB, holds a
+live turn's session at its 32 MiB bound beside about twenty ordinary ones (a
+day's work compresses to one or two mebibytes); the least it accepts, 33 MiB,
+is one session at that bound once sealed, and every seat's sessions share the
+object store with the company's files, so a company of forty seats or more on
+the default `nats` bucket belongs on S3 (`store.objects.backend`).
 
 ---
 
 ## Related
 
-- [Turn Engine](turn-engine.md) — the phases, and the within-turn prior-work ledger
+- [Code Sandbox](code-sandbox.md) — where a session is kept, continued and read
+- [Turn Engine](turn-engine.md) — the phases, the within-turn prior-work ledger, and how a turn ends on the executor log
 - [Agent Learning](agent-learning.md) — episodes, the diary, counterparty profiles
 - [Event System](event-system.md) — the two keys, and inbox coalescing
-- [Scaling Out](scaling.md) — why shared state lives in the coordination slot
+- [Architecture](architecture.md#5-where-state-lives) — where state lives, and the replicated domains the executor log is one of

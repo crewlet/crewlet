@@ -9,12 +9,11 @@
 // # A seat's memory is keyed on its handle or its agent id
 //
 // Every table here that names its seat by a handle — episodes.agent_handle,
-// counterparty_profiles.observer_handle and subject_handle, the two skill
-// tables' agent_handle, and the conversation ledger's
-// conversation_sessions.agent_handle in internal/agent/ledger/ledgerstore —
-// holds its [org.Role.Handle], and the diary and the onboarding marker hold
-// the agent id derived from it. A handle is immutable (ADR-0013): a document
-// that changes one has created a new seat, with no memory.
+// counterparty_profiles.observer_handle and subject_handle, and the two skill
+// tables' agent_handle — holds its [org.Role.Handle], and the diary and the
+// onboarding marker hold the agent id derived from it. A handle is immutable
+// (ADR-0013): a document that changes one has created a new seat, with no
+// memory.
 package learning
 
 import (

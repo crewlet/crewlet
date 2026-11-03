@@ -52,8 +52,6 @@ type Question string
 const (
 	// QuestionMemory is a seat's memory: [Memory].
 	QuestionMemory Question = "memory"
-	// QuestionThreads is a seat's conversation ledger: [Threads].
-	QuestionThreads Question = "threads"
 	// QuestionOverview is several seats' totals at once: [Overview]. The
 	// one question addressed to MANY incarnations — every holder named in
 	// the request's `seats` answers for its own.
@@ -66,8 +64,7 @@ const (
 // a successor added — is answered that it cannot, which the asker reports as
 // unavailable naming the reason.
 func (q Question) Valid() bool {
-	return q == QuestionMemory || q == QuestionThreads || q == QuestionOverview ||
-		q == QuestionEpisode
+	return q == QuestionMemory || q == QuestionOverview || q == QuestionEpisode
 }
 
 // Seat is one seat a read is about, resolved by the asker from the company it
@@ -75,8 +72,8 @@ func (q Question) Valid() bool {
 //
 // TWO NAMES, because a seat's memory is keyed two ways: ID is its derived
 // agent id (ADR-0013), which its lease and its diary and onboarding marker are
-// keyed by; Handle is its handle, which its episodes, skills, profiles and
-// conversation ledger are keyed by.
+// keyed by; Handle is its handle, which its episodes, skills and profiles are
+// keyed by.
 type Seat struct {
 	ID     uuid.UUID `json:"id"`
 	Handle string    `json:"handle"`
@@ -179,26 +176,6 @@ func (r *Reader) Episode(ctx context.Context, seat Seat, id string) (EpisodeDeta
 	return out, nil
 }
 
-// Threads is one seat's conversation ledger, answered by its holder.
-func (r *Reader) Threads(ctx context.Context, seat Seat, conversation string, limit int) (Threads, error) {
-	req := request{
-		Version: WireVersion, Question: QuestionThreads, Seat: seat, Limit: limit,
-		Conversation: conversation,
-	}
-	var out Threads
-	holder, err := r.read(ctx, req, &out, func(ctx context.Context) (any, error) {
-		return r.Local.Threads(ctx, seat, conversation, limit)
-	})
-	if err != nil {
-		return Threads{}, err
-	}
-	if holder == "" {
-		return emptyThreads(seat.Handle, HolderNone), nil
-	}
-	out.HeldBy = holder
-	return out, nil
-}
-
 // read routes one question to the seat's holder and decodes its answer into
 // out, returning the holder's NODE id — or "" when no node holds the seat,
 // with out untouched.
@@ -289,12 +266,11 @@ func (r *Reader) ask(ctx context.Context, req request, owner string, out any) (s
 // its store by the seat's id and handle and never re-resolves a handle against
 // a chart of its own, which may be a different reading from the asker's.
 type request struct {
-	Version      int      `json:"v"`
-	Question     Question `json:"q"`
-	Seat         Seat     `json:"seat,omitzero"`
-	Owner        string   `json:"owner,omitempty"`
-	Limit        int      `json:"limit,omitempty"`
-	Conversation string   `json:"conversation,omitempty"`
+	Version  int      `json:"v"`
+	Question Question `json:"q"`
+	Seat     Seat     `json:"seat,omitzero"`
+	Owner    string   `json:"owner,omitempty"`
+	Limit    int      `json:"limit,omitempty"`
 	// SkillsOrder is the order a [QuestionMemory] read lists the skills in.
 	SkillsOrder learning.SkillOrder `json:"skills_order,omitempty"`
 	// Episode names the one episode a [QuestionEpisode] read is about.
@@ -356,8 +332,6 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []uuid.U
 		case QuestionMemory:
 			answer, err = local.Memory(ctx, req.Seat,
 				MemoryQuery{Limit: req.Limit, Skills: req.SkillsOrder})
-		case QuestionThreads:
-			answer, err = local.Threads(ctx, req.Seat, req.Conversation, req.Limit)
 		case QuestionEpisode:
 			answer, err = local.Episode(ctx, req.Seat, req.Episode)
 		}

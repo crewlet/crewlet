@@ -1839,7 +1839,7 @@ type Stream struct {
 	// every retention delete of them is recorded before it is applied.
 	//
 	// UNSET TAKES 512 MiB ([DefaultExecutorLogMaxBytes]), sized by the turns
-	// the company's seats run rather than by the disk: about eighteen days of
+	// the company's seats run rather than by the disk: about seventeen days of
 	// a completely blocked trim at the reference company's rate. Where the
 	// broker is short it is scaled down as far as its 64 MiB floor, so a
 	// fresh node reserves only the floor for it. It shares the state logs'

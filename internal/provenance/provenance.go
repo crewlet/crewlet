@@ -118,6 +118,15 @@ const (
 	// reached nobody through either, and a reader auditing a transcript has
 	// to tell it from both. Every door labels it by one rule ([Executor]).
 	SourceExecutor Source = "executor"
+
+	// SourceTurnEnding is how an earlier turn of a conversation ended, as the
+	// engine recorded it on the executor log and tells the conversation's
+	// next turn: what that turn was asked, what its reviewer said landed,
+	// what its executor said blocked it, why whoever stopped it did, and the
+	// engine's own account of what failed or was not kept — each quoting
+	// what a box, a tool or a person wrote. A reader auditing a transcript
+	// has to tell an earlier turn's account from anything this turn read.
+	SourceTurnEnding Source = "turn_ending"
 )
 
 // Sources are every surface.
@@ -126,6 +135,7 @@ var Sources = []Source{
 	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
 	SourceArtifactRow, SourceChangeNote, SourceAlert, SourceNotification,
 	SourceA2AMessage, SourceExecutor, SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
+	SourceTurnEnding,
 }
 
 // Valid reports whether s is one of [Sources].

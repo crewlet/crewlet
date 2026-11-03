@@ -26,9 +26,8 @@ import (
 // surface writes ([SurfaceWriteDomains]), so the person's write surfaces have
 // no refusal of it to class and no object of it to name, and its writer facade
 // ([ExecutorWrites]) is the engine's alone, which a gate over the packages
-// serving a person or a model holds. (No launch records a turn's first read
-// yet: the operation is declared, and the engine's first launch is to take it
-// up.)
+// serving a person or a model holds. A turn's first launch records its first
+// read through it, as its captures and its end are recorded.
 //
 // # Each write is the same operation however often it is asked
 //

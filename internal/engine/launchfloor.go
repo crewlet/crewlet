@@ -31,10 +31,13 @@ import (
 // window that leaves less than it ([meter.starved]) and says so in those words
 // ([starvedReason]). Read anywhere as the static floor, a resume refused below
 // its own found no window starved, was not held, and was retried into the same
-// refusal. A continued launch is only ever a resumed segment's — a relaunch —
-// so its floor is HELD there, never parked: the dispatcher's park holds a
-// seat's mail for its turns' first launches, which continue no session
-// ([Engine.budgetPark]).
+// refusal. A relaunch's floor is HELD on its resumed segment, which has no mail
+// to park; a turn's FIRST launch, which continues the session its
+// conversation's last turn left where it can, is refused on its dispatch, and
+// the dispatcher PARKS the seat's mail on the floor that launch was refused
+// below ([Engine.budgetPark]) — parked on the static floor, it found the window
+// not starved and NAKed the delivery into the same refusal until the broker
+// dead-lettered it.
 //
 // AND A FLOOR NO WINDOW CAN EVER LEAVE ROOM FOR IS NO FLOOR TO WAIT ON: a
 // session whose context with its brief is past the smallest ceiling a seat's or

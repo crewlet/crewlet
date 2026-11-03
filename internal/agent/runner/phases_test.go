@@ -308,12 +308,13 @@ type buildOpts struct {
 	// MEASURED can make it carry multi-byte runes.
 	task string
 
-	// context is the turn's frozen prefetch, and conversation its
-	// prior-turns block, for the cases about what reaches a prompt rather
-	// than what a phase decides. A collection is handed neither, as the
-	// engine's is: its runner takes them from the park ([collect]).
-	context      prefetch.Blocks
-	conversation string
+	// context is the turn's frozen prefetch, and endings how its
+	// conversation's earlier turns ended, for the cases about what reaches a
+	// prompt rather than what a phase decides. A collection is handed
+	// neither, as the engine's is: its runner takes them from the park
+	// ([collect]).
+	context prefetch.Blocks
+	endings string
 	// onPhase is the working indicator's seam. See [runner.Config.OnPhase].
 	onPhase func(phase.Phase)
 	// register adds tools beyond the fixture's standard catalogue, for a
@@ -419,25 +420,25 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		launcher = &playLauncher{}
 	}
 	r, err := runner.New(runner.Config{
-		Seat:         prompts.Seat{Org: organization, Role: role},
-		Registry:     reg,
-		Models:       models,
-		Context:      opts.context,
-		Conversation: opts.conversation,
-		Task:         task,
-		Reply:        waiting,
-		Launcher:     launcher,
-		Resume:       opts.resume,
-		Fence:        opts.fence,
-		Publisher:    opts.pub,
-		OnPhase:      opts.onPhase,
-		Steer:        opts.steer,
-		Subagent:     opts.subagent,
-		Ask:          opts.ask,
-		Turn:         runTurn,
-		Budget:       opts.budget,
-		Compact:      opts.compact,
-		Sessions:     sessions,
+		Seat:      prompts.Seat{Org: organization, Role: role},
+		Registry:  reg,
+		Models:    models,
+		Context:   opts.context,
+		Endings:   opts.endings,
+		Task:      task,
+		Reply:     waiting,
+		Launcher:  launcher,
+		Resume:    opts.resume,
+		Fence:     opts.fence,
+		Publisher: opts.pub,
+		OnPhase:   opts.onPhase,
+		Steer:     opts.steer,
+		Subagent:  opts.subagent,
+		Ask:       opts.ask,
+		Turn:      runTurn,
+		Budget:    opts.budget,
+		Compact:   opts.compact,
+		Sessions:  sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -846,7 +847,7 @@ func TestACollectionHandedASecondContextIsRefused(t *testing.T) {
 	resume := &runner.Resume{State: execstate.State{Version: execstate.Version, Round: 1}}
 	for name, cfg := range map[string]runner.Config{
 		"prefetched blocks": {Context: prefetch.Blocks{PersonalMemory: "- fetched again"}},
-		"conversation":      {Conversation: "### Turn 1\nfetched again"},
+		"endings":           {Endings: "## How this conversation's earlier turns ended\nread again"},
 	} {
 		cfg.Registry, cfg.Models, cfg.Launcher, cfg.Resume, cfg.Sessions =
 			tools.NewRegistry(), &phase.Registry{}, &playLauncher{}, resume, sessions

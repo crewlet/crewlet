@@ -3,13 +3,12 @@
 // # Why a read has to be routed
 //
 // A seat's memory — its diary, its episodes, the skills it drafted, what it
-// learned about the people it works with, whether it onboarded, and the ledger
-// of what it said in each conversation — is written to the store of the node
-// RUNNING the seat. memsync carries every row across the fleet on a compacted
-// changelog, and a node hydrates a seat's rows when placement hands it the
-// seat. So every node that ever held a seat keeps a copy of its memory, and
-// exactly one keeps it CURRENT: the holder. The copy on any other node is what
-// the seat knew the day it left, or nothing at all.
+// learned about the people it works with, and whether it onboarded — is
+// written to the store of the node RUNNING the seat. memsync carries every row
+// across the fleet on a compacted changelog, and a node hydrates a seat's rows
+// when placement hands it the seat. So every node that ever held a seat keeps
+// a copy of its memory, and exactly one keeps it CURRENT: the holder. The copy
+// on any other node is what the seat knew the day it left, or nothing at all.
 //
 // A screen that read whichever node served the request therefore described a
 // seat's memory as of the last time that node happened to run it — a diary

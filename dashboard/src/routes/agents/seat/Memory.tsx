@@ -1,18 +1,18 @@
 /**
- * What a seat remembers, what it has said on surfaces the engine does not own,
- * and — its Sessions, last (`Sessions.tsx`) — what its harness wrote on each
- * turn.
+ * What a seat remembers and — its Sessions, last (`Sessions.tsx`) — what its
+ * harness wrote on each turn and how each turn ended, which is also what a
+ * conversation's next turn continues and is told.
  *
  * # Read from the node that holds the seat
  *
  * A seat's memory is written to the store of the node running it, and a
  * compacted changelog carries it to whichever node holds the seat next — so
  * the holder's copy is the one kept current, and any other node's may be a
- * placement behind. The memory and the threads here are the HOLDER'S
- * (`held_by`), asked across the fleet; a seat no node holds answers `none`,
- * with nothing in it, and the tab says why rather than drawing a seat that
- * remembers nothing. The Sessions are not: their rows are the replicated
- * estate's and their bytes the fleet's object store's, so any node answers.
+ * placement behind. The memory here is the HOLDER'S (`held_by`), asked across
+ * the fleet; a seat no node holds answers `none`, with nothing in it, and the
+ * tab says why rather than drawing a seat that remembers nothing. The Sessions
+ * are not: their rows are the replicated estate's and their bytes the fleet's
+ * object store's, so any node answers.
  *
  * # A header counts the whole, a list shows the newest
  *
@@ -23,27 +23,16 @@
  * two cannot silently disagree.
  */
 
-import { Callout, Card, CodeBlock, EmptyState, Skeleton, TableKeyCell, Tag } from "@crewlethq/ui";
-import {
-  CircleAlertGlyph,
-  ClockGlyph,
-  MessageSquareGlyph,
-  UsersGlyph,
-  ZapGlyph,
-} from "@crewlethq/icons/glyphs";
-import { useLayoutEffect, useRef, useState } from "react";
-import { href, useParam } from "~/app/router.tsx";
-import { reveal } from "~/lib/scroller.ts";
+import { Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import { UsersGlyph, ZapGlyph } from "@crewlethq/icons/glyphs";
+import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { cutThen, DiaryCard, EpisodesCard, heldWords, pageWords } from "~/components/memory.tsx";
-import { conversationLabel, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
-import { plainText } from "~/lib/markdownText.ts";
+import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
-import { keepInView } from "./keepInView.ts";
 import { Sessions } from "./Sessions.tsx";
 import type { CounterpartyProfile } from "~/contract/memory.ts";
-import type { ConversationEntry, ConversationsAnswer } from "~/protocol/index.ts";
 
 export function Memory({ seat, now }: { seat: Seat; now: number }) {
   const handle = seat.handle;
@@ -129,194 +118,10 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
           </>
         )}
       </QueryState>
-      <Conversations seat={seat} now={now} />
       <Sessions seat={seat} now={now} />
     </div>
   );
 }
-
-/**
- * Every thread this seat holds a record in, and what it said there.
- *
- * The conversation ledger is what stops a seat replying twice in one thread —
- * the engine's only account of what a seat said on a surface it does not own.
- * WHICH THREAD IS OPEN is a filter (`conversation=`) rather than a section:
- * opening one replaces the history entry, so Back leaves the seat rather than
- * walking every thread the reader glanced at.
- *
- * # Choosing a thread shows it
- *
- * The list is a seat's every thread — twenty-odd rows, 1,700px drawn whole —
- * and choosing one is the section's only interaction, so what it opens has to
- * be on screen when it opens. Beside the list (a wide column) the list is
- * BOUNDED to the scroller's view — the band the detail sticks in — and scrolls
- * inside itself, handing the wheel back to the page at either end, and the
- * detail is STICKY under the page's top, so a thread chosen near the list's
- * end opens beside the row that was pressed rather than a screen above it. Stacked (a phone),
- * the detail is below the whole list, so choosing a thread SCROLLS the detail
- * into view and moves focus to its heading ([reveal]) — the row's
- * highlight was the only feedback, 1,900px above what it had opened. The rule
- * is width-free on purpose: the detail is revealed whenever it is not on
- * screen, which is never on a wide column and always on a phone.
- */
-function Conversations({ seat, now }: { seat: Seat; now: number }) {
-  const [thread, setThread] = useParam("conversation", "", "filter");
-  // SET BY A PRESS, read once the chosen thread has rendered: a thread named in
-  // the address the page was opened on is not a reader's gesture, and the page
-  // opens at its top rather than jumping to it.
-  const chose = useRef(false);
-  const list = useRef<HTMLDivElement>(null);
-  const threads = useQuery(
-    "conversations",
-    { handle: seat.handle, ...(thread ? { conversation: thread } : {}) },
-    { enabled: seat.handle !== "" },
-  );
-  const data = threads.data;
-  const rows = data?.conversations ?? [];
-  // THE CHOSEN ROW STAYS IN ITS LIST'S VIEW, scrolled within the list alone —
-  // `scrollIntoView` would move the page too — ONCE IT IS DRAWN: a thread the
-  // address named on opening has no row until the threads are answered, which
-  // is after the first render, so this waits for the row rather than for the
-  // choice, and keeps each choice in view once.
-  const keptFor = useRef("");
-  const drawn = rows.some((row) => row.key === thread);
-  useLayoutEffect(() => {
-    if (!thread) {
-      keptFor.current = "";
-      return;
-    }
-    if (!drawn || keptFor.current === thread) return;
-    keptFor.current = thread;
-    const box = list.current;
-    const row = box?.querySelector<HTMLElement>('[aria-pressed="true"]');
-    if (box && row) keepInView(box, row);
-  }, [thread, drawn]);
-  useLayoutEffect(() => {
-    if (!thread || !chose.current) return;
-    chose.current = false;
-    reveal(document.getElementById(THREAD_DETAIL_ID), { focus: true });
-  }, [thread]);
-  // THE ANSWER IN HAND WHEN A THREAD IS CHOSEN IS THE LAST THREAD'S: the
-  // choice asks again with the new `conversation=`, and until that answer
-  // arrives the one in hand still carries the turns of the thread before —
-  // which, drawn under the new thread's name, read as its turns. So a thread's
-  // turns are drawn only from an answer read since it was chosen: which answer
-  // was in hand at the choice is kept from the render that saw it.
-  const [chosenOver, setChosenOver] = useState<{
-    thread: string;
-    answer: ConversationsAnswer | null;
-  }>({ thread, answer: null });
-  if (chosenOver.thread !== thread) setChosenOver({ thread, answer: data });
-  const turns = data !== null && data !== chosenOver.answer ? data : null;
-  return (
-    <section className="col gap-2" aria-labelledby="prof-conversations">
-      <h3 id="prof-conversations" className="prof-section-title">
-        Conversations
-      </h3>
-      <QueryState
-        error={threads.error}
-        refusal={threads.refusal}
-        loading={threads.loading && !data}
-      >
-        <div className="split thread-split">
-          <Card padding="none">
-            <Card.Header
-              icon={<MessageSquareGlyph size="sm" />}
-              count={data?.conversations_total}
-              subtitle={
-                data ? (pageWords(rows.length, data.conversations_total) ?? undefined) : undefined
-              }
-            >
-              <Card.Title as="h4">Threads</Card.Title>
-            </Card.Header>
-            {rows.length ? (
-              <div className="list thread-list" ref={list}>
-                {rows.map((row) => (
-                  // THE KEY HAS THE ROW: it is the thread's only identity, so
-                  // it takes the whole width and what is known about the
-                  // thread is the caption under it. Beside a tag and a full
-                  // timestamp it kept 78px of a 300px list and every row read
-                  // `work:ENG-…` — five threads nobody could tell apart.
-                  <button
-                    key={row.key}
-                    type="button"
-                    className={`thread-entry as-row${row.key === thread ? " selected" : ""}`}
-                    aria-pressed={row.key === thread}
-                    title={row.key}
-                    onClick={() => {
-                      chose.current = row.key !== thread;
-                      setThread(row.key === thread ? "" : row.key);
-                    }}
-                  >
-                    <TableKeyCell value={row.key} text={conversationLabel(row.key)} />
-                    <span className="t-caption">
-                      {plural(row.turns, "turn")} ·{" "}
-                      <span title={fmtDateTime(row.last_at)}>{relTime(row.last_at, now)}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                size="compact"
-                icon={<MessageSquareGlyph size={32} />}
-                title="No conversations recorded"
-                description={
-                  data?.held_by === "none"
-                    ? "No node is running this seat."
-                    : "Threads it takes part in appear here."
-                }
-              />
-            )}
-          </Card>
-
-          <Card padding="none" className="thread-detail-card">
-            <Card.Header
-              icon={<ClockGlyph size="sm" />}
-              // A COUNT IS A FACT ABOUT THE THREAD THE READER OPENED: with
-              // none open the answer carries no entries, and a 0 there would
-              // be a quantity stated about a thread nobody had named.
-              count={thread ? turns?.entries?.length : undefined}
-              // WHICH THREAD, named where the turns are: on a phone the list
-              // that says it is a screen above.
-              subtitle={thread ? conversationLabel(thread) : undefined}
-            >
-              <Card.Title as="h4" id={THREAD_DETAIL_ID} tabIndex={-1}>
-                Thread turns
-              </Card.Title>
-            </Card.Header>
-            {!thread ? (
-              <EmptyState
-                size="compact"
-                icon={<ClockGlyph size={32} />}
-                title="Nothing selected"
-                description="Choose a thread."
-              />
-            ) : !turns ? (
-              <Skeleton variant="text" rows={3} label="Loading this thread's turns" />
-            ) : turns.entries?.length ? (
-              <div className="list">
-                {turns.entries.map((entry, i) => (
-                  <ThreadTurn key={entry.turn_id || i} entry={entry} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                size="compact"
-                icon={<ClockGlyph size={32} />}
-                title="No turns in this thread"
-                description="Older turns in this thread were trimmed."
-              />
-            )}
-          </Card>
-        </div>
-      </QueryState>
-    </section>
-  );
-}
-
-/** The open thread's heading, which a press [reveal]s and focuses. */
-const THREAD_DETAIL_ID = "prof-thread-turns";
 
 /** A counterparty's stable identity, for a key and for a link.
  *
@@ -374,7 +179,7 @@ export function CounterpartyRow({ profile, now }: { profile: CounterpartyProfile
         <span className="spacer" />
         <span className="t-caption">{plural(profile.interactions, "interaction")}</span>
         {/* RELATIVE, like every other list on the profile (Episodes,
-            Threads), the instant on hover: a full timestamp with seconds was
+            Sessions), the instant on hover: a full timestamp with seconds was
             the one row that read differently. */}
         {profile.last_updated_at && (
           <span className="t-caption" title={fmtDateTime(profile.last_updated_at)}>
@@ -397,63 +202,6 @@ export function CounterpartyRow({ profile, now }: { profile: CounterpartyProfile
         <p className="t-caption">
           Last confirmed {fmtDateTime(profile.last_corroborated_at)}. No longer learning about them.
         </p>
-      )}
-    </div>
-  );
-}
-
-/** One recorded turn in one conversation.
- *
- *  `reply` AND `unsent` ARE NOT THE SAME FIELD RENDERED TWICE. Both carry the
- *  turn's final artifact, and which one holds it is the whole record of
- *  whether anybody received it: a turn can end with real work done and no way
- *  to say so, and a panel that drew the two alike would show work announced
- *  to nobody as announced — the confusion that made a seat answer a follow-up
- *  against a message it had never sent.
- */
-export function ThreadTurn({ entry }: { entry: ConversationEntry }) {
-  const trigger = entry.trigger ? plainText(entry.trigger) : "";
-  return (
-    <div className="thread-entry">
-      <div className="row gap-1 wrap">
-        {entry.decision && <Tag appearance="outline">{entry.decision}</Tag>}
-        <span className="spacer" />
-        {entry.turn_id && (
-          <a className="t-link mono t-caption" href={href(["live", "turns", entry.turn_id])}>
-            turn
-          </a>
-        )}
-        <span className="t-caption">{entry.at ? fmtDateTime(entry.at) : ""}</span>
-      </div>
-      {/* WHAT WOKE IT, as a line of prose rather than a chip: the trigger is
-          the brief the engine wrote the seat — markdown, often a paragraph
-          ("## Coalesced updates (5 events)…") — and a chip drew the syntax
-          raw and cut the second tag off at the card's edge. Stripped to its
-          words (`plainText`), two lines, the whole on hover. */}
-      {trigger && (
-        <p className="t-caption clamp" title={trigger}>
-          {trigger}
-        </p>
-      )}
-      {entry.intent && <p className="t-body">{entry.intent}</p>}
-      {entry.reply && <p className="t-caption">{entry.reply}</p>}
-      {entry.unsent && (
-        // THE ONE THAT REACHED NOBODY, marked.
-        <Callout variant="warning" icon={<CircleAlertGlyph size="md" />}>
-          <strong>Nothing was delivered.</strong> {entry.unsent}
-        </Callout>
-      )}
-      {entry.completed_work && <p className="t-caption">{entry.completed_work}</p>}
-      {/* A BLOCK, NOT A BARE `pre`: a long tool log is a scroll container,
-          and `focusWhenScrollable` names and focuses the ones that scroll so
-          a keyboard can reach them. */}
-      {entry.tool_calls && (
-        <CodeBlock
-          plain
-          focusWhenScrollable
-          label="Tool calls in this turn"
-          code={entry.tool_calls}
-        />
       )}
     </div>
   );

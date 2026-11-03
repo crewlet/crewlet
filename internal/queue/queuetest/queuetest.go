@@ -1031,13 +1031,17 @@ func (b *batchJournal) staysAt(t *testing.T, want int, what string) {
 // Every unbounded `<-ch` in a shared suite is a ten-minute timeout and a
 // goroutine dump for whichever backend author trips it, on a day they were
 // debugging something else. rescue runs first on the failure path, to unblock
-// whatever the suite is holding so the process can still exit and report.
+// whatever the suite is holding so the process can still exit and report; a
+// case that holds nothing a cleanup will not release passes nil, which a
+// timeout must report rather than call.
 func awaitSignal(t *testing.T, ch <-chan struct{}, what string, rescue func()) {
 	t.Helper()
 	select {
 	case <-ch:
 	case <-time.After(settleFor):
-		rescue()
+		if rescue != nil {
+			rescue()
+		}
 		// The case closes some of these channels itself, so a signal that
 		// never came says nothing about what was delivered.
 		timedOut(t, what, verdictUnmet, nil)

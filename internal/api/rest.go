@@ -44,13 +44,11 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/agents/{id}/memory", what: "agent_memory", path: map[string]string{"id": "id"}},
 	// One episode WHOLE, under the memory that lists its opening.
 	{method: "GET", pattern: "/agents/{id}/memory/episodes/{episode}", what: "agent_episode", path: map[string]string{"id": "id", "episode": "episode"}},
-	// One seat's external threads. Under /agents/{id}/ beside its memory,
-	// because it is the same kind of fact — what this seat has said and
-	// remembered — rather than a company-wide listing.
-	{method: "GET", pattern: "/agents/{id}/conversations", what: "conversations", path: map[string]string{"id": "handle"}},
-	// One seat's EXECUTOR SESSIONS, beside its threads for their reason:
-	// what its harness wrote on each turn, kept when the turn's run ended —
-	// and one turn's transcript under the listing that names it.
+	// One seat's EXECUTOR SESSIONS, under /agents/{id}/ beside its memory,
+	// because they are the same kind of fact — what this seat has said and
+	// remembered — rather than a company-wide listing: what its harness
+	// wrote on each turn, kept when the turn's run ended, and one turn's
+	// transcript under the listing that names it.
 	{method: "GET", pattern: "/agents/{id}/sessions", what: "executor_sessions", path: map[string]string{"id": "handle"}},
 	{method: "GET", pattern: "/agents/{id}/sessions/{turn_id}", what: "executor_session",
 		path: map[string]string{"id": "handle", "turn_id": "turn_id"}},

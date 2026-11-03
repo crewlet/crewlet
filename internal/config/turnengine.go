@@ -84,10 +84,11 @@ type TurnEngine struct {
 	// survive the store, which decodes a revision onto the defaults.
 	ExecutorMinBudgetTokens *int `yaml:"executor_min_budget_tokens,omitempty" json:"executor_min_budget_tokens,omitempty" js:"min=0" desc:"Refuse an executor launch, and park the seat, below this remaining token budget (default 25000; 0 = no floor)."`
 
-	// ConversationSession is the cross-turn ledger. It is nested here
-	// rather than beside it because the turn engine reads it on every
-	// turn, so it rides the same live settings cell and hot-reloads
-	// through the same path.
+	// ConversationSession is how a seat's executor sessions are kept and
+	// continued across a conversation's turns. It is nested here rather
+	// than beside it because the turn engine reads it on every turn, so it
+	// rides the same live settings cell and hot-reloads through the same
+	// path.
 	ConversationSession ConversationSession `yaml:"conversation_session,omitempty" json:"conversation_session"`
 }
 
@@ -199,60 +200,52 @@ func (t *TurnEngine) validate(path Path) error {
 	return p.err()
 }
 
-// ConversationSession is the per-conversation ledger: what a seat already
-// did in one conversation — a chat thread, an issue, a pull request —
-// carried into the NEXT turn of that conversation as a block on the
-// executor's user message.
+// ConversationSession is how a seat's executor sessions are kept and
+// continued: each launch's harness session, captured when its run ends and
+// named by its turn's row on the executor log (internal/executordomain), is
+// continued by the turn's relaunches and by the NEXT turn of its conversation
+// — a chat thread, an issue, a pull request — which is also told how the
+// conversation's earlier turns ended.
 //
-// The cross-turn counterpart of the within-turn prior-work ledger, and
-// deliberately STRUCTURED rather than a transcript replay.
+// The session is the record of what a seat did in a conversation, transcript
+// and all; the engine adds only what a transcript cannot know — how each turn
+// ended, where the new turn begins, and that its box is new
+// (docs/concepts/conversation-sessions.md).
 type ConversationSession struct {
-	// Enabled records and replays completed turns, and keeps each executor
-	// launch's harness session in the object store (internal/executordomain).
+	// Enabled keeps each executor launch's harness session in the object
+	// store (internal/executordomain), continues it in the turn's relaunches
+	// and in the conversation's next turn, and tells that next turn how the
+	// conversation's earlier turns ended.
 	//
-	// On by default: the block is deterministic, bounded, and is the only
-	// context a thin-trigger turn gets, and each launch's session is kept,
-	// named by its turn's row on the executor log, for a launch that
-	// continues the session to restore. Turning it off restores the
-	// pre-ledger prompt exactly and keeps no session — none is captured or
+	// On by default. Turning it off keeps no session — none is captured or
 	// stamped, and no launch seals what it handed its box for a scrub —
-	// which is what makes it a safe live kill switch. How each turn ended is
-	// still recorded on the executor log either way: that is the account of
-	// the turn, not its session.
-	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Record and replay per-conversation history, and keep each executor launch's harness session (default on; off keeps no session, and still records how each turn ended)."`
+	// continues none, reads no conversation's head and tells no turn how its
+	// conversation's earlier turns ended, which is what makes it one safe
+	// live kill switch for everything a conversation carries between turns.
+	// How each turn ended is still recorded on the executor log either way:
+	// that is the account of the turn, not its session.
+	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Keep each executor launch's harness session, continue it in the turn's relaunches and the conversation's next turn, and tell that turn how the conversation's earlier turns ended (default on; off keeps and continues no session, and still records how each turn ended)."`
 
-	// MaxEntries is what is KEPT per conversation, trimmed at write time.
-	//
-	// It is not the only bound, and the split is deliberate: this one bounds
-	// the RECORD, and [ledger.InjectedMaxChars] bounds what one prompt
-	// SHOWS, by dropping whole entries oldest-first and saying how many.
-	// Neither ever cuts inside an entry — the stored row is the only copy of
-	// that turn, and a half-recorded reply reads as the whole of what the
-	// seat said.
-	//
-	// There is no injected-side CONFIG pair. Two knobs (injected_max_entries,
-	// injected_max_chars) used to sit here; neither was ever threaded to a
-	// caller, so both validated, defaulted and documented a truncation that
-	// did not happen. The render bound that replaced them is a constant with
-	// its reasoning at the definition rather than a knob nobody had cause to
-	// set.
-	// Larger than what any prompt injects, so the dashboard can show a
-	// conversation's history beyond what a single turn carried. The trim
-	// is what bounds a DM, whose conversation key is the whole channel and
-	// so never stops receiving entries.
-	MaxEntries int `yaml:"max_entries,omitempty" json:"max_entries,omitempty" js:"min=0" desc:"Entries kept per conversation."`
-
-	// RetentionDays is how long a conversation is remembered. It matches
-	// the event store's own horizon, so the engine's memory of a
+	// RetentionDays is how long a seat's executor sessions are kept past
+	// their turn's last instant: a turn's row on the executor log, and the
+	// session it names, is deleted this many days after its last record
+	// unless a later turn of its conversation took it up first — so a
+	// conversation quiet for longer starts its next turn fresh. Read at
+	// every pass of the reaper that deletes them, so a revision that moves
+	// it is honoured on the next pass rather than the next boot. Thirty days
+	// by default, the event store's own horizon, so the engine's memory of a
 	// conversation and the telemetry showing what it did there forget
 	// together.
-	RetentionDays int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0" desc:"How long a conversation is remembered."`
+	RetentionDays int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0" desc:"Days a seat's executor sessions are kept past their turn's last record, read at every reaper pass (default 30)."`
 
 	// MaxBytesPerSeat is the most object-store bytes one seat's captured
 	// executor sessions may hold (internal/executordomain): past it a new
 	// capture releases the seat's oldest ENDED turns' sessions, keeping how
 	// each ended, and a capture the seat's live turns leave no room for is
-	// refused, so that turn's next launch starts fresh.
+	// refused, so that turn's next launch starts fresh. A session a live
+	// turn's first launch was handed to continue is HELD, and no release
+	// takes it, until that turn keeps a session of its own or ends — so it
+	// counts against the budget beside the seat's live turns for as long.
 	//
 	// SIXTY-FOUR MEBIBYTES BY DEFAULT ([DefaultSessionBytesPerSeat]), which
 	// says why. The engine reads it off the revision the fleet runs, and
@@ -292,10 +285,9 @@ const (
 	SessionBytesPerSeatCeiling int64 = 64 << 30
 )
 
-// DefaultConversationSession is the ledger's shipped defaults.
+// DefaultConversationSession is the block's shipped defaults.
 func DefaultConversationSession() ConversationSession {
 	return ConversationSession{
-		MaxEntries:      20,
 		RetentionDays:   30,
 		MaxBytesPerSeat: DefaultSessionBytesPerSeat,
 	}
@@ -312,19 +304,14 @@ func (c *ConversationSession) SessionBudget() int64 {
 	return c.MaxBytesPerSeat
 }
 
-// Records reports whether the ledger is on, applying the true default.
-func (c *ConversationSession) Records() bool { return c.Enabled.Or(true) }
-
 // KeepsSessions reports whether each executor launch's harness session is
-// kept, applying the true default: the same switch the ledger reads, so one
-// gesture turns off everything a conversation carries between turns.
+// kept and continued, applying the true default: one switch, so one gesture
+// turns off everything a conversation carries between turns — its session,
+// and the account of how its earlier turns ended.
 func (c *ConversationSession) KeepsSessions() bool { return c.Enabled.Or(true) }
 
 func (c *ConversationSession) validate(path Path) error {
 	var p problems
-	if c.MaxEntries < 1 {
-		p.add(at(path, "max_entries"), ErrOutOfRange, "must be at least 1, got %d", c.MaxEntries)
-	}
 	if c.RetentionDays < 1 {
 		p.add(at(path, "retention_days"), ErrOutOfRange,
 			"must be at least 1, got %d", c.RetentionDays)

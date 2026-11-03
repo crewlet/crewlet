@@ -14,11 +14,11 @@ import (
 //
 // The driver's default BEGIN is deferred and its conflict detection is per
 // FILE: a transaction that reads a row another writer has since advanced past
-// is refused its first write with "database snapshot is stale". Twelve callers
-// in this tree do read-then-write inside Tx, and for as long as that was the
-// begin this package used, the refusal was either a lost write — a
-// conversation entry, a memory row, a config revision, gone with a log line —
-// or a retry that ran the whole body again. A write transaction now holds the
+// is refused its first write with "database snapshot is stale". Callers across
+// this tree do read-then-write inside Tx, and for as long as that was the
+// begin this package used, the refusal was either a lost write — a memory row,
+// a config revision, gone with a log line — or a retry that ran the whole body
+// again. A write transaction now holds the
 // lock from its BEGIN (begin.go) and queues for it in order (writequeue.go),
 // so the second writer reads only after the first has committed and there is
 // no race left to lose or to recover from.

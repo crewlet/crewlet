@@ -90,11 +90,22 @@ var budgetParkSpec = parkSpec{
 }
 
 // budgetParks is every seat inbox this node holds for want of budget, by the
-// seat's id, each with the ceilings it was decided under.
+// seat's id, each with the ceilings it was decided under, which a change of
+// the company releases it on. The floor it waits for room for — the static
+// floor, or the larger one a launch that continues its conversation's session
+// was refused below — is the refusal's, read again on the delivery the park
+// hands back, and no reader asks it of the park: an ask waiting behind the park
+// is owed for as long as the park holds, which its holder answers
+// (parkheld.go).
 type budgetParks = seatParks[budgetBasis]
 
 // budgetPark is the dispatcher's budget stage: it parks handle's seat when one
-// of its capped windows is refusing, reporting the deferral reason.
+// of its capped windows is refusing, or leaves less room than the delivery's
+// launch needs, reporting the deferral reason. refused is the budget refusal the
+// delivery's turn met, nil before any turn ran: the floor the park waits for
+// room for is the one that launch was refused below ([floorOf]) — a first
+// launch that continues its conversation's session needs that session's context
+// beside its brief — and the static floor otherwise.
 //
 // What it does NOT do is decide an unknown: a counter that cannot be read
 // lets the delivery through, logged, because the turn's own meter is the gate
@@ -103,14 +114,15 @@ type budgetParks = seatParks[budgetBasis]
 // the hold that could not be taken, which the dispatcher DEFERS (see
 // [Dispatcher.parkOnBudget]): the refusal is the node's, and a deferral keeps
 // the delivery's place at the head of the seat's inbox.
-func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, error) {
+func (e *Engine) budgetPark(ctx context.Context, handle string, refused error) (string, bool, error) {
 	c := e.Company()
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
 		// No counter, or nothing to refuse with.
 		return "", false, nil
 	}
-	r, refusing, starved, err := m.parks(ctx)
+	floor := floorOf(c, refused)
+	r, refusing, starved, err := m.parks(ctx, floor)
 	if err != nil {
 		log.WarnContext(ctx, "budget_park_unknown", "seat", handle, "error", err,
 			"detail", "the counters could not be read, so the delivery runs and "+
@@ -143,11 +155,11 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		// none, so there is no refusal of a charge to record.
 		m.turnAway(ctx, r)
 	} else {
-		reason = starvedReason(r, launchFloor{static: m.basis.floor})
+		reason = starvedReason(r, floor)
 	}
 	log.InfoContext(ctx, "seat_budget_parked", "seat", handle, "scope", r.Scope,
 		"period", string(r.Window.Period), "window", r.Window.Label,
-		"used", r.Used, "limit", r.Limit, "floor", m.basis.floor, "starved", starved,
+		"used", r.Used, "limit", r.Limit, "floor", floor.tokens(), "starved", starved,
 		"resets_at", rfc3339(r.Window.End),
 		"detail", "this seat's mail waits on its inbox until the window turns "+
 			"over or a revision raises the ceiling")
@@ -170,7 +182,8 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 
 // parks reports the window that parks a seat's mail, and which of the two
 // conditions holds it there: a capped window refusing outright, or — where none
-// is — one leaving less room than an executor launch needs ([meter.starved]).
+// is — one leaving less room than floor, the room the delivery's launch needs
+// ([meter.starved]).
 //
 // AND A WINDOW TOO SHORT FOR A LAUNCH, which every turn makes: a seat with room
 // left but less than the executor floor refuses every turn at its launch
@@ -183,12 +196,15 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 // waiting in that mail is still owed its answer ([colleagueOwed]). Three-valued
 // as both its halves are.
 //
-// THE STATIC FLOOR, because what both readers hold mail for is a turn's first
-// launch, which continues no session of the turn's own ([launchFloor]).
-func (m *meter) parks(ctx context.Context) (r refusal, refusing, starved bool, err error) {
+// THE FLOOR IS THE CALLER'S: the static one for a delivery no launch has been
+// refused for yet, and the one a launch was refused below where one was — a
+// turn's first launch that continues its conversation's session needs that
+// session's context beside its brief ([launchFloor]), and a window with room
+// for the static floor alone holds that launch back as surely as a full one.
+func (m *meter) parks(ctx context.Context, floor launchFloor) (r refusal, refusing, starved bool, err error) {
 	r, refusing, err = m.refusing(ctx)
 	if err == nil && !refusing {
-		r, starved, err = m.starved(ctx, m.basis.floor)
+		r, starved, err = m.starved(ctx, floor.tokens())
 	}
 	return r, refusing, starved, err
 }

@@ -211,13 +211,20 @@ func newFlooredParkRig(t *testing.T, dayCeiling, floor string) *parkRig {
 // spend puts tokens on the Lead's counters in the windows of the rig's clock.
 func (r *parkRig) spend(t *testing.T, tokens int) {
 	t.Helper()
+	r.spendIn(t.Context(), t, tokens)
+}
+
+// spendIn is [parkRig.spend] under ctx, for a caller that holds a context of
+// its own: a turn's frame the rig plays charges under the frame's context.
+func (r *parkRig) spendIn(ctx context.Context, t *testing.T, tokens int) {
+	t.Helper()
 	c := r.e.Company()
 	id, ok := c.Org.AgentIDFor(c.Org.AgentSeatByHandle("lead"))
 	if !ok {
 		t.Fatal("the Lead has no agent id")
 	}
 	berlin := c.Config.Location()
-	if _, err := r.fleet.PostCharge(t.Context(), coord.AgentScope(id.String()), tokens,
+	if _, err := r.fleet.PostCharge(ctx, coord.AgentScope(id.String()), tokens,
 		coord.WindowsAt(r.clock(), berlin)); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}
@@ -520,6 +527,47 @@ func TestALaunchRefusedBelowTheFloorParksTheSeat(t *testing.T) {
 	if handed != 1 {
 		t.Errorf("the delivery was handed over %d times, want once: the refused launch was "+
 			"NAKed into a redelivery rather than parked", handed)
+	}
+}
+
+// A FIRST LAUNCH HELD BELOW ITS CONTINUED FLOOR PARKS THE SEAT ON THAT FLOOR. A
+// turn's first launch that continues its conversation's session needs that
+// session's context beside its brief, more than the static floor; refused
+// between the two, the delivery is parked — never NAKed into the same refusal —
+// on the floor the launch was refused below, where a window with room for the
+// static floor alone is not a window with room. And a colleague's ask waiting
+// behind the park is still owed, though a recount of the counters on the
+// static floor finds room: the park holds the inbox, and the node holding it
+// says so (on another node, [TestAnAskBehindAParkIsOwedOnWhicheverNodeTheSweepRuns]).
+//
+// Mutation: park on the static floor, or judge an ask behind the park by the
+// static recount alone, and a check goes red.
+func TestAFirstLaunchHeldBelowItsContinuedFloorParksTheSeatOnThatFloor(t *testing.T) {
+	t.Parallel()
+	r := newFlooredParkRig(t, "100", "30")
+	r.mu.Lock()
+	r.turnFn = func() (turn.Result, error) {
+		// FIFTY LEFT: room for the static floor of thirty, and none for a
+		// launch whose session's last request carried fifty beside a brief
+		// of ten.
+		r.spend(t, 50)
+		return turn.Result{}, executorHeadroom(t.Context(), staticRemaining{left: 50},
+			launchFloor{static: 30}.continuing(50, 10))
+	}
+	r.mu.Unlock()
+	r.deliver(t)
+	r.mu.Lock()
+	handed := r.handed
+	r.mu.Unlock()
+	if r.runs() != 1 || handed != 1 || !slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Fatalf("a first launch refused below its continued floor: runs %d, handed %d, holds %v; want the "+
+			"seat parked", r.runs(), handed, r.holds())
+	}
+	r.e.adoptSeatPauses(t.Context(), nil)
+	owed, err := colleagueOwed{engine: r.e, runs: fakeSeatRuns{}}.AnswerOwed(t.Context(), quietAsk)
+	if err != nil || !owed {
+		t.Fatalf("an ask behind the park reads owed = %v (%v), want owed while the park holds the inbox",
+			owed, err)
 	}
 }
 

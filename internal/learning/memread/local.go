@@ -7,8 +7,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/learning"
 )
 
@@ -23,34 +21,11 @@ import (
 // exactly the seats whose memory had grown past the page.
 const PageLimit = 50
 
-// DefaultThreadPage and MaxThreadPage bound the conversation listing.
-//
-// FIFTY by default, like every per-seat page; TWO HUNDRED at most, which is
-// [learning.MaxProfilesListed]' figure for its own reason: the size of the
-// company this engine is built for plus the correspondents one seat
-// accumulates on the surfaces it works. A page size is not a filter, so one
-// asked past the ceiling is served the ceiling rather than refused.
-const (
-	DefaultThreadPage = 50
-	MaxThreadPage     = 200
-)
-
 // Page clamps a memory page size a caller asked for: an absent or nonsensical
 // one takes [PageLimit], and one past it is served [PageLimit].
 func Page(asked int) int {
 	if asked <= 0 || asked > PageLimit {
 		return PageLimit
-	}
-	return asked
-}
-
-// ThreadPage clamps a conversation page size, in the same idiom.
-func ThreadPage(asked int) int {
-	switch {
-	case asked <= 0:
-		return DefaultThreadPage
-	case asked > MaxThreadPage:
-		return MaxThreadPage
 	}
 	return asked
 }
@@ -66,15 +41,14 @@ type Profiles interface {
 // half empty, which is how a node that keeps no such half says so.
 //
 // KEYED AS EACH HALF IS WRITTEN: the diary and the onboarding marker on the
-// seat's id, and the episodes, skills, profiles and conversation ledger on its
-// handle — both off the [Seat] the asker resolved.
+// seat's id, and the episodes, skills and profiles on its handle — both off
+// the [Seat] the asker resolved.
 type Stores struct {
-	Diary         *learning.Diary
-	Episodes      *learning.Episodes
-	Skills        *learning.Skills
-	Profiles      Profiles
-	Onboarding    *learning.Onboarding
-	Conversations ledgerstore.Conversations
+	Diary      *learning.Diary
+	Episodes   *learning.Episodes
+	Skills     *learning.Skills
+	Profiles   Profiles
+	Onboarding *learning.Onboarding
 	// Now is the clock a diary entry's lapse is judged against; nil is the
 	// wall clock.
 	Now func() time.Time
@@ -297,41 +271,12 @@ type SubjectRow struct {
 	Name       string `json:"name"`
 }
 
-// Threads is one seat's conversation ledger, as the `conversations` answer
-// sends it.
-type Threads struct {
-	Handle string `json:"handle"`
-	// Conversations is a page of the threads the seat holds entries in,
-	// newest activity first; ConversationsTotal how many it holds.
-	Conversations      []ThreadRow `json:"conversations"`
-	ConversationsTotal int         `json:"conversations_total"`
-	// Entries is what the seat recorded in the ONE conversation asked for,
-	// oldest first — empty when none was named.
-	Entries []ledger.Session `json:"entries"`
-	// HeldBy is as [Memory.HeldBy].
-	HeldBy string `json:"held_by"`
-}
-
-// ThreadRow is one conversation a seat holds entries for.
-type ThreadRow struct {
-	Key    string    `json:"key"`
-	Turns  int       `json:"turns"`
-	LastAt time.Time `json:"last_at"`
-}
-
 // emptyMemory is the answer about a seat nobody holds, or a node that keeps no
 // memory: every key, every list empty.
 func emptyMemory(handle, heldBy string) Memory {
 	return Memory{
 		ID: handle, Diary: []DiaryRow{}, Episodes: []EpisodeRow{}, Skills: []SkillRow{},
 		Counterparties: []ProfileRow{}, HeldBy: heldBy,
-	}
-}
-
-func emptyThreads(handle, heldBy string) Threads {
-	return Threads{
-		Handle: handle, Conversations: []ThreadRow{}, Entries: []ledger.Session{},
-		HeldBy: heldBy,
 	}
 }
 
@@ -458,37 +403,6 @@ func (s *Stores) Episode(ctx context.Context, seat Seat, id string) (EpisodeDeta
 		Episode: e, AskBytes: len(e.Ask), PlanSummaryBytes: len(e.PlanSummary),
 	})
 	out.Episode = &row
-	return out, nil
-}
-
-// Threads reads one seat's conversation ledger from THIS node's store — a
-// page of its threads and, when one is named, what it recorded there.
-func (s *Stores) Threads(ctx context.Context, seat Seat, conversation string, limit int) (Threads, error) {
-	out := emptyThreads(seat.Handle, "")
-	if s.Conversations == nil {
-		return out, nil
-	}
-	limit = ThreadPage(limit)
-	threads, err := s.Conversations.Threads(ctx, seat.Handle, limit)
-	if err != nil {
-		return Threads{}, err
-	}
-	for _, t := range threads {
-		out.Conversations = append(out.Conversations,
-			ThreadRow{Key: t.Key, Turns: t.Entries, LastAt: t.LastAt})
-	}
-	if out.ConversationsTotal, err = s.Conversations.ThreadCount(ctx, seat.Handle); err != nil {
-		return Threads{}, err
-	}
-	if conversation != "" {
-		entries, err := s.Conversations.History(ctx, seat.Handle, conversation, limit)
-		if err != nil {
-			return Threads{}, err
-		}
-		if entries != nil {
-			out.Entries = entries
-		}
-	}
 	return out, nil
 }
 

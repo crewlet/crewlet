@@ -63,9 +63,10 @@
 //  1. Every builder is a pure function of its inputs, and the inputs are
 //     frozen at turn start. Nothing here reads a clock, a counter, or the
 //     process environment on its own.
-//  2. Anything that GROWS as a phase loops — the prior-work ledger, the
-//     conversation history — rides the user message ([BuildPhaseUserMessage]),
-//     never a system prompt.
+//  2. Anything that GROWS as a phase loops — the prior-work ledger — rides the
+//     user message ([BuildPhaseUserMessage]), never a system prompt; and so
+//     does how the conversation's earlier turns ended, which is the turn's
+//     and not the seat's.
 //
 // Assembly is deterministic for the same reason: map iteration order is not,
 // so every set that reaches a prompt (the role's MCP servers, the matched
