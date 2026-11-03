@@ -521,6 +521,11 @@ export function askHeadline(ask: WorkAskRow): string {
   return askIsMessage(ask) ? ASK_HEADING : askQuestion(ask);
 }
 
+/** An ask's question as one row reads it: its markdown stripped to words. */
+export function askPreview(ask: WorkAskRow): string {
+  return plainText(askQuestion(ask));
+}
+
 /**
  * Every text of an ask a reader reads as one message: its question, its
  * context, the asker's reasoning and each option. A bare `#11` in any of them
@@ -538,6 +543,11 @@ export function askTexts(ask: WorkAskRow): string[] {
  */
 export function answeredQuestion(answered: AnsweredDecision): string {
   return "run" in answered ? answered.run.question.trim() : askQuestion(answered.ask);
+}
+
+/** An answered question as one row reads it ([askPreview]). */
+export function answeredPreview(answered: AnsweredDecision): string {
+  return plainText(answeredQuestion(answered));
 }
 
 /** Every text of an answered question a reader reads as one message ([askTexts]). */

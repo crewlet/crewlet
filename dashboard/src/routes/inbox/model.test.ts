@@ -13,6 +13,7 @@ import {
   ASK_HEADING,
   askContext,
   askHeadline,
+  askPreview,
   askQuestion,
   earlierOf,
   followThrough,
@@ -202,6 +203,15 @@ describe("what an ask says", () => {
       decision: { ...ASK_ROW.decision, question },
     } as unknown as WorkAskRow;
     expect(askHeadline(long)).toBe(question);
+  });
+
+  test("a row reads an ask's question as words, its markdown stripped", () => {
+    const words = {
+      ...ASK_ROW,
+      decision: undefined,
+      body: "QA verdict at head **b003820**: **approved** with `ruff`.\nRan the suite.",
+    } as unknown as WorkAskRow;
+    expect(askPreview(words)).toBe("QA verdict at head b003820: approved with ruff.");
   });
 });
 
