@@ -657,10 +657,10 @@ type GenerationFacts struct {
 // ONE MAPPING FOR EVERY DOMAIN'S GENERATION RECORD, because one reanchor names
 // one party and the audit feed reads the histories side by side: written once
 // per domain — the tracker's, the knowledge base's, the identity estate's, the
-// artifacts log's, the artifact datastore's, the Dashboard Assistant's, chat's
-// and the code log's — it was eight copies of one rule, already apart on what
-// counts as nobody (a name of spaces was a party to two of them and the node
-// to the others) and on which vocabulary a kind is read in. A domain only says
+// artifacts log's, the artifact datastore's, the Dashboard Assistant's, chat's,
+// the executor log's and the code log's — it was nine copies of one rule,
+// already apart on what counts as nobody (a name of spaces was a party to two
+// of them and the node to the others) and on which vocabulary a kind is read in. A domain only says
 // what the actor kind is in its own columns.
 //
 // THE KIND IS AN ACTOR KIND, the one [iam.ActorFor] records a party under,
