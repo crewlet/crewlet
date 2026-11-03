@@ -318,6 +318,22 @@ export interface AccessPlanAnswer {
 /** The control of one seat's lane an `access_not_offered` refusal is about. */
 export type AccessRefusalField = "level" | "permissions" | "scope";
 
+/**
+ * An `access_not_offered` refusal's body, beside the envelope's `error` and
+ * `message`: the first seat whose draft asks for what the vendor does not
+ * offer, on which lane and control, and why.
+ */
+export interface AccessRefusal {
+  seat: string;
+  lane: AccessLaneKey;
+  field: AccessRefusalField;
+  detail: string;
+  /** What the lane offers instead, where it lists them. */
+  offered?: string[];
+  /** The level every other level in a set needs, where the refusal is its absence. */
+  required?: string;
+}
+
 /** `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`. */
 export type AccessSeatAction = "rotate" | "remove" | "keep" | "restore" | "retry" | "done";
 
