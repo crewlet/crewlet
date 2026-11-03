@@ -45,6 +45,84 @@ export function lanesOf(answer: AccessAnswer): Lane[] {
   }));
 }
 
+/** What a person does at the vendor where only a person can make a seat's account: the Set up sheet's three openings. */
+export type HandoffStep = "create" | "mint" | "rerole";
+
+/**
+ * One seat's handoff, as the Set up sheet draws it, read off the sync's wait
+ * and the lane's own levels: nothing here is a guess at the vendor.
+ */
+export interface Handoff {
+  step: HandoffStep;
+  /** The vendor's page where the person acts, where the engine names it. */
+  url: string | undefined;
+  /** The engine's sentence for the wait; empty for a rotate, which waits on nothing yet. */
+  said: string;
+  /** The account to make, or the one the seat already has, by name, where the engine names it. */
+  account: string | undefined;
+  /** The role to give it, in the vendor's word, with the vendor's own line on what it allows. */
+  role: { name: string; note: string | undefined } | undefined;
+  /** The role the vendor shows now, where it is one of the lane's levels. */
+  current: string | undefined;
+  /** A token was sealed for the seat before (revoked at the vendor, or being rotated), so this is a new one. */
+  renew: boolean;
+  /** Opened to rotate a token the vendor still accepts: the sheet starts at the paste. */
+  rotating: boolean;
+}
+
+const HANDOFF_STEPS: ReadonlySet<string> = new Set<HandoffStep>(["create", "mint", "rerole"]);
+
+/** What the engine says of a seat's account at the vendor: its name, the role chosen, and the role it holds. */
+function seatFacts(lane: Lane, saved: AccessSeatLane) {
+  const level = (id: string | undefined) => lane.levels.find((l) => l.id !== "" && l.id === id);
+  const chosen = level(saved.desired.level);
+  return {
+    account: saved.observed.account || undefined,
+    role: chosen ? { name: chosen.name, note: chosen.note } : undefined,
+    current: level(saved.observed.level)?.name,
+  };
+}
+
+/**
+ * The handoff a seat is waiting on, or undefined: only on a lane whose
+ * account a person makes (its words say so), only while the sync waits on a
+ * person, and only for a step the sheet opens on. Deleting a robot or an old
+ * token at the vendor is a wait of its own, drawn on the row with its page.
+ */
+export function handoffOf(lane: Lane, saved: AccessSeatLane): Handoff | undefined {
+  if (!laneWords(lane.key).handoff) return undefined;
+  const wait = saved.sync?.outcome === "waiting" ? saved.sync.error : undefined;
+  if (!wait || wait.actor !== "you" || !wait.action_url || !HANDOFF_STEPS.has(wait.step)) {
+    return undefined;
+  }
+  return {
+    step: wait.step as HandoffStep,
+    url: wait.action_url,
+    said: wait.said,
+    ...seatFacts(lane, saved),
+    renew: saved.observed.credential !== undefined || saved.observed.credential_gone === true,
+    rotating: false,
+  };
+}
+
+/**
+ * The handoff a rotate opens on a lane whose tokens a person makes: a new
+ * token for the account the seat already has, pasted here. The engine takes a
+ * paste for a seat whose token still works as the rotate, so the seat action
+ * is never called. Undefined on every other lane, which rotates by itself.
+ */
+export function rotateHandoffOf(lane: Lane, saved: AccessSeatLane): Handoff | undefined {
+  if (!laneWords(lane.key).handoff) return undefined;
+  return {
+    step: "mint",
+    url: undefined,
+    said: "",
+    ...seatFacts(lane, saved),
+    renew: true,
+    rotating: true,
+  };
+}
+
 /** Whether the engine leaves a lane's access to the company, outside Crewlet. */
 export function managedOutside(lane: Lane): boolean {
   return lane.managed === "external";

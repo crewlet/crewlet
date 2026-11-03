@@ -14,6 +14,7 @@ import {
   MATTERMOST_LANE,
   datadogAnswer,
   expoAnswer,
+  expoWaitingAnswer,
   offLane,
   onLane,
 } from "./fixtures.ts";
@@ -22,6 +23,8 @@ import {
   accessWords,
   availableActions,
   emptyScopeHint,
+  handoffOf,
+  rotateHandoffOf,
   joinLevels,
   levelName,
   noToolRemedy,
@@ -138,7 +141,7 @@ test("an Expo seat's tool is the EAS CLI in its box, and its level is Expo's rol
   expect(accessWords(EXPO_LANE, qa.observed)).toBe("Developer");
   expect(availableActions(EXPO_LANE, qa, false, false)).toEqual(["rotate"]);
   expect(offSentence(EXPO_LANE, offLane("viewer"))).toBe(
-    "Off. Turning it on creates an Expo robot user for the agent with the chosen role, and its own access token.",
+    "Off. Turning it on asks you to add a robot for the agent at Expo with the chosen role and paste its token here. Crewlet checks the token and keeps it.",
   );
 });
 
@@ -286,4 +289,77 @@ test("an agent that left the company reads as such when its details open, not as
   expect(offSentence(DATADOG_LANE, offLane(), true)).toBe(
     "This agent left the company and has no account here.",
   );
+});
+
+// A HANDOFF IS READ OFF THE ENGINE'S WAIT AND THE LANE'S OWN LEVELS, never
+// guessed: the role in the vendor's word with its own line, the role it shows
+// now, the robot by the name the engine sent, and whether this is a new token.
+describe("a handoff", () => {
+  const pm = (answer: ReturnType<typeof expoWaitingAnswer>) => answer.seats[0]!.lanes.expo!;
+
+  test("a new agent's wait is a handoff from its robot, at the role chosen here", () => {
+    expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer("create")))).toEqual({
+      step: "create",
+      url: "https://expo.dev/accounts/gophrase/settings/access-tokens",
+      said: "Add a robot named crewlet-gophrase-pm with the Runner role at Expo",
+      account: "crewlet-gophrase-pm",
+      role: { name: "Runner", note: "View all projects and perform low-risk actions on them" },
+      current: undefined,
+      renew: false,
+      rotating: false,
+    });
+  });
+
+  test("a refused token is a new one, and a changed role says what Expo shows", () => {
+    expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer("mint")))).toMatchObject({
+      step: "mint",
+      renew: true,
+    });
+    expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer("rerole")))).toMatchObject({
+      step: "rerole",
+      current: "Developer",
+      role: { name: "Runner" },
+    });
+  });
+
+  test("the robot is named only as the engine named it", () => {
+    for (const step of ["create", "mint"] as const) {
+      expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer(step, { named: false })))?.account).toBe(
+        undefined,
+      );
+    }
+  });
+
+  // A ROTATE IS A PASTE FOR THE ROBOT THE SEAT ALREADY HAS: a new token, opened
+  // at the paste, with no wait behind it. Every other lane rotates by itself.
+  test("a rotate opens a new token for the robot the seat has, and only on Expo", () => {
+    const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
+    expect(rotateHandoffOf(EXPO_LANE, qa)).toMatchObject({
+      step: "mint",
+      url: undefined,
+      account: "crewlet-gophrase-qa",
+      role: { name: "Developer" },
+      renew: true,
+      rotating: true,
+    });
+    expect(rotateHandoffOf(DATADOG_LANE, sre())).toBeUndefined();
+  });
+
+  // DELETING AT THE VENDOR IS A WAIT OF ITS OWN, drawn on the row with its
+  // page; and a vendor that makes its own accounts never hands one off.
+  test("deleting a robot or a token is no handoff, and no other lane has one", () => {
+    const lane = pm(expoWaitingAnswer("mint"));
+    for (const step of ["revoke", "remove"] as const) {
+      expect(
+        handoffOf(EXPO_LANE, {
+          ...lane,
+          sync: { ...lane.sync!, error: { ...lane.sync!.error!, step } },
+        }),
+      ).toBeUndefined();
+    }
+    expect(
+      handoffOf(EXPO_LANE, { ...lane, sync: { ...lane.sync!, outcome: "ok" } }),
+    ).toBeUndefined();
+    expect(handoffOf(DATADOG_LANE, lane)).toBeUndefined();
+  });
 });
