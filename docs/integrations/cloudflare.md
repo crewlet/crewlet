@@ -210,9 +210,11 @@ The card's findings, and what clears each:
 | Finding | What it says | What clears it |
 |---|---|---|
 | `credential_missing` | `integrations.cloudflare.provisioning.api_token` resolved to nothing | Seal the provisioner token as `CLOUDFLARE_API_TOKEN`, or point `api_token` at the variable that holds it |
-| `credential_rejected` | Cloudflare refused the provisioner token: it is wrong, disabled or expired, belongs to another account, or lacks Account API Tokens Write, Account Settings Read or Zone Read | Create a new token with the [permissions above](#creating-the-provisioner-token) and replace it with **Replace key** |
+| `credential_rejected` | Cloudflare refused the provisioner token: it is wrong, disabled or expired, belongs to another account, or was refused a read it needs (the detail names the read and its permission) | Create a new token with the [permissions above](#creating-the-provisioner-token) and replace it with **Replace key** |
+| `grant_short` | The provisioner token does not hold every permission group the levels can grant, so a seat token it mints could fall short | Edit the provisioner token at Cloudflare to add the groups the detail lists, over the account and its zones |
 | `credential_expiring` | The provisioner token expires within 14 days | Create a new token and replace it before the date the finding names |
 | `unknown_tier` | A zone in `provisioning.zones` is not in the account, or a permission group a level names is not offered to the account | Correct the zone name, or remove it from the list. For a permission group, check the account can use that product |
+| `registration_orphaned` | Cloudflare holds active account tokens named like this company's agent tokens (`crewlet-<company>-...`) that the engine has no record of | Delete the ones nobody uses at Cloudflare. Crewlet never deletes a token it did not create |
 | `identity_failed` | An agent's token could not be minted, narrowed or rolled. Cloudflare's reason is in the detail; the usual one is a provisioner that does not hold a group the agent's level grants | Add the missing group to the provisioner token, then **Retry** on the agent's row |
 
 An agent's own failures (a token that could not be minted or rolled, or one disabled at Cloudflare) are also reported on that agent's row on the **Agents** tab, with the control that answers them.

@@ -787,8 +787,8 @@ mcp_servers:
   granted: a change to a grant fails the write instead of leaving a block that
   looks like one. A server turned off is held to the same rule, since it keeps
   its grant for the day it is turned back on. The blocks the engine reads by
-  their own name (`github`, `gitlab`, `datadog`, `cloudflare`, `atlassian`,
-  `jira`, `confluence`) are the engine's as well as a server's, and are not held to it.
+  their own name (`github`, `gitlab`, `datadog`, `atlassian`, `jira`,
+  `confluence`) are the engine's as well as a server's, and are not held to it.
 - **A grant names only what the company holds**: a unit key that is no unit's,
   a handle that is no seat's or is a person's (a person runs no tools), a name
   listed twice, or a seat both named and left out, is refused at its entry.
