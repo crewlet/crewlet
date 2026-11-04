@@ -226,6 +226,14 @@ var replaced = []struct {
 	{"digitalocean", "digitalocean", []key{{"TOKEN", "", "Authorization", "Bearer ", false}}},
 	{"scaleway", "scaleway", []key{{"SECRET_KEY", "SCW_SECRET_KEY", "", "", false}, {"ACCESS_KEY", "SCW_ACCESS_KEY", "", "", false}}},
 	{"aws", "aws", []key{{"CREDENTIALS", "", "", "", true}}},
+	{"google_cloud", "google-cloud-monitoring", []key{{"ACCESS_TOKEN", "", "Authorization", "Bearer ", false}}},
+	{"google_cloud", "google-cloud-monitoring", []key{{"ACCESS_TOKEN", "", "Authorization", "Bearer ", false}}},
+	{"google_cloud", "google-cloud-monitoring", []key{{"ACCESS_TOKEN", "", "Authorization", "Bearer ", false}}},
+	{"google_cloud", "google-cloud-monitoring", []key{{"ACCESS_TOKEN", "", "Authorization", "Bearer ", false}}},
+	{"google_cloud", "google-cloud-monitoring", []key{{"ACCESS_TOKEN", "", "Authorization", "Bearer ", false}}},
+	{"google_cloud", "google-cloud-monitoring", []key{{"ACCESS_TOKEN", "", "Authorization", "Bearer ", false}}},
+	{"google_cloud", "google-cloud-monitoring", []key{{"ACCESS_TOKEN", "", "Authorization", "Bearer ", false}}},
+	{"google_cloud", "google-cloud-monitoring", []key{{"ACCESS_TOKEN", "", "Authorization", "Bearer ", false}}},
 }
 
 func keysOf(in []catalogue.SeatKey) []key {
@@ -300,6 +308,13 @@ func TestRecognitionMatchesTheSeatBindingsItReplaces(t *testing.T) {
 		{"AWS's server in eu-west-1", remote("https://aws-mcp.eu-west-1.api.aws/mcp"), "aws", bound(10)},
 		{"another AWS endpoint under api.aws", remote("https://sts.us-east-1.api.aws/"), "", nil},
 		{"a lookalike of AWS's server", remote("https://aws-mcp.us-east-1.api.aws.example.net/mcp"), "", nil},
+		{"Google's Monitoring server", remote("https://monitoring.googleapis.com/mcp"), "google_cloud", bound(11)},
+		{"Google's Storage server", remote("https://storage.googleapis.com/storage/mcp"), "google_cloud", bound(17)},
+		{"Google's Resource Manager server", remote("https://cloudresourcemanager.googleapis.com/mcp"), "google_cloud", bound(18)},
+		{"a host under a Google server's", remote("https://x.monitoring.googleapis.com/mcp"), "", nil},
+		{"a lookalike of a Google server", remote("https://monitoring.googleapis.com.example.net/mcp"), "", nil},
+		{"a Google API nobody recognises", remote("https://bigquery.googleapis.com/mcp"), "", nil},
+		{"a Google host spelled on stdio", stdio("curl", "https://compute.googleapis.com/mcp"), "", nil},
 		{"a server nobody recognises", stdio("uvx", "some-server==1.0.0"), "", nil},
 		{"an address nobody recognises", remote("https://mcp.example.com/"), "", nil},
 		{"an address that does not parse", remote("://mcp.datadoghq.com"), "", nil},

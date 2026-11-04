@@ -170,6 +170,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Run the setup block the form gives you in AWS CloudShell. It creates one CloudFormation stack with Crewlet's sign-in, its provisioner role, the boundary and the level policies, and prints the line you paste back.",
   },
+  google_cloud: {
+    does: [
+      "Read VMs, GKE, Cloud Run, Cloud SQL, metrics and logs in the projects you choose",
+      "Restart and scale VMs and workloads, and run Cloud Run jobs, where you allow it",
+      "Use Google's MCP servers and gcloud as themselves, with no key to keep",
+    ],
+    identity:
+      "Crewlet makes a Google Cloud service account for each agent, in a project that holds only Crewlet's accounts.",
+    byHand:
+      "Create an empty project for Crewlet's accounts and run the setup block the form gives you. Then, on each project agents may use, run the project block from the docs, which creates Crewlet's Operator role and its limited grants.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */

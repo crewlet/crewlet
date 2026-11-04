@@ -233,6 +233,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"integrations.digitalocean", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.scaleway", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.aws", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.google_cloud", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 

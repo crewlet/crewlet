@@ -1857,7 +1857,13 @@ const (
 	// (the entry, what the page preloads and the page itself) is 136 bytes
 	// lighter raw. 112 bytes past 5500 KiB, it moved to the measured size's
 	// next KiB: 5501 KiB.
-	treeBudget = 5<<20 + 381<<10
+	// Google Cloud (its catalogue entry, its Agents tab words with the link
+	// to preparing a project, the issued period and the note on gcloud, and
+	// the org builder's leftover service account), merged onto that tree with
+	// the kit's Google Cloud mark already in 0.94.0, took it from 5500.1 KiB
+	// (5,632,112 bytes) to 5502.4 KiB (5,634,465 bytes, +2,353 bytes). The
+	// measured size's next KiB: 5503 KiB.
+	treeBudget = 5<<20 + 383<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

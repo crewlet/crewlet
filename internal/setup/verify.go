@@ -126,6 +126,10 @@ type Check struct {
 	// that renders the stack's boundary from it: a document field with no
 	// form field of its own. Empty is the home Region and us-east-1.
 	Regions []string
+
+	// Company is the company's name, carried for Google Cloud's probe: the
+	// federation token it signs names an issuer and a subject made from it.
+	Company string
 }
 
 // Secret is the credential under check, for a probe that must keep it out

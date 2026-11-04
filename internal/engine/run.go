@@ -43,6 +43,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -111,6 +112,11 @@ type Engine struct {
 	// awsIssuer holds the AWS sessions this process has issued its agents,
 	// each until it runs short ([awsSeatIssuer]).
 	awsIssuer awsint.Issuer
+
+	// googleCloudIssuer holds the access tokens this process has issued its
+	// agents' own Google Cloud service accounts, one per account, in memory
+	// only, for every reader of a seat's token alike. See googlecloudtoken.go.
+	googleCloudIssuer googlecloud.SeatIssuer
 	// issuers replaces the integrations that issue seat credentials at use,
 	// for a test of the contract they share; nil is the build's
 	// ([Engine.seatIssuers]). See issued.go.
@@ -1874,8 +1880,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// token: every reader of one installation (the seat's servers, a launch,
 	// each running box's poll and its nudges, the inbound participant lookup)
 	// meets the held refusal within the wait rather than asking GitHub again
-	// on every read. See [github.Issuer].
+	// on every read. See [github.Issuer]. And the same for every agent's
+	// Google Cloud token ([googlecloud.SeatIssuer]).
 	e.githubIssuer.RetryWait = e.seatRetryDelay
+	e.googleCloudIssuer.RetryWait = e.seatRetryDelay
 
 	// THE VIEW OF THE FLEET'S DATA NODES, built before the router that asks
 	// it on every request. Building it lists nothing: it runs

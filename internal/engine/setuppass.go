@@ -78,6 +78,10 @@ import (
 // Scaleway reads its provisioner key and organization, and its access sync
 // makes, narrows, rotates and deletes one IAM application, policy and API key
 // per agent.
+//
+// Google Cloud reaches its provisioner by federation and reads the levels'
+// roles and the identity project's accounts, and its access sync makes,
+// grants, disables and deletes one service account per agent.
 func (e *Engine) setupPasses() []setup.Pass {
 	return []setup.Pass{
 		&slackPass{engine: e},
@@ -92,6 +96,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&expoPass{engine: e},
 		&digitaloceanPass{engine: e},
 		&awsPass{engine: e},
+		&googleCloudPass{engine: e},
 		&atlassianPass{engine: e},
 	}
 }

@@ -4190,7 +4190,7 @@ link, so the dashboard asks the begin route above for one and submits a form.
 
 Every integration the engine manages an account or a credential per agent on
 (Slack, Mattermost, Atlassian for Jira and Confluence, GitHub, GitLab, Datadog,
-Cloudflare, Expo, DigitalOcean, Scaleway and AWS) has an Agents tab, and these routes are what it reads and
+Cloudflare, Expo, DigitalOcean, Scaleway, AWS and Google Cloud) has an Agents tab, and these routes are what it reads and
 writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
@@ -4200,9 +4200,10 @@ Expo's `viewer`, `runner`, `developer` or `release_manager`, each a fixed set
 of Expo permissions; DigitalOcean's `read`, `operate` or `administer`, each a
 fixed set of DigitalOcean token scopes; Scaleway's `read`, `operate` or `administer`, each a fixed
 set of permission sets; AWS's `read`, `operate` or `administer`, each a set of
-Crewlet's customer managed policies), GitHub's permissions, and the scope it is narrowed to
-(Scaleway's is the project IDs its policy grants the level on, and must name
-at least one while the agent is on).
+Crewlet's customer managed policies; Google Cloud's `viewer`, `operator` or
+`administer`, each a fixed set of Google's roles), GitHub's permissions, and the
+scope it is narrowed to (Scaleway's and Google Cloud's are the project IDs the
+level is granted on, and name at least one while the agent is on).
 A lane is the block's key:
 `atlassian` has two, `jira` and `confluence`, over one account per agent, and
 every other integration has one named after itself. Jira and Confluence asked
@@ -4249,7 +4250,7 @@ sentence in the engine's words, where it waits on the vendor applying a grant
 the last sync wrote (a new account not yet grantable, a grant not yet in
 effect): that sync ended `ok`, since nobody owes a step, and the tool reads as
 it otherwise would once the vendor's stated wait ends. A lane whose tool is a CLI in the agent's own box
-(Expo's EAS CLI, DigitalOcean's doctl, Scaleway's scw, AWS's CLI) also carries `box`, what that box holds for it: in `env`, the
+(Expo's EAS CLI, DigitalOcean's doctl, Scaleway's scw, AWS's CLI, Google Cloud's gcloud) also carries `box`, what that box holds for it: in `env`, the
 exact `sandbox.env` lines the seat needs, each variable set to the seat's own
 sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
 settings the engine supplies itself, as configured (`"by": "crewlet"`):
@@ -12879,7 +12880,7 @@ trace anywhere except the provider's own delivery UI.
 
 `tools` is **one roll-up per tool** this build serves (`slack`, `mattermost`,
 `atlassian` for the organization, Confluence, Jira and the Forge relay,
-`github`, `gitlab`, `datadog`, `cloudflare`, `expo`, `digitalocean`, `scaleway`, `aws`), whether or not the company configured it, so a
+`github`, `gitlab`, `datadog`, `cloudflare`, `expo`, `digitalocean`, `scaleway`, `aws`, `google_cloud`), whether or not the company configured it, so a
 reader never invents a state for a missing one. `state` is `attention` (a
 person has to act), `not_connected` (configured and not working yet, with
 nobody owing anything — or this node could not read the status),

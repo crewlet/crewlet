@@ -88,6 +88,7 @@ const answer: IntegrationsAnswer = {
       "digitalocean",
       "scaleway",
       "aws",
+      "google_cloud",
     ].map((key) => ({
       key,
       surfaces: [key],
@@ -137,6 +138,7 @@ const listing = {
       "digitalocean",
       "scaleway",
       "aws",
+      "google_cloud",
     ].map((k) => tool(k)),
   ],
   external_url: { value: "https://engine.example.com", config_path: "api.external_url" },
@@ -296,7 +298,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
     ["Code", ["GitHub", "GitLab"]],
     ["Observability", ["Datadog"]],
-    ["Cloud and Infrastructure", ["AWS", "Cloudflare", "DigitalOcean", "Scaleway"]],
+    ["Cloud and Infrastructure", ["AWS", "Cloudflare", "DigitalOcean", "Google Cloud", "Scaleway"]],
     ["Mobile apps", ["Expo"]],
   ]);
 });

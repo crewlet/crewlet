@@ -68,15 +68,23 @@ func TestAServerNameIsOneEveryClientCanSpell(t *testing.T) {
 // EVERY NAME THE ENGINE READS A SERVER BY IS ONE THE RULE TAKES: the vendor
 // blocks the engine reads by name whether or not a server has it
 // (org.EngineReadMCPEnv), and the integrations and access lanes a per-seat
-// server is recognised by when it is named after one (SeatCredentialKind), so
+// server is recognised by when it is named after one (SeatServerName), so
 // a server named after its vendor, as the docs name every one, is never
-// refused for its name. The bridge's own name stays reserved.
+// refused for its name, and reads back as its integration. The bridge's own
+// name stays reserved.
 //
 // Mutation: bound a name below the longest of them (a MaxMCPServerName of 9
-// refuses confluence), and this is red.
+// refuses confluence), or name google_cloud's server by its key, and this is red.
 func TestEveryNameTheEngineReadsAServerByIsOneTheRuleTakes(t *testing.T) {
 	t.Parallel()
-	names := slices.Concat(org.EngineReadMCPEnv(), SeatCredentialKinds(), SeatAccessLanes())
+	names := slices.Clone(org.EngineReadMCPEnv())
+	for _, key := range slices.Concat(SeatCredentialKinds(), SeatAccessLanes()) {
+		server := SeatServerName(key)
+		if got := SeatServerKind(server); got != SeatCredentialKind(key) {
+			t.Errorf("a server named %q for %s reads back as %q", server, key, got)
+		}
+		names = append(names, server)
+	}
 	if len(names) < 6 {
 		t.Fatalf("read %d names, so the case asserts nothing", len(names))
 	}

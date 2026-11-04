@@ -13,9 +13,9 @@ import (
 // [seataccess.BoxDefaulter] supplies reaches the box of every seat with any of
 // its lanes on, beneath every layer a person writes, so which vendors supply
 // one is held here, each with why: a vendor that starts to fails this test
-// until it is named. Scaleway and AWS do in this build. Every vendor is
-// registered here
-// (scoperequired_test.go), so the list is checked against all of them.
+// until it is named. Scaleway, AWS and Google Cloud do in this build. Every
+// vendor is registered here (scoperequired_test.go), so the list is checked
+// against all of them.
 func TestAVendorGainsBoxDefaultsOnlyByAReviewedChange(t *testing.T) {
 	t.Parallel()
 	reviewed := map[integration.Kind]string{
@@ -27,6 +27,8 @@ func TestAVendorGainsBoxDefaultsOnlyByAReviewedChange(t *testing.T) {
 			"SCW_DEFAULT_ORGANIZATION_ID and SCW_DEFAULT_PROJECT_ID, which the company's connection and the " +
 			"seat's projects decide, and SCW_DISABLE_CHECK_VERSION keeps its update notice out of the " +
 			"agent's output; none is a secret, and a line the person writes wins",
+		integration.KindGoogleCloud: "gcloud reads the agent's own token from a file the poll keeps " +
+			"current, and its first project as the default; neither signs a harness in",
 	}
 	var supplying []integration.Kind
 	registered := seataccess.Registered()

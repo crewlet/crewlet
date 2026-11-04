@@ -107,6 +107,10 @@ const (
 	// nothing.
 	KindAWS Kind = "aws"
 
+	// KindGoogleCloud provisions one service account per agent and, in this
+	// build, ingests nothing.
+	KindGoogleCloud Kind = "google_cloud"
+
 	// KindAtlassian is the ORGANIZATION, not a third product. Jira and
 	// Confluence are sites this engine reads and writes as an account; this
 	// is where the account itself is created, which no site API can do. It
@@ -121,7 +125,8 @@ const (
 // status listing does not reshuffle between two reads of the same fleet.
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
-	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean, KindScaleway, KindAWS, KindAtlassian,
+	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
+	KindScaleway, KindAWS, KindGoogleCloud, KindAtlassian,
 }
 
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
@@ -149,7 +154,8 @@ var ConvergeOrder = []Kind{
 	// THE ACCOUNTS FIRST, then the products that authenticate as them.
 	KindAtlassian, KindJira, KindConfluence,
 	KindSlack, KindMattermost,
-	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean, KindScaleway, KindAWS,
+	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
+	KindScaleway, KindAWS, KindGoogleCloud,
 }
 
 // Valid reports whether k is a surface this build knows.
@@ -244,10 +250,10 @@ func (k Kind) Ingress() Ingress {
 // account, beside a second badge saying the key had not resolved. Both were
 // answers to questions this surface is not asked.
 //
-// Cloudflare, Expo, DigitalOcean, Scaleway and AWS are the same in this build:
-// each agent's credential there is minted, pasted or issued, and nothing they
-// send is routed to a seat.
+// Cloudflare, Expo, DigitalOcean, Scaleway, AWS and Google Cloud are the same in
+// this build: each agent's credential or identity there is minted, pasted or
+// issued, and nothing they send is routed to a seat.
 func (k Kind) Ingests() bool {
 	return k != KindAtlassian && k != KindCloudflare && k != KindExpo && k != KindDigitalOcean &&
-		k != KindScaleway && k != KindAWS
+		k != KindScaleway && k != KindAWS && k != KindGoogleCloud
 }

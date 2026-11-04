@@ -93,6 +93,9 @@ func seatFields(kind string) []seatField {
 	case "scaleway":
 		// The secret key first, as the credential; the access key names it.
 		return []seatField{{"SECRET_KEY", true}, {"ACCESS_KEY", true}}
+	case "google_cloud":
+		// The access token the engine issues at use for an hour, never sealed.
+		return []seatField{{"ACCESS_TOKEN", true}}
 	default:
 		return nil
 	}
@@ -123,9 +126,10 @@ func (c *Company) documentMode(kind string) SeatCredentialMode {
 
 // credentialKindOf is the integration whose seat credential an `mcp_env`
 // block named server carries, by the server's conventional name (Jira's and
-// Confluence's are Atlassian's), and whether it carries one.
+// Confluence's are Atlassian's, google-cloud is google_cloud's), and whether it
+// carries one.
 func credentialKindOf(server string) (string, bool) {
-	kind := SeatCredentialKind(server)
+	kind := SeatServerKind(server)
 	return kind, slices.Contains(SeatCredentialKinds(), kind)
 }
 

@@ -20,13 +20,14 @@ import (
 func TestDesiredRoundTripsThroughTheDocument(t *testing.T) {
 	t.Parallel()
 	cases := map[seataccess.Lane]seataccess.Desired{
-		seataccess.LaneDatadog:    {Enabled: true, Level: "role-1"},
-		seataccess.LaneGitLab:     {Enabled: true, Level: "30", Scope: []string{"acme/api", "acme/web"}},
-		seataccess.LaneJira:       {Enabled: true, Level: "10101", Scope: []string{"OPS"}},
-		seataccess.LaneConfluence: {Enabled: false, Level: "create:page read:space", Scope: []string{"ENG"}},
-		seataccess.LaneMattermost: {Enabled: true, Level: "system_user system_post_all", Scope: []string{"town-square"}},
-		seataccess.LaneSlack:      {Enabled: true},
-		seataccess.LaneExpo:       {Enabled: true, Level: "release_manager"},
+		seataccess.LaneDatadog:     {Enabled: true, Level: "role-1"},
+		seataccess.LaneGitLab:      {Enabled: true, Level: "30", Scope: []string{"acme/api", "acme/web"}},
+		seataccess.LaneJira:        {Enabled: true, Level: "10101", Scope: []string{"OPS"}},
+		seataccess.LaneConfluence:  {Enabled: false, Level: "create:page read:space", Scope: []string{"ENG"}},
+		seataccess.LaneMattermost:  {Enabled: true, Level: "system_user system_post_all", Scope: []string{"town-square"}},
+		seataccess.LaneSlack:       {Enabled: true},
+		seataccess.LaneExpo:        {Enabled: true, Level: "release_manager"},
+		seataccess.LaneGoogleCloud: {Enabled: true, Level: "operator", Scope: []string{"acme-data", "acme-web"}},
 		seataccess.LaneGitHub: {Enabled: true, Scope: []string{"acme/api"},
 			Permissions: seataccess.Permissions{"contents": seataccess.AccessRead, "workflows": seataccess.AccessWrite}},
 	}

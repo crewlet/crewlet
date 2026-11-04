@@ -1703,6 +1703,14 @@ or without egress. `GET /mcp-catalogue` serves it (see the
 | `stripe` | Stripe's remote server | OAuth, or an agent API key header |
 | `cloudflare` | The Cloudflare API server | the Cloudflare integration (each agent's own scoped token), OAuth, or an API token header |
 | `digitalocean` | DigitalOcean's MCP router | the DigitalOcean integration (each agent's own token), OAuth, or a token header |
+| `google-cloud-monitoring` | Google's Cloud Monitoring server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-logging` | Google's Cloud Logging server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-compute` | Google's Compute Engine server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-gke` | Google's Google Kubernetes Engine server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-run` | Google's Cloud Run server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-sql` | Google's Cloud SQL server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-storage` | Google's Cloud Storage server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
+| `google-cloud-resource-manager` | Google's Resource Manager server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
 | `expo` | Expo's hosted server | OAuth, as the person who signs it in. Each agent's own robot token signs in the EAS CLI instead, through its `sandbox.env` (see [Expo](../integrations/expo.md#the-agents-expo-tools)) |
 | `aws` | AWS's MCP Server, one per agent | the AWS integration: the engine signs each request as the agent's own IAM role, so no credential is entered or sent (see [AWS](../integrations/aws.md#the-agents-tools)) |
 | `gitlab` | `glab mcp serve`, one per agent | the GitLab integration |
@@ -1930,8 +1938,8 @@ Two things MCP does not cover, and what to do instead:
   [GitLab](../integrations/gitlab.md), [GitHub](../integrations/github.md) and
   [Datadog](../integrations/datadog.md), plus Atlassian's own Forge relay, and
   every one of them routes end to end. [Cloudflare](../integrations/cloudflare.md),
-  [Expo](../integrations/expo.md) and [DigitalOcean](../integrations/digitalocean.md)
-  receive nothing yet: they provision each agent's credential and its tool only. A config block the engine cannot honour
+  [Expo](../integrations/expo.md), [DigitalOcean](../integrations/digitalocean.md)
+  and [Google Cloud](../integrations/google-cloud.md) receive nothing yet: they provision each agent's credential and its tool only. A config block the engine cannot honour
   is refused rather than ignored, because a silently dropped integration block
   looks exactly like one that is working until somebody notices the messages
   never arrived.
@@ -2492,7 +2500,8 @@ When the engine launches a per-role MCP server instance, it merges the base serv
 ### Seat credentials the engine binds
 
 For an integration the engine manages an account or a credential on
-(Atlassian, AWS, Cloudflare, Datadog, DigitalOcean, Expo, GitHub, GitLab, Mattermost, Scaleway, Slack), a
+(Atlassian, AWS, Cloudflare, Datadog, DigitalOcean, Expo, GitHub, GitLab, Google Cloud,
+Mattermost, Scaleway, Slack), a
 seat's own credential is never named in
 `mcp_env`. The engine seals it under a name it derives from the handle and
 binds it to every per-seat server (`shared: false`) that reads that
@@ -2510,7 +2519,7 @@ mcp_servers:
     shared: false
     url: "https://mcp.example.com/"
     seat_credentials:
-      - kind: atlassian          # atlassian | cloudflare | datadog | digitalocean | expo | github | gitlab | mattermost | scaleway | slack
+      - kind: atlassian          # atlassian | cloudflare | datadog | digitalocean | expo | github | gitlab | google_cloud | mattermost | scaleway | slack
         field: EMAIL             # optional: Atlassian's TOKEN or EMAIL, Scaleway's SECRET_KEY or ACCESS_KEY; empty is the credential itself
         key: X-Atlassian-User    # the variable (stdio) or header (http) the server reads
       - kind: atlassian
@@ -2529,6 +2538,7 @@ recognition:
 | Datadog's remote server | a `datadoghq.` or `ddog-gov.` host | `DD_APPLICATION_KEY` |
 | The Cloudflare API server | `mcp.cloudflare.com` | `Authorization: Bearer <seat token>` |
 | DigitalOcean's MCP router and services | `mcp.digitalocean.com` or a host under it | `Authorization: Bearer <seat token>` |
+| Google's managed Google Cloud servers | the host of each: `monitoring`, `logging`, `compute`, `container`, `run`, `sqladmin`, `storage` and `cloudresourcemanager`, each `.googleapis.com` | `Authorization: Bearer <the agent's issued access token>` |
 | GitHub's remote server | `api.githubcopilot.com` | `Authorization: Bearer <installation token>` |
 | GitHub's local server | a `github-mcp-server` command or image | `GITHUB_PERSONAL_ACCESS_TOKEN` |
 | `glab mcp serve` | the `glab` command with `mcp` | `GITLAB_TOKEN` |

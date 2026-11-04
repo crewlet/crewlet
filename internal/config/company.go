@@ -1212,6 +1212,8 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.Scaleway != nil
 	case "aws":
 		return in.AWS != nil
+	case "google_cloud":
+		return in.GoogleCloud != nil
 	case "atlassian":
 		return in.Atlassian != nil
 	default:

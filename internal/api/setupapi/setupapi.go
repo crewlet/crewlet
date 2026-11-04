@@ -101,6 +101,7 @@ import (
 	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
@@ -1038,6 +1039,15 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.AWS
 		summary = awsint.Summary()
 		reqs = awsint.Requirements(block, company.Name, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindGoogleCloud:
+		// NO ROSTER HERE, as for Expo: each agent's service account is
+		// listed on the integration's Agents tab from the access ledger,
+		// and its token is issued at use, never named in the document.
+		block := company.Integrations.GoogleCloud
+		summary = googlecloud.Summary()
+		reqs = googlecloud.Requirements(company.Name, block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

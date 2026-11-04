@@ -978,6 +978,8 @@ func LaneName(lane Lane) string {
 		return "Scaleway"
 	case LaneAWS:
 		return "AWS"
+	case LaneGoogleCloud:
+		return "Google Cloud"
 	default:
 		return string(lane)
 	}

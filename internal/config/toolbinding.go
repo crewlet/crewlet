@@ -41,7 +41,7 @@ import (
 // `mcp_servers` entry declares it.
 type SeatCredential struct {
 	// Kind is the integration whose seat credential it is.
-	Kind string `yaml:"kind" json:"kind" js:"required;enum=atlassian|cloudflare|datadog|digitalocean|expo|github|gitlab|mattermost|scaleway|slack" desc:"Integration whose per-seat credential this server reads."`
+	Kind string `yaml:"kind" json:"kind" js:"required;enum=atlassian|cloudflare|datadog|digitalocean|expo|github|gitlab|google_cloud|mattermost|scaleway|slack" desc:"Integration whose per-seat credential this server reads."`
 
 	// Field is which of the integration's seat credentials: TOKEN or EMAIL
 	// for Atlassian; empty is the integration's credential itself.
@@ -75,7 +75,7 @@ func SeatToolFields(kind string) []string {
 // SeatCredentialKinds is every integration a server can read a seat
 // credential of.
 func SeatCredentialKinds() []string {
-	return []string{"atlassian", "cloudflare", "datadog", "digitalocean", "expo", "github", "gitlab", "mattermost", "scaleway", "slack"}
+	return []string{"atlassian", "cloudflare", "datadog", "digitalocean", "expo", "github", "gitlab", "google_cloud", "mattermost", "scaleway", "slack"}
 }
 
 // SeatCredentialKind is the integration a seat block's lane belongs to:
@@ -85,6 +85,18 @@ func SeatCredentialKind(lane string) string {
 		return "atlassian"
 	}
 	return lane
+}
+
+// SeatServerName is the name a server named after lane's integration carries,
+// in a server name's alphabet: the lane's key with its underscores as hyphens,
+// so google_cloud's server is google-cloud.
+func SeatServerName(lane string) string { return strings.ReplaceAll(lane, "_", "-") }
+
+// SeatServerKind is the integration a server, or an `mcp_env` block, named
+// after one belongs to ([SeatServerName]): the inverse of SeatServerName,
+// read through [SeatCredentialKind].
+func SeatServerKind(server string) string {
+	return SeatCredentialKind(strings.ReplaceAll(server, "-", "_"))
 }
 
 // SeatToolBindingFor is the conventional recognised server for lane's
@@ -236,7 +248,7 @@ func (c *Company) UnboundSeatServers(kind string) []string {
 	var out []string
 	for i := range c.MCPServers {
 		server := &c.MCPServers[i]
-		if server.IsShared() || SeatCredentialKind(server.Name) != kind {
+		if server.IsShared() || SeatServerKind(server.Name) != kind {
 			continue
 		}
 		if len(server.SeatBindings()) == 0 {

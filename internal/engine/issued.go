@@ -22,9 +22,10 @@ import (
 // Some integrations never seal an agent's credential: the engine issues it
 // when one of the seat's values names it, from what the integration does hold,
 // and it lives about an hour. GitHub's installation token, minted from the
-// agent's own app key, is one (githubtoken.go). Configuration names such a
-// credential the way it names every other, as a `${VAR}`, in the three places
-// a seat's credentials are read:
+// agent's own app key, is one (githubtoken.go); Google Cloud's access token,
+// minted for the agent's own service account, is another (googlecloudtoken.go).
+// Configuration names such a credential the way it names every other, as a
+// `${VAR}`, in the three places a seat's credentials are read:
 //
 //   - its tool servers' `role.mcp_env` block, read by [seatSpecs] for the
 //     servers this node runs for the seat;
@@ -229,7 +230,11 @@ func (e *Engine) seatIssuers() []seatIssuer {
 	if e.issuers != nil {
 		return e.issuers
 	}
-	return []seatIssuer{githubSeatIssuer{issuer: &e.githubIssuer}, awsSeatIssuer{issuer: &e.awsIssuer}}
+	return []seatIssuer{
+		githubSeatIssuer{issuer: &e.githubIssuer},
+		awsSeatIssuer{issuer: &e.awsIssuer},
+		googleCloudSeatIssuer{engine: e, tokens: &e.googleCloudIssuer},
+	}
 }
 
 // seatToken answers one variable an integration issues one seat, issued at

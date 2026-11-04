@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/whsec"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -44,6 +45,14 @@ const (
 	// self-signed certificate, both PEM ([GenerateCertificateAuthority]).
 	// Only ever minted, never pasted.
 	ShapeCertificateAuthority Shape = "certificate_authority"
+
+	// ShapeGoogleServiceAccount is a Google Cloud service account's email,
+	// `<id>@<project>.iam.gserviceaccount.com`, as config holds it.
+	ShapeGoogleServiceAccount Shape = "google_service_account"
+
+	// ShapeGoogleProvider is a workload identity provider's full resource
+	// name, as config holds it.
+	ShapeGoogleProvider Shape = "google_workload_provider"
 
 	// ShapeUUID is a vendor identifier or secret written as a UUID, such as
 	// a Scaleway Organization ID or secret key: 32 hexadecimal digits in
@@ -104,6 +113,19 @@ func (s Shape) Problem(noun, value string) string {
 		}
 		return fmt.Sprintf("This %s is not a Scaleway access key: it is SCW followed by 17 capital "+
 			"letters or digits, 20 characters in all. Paste the access key shown beside the secret key.", noun)
+	case ShapeGoogleServiceAccount:
+		if _, ok := config.GoogleCloudServiceAccount(value); ok {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not a service account's email: it reads "+
+			"<id>@<project>.iam.gserviceaccount.com, as the service account's page shows it.", noun)
+	case ShapeGoogleProvider:
+		if config.GoogleCloudProvider(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not a workload identity provider's full name: it reads "+
+			"projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>, "+
+			"as the last line the Cloud Shell block prints.", noun)
 	case ShapeOpaqueToken:
 	default:
 		return ""
@@ -137,9 +159,9 @@ func opaqueTokenRune(r rune) bool {
 // bits of entropy, URL-safe and safe to paste into a third-party app's header
 // field, which is where a shared token ends up.
 //
-// A VENDOR-ISSUED IDENTIFIER IS NEVER MINTED: a value of [ShapeUUID] or
-// [ShapeScalewayAccessKey] names something the vendor made, and one Crewlet
-// made up would name nothing.
+// A VENDOR-ISSUED IDENTIFIER IS NEVER MINTED: a value of [ShapeUUID],
+// [ShapeScalewayAccessKey], [ShapeGoogleServiceAccount] or [ShapeGoogleProvider]
+// names something the vendor made, and one Crewlet made up would name nothing.
 func (s Shape) Mint(token func() string) (string, error) {
 	switch s {
 	case ShapeSigningKey:
@@ -148,7 +170,7 @@ func (s Shape) Mint(token func() string) (string, error) {
 		return GenerateCertificateAuthority(CertificateAuthorityName(), time.Now())
 	case ShapeES256Key:
 		return mintES256()
-	case ShapeUUID, ShapeScalewayAccessKey:
+	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider:
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
 	default:
 		return token(), nil
