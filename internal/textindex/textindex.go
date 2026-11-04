@@ -1,6 +1,8 @@
 // Package textindex is the engine's own lexical search: an analyzer that
-// turns a document into terms, and a BM25 ranker over the inverted list those
-// terms are stored in.
+// turns a document into terms, a BM25 ranker over the inverted list those
+// terms are stored in, and [Find], which asks the same of one text no index
+// holds — whether it holds a query's every term, and where the first is — and
+// [FindIn] of one handed over in pieces.
 //
 // # Why the engine has one at all
 //
@@ -37,9 +39,11 @@
 package textindex
 
 import (
+	"iter"
 	"math"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // A Profile is one corpus's BM25 tuning, chosen by the index that ranks with
@@ -173,7 +177,10 @@ func Analyze(text string) map[string]int {
 		return nil
 	}
 	terms := map[string]int{}
-	tokenize(text, func(term string) { terms[term]++ })
+	tokenize(text, func(term []byte, _ int) bool {
+		terms[string(term)]++
+		return true
+	})
 	if len(terms) == 0 {
 		return nil
 	}
@@ -194,39 +201,109 @@ func Analyze(text string) map[string]int {
 func Terms(query string) []string {
 	var out []string
 	seen := map[string]bool{}
-	tokenize(query, func(term string) {
-		if seen[term] {
-			return
+	tokenize(query, func(term []byte, _ int) bool {
+		if seen[string(term)] {
+			return true
 		}
-		seen[term] = true
-		out = append(out, term)
+		seen[string(term)] = true
+		out = append(out, string(term))
+		return true
 	})
 	return out
 }
 
-// tokenize splits text into terms and hands each to yield, in order.
-func tokenize(text string, yield func(term string)) {
-	var b strings.Builder
-	flush := func() {
-		if b.Len() == 0 {
-			return
-		}
-		term := b.String()
-		b.Reset()
-		if len(term) < MinTermLength {
-			return
-		}
-		if len(term) > MaxTermLength {
-			term = truncateTerm(term)
-		}
-		yield(term)
+// Find reports where in text the earliest occurrence of any of terms begins —
+// the byte offset of its first character, -1 where none occurs — and whether
+// text holds every one of them. Terms are a query's as [Terms] makes them, and
+// each is found only as a whole term [Analyze] makes of text: "deploy" is not
+// in "redeployment", and "Deploy" is in "deploy-pipeline". No terms at all are
+// found nowhere: (-1, false), as a query of no words matches nothing.
+//
+// THROUGH THE ONE TOKENIZER, for [Terms]' reason: a match decided by any other
+// reading of the text — a substring, another rule for case or for what splits
+// a word — is one a search through the index would not make, and a word
+// plainly in the text would be found by one and not by the other. And
+// STREAMING: it reads text once, holds no term of it past the comparison, and
+// stops as soon as every term has been seen, so a text of mebibytes costs one
+// pass and no allocation per word.
+func Find(text string, terms []string) (first int, all bool) {
+	return FindIn(func(yield func(int, string) bool) { yield(0, text) }, terms)
+}
+
+// FindIn is [Find] over a text handed over in pieces, in order, each with the
+// byte offset in the text it begins at: first is an offset in the whole text.
+// A term is read within one piece and never across two, so pieces are cut
+// where no term runs on — the stretches a redaction left between the markers
+// it wrote, say (internal/redact's OwnWords), which a reader of the redacted
+// text is shown as its own words, apart from the marker's.
+//
+// IN PIECES RATHER THAN A COPY OF THE TEXT WITH THE GAPS BLANKED, which would
+// be one more copy of a text that may run to mebibytes, made only to be
+// scanned once.
+func FindIn(pieces iter.Seq2[int, string], terms []string) (first int, all bool) {
+	if len(terms) == 0 {
+		return -1, false
 	}
-	for _, r := range text {
+	seen := make(map[string]bool, len(terms))
+	for _, term := range terms {
+		seen[term] = false
+	}
+	first, missing := -1, len(seen)
+	for offset, piece := range pieces {
+		tokenize(piece, func(term []byte, at int) bool {
+			found, wanted := seen[string(term)]
+			if !wanted {
+				return true
+			}
+			if first < 0 {
+				first = offset + at
+			}
+			if !found {
+				seen[string(term)] = true
+				missing--
+			}
+			return missing > 0
+		})
+		if missing == 0 {
+			break
+		}
+	}
+	return first, missing == 0
+}
+
+// tokenize splits text into terms and hands each to yield, in order, with the
+// byte offset in text where the term's first character is; it stops where
+// yield answers false. A term is handed over as bytes that are valid only
+// until yield returns: a caller that keeps one copies it, and one that only
+// compares it allocates nothing.
+func tokenize(text string, yield func(term []byte, at int) bool) {
+	var term []byte
+	start := 0
+	flush := func() bool {
+		if len(term) == 0 {
+			return true
+		}
+		whole := term
+		term = term[:0]
+		if len(whole) < MinTermLength {
+			return true
+		}
+		if len(whole) > MaxTermLength {
+			whole = truncateTerm(whole)
+		}
+		return yield(whole, start)
+	}
+	for at, r := range text {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(unicode.ToLower(r))
+			if len(term) == 0 {
+				start = at
+			}
+			term = utf8.AppendRune(term, unicode.ToLower(r))
 			continue
 		}
-		flush()
+		if !flush() {
+			return
+		}
 	}
 	flush()
 }
@@ -239,7 +316,7 @@ func tokenize(text string, yield func(term string)) {
 // different term and never match it. (internal/textcut carries the general
 // form of this rule; it is inlined here because this cut appends nothing and
 // the two must not drift into needing each other.)
-func truncateTerm(term string) string {
+func truncateTerm[T ~string | ~[]byte](term T) T {
 	cut := MaxTermLength
 	for cut > 0 && !isRuneStart(term[cut]) {
 		cut--
