@@ -32,7 +32,7 @@ func TestCleanTextSkipsEveryReplacement(t *testing.T) {
 	guarded := testing.AllocsPerRun(100, func() { _ = Secrets(text) })
 	unguarded := testing.AllocsPerRun(100, func() {
 		s := text
-		for _, r := range rules {
+		for _, r := range rules() {
 			s = r.pattern.ReplaceAllLiteralString(s, r.with)
 		}
 		_ = s
@@ -41,7 +41,7 @@ func TestCleanTextSkipsEveryReplacement(t *testing.T) {
 	// at least that. A bare `guarded < unguarded` would pass on measurement
 	// noise: under the race detector each regexp execution allocates, and
 	// the two loops execute a different number of them.
-	saved := float64(len(rules))
+	saved := float64(len(rules()))
 	if unguarded-guarded < saved {
 		t.Errorf("Secrets over clean text allocated %v per call against %v for the "+
 			"unguarded loop — the match test saved less than one allocation per "+

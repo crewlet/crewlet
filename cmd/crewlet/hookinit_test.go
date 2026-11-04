@@ -40,9 +40,10 @@ import (
 // The two bounds, and why each:
 //
 //   - hookInitPackageBytes, 256 KiB, for one package: the largest any package
-//     of this module allocates at init today is redact's, about 195 KB of
-//     patterns (10 KB of it the engine's own run-token shape), with the event
-//     types' next at 93, and the webhooks pages parsed at init were 315 KB —
+//     of this module allocates at init today is redact's, about 132 KB of
+//     patterns — 195 before its token rules, the engine's own run-token shape
+//     10 KB of them, were built at first use — with the event types' next at
+//     93, and the webhooks pages parsed at init were 315 KB —
 //     about 2 ms of every push — before they were built at their first
 //     request. A package that needs more builds it at first use
 //     (sync.OnceValue), as the password blocklist does (140 KB) and the code
@@ -76,7 +77,8 @@ import (
 //     a second webhooks-sized global anywhere fails it, while a toolchain's
 //     change to what a compiled pattern allocates, within the 140 KB left,
 //     does not; growth past that is built at first use rather than bought
-//     with a larger bound.
+//     with a larger bound, as redact's token rules were: 62 KB off its init,
+//     for 1.41 MB in the plain build.
 const (
 	hookInitPackageBytes = 256 << 10
 	hookInitBytes        = 3 << 19

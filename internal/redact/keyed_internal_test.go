@@ -157,7 +157,7 @@ func spellings(word string) []string {
 // keyed scan, and this fails.
 func TestEveryRuleOpensWithALiteralOrIsKeyed(t *testing.T) {
 	t.Parallel()
-	for _, r := range rules {
+	for _, r := range rules() {
 		if prefix, _ := r.pattern.LiteralPrefix(); prefix == "" && r.keyed == nil {
 			t.Errorf("rule %q opens with no literal for the regexp to skip ahead on and is not keyed: "+
 				"it would run over every byte of every text — build it with keyedOn", r.pattern)

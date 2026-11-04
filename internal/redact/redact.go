@@ -89,6 +89,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
@@ -333,7 +334,7 @@ func armourAt(text string, i int) bool {
 // another: sk-proj- is checked before the bare sk- that would otherwise
 // swallow it and label an OpenAI project key as a plain api-key. It matters
 // too where one shape can HOLD another, which is why the run token is first
-// ([runTokenRule]).
+// ([runTokenPattern]).
 //
 // Go's regexp is RE2: no backtracking, so matching is linear in the input
 // whatever the pattern — which matters here, because this pass runs over
@@ -341,25 +342,34 @@ func armourAt(text string, i int) bool {
 // opens with a literal RE2 skips ahead on, or is [keyed] on the words it opens
 // with instead.
 //
+// BUILT AT FIRST USE, NOT AT INIT. The code host's push hook is this binary,
+// and pays every package's init on every push (cmd/crewlet's
+// hookinit_test.go) for a process that redacts nothing; a token's bounded
+// repeat compiles to a program holding every count, the run token's alone
+// about 10 KB, and compiled at init, the table's ten tokens were 62 KB of this
+// package's 195 (GODEBUG=inittrace).
+//
 // A PRIVATE KEY IS NOT A RULE HERE. It is the one shape that spans lines, and
 // the one whose end may not have been written yet, so it is found by
 // [keyBlocks] — before every rule below, so a token shape that happens to occur
 // inside a key's body is taken with the block rather than leaving it split.
-var rules = []rule{
-	runTokenRule,
-	token(`sk-proj-[A-Za-z0-9_-]{20,}`, "api-key"),
-	token(`sk-ant-[A-Za-z0-9_-]{20,}`, "api-key"),
-	token(`sk-[A-Za-z0-9_-]{20,}`, "api-key"),
-	token(`xox[bpsare]-[A-Za-z0-9-]{20,}`, "slack-token"),
-	token(`AKIA[A-Z0-9]{16}`, "aws-key"),
-	token(`gh[pousr]_[A-Za-z0-9]{36,}`, "github-token"),
-	token(`github_pat_[A-Za-z0-9_]{50,}`, "github-token"),
-	token(`glpat-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
-	token(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
-	passwordRule.valued(passwordMarker, passwordValue),
-}
+var rules = sync.OnceValue(func() []rule {
+	return []rule{
+		token(runTokenPattern, "run-token"),
+		token(`sk-proj-[A-Za-z0-9_-]{20,}`, "api-key"),
+		token(`sk-ant-[A-Za-z0-9_-]{20,}`, "api-key"),
+		token(`sk-[A-Za-z0-9_-]{20,}`, "api-key"),
+		token(`xox[bpsare]-[A-Za-z0-9-]{20,}`, "slack-token"),
+		token(`AKIA[A-Z0-9]{16}`, "aws-key"),
+		token(`gh[pousr]_[A-Za-z0-9]{36,}`, "github-token"),
+		token(`github_pat_[A-Za-z0-9_]{50,}`, "github-token"),
+		token(`glpat-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
+		token(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
+		passwordRule.valued(passwordMarker, passwordValue),
+	}
+})
 
-// runTokenRule is the engine's OWN per-run token (internal/runtoken): the
+// runTokenPattern is the engine's OWN per-run token (internal/runtoken): the
 // credential the telemetry receiver's endpoint, the tool bridge's URL and an
 // artifact view ticket each carry, `crewlet_rt1.<tag>.<subject>.<expiry>.<sig>`.
 //
@@ -388,7 +398,7 @@ var rules = []rule{
 // replace the piece it knows and leave the rest of the token, its signature
 // among it, in the text — or read the token's own `crewlet_rt1` as the end of
 // the key before it, and leave the rest.
-var runTokenRule = token(`crewlet_rt1\.[A-Za-z0-9_-]{8}\.[^.\s\[]*\.[0-9]+\.[A-Za-z0-9_-]{43}`, "run-token")
+const runTokenPattern = `crewlet_rt1\.[A-Za-z0-9_-]{8}\.[^.\s\[]*\.[0-9]+\.[A-Za-z0-9_-]{43}`
 
 // token is the rule that replaces each match of pattern with the marker for
 // what it is.
@@ -1493,7 +1503,7 @@ type valueHold struct {
 // that the whole text left as it was.
 func passwordInput(text string, spans [][2]int) written {
 	w := written{text: text}.replace(spans, keyMarker)
-	for _, r := range rules {
+	for _, r := range rules() {
 		if r.value != nil {
 			break
 		}
@@ -1917,7 +1927,7 @@ func Secrets(text string) string {
 		b.WriteString(text[at:])
 		text = b.String()
 	}
-	for _, r := range rules {
+	for _, r := range rules() {
 		text = r.apply(text)
 	}
 	return text
@@ -1937,7 +1947,7 @@ func Contains(text string) bool {
 	if len(keySpans(text)) > 0 {
 		return true
 	}
-	for _, r := range rules {
+	for _, r := range rules() {
 		if r.in(text) {
 			return true
 		}
