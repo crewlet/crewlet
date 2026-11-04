@@ -230,7 +230,11 @@ func TestAFireIsNeverTakenAsTheAnswerToTheLastFire(t *testing.T) {
 	eventually(t, "the next fire to be handled", func() bool {
 		return len(s.ordinary.ran()) == 1 || mustRun(t, s.store, "f1").Answer != nil
 	})
-	settle()
+	// SETTLED, so what follows is final: every event published to the seat's
+	// mail and its control topic acknowledged, and nothing in flight — an
+	// answer recorded, or a resume, only after the fire's turn would have
+	// been published first.
+	s.mail.settled(t, s.inbox(), s.control())
 	if run := mustRun(t, s.store, "f1"); run.Status != sandbox.StatusAwaiting || run.Answer != nil {
 		t.Fatalf("the last fire's run is %q with the answer %+v, want it still waiting on its question",
 			run.Status, run.Answer)
