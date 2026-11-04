@@ -320,19 +320,11 @@ func judgeServers(w *decltype.World, f *decltype.File, out *serverWalk) {
 		// rule: every store it assigns, and whether it sets a limit anywhere.
 		var stores []serverSite
 		sized := false
-		// elided is the type of each literal whose collection elides it, as
-		// the collection gives it.
-		elided := map[*ast.CompositeLit]decltype.Type{}
 		ast.Inspect(decl, func(n ast.Node) bool {
 			switch x := n.(type) {
 			case *ast.CompositeLit:
-				typ, ok := elided[x]
-				if !ok && x.Type != nil {
-					typ = w.TypeOf(x, f)
-				}
-				elide(w, x, typ, elided)
 				store, enables, limit := keyed(x, "StoreDir"), enabled(x), keyed(x, "JetStreamMaxStore")
-				name, named := w.Named(typ)
+				name, named := w.Named(w.TypeOf(x, f))
 				switch {
 				case !named && (store || enables):
 					out.untyped = append(out.untyped, serverSite{file: f.Rel, line: line(x), fn: label,
@@ -393,41 +385,6 @@ func judgeServers(w *decltype.World, f *decltype.File, out *serverWalk) {
 		case len(stores) > 0:
 			out.declared[shapeAssignment]++
 		}
-	}
-}
-
-// elide records, for each element of the literal lit whose type it elides,
-// the type lit's own type typ gives it: a slice's or an array's element, a
-// map's key or value. A literal whose type the walk does not know gives none,
-// and an element it elides is then a literal of no known type.
-func elide(w *decltype.World, lit *ast.CompositeLit, typ decltype.Type, elided map[*ast.CompositeLit]decltype.Type) {
-	under, how := w.Underlying(typ)
-	if how != decltype.Resolved {
-		return
-	}
-	var key, elem decltype.Type
-	switch x := under.Expr().(type) {
-	case *ast.ArrayType:
-		elem = under.In(x.Elt)
-	case *ast.MapType:
-		key, elem = under.In(x.Key), under.In(x.Value)
-	default:
-		return
-	}
-	set := func(e ast.Expr, t decltype.Type) {
-		if c, ok := e.(*ast.CompositeLit); ok && c.Type == nil {
-			elided[c] = t
-		}
-	}
-	for _, e := range lit.Elts {
-		if kv, ok := e.(*ast.KeyValueExpr); ok {
-			if key.Known() {
-				set(kv.Key, key)
-			}
-			set(kv.Value, elem)
-			continue
-		}
-		set(e, elem)
 	}
 }
 
