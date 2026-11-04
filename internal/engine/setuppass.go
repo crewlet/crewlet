@@ -74,6 +74,10 @@ import (
 //
 // Cloudflare reads its provisioner token and account, and its access sync
 // mints, narrows, rolls and deletes one account API token per agent.
+//
+// Scaleway reads its provisioner key and organization, and its access sync
+// makes, narrows, rotates and deletes one IAM application, policy and API key
+// per agent.
 func (e *Engine) setupPasses() []setup.Pass {
 	return []setup.Pass{
 		&slackPass{engine: e},
@@ -84,6 +88,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&mattermostPass{engine: e},
 		&datadogPass{engine: e},
 		&cloudflarePass{engine: e},
+		&scalewayPass{engine: e},
 		&expoPass{engine: e},
 		&digitaloceanPass{engine: e},
 		&atlassianPass{engine: e},

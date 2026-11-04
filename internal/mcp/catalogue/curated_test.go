@@ -221,6 +221,7 @@ var replaced = []struct {
 		{"TOKEN", "CONFLUENCE_API_TOKEN", "", ""}, {"EMAIL", "CONFLUENCE_USERNAME", "", ""}}},
 	{"cloudflare", "cloudflare", []key{{"API_TOKEN", "", "Authorization", "Bearer "}}},
 	{"digitalocean", "digitalocean", []key{{"TOKEN", "", "Authorization", "Bearer "}}},
+	{"scaleway", "scaleway", []key{{"SECRET_KEY", "SCW_SECRET_KEY", "", ""}, {"ACCESS_KEY", "SCW_ACCESS_KEY", "", ""}}},
 }
 
 func keysOf(in []catalogue.SeatKey) []key {
@@ -288,6 +289,9 @@ func TestRecognitionMatchesTheSeatBindingsItReplaces(t *testing.T) {
 		{"DigitalOcean's API itself", remote("https://api.digitalocean.com/v2/"), "", nil},
 		{"a lookalike of DigitalOcean's router", remote("https://mcp.digitalocean.com.example.net/mcp"), "", nil},
 		{"DigitalOcean's host spelled on stdio", stdio("curl", "https://mcp.digitalocean.com/mcp"), "", nil},
+		{"scw serving MCP", stdio("scw", "mcp", "server", "serve"), "scaleway", bound(9)},
+		{"scw by its path", stdio("/usr/local/bin/scw", "mcp", "server", "serve", "namespaces=instance"), "scaleway", bound(9)},
+		{"scw doing something else", stdio("scw", "instance", "server", "list"), "", nil},
 		{"a server nobody recognises", stdio("uvx", "some-server==1.0.0"), "", nil},
 		{"an address nobody recognises", remote("https://mcp.example.com/"), "", nil},
 		{"an address that does not parse", remote("://mcp.datadoghq.com"), "", nil},

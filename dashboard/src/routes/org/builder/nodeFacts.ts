@@ -197,7 +197,8 @@ export type Tool =
   | "atlassian"
   | "cloudflare"
   | "expo"
-  | "digitalocean";
+  | "digitalocean"
+  | "scaleway";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -212,6 +213,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   cloudflare: "Cloudflare",
   expo: "Expo",
   digitalocean: "DigitalOcean",
+  scaleway: "Scaleway",
 };
 
 /**
@@ -454,6 +456,9 @@ const VENDOR_LANES = {
  * NOTHING FOR DIGITALOCEAN: a seat's token is all it has there, and Crewlet
  * revokes it itself once the seat is off or gone, so nothing is left to
  * decommission.
+ *
+ * NOTHING FOR SCALEWAY: a seat's IAM application, policy and API key are all it
+ * has there, and the engine deletes them once the seat is off or gone.
  */
 export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
   if (isMintedKey(seat.key)) return [];

@@ -160,6 +160,7 @@ const SURFACE_NAMES: Record<string, string> = {
   cloudflare: "Cloudflare",
   expo: "Expo",
   digitalocean: "DigitalOcean",
+  scaleway: "Scaleway",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -228,6 +229,14 @@ export const CATALOG: Entry[] = [
     vendor: "cloudflare",
     surfaces: surfacesOf("cloudflare"),
     doc: "cloudflare",
+  },
+  {
+    key: "scaleway",
+    name: "Scaleway",
+    description: "Projects, servers, networks and storage, with an IAM application per agent.",
+    vendor: "scaleway",
+    surfaces: surfacesOf("scaleway"),
+    doc: "scaleway",
   },
   {
     key: "expo",

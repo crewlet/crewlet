@@ -1,0 +1,42 @@
+// Package scaleway gives each agent seat its own Scaleway IAM application,
+// with one policy granting the seat's level on its projects and its own API
+// key.
+//
+// # An application per seat
+//
+// Scaleway's non-human principal is the IAM application: it holds API keys and
+// is the principal of policies, so each agent acts as itself and its actions
+// are attributable and revocable on their own. The per-seat access vendor
+// ([seataccess.Vendor]) makes the application through the company's provisioner
+// key, writes its one policy, mints its key, rewrites the policy's rules when
+// the seat's level or projects change, rotates the key before it expires, and
+// deletes all three when the seat is turned off.
+//
+// # Only what the ledger records is the engine's
+//
+// Application names are not unique and anyone holding IAM rights can create
+// one under any name, so a name is never proof of provenance. The engine acts
+// only on application IDs its ledger recorded when it made them. On such an
+// application, the policy named for the seat is the engine's and every other
+// policy is a grant somebody else made, reported and never deleted.
+//
+// # The provisioner can reach the whole organization
+//
+// Scaleway checks no grant against what its granter holds, and no condition
+// can tell one application's keys from another's. So the provisioner key can
+// mint a key for, and grant anything to, any application in the organization.
+// What bounds an agent is this package's fixed level table and its
+// never-granted list, both held by tests.
+//
+// # The key reaches the agent's box by reference
+//
+// The seat's secret key and access key are sealed as
+// SCALEWAY_SECRET_KEY_<HANDLE> and SCALEWAY_ACCESS_KEY_<HANDLE>. The scw CLI in
+// the seat's box reads them as SCW_SECRET_KEY and SCW_ACCESS_KEY, two lines of
+// `role.sandbox.env`, and the engine supplies the organization and the default
+// project itself ([accessVendor.BoxDefaults]).
+package scaleway
+
+// Backend is the integration's name: the config block's key, the integration
+// kind and the seat access lane.
+const Backend = "scaleway"

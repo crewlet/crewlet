@@ -53,6 +53,20 @@ func (e *Engine) SeatAccessLedger() (seataccess.Ledger, error) {
 // kind, by the seat's handle: the agents' accounts the access sync manages,
 // which a company-level pass leaves to it or touches only as its own.
 func (e *Engine) seatAccessAccounts(ctx context.Context, kind integration.Kind) (map[string]string, error) {
+	records, err := e.seatAccessHeld(ctx, kind)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(records))
+	for handle, rec := range records {
+		out[handle] = rec.Account.ID
+	}
+	return out, nil
+}
+
+// seatAccessHeld is every ledger record of kind that holds an account, by
+// seat handle.
+func (e *Engine) seatAccessHeld(ctx context.Context, kind integration.Kind) (map[string]seataccess.Record, error) {
 	ledger, err := e.SeatAccessLedger()
 	if err != nil {
 		return nil, err
@@ -61,10 +75,10 @@ func (e *Engine) seatAccessAccounts(ctx context.Context, kind integration.Kind) 
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]string, len(records))
+	out := make(map[string]seataccess.Record, len(records))
 	for handle, rec := range records {
 		if rec.Held() {
-			out[handle] = rec.Account.ID
+			out[handle] = rec
 		}
 	}
 	return out, nil
@@ -439,10 +453,14 @@ func (e *Engine) seatAccessPlan(c *Company, kind integration.Kind) (*provision.P
 		}
 		sinks := seataccess.SinkNames(cat, seat.Handle)
 		s := provision.Seat{Handle: seat.Handle, Role: seat.Name, TokenVar: sinks[cat.Credentials[0]]}
-		if len(cat.Credentials) > 1 && kind == integration.KindAtlassian {
-			// ATLASSIAN ASSIGNS THE ADDRESS, and its product APIs refuse
-			// the token without it ([provision.Seat.EmailVar]).
-			s.EmailVar = sinks[cat.Credentials[1]]
+		// EVERY OTHER VALUE THE SEAT'S TOOL READS that this sync seals
+		// beside the credential ([provision.Seat.AlsoVars]): Atlassian's
+		// address, Scaleway's access key. One the engine issues at use,
+		// such as GitHub's installation token, is sealed by nobody.
+		for _, field := range config.SeatToolFields(string(kind)) {
+			if name := sinks[field]; name != "" && field != cat.Credentials[0] {
+				s.AlsoVars = append(s.AlsoVars, name)
+			}
 		}
 		plan.Add(s)
 	}

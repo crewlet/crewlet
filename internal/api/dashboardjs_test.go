@@ -1815,7 +1815,13 @@ const (
 	// Merged again with it, main's +6,031 bytes came to 6,032 bytes on the
 	// merged tree, taking it from 5486.9 KiB (5,618,606 bytes) to 5492.8 KiB
 	// (5,624,638 bytes). It moved by main's own 6 KiB, from 5487 KiB: 5493 KiB.
-	treeBudget = 5<<20 + 373<<10
+	// The Scaleway integration (its catalogue entry, story and Agents tab
+	// words, its tool named server first as DigitalOcean's is, and the org
+	// builder's Scaleway facts), merged onto that tree, took it from 5492.8 KiB
+	// (5,624,638 bytes) to 5494.6 KiB (5,626,424 bytes, +1,786 bytes). The
+	// initial load did not grow. It moved up to the measured size's next KiB:
+	// 5495 KiB, 456 bytes clear.
+	treeBudget = 5<<20 + 375<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
