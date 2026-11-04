@@ -51,6 +51,10 @@ const openCodeUsageBefore = "crewlet.usage_before"
 // coming up.
 const openCodeListenWait = 60 * time.Second
 
+// openCodeClock is the command a run's script reads the time from, in whole
+// seconds, to bound its waits for its servers.
+const openCodeClock = "date +%s"
+
 // openCodeMCPWait bounds how long the run waits for the MCP servers it declares
 // to finish connecting before it sends the brief. OpenCode's own catalog
 // timeout — how long it gives one server to list its tools — defaults to thirty
@@ -212,6 +216,7 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 func (OpenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
 	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeTimes{
 		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: sandbox.JobStopGrace,
+		clock: openCodeClock,
 	}))
 }
 
@@ -221,9 +226,12 @@ func (OpenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ 
 // how long it gives a process of its own to go ([sandbox.JobStopGrace]): a value
 // rather than the constants read inline, so a case about a wait runs it at a
 // length that case can tell apart — a bound run out at one a test can afford,
-// or a stop stretched to one no prompt end could be mistaken for.
+// or a stop stretched to one no prompt end could be mistaken for. And the
+// clock those waits are read on ([openCodeClock]), so a case about a bound
+// running out decides when it does rather than racing the wall clock.
 type openCodeTimes struct {
 	listen, mcp, sync, stop time.Duration
+	clock                   string
 }
 
 // newOpenCodeSession mints the id a run's session is created under: 32 lowercase
@@ -464,11 +472,11 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`OPENCODE_CONFIG_CONTENT="$config" %sopencode serve --hostname 127.0.0.1 --port 0 < /dev/null > %s 2>&1 &`,
 		steered, srv)
 	line(`spid=$!`)
-	line(`deadline=$(( $(date +%%s) + %d ))`, int(times.listen.Seconds()))
+	line(`deadline=$(( $(%s) + %d ))`, times.clock, int(times.listen.Seconds()))
 	line(`until grep -q '^server listening on ' %s 2> /dev/null && grep -q '^server password ' %s 2> /dev/null; do`, srv, srv)
 	line(`  [ -z "$endasked" ] || endbefore`)
 	line(`  if ! kill -0 "$spid" 2> /dev/null; then echo 'crewlet: opencode serve exited before it listened:' >&2; cat %s >&2; exit 1; fi`, srv)
-	line(`  if [ "$(date +%%s)" -ge "$deadline" ]; then`)
+	line(`  if [ "$(%s)" -ge "$deadline" ]; then`, times.clock)
 	line(`    if grep -q '^server listening on ' %s 2> /dev/null; then echo 'crewlet: opencode serve listened but printed no server password within %s' >&2; else echo 'crewlet: opencode serve did not say where it listens within %s' >&2; fi`,
 		srv, times.listen, times.listen)
 	line(`    exit 1`)
@@ -484,7 +492,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`fi`)
 
 	if checks := openCodeReadiness(req.MCPServers); checks != "" {
-		line(`deadline=$(( $(date +%%s) + %d ))`, int(times.mcp.Seconds()))
+		line(`deadline=$(( $(%s) + %d ))`, times.clock, int(times.mcp.Seconds()))
 		line(`while :; do`)
 		// A REQUEST HERE starts no run, and leaves the run's own tail to
 		// export the session through the server that is up.
@@ -493,7 +501,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		line(`  ready=1`)
 		b.WriteString(checks)
 		line(`  [ "$ready" = 1 ] && break`)
-		line(`  if [ "$(date +%%s)" -ge "$deadline" ]; then echo 'crewlet: an MCP server was still connecting after %s; the run starts without it' >&2; break; fi`, times.mcp)
+		line(`  if [ "$(%s)" -ge "$deadline" ]; then echo 'crewlet: an MCP server was still connecting after %s; the run starts without it' >&2; break; fi`, times.clock, times.mcp)
 		line(`  sleep 0.5`)
 		line(`done`)
 	}
