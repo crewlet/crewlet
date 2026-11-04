@@ -271,10 +271,13 @@ func (r *rowsAgainFail) Session(context.Context, string, string,
 // session's object fails and its row cannot be read again to say whether it
 // still names that object, the failure may be a release as much as a loss: the
 // read is unavailable, for its caller to ask again, and never classed as an
-// object the store no longer holds, nor as one that does not open.
+// object the store no longer holds, nor as one that does not open — and it
+// says the executor log is what did not answer (ErrKeptUnknown), never the
+// store, which here answered that the object is gone.
 //
 // Mutation: answer from the object's failure where the row could not be read
-// again, or wrap that failure in the answer, and the check goes red.
+// again, wrap that failure in the answer, or say it as a store that did not
+// answer, and the check goes red.
 func TestASessionWhoseRowCannotBeReadAgainIsUnavailable(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionStore(t)
@@ -286,9 +289,9 @@ func TestASessionWhoseRowCannotBeReadAgainIsUnavailable(t *testing.T) {
 	_, err := executorread.Read(t.Context(),
 		executorread.Ask{Handle: "ana", Turn: row.Turn, Fresh: stale, By: executor.ReadByPerson},
 		executorread.Source{Rows: rows, Objects: store})
-	if !errors.Is(err, executorread.ErrUnavailable) || errors.Is(err, objstore.ErrNotFound) ||
-		errors.Is(err, executordomain.ErrUnreadable) || rows.reads != 2 {
+	if !errors.Is(err, executorread.ErrKeptUnknown) || !errors.Is(err, executorread.ErrUnavailable) ||
+		errors.Is(err, objstore.ErrNotFound) || errors.Is(err, executordomain.ErrUnreadable) || rows.reads != 2 {
 		t.Errorf("an object that failed, its row not read again, answered %v after %d reads of the row; "+
-			"want unavailable alone, after two", err, rows.reads)
+			"want unavailable, the log not saying whether it is kept, after two", err, rows.reads)
 	}
 }

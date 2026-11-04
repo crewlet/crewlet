@@ -241,13 +241,86 @@ func TestEveryReaderOfASessionSaysItsStateInOneSetOfWords(t *testing.T) {
 	}
 
 	if _, err := read(t, &stubRows{rows: []executordomain.Session{tampered}}, silentObjects{},
-		tampered.Turn); !errors.Is(err, executorread.ErrUnavailable) {
-		t.Errorf("a store that did not answer: %v, want unavailable", err)
+		tampered.Turn); !errors.Is(err, executorread.ErrUnavailable) || errors.Is(err, executorread.ErrKeptUnknown) {
+		t.Errorf("a store that did not answer: %v, want unavailable, the log having said the session is "+
+			"still kept", err)
 	}
 	turn := uuid.NewString()
 	_, err = read(t, rows, store, turn)
 	if !errors.Is(err, executorread.ErrNoSession) ||
 		!strings.Contains(err.Error(), "ana keeps no executor session of the turn "+turn) {
 		t.Errorf("a turn the seat keeps no row of: %v, want no session, saying so", err)
+	}
+}
+
+// waitingObjects opens no object until its caller leaves: a store that never
+// answers.
+type waitingObjects struct{}
+
+func (waitingObjects) Open(ctx context.Context, _ executordomain.Session) (io.ReadCloser, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// failingObjects fails every open as a store that refused the read would.
+type failingObjects struct{}
+
+func (failingObjects) Open(context.Context, executordomain.Session) (io.ReadCloser, error) {
+	return nil, errors.New("the store refused the read")
+}
+
+// leavingRows serves its row once and waits on the second read for its
+// caller to leave: a row read again, after its object failed, that the
+// caller's bound outlasts.
+type leavingRows struct {
+	stubRows
+	served int
+}
+
+func (s *leavingRows) Session(ctx context.Context, handle, turn string,
+	fresh statelog.Freshness) (executordomain.SessionRead, error) {
+
+	if s.served++; s.served > 1 {
+		<-ctx.Done()
+		return executordomain.SessionRead{}, ctx.Err()
+	}
+	return s.stubRows.Session(ctx, handle, turn, fresh)
+}
+
+// A READ ITS CALLER'S OWN BOUND ENDED IS RETURNED AS IT ENDED, beside the row
+// it was reading — on the object, or on the row read again once the object
+// failed: never a page, and never a store's failure or a loss, while the row
+// says which session it was — what a caller whose bound ended the read tells
+// its reader of the session's size.
+//
+// NOT PARALLEL, NOR ITS CASES: a seat's read waits for the process's one seat
+// slot of transcript reads before it opens the object, and a read holding the
+// slot would end a case's twenty milliseconds in that wait, where the read
+// leaves on neither place it is about.
+//
+// Mutation: answer a read its caller left, at either place, with no row, or as
+// a store that did not answer, and a case goes red.
+func TestAReadItsCallerLeftNamesTheRowItWasReading(t *testing.T) {
+	store, _ := sessionStore(t)
+	row := sealedSession(t, store, "ana", gzipText(t, openCodeExport("fix the flake")))
+	for name, src := range map[string]executorread.Source{
+		"left on the object": {Rows: &stubRows{rows: []executordomain.Session{row}},
+			Objects: waitingObjects{}},
+		"left on the row read again": {Rows: &leavingRows{stubRows: stubRows{rows: []executordomain.Session{row}}},
+			Objects: failingObjects{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			defer cancel()
+			page, err := executorread.Read(ctx, executorread.Ask{Handle: "ana", Turn: row.Turn,
+				Fresh: statelog.Freshness{Level: statelog.ReadStale}, By: executor.ReadBySeat}, src)
+			if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, executorread.ErrUnavailable) {
+				t.Fatalf("a read its caller's bound ended answered %v, want the caller's own deadline", err)
+			}
+			if page.Read.Session.Object != row.Object || page.State != "" || len(page.Transcript.Entries) != 0 {
+				t.Errorf("the read answered %+v beside its deadline, want the row it was reading and no page",
+					page)
+			}
+		})
 	}
 }

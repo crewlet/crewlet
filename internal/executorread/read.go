@@ -143,9 +143,19 @@ var (
 	// a read of it can no longer continue: the caller's to change.
 	ErrCursor = errors.New("executorread: the cursor does not continue this transcript")
 
-	// ErrUnavailable reports a session the object store did not answer for:
-	// the caller asks again.
+	// ErrUnavailable reports a session that could not be read now, which the
+	// caller asks again for: the object store did not answer for it, or —
+	// [ErrKeptUnknown] — its object failed and the executor log did not answer
+	// whether it is still kept.
 	ErrUnavailable = errors.New("executorread: the session could not be read now")
+
+	// ErrKeptUnknown is the [ErrUnavailable] of a session whose object failed
+	// — not found, not opening, or its store not answering — and whose row
+	// could not be read again to say whether the session is still kept: the
+	// executor log is what did not answer, so a reader is told that, never
+	// that the store did not, which may have answered that the object is
+	// gone.
+	ErrKeptUnknown = fmt.Errorf("%w: the executor log did not say whether it is still kept", ErrUnavailable)
 )
 
 // howRowsGo is how a turn's row goes from the executor log, as every reader of
@@ -184,8 +194,13 @@ func noSession(ask Ask, reading bool) error {
 // decoder's, which would quote what a box's own agent packed. Only a turn with
 // no row ([ErrNoSession]), a cursor the page cannot continue ([ErrCursor]) and
 // a store that did not answer ([ErrUnavailable]) are no page; a caller that
-// left is returned as it left, and a refusal of the log's own — a turn id that
-// is none — as the log said it.
+// left is returned as it left — beside the row its read had read, where it had
+// read one ([Page.Read]), so a caller whose own bound ended the read can say
+// how large the session it was reading is — and a refusal of the log's own — a
+// turn id that is none — as the log said it. A store that did not answer and a
+// log that did not say whether a failed session is still kept are both
+// [ErrUnavailable], and the second is [ErrKeptUnknown] too, so a caller tells a
+// reader which of the two did not answer.
 //
 // A SESSION RELEASED WHILE IT IS READ IS SAID AS RELEASED. A read holds
 // nothing: the session a page reads can go between the read of its row and
@@ -231,7 +246,7 @@ func Read(ctx context.Context, ask Ask, src Source) (Page, error) {
 	case errors.Is(err, executordomain.ErrNotFound):
 		return Page{}, noSession(ask, true)
 	case err != nil && ctx.Err() != nil:
-		return Page{}, ctx.Err()
+		return Page{Read: read}, ctx.Err()
 	case err != nil:
 		// UNKNOWN, NEVER A LOSS: the object failed and the row could not be
 		// asked whether it still names it, so the failure may be a release
@@ -239,8 +254,7 @@ func Read(ctx context.Context, ask Ask, src Source) (Page, error) {
 		// The object's failure is said, never wrapped: wrapped, it would class
 		// the page as the loss this cannot tell it from.
 		return Page{}, fmt.Errorf("%w: %s's session of the turn %s did not read (%v), and its row "+
-			"could not be read again to say whether it is still kept: %w", ErrUnavailable, ask.Handle,
-			ask.Turn, failed, err)
+			"could not be read again: %w", ErrKeptUnknown, ask.Handle, ask.Turn, failed, err)
 	case again.Session.HasObject() && again.Session.Object.Key == read.Session.Object.Key:
 		// STILL NAMED: the failure is the store's or the archive's own.
 		page.Read, page.Reread = again, true
@@ -320,7 +334,8 @@ func unread(page Page, err error) (Page, error) {
 	var malformed *executor.MalformedArchiveError
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return Page{}, err
+		// THE ROW IT WAS READING, and no page of it.
+		return Page{Read: page.Read}, err
 	// GONE BEFORE UNREADABLE: the store's own absence is wrapped in the
 	// domain's unreadable, and a reader acts on the two differently.
 	case errors.Is(err, objstore.ErrNotFound):

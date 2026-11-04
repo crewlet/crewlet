@@ -140,6 +140,12 @@ var trustDoors = map[string]trustDoor{
 		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
 		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
+	// WHAT A SEAT'S KEPT SESSION HOLDS, read back by the seat through its
+	// session tools: a harness's record of a past run, by the one rule for it
+	// (ExecutorSession), whose every door is this one.
+	"internal/agent/builtin/sessions.go:sessionLabel": {vendor, []string{
+		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
+	}},
 	"internal/assistant/catalog/writes.go:answersRun": {vendor, []string{
 		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 		"internal/assistant.TestARunAnswersReceiptIsReadAtTheRunsTrust",

@@ -234,10 +234,15 @@ existing turn-engine diff handler with no extra apply-config wiring.
 
 **`enabled: false`** keeps no executor launch's session — nothing is captured
 or stamped ([Code Sandbox](code-sandbox.md#each-launchs-session-kept)) —
-continues none, reads no conversation's head and tells no turn how its
-conversation's earlier turns ended: one switch for everything a conversation
-carries between turns. How each turn ended is still recorded on the executor
-log, so turning it back on finds the conversation's endings.
+continues none, reads no conversation's head, tells no turn how its
+conversation's earlier turns ended, and offers no seat a tool to read its
+sessions ([A seat reads its own](code-sandbox.md#a-seat-reads-its-own)): one
+switch for everything a conversation carries between turns. The sessions kept
+before it went off are read by no model — a launch already running when its
+node applies the revision is refused at its next call to either tool, which
+asks the revision its node runs — and stay a person's to read as the seat's
+trail. How each turn ended is still recorded on the executor log, so
+turning it back on finds the conversation's endings.
 
 **`retention_days`** is how long a seat's sessions are kept past their turn's
 last record: the trash reaper deletes a row, and the session it names, that no

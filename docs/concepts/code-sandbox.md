@@ -1789,6 +1789,94 @@ what its commands printed — and every subagent's thread. The redaction matches
 the credential shapes the engine knows, not values, so a secret of no
 recognisable shape that a run read is in its transcript as the run read it.
 
+#### A seat reads its own
+
+**A seat's executor finds and reads its seat's other sessions itself**, with
+two built-in tools on the seat's registry, each a read of the seat's rows on
+the executor log at the seat's own level (`linearizable`):
+
+- **`list_sessions`** lists the seat's sessions, the latest begun first, ten
+  to a page and at most fifteen: each row's turn and conversation, whether it
+  is the reading turn's own (`this_turn`, its earlier launches) or of the
+  conversation that turn serves (`this_conversation`), when it was captured
+  and ended, whether its session is still kept and its size kept
+  (`kept`, `kept_bytes`), the session its first launch was handed
+  (`base_turn`), and what its turn was asked and how it ended, each of those
+  words cut to 300 bytes. **With `query`** it keeps the sessions whose words —
+  what the turn was asked, its conversation, and its ending's accounts — hold
+  every word, matched whole as the engine's [search](../guides/search.md)
+  matches a word (case folded, no stemming) against what the row's redaction
+  shows of its own words, so a word found only inside a redacted credential, or
+  only in the marker the redaction wrote in its place, finds nothing. The
+  node holding the rows examines a thousand of them a page and answers its
+  hits alone, so a node without `data` is never shipped a seat's history to
+  filter; and a page says how many sessions it searched and whether they
+  reached the seat's oldest (`searched`), never that nothing matches past
+  them — nor among them, where the node that answered holds records it could
+  not read (`incomplete`): that page says sessions may be missing from it.
+- **`read_session`** reads a page of one session's transcript by its turn id:
+  on its first page the row whole, then its entries, each with its place among
+  every entry the transcript holds (`ordinal`). A seat's page is held to fifty
+  entries, 32 KiB of their text and 8 KiB an entry — a quarter, a
+  thirty-second and a half of a person's — and trimmed from its end to fit one
+  tool answer, its `next_cursor` naming the first entry left out. **`kinds`**
+  narrows it to some kinds of entry (`["brief","model","summary"]` for the
+  gist), and **`match`** to the entries whose whole text holds every word —
+  decided on what the redaction shows of the entry's own words, so a word only
+  a redacted credential held, or only its marker spells, is no hit, whether
+  asked alone or beside a word the entry shows, and a guess at a redacted value
+  is answered as a wrong one is. Each hit is handed out as the window of its
+  redacted text around the first word it shows, cut never inside a marker,
+  with where the window begins in that redacted text (`text_from`) and a
+  cursor that reads the transcript on from that entry. A part of the record
+  the read could not read (an entry of kind `unread`) is handed out whatever
+  `kinds` or `match` asks, never passed over. A page says what it searched: a
+  read that reached the transcript's end, that no entry from where it began
+  holds the words — or, beside the parts it could not read, that it cannot say
+  what those held; one the archive's read budget stopped, where.
+
+**Only the seat's own, by construction.** Neither tool takes a seat: both read
+the seat of the turn the call is made in, which over the
+[tool bridge](#the-tool-bridge--a-seats-own-tools-from-inside-a-box) is the
+run's own seat whatever the request carried, so another seat's turn id is
+answered exactly as one nobody has. The reviewer is offered neither — it judges
+the turn's own record, never the executor's memory — no person's surface
+registers them, and a person, or their assistant, calling one is refused as an
+agent seat's own verb: a person reads a seat's sessions as its trail, above. A
+[worker](turn-engine.md#workers) its parent grants one reads as the seat's own
+delegate in the same turn.
+
+**Every word is fenced as a harness's**, under `executor_session` at
+`external` trust ([Agent Runtime](agent-runtime.md#text-somebody-else-wrote)):
+an entry naming the seat whose run kept it, the row's words naming nobody —
+never the reading seat's own, since a transcript quotes whatever its run's
+tools returned.
+
+**What a read costs.** One read of the executor log a call, which its read
+model counts (150 a seat a day). A transcript is decoded on the node holding
+the seat, in one of its two transcript slots, and seats take at most one of
+those two between them, so a node whose seats page transcripts still decodes a
+person's. A call the object store or the node's other reads hold past two
+minutes is answered unavailable, naming the session's size, and never as a
+session that holds nothing.
+
+**A read holds nothing.** Reading a session writes no record and holds no
+session, so it keeps none past what the seat's budget and the retention give
+it. A session released while it is listed or read is said as released, from
+what its row says then, as a person's read says it (above), and what was read
+of it before stands.
+
+**A company that keeps no session offers neither tool**:
+`turn_engine.conversation_session.enabled: false` withholds both from every
+model, the sessions kept before it went off included, which people still read
+as the seat's trail ([Conversation Sessions](conversation-sessions.md#configuration)).
+No launch of that revision is offered them, and each call asks the revision
+its node runs now, so a launch already running when its node applies it is
+refused at its next call — forbidden, saying the switch is off — rather than
+reading on until it ends.
+Neither is offered on a node with no object store, nor on one whose keyring
+cannot open a sealed stream.
+
 ---
 
 ## Budgets
@@ -1815,6 +1903,7 @@ The harness calls the LLM itself, from inside the box, so the engine cannot gate
 - **A run's own tokens are redacted from everything it hands back.** Every per-run token the engine mints — the telemetry endpoint's, the tool bridge's, a coding box's git credential, an artifact view ticket's — opens with the literal `crewlet_rt1` (`crewlet_rt1.<tag>.<subject>.<expiry>.<signature>`), and every text a box hands back — its report, its transcript, its question, its failure, its live output — is redacted of every token of that shape, to `[REDACTED:run-token]`, on the node that collects the run, before anything is stored or shown. It is recognised by its shape, as a vendor's key is, because no node that collects a run holds the tokens its launch minted, and a harness that prints its environment or its MCP configuration to debug its setup prints its own.
 - **A kept session leaves its box scrubbed.** Every secret the engine put in a box by value, and every credential shape the engine's redaction knows, is taken out of each file of a [kept session](#each-launchs-session-kept) before it is sealed, so a session continued in another box — a remote one included — carries none of the login or the environment its first box was handed.
 - **A check's box carries nothing of a seat's, and never runs on the engine host as its user.** It runs a change's own code, so it holds no harness, no model's sign-in, no login and none of the operator's setup, only the secrets its check names, and `direct` is refused for it by name rather than warned about ([Check boxes](#check-boxes)).
+- **A seat reads its own sessions whoever its turn acts for.** A session holds what the seat's runs read for whoever their turns acted for — a person's private room, a file only that person may read — and the seat's later turns read it back with `list_sessions` and `read_session` whoever they act for, as they read the seat's diary and its past turns: a transcript keeps no record of which entry needed whose permission, so no ceiling of who the reading turn acts for can be held over it ([A seat reads its own](#a-seat-reads-its-own)). Give a seat that reads one person's private work no work from anybody else, or keep no sessions (`turn_engine.conversation_session.enabled: false`), which withholds both tools from every model: no launch of that revision is offered them, and each call asks the revision its node runs, so a launch already running is refused at its next call once its node applies it.
 - **Injected values are ephemeral.** `${VAR}` references are resolved at acquire time into that sandbox's process env only; the database stores references, never values, and the values die with the box.
 - **Workers run on the engine host, never in a box.** A delegated worker — including one a run delegates to over its bridge — runs the engine's own tool loop, its harness's own tools denied and its grant cut from its parent's. No tool it can hold starts a run, and its control denylist keeps `delegate`, `a2a_ask` and the A2A channel tools, and the parent's discovery pair, from it by name.
 - **Network egress is the provider's policy.** The engine does not enforce egress rules; use your E2B template's network policy for that, and prefer an allowlist (the LLM endpoint — the gateway its entry's `env` names, where it names one — the git host, the engine's tool bridge and OTLP receiver) in the templates your production agent seats' boxes run.

@@ -523,12 +523,15 @@ performs — so connecting a vendor is the same permission as both.
 
 An agent seat acting in its own turn holds exactly the apps — `iam.Apps`,
 derived, so a seat can never hold `admin` — and its **role** decides which
-tools it is offered. One verb belongs to agents alone, marked **seat-only** on
-its row: `a2a_ask`, which spends a colleague seat's turn. No person and no
-token takes it, whatever they hold, because a person has no turn for a
-colleague's answer to land in; which seats
-may is the role registry's decision, which already says which seat runs which
-tool. Seat-only is the mirror of the **human-only** mark, and both are checked
+tools it is offered. Three verbs belong to agents alone, marked **seat-only**
+on their rows: `a2a_ask`, which spends a colleague seat's turn, and
+`list_sessions` and `read_session`, with which a seat's executor reads the
+seat's own executor sessions. No person and no token takes them, whatever they
+hold: a person has no turn for a colleague's answer to land in, and reads a
+seat's sessions as its trail, on a route of its own
+([Code Sandbox](code-sandbox.md#a-seat-reads-its-own)); which seats may ask a
+colleague is the role registry's decision, which already says which seat runs
+which tool. Seat-only is the mirror of the **human-only** mark, and both are checked
 before anything else on the row ([The sixteen rules](#the-sixteen-rules)). On
 an artifact, an agent holds what its relations grant, capped at `contributor`
 on work it does not own, and inside a turn somebody woke it is bounded by that
@@ -2425,7 +2428,7 @@ unlocks.
 | **App** | Every Worklet and Doclet read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages. And using the chat: reading and searching rooms, saying something in one, reacting and moving one's own membership, and, a person's, making a room, opening a conversation, a room's topic, purpose and whole membership | The row's app (`worklet`, `doclet` or `chatlet`), which an administrator holds through `Expand`. WHICH room is the chat's own rule, decided where the write lands: a private room is its members' |
 | **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds (a token or a service account bound to none) is refused, because it runs on the bound seat's model | Any one of the apps the row names (here `worklet` or `doclet`, and no other): the answer searches the pages only for a `doclet` holder and the board only for a `worklet` holder |
 | **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `worklet`, or the person an open ask on the item names, and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
-| **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even admin |
+| **Self** | The caller's own diary, episodes, skills and onboarding marker, and an agent seat's own executor sessions (`list_sessions`, `read_session`) | The caller, and **nobody else** — not even admin |
 | **Own record** | Marking an inbox, pinned views; a person's chat read state (`mark_chat_read`) | The owner, or admin, with the row's app |
 | **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (pausing it, resuming it, a note to the turn it is running: `pause_seat`, `resume_seat`, `steer_turn`); answering the question an executor parked on (`answer_executor`); and reading one seat's own trail (`audit.seat.read`: its memory, its turns, its executor's live output and its executor sessions with their transcripts) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs, and with no app on the rest, since a lead who uses no app still runs their team. For a seat's controls the owner is the person bound to the seat — for a note to a turn whose executor is in its box, the seat the executor's record names under its sealed anchor, which the asking node reads itself ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)); for an executor's question it is its **requester** (the person whose message woke the turn that launched it), and otherwise whoever leads the executor's seat, so nobody who merely leads the requester answers a question the executor put to them |
 | **Saved view** | Saving a view | With `worklet`: a **personal** view (one naming an owner) is its owner's, or admin's; a **shared** one is its container's lead's (a project's, a unit's, or the person whose page it sits on and whoever leads them) or admin's, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
@@ -2453,13 +2456,16 @@ replacing it — archiving is still the project lead's, and a purge still needs
 `admin` — and it is checked **first**, so an agent is told it is a seat
 rather than that it lacks a permission it may well hold.
 
-**And one verb is only an agent's.** `a2a_ask` carries the opposite mark,
-**seat-only**: no person and no token takes it, whatever they hold — `403`
-with the reason `seat_only` and no permission named, because none would change
-the answer — and an agent seat takes it with no permission at all, offered or
-not by its role. Asking a colleague spends that seat's turn and budget; which
-seats may ask is the role registry's decision, and a person has no turn for an
-answer to land in. Seat-only is checked where human-only is, before the rule,
+**And three verbs are only an agent's.** `a2a_ask`, `list_sessions` and
+`read_session` carry the opposite mark, **seat-only**: no person and no token
+takes them, whatever they hold — `403` with the reason `seat_only` and no
+permission named, because none would change the answer — and an agent seat
+takes them with no permission at all, offered or not by its role. Asking a
+colleague spends that seat's turn and budget; which seats may ask is the role
+registry's decision, and a person has no turn for an answer to land in. The two
+session reads are the seat's own, of the **Self** class, so even admin is
+refused them: a person reads a seat's executor sessions as its trail
+(`audit.seat.read`), which is a lead's or admin's, not the seat's own verb. Seat-only is checked where human-only is, before the rule,
 and no row carries both.
 
 **And some are made as a seat.** `answer_knowledge` and every chat verb carry
