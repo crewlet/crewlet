@@ -246,18 +246,20 @@ budgets are longer, and the shared case has not been re-measured under them;
 and does not show.
 
 So those packages run in `make test-solo` and in CI's `end-to-end gates`
-job, and `make test` leaves them out. A contention split, not a coverage one
-— `make check` depends on both targets. `make test-solo` runs its packages
+shards, and `make test` leaves them out. A contention split, not a coverage
+one: `make check` depends on both targets. `make test-solo` runs its packages
 one binary at a time (`-p 1`) and compiles them first at full parallelism,
 since `-p 1` would otherwise compile the whole dependency tree one package at
 a time too.
 
 **In CI each half runs on several runners at once.** A `test plan` job deals
-the parallel half into shards by measured duration and proves that every
-package lands in exactly one; each `test (race) I/N` leg runs `make test` on
-its shard, and the job named `test (race)`, the check `main` requires, passes
-only when the plan and every shard did. `end-to-end gates` is plain `make
-test-solo`. A local run can do what a shard does:
+each half into shards by measured duration and proves that every package
+lands in exactly one. Each `test (race) I/N` leg runs `make test` on its
+shard and each `end-to-end gates I/N` leg runs `make test-solo` on its own,
+still at `-p 1`: a shard is a separate machine, so no two packages that run
+alone ever share one. The jobs named `test (race)` and `end-to-end gates`,
+the checks `main` requires, pass only when the plan and every shard of their
+half did. A local run can do what a shard does:
 
 ```bash
 make test TEST_TIMINGS=/tmp/test-timings.tsv                 # write how long each package took
@@ -595,12 +597,12 @@ What follows are the prerequisites that legitimately vary by machine.
 
   **Which node.** CI installs `latest` (the newest Node release, resolved by
   setup-node when the job runs) in the `dashboard` job, the race shards, the
-  `gates` job and
+  `end-to-end gates` shards and
   [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)'s
   `build` job. The last must always answer this the same way as `dashboard`,
-  because it rebuilds the bundle that job diffs. The race shards and `gates` need
-  not match either: what they run under plain node is a committed file — the
-  plugin, the built bundle — not a fresh build.
+  because it rebuilds the bundle that job diffs. The two sets of shards need
+  not match either: what they run under plain node is a committed file (the
+  plugin, the built bundle), not a fresh build.
 
   **Nothing in this repository names a node version**, and that is a decision
   rather than an oversight. A pin earns its keep by being maintained, and
@@ -1180,9 +1182,13 @@ The checks to require are the jobs of `ci.yml` a pull request runs: `build +
 vet`, `sign-off`, `dashboard`, `test (race)`, `end-to-end gates`,
 `golangci-lint` and the four `cross-compile the release targets` legs. A rule
 matches a check by its exact name, and a matrix leg's name carries its matrix
-values — `cross-compile the release targets (linux, amd64)` — so each leg is
+values (`cross-compile the release targets (linux, amd64)`), so each leg is
 required by that full name; a check the rule names that never reports blocks
 every pull request, and renaming a job is therefore a change to the rule too.
+The test shards are the exception: `test (race)` and `end-to-end gates` are
+aggregate jobs over the `test (race) I/N` and `end-to-end gates I/N` legs, so
+the rule names the aggregates and never a shard, whose name changes with the
+shard count.
 
 The job runs only when Dependabot is both the pull request's author *and* the
 actor that triggered the run. That second condition is what stops the workflow

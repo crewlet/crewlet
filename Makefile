@@ -8,9 +8,9 @@
 # until the pull request goes red.
 #
 # For the TEST jobs that is now true by construction rather than by care:
-# each of ci.yml's `test (race)` shards runs `make test` with TEST_SHARD,
-# TEST_WEIGHTS and TEST_TIMINGS set (below), and its `end-to-end gates` job
-# runs `make test-solo`, so there is one command and no copy to keep in step. Every other job
+# every shard of ci.yml's `test (race)` and `end-to-end gates` runs `make test`
+# or `make test-solo` with TEST_SHARD, TEST_WEIGHTS and TEST_TIMINGS set
+# (below), so there is one command and no copy to keep in step. Every other job
 # still inlines its own, and NOTHING asserts those agree --
 # internal/version/makefile_test.go used to and was dropped -- so for the rest,
 # change a target and its ci.yml step in the same commit, and read both.
