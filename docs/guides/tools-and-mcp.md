@@ -1712,6 +1712,7 @@ or without egress. `GET /mcp-catalogue` serves it (see the
 | `google-cloud-storage` | Google's Cloud Storage server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
 | `google-cloud-resource-manager` | Google's Resource Manager server | the Google Cloud integration (each agent's own hour-long token), or a bearer token header |
 | `expo` | Expo's hosted server | OAuth, as the person who signs it in. Each agent's own robot token signs in the EAS CLI instead, through its `sandbox.env` (see [Expo](../integrations/expo.md#the-agents-expo-tools)) |
+| `aws` | AWS's MCP Server, one per agent | the AWS integration: the engine signs each request as the agent's own IAM role, so no credential is entered or sent (see [AWS](../integrations/aws.md#the-agents-tools)) |
 | `gitlab` | `glab mcp serve`, one per agent | the GitLab integration |
 | `scaleway` | `scw mcp server serve`, one per agent, serving the products the agent levels reach | the Scaleway integration (each agent's own API key). scw 2.65.2 has to be installed on every engine host that runs agent seats (see [Scaleway](../integrations/scaleway.md#the-agents-scaleway-tools)) |
 | `slack` | `slack-mcp-server` 1.3.0, one per agent | the Slack integration |
@@ -2499,8 +2500,8 @@ When the engine launches a per-role MCP server instance, it merges the base serv
 ### Seat credentials the engine binds
 
 For an integration the engine manages an account or a credential on
-(Atlassian, Cloudflare, Datadog, DigitalOcean, Expo, GitHub, GitLab, Google Cloud, Mattermost,
-Scaleway, Slack), a
+(Atlassian, AWS, Cloudflare, Datadog, DigitalOcean, Expo, GitHub, GitLab, Google Cloud,
+Mattermost, Scaleway, Slack), a
 seat's own credential is never named in
 `mcp_env`. The engine seals it under a name it derives from the handle and
 binds it to every per-seat server (`shared: false`) that reads that

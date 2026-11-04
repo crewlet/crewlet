@@ -404,6 +404,15 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		}
 		add("digitalocean", in.DigitalOcean.Enabled, nil, map[string]any{"team": team})
 	}
+	if in.AWS != nil {
+		// NOTHING INBOUND: the row names the stack, by its short name and
+		// home Region, which every name in the account carries.
+		var slug, region string
+		if in.AWS.Provisioning != nil {
+			slug, region = in.AWS.Provisioning.Slug, in.AWS.Provisioning.HomeRegion
+		}
+		add("aws", in.AWS.Enabled, nil, map[string]any{"slug": slug, "home_region": region})
+	}
 	if in.GoogleCloud != nil {
 		// PROVISIONING ALONE, like Expo's: nothing arrives from Google, so
 		// there is no delivery secret. The provisioner, whose project holds

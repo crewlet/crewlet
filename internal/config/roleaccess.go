@@ -33,7 +33,7 @@ func SeatAccessOn(enabled *bool) bool { return enabled != nil && *enabled }
 // SeatAccessLanes is every per-seat block, by its key under
 // `roles[].integrations`.
 func SeatAccessLanes() []string {
-	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo", "digitalocean", "scaleway", "google_cloud"}
+	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud"}
 }
 
 // SeatScope is the key and the entries of r's scope at lane: the containers
@@ -147,6 +147,10 @@ func (r *Role) seatEnabled(lane string) (*bool, bool) {
 	case "scaleway":
 		if in.Scaleway != nil {
 			return in.Scaleway.Enabled, true
+		}
+	case "aws":
+		if in.AWS != nil {
+			return in.AWS.Enabled, true
 		}
 	case "google_cloud":
 		if in.GoogleCloud != nil {

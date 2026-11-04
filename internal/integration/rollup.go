@@ -84,6 +84,7 @@ var Tools = []Tool{
 	{Key: "expo", Surfaces: []ToolSurface{{string(KindExpo), "Expo"}}},
 	{Key: "digitalocean", Surfaces: []ToolSurface{{string(KindDigitalOcean), "DigitalOcean"}}},
 	{Key: "scaleway", Surfaces: []ToolSurface{{string(KindScaleway), "Scaleway"}}},
+	{Key: "aws", Surfaces: []ToolSurface{{string(KindAWS), "AWS"}}},
 	{Key: "google_cloud", Surfaces: []ToolSurface{{string(KindGoogleCloud), "Google Cloud"}}},
 }
 

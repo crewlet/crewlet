@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	awsint "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/code"
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	codehome "github.com/crewlet/crewlet/internal/code/home"
@@ -107,6 +108,11 @@ type Engine struct {
 	// per wait of the seats' restart schedule ([Engine.seatRetryDelay],
 	// set in [New]). See githubtoken.go.
 	githubIssuer github.Issuer
+
+	// awsIssuer holds the AWS sessions this process has issued its agents,
+	// each until it runs short ([awsSeatIssuer]).
+	awsIssuer awsint.Issuer
+
 	// googleCloudIssuer holds the access tokens this process has issued its
 	// agents' own Google Cloud service accounts, one per account, in memory
 	// only, for every reader of a seat's token alike. See googlecloudtoken.go.

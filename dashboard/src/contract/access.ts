@@ -18,8 +18,10 @@
  * the Expo role that holds them; DigitalOcean's `read`, `operate` or
  * `administer`, each a set of DigitalOcean token scopes sent as its `grants`;
  * Scaleway's `read`, `operate` or `administer`, Crewlet's own sets of Scaleway
- * permission sets; Google Cloud's `viewer`, `operator` or `administer`,
- * Crewlet's own sets of Google's predefined roles) and is drawn under the
+ * permission sets; AWS's `read`, `operate` or `administer`, Crewlet's own
+ * customer managed policies; Google Cloud's `viewer`, `operator` or
+ * `administer`, Crewlet's own sets of Google's predefined roles) and is drawn
+ * under the
  * vendor's exact name, which
  * `options` carries. Datadog's, Jira's and Confluence's lists are read live
  * from the vendor, so no list of them lives here. GitHub has no levels; a
@@ -42,6 +44,7 @@ export type AccessLaneKey =
   | "expo"
   | "digitalocean"
   | "scaleway"
+  | "aws"
   | "google_cloud";
 
 /** "external" on a lane the engine does not provision for the company. */

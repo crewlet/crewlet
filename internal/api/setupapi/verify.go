@@ -170,6 +170,7 @@ func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 		// nothing.
 		Declared: company.Integrations.Atlassian.Declared(),
 		Zones:    company.Integrations.Cloudflare.ZoneNames(),
+		Regions:  company.Integrations.AWS.RegionList(),
 		Company:  company.Name,
 	})
 	switch {

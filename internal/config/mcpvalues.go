@@ -151,7 +151,7 @@ func (c *Company) MCPValueSlot(server, seat, key string) (MCPValueSlot, error) {
 		return MCPValueSlot{}, fmt.Errorf("%w: %q", ErrMCPValueKey, key)
 	}
 	for _, bound := range srv.SeatBindings() {
-		if srv.ValueKey(bound.Key) == srv.ValueKey(key) {
+		if !bound.Sign && srv.ValueKey(bound.Key) == srv.ValueKey(key) {
 			return MCPValueSlot{}, fmt.Errorf("%w: %s of %q is each agent's own %s credential",
 				ErrMCPValueBound, key, server, bound.Kind)
 		}
@@ -376,6 +376,9 @@ func (c *Company) MCPValueKeys(server, seat string) ([]MCPValueKey, bool) {
 	}
 	bound := map[string]BoundSeatKey{}
 	for _, b := range srv.SeatBindings() {
+		if b.Sign {
+			continue
+		}
 		bound[srv.ValueKey(b.Key)] = b
 		if _, ok := keys[srv.ValueKey(b.Key)]; !ok {
 			keys[srv.ValueKey(b.Key)] = b.Key

@@ -1836,13 +1836,17 @@ const (
 	// the phases chunk +398; every other chunk kept its size. The initial load
 	// did not grow: its files are the same bytes but for the chunk names they
 	// list. 5498 KiB.
+	// AWS (its catalogue entry and story, the Agents tab's words and the org
+	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
+	// tile's cloud glyph) took it from 5497.5 KiB (5,629,434 bytes) to 5499.5
+	// KiB (5,631,527 bytes, +2,093 bytes). 5500 KiB.
 	// Google Cloud (its catalogue entry, its Agents tab words with the link
 	// to preparing a project, the issued period and the note on gcloud, and
-	// the org builder's leftover service account) and the kit's move to
-	// 0.93.0 (the Google Cloud mark), merged onto that tree, took it from
-	// 5497.5 KiB (5,629,434 bytes) to 5499.9 KiB (5,631,868 bytes, +2,434
-	// bytes, as on every tree before). The measured size's next KiB: 5500 KiB.
-	treeBudget = 5<<20 + 380<<10
+	// the org builder's leftover service account), merged onto that tree with
+	// the kit's Google Cloud mark already in 0.94.0, took it from 5499.5 KiB
+	// (5,631,527 bytes) to 5501.8 KiB (5,633,880 bytes, +2,353 bytes). The
+	// measured size's next KiB: 5502 KiB.
+	treeBudget = 5<<20 + 382<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

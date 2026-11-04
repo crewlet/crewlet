@@ -245,6 +245,20 @@ var curated = sync.OnceValue(func() []Entry {
 			recognise: []recognition{{match: hostUnder("mcp.digitalocean.com"), keys: digitaloceanKeys}},
 		},
 		{
+			// SIGNED BY THE ENGINE, NEVER A HEADER: AWS's server takes no
+			// bearer token, so each request is signed with the agent's own
+			// session, which never leaves the engine, and a box is never
+			// handed the server.
+			ID: "aws", Name: "aws", Title: "AWS", Vendor: "aws",
+			Description: "The AWS APIs, documentation and Region facts, each call authorized as the agent's own IAM role.",
+			Transport:   TransportHTTP, URL: "https://aws-mcp.us-east-1.api.aws/mcp",
+			Auth:        []AuthMethod{AuthIntegration},
+			Integration: "aws",
+			Docs:        "https://docs.aws.amazon.com/aws-mcp/latest/userguide/what-is-mcp-server.html",
+			ReadAt:      "2026-11-03",
+			recognise:   []recognition{{match: awsMCPHost, keys: []SeatKey{{Field: "CREDENTIALS", Sign: true}}}},
+		},
+		{
 			// OAUTH ONLY, AND NO SEAT BINDING: the server is its own
 			// authorization server (scope mcp:access), and whether it takes an
 			// Expo access token as a bearer is undocumented.

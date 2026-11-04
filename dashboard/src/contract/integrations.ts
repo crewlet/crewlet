@@ -198,6 +198,7 @@ export const INTEGRATION_TOOLS = {
   expo: ["expo"],
   digitalocean: ["digitalocean"],
   scaleway: ["scaleway"],
+  aws: ["aws"],
   google_cloud: ["google_cloud"],
 } as const;
 
