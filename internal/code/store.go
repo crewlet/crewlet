@@ -609,9 +609,10 @@ func decideEach(ctx context.Context, n int, decide func(ctx context.Context, k i
 //   - the context ended;
 //   - a LATER activation's fence ([ErrSuperseded]), since a fence only rises
 //     and every decide reads it first;
-//   - a refusal of THIS NODE by the code log — its eviction, a floor it is
-//     below or cannot read, a log that is full, skewed, truncated or not the
-//     one its rows came from — since every publish this node makes meets it.
+//   - a refusal of THIS NODE by the code log — its eviction or an eviction
+//     state it cannot read, a floor it is below or cannot read, a log that is
+//     full, skewed, truncated or not the one its rows came from — since every
+//     publish this node makes meets it.
 //
 // Every other failure is the repository's own: a purge it waits for, a
 // manager that is not the configuration, a record this node cannot decode
@@ -637,8 +638,9 @@ func sharedFailure(err error) bool {
 		// node's copy of the operation, which says nothing about this
 		// node (statelog.Unavailable.CopyWriter).
 		return refused.CopyWriter == ""
-	case statelog.ReasonBelowFloor, statelog.ReasonFloorUnknown, statelog.ReasonLogFull,
-		statelog.ReasonSkew, statelog.ReasonLogTruncated, statelog.ReasonWrongStream:
+	case statelog.ReasonEvictionUnknown, statelog.ReasonBelowFloor, statelog.ReasonFloorUnknown,
+		statelog.ReasonLogFull, statelog.ReasonSkew, statelog.ReasonLogTruncated,
+		statelog.ReasonWrongStream:
 		return true
 	}
 	return false
