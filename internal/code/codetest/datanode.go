@@ -2,6 +2,7 @@ package codetest
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -81,6 +82,10 @@ type DataOptions struct {
 	// record its applier applies past a move; nil is the wall clock, moved
 	// by nothing.
 	Clock *Clock
+	// WrapDriver wraps the driver under the node's store files, nil for none:
+	// the window a meta-test holds the applier's commits through
+	// (storetest.HoldCommits).
+	WrapDriver func(driver.Driver) driver.Driver
 }
 
 // DataNode is one data node's code domain, composed as the engine composes it
@@ -215,7 +220,8 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	}
 	// THE ESTATE, seeded where none exists and opened as it is where one
 	// does — which is what a restarted process does.
-	p.db, p.estate = storetest.OpenEstate(t, filepath.Join(d.o.Dir, "node.db"), store.Options{}, 1)
+	p.db, p.estate = storetest.OpenEstate(t, filepath.Join(d.o.Dir, "node.db"),
+		store.Options{WrapDriver: d.o.WrapDriver}, 1)
 	checkpoint, _, err := statelog.CheckpointOf(ctx, p.estate.Reader(), spec.Name)
 	if err != nil {
 		t.Fatalf("codetest: %s: read the checkpoint: %v", d.o.ID, err)
@@ -654,15 +660,32 @@ func (d *DataNode) Level(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("codetest: %s: the code log's end: %w", d.o.ID, err)
 	}
-	for p.runner.Reached().Seq < last {
+	if err := awaitAt(ctx, func() uint64 { return p.runner.Reached().Seq }, last); err != nil {
+		return fmt.Errorf("codetest: %s reached %d of the log's %d: %w", d.o.ID, p.runner.Reached().Seq, last, err)
+	}
+	return nil
+}
+
+// awaitAt waits until at answers want or more, or ctx ends.
+func awaitAt[N int64 | uint64](ctx context.Context, at func() N, want N) error {
+	for at() < want {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("codetest: %s reached %d of the log's %d: %w", d.o.ID,
-				p.runner.Reached().Seq, last, ctx.Err())
+			return ctx.Err()
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 	return nil
+}
+
+// Checkpoint is the applier's committed checkpoint: what a halt or a restart
+// leaves the node holding, below which nothing is given back.
+func (d *DataNode) Checkpoint() statelog.Position {
+	p := d.proc()
+	if p == nil {
+		return statelog.Position{}
+	}
+	return p.runner.Committed()
 }
 
 // Drained is the applier's own: whether it has reached the log's end once
@@ -723,11 +746,21 @@ func (d *DataNode) LogStats(ctx context.Context) (js.LogStats, error) {
 // PauseApplier halts the node's applier until resume, which moves its
 // consumer back to the checkpoint and runs it again — the engine's halt and
 // resume. t reports a resume that could not move the consumer.
+//
+// The node holds, while held, everything it had reached when paused. A halt
+// gives back what the applier reached past its checkpoint (statelog.Runner.Reached),
+// so the checkpoint covers that before the halt.
 func (d *DataNode) PauseApplier(t testing.TB) (resume func()) {
 	t.Helper()
 	p := d.proc()
 	if p == nil {
 		t.Fatalf("codetest: PauseApplier of data node %s, which is not running", d.o.ID)
+		return func() {}
+	}
+	reached := p.runner.Reached()
+	if err := awaitAt(t.Context(), func() int64 { return p.runner.Committed().Packed() }, reached.Packed()); err != nil {
+		t.Fatalf("codetest: %s: checkpoint at %s, below the %s it reached, before the halt: %v", d.o.ID,
+			p.runner.Committed(), reached, err)
 		return func() {}
 	}
 	p.stopApplier()
