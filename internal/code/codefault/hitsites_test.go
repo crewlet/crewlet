@@ -22,10 +22,10 @@ const codefaultPath = "github.com/crewlet/crewlet/internal/code/codefault"
 
 // hitDirs are the directories the points are hit in: the code host's
 // pipeline, its engine write's build among it, and the suite's wrapping
-// publisher that hits the committer's — a push's — the cache, whose sync hits
-// its own, the compactor, which hits the compaction's, the publication's
-// and the expunge's, the check runner, which hits a check's run's, and the
-// mirrors, which hit an import's and a pull mirror's sync's.
+// publisher and reserve reading that hit the committer's — a push's — the
+// cache, whose sync hits its own, the compactor, which hits the compaction's,
+// the publication's and the expunge's, the check runner, which hits a check's
+// run's, and the mirrors, which hit an import's and a pull mirror's sync's.
 var hitDirs = []string{"internal/code/host", "internal/code/codetest", "internal/code/cache",
 	"internal/code/compact", "internal/code/checkrun", "internal/code/mirror"}
 
@@ -109,6 +109,7 @@ var pointNames = map[string]codefault.Point{
 	"ImportAfterBuild": codefault.ImportAfterBuild, "ImportAfterUpload": codefault.ImportAfterUpload,
 	"ImportAfterPropose": codefault.ImportAfterPropose, "MirrorAfterBuild": codefault.MirrorAfterBuild,
 	"MirrorAfterUpload": codefault.MirrorAfterUpload, "MirrorAfterPropose": codefault.MirrorAfterPropose,
+	"CommitterBeforeAdmit": codefault.CommitterBeforeAdmit,
 }
 
 // byPoint is counts keyed by identifier, read as points.

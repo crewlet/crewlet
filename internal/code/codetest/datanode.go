@@ -121,6 +121,9 @@ type dataIncarnation struct {
 	applyMu   sync.Mutex
 	applyStop func() error
 
+	// records is the code log read by position through the fleet's keyring.
+	records statelog.VerifiedLog
+
 	reader    *code.Reader
 	committer *code.Committer
 	// changes is the change writer beside the committer, over the same
@@ -228,6 +231,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if err != nil {
 		t.Fatalf("codetest: %s: build the record verifier: %v", d.o.ID, err)
 	}
+	p.records = statelog.VerifiedLog{Log: p.log, Verifier: verifier}
 	var applier statelog.Applier = code.NewApplier(nil)
 	if d.o.Clock != nil {
 		applier = d.o.Clock.wrap(applier)
@@ -251,6 +255,11 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	p.startApplier()
 
 	reserve, err := statelog.NewReserve(spec, func(ctx context.Context) (statelog.Usage, error) {
+		if ctx.Value(admitting{}) != nil {
+			if ferr := d.o.Faults.Hit(ctx, codefault.CommitterBeforeAdmit, 0); ferr != nil {
+				return statelog.Usage{}, ferr
+			}
+		}
 		s, serr := p.log.Stats(ctx)
 		return statelog.Usage{Bytes: s.Bytes, MaxBytes: s.MaxBytes}, serr
 	})
@@ -274,7 +283,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		fence.Committed = p.runner.Committed
 		pub, perr := statelog.NewPublisher(statelog.Deps{
 			Domain: code.Domain{}, Spec: spec, Log: p.log, Signer: signer,
-			Records: statelog.VerifiedLog{Log: p.log, Verifier: verifier}, Rows: rows, Fence: fence,
+			Records: p.records, Rows: rows, Fence: fence,
 			Gates: code.NewGates(p.estate.Reader()), Waiter: p.runner, Voids: p.runner, Identity: p.runner,
 			Admission: reserve, NodeID: writer, Generation: gen,
 		})
@@ -676,6 +685,28 @@ func (d *DataNode) Health(ctx context.Context) (statelog.Health, error) {
 // declaration's or an eviction's, which go through the lifecycle store.
 func (d *DataNode) Appends() int { return int(d.appends.Load()) }
 
+// Writer is the node that published the code log's record at at, read off the
+// log through the fleet's keyring: the record's envelope names it, and no row
+// keeps it.
+func (d *DataNode) Writer(ctx context.Context, at statelog.Position) (string, error) {
+	p := d.proc()
+	if p == nil {
+		return "", fmt.Errorf("codetest: data node %s is not running", d.o.ID)
+	}
+	_, body, _, ok, err := p.records.At(ctx, at.Seq)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("codetest: %s: read the record at %s: %w", d.o.ID, at, err)
+	case !ok:
+		return "", fmt.Errorf("codetest: %s: the code log holds no record at %s", d.o.ID, at)
+	}
+	env, err := code.Domain{}.Envelope(body)
+	if err != nil {
+		return "", fmt.Errorf("codetest: %s: decode the record at %s: %w", d.o.ID, at, err)
+	}
+	return env.Writer, nil
+}
+
 // LogStats is the code log's stream as the broker holds it — its ends, its
 // records and its BYTES, every record's signed frame included: what a
 // benchmark reads the bytes a kind of record costs the log off, before and
@@ -866,14 +897,21 @@ func (p *dataIncarnation) health(ctx context.Context) (statelog.Health, error) {
 // record the receiver never heard about. Hit here rather than in
 // internal/code, so the domain imports nothing from codefault. It counts the
 // records it appended — [DataNode.Appends].
+//
+// AND IT MARKS EVERY PUBLISH [admitting], so the usage reading its admission
+// starts hits codefault.CommitterBeforeAdmit.
 type faultPublisher struct {
 	inner   code.Publisher
 	faults  *codefault.Script
 	appends *atomic.Int64
 }
 
+// admitting marks the context a wrapped writer publishes under. The read index
+// shares the code log's reserve, and a barrier's reading never carries it.
+type admitting struct{}
+
 func (p *faultPublisher) Publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
-	res, err := p.inner.Publish(ctx, req)
+	res, err := p.inner.Publish(context.WithValue(ctx, admitting{}, true), req)
 	if err == nil {
 		if res.Wrote() && !res.Collapsed {
 			p.appends.Add(1)
