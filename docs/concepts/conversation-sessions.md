@@ -145,6 +145,17 @@ the endings — and, but for the first, the reason is logged as
 - or the launch reuses the box its turn's earlier job ran in, whose own
   session is that job's to continue in place.
 
+Where the turn read a head — every case above but the first two — the brief
+also names it, under `## A kept session this run does not continue`: that the
+conversation's last turn worked in a session this run does not continue, and
+that `read_session` reads it under that turn's id
+([A seat reads its own](code-sandbox.md#a-seat-reads-its-own)) — never why,
+which is the log's to say. Only where the seat is offered `read_session`, and
+never in the continuation a session reads; a relaunch that cannot take up the
+turn's own kept session names that one the same way, a round lost a second
+time included, and a relaunch of a turn that has kept nothing names the head
+its first launch froze only where the turn's row was read holding it.
+
 ---
 
 ## Where a session lives

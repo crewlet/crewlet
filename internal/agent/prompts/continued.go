@@ -175,6 +175,42 @@ func boxPaths(home string) string {
 		" this box keeps its checkout and its home."
 }
 
+// keptSessionHeader titles what a fresh brief says of a kept session its run
+// does not continue.
+const keptSessionHeader = "## A kept session this run does not continue"
+
+// KeyKeptSession keys the section [KeptSession] is appended to a brief as.
+const KeyKeptSession = "kept_session"
+
+// KeptSession is what a run that starts a session of its own is told of a kept
+// session it does not continue, which its model cannot otherwise know is there
+// to read: this turn's earlier launches' (thisTurn), or the session its
+// conversation's last turn left; and that `read_session` reads it under turn's
+// id, `match` finding a word in it. turn is the engine's record, defused by the
+// caller.
+//
+// ONE SENTENCE, AND ONLY HERE: a standing sentence about the session tools
+// would ride every request of every run and say what their descriptions say,
+// and this is the one place a model cannot know a session it could read
+// exists — a launch that could not continue the turn's own, or the one its
+// conversation's last turn left.
+//
+// NEVER WHY IT IS NOT CONTINUED. Why a launch continues no session is said in
+// words for the log, and they quote what said no: a store's or a router's
+// error, a refused capture's reason, which carries what a box printed. Told
+// to the run in the engine's own voice, they put what a box wrote outside any
+// fence and an error meant for an operator into a vendor model's prompt; and
+// what the run can do about it is the same whatever the reason — read what
+// that session did.
+func KeptSession(turn string, thisTurn bool) string {
+	whose, what := "This conversation's last turn", "it did"
+	if thisTurn {
+		whose, what = "This turn's earlier launches", "they did"
+	}
+	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue. Read what " +
+		what + " with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."
+}
+
 // NextTurn is where the session a conversation's last turn left ends and the
 // turn that continues it begins, as [BuildNextTurn] tells the run: the ended
 // turn whose session it continues and when it ended, where that session was

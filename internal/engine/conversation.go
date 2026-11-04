@@ -106,10 +106,18 @@ func (r *conversationRead) basis(restorer sandbox.ArchiveRestorer) runner.Sessio
 		return runner.SessionBasis{Why: "the conversation's last turn left no session to continue"}
 	}
 	base := *r.base.Session
+	// THE HEAD IS KEPT, continued or not: the read named it because its row
+	// names its session, and the begin this launch publishes holds it against
+	// every release while the turn has kept nothing
+	// ([sandbox.LaunchRequest.Base]), so a run that starts a session of its
+	// own beside it may read it. A relaunch names it only where the turn's
+	// row was read holding it ([sandbox.ContinuedSession.KeptTurn]).
 	if continuity := sandbox.BaseContinuityOf(base, nil, nil, restorer); !continuity.Continues {
-		return runner.SessionBasis{Why: continuity.Why}
+		return runner.SessionBasis{Why: continuity.Why, KeptTurn: base.Turn}
 	}
-	return baseBasis(base, 0)
+	basis := baseBasis(base, 0)
+	basis.KeptTurn = base.Turn
+	return basis
 }
 
 // baseBasis is the session a conversation's last turn left as a launch's basis:

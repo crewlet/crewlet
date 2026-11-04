@@ -180,19 +180,21 @@ func (k keptLaunch) relaunch(t *testing.T, basis runner.SessionBasis, inPlace *r
 // place, the calls it had been answered — the highest, and the places below it
 // still in flight — the notes it had read, whether its harness was cut off,
 // where it was last worked, what its last request carried, which the launch's
-// floor is made of, and the harness that wrote it, which the member the launch
-// picks must run.
+// floor is made of, the harness that wrote it, which the member the launch
+// picks must run, and the turn whose session it is, which a run that starts one
+// of its own instead is told it may read.
 //
 // Mutation: drop any of them from the answer, and the brief that continues the
-// session tells it the wrong things, the floor counts nothing, or the launch
-// cannot hold its member to the session's harness.
+// session tells it the wrong things, the floor counts nothing, the launch
+// cannot hold its member to the session's harness, or a fresh run is never told
+// the session is there.
 func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 	t.Parallel()
 	k := newKeptLaunch(t, 40000, 0, 0)
 	got := k.l.ProbeSession(k.ctx)
 	want := runner.SessionBasis{LaunchSeq: k.kept.LaunchSeq, CaptureSeq: 1, SessionID: "s-1",
 		Harness: "claude-code", BridgeSeq: 3, BridgeOpen: []int{2}, NoteCursor: 4, Interrupted: true,
-		Home: "/boxes/4f2a/home", ContextTokens: 40000}
+		Home: "/boxes/4f2a/home", ContextTokens: 40000, KeptTurn: "t1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the probe answered %+v, want %+v", got, want)
 	}
