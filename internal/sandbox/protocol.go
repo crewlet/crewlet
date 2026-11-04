@@ -103,6 +103,21 @@
 // marks it first, so no attempt at the same answer makes it twice
 // ([PendingStore.MarkHeldCall]). See heldcall.go.
 //
+// AND A RUN'S VALUES ARE HELD TO A BYTE BUDGET: one value in the coordination
+// store is one broker message, so the run's row and the log beside it are each
+// held to [RowBytes], in the bytes their encoder writes, and every field has a
+// share of its value's. The log's calls have theirs ([BridgeLogBytes]), each
+// call held to its own and the calls it counts without listing kept as
+// identities ([ElidedCall]); on the row, the parked state has its own
+// ([ExecuteStateBytes]), which its park condenses to fit and the store refuses
+// past, and the rest is every other field held by the write that puts it there
+// — a person's reply, a held call's sealed arguments and a box's word on its
+// session included — with room stated for what a later build adds. Every call
+// carries the identity its run's call log admitted it under
+// ([BridgeCall.Digest]), but for one whose arguments are withheld
+// ([BridgeCall.Withheld]), so neither a cut argument nor a dropped call moves an
+// operation id a resumed segment derives. See rowbytes.go.
+//
 // AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
 // NODE'S HOST ([PendingRun.LaunchNode], ADR-0065): that node's own waiter polls,
 // keeps alive, reaps and reclaims it, a seat's holder elsewhere asks the host to

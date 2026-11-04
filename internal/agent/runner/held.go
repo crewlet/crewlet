@@ -73,6 +73,13 @@ type HeldCommit interface {
 	// the call's entry land on the row in one write and the call reaches the
 	// round's log after it; an error after the row's write leaves the call to
 	// the next job's opening, which appends it ([sandbox.OwedCall]).
+	//
+	// WITHOUT ITS ARGUMENTS AND WITHOUT THEIR DIGEST: they ride the row
+	// sealed on the held call (ADR-0077), and a digest of them in the clear
+	// beside the tool's name would confirm a guess at what the seal hides.
+	// A later segment's call log counts the call as one of its tool whose
+	// arguments are not known (sandbox.BridgeCall.Withheld) — an over-count
+	// of a tool no operation id reads, since no builtin is ever held.
 	Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error
 }
 

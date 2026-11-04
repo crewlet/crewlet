@@ -21,7 +21,7 @@ func TestALongRunsLogKeepsTheCallsThatEndedIt(t *testing.T) {
 		elided int
 	)
 	add := func(name string) {
-		calls, elided = appendBounded(calls, elided, BridgeCall{Name: name, Seq: len(calls) + elided + 1})
+		calls, elided, _ = appendBounded(calls, elided, BridgeCall{Name: name, Seq: len(calls) + elided + 1})
 	}
 	for i := range MaxBridgeCalls {
 		switch i {
@@ -57,7 +57,7 @@ func TestALongRunsLogKeepsTheCallsThatEndedIt(t *testing.T) {
 	var only []BridgeCall
 	onlyElided := 0
 	for range 2 * MaxBridgeCalls {
-		only, onlyElided = appendBounded(only, onlyElided, BridgeCall{Name: SubmitWorkTool})
+		only, onlyElided, _ = appendBounded(only, onlyElided, BridgeCall{Name: SubmitWorkTool})
 	}
 	if len(only) != MaxBridgeCalls || onlyElided != MaxBridgeCalls {
 		t.Errorf("a log of submissions holds %d with %d elided, want it held to %d",

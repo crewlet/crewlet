@@ -1821,11 +1821,26 @@ const (
 	// (5,624,638 bytes) to 5494.6 KiB (5,626,424 bytes, +1,786 bytes). The
 	// initial load did not grow. It moved up to the measured size's next KiB:
 	// 5495 KiB, 456 bytes clear.
+	// A bridged call the run's log keeps in part drawn as such on a run's page
+	// (its "partly kept" tag, and over its arguments and its result how much
+	// the call sent and answered), a long log's dropped middle said by tool in
+	// its callout, a collected run's dropped calls said by tool on its execute
+	// card, a sealed call drawn as one wherever the turn page draws a call (the
+	// execute card, a call's span and the Tools tab's outcome), and the calls
+	// a collected executor's record did not keep counted in the turn's Tool
+	// calls fact, said on the Tools tab and counted by a call's span and the
+	// executors board's rail, with their failures in its failure tag, took it
+	// from 5494.6 KiB (5,626,424 bytes) to 5497.5 KiB (5,629,434 bytes; +2.9
+	// KiB, 3010 bytes): the Executors chunk +804 bytes, the shared chunk the
+	// wording landed in +794, the live chunk +518, the settled chunk +496 and
+	// the phases chunk +398; every other chunk kept its size. The initial load
+	// did not grow: its files are the same bytes but for the chunk names they
+	// list. 5498 KiB.
 	// AWS (its catalogue entry and story, the Agents tab's words and the org
 	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
-	// tile's cloud glyph) took it from 5494.6 KiB (5,626,424 bytes) to 5496.6
-	// KiB (5,628,516 bytes, +2,092 bytes). 5497 KiB.
-	treeBudget = 5<<20 + 377<<10
+	// tile's cloud glyph) took it from 5497.5 KiB (5,629,434 bytes) to 5499.5
+	// KiB (5,631,527 bytes, +2,093 bytes). 5500 KiB.
+	treeBudget = 5<<20 + 380<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

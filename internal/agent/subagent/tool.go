@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/structured"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -43,9 +44,26 @@ import (
 // values by hanging a map off the tool-call context and validating its shape
 // at every call. A closure over the turn's Config makes that whole class of
 // "engine config missing or malformed" failure unrepresentable.
+//
+// # Its workers count their calls on the call's own log
+//
+// A CALL, NOT THE TOOL, owns the work it starts: the surface that runs a call
+// may admit it on a call log of its own — a fork of the run's, taken in the
+// order calls arrived (internal/tools' Surface.Admit) — and hands the turn it
+// admitted the call under to [Tool.CallForTurn]. The workers fork from THAT
+// log, so what they call is the call's own work: absorbed into the run's log
+// once the call returns, and handed on with the call's result, for a caller
+// that records the call where a later segment's call log is seeded from — a
+// bridged run's tool log, kept beside its row. Forked from the run's own log
+// instead, a bridged `delegate`'s workers counted on the run while its record
+// held nothing of them, and a run resumed from that record took a join a
+// worker's leave came between for the first join's retry.
 type Tool struct{ cfg Config }
 
-var _ tools.Callable = (*Tool)(nil)
+var (
+	_ tools.Callable     = (*Tool)(nil)
+	_ tools.SeatCallable = (*Tool)(nil)
+)
 
 // NewTool binds the tool to a turn's config.
 func NewTool(cfg Config) *Tool { return &Tool{cfg: cfg} }
@@ -229,8 +247,26 @@ func (t *turnCount) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Call plans and runs the delegate call.
+// Call plans and runs the delegate call as the turn the tool was built for
+// ([Config.Turn]): its workers count their calls on that turn's call log.
 func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.call(ctx, t.cfg, args)
+}
+
+// CallForTurn is [Tool.Call] as turn — the turn the surface admitted this call
+// under, whose call log is the call's own where the surface admitted it on one
+// — so its workers count their calls as the call's own work (see [Tool]). A
+// nil turn is the one the tool was built for.
+func (t *Tool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
+	cfg := t.cfg
+	if turn != nil {
+		cfg.Turn = turn
+	}
+	return t.call(ctx, cfg, args)
+}
+
+// call plans and runs the delegate call under cfg.
+func (t *Tool) call(ctx context.Context, cfg Config, args map[string]any) (tools.Result, error) {
 	var parsed callArgs
 	// structured's rule and not a copy of it: a field the arguments do not
 	// declare — a task's `afer` — is refused by name rather than dropped,
@@ -249,7 +285,7 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, err
 		})
 	}
 
-	results, err := Run(ctx, t.cfg, req)
+	results, err := Run(ctx, cfg, req)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return tools.Result{}, ctxErr

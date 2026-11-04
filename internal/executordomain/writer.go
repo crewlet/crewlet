@@ -271,10 +271,12 @@ func (n NewCapture) validate() error {
 		field, value string
 		max          int
 	}{
-		{"the harness", n.Harness, HarnessMaxBytes}, {"the harness's version", n.HarnessVersion, executorkeep.HarnessVersionMaxBytes},
+		{"the harness", n.Harness, executorkeep.HarnessMaxBytes},
+		{"the harness's version", n.HarnessVersion, executorkeep.HarnessVersionMaxBytes},
 		{"the session id", n.SessionID, executorkeep.SessionIDMaxBytes},
 		{"the content key", n.ContentKey, ContentKeyMaxBytes},
-		{"the home path", n.Home, PathMaxBytes}, {"the workspace path", n.Workspace, PathMaxBytes},
+		{"the home path", n.Home, executorkeep.PathMaxBytes},
+		{"the workspace path", n.Workspace, executorkeep.PathMaxBytes},
 	} {
 		if err := checkText(f.field, f.value, f.max); err != nil {
 			return err
@@ -334,8 +336,8 @@ func checkTurn(handle, turn, conversationKey, workKey string) error {
 	switch {
 	case !iam.ValidSeatHandle(handle):
 		return invalid("%q is not a seat's handle", handle)
-	case len(turn) > TurnIDMaxBytes:
-		return invalid("the turn id is %d bytes and the maximum is %d", len(turn), TurnIDMaxBytes)
+	case len(turn) > executorkeep.TurnIDMaxBytes:
+		return invalid("the turn id is %d bytes and the maximum is %d", len(turn), executorkeep.TurnIDMaxBytes)
 	case !canonicalTurn(turn):
 		return invalid("the turn id %q is not a run id in its canonical spelling: "+
 			"a UUID, lowercase and dashed, as the engine mints one", turn)

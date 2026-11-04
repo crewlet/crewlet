@@ -324,7 +324,7 @@ func TestARunIsServedAgainByTheNodeThatRecoversIt(t *testing.T) {
 	}
 	logged := run.calls(t)
 	if len(logged.Calls) != 2 {
-		t.Fatalf("the run's row holds %d calls, want both", len(logged.Calls))
+		t.Fatalf("the run's log holds %d calls, want both", len(logged.Calls))
 	}
 	last := logged.Calls[1]
 	if last.Name != "probe" || last.Seq != 2 {

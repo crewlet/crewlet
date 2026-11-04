@@ -298,6 +298,11 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 		return "", PendingRun{}, errNoteBounds
 	case note.ID == "" || len(note.Sealed) == 0:
 		return "", PendingRun{}, fmt.Errorf("sandbox: a note to run %s needs its id and its seal", turnID)
+	case len(note.Sealed) > MaxNoteSealedBytes:
+		// HELD TO ITS SHARE OF THE ROW before anything is written: see
+		// [MaxNoteSealedBytes].
+		return "", PendingRun{}, fmt.Errorf("sandbox: a note to run %s is sealed in %d bytes, past the "+
+			"%d a note may be: %w", turnID, len(note.Sealed), MaxNoteSealedBytes, ErrNoteTooLarge)
 	}
 	if note.At.IsZero() {
 		note.At = s.clock()

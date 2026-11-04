@@ -19,7 +19,7 @@ import { turnSpan } from "~/lib/phases.ts";
 import type { Timed } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 import { tellStory } from "~/lib/turnstory.ts";
-import { phaseRecord } from "~/test/phaseRecord.ts";
+import { phaseRecord, toolCall } from "~/test/phaseRecord.ts";
 
 function record(payload: Record<string, unknown>): EventRecord {
   return { payload } as unknown as EventRecord;
@@ -398,6 +398,27 @@ describe("turnFacts", () => {
   test("the node is the one the answer says ran it", () => {
     expect(fact(view({ nodes: ["node-a", "node-b"] }), "Node")?.value).toBe("node-a, node-b");
     expect(fact(view({}), "Node")?.value).toBe("");
+  });
+
+  test("the tool calls count every call, the ones no record lists said in the note", () => {
+    // A collected executor's record keeps its run's head and tail and counts
+    // the middle it dropped: the turn made those calls too, as its round's own
+    // count on the Timeline says. Mutation: count the listed calls alone, and
+    // the header says 200 of a run that made 263.
+    const own = [
+      phaseRecord({
+        key: "a",
+        phase: "execute",
+        iteration: 1,
+        tools: [toolCall({ name: "read_file" }), toolCall({ name: "post_message" })],
+        callsElided: 61,
+        elidedCalls: [{ name: "read_file", calls: 61 }],
+      }),
+    ];
+    const calls = fact(view({ own }), "Tool calls");
+    expect(calls?.value).toBe(63);
+    expect(calls?.note).toMatch(/^61 not listed/);
+    expect(fact(view({ own: [phaseRecord({ key: "b" })] }), "Tool calls")?.note).toBe(undefined);
   });
 
   test("a turn with no phase record in hand counts nothing, and notes nothing", () => {

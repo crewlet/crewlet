@@ -293,6 +293,50 @@ type ToolResult struct {
 	// refused calls is filed under. On a call a tool answered they are one
 	// value.
 	Source string
+
+	// Absorbed is the calls the run's call log took in from this call's
+	// OWN WORK once it returned — a `delegate`'s workers, each counting its
+	// calls on a fork of the call's own (internal/agent/turnctx's
+	// CallLog.Own) — set by a surface that admitted the call
+	// ([Surface.Admit]). This loop never reads it, since its run's log holds
+	// them already: it is for a caller that records the call where a LATER
+	// segment's log is seeded from — a bridged run's tool log, kept beside its
+	// row — and has to record them with it, or that segment counts fewer calls
+	// than the run made.
+	Absorbed []Called
+}
+
+// Called is one call as a run's call log counts it: its tool, and the digest
+// of what it asked for — a call [ToolResult.Absorbed] hands on.
+//
+// THIS PACKAGE'S OWN TYPE, not the call log's: the loop is the Dashboard
+// Assistant's too, which reaches nothing of a seat's turn
+// (internal/assistant's import gate), so it names a call by the two strings a
+// call log counts it by rather than by the turn context's type.
+type Called struct {
+	Tool   string
+	Digest string
+}
+
+// CallPanic is a panic an admitted call raised, raised again by the surface
+// that admitted it ([Surface.Admit]) carrying what the call's own work had
+// added to the run's call log by then ([ToolResult.Absorbed]) — which the
+// run's log absorbs whether or not the call returns, so a caller that records
+// the call where a later segment's log is seeded from records that work beside
+// the call that broke, as it would have beside one that answered. Value is
+// what the call panicked with; [PanicValue] is what a recovery logs.
+type CallPanic struct {
+	Value    any
+	Absorbed []Called
+}
+
+// PanicValue is a recovered panic as the call raised it, and what its own work
+// absorbed where a surface carried that out with it ([CallPanic]).
+func PanicValue(recovered any) (any, []Called) {
+	if p, ok := recovered.(*CallPanic); ok {
+		return p.Value, p.Absorbed
+	}
+	return recovered, nil
 }
 
 // Refusal is the call's class, read out of [ToolResult.Cause] by
@@ -357,6 +401,15 @@ type Execution struct {
 	// running. Empty on a success and on a third-party server's own
 	// failure, which the engine does not classify.
 	Refusal mcp.Refusal
+
+	// Held is an executor run's call held for a person's approval — recorded
+	// failed, since nothing it asked for happened, and no failure of
+	// anybody's: the run's question for a person — and Approved the call they
+	// let be made. Both WITHHOLD their arguments, which ride the run's record
+	// sealed and are never on a record in the clear: Args is empty on either,
+	// and a reader that draws it says the arguments are sealed rather than
+	// that the call sent none. Never set on a call of the loop's own.
+	Held, Approved bool
 }
 
 // Round is one model request of the loop: when it was made, how long the model

@@ -166,6 +166,12 @@ func (e Ending) Validate() error {
 // Fit is the ending with every prose field cut to its bound on a rune
 // boundary, marked where it was cut ([textcut.Within], so the marker is inside
 // the bound the record is held to).
+//
+// AND WHERE IT IS OWED, before the log records it: a turn's end rides its run's
+// row until the run's ending records it here (internal/sandbox's OweEnd), and
+// that row is held to a byte budget that counts an owed end with every field
+// at its bound, so the sandbox fits it, and refuses one still outside
+// [Ending.Within], before the row carries it.
 func (e Ending) Fit() Ending {
 	e.CompletedWork = textcut.Within(e.CompletedWork, CompletedWorkMaxBytes)
 	e.BlockedOn = textcut.Within(e.BlockedOn, BlockedOnMaxBytes)

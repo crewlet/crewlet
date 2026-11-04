@@ -410,7 +410,30 @@ type CoordinatorOptions struct {
 	// THE SESSION'S NOTE INBOX GOES WITH IT, and no note with it: the notes
 	// still waiting are on the run's record, which the ending publishes as
 	// expired before it deletes it ([CoordinatorOptions.SteersExpired]).
+	//
+	// AND THE SESSION CARRIES WHAT IT OWES BEFORE THIS RETURNS: a call whose
+	// own append did not land, which its session carries into the run's log
+	// as it ends (internal/api/mcpbridge's Ledger.End, the session's last
+	// carry of its own, made once any carry [CoordinatorOptions.Settle] asked
+	// for is done), so the reads and the deletes that follow an ending see
+	// it.
 	Ended func(runID string)
+
+	// Settle asks the bridge session serving a run's job to carry into the
+	// run's log whatever calls it still owes it — ones whose own append did
+	// not land, which a later call of the session would have carried — with
+	// their spend onto the job's record, before it returns, and reports
+	// whether it carried any. Asked once the job's box has been read back and
+	// before the log is read for what the job did: a job's LAST call has no
+	// later call of its own, and a submission whose append met a store's blip
+	// would otherwise be missing from the log its resume judges the round by,
+	// though the store answered a second later. Where it carried something,
+	// the job's spend is read again ([Coordinator.collectClaimed]), and the
+	// resume reads the calls from the log after it.
+	//
+	// Nil carries nothing, which a coordinator whose runs make no bridged
+	// calls — a test's — has.
+	Settle func(ctx context.Context, runID, launchID string) bool
 
 	// Recovered is told of each run this node takes over still RUNNING in
 	// its box, as it recovers the run's seat ([Coordinator.RecoverSeat]):
@@ -834,6 +857,8 @@ type Coordinator struct {
 	// pushes is [CoordinatorOptions.Pushes].
 	pushes RunPushes
 	ended  func(runID string)
+	// settle is [CoordinatorOptions.Settle].
+	settle func(ctx context.Context, runID, launchID string) bool
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
@@ -1036,6 +1061,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		answers:       opts.Answers,
 		condense:      opts.Condense,
 		ended:         opts.Ended,
+		settle:        opts.Settle,
 		recovered:     opts.Recovered,
 		stopped:       opts.Stopped,
 		closeStopped:  opts.CloseStopped,
@@ -1604,6 +1630,19 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	if err != nil {
 		return run, Result{}, false, c.collectFailed(ctx, run, err)
 	}
+	// WHAT THE JOB'S CALLS COST AS IT STANDS ONCE IT IS OVER, read again
+	// where the claim's read cannot be the whole of it: a run ENDED AT ITS
+	// TURN'S CAP was working until the collection stopped it, and a call it
+	// made over the bridge meanwhile wrote its spend on the record and not on
+	// the claim; and a job whose session still OWED the log calls has them
+	// carried now ([CoordinatorOptions.Settle]) — its last call, a
+	// submission, whose own append met a store's blip, above all — with their
+	// spend. The calls themselves are read from the log by the resume, after
+	// this ([Coordinator.resumeAndSettle]), so the resumed turn judges the run
+	// on what it did, all of it, and is charged for all of it.
+	if settled := c.settle != nil && c.settle(ctx, run.TurnID, run.LaunchID); ended || settled {
+		run = c.rereadSpend(ctx, run)
+	}
 	if ended {
 		// A RUN ENDED AT ITS TURN'S CAP was working until the collection
 		// stopped it: a call it made over the bridge meanwhile is in its
@@ -1631,6 +1670,33 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishCollected(ctx, run, result)
 	return run, result, true, nil
+}
+
+// rereadSpend is run with what its job's bridged calls cost the engine read
+// again off its row ([LaunchRecord.Bridged]): the run as claimed where the row
+// cannot be read, or no longer holds the job.
+//
+// THE SPEND BESIDE THE CALLS: every append, a session's carry of what it owed
+// included, writes the session's running total onto the job's record once the
+// log has taken its calls ([PendingStore.AppendBridgeCall]), and the resume
+// charges the job's engine spend off this run ([ResumeRequest.Engine]) while it
+// reads the calls themselves from the log. Not read again, a carried call's
+// work — a `delegate`'s workers above all — is in the log the resume reads and
+// its cost is charged nowhere: the next launch resets the job's record.
+func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRun {
+	latest, found, err := c.pending.Get(ctx, run.TurnID)
+	switch {
+	case err != nil:
+		// The claim's spend stands: the turn is charged what it holds, and
+		// the line says a late call's cost may be missing from it.
+		log.WarnContext(ctx, "sandbox_run_spend_reread_failed",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", err.Error())
+	case found && latest.LaunchID == run.LaunchID:
+		// THE NEWER TOTAL, as the store keeps one ([EngineSpend.Newest]):
+		// each figure only grows within one session's meter.
+		run.Launch.Bridged = run.Launch.Bridged.Newest(latest.Launch.Bridged)
+	}
+	return run
 }
 
 // collectFailed answers a collection that could not read its box back: AGAIN,
@@ -2486,6 +2552,13 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 //   - The seat's runs could not be read: whichever answer THIS NODE'S OWN
 //     COUNT supports — see [Coordinator.answerLookupFailed]. No awaiting run
 //     on the seat: [AnswerNotMine]. An awaiting run: [AnswerDeferred].
+//   - The reply is past what the run's row carries as an answer
+//     ([ErrAnswerTooLarge], [MaxAnswerBytes]): [AnswerNotMine]. Nothing was
+//     written, so nothing is owed it but the ordinary message it is, which
+//     keeps every word of it; the run waits on its question, and the refusal
+//     is recorded for the reply's author as `executor_answered` with the
+//     outcome too_large ([types.AnswerTooLarge]) — on the dashboard, and never
+//     in the conversation they replied in.
 //   - The answer could not be recorded: [AnswerDeferred]. The write MAY have
 //     landed, so this is the ambiguous case, resolved towards the run — the
 //     delivery comes back and, if the record did land, is recognised as the
@@ -2549,6 +2622,32 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 			return AnswerNotMine, nil
 		}
 		recorded, won, err := c.recordAnswer(ctx, run, reply)
+		if tooLarge, ok := errors.AsType[*AnswerTooLargeError](err); ok {
+			// NO ANSWER THE ROW CAN CARRY ([MaxAnswerBytes]), and so not the
+			// run's: nothing was written, and the reply goes its way as the
+			// ordinary message it is — every word of it reaches the seat,
+			// which a cut answer or a reply dropped at the broker would not.
+			// The run waits on its question.
+			//
+			// AND THE REFUSAL IS RECORDED FOR ITS AUTHOR, with what it weighed
+			// and what an answer may and none of its words
+			// ([types.AnswerTooLarge]): the reply was written as the answer,
+			// and the record is where a person reads that it was not taken —
+			// the dashboard draws it on the turn's page and in the activity
+			// feed. NOTHING IS POSTED IN THE CONVERSATION THEY REPLIED IN, so
+			// a person who reads only that takes the run to be carrying on
+			// with the reply, and the next thing they say there, an "any
+			// luck?", is what the question is answered with where it fits.
+			log.WarnContext(ctx, "sandbox_answer_too_large", "turn_id", run.TurnID, "agent", handle,
+				"conversation", reply.Conv.Identity, "error", err.Error(),
+				"detail", "a reply past what a run's row carries as its answer is handled as the "+
+					"ordinary message it is, the refusal is recorded as executor_answered with the "+
+					"outcome too_large, and the run waits on its question")
+			by := chatAnswerer(trigger)
+			by.tooLarge = tooLarge
+			c.announceAnswered(ctx, run, types.AnswerViaChat, types.AnswerTooLarge, by)
+			return AnswerNotMine, nil
+		}
 		if errors.Is(err, ErrSeatNotHeld) {
 			// THE SEAT'S HOLDER'S TO RECORD: nothing was written, and the
 			// delivery goes back to reach the holder — uncounted, because
@@ -2838,6 +2937,20 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			return AnswerNotMine, nil
 		}
 		recorded, won, err := c.record(ctx, run, words, answer)
+		if errors.Is(err, ErrAnswerTooLarge) {
+			// NO ANSWER THE ROW CAN CARRY ([MaxAnswerBytes]), refused before
+			// anything was written, which no attempt changes: let go of,
+			// as an answer a run could not be resumed with is, the person
+			// to answer again. `answer_executor` holds an answer far under
+			// the share before it delivers one (MaxRunAnswerBytes), so this
+			// is an answer that never came through it.
+			log.ErrorContext(ctx, "sandbox_answer_too_large",
+				"turn_id", given.TurnID, "launch_id", given.LaunchID, "answered_by", given.AnsweredBy,
+				"error", err.Error(), "detail", "an answer by turn past what a run's row carries "+
+					"is let go of unrecorded, and the run waits on its question")
+			answered(run, types.AnswerDeclined)
+			return AnswerNotMine, nil
+		}
 		if err != nil {
 			// THE RECORD MAY HAVE LANDED — the chat route's ambiguous case,
 			// resolved the same way: towards the run. If it did land, the
@@ -3006,6 +3119,9 @@ func answeredAs(disposition AnswerDisposition) types.AnswerOutcome {
 type answerer struct {
 	by, kind, operatorID string
 	choice, said         string
+	// tooLarge is what a reply too large to be recorded as the answer
+	// weighed, and what an answer may weigh ([types.AnswerTooLarge]).
+	tooLarge *AnswerTooLargeError
 }
 
 // chatAnswerer is who a chat reply came from: the sender as the transport's
@@ -3039,6 +3155,9 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 		LaunchID: run.LaunchID, Question: run.Question, QuestionContext: run.QuestionContext,
 		Decision: run.Decision, AudienceHandles: slices.Clone(run.AudienceHandles),
 		Choice: by.choice, Answer: by.said,
+	}
+	if by.tooLarge != nil {
+		payload.AnswerBytes, payload.AnswerMaxBytes = by.tooLarge.Weighs, by.tooLarge.May
 	}
 	if !run.AskedAt.IsZero() {
 		payload.AskedAt = run.AskedAt.UTC()
