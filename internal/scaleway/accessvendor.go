@@ -608,7 +608,7 @@ func (s *accessSession) mint(ctx context.Context, in seataccess.ApplyInput) (sea
 		if err != nil {
 			return seataccess.StepResult{}, s.refused(err)
 		}
-		if !accessKeyPattern.MatchString(key.AccessKey) || !uuidPattern.MatchString(key.SecretKey) {
+		if !accessKeyPattern().MatchString(key.AccessKey) || !uuidPattern().MatchString(key.SecretKey) {
 			// THE KEY EXISTS AND ITS VALUE NEVER ARRIVED WHOLE, so it is
 			// taken back now rather than left live and held by nobody.
 			var undo error
