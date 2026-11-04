@@ -8,9 +8,9 @@
 # until the pull request goes red.
 #
 # For the TEST jobs that is now true by construction rather than by care:
-# ci.yml's `test (race)` job runs `make test` with TEST_WEIGHTS and
-# TEST_TIMINGS set (below), and its `end-to-end gates` job runs `make
-# test-solo`, so there is one command and no copy to keep in step. Every other job
+# each of ci.yml's `test (race)` shards runs `make test` with TEST_SHARD,
+# TEST_WEIGHTS and TEST_TIMINGS set (below), and its `end-to-end gates` job
+# runs `make test-solo`, so there is one command and no copy to keep in step. Every other job
 # still inlines its own, and NOTHING asserts those agree --
 # internal/version/makefile_test.go used to and was dropped -- so for the rest,
 # change a target and its ci.yml step in the same commit, and read both.
@@ -497,10 +497,15 @@ test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (
 # TestAFleetOfThree/EveryNodeMintsIntoOneKeySpace (then a test of its own)
 # with `ensure stream CREWLET_NOTIFICATIONS: context deadline exceeded`, and
 # passed alone.
+#
+# EACH HALF WHOLE, stated rather than defaulted: TEST_SHARD's `?=` reads the
+# environment and a sub-make inherits the parent's command line, so a value
+# exported in the shell or given to `make check` would run one shard of each
+# half and print that every gate passed.
 check: fmt-check tidy-check signoff-check signoff-test git-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@status=0; \
-	$(MAKE) test || status=1; \
-	$(MAKE) test-solo || status=1; \
+	$(MAKE) test TEST_SHARD= || status=1; \
+	$(MAKE) test-solo TEST_SHARD= || status=1; \
 	[ $$status -eq 0 ] || exit $$status; \
 	echo; \
 	echo "All local gates passed. One thing this did NOT cover, because it"; \
