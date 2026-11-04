@@ -337,6 +337,7 @@ func truncateNewestIndex(t *testing.T, c *codetest.Case) {
 // and a sentence that says it again in words, since git does not read the
 // header.
 func TestBusySlotsAre503WithTheirRetryAfter(t *testing.T) {
+	t.Parallel()
 	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{MaxTransfers: 1}}, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()

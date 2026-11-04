@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
@@ -27,17 +28,20 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // headLog is ONE executor log as these cases play it: the head a turn's dispatch
 // reads off it, the rows its launches restore from and record on, and every
 // object's archive. It keeps the domain's rules these cases turn on and no
-// others — a turn's first landed record keeps its read, a begin holds its base
-// where the base's row still names the session the read saw, a live row that
-// landed no capture holds its base against an end's absorption, and only a turn
-// that landed a capture absorbs what its read handed out — which the domain's
-// own suite holds on the real log (internal/executordomain's
+// others — the head is the ended turn that read the conversation last, a turn's
+// first landed record keeps its read, a begin holds its base where the base's
+// row still names the session the read saw, a live row that landed no capture
+// holds its base against an end's absorption, and only a turn that landed a
+// capture absorbs what its read handed out — which the domain's own suite holds
+// on the real log (internal/executordomain's
+// TestAConversationsHeadIsTheTurnThatReadItLast and
 // TestNoReleaseTakesAHeldBase).
 type headLog struct {
 	mu       sync.Mutex
@@ -88,10 +92,17 @@ func (l *headLog) nextLocked() statelog.Position {
 // names a session sessionID holding body, whose last request carried
 // contextTokens, its reviewer's account of it landed.
 func (l *headLog) endedTurn(turn, sessionID, body string, contextTokens int64) executordomain.Session {
+	return l.endedOn("chat:D1", turn, sessionID, body, contextTokens)
+}
+
+// endedOn is [headLog.endedTurn] of seat swe's conversation conversation.
+func (l *headLog) endedOn(conversation, turn, sessionID, body string,
+	contextTokens int64) executordomain.Session {
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	key := objstore.KeyAt(time.Now())
-	row := executordomain.Session{Handle: "swe", Turn: turn, ConversationKey: "chat:D1", WorkKey: "wk-" + turn,
+	row := executordomain.Session{Handle: "swe", Turn: turn, ConversationKey: conversation, WorkKey: "wk-" + turn,
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: sessionID,
 		Object:     objstore.Object{Key: key, Hash: objstore.Hash(strings.Repeat("b", 64)), Size: int64(len(body))},
 		ContentKey: "k1", ArchiveFormat: sandbox.FakeArchiveFormat, LaunchSeq: 1, CaptureSeq: 1,
@@ -138,13 +149,18 @@ func (l *headLog) Head(_ context.Context, handle, conversationKey string,
 		return cmp.Compare(a.EndedAtPosition.Seq, b.EndedAtPosition.Seq)
 	})
 	var out executordomain.Head
-	for i := len(ended) - 1; i >= 0; i-- {
-		if ended[i].HasObject() {
-			head := ended[i]
-			out.Session = &head
-			ended = slices.Delete(ended, i, i+1)
-			break
+	// THE HEAD IS THE TURN THAT READ THE CONVERSATION LAST, the newest end
+	// among turns that read alike, as the domain's head statement orders it.
+	head := -1
+	for i, row := range ended {
+		if row.HasObject() && (head < 0 || lineAfter(row, ended[head])) {
+			head = i
 		}
+	}
+	if head >= 0 {
+		chosen := ended[head]
+		out.Session = &chosen
+		ended = slices.Delete(ended, head, head+1)
 	}
 	if len(ended) > executordomain.MaxEndings {
 		out.EndingsOmitted = len(ended) - executordomain.MaxEndings
@@ -159,6 +175,15 @@ func (l *headLog) Head(_ context.Context, handle, conversationKey string,
 	slices.Reverse(out.Siblings)
 	out.Position = statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Seq: l.seq}
 	return out, nil
+}
+
+// lineAfter reports whether a comes after b in their conversation's line: it
+// read the conversation later, or at the same position and ended later.
+func lineAfter(a, b executordomain.Session) bool {
+	if ra, rb := a.ReadThrough.Packed(), b.ReadThrough.Packed(); ra != rb {
+		return ra > rb
+	}
+	return a.EndedAtPosition.Packed() > b.EndedAtPosition.Packed()
 }
 
 func (l *headLog) Begin(_ context.Context, _ executordomain.Call,
@@ -346,10 +371,11 @@ func (conversingKeep) Upload(context.Context, executorkeep.SealedSpool,
 	return executorkeep.SealedObject{}, errors.New("no case here keeps a session")
 }
 
-// conversingLaunch is a seat whose turns serve the conversation `chat:D1`, on
-// an engine whose dispatch reads that conversation's head off one log, whose
-// launches record on it and continue sessions from it, and the double's runner
-// every launch starts its job on.
+// conversingLaunch is a seat whose turns serve the conversation key —
+// `chat:D1` unless a case serves another — on an engine whose dispatch reads
+// that conversation's head off one log, whose launches record on it and
+// continue sessions from it, and the double's runner every launch starts its
+// job on.
 type conversingLaunch struct {
 	e    *Engine
 	c    *Company
@@ -357,6 +383,7 @@ type conversingLaunch struct {
 	log  *headLog
 	jobs *sandbox.FakeRunner
 	ctx  context.Context
+	key  string
 }
 
 // newConversingLaunch is the seat's engine, its day capped at ceiling (zero
@@ -413,20 +440,20 @@ func newConversingLaunch(t *testing.T, ceiling, spent int) conversingLaunch {
 			t.Fatalf("PostCharge: %v", err)
 		}
 	}
-	return conversingLaunch{e: e, c: c, seat: seat, log: heads, jobs: jobs, ctx: ctx}
+	return conversingLaunch{e: e, c: c, seat: seat, log: heads, jobs: jobs, ctx: ctx, key: "chat:D1"}
 }
 
 // read is what turnID's dispatch reads of the conversation it serves.
 func (k conversingLaunch) read(turnID string) *conversationRead {
 	return k.e.readConversation(k.ctx, k.c, Request{Handle: k.seat.Handle(), RunID: turnID,
-		ConversationKey: "chat:D1"}, provenance.NewBoundary())
+		ConversationKey: k.key}, provenance.NewBoundary())
 }
 
 // launcher is turnID's launcher: a dispatched segment's, handed what its
 // dispatch read, or a resumed segment's, handed nil.
 func (k conversingLaunch) launcher(turnID string, read *conversationRead) *agentLauncher {
 	l := launcherOn(k.e, k.c, k.seat, turnID)
-	l.turn.ConversationKey, l.turn.WorkKey = "chat:D1", "wk-"+turnID
+	l.turn.ConversationKey, l.turn.WorkKey = k.key, "wk-"+turnID
 	l.conversation = read
 	return l
 }
@@ -561,6 +588,180 @@ func TestTheFrozenBaseOutlivesASiblingsEnd(t *testing.T) {
 	}
 	if heads := k.log.headReads(); heads != 1 {
 		t.Errorf("the turn read its conversation's head %d times, want once", heads)
+	}
+}
+
+// A SCHEDULED FIRE CONTINUES THE PREVIOUS FIRE'S SESSION. Every fire of a
+// schedule carries the schedule's conversation, stamped as the scheduler stamps
+// it, and the dispatcher takes the turn's conversation off it — so a fire's
+// dispatch reads the head the schedule's last fire left on its seat, and is
+// told how the earlier fires ended in the schedule's words; its first launch
+// continues the last fire's session in a box of its own and holds it on the
+// log; and once the fire has captured and ended, its end absorbs the last
+// fire's row, so the fire after it continues this one's. Another seat running
+// the same schedule — a unit's, fanned out — keeps a conversation of its own:
+// its read finds none of this seat's fires.
+//
+// Mutation: stamp a fire with no conversation, read any key but the fire's or
+// any seat's but the turn's own, or tell a schedule's earlier fires in a
+// conversation's words, and a check goes red.
+func TestAScheduledFireContinuesThePreviousFiresSession(t *testing.T) {
+	t.Parallel()
+	k := newConversingLaunch(t, 0, 0)
+	agent, ok := k.c.Org.AgentIDFor(k.seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	fire := events.New(types.TaskAssigned{TaskID: "role:swe:health-check:20261030T1800:swe",
+		Agent: agent.String(), RoleName: "SWE", Description: "check the services", Schedule: "health-check",
+		ScopeType: types.ScheduleScopeRole, ScopeID: agent.String(), ScheduledAt: time.Now().UTC()},
+		events.NewTrace())
+	stamped := schedule.FirePartition(schedule.Entry{Scope: types.ScheduleScopeRole, ScopeID: agent.String(),
+		Schedule: org.Schedule{Name: "health-check"}})
+	notify.Stamp(fire, stamped, stamped)
+	k.key = conversationIdentityOf([]*events.Event{fire})
+	if k.key != stamped || !notify.Scheduled(k.key) {
+		t.Fatalf("the dispatcher reads the fire's conversation as %q, want its schedule's %q", k.key, stamped)
+	}
+	k.log.endedOn(k.key, "f1", "s-f1", "F1's transcript", 42000)
+
+	read := k.read("f2")
+	if read.why != "" || read.frozen() == nil || read.frozen().Session == nil || read.frozen().Session.Turn != "f1" {
+		t.Fatalf("the fire's dispatch read %+v, want the last fire's session, f1", read)
+	}
+	endings := read.endingsBlock()
+	if !strings.HasPrefix(endings, "## How this schedule's earlier fires ended") ||
+		!strings.Contains(endings, "### Fire f1") {
+		t.Fatalf("the fire is told %q, want the schedule's earlier fires in its words", endings)
+	}
+	l := k.launcher("f2", read)
+	basis := l.ProbeSession(k.ctx)
+	if !basis.ContinuesBase() || basis.Base.Turn != "f1" || basis.SessionID != "s-f1" {
+		t.Fatalf("the fire's first launch is answered %+v, want f1's session", basis)
+	}
+	decided, err := k.launch(t, l, basis, endings)
+	if err != nil {
+		t.Fatalf("the fire's first launch: %v", err)
+	}
+	if last := k.lastStarted(t); last.Resume != "s-f1" || len(decided) != 1 || !decided[0].Base ||
+		!decided[0].NewBox {
+		t.Fatalf("the fire started session %q, deciding %+v; want f1's, in a box of its own", last.Resume, decided)
+	}
+	if begins := k.log.begun("f2"); len(begins) != 1 || begins[0].BaseTurn != "f1" ||
+		begins[0].ConversationKey != k.key {
+		t.Fatalf("the fire's first launch recorded begins %+v, want one on the schedule holding f1", begins)
+	}
+
+	// THE FIRE CAPTURES AND ENDS: what it was handed goes, and it is the head.
+	if _, err := k.log.Capture(k.ctx, executordomain.Call{}, executordomain.NewCapture{Handle: "swe",
+		Turn: "f2", ConversationKey: k.key, WorkKey: "wk-f2", Harness: "claude-code", SessionID: "s-f2",
+		Object: objstore.Object{Key: objstore.KeyAt(time.Now()), Hash: objstore.Hash(strings.Repeat("f", 64)),
+			Size: 3},
+		ArchiveFormat: sandbox.FakeArchiveFormat, LaunchSeq: 1, CaptureSeq: 1}); err != nil {
+		t.Fatalf("f2's capture: %v", err)
+	}
+	if _, err := k.log.End(k.ctx, executordomain.Call{}, executordomain.NewEnd{Handle: "swe", Turn: "f2",
+		ConversationKey: k.key, WorkKey: "wk-f2",
+		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
+		t.Fatalf("f2's end: %v", err)
+	}
+	if row, ok := k.log.row("f1"); ok {
+		t.Errorf("the fire's end left the last fire's row %+v, which it continued", row)
+	}
+	if after := k.read("f3"); after.frozen() == nil || after.frozen().Session == nil ||
+		after.frozen().Session.Turn != "f2" {
+		t.Errorf("the next fire's dispatch read %+v, want f2's session", after)
+	}
+
+	other := k.e.readConversation(k.ctx, k.c, Request{Handle: "qa", RunID: "g1", ConversationKey: k.key},
+		provenance.NewBoundary())
+	if !other.leftNone() || other.endingsBlock() != "" {
+		t.Errorf("another seat running the schedule read %+v, want none of this seat's fires", other)
+	}
+}
+
+// THE NEXT FIRE CONTINUES THE SCHEDULE'S LINE, NOT THE FIRE THAT ENDED LAST,
+// as the engine reads it. Fire f10 read the schedule's head, f09, and parked
+// on a person's question; f11 read the same head beside it, continued it and
+// ended; f12 read the schedule after that end, continued f11 and ended; and
+// f10, answered, ended last of all. The next fire's dispatch reads f12, the
+// newest in the schedule's line: its first launch is answered f12's session,
+// and its brief tells in the schedule's words how f10 ended, f10's session
+// offered beside the head and both handed out for its end to absorb. headLog
+// orders a head as the domain's head statement does, and the domain's own
+// suite holds that statement to the same line (internal/executordomain's
+// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued).
+//
+// Mutation: order headLog's head by its end alone (lineAfter), as the domain
+// ordered it before, and the fire is handed f10's session, which saw neither
+// fire beside it.
+func TestTheNextFireContinuesTheSchedulesLineNotTheFireThatEndedLast(t *testing.T) {
+	t.Parallel()
+	k := newConversingLaunch(t, 0, 0)
+	agent, ok := k.c.Org.AgentIDFor(k.seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	k.key = notify.ScheduleConversation(types.ScheduleScopeRole, agent.String(), "health-check")
+	k.log.endedOn(k.key, "f09", "s-f09", "F09's transcript", 42000)
+	stream := executordomain.Domain{}.Stream().Name
+	captureFire := func(turn string, read *conversationRead) {
+		t.Helper()
+		frozen := read.frozen()
+		if frozen == nil {
+			t.Fatalf("%s's dispatch read nothing: %q", turn, read.why)
+		}
+		if _, err := k.log.Capture(k.ctx, executordomain.Call{}, executordomain.NewCapture{Handle: "swe",
+			Turn: turn, ConversationKey: k.key, WorkKey: "wk-" + turn, Harness: "claude-code",
+			SessionID: "s-" + turn,
+			Object: objstore.Object{Key: objstore.KeyAt(time.Now()), Hash: objstore.Hash(strings.Repeat("e", 64)),
+				Size: 3},
+			ArchiveFormat: sandbox.FakeArchiveFormat, LaunchSeq: 1, CaptureSeq: 1,
+			ReadThrough: statelog.Unpack(stream, frozen.ReadThrough), Absorbs: frozen.Absorbs}); err != nil {
+			t.Fatalf("%s's capture: %v", turn, err)
+		}
+	}
+	endFire := func(turn string) {
+		t.Helper()
+		if _, err := k.log.End(k.ctx, executordomain.Call{}, executordomain.NewEnd{Handle: "swe", Turn: turn,
+			ConversationKey: k.key, WorkKey: "wk-" + turn,
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
+			t.Fatalf("%s's end: %v", turn, err)
+		}
+	}
+
+	// F10 READS F09 AND PARKS; f11 reads it too, beside f10, and ends.
+	captureFire("f10", k.read("f10"))
+	captureFire("f11", k.read("f11"))
+	endFire("f11")
+	// F12 READS THE SCHEDULE AFTER F11'S END, continues f11 and ends; f10,
+	// answered, ends last of all.
+	at12 := k.read("f12")
+	if frozen := at12.frozen(); frozen == nil || frozen.Session == nil || frozen.Session.Turn != "f11" {
+		t.Fatalf("the premise: f12's dispatch read %+v, want f11's session", frozen)
+	}
+	captureFire("f12", at12)
+	endFire("f12")
+	endFire("f10")
+
+	at13 := k.read("f13")
+	frozen := at13.frozen()
+	if at13.why != "" || frozen == nil || frozen.Session == nil || frozen.Session.Turn != "f12" {
+		t.Fatalf("the next fire's dispatch read %+v (%q), want f12's session, the newest in the schedule's "+
+			"line, not f10's, which ended last", frozen, at13.why)
+	}
+	if endings := at13.endingsBlock(); !strings.HasPrefix(endings, "## How this schedule's earlier fires ended") ||
+		!strings.Contains(endings, "### Fire f10") {
+		t.Errorf("the next fire is told %q, want how f10 ended, in the schedule's words", endings)
+	}
+	if len(frozen.Siblings) != 1 || frozen.Siblings[0].Turn != "f10" ||
+		!slices.Contains(frozen.Absorbs, "f12") || !slices.Contains(frozen.Absorbs, "f10") {
+		t.Errorf("the next fire is offered %+v and hands out %v, want f10's session offered beside the head "+
+			"and both handed out", frozen.Siblings, frozen.Absorbs)
+	}
+	basis := k.launcher("f13", at13).ProbeSession(k.ctx)
+	if !basis.ContinuesBase() || basis.Base.Turn != "f12" || basis.SessionID != "s-f12" {
+		t.Errorf("the next fire's first launch is answered %+v, want f12's session", basis)
 	}
 }
 

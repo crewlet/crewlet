@@ -131,7 +131,10 @@ Review** (with **Onboarding** before them on its very first turn), and
 returns to `Idle` — every prompt and tool call
 inspectable. That's the engine, your model, and your config all
 confirmed working, with no external account involved. Delete the
-schedule once real work arrives.
+schedule once real work arrives: every fire continues, and pays for, the
+session the last one left
+([Scheduling](../concepts/scheduling.md#each-fire-continues-the-last-fires-session)),
+so each fire costs more as that session grows, up to the harness's window.
 
 ### 8. Add one integration at a time
 
@@ -447,9 +450,12 @@ hand-created credential turned out to be.
 
 **Handles are effectively permanent.** An agent's durable id is a UUIDv5
 over `"<company name>:<handle>"` (`org.DeriveAgentID`), so renaming a
-seat's `handle`, *or the company `name`*, mints a new id and orphans that
-agent's diary, onboarding markers, and counterparty profiles. The seat
-keeps working, but it has lost its memory.
+seat's `handle`, *or the company `name`*, mints a new id and orphans what
+the agent keeps under it: its diary and onboarding markers. A `handle`
+rename also orphans what is kept under the handle itself — its episodes,
+skills, counterparty profiles and conversations' sessions — so the renamed
+seat starts with no memory at all. Either way the seat keeps working,
+without what was orphaned.
 
 Settle the company name and each handle before the company runs. See
 [Agent Runtime § Seat Definition and the Runner](../concepts/agent-runtime.md#seat-definition-and-the-runner).

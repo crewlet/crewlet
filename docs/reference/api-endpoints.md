@@ -5788,7 +5788,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `agent_memory` | `{id, limit, skills_order}` | `GET /agents/{id}/memory`. A seat's trail, so it takes `audit.seat.read` — the seat's lead, or `admin`. ANSWERED BY THE NODE HOLDING THE SEAT, which it names (`held_by`, or `none` with an empty answer for a seat no node holds; `unavailable` while the holder is silent or still taking the seat) — every node keeps a copy of a seat's memory and only the holder keeps it current. Four collections, each a page (`limit`, at most 50) with its counted total beside it: the diary (`diary_total`), the episodes (`episodes_total`), the synthesized skills (`skills_total`, newest drafted first, or in `skills_order` — `uses`, the most used first, or `updated`, the most recently changed — which the holder applies to the whole set BEFORE it cuts the page, so the page is the top of the set and never the newest page re-sorted; any other value is `bad_params`) and the COUNTERPARTY PROFILES (`counterparties_total`) — what this seat has learned about the colleagues it works with, both instants carried because `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits changed. `traits` is a bag whose keys the model invents, never a fixed schema. Plus `latest_reflection` (the newest live diary entry, whatever the page) and `onboarded_at`. An episode's `ask` and `plan_summary` are their OPENINGS, at most 600 bytes each — the figure a seat is shown of a past turn's words before they are condensed (`learning.EpisodeAccountBytes`) — with each whole text's size in `ask_bytes` and `plan_summary_bytes`. The diary is keyed on the derived agent id and the other three on the seat's handle; both are resolved from the one identifier a caller has, the handle. See [the route](#get-agentsidmemory) |
 | `agent_episode` | `{id, episode}` | `GET /agents/{id}/memory/episodes/{episode}`. A seat's trail, so it takes `audit.seat.read`, as `agent_memory` does. ONE EPISODE WHOLE — what the turn was asked and what it did, complete — answered by the seat's holder as `agent_memory` is (`held_by`); `episode: null` for one the seat no longer holds. See [the route](#get-agentsidmemoryepisodesepisode) |
 | `memory_overview` | `{}` | **Decided per seat by `audit.seat.read`**, as `agent_memory` is, and answered for exactly the seats the caller may read — every one for `admin`, a lead's own agents for a lead, none for anybody else; a seat this node cannot decide makes the whole answer `unavailable` rather than a shorter list. Each seat's memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. The seats the caller may read, handle order, no cap. See [the section](#memory_overview) |
-| `executor_sessions` | `{handle, cursor, limit, read_level, …}` | `GET /agents/{id}/sessions`. The seat's EXECUTOR SESSIONS, the latest begun first: a row per turn whose executor captured its harness's session or that read its conversation, naming the sealed object in the fleet's object store that holds the session its harness kept when its run ended — the whole record of what the run read, called and wrote — and how the turn ended. A seat's trail, so it takes `audit.seat.read` — the seat, its lead or `admin`, the verb an executor's tail is decided by — and an absent `handle` is the caller's own seat. Read through the estate router, so any node answers, at the caller's freshness (`read_level`; this surface's own when absent). A page of `limit` rows (25 when absent, 100 at most) with `next_cursor`, the cursor of the page after it, absent on the last; `read_level` and `position` say how it was read, and `complete: false` that the answering copy holds a record of the log it could not read. Each row says which launch would continue it (`continued_by`: `relaunch` while its turn is live, `next_turn` once it has ended), whether it would (`continuable`, `null` where that cannot be said now), where (`continues_in`: `any_box` or `parked_box`) and where not, why (`not_continuable`), and the session its turn's first launch was handed (`base_turn`). See [the route](#get-agentsidsessions) |
+| `executor_sessions` | `{handle, cursor, limit, read_level, …}` | `GET /agents/{id}/sessions`. The seat's EXECUTOR SESSIONS, the latest begun first: a row per turn whose executor captured its harness's session or that read its conversation, naming the sealed object in the fleet's object store that holds the session its harness kept when its run ended — the whole record of what the run read, called and wrote — and how the turn ended. A seat's trail, so it takes `audit.seat.read` — the seat, its lead or `admin`, the verb an executor's tail is decided by — and an absent `handle` is the caller's own seat. Read through the estate router, so any node answers, at the caller's freshness (`read_level`; this surface's own when absent). A page of `limit` rows (25 when absent, 100 at most) with `next_cursor`, the cursor of the page after it, absent on the last; `read_level` and `position` say how it was read, and `complete: false` that the answering copy holds a record of the log it could not read. Each row says which launch would continue it (`continued_by`: `relaunch` while its turn is live, `next_turn` once it has ended, `next_fire` once a fire of a schedule has), whether it would (`continuable`, `null` where that cannot be said now), where (`continues_in`: `any_box` or `parked_box`) and where not, why (`not_continuable`), and the session its turn's first launch was handed (`base_turn`). See [the route](#get-agentsidsessions) |
 | `executor_session` | `{handle, turn_id, cursor, read_level, …}` | `GET /agents/{id}/sessions/{turn_id}`. One turn's session and a page of its TRANSCRIPT, its sealed object opened and read as its harness recorded it — entries of `brief`, `note`, `model`, `tool_call`, `tool_result`, `summary` and `unread` — every entry's text redacted at this read. Decided as `executor_sessions` is, and it shows more than the run's live output did: every call's input and each result's text, to an entry's bound. A page holds at most 200 entries and 1 MiB of text, each entry at most 16 KiB, and `cut` says why it ends where it does, `next_cursor` the cursor of the page after it, absent on the last; `read_level`, `position` and `complete` say how the session's row was read. A node decodes at most two transcripts at once, and a question past them waits for a slot, nothing opened, for as long as its caller does. An object the store no longer holds, one that does not open, one that is no archive and one this build does not read are each an answer (`state`) with the engine's sentence (`why`), never a failure. Its first page says of the row whether a launch would continue the session, and a later page leaves `continuable` null. A turn the seat keeps no row of is `not_found`: it recorded none, or its row went with the end of a later turn of its conversation that was handed it, past the retention, or with the seat. See [the route](#get-agentsidsessionsturn_id) |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload, and `node`, the node that published it (every stored event carries it, not only this answer's) |
 | `events` | `{limit, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only, since, until, before_id, before_time}` | `GET /events`. `feed_only=true` selects the rows the activity feed carries — every stored type but the ones it keeps out (`auxiliary_spend`), a trace's `agent` siblings included — and is what every read merged with the live feed asks; `true`, `false` or absent, any other word a **400**. `failed` is THREE-VALUED the same way — `true`, `false` or absent, any other word a **400** — and selects by the rule every row's own `failed` is stamped by: a stored `failed` tag, or a type that is itself a failure (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `executor_failed`). It is the event log's "Failures only", applied by the engine so the axis and every page are one set. `suspended` is THREE-VALUED — `true`, `false` or absent for every row, any other word a **400** — and selects by whether a completion record PARKED its turn on its executor in its box: a turn that parks and resumes writes two `agent_turn_completed` records, the first marked `suspended`, so `type=agent_turn_completed&suspended=false` is the turns that ENDED, one record each, and is what a turns axis counts over. `trace_id` selects one trace as a FILTER — paged, windowed and combinable with every other filter, where [`GET /events/trace/{trace_id}`](#routes) is the whole trace oldest first. `channel_id` selects one agent-to-agent conversation's events, by the channel id every A2A event carries (an index seek, migration `0034`). `seat` is a seat's **handle** and selects the events that seat published, resolved on the server to the id every node derives for it — so a seat since removed from the chart still names its history, and a role name, which a rename changes, is never the key; anything that is not a handle, or a person's seat's handle, is a **400** — an empty page would read as a seat that never did anything — and before a company configuration is applied it is **503** `unavailable`, since the id is derived from the company's name. `agent` is the broader question — the **related** filter: every event involving one agent seat, named by any handle it answers to and matched on its agent id, plus every event sharing a trace with one (see [Paging the event history](#paging-the-event-history)). `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered; `work_item` selects every event on one work item — each turn's start, its phases and completions, an executor it launched — named by the item's identity across trackers, `<backend>:<id>` (`native:<task id>`, `jira:<issue id>`), never by its key, which a move rewrites. A value that is not that shape (a key such as `ENG-4`, or either half missing) is a **400** rather than an empty page, because an empty answer reads as "nothing happened on this item". The filter reads the `work_item` COLUMN (migration `0033`), filled from the same payload field as the row's `work_item` tag. Every row answers with its own `work_key` read off the `work_key` COLUMN (migration `0029`) rather than out of its `tags` — the column is what the `work_key` filter reads, so a row and the filter that matched it never disagree about its unit of work |
@@ -6799,8 +6799,9 @@ retry itself.
 
 A seat's [executor](../concepts/code-sandbox.md#answering-a-parked-run) that stops
 to ask a person something parks until it is answered. A reply on the
-conversation it was asked in answers it — but an executor launched by a schedule, a
-task assignment or a colleague's ask has **no conversation**, so `answer_executor`
+conversation it was asked in answers it — but an executor launched by a task
+assignment or a colleague's ask has **no conversation**, and one a schedule
+launched has its schedule's, which nobody can reply into, so `answer_executor`
 answers any parked executor by naming its turn:
 
 | Argument | |
@@ -10323,17 +10324,21 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object to
   make room for newer ones, keeping how the turn ended.
 - **`base_turn`** is the ended turn whose session this turn's first launch was
-  handed to continue: its conversation's newest as the turn's dispatch read it,
-  held on the log by the turn's `begin`. Absent where the read named none, that
-  session had gone before the `begin` landed, or no `begin` landed. Whether a
-  launch took it up is the turn's `executor_collected` records' `brief`
-  (`continued_conversation`).
+  handed to continue: its conversation's head as the turn's dispatch read it
+  (of the conversation's ended turns whose rows still name a session, the one
+  that read the conversation last), held on the log by the turn's `begin`.
+  Absent where the read named none, that session had gone before the `begin`
+  landed, or no `begin` landed. Whether a launch took it up is the turn's
+  `executor_collected` records' `brief` (`continued_conversation`).
 - **`continued_by`** is the launch the rest is about: `relaunch` — a relaunch
   of the turn — while the turn is live and its run is neither over nor ending,
   and `next_turn` — its conversation's next turn — once it has ended, or its run
-  is over or ending and its end is not on the log yet. Absent for a turn that
-  served no conversation, which no launch continues once it ends, and on a
-  transcript's later page.
+  is over or ending and its end is not on the log yet; for a turn of a
+  schedule's conversation (`conversation_key` `schedule/…`: a schedule is a
+  conversation of each seat that runs it) that launch is `next_fire`, the
+  schedule's next fire, decided the same way and said in the schedule's words.
+  Absent for a turn that served no conversation, which no launch continues once
+  it ends, and on a transcript's later page.
 - **`continuable`** says whether that launch would continue this session,
   decided by the one decision that launch takes, of the member of the seat's
   executor chain it would be launched on now, the first not sitting out its
@@ -10343,9 +10348,10 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   ([A relaunch continues the turn's
   session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session))
   — over the row as a relaunch reads it. **The next turn** decides it as that
-  turn's first launch does of its conversation's head: only the head — the
-  newest ended turn of the conversation whose row still names a session, which
-  the same read names from its own snapshot — is continued, where that runner
+  turn's first launch does of its conversation's head: only the head — of the
+  conversation's ended turns whose rows still name a session, the one that read
+  the conversation last, which the same read names from its own snapshot — is
+  continued, where that runner
   restores it ([A conversation's next turn continues its last turn's
   session](../concepts/code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)).
   **The member is the one the node holding the seat would pick**, which sits
@@ -12372,12 +12378,16 @@ end](../concepts/turn-engine.md#how-a-turn-ends-on-the-executor-log) once the
 turn's captures have settled, and can take minutes. The seat's next work
 waits behind it. `answerable_in_chat` is `false`
 for a run whose turn was triggered by something other than an inbound
-message — a schedule tick, a task assignment, an A2A wake — because the
+message — a schedule's fire, a task assignment, an A2A wake — because the
 resume path matches an inbound message's conversation identity against
-the one the run was parked with, and those runs stored **no conversation
-at all**: their trigger names neither key, so neither is stamped and
-neither reaches the row. Telling somebody to "reply in the thread" would
-send them to a thread that does not exist. Such a run is still answerable:
+the one the run was parked with. A task assignment's and an A2A wake's runs
+stored **no conversation at all**: their trigger names neither key, so neither
+is stamped and neither reaches the row. A fire's run stored its schedule's
+conversation (`schedule/…`), which every fire of the schedule carries and no
+inbound message does, so no delivery on it is offered to a parked run: the
+schedule's next fire is never taken for the answer to its last fire's
+question. Telling somebody to "reply in the thread" would send them to a
+thread that does not exist. Such a run is still answerable:
 [`answer_executor`](#answering-a-parked-executor) names it by its `turn_id` instead.
 
 `audience` is the harness's own label for who should answer —

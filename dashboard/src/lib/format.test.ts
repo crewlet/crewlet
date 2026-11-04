@@ -39,7 +39,6 @@ import {
   relTime,
   sentence,
   splitConversationKey,
-  conversationLabel,
   tsKey,
   fmtElapsed,
   fmtUptime,
@@ -258,17 +257,6 @@ describe("text", () => {
     });
     expect(splitConversationKey("github:acme/api#42").local).toBe("acme/api#42");
     expect(splitConversationKey("bare")).toEqual({ source: "", local: "bare" });
-  });
-
-  // A ROW PRINTS A UUID'S HEAD — the way every narrow row names one — and
-  // nothing else in a key changes, so `work:ENG-32` stays whole.
-  test("a conversation key's uuids are cut to their heads, and nothing else is", () => {
-    expect(conversationLabel("work:task:4d631f6d-5107-46f0-8043-a1f9d7a74abc")).toBe(
-      "work:task:4d631f6d",
-    );
-    expect(conversationLabel("work:ENG-32")).toBe("work:ENG-32");
-    expect(conversationLabel("slack:C9:1718.001")).toBe("slack:C9:1718.001");
-    expect(conversationLabel("")).toBe("");
   });
 
   test("an engine identifier becomes a label", () => {

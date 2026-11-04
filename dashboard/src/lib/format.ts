@@ -670,25 +670,6 @@ export function splitConversationKey(key: string): { source: string; local: stri
   return { source: key.slice(0, idx), local: key.slice(idx + 1) };
 }
 
-/** A uuid anywhere inside an identifier. */
-const UUID_IN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-
-/**
- * A conversation key as a row prints it: every uuid inside it cut to its first
- * eight characters — `work:task:4d631f6d` — and everything else as it is, so
- * `work:ENG-32` and `slack:C9:1718.001` are untouched.
- *
- * THE KEY IS THE THREAD'S ONLY IDENTITY on a list of threads, and a Worklet task
- * nobody gave a key is `work:task:` and a uuid — 46 unbreakable characters that
- * no row has room for, so a list of them read `work:task…` five times over.
- * The head of a uuid is how this product names one everywhere a row is narrow
- * (`workItemLabel`'s "task 4d631f6d"); the whole key belongs on the title, and
- * every caller puts it there.
- */
-export function conversationLabel(key: string): string {
-  return (key ?? "").replace(UUID_IN, (id) => id.slice(0, 8));
-}
-
 /**
  * A clause said as a sentence of its own: its first letter capitalised, and a
  * full stop added where it ends without one.

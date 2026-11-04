@@ -63,8 +63,13 @@ const (
 	sessionKey = "sqlite_autoindex_executor_sessions_1"
 
 	// conversationIdx is a conversation's rows in the order they ended: its
-	// head, its endings and an end's dedupe.
+	// endings and an end's dedupe.
 	conversationIdx = "executor_sessions_conversation_idx"
+
+	// lineIdx is a conversation's rows in its LINE's order — by where each
+	// turn read the conversation, then by its end: its head, the newest of
+	// them ([Head.Session]).
+	lineIdx = "executor_sessions_line_idx"
 
 	// endedIdx is a seat's rows in the order they ended: the budget's
 	// release, oldest first.

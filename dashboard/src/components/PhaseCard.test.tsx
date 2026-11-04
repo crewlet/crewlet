@@ -1384,6 +1384,36 @@ describe("a round the harness's turn cap ended", () => {
 });
 
 /**
+ * A PHASE'S CONVERSATION IS PRINTED AS EVERY ROW PRINTS A KEY. A schedule's
+ * fire carries its schedule's key — `schedule/`, the scope, the scope's id and
+ * the name, each escaped — which no surface holds: the card prints it decoded,
+ * and its title says it is the schedule the turn was a fire of, beside the key
+ * as sent. Any other key is the external conversation the turn served.
+ *
+ * Mutation: print the key as sent, or title a schedule's key as an external
+ * conversation, and a check goes red.
+ */
+describe("a phase's conversation", () => {
+  test("a fire's schedule key is printed decoded, the key as sent on its title", () => {
+    const key = "schedule/unit/eng/weekly%20report";
+    const { container } = render(
+      <PhaseCard record={phase({ conversationKey: key })} defaultOpen />,
+    );
+    const shown = screen.getByText("schedule/unit/eng/weekly report");
+    expect(shown.getAttribute("title")).toBe(`the schedule this turn was a fire of: ${key}`);
+    expect(container.textContent).not.toContain(key);
+  });
+
+  test("any other key is the external conversation the turn served", () => {
+    const key = "slack:C9:1718.001";
+    render(<PhaseCard record={phase({ conversationKey: key })} defaultOpen />);
+    expect(screen.getByText(key).getAttribute("title")).toBe(
+      `the external conversation this turn served: ${key}`,
+    );
+  });
+});
+
+/**
  * A SEALED CALL IS DRAWN AS THE ONE IT IS.
  *
  * An executor's call held for a person's approval, and the call they approved,

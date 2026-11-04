@@ -1840,13 +1840,30 @@ const (
 	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
 	// tile's cloud glyph) took it from 5497.5 KiB (5,629,434 bytes) to 5499.5
 	// KiB (5,631,527 bytes, +2,093 bytes). 5500 KiB.
+	// A schedule's next fire continuing the session its last fire left — the
+	// Sessions view's words for the launch that continues a fire's session
+	// (`continued_by: next_fire`), a schedule's conversation key printed with
+	// its parts decoded by a conversation label that moved out of
+	// lib/format.ts, which the shell loads first, into lib/conversationKey.ts,
+	// which only the screens that print a key load, and a fire's turn naming
+	// its schedule's conversation as one on the Turn page's rail and a phase
+	// card's footer, saying whether a key is the external conversation the
+	// turn served or the schedule the turn was a fire of — took it from 5499.5
+	// KiB (5,631,527 bytes) to 5500.1 KiB (5,632,112 bytes), +585 bytes: the
+	// phases chunk the phase card and the Memory tab share +452, the agents
+	// chunk +210, the settled and live chunks that print a key +33 and +25,
+	// less the 132 the label took out of the shared chunk the shell loads and
+	// 3 across the chunks whose imports the bundler renamed. The initial load
+	// (the entry, what the page preloads and the page itself) is 136 bytes
+	// lighter raw. 112 bytes past 5500 KiB, it moved to the measured size's
+	// next KiB: 5501 KiB.
 	// Google Cloud (its catalogue entry, its Agents tab words with the link
 	// to preparing a project, the issued period and the note on gcloud, and
 	// the org builder's leftover service account), merged onto that tree with
-	// the kit's Google Cloud mark already in 0.94.0, took it from 5499.5 KiB
-	// (5,631,527 bytes) to 5501.8 KiB (5,633,880 bytes, +2,353 bytes). The
-	// measured size's next KiB: 5502 KiB.
-	treeBudget = 5<<20 + 382<<10
+	// the kit's Google Cloud mark already in 0.94.0, took it from 5500.1 KiB
+	// (5,632,112 bytes) to 5502.4 KiB (5,634,465 bytes, +2,353 bytes). The
+	// measured size's next KiB: 5503 KiB.
+	treeBudget = 5<<20 + 383<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

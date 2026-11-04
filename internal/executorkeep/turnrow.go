@@ -36,7 +36,8 @@ type TurnRow struct {
 
 	// Ended is a turn whose end applied: no relaunch of it continues its
 	// session, and only its conversation's next turn may, where the row is
-	// that conversation's newest.
+	// that conversation's head (executordomain.Head: of its ended turns that
+	// name a session, the one that read the conversation last).
 	Ended bool
 
 	// ConversationKey is the conversation the turn served, "" for none: a
@@ -95,8 +96,9 @@ type ConversationHead struct {
 	// session and ran beside the head.
 	Siblings []TurnRow
 
-	// Session is the head: the newest ended turn of the conversation that
-	// left a session, nil where none did.
+	// Session is the head: of the conversation's ended turns whose rows still
+	// name a session, the one that read the conversation last, nil where none
+	// does.
 	Session *TurnRow
 }
 

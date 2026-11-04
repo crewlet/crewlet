@@ -273,8 +273,10 @@ roles:
         task: "Write a short note on what the company should focus on this week."
 ```
 
-Tell them to delete that schedule once real work arrives. Then layer
-integrations one at a time, validating after each.
+Tell them to delete that schedule once real work arrives: it fires every five
+minutes, and each fire continues the session the last fire left, paying for
+the whole of it on every request. Then layer integrations one at a time,
+validating after each.
 
 Full worked examples to model the shape on — read them, don't
 reinvent them:

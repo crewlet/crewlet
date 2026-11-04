@@ -206,7 +206,7 @@ const SESSION_TURN = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11";
 const LOG_AT = { stream: "CREWLET_EXECUTOR_LOG", generation: 1, seq: 9 };
 
 /** One turn's executor session as `executor_sessions` lists it: a completed
- *  turn whose session is kept and its conversation's newest, which the
+ *  turn whose session is kept and its conversation's head, which the
  *  conversation's next turn would continue, with `over` laid on top. */
 function sessionRow(over: Record<string, unknown> = {}) {
   return {

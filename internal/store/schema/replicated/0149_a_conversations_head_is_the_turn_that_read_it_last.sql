@@ -1,0 +1,41 @@
+-- A conversation's head is the turn that read it last: the executor domain's
+-- LINE ORDER (internal/executordomain; ADR-0073's amendment "a schedule is a
+-- conversation of each seat that runs it").
+--
+-- WHO HAS TO AGREE ON IT: every data node, identically, derived from the
+-- CREWLET_EXECUTOR_LOG stream by its one applier, as 0073 states for the rest
+-- of executor_sessions. An index only, over columns every node already writes
+-- from the same records, so no row changes and the identity claim is untouched.
+--
+-- # Why the end was the wrong order
+--
+-- A conversation's head was the newest END among its turns that left a
+-- session, and a turn's end absorbs only what its own first read handed out.
+-- Two turns of one conversation run beside each other whenever one parks on a
+-- person's question, which frees its seat — and every time for a schedule,
+-- whose next fire is never taken as that question's answer. A turn that read
+-- the conversation early and ended late then became the head: the turn after
+-- it continued the old session, and the turns that read after it, each
+-- continuing the one before, were told and then absorbed rather than
+-- continued. The head is now the ended turn whose READ is newest — the newest
+-- point of the conversation's line, which every later read built on — and,
+-- among turns that read at one position, the newest end; a turn that read no
+-- conversation (its read failed, so its read_through is 0) sorts after every
+-- turn that read.
+--
+-- # The budget's release keeps its order, and its index
+--
+-- The seat budget still releases the oldest END first, through
+-- executor_sessions_ended_idx, which stays. Which sessions a capture releases
+-- is decided by every data node's applier, so a fleet in a rolling upgrade,
+-- some of its nodes releasing by end and others by read, would release
+-- different sessions for one capture, and its copies of the estate would
+-- diverge. The head is a read's alone: two builds that answer different heads
+-- hand two turns different bases, each recorded on the log as that turn's
+-- read, and diverge nothing. Under budget pressure the release can take a
+-- conversation's head before a stale sibling, a turn that read it earlier and
+-- ended later, and the next turn then continues, of the sessions the
+-- conversation still keeps, the one that read it last, and is told the
+-- released head's ending as it is told every other.
+
+CREATE INDEX executor_sessions_line_idx ON executor_sessions (agent_handle, conversation_key, read_through, end_seq); -- a conversation's head: the newest read, the newest end among equals

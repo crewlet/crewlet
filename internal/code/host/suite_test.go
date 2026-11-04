@@ -16,13 +16,28 @@ import (
 // each object store backend: the in-memory twin, and S3 through an in-process
 // bucket speaking its wire — the backend whose puts go in parts and whose
 // reads go in ranges.
+//
+// BOTH PASSES RUN IN PARALLEL, with each other and with the package's other
+// parallel tests, for TestTheGitFloorsPassTheSuite's reason below: each is one
+// whole pass of the suite, and run serially the two of them were most of the
+// serial prefix, which no parallel test starts before. Measured under -race on
+// two CPUs with nothing beside it, the package took 614 s, 417 s of it serial
+// and 296 s of that these two passes (146 s and 150 s); on CI's four-vCPU
+// runner, beside the rest of `make test`, it took 1,048 s to 1,735 s in twelve
+// runs, and once ran out its 30 minutes with the floors pass the only test
+// left, 6m44s into its slot. Run in parallel, the package took 448 s on those
+// two CPUs, 47 s of it serial. They may run in parallel for the floors arm's
+// reason too, which runs these same cases in parallel already.
 func TestTheHostPassesTheSuite(t *testing.T) {
+	t.Parallel()
 	t.Run("memobj", func(t *testing.T) {
+		t.Parallel()
 		codetest.Run(t, codetest.Solo(codetest.SoloOptions{}, func(*testing.T) objstore.Backend {
 			return memobj.New()
 		}))
 	})
 	t.Run("s3fake", func(t *testing.T) {
+		t.Parallel()
 		codetest.Run(t, codetest.Solo(codetest.SoloOptions{}, s3Backend))
 	})
 }

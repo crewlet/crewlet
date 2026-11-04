@@ -206,8 +206,8 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 	switch {
 	case run == nil || row.Ended:
 		return SessionContinuity{Why: "the turn has ended, so no relaunch of it continues its session: a " +
-			"session its turn ended with is continued only by its conversation's next turn, where it is the " +
-			"conversation's newest"}
+			"session its turn ended with is continued only by its conversation's next turn, where its turn is " +
+			"the conversation's head, the ended turn with a kept session that read the conversation last"}
 	case run.endDecided():
 		return SessionContinuity{Why: "the turn is ending: its run's ending is decided, and no relaunch " +
 			"of it follows to continue its session"}
@@ -311,10 +311,19 @@ const (
 	// served no conversation has no next turn, and its reader is told no
 	// launch continues its session at all.
 	ContinuedByNextTurn ContinuedBy = "next_turn"
+
+	// ContinuedByNextFire is [ContinuedByNextTurn] of a schedule's
+	// conversation: the schedule's next fire, which continues the session
+	// only where it is the schedule's head on the seat — of the ended fires
+	// whose rows still name a session, the one that read the schedule's
+	// conversation last — a schedule is a conversation of each seat that runs
+	// it, every fire a turn of it (internal/notify's ScheduleConversation). The
+	// same decision, told in the schedule's words.
+	ContinuedByNextFire ContinuedBy = "next_fire"
 )
 
 // ContinuedBys are every launch a reader is told continues a session.
-var ContinuedBys = []ContinuedBy{ContinuedByRelaunch, ContinuedByNextTurn}
+var ContinuedBys = []ContinuedBy{ContinuedByRelaunch, ContinuedByNextTurn, ContinuedByNextFire}
 
 // Valid reports whether b is one of [ContinuedBys]. An answer a newer build
 // sent may name another, which is read as the value it is.
@@ -418,7 +427,8 @@ func (r refusedRestore) Restores(SessionArchive) (bool, string) { return false, 
 
 // ReadContinuity is whether a launch would continue a turn's session, as a
 // reader of the session is told it ([ReadContinuityOf]): a relaunch of the
-// turn, or the next turn of its conversation, which By says.
+// turn, or the next turn of its conversation — its schedule's next fire, for a
+// schedule's — which By says.
 type ReadContinuity struct {
 	// By is the launch the answer is about ([ContinuedBys]); empty where no
 	// launch would ever continue the session — a turn that served no
@@ -442,7 +452,13 @@ type ReadContinuity struct {
 // ReadContinuityOf is whether a launch would continue the session of the turn
 // whose row on the executor log row is, as a reader is told it — THE DECISION
 // THAT LAUNCH TAKES, asked of what that launch reads — and which launch that
-// is ([ReadContinuity.By]):
+// is ([ReadContinuity.By]). next is the launch that continues the session an
+// ended turn of row's conversation left: [ContinuedByNextFire] where that
+// conversation is a schedule's, [ContinuedByNextTurn] for any other, and any
+// other value is read as the second. THE CALLER SAYS WHICH, by the
+// conversation's key (internal/notify's Scheduled): this package cannot ask,
+// since notify reaches it through internal/tracing, and a copy of the rule
+// here would be a second place that knows a schedule's key.
 //
 //   - A LIVE TURN'S SESSION, BY A RELAUNCH OF IT: [ContinuityOf], of row, the
 //     turn's run record as it stands (run), the job that record names as the
@@ -492,18 +508,44 @@ type ReadContinuity struct {
 // launch gets runs a harness release that takes the session up, and whether
 // the seat's budget can carry it, are the launch's to find out.
 func ReadContinuityOf(row executorkeep.TurnRow, head string, run *PendingRun, target RelaunchTarget,
-	now time.Time) ReadContinuity {
+	next ContinuedBy, now time.Time) ReadContinuity {
 
+	later := laterLaunchOf(next)
 	switch {
 	case row.Ended:
-		return nextTurnContinuity(row, head, target)
+		return nextTurnContinuity(row, head, target, later)
 	case run == nil || run.endDecided():
-		return endingContinuity(row, run)
+		return endingContinuity(row, run, later)
 	}
-	read := relaunchContinuity(row, *run, target, now)
+	read := relaunchContinuity(row, *run, target, later, now)
 	read.By = ContinuedByRelaunch
 	return read
 }
+
+// laterLaunch is the launch that continues the session an ended turn of a
+// conversation left, as a reader is told it: what it is answered as, and the
+// words its sentences name the conversation and its turns in.
+type laterLaunch struct {
+	by ContinuedBy
+
+	// whole is what the conversation is called, turn what each of its turns
+	// is: a conversation's turns, or a schedule's fires.
+	whole, turn string
+}
+
+// laterLaunchOf is next as a reader is told it ([ReadContinuityOf]): a
+// schedule's next fire, or any other conversation's next turn — what every
+// value but [ContinuedByNextFire] is read as.
+func laterLaunchOf(next ContinuedBy) laterLaunch {
+	if next == ContinuedByNextFire {
+		return laterLaunch{by: ContinuedByNextFire, whole: "schedule", turn: "fire"}
+	}
+	return laterLaunch{by: ContinuedByNextTurn, whole: "conversation", turn: "turn"}
+}
+
+// launch is the launch in a reader's words: "the conversation's next turn",
+// "the schedule's next fire".
+func (l laterLaunch) launch() string { return "the " + l.whole + "'s next " + l.turn }
 
 // servedNoConversation is why no launch continues the session of a turn that
 // served no conversation once no relaunch of it follows: a later turn
@@ -511,11 +553,13 @@ func ReadContinuityOf(row executorkeep.TurnRow, head string, run *PendingRun, ta
 const servedNoConversation = "the turn served no conversation, so no later turn continues its session"
 
 // nextTurnContinuity is [ReadContinuityOf] of an ended turn's row: whether its
-// conversation's next turn would continue its session, head being the turn the
-// read that answered row named its conversation's head.
-func nextTurnContinuity(row executorkeep.TurnRow, head string, target RelaunchTarget) ReadContinuity {
+// conversation's next turn — later — would continue its session, head being the
+// turn the read that answered row named its conversation's head.
+func nextTurnContinuity(row executorkeep.TurnRow, head string, target RelaunchTarget,
+	later laterLaunch) ReadContinuity {
+
 	not := func(why string) ReadContinuity {
-		return ReadContinuity{By: ContinuedByNextTurn, Decided: true, Why: why}
+		return ReadContinuity{By: later.by, Decided: true, Why: why}
 	}
 	switch {
 	case row.ConversationKey == "":
@@ -527,28 +571,28 @@ func nextTurnContinuity(row executorkeep.TurnRow, head string, target RelaunchTa
 		// turn names a head for its conversation — that row, if nothing newer —
 		// so a read that names none did not say which session the next turn
 		// is handed, which is no reason to say it is not this one.
-		return ReadContinuity{By: ContinuedByNextTurn, Why: "the read of this session did not say which of " +
-			"its conversation's sessions is the newest; ask again shortly"}
+		return ReadContinuity{By: later.by, Why: "the read of this session did not say which of its " +
+			later.whole + "'s sessions is the newest in its line; ask again shortly"}
 	case head != row.Turn:
-		return not(fmt.Sprintf("the conversation's next turn is handed turn %s's session, the newest the "+
-			"conversation left, and is told how this one ended where its brief has room", head))
+		return not(fmt.Sprintf("%s is handed %s %s's session, the newest in the %s's line, and is told "+
+			"how this one ended where its brief has room", later.launch(), later.turn, head, later.whole))
 	case target.Undecided:
-		return ReadContinuity{By: ContinuedByNextTurn, Why: target.Why}
+		return ReadContinuity{By: later.by, Why: target.Why}
 	case target.NoKept != "":
 		return not(target.NoKept)
 	}
 	if continuity := BaseContinuityOf(baseSessionOf(row), nil, nil, target.restorer()); !continuity.Continues {
 		return not(continuity.Why)
 	}
-	return ReadContinuity{By: ContinuedByNextTurn, Decided: true, Continues: true, In: ContinuesInAnyBox}
+	return ReadContinuity{By: later.by, Decided: true, Continues: true, In: ContinuesInAnyBox}
 }
 
 // endingContinuity is [ReadContinuityOf] of a live turn's row whose run is over
 // (run nil) or ending: decided only for a turn that served no conversation,
 // which no later turn continues; for any other, whether its conversation's next
-// turn continues the session the row names is decided once the turn's end is on
-// the log, where the read that answered row did not find it.
-func endingContinuity(row executorkeep.TurnRow, run *PendingRun) ReadContinuity {
+// turn — later — continues the session the row names is decided once the turn's
+// end is on the log, where the read that answered row did not find it.
+func endingContinuity(row executorkeep.TurnRow, run *PendingRun, later laterLaunch) ReadContinuity {
 	over := "the turn's run is over"
 	if run != nil {
 		over = "the turn is ending"
@@ -556,16 +600,17 @@ func endingContinuity(row executorkeep.TurnRow, run *PendingRun) ReadContinuity 
 	if row.ConversationKey == "" {
 		return ReadContinuity{Decided: true, Why: over + "; " + servedNoConversation}
 	}
-	return ReadContinuity{By: ContinuedByNextTurn, Why: over + ", and its end is not on the executor log as " +
-		"this session was read; once it is, the conversation's next turn continues the session this row " +
-		"names if it is the newest the conversation left"}
+	return ReadContinuity{By: later.by, Why: over + ", and its end is not on the executor log as this " +
+		"session was read; once it is, " + later.launch() + " continues the session this row names if it " +
+		"is then the newest in the " + later.whole + "'s line"}
 }
 
 // relaunchContinuity is [ReadContinuityOf] of a live turn's row whose run is
 // neither over nor ending: whether a relaunch of the turn would continue its
-// session.
+// session — later naming the turn's base, where a relaunch would continue that
+// instead, as its conversation names its turns.
 func relaunchContinuity(row executorkeep.TurnRow, run PendingRun, target RelaunchTarget,
-	now time.Time) ReadContinuity {
+	later laterLaunch, now time.Time) ReadContinuity {
 
 	switch {
 	case jobWorking(run):
@@ -617,7 +662,7 @@ func relaunchContinuity(row executorkeep.TurnRow, run PendingRun, target Relaunc
 	case boxUndecided:
 		return ReadContinuity{Why: reason}
 	}
-	if base := relaunchedBase(row, run, target); base != "" {
+	if base := relaunchedBase(row, run, target, later); base != "" {
 		reason += "; " + base
 	}
 	return ReadContinuity{Decided: true, Why: reason}
@@ -635,8 +680,11 @@ func relaunchContinuity(row executorkeep.TurnRow, run PendingRun, target Relaunc
 // that resume has not said which, nothing is claimed. IN A BOX OF ITS OWN, which
 // is the launch's to get, and so said: a relaunch into the box the turn's job
 // ran in continues the session that box holds instead
-// ([Coordinator.continueBase]).
-func relaunchedBase(row executorkeep.TurnRow, run PendingRun, target RelaunchTarget) string {
+// ([Coordinator.continueBase]). The base is named as later names the turns of
+// row's conversation: a schedule's base is its last fire.
+func relaunchedBase(row executorkeep.TurnRow, run PendingRun, target RelaunchTarget,
+	later laterLaunch) string {
+
 	switch {
 	case target.NoKept != "" || run.Base == nil || run.Base.Session == nil:
 		return ""
@@ -647,8 +695,8 @@ func relaunchedBase(row executorkeep.TurnRow, run PendingRun, target RelaunchTar
 	if !BaseContinuityOf(base, &row, &run, target.restorer()).Continues {
 		return ""
 	}
-	return fmt.Sprintf("a relaunch of the turn in a box of its own continues turn %s's session instead, which "+
-		"the turn's first launch was handed", base.Turn)
+	return fmt.Sprintf("a relaunch of the turn in a box of its own continues %s %s's session instead, which "+
+		"the turn's first launch was handed", later.turn, base.Turn)
 }
 
 // TargetAsk is what a reader asks the node holding row's seat about it
@@ -993,7 +1041,7 @@ func (c *Coordinator) continuesNoKept() string {
 // keeps none: what a launch logs and a reader of a session is told.
 const NoKeptSession = "the company keeps no executor session (turn_engine.conversation_session.enabled " +
 	"is false), so a relaunch continues at most the session its own box holds, and a conversation's next " +
-	"turn continues none"
+	"turn, or a schedule's next fire, continues none"
 
 // followedContext is what the last request of the session of run's current
 // job carried, as that job's newest capture measured it, kept or not; zero

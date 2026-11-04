@@ -104,7 +104,7 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 			if tc.row != nil {
 				tc.row(&row)
 			}
-			got := ReadContinuityOf(row.Kept(), tc.head, nil, tc.target, now)
+			got := ReadContinuityOf(row.Kept(), tc.head, nil, tc.target, ContinuedByNextTurn, now)
 			switch {
 			case got.By != tc.by:
 				t.Fatalf("ReadContinuityOf = %+v, want it about %q", got, tc.by)
@@ -193,7 +193,7 @@ func TestARelaunchOfATurnThatKeptNothingIsSaidToContinueItsBase(t *testing.T) {
 			if tc.run != nil {
 				tc.run(&run)
 			}
-			got := ReadContinuityOf(row.Kept(), "t-head", &run, tc.target, now)
+			got := ReadContinuityOf(row.Kept(), "t-head", &run, tc.target, ContinuedByNextTurn, now)
 			switch {
 			case got.By != ContinuedByRelaunch || !got.Decided || got.Continues:
 				t.Fatalf("ReadContinuityOf = %+v, want a relaunch decided not to continue the row's own", got)
@@ -230,7 +230,7 @@ func TestALiveTurnWhoseRunIsOverOrEndingIsTheNextTurnsUndecided(t *testing.T) {
 		Ending: &RecordedEnding{ID: "ending-1"}}
 	target := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
 	for name, run := range map[string]*PendingRun{"its run over": nil, "its ending decided": stopping} {
-		got := ReadContinuityOf(row.Kept(), "", run, target, now)
+		got := ReadContinuityOf(row.Kept(), "", run, target, ContinuedByNextTurn, now)
 		if got.By != ContinuedByNextTurn || got.Decided || !strings.Contains(got.Why, "not on the executor log") {
 			t.Errorf("%s: ReadContinuityOf = %+v, want the next turn's, undecided until its end lands", name, got)
 		}
@@ -239,28 +239,76 @@ func TestALiveTurnWhoseRunIsOverOrEndingIsTheNextTurnsUndecided(t *testing.T) {
 		}
 		keyless := row
 		keyless.ConversationKey = ""
-		if got := ReadContinuityOf(keyless.Kept(), "", run, target, now); got.By != "" || !got.Decided ||
-			!strings.Contains(got.Why, "served no conversation") {
+		if got := ReadContinuityOf(keyless.Kept(), "", run, target, ContinuedByNextTurn, now); got.By != "" ||
+			!got.Decided || !strings.Contains(got.Why, "served no conversation") {
 			t.Errorf("%s: a turn of no conversation reads %+v, want decided, continued by no launch", name, got)
 		}
 	}
 }
 
-// WHO CONTINUES A SESSION IS ONE OF TWO, and an answer naming another — one a
-// build that knows a third wrote — reads as the value it is.
+// A SCHEDULE'S SESSION IS TOLD OF ITS NEXT FIRE. A schedule is a conversation
+// of each seat that runs it, every fire a turn of it, so an ended fire's row is
+// decided by the decision any conversation's is — its next fire's first
+// launch's — and answered as the schedule's next fire, in the schedule's words:
+// the head continued in any box; an older fire's row naming the fire the next
+// one is handed instead; a fire whose end is not on the log yet undecided until
+// it is; and a live fire that kept nothing, whose relaunch continues the last
+// fire's session. Whatever else a caller passes is the next turn's.
+//
+// Mutation: answer a schedule's row as the next turn's, word it as a
+// conversation's, or read an unknown launch as the next fire, and a check goes
+// red.
+func TestAScheduleRowIsToldItsNextFire(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	restores := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
+	fire := endedHead(now)
+	fire.ConversationKey = "schedule/role/a-1/health-check"
+
+	head := ReadContinuityOf(fire.Kept(), "t-head", nil, restores, ContinuedByNextFire, now)
+	if head.By != ContinuedByNextFire || !head.Decided || !head.Continues || head.In != ContinuesInAnyBox {
+		t.Errorf("the schedule's newest session reads %+v, want its next fire's, continued in any box", head)
+	}
+	older := ReadContinuityOf(fire.Kept(), "t-newer", nil, restores, ContinuedByNextFire, now)
+	if older.By != ContinuedByNextFire || !older.Decided || older.Continues ||
+		!strings.Contains(older.Why, "the schedule's next fire is handed fire t-newer's session, the newest "+
+			"in the schedule's line") {
+		t.Errorf("an older fire's session reads %+v, want its next fire's, naming the fire it is handed", older)
+	}
+	ending := fire
+	ending.Ending, ending.EndedAt = nil, time.Time{}
+	over := ReadContinuityOf(ending.Kept(), "", nil, restores, ContinuedByNextFire, now)
+	if over.By != ContinuedByNextFire || over.Decided ||
+		!strings.Contains(over.Why, "once it is, the schedule's next fire continues the session") {
+		t.Errorf("a fire whose run is over reads %+v, want its next fire's, undecided until its end lands", over)
+	}
+	begun, run := begunTurn(now)
+	begun.ConversationKey = fire.ConversationKey
+	relaunch := ReadContinuityOf(begun.Kept(), "t-head", &run, restores, ContinuedByNextFire, now)
+	if relaunch.By != ContinuedByRelaunch ||
+		!strings.Contains(relaunch.Why, "continues fire t-head's session instead") {
+		t.Errorf("a fire that kept nothing reads %+v, want its relaunch continuing the last fire's session", relaunch)
+	}
+	if got := ReadContinuityOf(fire.Kept(), "t-head", nil, restores, "later", now); got.By != ContinuedByNextTurn {
+		t.Errorf("a launch this build does not name reads %+v, want the next turn's", got)
+	}
+}
+
+// WHO CONTINUES A SESSION IS ONE OF THREE, and an answer naming another — one a
+// build that knows a fourth wrote — reads as the value it is.
 //
 // Mutation: answer true for any value, or drop one from [ContinuedBys], and a
 // row goes red.
-func TestWhoContinuesASessionIsOneOfTwo(t *testing.T) {
+func TestWhoContinuesASessionIsOneOfThree(t *testing.T) {
 	t.Parallel()
 	for by, valid := range map[ContinuedBy]bool{
-		ContinuedByRelaunch: true, ContinuedByNextTurn: true, "later": false, "": false,
+		ContinuedByRelaunch: true, ContinuedByNextTurn: true, ContinuedByNextFire: true, "later": false, "": false,
 	} {
 		if by.Valid() != valid {
 			t.Errorf("%q.Valid() = %v, want %v", by, by.Valid(), valid)
 		}
 	}
-	if len(ContinuedBys) != 2 {
-		t.Errorf("ContinuedBys = %v, want the two", ContinuedBys)
+	if len(ContinuedBys) != 3 {
+		t.Errorf("ContinuedBys = %v, want the three", ContinuedBys)
 	}
 }

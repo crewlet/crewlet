@@ -467,12 +467,14 @@ type Actor struct {
 // reproduces and therefore the only one that can collapse a re-run's writes
 // into the first attempt's.
 //
-// THE RUN WHERE THERE IS NOT. A turn with no ledgerable trigger — a scheduled
-// fire, a resumed run whose dispatch is long gone — has no cross-run duplicate
-// to collapse, but it still has ROUNDS: an executor that calls the same update
-// twice in one run should write once, and seeding from "" made every such call
-// mint a fresh id and write again. Falling back to the run keeps the
-// within-run guarantee without inventing a cross-run one.
+// THE RUN WHERE THERE IS NOT. A turn with no ledgerable trigger — a
+// sub-agent's, a resumed run whose dispatch is long gone — has no cross-run
+// duplicate to collapse, but it still has ROUNDS: an executor that calls the
+// same update twice in one run should write once, and seeding from "" made
+// every such call mint a fresh id and write again. Falling back to the run
+// keeps the within-run guarantee without inventing a cross-run one. A
+// scheduled fire is not such a turn: it is a task assignment, which the
+// completion ledger records, so its key is its fire's.
 //
 // OUTSIDE A TURN IT IS THE REQUEST'S OWN KEY, where its transport carries one:
 // the act transport and the HTTP write surface hand the `Idempotency-Key` a

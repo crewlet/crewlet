@@ -64,7 +64,8 @@ import { CircleAlertGlyph, FileTextGlyph, SquareTerminalGlyph } from "@crewlethq
 import { useLayoutEffect, useRef, useState } from "react";
 import { href, useParam, useRoute } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { conversationLabel, fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
+import { conversationLabel } from "~/lib/conversationKey.ts";
+import { fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useClient } from "~/lib/store-hooks.ts";
@@ -603,6 +604,11 @@ const CONTINUED_BY: Record<SessionContinuedBy, ContinuedWords> = {
     not: "The conversation's next turn would not continue this session",
     unknown: "Whether the conversation's next turn continues this session cannot be said now",
   },
+  next_fire: {
+    would: "The schedule's next fire would continue this session",
+    not: "The schedule's next fire would not continue this session",
+    unknown: "Whether the schedule's next fire continues this session cannot be said now",
+  },
 };
 
 /**
@@ -631,10 +637,11 @@ const CONTINUES_IN: Record<SessionContinuesIn, string> = {
 
 /**
  * Whether a launch would continue the session, as a sentence: which launch
- * (`continued_by` — a relaunch of its turn, or its conversation's next turn),
- * the engine's decision (`continuable`) and where (`continues_in`), with its own
- * reason (`not_continuable`) where it would not, where a relaunch would only in
- * the box the turn's run parked in, and where it cannot be said now.
+ * (`continued_by` — a relaunch of its turn, its conversation's next turn, or
+ * its schedule's next fire), the engine's decision (`continuable`) and where
+ * (`continues_in`), with its own reason (`not_continuable`) where it would not,
+ * where a relaunch would only in the box the turn's run parked in, and where it
+ * cannot be said now.
  *
  * NO MORE THAN THE ENGINE DECIDED: a launch WOULD continue the session where
  * the box it gets can take it up and the seat's budget can carry it, which only
@@ -733,8 +740,8 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
 }
 
 /**
- * The session a turn's first launch was handed to continue — the newest its
- * conversation left as the turn's dispatch read it — as a link that opens that
+ * The session a turn's first launch was handed to continue — its
+ * conversation's head as the turn's dispatch read it — as a link that opens that
  * session here, where this seat still keeps it: the chain a conversation's
  * turns make, followed a turn at a time. The engine says whether the session is
  * still kept once it is opened; an absorbed one is gone with the turn that was

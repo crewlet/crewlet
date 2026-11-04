@@ -201,7 +201,7 @@ func TestTwoRunsOfOneTriggerWriteOneOperation(t *testing.T) {
 
 // AND A TURN WITH NO LEDGERABLE TRIGGER IS STILL IDEMPOTENT WITHIN ITS RUN.
 //
-// A scheduled fire has no work key — the documented "nothing to collapse" —
+// A sub-agent's turn has no work key — the documented "nothing to collapse" —
 // and its seed used to be empty, so every call minted a fresh id and an
 // executor that updated the same item in two rounds wrote twice. Falling back
 // to the run keeps the within-run guarantee without inventing a cross-run one.

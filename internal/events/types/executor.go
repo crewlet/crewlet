@@ -610,8 +610,9 @@ func (e ExecutorStopped) SummaryFor(actor string) string {
 // # Why a second way in
 //
 // The chat route matches a reply to a run by conversation, and a run launched
-// by anything that is not a conversation — a schedule, a task assignment, a
-// colleague's ask — stored none. Such a run parked on a question nobody could
+// by a task assignment or a colleague's ask stored none, while one a schedule
+// launched stores its schedule's, which nobody can reply into
+// (internal/notify's Derived). Such a run parked on a question nobody could
 // answer: there was no thread to reply in, and the question waited out its
 // pause TTL while the person who knew the answer had nowhere to put it. An
 // answer by turn names the run instead, and it can be given from any node.

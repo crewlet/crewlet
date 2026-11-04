@@ -499,7 +499,7 @@ func TestAnUnkeyedObservationDoesNotDisarmTheNextRedelivery(t *testing.T) {
 			WorkKey: workKey,
 		}
 	}
-	// A keyed interaction, then an unkeyed one (a scheduled fire).
+	// A keyed interaction, then an unkeyed one (a sub-agent's).
 	for _, key := range []string{"wk-1", ""} {
 		if _, err := c.Record(t.Context(), obs(key)); err != nil {
 			t.Fatalf("Record(%q): %v", key, err)

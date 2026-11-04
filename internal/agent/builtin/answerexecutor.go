@@ -83,11 +83,12 @@ type runParties struct {
 // # Why by turn
 //
 // A reply on the conversation the question was asked in is matched to the run
-// by that conversation — and a run launched by a schedule, a task assignment
-// or a colleague's ask has no conversation at all. Its question could not be
-// answered: there was nowhere to reply, and it waited out its pause TTL. This
-// tool names the run instead, so any parked run is answerable whatever woke
-// the turn that launched it.
+// by that conversation — and a run launched by a task assignment or a
+// colleague's ask has no conversation at all, while one a schedule launched
+// has its schedule's, which nobody can reply into (internal/notify's Derived).
+// Its question could not be answered: there was nowhere to reply, and it
+// waited out its pause TTL. This tool names the run instead, so any parked run
+// is answerable whatever woke the turn that launched it.
 //
 // # Whose question it is
 //
