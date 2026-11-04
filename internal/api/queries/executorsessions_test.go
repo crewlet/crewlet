@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -608,6 +609,60 @@ func TestAnEndingsProseIsRedactedAtThisRead(t *testing.T) {
 			if strings.Contains(said, plantedKey) || !strings.Contains(said, redact.Marker) {
 				t.Errorf("%s: the ending's %s reads %q, want it redacted", question, field, said)
 			}
+		}
+	}
+}
+
+// EVERY SURFACE SHOWS A SESSION'S ROW THROUGH ONE REDACTION. Both questions
+// show a row whose every text spells a token the redaction knows exactly as
+// the row's own redaction shows it (executordomain.Session.Redacted) — what the
+// turn was asked, and the whole ending — and the row's other words as the row
+// holds them: what that one redaction covers is redacted here, and nothing it
+// leaves is redacted by a copy of this surface's own, so this surface and every
+// other reader of a row cannot show one row two ways.
+//
+// Mutation: show the ask or the ending as the row holds it rather than as the
+// row's redaction shows it, or redact the conversation's key here, and a check
+// goes red.
+func TestEverySurfaceShowsASessionsRowThroughOneRedaction(t *testing.T) {
+	t.Parallel()
+	quoted := "the deploy used " + plantedKey
+	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	raw := executordomain.Session{Handle: "ana", Turn: uuid.NewString(),
+		ConversationKey: "chat:" + plantedKey, WorkKey: plantedKey, CapturedAt: at, EndedAt: at,
+		AskExcerpt: "fix it with " + plantedKey,
+		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, CompletedWork: quoted,
+			BlockedOn: quoted, StoppedBy: "ana.diaz", StopReason: quoted, Failure: quoted,
+			Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: quoted}}}
+	want := raw.Redacted()
+	store, _ := sessionObjectStore(t)
+	s := sessionSources(t, &stubSessions{rows: []executordomain.Session{raw}}, store)
+	listed, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	read, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": raw.Turn})
+	if err != nil {
+		t.Fatalf("executor_session: %v", err)
+	}
+	rows := listed.(queries.SessionsAnswer).Sessions
+	if len(rows) != 1 {
+		t.Fatalf("the list holds %d rows, want the one", len(rows))
+	}
+	for question, row := range map[string]queries.SessionRow{
+		"executor_sessions": rows[0], "executor_session": read.(queries.SessionAnswer).Session,
+	} {
+		if row.AskExcerpt != want.AskExcerpt {
+			t.Errorf("%s shows the ask as %q, want the row's redaction %q", question, row.AskExcerpt,
+				want.AskExcerpt)
+		}
+		if row.Ending == nil || !reflect.DeepEqual(*row.Ending, *want.Ending) {
+			t.Errorf("%s shows the ending as %+v, want the row's redaction %+v", question, row.Ending,
+				want.Ending)
+		}
+		if row.ConversationKey != raw.ConversationKey || row.WorkKey != raw.WorkKey {
+			t.Errorf("%s shows the conversation %q and the work %q, want them as the row holds them",
+				question, row.ConversationKey, row.WorkKey)
 		}
 	}
 }

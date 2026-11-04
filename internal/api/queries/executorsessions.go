@@ -806,33 +806,20 @@ func notATranscriptCursor(cursor string) error {
 		"handed out, and %q isn't", ErrBadParams, cursor)
 }
 
-// sessionRowOf is a row as this surface shows it, the text somebody wrote in it
-// redacted.
+// sessionRowOf is a row as this surface shows it: through the row's one
+// redaction ([executordomain.Session.Redacted]), which every reader of a row
+// shows it through, so what the turn was asked and the ending's prose are
+// redacted here exactly as they are wherever else a row is shown.
 func sessionRowOf(s executordomain.Session) SessionRow {
+	s = s.Redacted()
 	row := SessionRow{
 		Turn: s.Turn, ConversationKey: s.ConversationKey, WorkKey: s.WorkKey,
 		Harness: s.Harness, HarnessVersion: s.HarnessVersion,
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
-		AskExcerpt: redact.Secrets(s.AskExcerpt), Kept: s.HasObject(), BaseTurn: s.BaseTurn,
+		AskExcerpt: s.AskExcerpt, Kept: s.HasObject(), BaseTurn: s.BaseTurn, Ending: s.Ending,
 	}
 	if row.Kept {
 		row.ObjectBytes = s.Object.Size
-	}
-	if s.Ending != nil {
-		// A COPY, redacted: the row is the domain's, and the ending's prose
-		// is a model's or a person's words — and why its newest capture was
-		// not kept quotes what refused it, an error a box or a store wrote.
-		ending := *s.Ending
-		ending.CompletedWork = redact.Secrets(ending.CompletedWork)
-		ending.BlockedOn = redact.Secrets(ending.BlockedOn)
-		ending.StopReason = redact.Secrets(ending.StopReason)
-		ending.Failure = redact.Secrets(ending.Failure)
-		if u := ending.Unkept; u != nil {
-			unkept := *u
-			unkept.Reason = redact.Secrets(unkept.Reason)
-			ending.Unkept = &unkept
-		}
-		row.Ending = &ending
 	}
 	return row
 }
