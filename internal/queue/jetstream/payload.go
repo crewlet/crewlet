@@ -70,7 +70,7 @@ import (
 // is written, naming the limit — see [reconnectWatch], which says so on the
 // reconnect itself.
 //
-// And NOTHING AT ALL of a limit lowered by a LIVE RELOAD, which no check on
+// And NOTHING AT ALL of a limit a LIVE RELOAD lowers later, which no check on
 // this side can see: nats-server applies a reloaded max_payload to the
 // connections it holds without sending them an INFO, so the client goes on
 // reading the contract's figure, and the first message past the new limit

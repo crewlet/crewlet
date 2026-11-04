@@ -76,12 +76,15 @@ func TestARestartChangesTheLimitAndKeepsTheStreams(t *testing.T) {
 // send it — nats-server sends no INFO for a reloaded max_payload — while a new
 // connection reads the reloaded figure. A Reload that restarted would hand a
 // case a client that had reconnected and read the new limit, and the close for
-// good the case exists to stage would never happen.
+// good the case exists to stage would never happen. The INFO ending a handshake
+// does carry a reload that lands first, so the client here finishes its own
+// before the reload.
 //
 // Mutation: implement Reload as a stop and a start on the same port and the
 // reconnect row goes red; build the reloaded set from scratch rather than from
 // the running one and the reload is refused for changing what cannot be
-// reloaded.
+// reloaded; drop the round trip before the reload and the limit row goes red
+// whenever the reload beats the INFO that ends the handshake.
 func TestAReloadChangesTheServerAndNotItsClients(t *testing.T) {
 	t.Parallel()
 	const before, after = 8 << 20, 2 << 20
@@ -91,6 +94,11 @@ func TestAReloadChangesTheServerAndNotItsClients(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(nc.Close)
+	// Finished before the reload, which otherwise can reach the client in
+	// the INFO ending its handshake.
+	if err := nc.FlushTimeout(5 * time.Second); err != nil {
+		t.Fatalf("finish the handshake: %v", err)
+	}
 
 	srv.Reload(after)
 
