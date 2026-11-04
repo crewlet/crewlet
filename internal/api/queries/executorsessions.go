@@ -591,7 +591,8 @@ func (s Sources) executorSession(ctx context.Context, p Params) (any, error) {
 	}
 	cursor := strings.TrimSpace(p.String("cursor"))
 	page, err := executorread.Read(ctx,
-		executorread.Ask{Handle: seat.Handle, Turn: turn, Cursor: cursor, Fresh: fresh},
+		executorread.Ask{Handle: seat.Handle, Turn: turn, Cursor: cursor, Fresh: fresh,
+			By: executor.ReadByPerson},
 		executorread.Source{Rows: s.ExecutorSessions, Objects: s.SessionObjects})
 	if err != nil {
 		return nil, sessionRefusal(err)

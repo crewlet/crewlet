@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // TranscriptState is what reading a session's object came to.
@@ -90,6 +91,12 @@ type Ask struct {
 	// Fresh is the level the turn's row is read at: a person's read
 	// surface's own, or the one its caller asked.
 	Fresh statelog.Freshness
+
+	// By is whose read it is, which holds the page to that reader's bounds
+	// and its read to that reader's slots ([executor.Reader]); Filter narrows
+	// the page to the entries it keeps, every entry counted all the same.
+	By     executor.Reader
+	Filter executor.TranscriptFilter
 }
 
 // Page is one read of a kept session: the row it was read from, what reading
@@ -168,8 +175,8 @@ func noSession(ask Ask, reading bool) error {
 
 // Read reads a page of the session of the seat's turn ask names: the turn's
 // row at ask's level, and the transcript its object holds from ask's cursor on,
-// held to the bounds every person's read is held to
-// ([executor.TranscriptReadBounds]).
+// held to the bounds of whose read it is ([executor.Reader.Bounds]) and
+// narrowed by ask's filter.
 //
 // A ROW THAT NAMES NO SESSION, AND AN OBJECT THAT DOES NOT READ, ARE ANSWERS:
 // the row is still the turn's account of how it ended, so a page says why no
@@ -199,6 +206,10 @@ func noSession(ask Ask, reading bool) error {
 // fails. And a later page whose row went, or names no object, before its read
 // began is said the same way, the pages before it standing.
 func Read(ctx context.Context, ask Ask, src Source) (Page, error) {
+	if !ask.By.Valid() {
+		return Page{}, fmt.Errorf("executorread: a read of a session says whose it is, one of %s, "+
+			"and %q is none", words.Or(executor.Readers), ask.By)
+	}
 	reading := ask.Cursor != ""
 	read, err := src.Rows.Session(ctx, ask.Handle, ask.Turn, ask.Fresh)
 	switch {
@@ -211,7 +222,7 @@ func Read(ctx context.Context, ask Ask, src Source) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	page, failed := readPage(ctx, read, from, reading, src.Objects)
+	page, failed := readPage(ctx, ask, read, from, reading, src.Objects)
 	if failed == nil || !releasable(failed) {
 		return unread(page, failed)
 	}
@@ -238,7 +249,7 @@ func Read(ctx context.Context, ask Ask, src Source) (Page, error) {
 	if from, err = ordinalOf(ask.Cursor, again.Session); err != nil {
 		return Page{}, err
 	}
-	page, failed = readPage(ctx, again, from, true, src.Objects)
+	page, failed = readPage(ctx, ask, again, from, true, src.Objects)
 	page.Reread = true
 	return unread(page, failed)
 }
@@ -254,17 +265,18 @@ func releasable(failed error) bool {
 		!errors.As(failed, &malformed) && !errors.Is(failed, executor.ErrUnsupportedArchive)
 }
 
-// readPage reads the page of read's transcript from the entry from on: its
-// object opened and read through the runner's own format knowledge — or the
-// page saying why it holds no entries, or what kept the object from being read
-// ([unread] says it). reading says the session was being read before this
-// page: a row naming no object then names none any more.
-func readPage(ctx context.Context, read executordomain.SessionRead, from int, reading bool,
+// readPage reads the page of read's transcript from the entry from on, as ask
+// reads it: its object opened and read through the runner's own format
+// knowledge — or the page saying why it holds no entries, or what kept the
+// object from being read ([unread] says it). reading says the session was
+// being read before this page: a row naming no object then names none any
+// more.
+func readPage(ctx context.Context, ask Ask, read executordomain.SessionRead, from int, reading bool,
 	objects Objects) (Page, error) {
 
 	row := read.Session
-	page := Page{Read: read,
-		Transcript: executor.Transcript{Entries: []executor.TranscriptEntry{}, From: from, Next: from}}
+	page := Page{Read: read, Transcript: executor.Transcript{Entries: []executor.TranscriptEntry{},
+		Places: []executor.EntryPlace{}, From: from, Next: from}}
 	if !row.HasObject() {
 		// REDACTED: why a capture was not kept quotes what refused it.
 		page.State, page.Why = TranscriptNone, redact.Secrets(row.NotKept())
@@ -282,7 +294,8 @@ func readPage(ctx context.Context, read executordomain.SessionRead, from int, re
 	// the slot back: an object opened here would hold its store's connection
 	// for as long as the read waited for one.
 	open := func(ctx context.Context) (io.ReadCloser, error) { return objects.Open(ctx, row) }
-	transcript, err := executor.ReadTranscript(ctx, row.Harness, row.ArchiveFormat, open, from)
+	transcript, err := executor.ReadTranscriptAs(ctx, ask.By, ask.Filter, row.Harness, row.ArchiveFormat,
+		open, from)
 	if err != nil {
 		return page, err
 	}
@@ -328,7 +341,7 @@ func unread(page Page, err error) (Page, error) {
 		return Page{}, fmt.Errorf("%w: the object store did not answer for %s's session of the turn "+
 			"%s: %w", ErrUnavailable, row.Handle, row.Turn, err)
 	}
-	page.Transcript.Entries = []executor.TranscriptEntry{}
+	page.Transcript.Entries, page.Transcript.Places = []executor.TranscriptEntry{}, []executor.EntryPlace{}
 	return page, nil
 }
 

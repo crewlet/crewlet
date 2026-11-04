@@ -147,7 +147,8 @@ func read(t *testing.T, rows executorread.Rows, objects executorread.Objects,
 	turn string) (executorread.Page, error) {
 	t.Helper()
 	return executorread.Read(t.Context(),
-		executorread.Ask{Handle: "ana", Turn: turn, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		executorread.Ask{Handle: "ana", Turn: turn, Fresh: statelog.Freshness{Level: statelog.ReadStale},
+			By: executor.ReadByPerson},
 		executorread.Source{Rows: rows, Objects: objects})
 }
 

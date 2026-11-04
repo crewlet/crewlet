@@ -99,7 +99,8 @@ func TestASessionReleasedWhileItIsReadIsSaidAsReleased(t *testing.T) {
 		texts[i] = fmt.Sprintf("message %d", i)
 	}
 	listed := sealedSession(t, store, "ana", gzipText(t, openCodeExport(texts...)))
-	first, err := executorread.Read(t.Context(), executorread.Ask{Handle: "ana", Turn: listed.Turn, Fresh: stale},
+	first, err := executorread.Read(t.Context(),
+		executorread.Ask{Handle: "ana", Turn: listed.Turn, Fresh: stale, By: executor.ReadByPerson},
 		executorread.Source{Rows: &scriptedRows{answers: []*executordomain.Session{&listed}}, Objects: store})
 	if err != nil || first.State != executorread.TranscriptRead || first.Next == "" {
 		t.Fatalf("the listed session's first page reads %s, next %q, err %v: this proves nothing of a "+
@@ -159,7 +160,8 @@ func TestASessionReleasedWhileItIsReadIsSaidAsReleased(t *testing.T) {
 	} {
 		rows := &scriptedRows{answers: c.answers}
 		page, err := executorread.Read(t.Context(),
-			executorread.Ask{Handle: "ana", Turn: listed.Turn, Cursor: c.cursor, Fresh: stale},
+			executorread.Ask{Handle: "ana", Turn: listed.Turn, Cursor: c.cursor, Fresh: stale,
+				By: executor.ReadByPerson},
 			executorread.Source{Rows: rows, Objects: store})
 		said := page.Why
 		if err != nil {
@@ -201,7 +203,8 @@ func TestASessionReleasedWhileItIsReadIsSaidAsReleased(t *testing.T) {
 	// failure is read as the release it is.
 	streamed := sealedSession(t, store, "ana", gzipText(t, openCodeExport(texts...)))
 	rows := &scriptedRows{answers: []*executordomain.Session{&streamed, nil}}
-	_, err = executorread.Read(t.Context(), executorread.Ask{Handle: "ana", Turn: streamed.Turn, Fresh: stale},
+	_, err = executorread.Read(t.Context(),
+		executorread.Ask{Handle: "ana", Turn: streamed.Turn, Fresh: stale, By: executor.ReadByPerson},
 		executorread.Source{Rows: rows, Objects: cutObjects{store: store}})
 	if !errors.Is(err, executorread.ErrNoSession) || !strings.Contains(err.Error(), "nothing more") ||
 		len(rows.asked) != 2 {
@@ -232,7 +235,8 @@ func TestALiveRowWithNoSessionYetIsSaidAsSuch(t *testing.T) {
 	begun := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), ConversationKey: "chat:room",
 		BaseTurn: uuid.NewString()}
 	rows := &scriptedRows{answers: []*executordomain.Session{&begun}}
-	page, err := executorread.Read(t.Context(), executorread.Ask{Handle: "ana", Turn: begun.Turn, Fresh: stale},
+	page, err := executorread.Read(t.Context(),
+		executorread.Ask{Handle: "ana", Turn: begun.Turn, Fresh: stale, By: executor.ReadByPerson},
 		executorread.Source{Rows: rows, Objects: openedNothing{t}})
 	if err != nil {
 		t.Fatalf("a live row with no session answered %v, want a page saying so", err)
@@ -280,7 +284,7 @@ func TestASessionWhoseRowCannotBeReadAgainIsUnavailable(t *testing.T) {
 	}
 	rows := &rowsAgainFail{row: row, err: errors.New("estate: no data node answered within its budget")}
 	_, err := executorread.Read(t.Context(),
-		executorread.Ask{Handle: "ana", Turn: row.Turn, Fresh: stale},
+		executorread.Ask{Handle: "ana", Turn: row.Turn, Fresh: stale, By: executor.ReadByPerson},
 		executorread.Source{Rows: rows, Objects: store})
 	if !errors.Is(err, executorread.ErrUnavailable) || errors.Is(err, objstore.ErrNotFound) ||
 		errors.Is(err, executordomain.ErrUnreadable) || rows.reads != 2 {
