@@ -32,7 +32,16 @@ type busySeat struct {
 	coordinator *sandbox.Coordinator
 	retries     *handCranked
 	ordinary    *turns
+	// mail counts what reaches the seat's inbox and its control topic, and
+	// what of it their handlers finished ([acks.settled]).
+	mail *acks
 }
+
+// inbox and control are the seat's two topics: its mail, which the
+// coordinator holds while a run holds the seat, and the topic that carries
+// what is addressed to its runs, which no hold stops.
+func (s *busySeat) inbox() string   { return fixtureInbox("swe") }
+func (s *busySeat) control() string { return topics.AgentControl(fixtureSeat("swe")) }
 
 func newBusySeat(t *testing.T, resume func(*busySeat) sandbox.Resumer) *busySeat {
 	t.Helper()
@@ -77,20 +86,21 @@ func newBusySeat(t *testing.T, resume func(*busySeat) sandbox.Resumer) *busySeat
 		return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
 			SeatHeldBySandbox: held, SandboxAwaitsAnswer: awaits}
 	}
-	if err := q.Subscribe(ctx, fixtureInbox("swe"), fixtureInboxGroup("swe"),
-		func(ctx context.Context, ev *events.Event) queue.Result {
+	s.mail = watchAcks(q, s.inbox(), s.control())
+	if err := q.Subscribe(ctx, s.inbox(), fixtureInboxGroup("swe"),
+		s.mail.handler(s.inbox(), func(ctx context.Context, ev *events.Event) queue.Result {
 			return d.Dispatch(ctx, "swe", []*events.Event{ev})
-		}); err != nil {
+		})); err != nil {
 		t.Fatalf("Subscribe inbox: %v", err)
 	}
 	seat := fixtureSeat("swe")
-	if err := q.Subscribe(ctx, topics.AgentControl(seat), topics.AgentControlGroup(seat),
-		func(ctx context.Context, ev *events.Event) queue.Result {
+	if err := q.Subscribe(ctx, s.control(), topics.AgentControlGroup(seat),
+		s.mail.handler(s.control(), func(ctx context.Context, ev *events.Event) queue.Result {
 			if err := coordinator.OnEvent(ctx, ev); err != nil {
 				return queue.Nak(err)
 			}
 			return queue.Ack()
-		}); err != nil {
+		})); err != nil {
 		t.Fatalf("Subscribe control: %v", err)
 	}
 	return s
@@ -181,8 +191,11 @@ func TestAnAnswerByTurnReachesItsRunWhileAnotherJobHoldsTheSeat(t *testing.T) {
 	eventually(t, "the answer to be recorded on its run while the seat is busy", func() bool {
 		return mustRun(t, s.store, "t1").Status == sandbox.StatusAnswered
 	})
+	// THE ANSWER'S DELIVERY FINISHED, so every attempt it armed is armed and
+	// the fire below makes it; and the notice still waits on the held inbox.
+	s.mail.settled(t, s.control())
 	s.retries.fire()
-	settle()
+	heldWith(t, s.q, s.inbox(), fixtureInboxGroup("swe"), 1)
 	if got := order.list(); len(got) != 0 {
 		t.Fatalf("the seat did %v while t2's job held it, want nothing", got)
 	}
@@ -242,17 +255,22 @@ func TestALateAnswerByTurnDoesNotAnswerTheRunsNextQuestion(t *testing.T) {
 	}
 
 	s.answer(t, q1, "use main")
-	settle()
+	// THE LATE ANSWER'S DELIVERY FINISHED, spent or not, before the run
+	// moves on: every attempt it armed is armed for the fire below.
+	s.mail.settled(t, s.control())
 	s.retries.fire()
 	q2 := s.parks(t, "t1", "which test suite?")
 	s.retries.fire()
-	settle()
+	// AND EVERYTHING THE PARK PUBLISHED FINISHED TOO, so the run is read as
+	// it stands once nothing more reaches the seat.
+	s.mail.settled(t, s.control(), s.inbox())
 	if n := resumer.count(); n != 1 {
 		t.Fatalf("the run was resumed %d times: the late answer to Q1 resumed it again", n)
 	}
-	if q2.LaunchID == q1.LaunchID || q2.Answer != nil {
+	now := mustRun(t, s.store, "t1")
+	if q2.LaunchID == q1.LaunchID || now.Answer != nil {
 		t.Fatalf("run on launch %s with answer %+v, want it waiting on its second question "+
-			"with nothing recorded against it", q2.LaunchID, q2.Answer)
+			"with nothing recorded against it", q2.LaunchID, now.Answer)
 	}
 	if ran := s.ordinary.ran(); len(ran) != 0 {
 		t.Fatalf("an answer by turn was run as a turn: %q", ran)
