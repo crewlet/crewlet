@@ -24,9 +24,18 @@ const askerSlack = 400 * time.Millisecond
 
 // askDirectly sends one task read straight to node's subject, carrying floors
 // and a deadline askerSlack and a reply's margin away, and answers the reply
-// it heard. A node silent until the deadline, or heard from with less than
-// half the margin left — an answer its asker may already have given up on —
-// fails the case.
+// it heard.
+//
+// INSIDE A SYNCTEST BUBBLE ([inBubble]), which every case asking through it
+// runs in, so the reply is held to the instant the margin puts it at: a
+// reply's margin before the deadline, to the nanosecond, the trip taking no
+// time. Heard later — or never — the node's wait ran on toward the deadline
+// and its answer reached nobody; heard sooner, the node did not wait out what
+// its asker left it. On the machine's clock the case allowed the reply half
+// the margin to be sealed, carried and opened, and a loaded race-detector run
+// spent more (CI run 41760587867: heard with 320 ms left). How late a busy
+// runner wakes a goroutine is the scheduler's latency, which the margin was
+// never sized for.
 func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position) reply {
 	t.Helper()
 	args, err := json.Marshal(tasksArgs{})
@@ -44,9 +53,9 @@ func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position
 		t.Fatalf("%s answered %d replies (%v) before its asker stopped listening, want one", node,
 			len(replies), err)
 	}
-	if left < code.ReplyMargin/2 {
-		t.Fatalf("%s answered %v before its asker stops listening, want about the %v margin — "+
-			"a wait that runs to the deadline answers nobody", node, left.Round(time.Millisecond),
+	if left != code.ReplyMargin {
+		t.Fatalf("%s answered %v before its asker stops listening, want the reply's %v margin to "+
+			"the nanosecond — a wait that runs to the deadline answers nobody", node, left,
 			code.ReplyMargin)
 	}
 	rep, why, err := fleetEnvelopes.openReply(replies[0], req.ID)
@@ -63,21 +72,29 @@ func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position
 // node's honest `behind` reached nobody, and the asker heard a lagging node as
 // a wedged one: asked it last for suspectFor and told the placement it went
 // unanswered.
+//
+// IN A SYNCTEST BUBBLE, for [askDirectly]'s reason.
+//
+// Mutation: mark the served request with no margin (server.go) — the floor
+// wait runs to the deadline and the node is never heard; or with two — it is
+// heard with all 1.4 s left, not the margin.
 func TestANodeBehindItsAskersFloorSaysSoWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
 	if code.ReplyMargin+askerSlack >= statelog.ReadBudget {
 		t.Fatalf("the premise: the asker's %v must end before the floor wait's own %v would",
 			code.ReplyMargin+askerSlack, statelog.ReadBudget)
 	}
-	f := newFleet(t, "data-a")
-	f.nodes["data-a"].set(func(n *fakeNode) { n.behind = true })
+	inBubble(t, func(t *testing.T) {
+		f := newFleet(t, "data-a")
+		f.nodes["data-a"].set(func(n *fakeNode) { n.behind = true })
 
-	rep := askDirectly(t, f, "data-a",
-		[]statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 5}})
-	if rep.Unserved != unservedBehind || !strings.Contains(rep.Detail, "all its asker's attempt left") {
-		t.Fatalf("a node behind its asker's floor answered %+v, want it unserved %q naming what "+
-			"its asker left", rep, unservedBehind)
-	}
+		rep := askDirectly(t, f, "data-a",
+			[]statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 5}})
+		if rep.Unserved != unservedBehind || !strings.Contains(rep.Detail, "all its asker's attempt left") {
+			t.Fatalf("a node behind its asker's floor answered %+v, want it unserved %q naming what "+
+				"its asker left", rep, unservedBehind)
+		}
+	})
 }
 
 // A READ'S OWN WAITS END WHILE ITS ASKER IS STILL LISTENING TOO. The node has
@@ -87,22 +104,30 @@ func TestANodeBehindItsAskersFloorSaysSoWhileItsAskerListens(t *testing.T) {
 // reply's margin short of the request's deadline, because the serving node
 // marks the request it answers (statelog.WithReplyMargin): refused `behind`,
 // and heard.
+//
+// IN A SYNCTEST BUBBLE, for [askDirectly]'s reason.
+//
+// Mutation: let a wait ignore the instant its served request must be answered
+// by (statelog's waitWithin) — the read's wait runs to the deadline and the
+// node is never heard.
 func TestAReadsOwnWaitsEndWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
-	f := newFleet(t, "data-a")
-	f.nodes["data-a"].set(func(n *fakeNode) { n.levelRead = laggingLinearizableRead(t) })
+	inBubble(t, func(t *testing.T) {
+		f := newFleet(t, "data-a")
+		f.nodes["data-a"].set(func(n *fakeNode) { n.levelRead = laggingLinearizableRead(t) })
 
-	rep := askDirectly(t, f, "data-a", nil)
-	var refusal *statelog.Refused
-	if rep.Err == nil || !errors.As(decodeError(rep.Err), &refusal) ||
-		refusal.Code != statelog.RefuseBehind {
-		t.Fatalf("a node lagging its read's barrier answered %+v, want the read refused %q", rep,
-			statelog.RefuseBehind)
-	}
-	if !strings.Contains(refusal.Detail, "all its asker's attempt left") {
-		t.Errorf("the refusal reads %q, which does not say the asker's time is what ran out",
-			refusal.Detail)
-	}
+		rep := askDirectly(t, f, "data-a", nil)
+		var refusal *statelog.Refused
+		if rep.Err == nil || !errors.As(decodeError(rep.Err), &refusal) ||
+			refusal.Code != statelog.RefuseBehind {
+			t.Fatalf("a node lagging its read's barrier answered %+v, want the read refused %q", rep,
+				statelog.RefuseBehind)
+		}
+		if !strings.Contains(refusal.Detail, "all its asker's attempt left") {
+			t.Errorf("the refusal reads %q, which does not say the asker's time is what ran out",
+				refusal.Detail)
+		}
+	})
 }
 
 // laggingLinearizableRead is a linearizable tracker read through a real
