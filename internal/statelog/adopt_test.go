@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -110,7 +111,7 @@ type joinDonor struct {
 
 func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // TestTheEmbeddedServerCarriesWhatTheContractPromises pins the two options
@@ -146,7 +147,7 @@ func TestAMembersClientListenerIsLoopbackAndUnadvertised(t *testing.T) {
 // over-limit delivery a reportable error rather than a dropped connection.
 func TestTheClientIsToldTheCeiling(t *testing.T) {
 	t.Parallel()
-	e, err := startEmbedded(t.Context(), Config{StoreDir: t.TempDir()})
+	e, err := startEmbedded(t.Context(), Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("startEmbedded: %v", err)
 	}
@@ -300,7 +301,7 @@ func TestAFleetListenerWithNoKeysIsRefused(t *testing.T) {
 // rather than answering a group of one or removing nothing successfully.
 func TestABrokerWithNoMetadataGroupSaysSo(t *testing.T) {
 	t.Parallel()
-	srv, err := StartServer(t.Context(), Config{StoreDir: t.TempDir()})
+	srv, err := StartServer(t.Context(), Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatal(err)
 	}

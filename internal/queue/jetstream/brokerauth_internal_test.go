@@ -17,6 +17,7 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nkeys"
 
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -147,7 +148,7 @@ func signerOfUser(t *testing.T, u processUser) signer {
 func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 	t.Parallel()
 	member := Config{ServerName: "a", ClusterName: "fleet", StoreDir: t.TempDir(),
-		FleetAuth: fleetAuthOf(t, authRing)}
+		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: fleetAuthOf(t, authRing)}
 	auth := testAuth(t, member)
 	global, system := auth.ns.GlobalAccount(), auth.ns.SystemAccount()
 	if system == nil {
@@ -265,7 +266,7 @@ func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 
 	// A MEMBER WITH NO SYSTEM ACCOUNT ADMITS NO SYSTEM KEY: a solo member
 	// mints none, and a key from another start is a stranger's.
-	solo := testAuth(t, Config{StoreDir: t.TempDir()})
+	solo := testAuth(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
 	stray, err := newProcessUser("stray system account")
 	if err != nil {
 		t.Fatal(err)

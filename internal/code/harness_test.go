@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -182,7 +183,7 @@ func harnessLogBytes(room uint64) uint64 {
 // openLog provisions the code log on an embedded broker and opens it.
 func openLog(t testing.TB) *js.DomainLog {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}

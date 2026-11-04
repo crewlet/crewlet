@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -627,7 +628,8 @@ type SoloFleet struct {
 // it had before, on a restart.
 func (f *SoloFleet) openBroker(t testing.TB) *js.Queue {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: filepath.Join(f.dir, "stream"), SyncAlways: f.o.SyncAlways})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: filepath.Join(f.dir, "stream"),
+		StoreMaxBytes: brokertest.StoreMaxBytes, SyncAlways: f.o.SyncAlways})
 	if err != nil {
 		t.Fatalf("codetest: open the broker: %v", err)
 	}

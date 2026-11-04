@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -169,7 +170,8 @@ type fleet struct {
 func newFleet(t *testing.T) *fleet {
 	t.Helper()
 	dir := t.TempDir()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: filepath.Join(dir, "stream")})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: filepath.Join(dir, "stream"),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open the broker: %v", err)
 	}

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // A SECOND BROKER ON ONE STORE DIRECTORY IS REFUSED, before it reads anything,
@@ -24,13 +26,13 @@ import (
 func TestASecondBrokerOnOneStoreDirectoryIsRefused(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	first, err := StartServer(t.Context(), Config{StoreDir: dir})
+	first, err := StartServer(t.Context(), Config{StoreDir: dir, StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("first start: %v", err)
 	}
 	t.Cleanup(first.Shutdown)
 
-	second, err := StartServer(t.Context(), Config{StoreDir: dir})
+	second, err := StartServer(t.Context(), Config{StoreDir: dir, StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err == nil {
 		second.Shutdown()
 		t.Fatal("a second broker started on a store directory the first is running on")
@@ -56,13 +58,13 @@ func TestASecondBrokerOnOneStoreDirectoryIsRefused(t *testing.T) {
 func TestAStoppedBrokerReleasesItsStoreDirectory(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	first, err := StartServer(t.Context(), Config{StoreDir: dir})
+	first, err := StartServer(t.Context(), Config{StoreDir: dir, StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("first start: %v", err)
 	}
 	first.Shutdown()
 
-	second, err := StartServer(t.Context(), Config{StoreDir: dir})
+	second, err := StartServer(t.Context(), Config{StoreDir: dir, StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("the directory stayed held after its broker stopped: %v", err)
 	}
@@ -84,12 +86,12 @@ func TestAFailedStartReleasesItsStoreDirectory(t *testing.T) {
 	dir := t.TempDir()
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	if srv, err := StartServer(cancelled, Config{StoreDir: dir}); err == nil {
+	if srv, err := StartServer(cancelled, Config{StoreDir: dir, StoreMaxBytes: brokertest.StoreMaxBytes}); err == nil {
 		// The start can win its race with the cancel; then it is an
 		// ordinary start, and the case below holds it to its shutdown.
 		srv.Shutdown()
 	}
-	srv, err := StartServer(t.Context(), Config{StoreDir: dir})
+	srv, err := StartServer(t.Context(), Config{StoreDir: dir, StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("the directory stayed held after a failed start: %v", err)
 	}
@@ -108,7 +110,7 @@ func TestAStoreDirectoryThatIsAFileIsRefusedNamingTheSetting(t *testing.T) {
 	if err := os.WriteFile(store, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	srv, err := StartServer(t.Context(), Config{StoreDir: store})
+	srv, err := StartServer(t.Context(), Config{StoreDir: store, StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err == nil {
 		srv.Shutdown()
 		t.Fatal("a broker started on a store directory that is a file")

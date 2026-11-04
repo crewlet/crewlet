@@ -166,7 +166,7 @@ func TestTheTestSuitesExternalBrokerStatesItsAccountLimit(t *testing.T) {
 // be able to recognise the refusal without speaking this backend's codes.
 func TestARefusedReservationIsNamed(t *testing.T) {
 	t.Parallel()
-	q := fileQueue(t)
+	q := sizedFileQueue(t)
 	budget, err := q.StreamBudget(t.Context())
 	if err != nil {
 		t.Fatalf("StreamBudget: %v", err)
@@ -192,7 +192,7 @@ func TestARefusedReservationIsNamed(t *testing.T) {
 // found)", which reads as the cause.
 func TestARefusedReservationIsNotReadBack(t *testing.T) {
 	t.Parallel()
-	q := fileQueue(t)
+	q := sizedFileQueue(t)
 	budget, err := q.StreamBudget(t.Context())
 	if err != nil {
 		t.Fatalf("StreamBudget: %v", err)

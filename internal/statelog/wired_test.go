@@ -11,6 +11,7 @@ import (
 	"time"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -76,6 +77,9 @@ type wiredNode struct {
 func soloBroker(tb testing.TB, cfg js.Config) *js.Queue {
 	tb.Helper()
 	cfg.StoreDir = tb.TempDir()
+	if cfg.StoreMaxBytes == 0 {
+		cfg.StoreMaxBytes = brokertest.StoreMaxBytes
+	}
 	q, err := js.Open(tb.Context(), cfg)
 	if err != nil {
 		tb.Fatalf("open a broker: %v", err)

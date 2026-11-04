@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -487,7 +488,8 @@ func serveDonor(t *testing.T, e *Engine, nc *nats.Conn, deps statelog.DonorDeps)
 // donor's dial takes a second longer than the window and has to be awaited.
 func TestADonorWithASlowDialIsAwaitedOnItsDialsOwnBudget(t *testing.T) {
 	t.Parallel()
-	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open the broker: %v", err)
 	}

@@ -14,6 +14,8 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
+
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // loneMember starts a clustered member whose one configured peer is a port
@@ -25,7 +27,7 @@ func loneMember(t *testing.T) *Server {
 	t.Helper()
 	cfg := Config{ServerName: "lone", ClusterName: "lone", ClusterHost: "127.0.0.1",
 		ClusterURLs: []string{fmt.Sprintf("nats://127.0.0.1:%d", freePort(t))},
-		StoreDir:    t.TempDir(), FleetAuth: testFleetAuth()}
+		StoreDir:    t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: testFleetAuth()}
 	for attempt := 1; ; attempt++ {
 		cfg.ClusterPort = freePort(t)
 		srv, err := StartServer(t.Context(), cfg)

@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // A BROKER THAT CANNOT USE ITS STORE REFUSES ITS BOOT AT ONCE, WITH ITS OWN
@@ -48,7 +50,7 @@ func TestABrokerThatCannotUseItsStoreRefusesItsBootAtOnce(t *testing.T) {
 				[]byte("not a directory"), 0o600); err != nil {
 				t.Fatalf("plant a file where the store's jetstream directory goes: %v", err)
 			}
-			cfg := Config{StoreDir: store}
+			cfg := Config{StoreDir: store, StoreMaxBytes: brokertest.StoreMaxBytes}
 			if clustered {
 				cfg.ServerName, cfg.ClusterName = "member-1", "unusable-store"
 				cfg.ClusterHost = "127.0.0.1"

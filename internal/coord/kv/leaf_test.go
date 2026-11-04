@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -118,7 +119,7 @@ func leafMember(t testing.TB) int {
 	// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
 		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
-		FleetAuth: leafFleetAuth()})
+		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: leafFleetAuth()})
 	if err != nil {
 		t.Fatalf("start a member serving leaves: %v", err)
 	}

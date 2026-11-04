@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -113,7 +114,8 @@ func bindOps(t *testing.T, e *engine.Engine) {
 func gitNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 	t.Helper()
 	return bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(filepath.Dir(b.Store.Path), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(filepath.Dir(b.Store.Path), "stream"))
+		brokertest.CodeCacheIn(&b.Git)
 		b.Node.Roles = roles
 		b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: opsToken,
 			Grants: []iam.Grant{iam.GrantWorklet}}}
@@ -290,7 +292,12 @@ func TestAVolumeWithNoRoomRefusesTheCodeHostByName(t *testing.T) {
 		return e, err
 	}
 
-	_, err := boot(gitNodeBootstrap(t, nil))
+	// THE BUDGET LEFT TO THE ROOM, this case's subject: the fixture declares
+	// one (brokertest.CodeCacheIn), and the room is read off the volume the
+	// case stands in for (WithCacheDisk), never off the machine running it.
+	derived := gitNodeBootstrap(t, nil)
+	derived.Git.CacheMaxBytes = 0
+	_, err := boot(derived)
 	if err == nil {
 		t.Fatal("a git node booted on a volume whose broker may fill all of it")
 	}
