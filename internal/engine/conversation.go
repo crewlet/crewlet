@@ -186,8 +186,12 @@ func conversationEndings(head executordomain.Head, seat string, b provenance.Bou
 }
 
 // turnEndingOf is one ended turn's row as the block tells it: the engine's
-// account of how it ended (its [executordomain.Ending]), and what it was asked.
+// account of how it ended (its [executordomain.Ending]), and what it was asked
+// — through the row's one redaction, as every reader of a row is shown it
+// ([executordomain.Session.Redacted]): its words are a person's, a model's or
+// a box's, and the next turn's model is a reader like any other.
 func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
+	s = s.Redacted()
 	t := prompts.TurnEnding{Turn: s.Turn, EndedAt: s.EndedAt, Ask: s.AskExcerpt}
 	e := s.Ending
 	if e == nil {
