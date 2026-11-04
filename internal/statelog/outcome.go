@@ -297,7 +297,7 @@ const (
 	// duplicate delivery, which is.
 	ReasonFloorUnknown Reason = "floor_unknown"
 
-	// ReasonUsageUnknown: the log's usage could not be read before an
+	// ReasonUsageUnknown says the log's usage could not be read before an
 	// ordinary append, so the reserve above its ordinary ceiling could not
 	// be checked ([Reserve.Admit]). The third value, and it BLOCKS:
 	// admitting blind could spend the room the gate records land in.
