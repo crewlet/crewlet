@@ -573,7 +573,9 @@ func TestUploadPacksOwnDamageIsRepairedUnderTheRequest(t *testing.T) {
 // by fetching that one pack again over its files, and a multi-pack-index
 // missing a chunk it requires (F7, fatal for every reader) by dropping the
 // derived file. Each fetch is the request alone, so
-// cat-file is the first git to read the copy. And a multi-pack-index whose
+// cat-file is the first git to read the copy, and a pack's damage (G1, M) is
+// made on a second push's pack once the maintainer is done with the copy
+// (maintainedCopy), so no maintenance run reads it. And a multi-pack-index whose
 // table of contents ends early (F6, a CHUNK-FORMAT report, which names
 // neither derived file): the check's cat-file is asked about object ids
 // alone, which loads the index and never the commit-graph, so the report is
@@ -592,14 +594,16 @@ func TestUploadPacksOwnDamageIsRepairedUnderTheRequest(t *testing.T) {
 // repair drops the graph with the index; run the check's cat-file naming no
 // reader (no `Repairer: s.Repairer` in cache.Missing) and G1's and M's
 // reports make the copy's scrub due as they arrive, counted `queued` rather
-// than `request`.
+// than `request`; damage G1's or M's pack before the maintainer is done with
+// the copy, and its first run, kicked by the repair's own full round, reads it
+// beside the repair, counted `queued` under load.
 func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		// damage damages the copy and answers the incarnation it damaged; l
-		// is the case's logger.
-		damage func(t *testing.T, c *codetest.Case, l *logs, head string) string
+		// damage damages the copy p pushed head to from work and answers the
+		// incarnation it damaged and the commit to fetch; l is the case's logger.
+		damage func(t *testing.T, c *codetest.Case, l *logs, p *codetest.Person, work, head string) (string, string)
 		reason string
 		// counted is the crewlet.code.cache.rebuilds reason the repair is
 		// counted under.
@@ -613,7 +617,8 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 		// damage, whose report is never held.
 		held string
 	}{
-		{"F6 a multi-pack-index's table of contents ending early", func(t *testing.T, c *codetest.Case, l *logs, _ string) string {
+		{"F6 a multi-pack-index's table of contents ending early", func(t *testing.T, c *codetest.Case, l *logs,
+			_ *codetest.Person, _, head string) (string, string) {
 			dir := maintainersBitmap(t, c, l)
 			eventually(t, "the maintainer's commit-graph", func() bool {
 				_, err := os.Stat(filepath.Join(dir, "objects", "info", "commit-graph"))
@@ -622,36 +627,37 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 			// The first chunk's id zeroed: the terminating id, read too early.
 			overwriteFile(t, filepath.Join(dir, "objects", "pack", "multi-pack-index"),
 				gittest.ChunkRow(gittest.MidxHeader, 0), []byte{0, 0, 0, 0})
-			return dir
+			return dir, head
 		}, "derived", "derived", `"files":["multi-pack-index"]`, ""},
-		{"G1 the tip's type", func(t *testing.T, c *codetest.Case, _ *logs, head string) string {
-			dir := incarnationDir(t, c)
-			pack, start, _ := entryOf(t, dir, head)
+		{"G1 the tip's type", func(t *testing.T, c *codetest.Case, l *logs, p *codetest.Person, work,
+			_ string) (string, string) {
+			dir, tip := maintainedCopy(t, c, l, p, work)
+			pack, start, _ := entryOf(t, dir, tip)
 			b := readAt(t, pack, start, 1)[0]
 			overwriteFile(t, pack, start, []byte{b&0x8f | 5<<4}) // type 5 is reserved
-			return dir
+			return dir, tip
 		}, "corrupt", "stored", "", "pack"},
-		{"M every index offset past its pack", func(t *testing.T, c *codetest.Case, _ *logs, _ string) string {
-			dir := incarnationDir(t, c)
-			idx, err := filepath.Glob(filepath.Join(dir, "objects", "pack", "pack-*.idx"))
-			if err != nil || len(idx) == 0 {
-				t.Fatalf("no pack index under %s: %v", dir, err)
+		{"M every index offset past its pack", func(t *testing.T, c *codetest.Case, l *logs, p *codetest.Person, work,
+			_ string) (string, string) {
+			// The tip's pack alone: the maintainer's multi-pack-index answers
+			// for the first push's, so no reader opens that pack's index.
+			dir, tip := maintainedCopy(t, c, l, p, work)
+			pack, _, _ := entryOf(t, dir, tip)
+			idx := strings.TrimSuffix(pack, ".pack") + ".idx"
+			body, err := os.ReadFile(idx)
+			if err != nil {
+				t.Fatal(err)
 			}
-			for _, path := range idx {
-				body, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				n := int64(binary.BigEndian.Uint32(body[8+255*4:]))
-				overwriteFile(t, path, 8+256*4+n*24, bytes.Repeat([]byte{0x00, 0x0f, 0xff, 0xff}, int(n)))
-			}
-			return dir
+			n := int64(binary.BigEndian.Uint32(body[8+255*4:]))
+			overwriteFile(t, idx, 8+256*4+n*24, bytes.Repeat([]byte{0x00, 0x0f, 0xff, 0xff}, int(n)))
+			return dir, tip
 		}, "corrupt", "stored", "", "pack"},
-		{"F7 a multi-pack-index's pack names missing", func(t *testing.T, c *codetest.Case, l *logs, _ string) string {
+		{"F7 a multi-pack-index's pack names missing", func(t *testing.T, c *codetest.Case, l *logs,
+			_ *codetest.Person, _, head string) (string, string) {
 			dir := maintainersBitmap(t, c, l)
 			gittest.RenameChunk(t, filepath.Join(dir, "objects", "pack", "multi-pack-index"), gittest.MidxHeader,
 				"PNAM", "XNAM")
-			return dir
+			return dir, head
 		}, "derived", "derived", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -662,9 +668,9 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 			work := p.Init()
 			head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")
 			c.MustPush(p, work, "main")
-			dir := tc.damage(t, c, &l, head)
+			dir, want := tc.damage(t, c, &l, p, work, head)
 
-			resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, fetchWants([]string{head}))
+			resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, fetchWants([]string{want}))
 			if resp.StatusCode != http.StatusOK || !strings.Contains(answer, "packfile\n") {
 				t.Errorf("a fetch of the damaged cache answered %d %q, want its pack", resp.StatusCode, short(answer))
 			}
@@ -1160,6 +1166,17 @@ func maintainersBitmap(t *testing.T, c *codetest.Case, l *logs) string {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// maintainedCopy is RepoName's copy on node 0 and the commit p pushes from work
+// once the maintainer's bitmap run has ended: nothing of the maintainer's is due
+// for cache.MidxMinInterval, and the commit's pack is outside its index.
+func maintainedCopy(t *testing.T, c *codetest.Case, l *logs, p *codetest.Person, work string) (string, string) {
+	t.Helper()
+	maintainersBitmap(t, c, l)
+	tip := p.Commit(work, map[string]string{"src/b.go": "package b\n"}, "two")
+	c.MustPush(p, work, "main")
+	return incarnationDir(t, c), tip
 }
 
 // overwriteFile writes b over path at offset at, making the file writable
