@@ -58,12 +58,13 @@
 // before the box goes, and the turn parked on it closed as stopped
 // ([CoordinatorOptions.CloseStopped]).
 //
-// AND A STOPPED OR LOST JOB IS ENDED BEFORE ITS SESSION IS TAKEN: the read
-// sends its script a request to end it — SIGUSR1 to the pid the script recorded
-// in its box ([Sandbox.EndJob], [JobEnder]) — which stops its harness and packs
-// its session as its own end does, and kills what is left past the wait
-// ([Sandbox.KillJob]), so what is taken is final wherever the job ended. See
-// endjob.go.
+// AND A STOPPED OR LOST JOB IS ENDED BEFORE ITS SESSION IS TAKEN, and so is
+// one still working when its turn's cap has passed, since the cap is an end:
+// the read sends its script a request to end it — SIGUSR1 to the pid the script
+// recorded in its box ([Sandbox.EndJob], [JobEnder]) — which stops its harness
+// and packs its session as its own end does, and kills what is left past the
+// wait ([Sandbox.KillJob]), so what is taken is final wherever the job ended.
+// See endjob.go.
 //
 // The reap fences the row to its lease before it revives or lets go of
 // anything — and the revival stamps that lease on the row itself — and a take
@@ -855,8 +856,10 @@ type Sandbox interface {
 	// container's main process and stop the container the read still execs
 	// its pack in. In an E2B VM it is every process of the box's user: envd
 	// starts a job in envd's own process group, which no signal may reach,
-	// and runs as root, out of reach of the user's; and the box is reclaimed
-	// right after.
+	// and runs as root, out of reach of the user's; and no job runs in the box
+	// after it — a stop's and a loss's ending reclaims it right after, and a
+	// collection past its turn's cap pauses it for a turn that starts no round
+	// past that cap.
 	//
 	// NEVER A PART OF THE JOB FOR THE WHOLE: a box that can name no process
 	// group of the job's own signals nothing of it and answers [ErrNoJobGroup].

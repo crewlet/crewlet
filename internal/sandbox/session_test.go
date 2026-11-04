@@ -1152,41 +1152,56 @@ func TestACaptureTheSeatsBudgetCannotHoldIsNotUploaded(t *testing.T) {
 // a job that is over is taken as over, and final — the archive the run's
 // script packed at its harness's exit, as it is, and for a job that ended
 // without packing (one that failed before it got there) one the runner packs
-// now where the script left none ([SessionTake.Pack]); and a job its turn's
-// cap ended while it still ran, packed now as it stood and NOT final, since it
-// went on working until its box was paused.
+// now where the script left none ([SessionTake.Pack]). A job its turn's cap
+// passed while it still ran is ENDED first, as a stop's is, and so is one
+// whose poll cannot say whether it still works, since the cap has passed
+// whatever the poll answers: each is taken as its end left it, and final.
 //
-// AND A JOB WHOSE POLL CANNOT SAY WHETHER IT STILL WORKS is taken for one that
-// does: packed as it stands and not final, so a collection retried after it
-// takes the job again rather than passing over what it did meanwhile.
+// AND ONLY A JOB ITS END COULD NOT STOP — its script heard the request and
+// went on, and the kill past the wait could not reach it — is packed now as it
+// stands and NOT final, so a collection retried after it takes the job again
+// rather than passing over what it did meanwhile.
 //
 // Mutation: read a job that never packed as one with nothing to take, or as
-// one still working, call a cap-ended job's capture final, take its archive as
-// its script left it, or take a job whose poll failed for one that had ended,
-// and a row below differs.
+// one still working, pack a job its cap ended as it stands rather than ending
+// it, as the collection once did, take a job whose poll failed as it stands,
+// or call the capture of a job its end could not stop final, and a row below
+// differs.
 func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name                      string
-		capped, packed, pollFails bool
-		wantPack, final           bool
+		name                                   string
+		capped, packed, pollFails, unstoppable bool
+		wantPack, final                        bool
 	}{
 		{name: "packed by its script", packed: true, final: true},
 		{name: "ended without packing", final: true},
-		{name: "ended at its turn's cap while it ran", capped: true, wantPack: true},
-		{name: "at its turn's cap, its poll unanswered", capped: true, pollFails: true, wantPack: true},
+		{name: "ended at its turn's cap while it ran", capped: true, final: true},
+		{name: "at its turn's cap, its poll unanswered", capped: true, pollFails: true, final: true},
+		{name: "at its turn's cap, its end unable to stop it", capped: true, unstoppable: true, wantPack: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rig, writes, _ := keepingRig(t)
 			if tc.capped {
-				rig.launchUntil("t1", rig.now.Add(-time.Minute))
+				launched := rig.launchUntil("t1", rig.now.Add(-time.Minute))
 				rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
 				rig.coordinator.countRun("swe", StatusRunning)
 				if tc.pollFails {
-					// A POLL THAT CANNOT SAY is a job taken for one still
-					// working: packed as it stands, and not final.
+					// A POLL THAT CANNOT SAY is no reason to leave the job
+					// working past its cap: it is asked to end all the same.
 					rig.runner.PollErr = errors.New("the box's exec did not answer")
+				}
+				if tc.unstoppable {
+					// A SCRIPT THAT HEARS THE REQUEST AND GOES ON, and a kill
+					// past the wait that reaches nothing of the job.
+					rig.coordinator.endWait = 50 * time.Millisecond
+					rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) {
+						return EndAsked, nil
+					}
+					rig.provider.Box(launched.SandboxID).KillJobFunc = func(context.Context, string) error {
+						return ErrNoJobGroup
+					}
 				}
 				// PAST ITS TURN'S CAP a resume that fails after the collection
 				// is the turn's last, and the run is ended rather than handed

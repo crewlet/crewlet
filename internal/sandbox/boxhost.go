@@ -42,8 +42,9 @@ type BoxRead string
 
 const (
 	// BoxReadCollect is a completion's collection: the job asked whether
-	// it finished where its turn's cap has passed, its result read back,
-	// and the box paused for whatever comes next ([Coordinator.readBox]).
+	// it finished where its turn's cap has passed, and ENDED first where it
+	// still works then ([Coordinator.endJob]), its result read back, and the
+	// box paused for whatever comes next ([Coordinator.readBox]).
 	BoxReadCollect BoxRead = "collect"
 	// BoxReadStop is a stopped run's read of what it had spent by then, its
 	// job ended first ([Coordinator.endJob]), with nothing paused: its ending
@@ -275,8 +276,10 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // even a replayed or a forged one past the channel's own checks — can make no
 // read the run's own protocol is not making: a running job's box is never
 // paused under it, and no job is ended under it that is not already decided
-// stopped or lost — a stop's and a loss's read end the job first
-// ([Coordinator.endJob]), here on its host, the only node that can.
+// stopped or lost, or claimed past its turn's cap as this node's clock reads
+// the row's — a stop's and a loss's read end the job first, and a collection's
+// a job still working past its cap ([Coordinator.endJob]), here on its host,
+// the only node that can.
 func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandboxID string,
 	read BoxRead) (Result, bool, error) {
 

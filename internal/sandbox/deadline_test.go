@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -111,6 +112,96 @@ func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 	if got := calls[0].Bridged; got.Elided != 2 || !got.ElisionKnown() {
 		t.Errorf("the resume reads %d calls dropped from the log's middle, accounted for by %+v; "+
 			"want the two with their identities", got.Elided, got.ElidedCalls)
+	}
+}
+
+// A CAPPED RUN STILL SAYS IT WAS CUT OFF AT ITS CAP. Its collection ends a job
+// its turn's cap passed while it still worked, so by the time its result is
+// read the job is over, and its own record says only that a request ended it
+// ([Result.JobEnd]), which names no cause. It is still the run its cap ended:
+// never a success, its resume and its record saying the wall-clock cap ended
+// it, and never parked on the question it asked on its way out. That holds
+// where the poll before the end could not say whether the job still worked,
+// since its record of the request it heard says it did. And a job that
+// finished by itself before its cap's collection read it is no run the cap
+// ended, and is not ended again.
+//
+// Mutation: read ENDED off whether the job is over once its end is done, and a
+// run its cap stopped reads as one that finished; read it off the poll alone,
+// and a run whose poll could not say is said only to have been ended on
+// request and is parked on its question; mark every collection past the cap
+// ended, and a job that finished before its read is said cut off.
+func TestACappedRunStillSaysItWasCutOffAtItsCap(t *testing.T) {
+	t.Parallel()
+	const endedOnRequest = "the run was ended on request before it finished: its harness was told to " +
+		"stop and exited 143"
+	for _, tc := range []struct {
+		name                string
+		pollFails, finished bool
+	}{
+		{name: "its poll said it still worked"},
+		{name: "its poll could not say", pollFails: true},
+		{name: "it finished before its collection", finished: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			rig.launchUntil("t1", rig.now.Add(-time.Minute))
+			rig.coordinator.countRun("swe", StatusRunning)
+			stoppedAtCap := !tc.finished
+			if stoppedAtCap {
+				rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+			}
+			if tc.pollFails {
+				rig.runner.PollErr = errors.New("the box's exec did not answer")
+			}
+			if tc.finished {
+				rig.runner.Finish(Result{Success: true, Text: "checked the monitors"})
+			}
+			// WHAT A JOB ITS END STOPPED REPORTS: its script's record of the
+			// request, which the collection opens the run's failure with.
+			rig.runner.EndsAs(Result{Text: "halfway through", JobEnd: JobEndAsked, Error: endedOnRequest})
+
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			wantAsks := 0
+			if stoppedAtCap {
+				wantAsks = 1
+			}
+			if asks := rig.runner.Asks(); asks != wantAsks {
+				t.Fatalf("the job was asked to end %d times, want %d: ended only where its cap cut it off",
+					asks, wantAsks)
+			}
+			calls := rig.resumer.calls()
+			if len(calls) != 1 {
+				t.Fatalf("resumed %d times, want the turn back with what its run did; asked %+v", len(calls),
+					rig.questions())
+			}
+			said := strings.Contains(calls[0].Answer, "wall-clock cap")
+			if calls[0].Success == stoppedAtCap || said != stoppedAtCap {
+				t.Fatalf("the resume reads success %v and %q; want a run cut off at its cap: %v",
+					calls[0].Success, calls[0].Answer, stoppedAtCap)
+			}
+			recs := rig.collected()
+			if len(recs) != 1 || recs[0].Failed != stoppedAtCap ||
+				strings.Contains(recs[0].Error, "wall-clock cap") != stoppedAtCap {
+				t.Fatalf("the run's record is %+v; want it failed at its cap: %v", recs, stoppedAtCap)
+			}
+			if !stoppedAtCap {
+				return
+			}
+			if !strings.Contains(calls[0].Answer, "It had asked: which branch?") ||
+				!strings.Contains(calls[0].Answer, endedOnRequest) {
+				t.Errorf("the resume reads %q; want the cap's account with the question it had asked and how "+
+					"its job ended", calls[0].Answer)
+			}
+			if asked := rig.questions(); len(asked) != 0 || calls[0].Run.Question != "" {
+				t.Errorf("announced %+v and resumed carrying %q; a run its cap ended asks nobody", asked,
+					calls[0].Run.Question)
+			}
+		})
 	}
 }
 

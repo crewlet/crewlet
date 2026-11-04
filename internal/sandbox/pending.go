@@ -1496,9 +1496,11 @@ type PendingRun struct {
 	//
 	// ON THE ROW because the run is the one part of a turn that can outlast
 	// the cap by hours: the turn's own segments refuse to start a round past
-	// it, and a detached run is no round of theirs. The poll ends a running
-	// job that passes it as if it had finished ([Waiter]), and the
-	// collection that follows says why: what the run did up to then is
+	// it, and a detached run is no round of theirs. The poll announces a
+	// running job that passes it as if it had finished ([Waiter]), and the
+	// collection that follows ENDS the job as a stop's read does — its
+	// harness told to stop and its session packed as its own exit packs it
+	// ([Coordinator.readBox]) — and says why: what the run did up to then is
 	// collected, and its turn resumed to judge it, rather than the run cut
 	// off with its work unrecorded. Written by every launch of the turn,
 	// relaunches included.

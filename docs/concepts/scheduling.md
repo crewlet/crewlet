@@ -522,9 +522,11 @@ once the instant has passed. The run itself is the part that can outlast the
 cap by hours, so the instant is written on its row too
 ([`PendingRun.Deadline`](code-sandbox.md)): the completion poll ends a run
 still working past it as if it had finished, logging
-`sandbox_run_past_deadline`, and the collection that follows reads what it did
-up to then and resumes its turn to judge it, rather than cutting it off with
-its work unrecorded.
+`sandbox_run_past_deadline`, and the collection that follows
+[ends its job](code-sandbox.md#each-launchs-session-kept) as a person's stop
+does — its harness told to stop and its session packed as its own end packs
+it — reads what it did up to then and resumes its turn to judge it, rather
+than cutting it off with its work unrecorded.
 
 **Half an hour, for a ritual.** The clock runs from the moment the fire's turn
 begins, so everything up to the end of the run is on it: the turn-start

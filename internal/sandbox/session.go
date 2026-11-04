@@ -36,9 +36,9 @@ import (
 //
 //   - a completion's collection ([Coordinator.readBox]): the archive the run's
 //     script packed when its harness exited — or, for a job that never got to
-//     (one its turn's cap ended while it still ran, one that failed before it
-//     packed, one lost with its engine whose box is still there), one packed
-//     now;
+//     (one that failed before it packed, one lost with its engine whose box is
+//     still there), one packed now. A job its turn's cap passed while it still
+//     ran is ENDED first, as a stop's is, since the cap is an end;
 //   - a stop's read of what the run had spent, which first ENDS THE JOB
 //     ([Coordinator.endJob]): its script, asked, stops its harness and packs
 //     the session as its own exit does, and the archive it left is taken —
@@ -49,9 +49,8 @@ import (
 //     host the box is on ([BoxReadLoss]).
 //
 // So a capture is FINAL wherever its job ended — by itself, asked, or killed —
-// and taken as it stands, not final, only where the job still works: one its
-// turn's cap ended, which the pause after the read stops, and one a box would
-// not end.
+// and taken as it stands, not final, only where the job still works: one a box
+// would not end. No pack is made beside a harness still working but that.
 //
 // A box that is GONE — lost with its host, or with a node that left the fleet —
 // has nothing left to read, and keeps nothing.
@@ -406,10 +405,10 @@ type SessionCapture struct {
 	Reason string       `json:"reason,omitempty"`
 
 	// Final says the job had ENDED when the capture was taken — it exited,
-	// or died with its host — so nothing after it changes the session in
-	// its box, and a later read of the same job takes nothing new. A job
-	// still working when it was taken (a stop's, one its turn's cap ended)
-	// is not final.
+	// was ended by a stop, a loss or its turn's cap, or died with its host —
+	// so nothing after it changes the session in its box, and a later read of
+	// the same job takes nothing new. A job still working when it was taken
+	// (one a box would not end) is not final.
 	Final bool `json:"final,omitempty"`
 
 	// BridgeSeq is the last bridged call ([BridgeCall.Seq]) the run's log
@@ -435,12 +434,13 @@ type SessionCapture struct {
 
 	// Interrupted says the session's harness was CUT OFF rather than exiting
 	// cleanly: the archive was packed by the engine ([SessionTake.Pack]) — a
-	// job still working, one cut off at its turn's cap, one lost with its
-	// engine, one that died before its script could pack — or by the run's
-	// script after a harness that exited otherwise than cleanly, killed by a
-	// signal or its memory limit ([Result.HarnessCutOff]). Its transcript may
-	// end mid-record, its last tool call with no result. A launch that
-	// continues it restores the archive over the copy in its box
+	// job still working, one lost with its engine, one that died before its
+	// script could pack — or by the run's script after a harness that exited
+	// otherwise than cleanly, killed by a signal or its memory limit
+	// ([Result.HarnessCutOff]), or told to stop by an end a stop, a loss or its
+	// turn's cap asked of it ([Result.JobEnd]). Its transcript may end
+	// mid-record, its last tool call with no result. A launch that continues
+	// it restores the archive over the copy in its box
 	// ([CarriedSession.Replace]) and tells the run its transcript may end
 	// mid-call.
 	Interrupted bool `json:"interrupted,omitempty"`
@@ -718,16 +718,17 @@ type capturePoint struct {
 }
 
 // readCapture is the capture a box read takes of a job that is OVER — by
-// itself, or ended by the read ([Coordinator.endJob]) — or still working:
-// over, the archive its script packed where it left one and one packed now
-// where it left none ([SessionTake.Pack]), FINAL; working (one its turn's cap
-// ended, one a box would not end), one packed now as it stands, not final. CUT
-// OFF wherever the engine packs it — result names no archive the script left,
-// which is every loss's read, collecting nothing — where the script packed it
-// after a harness that did not exit cleanly ([Result.HarnessCutOff]): a harness
-// killed while its wrapper lived on is packed by the script all the same, its
-// transcript ending wherever the kill found it; and where its job was ended on
-// request ([Result.JobEnd]), a harness told to stop mid-step whatever its exit.
+// itself, or ended by the read ([Coordinator.endJob]), a stop's, a loss's or a
+// collection's past its turn's cap — or still working: over, the archive its
+// script packed where it left one and one packed now where it left none
+// ([SessionTake.Pack]), FINAL; working (one a box would not end), one packed
+// now as it stands, not final. CUT OFF wherever the engine packs it — result
+// names no archive the script left, which is every loss's read, collecting
+// nothing — where the script packed it after a harness that did not exit
+// cleanly ([Result.HarnessCutOff]): a harness killed while its wrapper lived on
+// is packed by the script all the same, its transcript ending wherever the kill
+// found it; and where its job was ended on request ([Result.JobEnd]), a harness
+// told to stop mid-step whatever its exit.
 func readCapture(read BoxRead, result Result, over bool) capturePoint {
 	return capturePoint{name: string(read), pack: !over, final: over,
 		cutOff: !over || result.Captured == nil || result.HarnessCutOff || result.JobEnd != ""}
@@ -964,7 +965,8 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 // room — the stamp of what came of it ([Coordinator.settleContext]), the
 // digest it leaves in the box ([stampContext]) — and after them its pause and
 // its answer theirs ([discardGrace] each). So nothing a take does, cut short or
-// not, costs the box its pause, which is what stops a job its turn's cap ended.
+// not, costs the box its pause, which is what holds a collected box asleep, and
+// bounded by the pause reaper, until whatever its turn does next.
 // by is zero where the read has no deadline.
 func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Time) {
 	deadline := time.Now().Add(SessionTakeBudget)

@@ -98,9 +98,9 @@ const JobStopGrace = 5 * time.Second
 // container or a VM.
 const JobKillWait = 2 * JobStopGrace
 
-// JobEndWait is the most the read that ends a stopped or lost job waits, once
-// its script was asked ([EndAsked]), for the job to be over before it kills it
-// ([Coordinator.endJob]).
+// JobEndWait is the most the read that ends a stopped, lost or capped job waits,
+// once its script was asked ([EndAsked]), for the job to be over before it kills
+// it ([Coordinator.endJob]).
 //
 // TWO MINUTES AND FIFTEEN SECONDS, which is everything the ended script does on
 // its way out, each at its own bound: the harness's grace ([JobStopGrace]); the
@@ -122,9 +122,11 @@ const JobEndBudget = JobEndWait + JobKillWait
 // second of it and a handful of execs.
 const jobEndPoll = time.Second
 
-// endJob ENDS a stopped or lost job before its session is taken, on its box's
-// host, as the first step of the read that takes it ([Coordinator.readBox],
-// [Coordinator.readLost]), and reports whether the job is over when it is done.
+// endJob ENDS a stopped or lost job, or one still working past its turn's cap,
+// before its session is taken, on its box's host, as the first step of the
+// read that takes it ([Coordinator.readBox] for a stop's and for a collection
+// past the cap, [Coordinator.readLost]), and reports whether the job is over
+// when it is done.
 //
 // A job that is already over has strays at most — a process its harness left
 // running in its group — which the kill sweeps. Any other is ASKED to end
@@ -140,12 +142,13 @@ const jobEndPoll = time.Second
 // A JOB STILL RUNNING AFTER ALL THAT — a box whose kill could not reach it, a
 // container that can name no process group of the job's own and so signalled
 // nothing of it ([ErrNoJobGroup]), a poll that cannot say — is taken as it
-// stands, not final, and its reclaim ends it; the log says so.
+// stands, not final, and its reclaim ends it — a capped job's once its turn's
+// ending reclaims the box its collection paused; the log says so.
 //
 // THE KILL OUTLIVES THE READ: it runs under a context of its own ([detached]),
-// since the stop or the loss decided the job's end, and a read cut short — its
-// node draining, its asker gone — must not leave the job running on the
-// strength of the read alone. Such a read is said as cut short ([whyCutShort]),
+// since the stop, the loss or the cap decided the job's end, and a read cut
+// short — its node draining, its asker gone — must not leave the job running on
+// the strength of the read alone. Such a read is said as cut short ([whyCutShort]),
 // never as a job that outlived its end, and reads nothing after the kill: its
 // context is gone, so it takes no session, and the ending's next read finds
 // the job killed.

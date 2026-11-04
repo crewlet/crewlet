@@ -180,6 +180,63 @@ func TestALossEndsItsJobBeforeItTakesItsSession(t *testing.T) {
 	}
 }
 
+// A CAPPED JOB IS ENDED BEFORE ITS SESSION IS TAKEN. A job still working when
+// its turn's wall-clock cap passes is announced as if it had finished, and the
+// collection that claims it ends it as a stop's read ends a job: the run's
+// bridge session is closed, its script asked to end the job — which stops its
+// harness and packs the session as its own exit does — and what is left
+// swept; only then is the session taken, as the job's end left it, never
+// packed now beside a harness still writing it. It is stamped FINAL, and
+// INTERRUPTED, since its harness was stopped mid-step. And the box is paused
+// after the take, as every collection's is, never reclaimed by the read.
+//
+// Mutation: read the job past its cap as it stands, as the collection once did,
+// and it is never asked to end and its session is packed now and not final;
+// end it after the take, and the take precedes the request; skip the end where
+// the poll answered running, and the job is taken working.
+func TestACappedJobIsEndedBeforeItsSessionIsTaken(t *testing.T) {
+	t.Parallel()
+	rig, _, _ := keepingRig(t)
+	stamps := rig.spyStamps()
+	launched := rig.launchUntil("t1", rig.now.Add(-time.Minute))
+	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+	rig.coordinator.countRun("swe", StatusRunning)
+	box := rig.provider.Box(launched.SandboxID)
+	seen := rig.watchEnd(box)
+	// WHAT THE ENDED JOB'S SCRIPT REPORTS: the archive it packed as its own
+	// exit does, after a harness that went within its grace.
+	rig.runner.EndsAs(Result{Text: "halfway through", SessionID: "s-1",
+		Captured: &rig.runner.Session.Archive, JobEnd: JobEndAsked})
+	// PAST ITS TURN'S CAP a resume that fails after the collection is the
+	// turn's last, and the run is ended rather than handed back: its row and
+	// its box stay, its ending decided, until this node's retry finishes it —
+	// which this case never fires.
+	rig.resumer.failWith(errors.New("held for the case to read the box"))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Logf("OnCompleted: %v", err)
+	}
+	rig.awaitKeeps()
+
+	closed, asked := seen.first("session closed"), seen.first("asked")
+	if closed < 0 || asked < 0 || closed > asked || seen.first("killed after 0 takes") < asked {
+		t.Fatalf("the capped job's collection went %v, want its session closed, its job asked to end and "+
+			"swept, before anything was taken", seen.all())
+	}
+	takes := rig.runner.Takes()
+	if len(takes) != 1 || takes[0].Pack {
+		t.Fatalf("takes %+v, want the one session the job's end left", takes)
+	}
+	if begun := stamps.begun(); len(begun) != 1 || !begun[0].Final || !begun[0].Interrupted {
+		t.Fatalf("the capped job's capture was stamped %+v, want it final and interrupted", begun)
+	}
+	if !box.Paused() || slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
+		t.Fatalf("the box is paused %v, and the reclaimed boxes are %v; want it paused after its take, as "+
+			"every collection's is", box.Paused(), rig.provider.KilledIDs())
+	}
+}
+
 // A JOB THAT OUTLIVES ITS END IS KILLED BEFORE ITS TAKE. A script asked to end
 // whose job is not over by the end's wait — a pack stuck, a call wedged — has
 // what is left of its job killed: a kill that ends it leaves a session taken
