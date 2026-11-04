@@ -19,6 +19,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // embeddedBroker is a solo broker with no listener, in the fleet's domain —
@@ -26,12 +27,13 @@ import (
 func embeddedBroker(t *testing.T) (*nats.Conn, jetstream.JetStream) {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{
-		ServerName:      "backup-streams-test",
-		JetStream:       true,
-		JetStreamDomain: jsapi.Domain,
-		Port:            -1,
-		DontListen:      true,
-		StoreDir:        t.TempDir(),
+		ServerName:        "backup-streams-test",
+		JetStream:         true,
+		JetStreamDomain:   jsapi.Domain,
+		Port:              -1,
+		DontListen:        true,
+		StoreDir:          t.TempDir(),
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("configure embedded server: %v", err)

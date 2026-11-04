@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 	"github.com/crewlet/crewlet/internal/seat"
 )
@@ -146,7 +147,8 @@ func externalBroker(t *testing.T) string {
 	external, err := server.NewServer(&server.Options{
 		ServerName: "external", JetStream: true, Port: -1, Host: "127.0.0.1",
 		StoreDir: filepath.Join(t.TempDir(), "external"), NoSigs: true,
-		MaxPayload: 8 << 20,
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
+		MaxPayload:        8 << 20,
 		// An external server authenticates somebody, or the dial refuses it.
 		Authorization: externaltest.Token,
 	})

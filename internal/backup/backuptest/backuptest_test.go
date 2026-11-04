@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backup/backuptest"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -68,12 +69,13 @@ type soloBroker struct {
 func brokerIn(t *testing.T, name, dir string) soloBroker {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{
-		ServerName:      name,
-		JetStream:       true,
-		JetStreamDomain: jsapi.Domain,
-		Port:            -1,
-		DontListen:      true,
-		StoreDir:        dir,
+		ServerName:        name,
+		JetStream:         true,
+		JetStreamDomain:   jsapi.Domain,
+		Port:              -1,
+		DontListen:        true,
+		StoreDir:          dir,
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("configure the broker %s: %v", name, err)

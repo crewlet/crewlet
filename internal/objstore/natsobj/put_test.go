@@ -724,7 +724,8 @@ func patterned(n int) []byte {
 func tcpMember(t *testing.T) *server.Server {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{ServerName: "member", Host: "127.0.0.1", Port: -1,
-		JetStream: true, JetStreamDomain: jsapi.Domain, StoreDir: t.TempDir(), NoSigs: true})
+		JetStream: true, JetStreamDomain: jsapi.Domain, StoreDir: t.TempDir(),
+		JetStreamMaxStore: brokertest.StoreMaxBytes, NoSigs: true})
 	if err != nil {
 		t.Fatalf("configure the member: %v", err)
 	}

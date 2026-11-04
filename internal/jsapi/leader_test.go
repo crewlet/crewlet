@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // leaderServer is a broker with no JetStream domain ([jsapitest]'s
@@ -33,10 +34,11 @@ func leaderServer(t *testing.T) (*server.Server, *jsapi.Leader) {
 func leaderServerFor(t *testing.T, opts ...jetstream.JetStreamOpt) (*server.Server, jetstream.JetStream) {
 	t.Helper()
 	srv, err := server.NewServer(&server.Options{
-		ServerName: "jsapi-leader-test",
-		JetStream:  true,
-		DontListen: true,
-		StoreDir:   t.TempDir(),
+		ServerName:        "jsapi-leader-test",
+		JetStream:         true,
+		DontListen:        true,
+		StoreDir:          t.TempDir(),
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("configure the broker: %v", err)
