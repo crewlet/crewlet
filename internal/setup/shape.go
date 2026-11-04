@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/whsec"
 	"github.com/crewlet/crewlet/internal/words"
@@ -49,9 +50,17 @@ const (
 )
 
 // The patterns the identifier shapes hold a value to.
+// Compiled at first use, not at init: the code host's push hook is this
+// binary and pays every package's init (cmd/crewlet's hookinit_test.go),
+// and a bounded repeat compiles to a program holding every count.
+// The two of them were about 28 KB of this package's init.
 var (
-	uuidShape              = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	scalewayAccessKeyShape = regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
+	uuidShape = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	})
+	scalewayAccessKeyShape = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
+	})
 )
 
 // Multiline reports a shape whose values span lines, which its own rule
@@ -71,13 +80,13 @@ func (s Shape) Problem(noun, value string) string {
 		}
 		return ""
 	case ShapeUUID:
-		if uuidShape.MatchString(value) {
+		if uuidShape().MatchString(value) {
 			return ""
 		}
 		return fmt.Sprintf("This %s is not a UUID: it is 32 hexadecimal digits in groups of 8, 4, 4, 4 "+
 			"and 12, joined by hyphens. Paste only the value, from the page that shows it.", noun)
 	case ShapeScalewayAccessKey:
-		if scalewayAccessKeyShape.MatchString(value) {
+		if scalewayAccessKeyShape().MatchString(value) {
 			return ""
 		}
 		return fmt.Sprintf("This %s is not a Scaleway access key: it is SCW followed by 17 capital "+
