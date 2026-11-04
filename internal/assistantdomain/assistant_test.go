@@ -658,7 +658,9 @@ func TestNothingSaidIsStoredInTheClear(t *testing.T) {
 	}
 	for _, table := range assistantdomain.ReproducibleTables {
 		got := n.table(table)
-		for _, plain := range []string{"PAYROLL", "Payroll review", "Worklet › Tasks", "Create task"} {
+		// "PAYROLL-" and not "PAYROLL": base64 never emits a '-', so a sealed
+		// value cannot spell it out by chance.
+		for _, plain := range []string{"PAYROLL-", "Payroll review", "Worklet › Tasks", "Create task"} {
 			if strings.Contains(got, plain) {
 				t.Errorf("%s holds %q in the clear:\n%s", table, plain, got)
 			}
