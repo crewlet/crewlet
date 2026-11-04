@@ -149,6 +149,15 @@ const (
 	// reached nobody through either, and a reader auditing a transcript has
 	// to tell it from both. Every door labels it by one rule ([Executor]).
 	SourceExecutor Source = "executor"
+	// SourceExecutorSession is what one of a seat's kept executor sessions
+	// holds, read back by the seat itself: a past run's transcript — its
+	// briefs, the notes a person sent it, what its model wrote, every tool it
+	// called and what answered — and its row's words, what its turn was
+	// asked and how it ended. Apart from [SourceExecutor], which is what an
+	// executor said to a person: a reader auditing a transcript would take a
+	// fence of that source for a question put to somebody, and this is a past
+	// run's whole record. Every door labels it by one rule ([ExecutorSession]).
+	SourceExecutorSession Source = "executor_session"
 	// SourceCheckLog is what a check of a commit said — its summary, the
 	// tail of its output, the failures its reports named and pages of its
 	// kept log: text the commit's code and its tests printed, or a person's
@@ -172,7 +181,8 @@ var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
 	SourceArtifactRow, SourceChangeNote, SourceAlert, SourceNotification,
-	SourceA2AMessage, SourceExecutor, SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
+	SourceA2AMessage, SourceExecutor, SourceExecutorSession, SourceBrandVoice, SourceAPIAnswer,
+	SourcePageContext, SourceDeepWork,
 	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
 	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
 	SourceTurnEnding,
@@ -883,6 +893,29 @@ func Repository(src Source) Label {
 // rule for such a surface ([TrustForHosted]) with every other writer there.
 func Executor(seat string) Label {
 	l := Label{Source: SourceExecutor, Trust: TrustExternal}
+	if seat != "" {
+		l.Authors = []Author{{Kind: iam.ActorAgent, Seat: seat}}
+	}
+	return l
+}
+
+// ExecutorSession is the label of what one of a seat's kept executor sessions
+// holds as the seat reads it back — an entry of a past run's transcript, what
+// its turn was asked, how it ended — naming the seat whose run kept it where
+// the reader knows the words are that run's record: THE ONE RULE for those
+// words, which every door they reach a model through takes.
+//
+// EXTERNAL, decided here and never inferred from its writer, by [Executor]'s
+// reasoning: a transcript is a vendor harness's record, composed in its box,
+// and it holds a brief that may be an outside message or a webhook's payload,
+// the notes people sent the run, its model's text, and whatever its tools
+// returned — files, command output, the open web — so the least trust of
+// those parts is the whole's. `own`, every writer the reading seat itself,
+// would be false of a tool's answer quoted in it. A note a person sent that
+// run was an instruction to it; read back later it is the history of one,
+// fenced like every other entry.
+func ExecutorSession(seat string) Label {
+	l := Label{Source: SourceExecutorSession, Trust: TrustExternal}
 	if seat != "" {
 		l.Authors = []Author{{Kind: iam.ActorAgent, Seat: seat}}
 	}

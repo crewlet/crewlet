@@ -182,11 +182,12 @@ var trustDoors = map[string]trustDoor{
 var (
 	hostedRule = []string{"TrustForHosted", "LabelForHosted"}
 	// The vendor rule's, the one rule for a harness's words, which
-	// are a vendor's model's whoever's seat the run works for (Executor),
-	// and the one rule for a repository's bytes, which nobody a read can name
-	// wrote (Repository).
+	// are a vendor's model's whoever's seat the run works for (Executor) —
+	// and what a seat's kept session holds, read back, a harness's record of
+	// a past run (ExecutorSession) — and the one rule for a repository's
+	// bytes, which nobody a read can name wrote (Repository).
 	vendorRule = []string{"TrustFor", "TrustForPartial", "LabelFor", "EnvelopeFor", "Executor",
-		"Repository"}
+		"ExecutorSession", "Repository"}
 	trustLevel   = []string{"TrustOwn", "TrustColleague", "TrustExternal"}
 	adoptedLevel = []string{"TrustCompany"}
 	pageLevel    = []string{"TrustPage"}
