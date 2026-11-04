@@ -232,6 +232,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"integrations.expo", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.digitalocean", "{enabled: false}", seatAccessOnHumanSeat},
 	{"integrations.scaleway", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.aws", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 

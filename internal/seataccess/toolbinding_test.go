@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	_ "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"

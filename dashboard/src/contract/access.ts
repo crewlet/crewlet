@@ -17,7 +17,8 @@
  * `developer` or `release_manager`, each a set of Expo permissions named for
  * the Expo role that holds them; DigitalOcean's `read`, `operate` or
  * `administer`, each a set of DigitalOcean token scopes sent as its `grants`; Scaleway's `read`, `operate` or `administer`,
- * Crewlet's own sets of Scaleway permission sets)
+ * Crewlet's own sets of Scaleway permission sets; AWS's `read`, `operate` or
+ * `administer`, Crewlet's own customer managed policies)
  * and is drawn under the
  * vendor's exact name, which
  * `options` carries. Datadog's, Jira's and Confluence's lists are read live
@@ -40,7 +41,8 @@ export type AccessLaneKey =
   | "cloudflare"
   | "expo"
   | "digitalocean"
-  | "scaleway";
+  | "scaleway"
+  | "aws";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";

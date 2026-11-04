@@ -12,8 +12,10 @@ import (
 
 	"github.com/google/uuid"
 
+	awsint "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -800,9 +802,50 @@ func seatSpecs(
 			unconfigured = append(unconfigured, mcpOutcome{server: server.Name, err: err})
 			continue
 		}
+		if k, signed := server.SignedBinding(); signed {
+			signer, missing := seatSigner(c, seat, k, env, mint)
+			if missing != nil {
+				missing.server, missing.instance = server.Name, instance
+				unconfigured = append(unconfigured, mcpOutcome{server: server.Name, err: missing})
+				continue
+			}
+			if signer == nil {
+				err := fmt.Errorf("%s signs with the %s integration's credential, which this build cannot sign with",
+					server.Name, k.Kind)
+				log.Error("mcp_server_unconfigured", "server", server.Name, "seat", seat.Handle(),
+					"error", err, "detail", "this seat gets no child for it")
+				unconfigured = append(unconfigured, mcpOutcome{server: server.Name, err: err})
+				continue
+			}
+			spec.Signer = signer
+		}
 		out = append(out, spec)
 	}
 	return out, unconfigured
+}
+
+// seatSigner signs a seat's requests to a server bound by a signed credential
+// ([config.MCPServer.SignedBinding]): the seat's issued value, resolved by the
+// seat's own resolution, as the integration signs with it. A value not issued
+// yet is a missing credential the pass judges like any other; nil, nil is an
+// integration this build signs for none of.
+func seatSigner(
+	c *Company, seat *org.Role, k config.BoundSeatKey, env *config.Resolver, mint *seatMint,
+) (mcp.RequestSigner, *credentialMissing) {
+	if k.Kind != string(integration.KindAWS) || c.Config.Integrations.AWS == nil ||
+		c.Config.Integrations.AWS.Provisioning == nil {
+		return nil, nil
+	}
+	name := awsint.SeatVariable(seat.Handle())
+	session := env.Value("${" + name + "}")
+	if session == "" {
+		return nil, credentialGap(seat.Handle(), []string{name}, env, mint)
+	}
+	signer, err := awsint.NewMCPSigner(session, c.Config.Integrations.AWS.Provisioning.HomeRegion)
+	if err != nil {
+		return nil, credentialGap(seat.Handle(), []string{name}, env, mint)
+	}
+	return signer, nil
 }
 
 // withheldForCredentials judges every server a pass held back for its

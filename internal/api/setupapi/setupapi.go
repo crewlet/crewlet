@@ -91,6 +91,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/authz"
+	awsint "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
@@ -1029,6 +1030,14 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.Scaleway
 		summary = scaleway.Summary()
 		reqs = scaleway.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindAWS:
+		// NO ROSTER HERE either: each agent's role is listed on the
+		// integration's Agents tab from the access ledger.
+		block := company.Integrations.AWS
+		summary = awsint.Summary()
+		reqs = awsint.Requirements(block, company.Name, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

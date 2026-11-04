@@ -2393,6 +2393,15 @@ func sandboxMCP(
 					"launched once the limit is lifted is given it")
 			continue
 		}
+		if _, signed := server.SignedBinding(); signed {
+			// OUT OF THE SCOPE: the engine signs each request to it with the
+			// seat's session, which never enters the box. The box's own CLI
+			// reaches the vendor through its credentials file instead.
+			log.Info("sandbox_mcp_server_signed", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server: the engine signs each request "+
+					"to it with the seat's own session, which never enters the box")
+			continue
+		}
 		if !server.Grants(seat) {
 			// OUT OF THE SCOPE, as one turned off is: declared, and not
 			// this seat's. Admission refuses the listing, so only a stored

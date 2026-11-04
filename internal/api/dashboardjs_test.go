@@ -1836,24 +1836,11 @@ const (
 	// the phases chunk +398; every other chunk kept its size. The initial load
 	// did not grow: its files are the same bytes but for the chunk names they
 	// list. 5498 KiB.
-	// A schedule's next fire continuing the session its last fire left — the
-	// Sessions view's words for the launch that continues a fire's session
-	// (`continued_by: next_fire`), a schedule's conversation key printed with
-	// its parts decoded by a conversation label that moved out of
-	// lib/format.ts, which the shell loads first, into lib/conversationKey.ts,
-	// which only the screens that print a key load, and a fire's turn naming
-	// its schedule's conversation as one on the Turn page's rail and a phase
-	// card's footer, saying whether a key is the external conversation the
-	// turn served or the schedule the turn was a fire of — took it from 5497.5
-	// KiB (5,629,434 bytes) to 5498.1 KiB (5,630,059 bytes), +625 bytes: the
-	// phases chunk the phase card and the Memory tab share +452, the agents
-	// chunk +233, the live and settled chunks that print a key +32 and +31,
-	// and 15 across the chunks whose imports the bundler renamed, less the 138
-	// the label took out of the shared chunk the shell loads. The initial load
-	// (the entry, what the page preloads and the page itself) is 134 bytes
-	// lighter raw. 107 bytes past 5498 KiB, it moved to the measured size's
-	// next KiB: 5499 KiB.
-	treeBudget = 5<<20 + 379<<10
+	// AWS (its catalogue entry and story, the Agents tab's words and the org
+	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
+	// tile's cloud glyph) took it from 5497.5 KiB (5,629,434 bytes) to 5499.5
+	// KiB (5,631,527 bytes, +2,093 bytes). 5500 KiB.
+	treeBudget = 5<<20 + 380<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

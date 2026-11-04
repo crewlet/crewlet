@@ -19,6 +19,7 @@ import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
 import { pick } from "~/testing.tsx";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import {
+  awsAnswer,
   cloudflareAnswer,
   confluenceAnswer,
   datadogAnswer,
@@ -1355,6 +1356,52 @@ test("turning a Scaleway seat off says the key goes at once, then its policy and
   expect(
     await screen.findByText(
       "Crewlet deletes the agent's API key, so it stops working at once, then its policy and IAM application. Turning it back on creates new ones.",
+    ),
+  ).toBeTruthy();
+});
+
+// AN AWS SEAT IS AN IAM ROLE WITH CREDENTIALS NOBODY HOLDS: the details name
+// the role, the level, credentials issued for 15 minutes at use, and the two
+// files Crewlet puts in the box for the CLI's crewlet profile. Nothing rotates.
+test("an AWS seat's details name its role, 15-minute credentials and the CLI's crewlet profile", () => {
+  draw(awsAnswer());
+  details("SRE", "AWS");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on AWS"]')!);
+  expect(facts.getByText("crewlet/gophrase/seat/crewlet-sre-7c2e")).toBeTruthy();
+  expect(facts.getByText("Permissions policies")).toBeTruthy();
+  expect(facts.getByText("Operate")).toBeTruthy();
+  expect(facts.getByText("AWS_CREDENTIALS_SRE").parentElement!.textContent).toBe(
+    "AWS_CREDENTIALS_SRE, issued for 15 minutes at a time, at use",
+  );
+  expect(facts.getByText("Live, AWS MCP Server, one per agent")).toBeTruthy();
+  const box = facts.getByText(".aws/config and .aws/crewlet-credentials.json");
+  expect(box.parentElement!.textContent).toBe(
+    ".aws/config and .aws/crewlet-credentials.json. AWS CLI configuration provided in ~/.aws/config as the profile crewlet, so commands use --profile crewlet; the AWS CLI v2 must be in the box image",
+  );
+  expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
+});
+
+// AWS APPLYING A NEW ROLE IS NOT A PERSON'S STEP: it reads as the tool
+// waiting, in the engine's words, and never as Needs you.
+test("an AWS seat waiting on AWS says so in its tool, never Needs you", () => {
+  draw(awsAnswer({ tool: "waiting", tool_reason: "AWS is still applying the change" }));
+  expect(screen.queryByText("Needs you")).toBeNull();
+  details("SRE", "AWS");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on AWS"]')!);
+  expect(
+    facts.getByText("Waiting: AWS is still applying the change, AWS MCP Server, one per agent"),
+  ).toBeTruthy();
+});
+
+// TURNING AN AWS SEAT OFF DENIES IT EVERYTHING AND KEEPS ITS ROLE, so it stops
+// within the time the live run measured and comes back as itself.
+test("turning an AWS seat off says it is denied everything within about 2 minutes, role kept", async () => {
+  draw(awsAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "SRE on AWS" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      /Crewlet attaches AWS's deny-all policy to the agent's role and detaches its level policies, so it stops within about 2 minutes of saving/,
     ),
   ).toBeTruthy();
 });
