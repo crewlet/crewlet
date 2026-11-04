@@ -10,7 +10,13 @@ import (
 
 // The values here are SHAPES, not credentials: each is a syntactically valid
 // example of a vendor's format built from filler characters, which is what the
-// denylist matches on.
+// denylist matches on. A session's credentials are among them: an AWS
+// session's key id, and a Google access token, a service account's in the
+// dotted segments its metadata server writes.
+//
+// Mutation: drop a rule from the table, or narrow its pattern past the shape
+// its row spells — the AWS rule to long-term keys alone, the Google one to a
+// body with no dot — and that row fails.
 func TestEveryKnownShapeIsReplaced(t *testing.T) {
 	cases := map[string]string{
 		"sk-proj-" + strings.Repeat("A", 32):                              "api-key",
@@ -19,6 +25,9 @@ func TestEveryKnownShapeIsReplaced(t *testing.T) {
 		"xoxb-" + strings.Repeat("1", 12) + "-" + strings.Repeat("2", 12): "slack-token",
 		"xoxp-" + strings.Repeat("3", 24):                                 "slack-token",
 		"AKIA" + strings.Repeat("Q", 16):                                  "aws-key",
+		"ASIA" + strings.Repeat("R", 16):                                  "aws-key",
+		"ya29.a0" + strings.Repeat("g", 40):                               "google-token",
+		"ya29.c.c0" + strings.Repeat("h", 40):                             "google-token",
 		"ghp_" + strings.Repeat("b", 36):                                  "github-token",
 		"gho_" + strings.Repeat("c", 36):                                  "github-token",
 		"github_pat_" + strings.Repeat("d", 60):                           "github-token",
@@ -103,6 +112,76 @@ func TestARunTokenIsTakenWholeAndOnce(t *testing.T) {
 		"a value redacted where a subject would stand": {
 			"crewlet_rt1.Tq0d_8-x.pwd=a.bsk-" + strings.Repeat("Q", 24) + ".1792927401." + sig,
 			"crewlet_rt1.Tq0d_8-x.pwd=" + redact.Marker + "password]" + redact.Marker + "api-key].1792927401." + sig,
+		},
+	} {
+		got := redact.Secrets(c.text)
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+		}
+		if again := redact.Secrets(got); again != got {
+			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
+		}
+		for _, sizes := range [][]int{{1}, {5, 400}} {
+			if shown, _ := settle(c.text, sizes); shown != c.want {
+				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
+			}
+		}
+	}
+}
+
+// A SESSION'S CREDENTIAL IS TAKEN WHOLE AND ONCE, as a run prints it: the key
+// id STS opens an AWS session's with, ASIA, and a Google access token, `ya29.`
+// and its base64url body — a service account's in segments a dot apart, as its
+// metadata server writes it. The body ends on a character of its own, so the
+// full stop after a token that ends a sentence stays the sentence's, and runs
+// to twenty characters at least, so prose naming the prefix is left as it is.
+//
+// AND A GOOGLE TOKEN IS TAKEN BEFORE THE VENDORS' RULES AND AFTER THE RUN
+// TOKEN. Its body is base64url, which spells `sk-` and a key's body by chance:
+// a vendor's rule taken first replaced that piece and left the token's head,
+// or, the token written straight after a vendor's key, read its `ya29` as the
+// key's end and left its body. And its body takes dots, as a run token's
+// segments are joined: taken before the run token, it read on from a subject
+// that ends in `ya29` to the signature, and left the run token's head.
+//
+// Each comes out as given, redacting it again changes nothing, and shown as it
+// settles, a byte at a time or in pieces, it is the same.
+//
+// Mutation: drop the ASIA rule, and the key id is published; take a Google
+// token's body without its dots, and the metadata server's token is; take the
+// dot that ends one, and the sentence loses its full stop; take the Google
+// token after the vendors' rules, and the token holding `sk-` keeps its head
+// and the one after a vendor's key its body; take it before the run token, and
+// the run token's head is published.
+func TestASessionsCredentialIsTakenWholeAndOnce(t *testing.T) {
+	t.Parallel()
+	aws, google, api := redact.Marker+"aws-key]", redact.Marker+"google-token]", redact.Marker+"api-key]"
+	keyID := "ASIA" + "QWERTYUIOP234567"
+	body := "a0AfB_byC-" + strings.Repeat("Xy3", 12)
+	metadata := "ya29.c.c0ASRK0Ga" + strings.Repeat("Qw-4_", 8)
+	for name, c := range map[string]struct{ text, want string }{
+		"an STS key id": {keyID, aws},
+		"one too short": {keyID[:19], keyID[:19]},
+		"the AWS CLI's answer": {
+			`{"Credentials": {"AccessKeyId": "` + keyID + `", "Expiration": "2026-11-04T12:00:00Z"}}`,
+			`{"Credentials": {"AccessKeyId": "` + aws + `", "Expiration": "2026-11-04T12:00:00Z"}}`,
+		},
+		"its environment":       {"export AWS_ACCESS_KEY_ID=" + keyID + "\n", "export AWS_ACCESS_KEY_ID=" + aws + "\n"},
+		"a Google access token": {"ya29." + body, google},
+		"a metadata server's, in segments": {
+			`{"access_token":"` + metadata + `","expires_in":3599}`, `{"access_token":"` + google + `","expires_in":3599}`,
+		},
+		"a bearer header":               {"Authorization: Bearer ya29." + body + "\n", "Authorization: Bearer " + google + "\n"},
+		"ending a sentence":             {"the token is ya29." + body + ".", "the token is " + google + "."},
+		"a body too short":              {"ya29.a0AfB_byC", "ya29.a0AfB_byC"},
+		"prose naming its prefix":       {"Google's access tokens open with ya29.", "Google's access tokens open with ya29."},
+		"a vendor's key spelled inside": {"ya29.a0Ab" + "sk-" + strings.Repeat("Q", 24) + "x", google},
+		"after a vendor's key":          {"sk-" + strings.Repeat("A", 24) + "ya29." + body, api + google},
+		"a run token whose subject ends in its prefix": {
+			runToken("ab12ya29"), redact.Marker + "run-token]",
+		},
+		"written up to an armour": {
+			"ya29." + body + "-----END RSA PRIVATE KEY-----\n", google + "-----END RSA PRIVATE KEY-----\n",
 		},
 	} {
 		got := redact.Secrets(c.text)

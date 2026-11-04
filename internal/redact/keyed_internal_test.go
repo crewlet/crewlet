@@ -153,14 +153,25 @@ func spellings(word string) []string {
 // of a 45 ms pass over a two-mebibyte transcript. A rule added without either
 // would bring that back with every test still passing, so this is what notices.
 //
+// AND THE LITERAL IS TWO BYTES AT LEAST, since one is a literal in name only:
+// an `A` is one byte in 64 of base64, which a transcript carries by the
+// mebibyte — an image the model read — so the machine would still start every
+// few dozen bytes. That is what folding the AWS key ids into one rule would
+// cost: `A[KS]IA` leaves RE2 the `A` alone.
+//
 // Mutation: build the password rule as a plain rule over its pattern, with no
-// keyed scan, and this fails.
+// keyed scan, or fold the AWS key ids into one rule over `A[KS]IA`, and this
+// fails.
 func TestEveryRuleOpensWithALiteralOrIsKeyed(t *testing.T) {
 	t.Parallel()
 	for _, r := range rules() {
-		if prefix, _ := r.pattern.LiteralPrefix(); prefix == "" && r.keyed == nil {
-			t.Errorf("rule %q opens with no literal for the regexp to skip ahead on and is not keyed: "+
-				"it would run over every byte of every text — build it with keyedOn", r.pattern)
+		if r.keyed != nil {
+			continue
+		}
+		if prefix, _ := r.pattern.LiteralPrefix(); len(prefix) < 2 {
+			t.Errorf("rule %q opens with the literal %q, which leaves the regexp less than two bytes to "+
+				"skip ahead on, and is not keyed: it would start on every few bytes of every text — open "+
+				"it with a longer literal, or build it with keyedOn", r.pattern, prefix)
 		}
 	}
 }

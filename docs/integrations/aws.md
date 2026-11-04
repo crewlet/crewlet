@@ -115,6 +115,8 @@ After a seat is turned off and back on within 15 minutes, a session issued befor
 
 The AWS CLI v2 must be in the box image.
 
+What the run prints of a session, this one or one it assumes itself, reaches its transcript and its live output with the session's access key ID redacted, as every credential shape Crewlet knows is ([Code Sandbox](../concepts/code-sandbox.md#each-launchs-session-kept)). The secret key and the session token have no shape of their own.
+
 **AWS's MCP Server.** Add it from the MCP catalogue (`aws`) as a per-agent server (`shared: false`), at the endpoint in your home Region where AWS runs one (us-east-1, us-west-2, eu-west-1, eu-west-2, eu-central-1, ap-southeast-1, ap-southeast-2 or ap-northeast-1), else us-east-1:
 
 ```yaml

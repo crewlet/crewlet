@@ -1504,6 +1504,10 @@ func TestAPasswordsKeyUnderAKeyWithNoEndIsNoLineOfIt(t *testing.T) {
 			begin + "AKIAABCDEFGHIJKLMNOP\nnext line\n",
 			m + "\n" + redact.Marker + "aws-key]\nnext line\n",
 		},
+		"a session's key id where its last line would be": {
+			begin + "ASIAABCDEFGHIJKLMNOP\nnext line\n",
+			m + "\n" + redact.Marker + "aws-key]\nnext line\n",
+		},
 	} {
 		got := redact.Secrets(form.text)
 		if strings.Contains(got, "hunter2") || strings.Contains(got, "u1") {
@@ -1566,6 +1570,12 @@ func keyFixtures() map[string]string {
 		"password in a string broken after its key":         "key: \"password:\\n\n  hunter2\\n\"\nnext: 1\n",
 		"password in a string broken after an escaped CRLF": "{\"log\": \"password:\\r\\n\n hunter2\"}\n",
 		"tokens": "token sk-" + strings.Repeat("q", 40) + "\nAKIA" + strings.Repeat("Q", 16) + "\n",
+		// A session's, as a run prints the ones it obtains: an STS key id in
+		// its environment, and a Google access token in the dotted segments
+		// a metadata server writes, then one ending a sentence.
+		"a session's tokens": "export AWS_ACCESS_KEY_ID=ASIA" + strings.Repeat("Q", 16) + "\n" +
+			"Authorization: Bearer ya29.c.c0ASRK0Ga" + strings.Repeat("Qw-4_", 8) + "\n" +
+			"printed ya29.a0AfB_byC-" + strings.Repeat("Xy3", 12) + ".\n",
 		"key after a password": "password:\n-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) +
 			"-----END RSA PRIVATE KEY-----\ntail\n",
 		"grep of both armours": grepOfBothArmours,

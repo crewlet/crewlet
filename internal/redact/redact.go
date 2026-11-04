@@ -13,7 +13,13 @@
 //
 // The patterns are a DENYLIST OF KNOWN CREDENTIAL SHAPES, which bounds what
 // this can promise: it catches the vendor prefixes, the engine's own per-run
-// tokens and the key formats below, not an arbitrary opaque secret. It is the
+// tokens and the key formats below, not an arbitrary opaque secret. A
+// session's credential is a shape too where its vendor gives it one — an AWS
+// session's access key id (`ASIA`), a Google access token (`ya29.`) — and a
+// run obtains one by itself as readily as it reads the keys it was handed
+// (`aws sts assume-role`, `gcloud auth print-access-token`). An AWS session's
+// secret key and session token have no shape of their own: only a reader that
+// takes a document apart finds them, by the keys they sit under. It is the
 // last line, not the first — the first is not putting a credential in the
 // text.
 //
@@ -334,7 +340,7 @@ func armourAt(text string, i int) bool {
 // another: sk-proj- is checked before the bare sk- that would otherwise
 // swallow it and label an OpenAI project key as a plain api-key. It matters
 // too where one shape can HOLD another, which is why the run token is first
-// ([runTokenPattern]).
+// ([runTokenPattern]) and a Google access token next ([googleTokenPattern]).
 //
 // Go's regexp is RE2: no backtracking, so matching is linear in the input
 // whatever the pattern — which matters here, because this pass runs over
@@ -346,8 +352,8 @@ func armourAt(text string, i int) bool {
 // and pays every package's init on every push (cmd/crewlet's
 // hookinit_test.go) for a process that redacts nothing; a token's bounded
 // repeat compiles to a program holding every count, the run token's alone
-// about 10 KB, and compiled at init, the table's ten tokens were 62 KB of this
-// package's 195 (GODEBUG=inittrace).
+// about 10 KB, and compiled at init, the ten it held before the session
+// shapes joined them were 62 KB of this package's 195 (GODEBUG=inittrace).
 //
 // A PRIVATE KEY IS NOT A RULE HERE. It is the one shape that spans lines, and
 // the one whose end may not have been written yet, so it is found by
@@ -356,11 +362,18 @@ func armourAt(text string, i int) bool {
 var rules = sync.OnceValue(func() []rule {
 	return []rule{
 		token(runTokenPattern, "run-token"),
+		token(googleTokenPattern, "google-token"),
 		token(`sk-proj-[A-Za-z0-9_-]{20,}`, "api-key"),
 		token(`sk-ant-[A-Za-z0-9_-]{20,}`, "api-key"),
 		token(`sk-[A-Za-z0-9_-]{20,}`, "api-key"),
 		token(`xox[bpsare]-[A-Za-z0-9-]{20,}`, "slack-token"),
+		// An AWS access key's id: a long-term key's, and a session's,
+		// under which STS issues every temporary credential — `aws sts
+		// assume-role`, an instance's role, the session a box is handed.
+		// TWO RULES, NOT `A[KS]IA`: the class would leave RE2 the `A`
+		// alone to skip ahead on.
 		token(`AKIA[A-Z0-9]{16}`, "aws-key"),
+		token(`ASIA[A-Z0-9]{16}`, "aws-key"),
 		token(`gh[pousr]_[A-Za-z0-9]{36,}`, "github-token"),
 		token(`github_pat_[A-Za-z0-9_]{50,}`, "github-token"),
 		token(`glpat-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
@@ -399,6 +412,27 @@ var rules = sync.OnceValue(func() []rule {
 // among it, in the text — or read the token's own `crewlet_rt1` as the end of
 // the key before it, and leave the rest.
 const runTokenPattern = `crewlet_rt1\.[A-Za-z0-9_-]{8}\.[^.\s\[]*\.[0-9]+\.[A-Za-z0-9_-]{43}`
+
+// googleTokenPattern is a Google OAuth access token: `ya29.` and the body
+// Google writes in base64url — what `gcloud auth print-access-token` prints, a
+// metadata server answers and a box on Google Cloud is handed. A service
+// account's token from the metadata server writes its body in segments a dot
+// apart (`ya29.c.…`), so a dot is the body's too; but the body ends on a
+// character of its own, since the full stop after a token that ends a
+// sentence is the sentence's. Twenty characters at least, as the vendors'
+// keys are held to, so a word written after the prefix in prose is no token.
+//
+// SECOND IN THE TABLE, before the vendors' rules, for the run token's reasons
+// ([runTokenPattern]): its body is base64url, which spells a vendor's prefix
+// and body — Google sizes an access token at up to 2048 bytes, and any three
+// of its characters are `sk-` once in 262 144 — and a token can be written
+// straight after a vendor's key. Taken after them, a vendor's rule would
+// replace the piece it knows and leave the token's head in the text, or read
+// the token's own `ya29` as the end of the key before it and leave the body.
+// And after the run token, not before it: read first, a Google token opening
+// in a run token's segment that ends in `ya29` would run on across the run
+// token's dots to its signature, and leave its head for no rule to match.
+const googleTokenPattern = `ya29\.[A-Za-z0-9_.-]{19,}[A-Za-z0-9_-]`
 
 // token is the rule that replaces each match of pattern with the marker for
 // what it is.
@@ -3381,8 +3415,9 @@ func fragment(run string) bool {
 // separator alone, `s3Password=` before the marker, all of it inside the run,
 // and read as a piece the second pass redacted the key the first had left
 // beside its value. What it costs is a key's line that holds a token's shape
-// whole — `AKIA` and sixteen capitals and digits, about once in four thousand
-// million lines of a key — read as a line interrupting it wherever it is read.
+// whole — `AKIA` or `ASIA` and sixteen capitals and digits, about once in two
+// thousand million lines of a key — read as a line interrupting it wherever it
+// is read.
 type claims struct {
 	text string
 	// whole is what each rule replaces: a token, a password's key and
