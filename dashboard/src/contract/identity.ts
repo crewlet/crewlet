@@ -255,3 +255,15 @@ export const READER_HEADER = "X-Crewlet-Reader";
  * whoever the cookie is, until the tab's next request was refused.
  */
 export const READER_PARAM = "reader";
+
+/**
+ * How long a tab waits for `GET /auth/session` before it says the engine has
+ * not answered: `auth.SessionClientWait`, held exactly by
+ * `internal/api/auth.TestTheDashboardWaitsForItsSessionAsLongAsTheEngineSays`.
+ *
+ * TEN SECONDS, twice the longest the guard holds this read for a session its
+ * node has not applied yet. The frame asks it before anything else, so the
+ * request default of thirty seconds left a person looking at placeholders for
+ * that long before anything said why.
+ */
+export const SESSION_READ_TIMEOUT_MS = 10_000;

@@ -1059,7 +1059,7 @@ var RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
 /**
 * The header every request a tab makes FOR ITS READER carries that reader in —
 * the principal id the tab recorded (`lib/reader.ts`) — beside the session
-* cookie: `auth.ReaderHeader`, held by
+* cookie: `httpjson.ReaderHeader`, held by
 * `internal/api/auth.TestTheDashboardNamesItsReaderInTheGuardsHeader`.
 *
 * The engine serves such a request only to that principal and refuses anybody
@@ -1086,6 +1086,17 @@ var READER_HEADER = "X-Crewlet-Reader";
 * whoever the cookie is, until the tab's next request was refused.
 */
 var READER_PARAM = "reader";
+/**
+* How long a tab waits for `GET /auth/session` before it says the engine has
+* not answered: `auth.SessionClientWait`, held exactly by
+* `internal/api/auth.TestTheDashboardWaitsForItsSessionAsLongAsTheEngineSays`.
+*
+* TEN SECONDS, twice the longest the guard holds this read for a session its
+* node has not applied yet. The frame asks it before anything else, so the
+* request default of thirty seconds left a person looking at placeholders for
+* that long before anything said why.
+*/
+var SESSION_READ_TIMEOUT_MS = 1e4;
 //#endregion
 //#region src/protocol/signin.ts
 /**
@@ -2322,10 +2333,14 @@ var auth = {
 	* `reader_changed` asks for both take its answer (`lib/session.ts`), and a
 	* read refused for naming the last reader would leave the tab nothing to be
 	* handed over with.
+	*
+	* WITHIN `SESSION_READ_TIMEOUT_MS`, so a tab learns that the engine has not
+	* answered well before the request default (see that constant).
 	*/
 	session: async (signal) => (await rest.request("GET", "/auth/session", {
 		signal,
-		forReader: false
+		forReader: false,
+		timeoutMs: SESSION_READ_TIMEOUT_MS
 	})).body,
 	/**
 	* The same read, made FOR THE TAB'S READER — what the keepalive asks
@@ -2334,7 +2349,7 @@ var auth = {
 	* under it: refused `reader_changed`, it is handed to whoever the session
 	* is now, within two keepalive intervals of the sign-in that moved it.
 	*/
-	keepAlive: async () => await rest.get("/auth/session"),
+	keepAlive: async () => (await rest.request("GET", "/auth/session", { timeoutMs: SESSION_READ_TIMEOUT_MS })).body,
 	/**
 	* End this browser's session. The engine clears the cookie whatever its
 	* own write did, so an answer at all means this browser holds no session.

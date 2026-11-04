@@ -44,6 +44,14 @@ export interface FrameSession {
   answer: SessionAnswer | null;
   /** Why the latest read did not answer: a `401` is nobody, anything else says nothing. */
   error: RestError | null;
+  /**
+   * Whether the engine has never answered this tab: no answer was ever had and
+   * the latest read ended with status 0, its deadline (`SESSION_READ_TIMEOUT_MS`)
+   * or a connection that never reached the engine. Where the socket's viewer
+   * has not answered either, the frame says so in place of the screen
+   * (`app/frame/SessionUnanswered.tsx`).
+   */
+  unanswered: boolean;
   /** The read's state as `QueryState` renders it — for the Account, which draws it. */
   code: RestResult<SessionAnswer>["code"];
   refusal: RestResult<SessionAnswer>["refusal"];
@@ -73,9 +81,10 @@ export function SessionReading({ children }: { children: ReactNode }) {
   const { reload: readAgain } = read;
   const reload = useCallback(() => readAgain({ quiet: true }), [readAgain]);
   const { error, code, refusal, loading } = read;
+  const unanswered = answer === null && error !== null && error.status === 0;
   const value = useMemo(
-    () => ({ answer, error, code, refusal, loading, reload }),
-    [answer, error, code, refusal, loading, reload],
+    () => ({ answer, error, unanswered, code, refusal, loading, reload }),
+    [answer, error, unanswered, code, refusal, loading, reload],
   );
   return createElement(Reading.Provider, { value }, children);
 }

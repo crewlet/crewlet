@@ -61,8 +61,10 @@ import {
 } from "./routes.ts";
 import { closedBy, framelessOf, guardedPath, personalPath, serviceOfPath } from "./nav.ts";
 import { AccessRefused } from "./frame/AccessRefused.tsx";
+import { SessionUnanswered } from "./frame/SessionUnanswered.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
 import { useHeldReading, useViewer } from "~/lib/viewer.ts";
 import { useOrgArrived, useServicesKnown, useServicesRun } from "~/lib/services.ts";
 import { ServiceNotice } from "./ServiceNotice.tsx";
@@ -434,7 +436,12 @@ function Screen({ where, path }: { where: Route; path: string[] }) {
   const runs = useServicesRun();
   const held = useHeldReading();
   const { accessRefused } = useConnection();
+  const session = useFrameSession();
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
+  // AN ENGINE THAT NEVER ANSWERED WHO THIS IS, over REST or the socket, is
+  // said in place of every screen, the Account's included: nothing any of
+  // them asks can be answered either. See `SessionUnanswered`.
+  if (session.unanswered && viewer.loading) return <SessionUnanswered />;
   // A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR says so in place, once
   // the engine has said what it runs (`lib/services.ts`): never a redirect,
   // since the service's card is on an administrator's page. See

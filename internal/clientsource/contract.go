@@ -420,6 +420,8 @@ var contract = []Entry{
 	{"READER_HEADER", ReadScalar, "internal/api/auth.TestTheDashboardNamesItsReaderInTheGuardsHeader"},
 	{"READER_PARAM", ReadScalar,
 		"internal/api/auth.TestTheDashboardsSocketNamesItsReaderInTheGuardsParameter"},
+	{"SESSION_READ_TIMEOUT_MS", ReadScalar,
+		"internal/api/auth.TestTheDashboardWaitsForItsSessionAsLongAsTheEngineSays"},
 
 	// services.ts
 	{"OrgServices", ReadInterface, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},

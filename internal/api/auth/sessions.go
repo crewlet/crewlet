@@ -320,6 +320,13 @@ func UnreadLevel(ctx context.Context) slog.Level {
 // the 503 and its [RetryIdentitySeconds] hint are for.
 const SessionCatchUp = statelog.DefaultResolveBudget
 
+// SessionClientWait is how long a client waits for `GET /auth/session` before
+// it says the engine has not answered: twice [SessionCatchUp], the longest the
+// guard holds a request presenting a session this node has not applied, which
+// leaves as long again for the round trip. The dashboard's frame waits exactly
+// this (`SESSION_READ_TIMEOUT_MS`, held by a test), and shows a retry after it.
+const SessionClientWait = 2 * SessionCatchUp
+
 // Applier is this node's identity applier, as the session arm waits on it.
 //
 // CONSUMER-DEFINED and one method wide: the arm never reads a position, it

@@ -1863,7 +1863,12 @@ const (
 	// the kit's Google Cloud mark already in 0.94.0, took it from 5500.1 KiB
 	// (5,632,112 bytes) to 5502.4 KiB (5,634,465 bytes, +2,353 bytes). The
 	// measured size's next KiB: 5503 KiB.
-	treeBudget = 5<<20 + 383<<10
+	// The frame saying the engine has not answered who this is (its panel,
+	// its words and the session read's own deadline) took it from 5502.5
+	// KiB (5,634,510 bytes) to 5503.0 KiB (5,635,097 bytes, +587 bytes):
+	// the entry +485 and the chunk the session reads share +102. 25 bytes
+	// past 5503 KiB, the measured size's next KiB: 5504 KiB.
+	treeBudget = 5<<20 + 384<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
