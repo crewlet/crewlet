@@ -440,36 +440,42 @@ jobs:
           fi
       # What the shards will run, run here first: each shard's own invocation,
       # whose union must be the whole half, each package once. A package lost
-      # from every shard, or dealt to two, is a line `diff` prints.
+      # from every shard, or dealt to two, is a line `diff` prints. The whole
+      # half's list goes to the aggregate job, which holds what ran against it.
       - name: every package in exactly one shard
         shell: bash
         run: |
           set -u
-          partition() { go run ./internal/solo/partition -weights "$RUNNER_TEMP/test-weights.tsv" "$@"; }
+          mkdir -p "$RUNNER_TEMP/plan"
+          cp "$RUNNER_TEMP/test-weights.tsv" "$RUNNER_TEMP/plan/"
+          partition() { go run ./internal/solo/partition -weights "$RUNNER_TEMP/plan/test-weights.tsv" "$@"; }
           prove() {
-            local half="$1" n="$2" dir="$RUNNER_TEMP/plan-$1"
+            local half="$1" n="$2" dir="$RUNNER_TEMP/deal-$1"
             mkdir -p "$dir"
-            partition "$half" | sort > "$dir/whole"
+            partition "$half" | sort > "$RUNNER_TEMP/plan/$half.txt"
             for i in $(seq 1 "$n"); do
               partition -shard "$i/$n" "$half" > "$dir/$i"
               echo "::group::the $half half, shard $i/$n: $(wc -l < "$dir/$i") packages"
               cat "$dir/$i"
               echo "::endgroup::"
             done
-            seq -f "$dir/%g" 1 "$n" | xargs cat | sort | diff "$dir/whole" -
-            echo "the $half half: $(wc -l < "$dir/whole") packages, each in exactly one of $n shards"
+            seq -f "$dir/%g" 1 "$n" | xargs cat | sort | diff "$RUNNER_TEMP/plan/$half.txt" -
+            echo "the $half half: $(wc -l < "$RUNNER_TEMP/plan/$half.txt") packages, each in exactly one of $n shards"
           }
           prove parallel "$RACE_SHARDS"
       - name: name the matrix legs
         id: legs
         run: echo "race=[$(seq -s, 1 "$RACE_SHARDS")]" >> "$GITHUB_OUTPUT"
+      # Kept for the thirty days a run can be re-run in, and overwritten by a
+      # re-run of this job: a shard re-run alone must deal from this same file.
       - name: hand the shards the weights they deal by
         uses: actions/upload-artifact@v7
         with:
-          name: test-weights-plan
-          path: ${{ runner.temp }}/test-weights.tsv
+          name: test-plan
+          path: ${{ runner.temp }}/plan
           if-no-files-found: error
-          retention-days: 1
+          overwrite: true
+          retention-days: 30
       - *gobuild-prune
       - *gobuild-save
 
@@ -490,12 +496,12 @@ jobs:
       - *go-caches
       - *gomod-restore
       - *gobuild-restore
-      - &weights-download
+      - &plan-download
         name: the weights the plan dealt by
         uses: actions/download-artifact@v8
         with:
-          name: test-weights-plan
-          path: ${{ runner.temp }}
+          name: test-plan
+          path: ${{ runner.temp }}/plan
       # THE PINNED GITS. `make test` runs the suite on the gits
       # scripts/git-pin.env pins, which scripts/git.sh builds into
       # CREWLET_GIT_CACHE (the Makefile's `##@ The pinned gits` says why the
@@ -571,7 +577,7 @@ jobs:
       - name: this shard of the suite, minus the packages that run alone
         env:
           TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        run: make test TEST_SHARD="$TEST_SHARD" TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_TIMINGS="$RUNNER_TEMP/test-timings.tsv"
+        run: make test TEST_SHARD="$TEST_SHARD" TEST_WEIGHTS="$RUNNER_TEMP/plan/test-weights.tsv" TEST_TIMINGS="$RUNNER_TEMP/test-timings.tsv"
       # On main only, and only a miss, as every cache here; after the make step,
       # which built what the restore did not bring. The first leg of a job is
       # the one saver of its key, so no two shards race to reserve it.
@@ -582,16 +588,18 @@ jobs:
         with:
           path: ${{ env.CREWLET_GIT_CACHE }}
           key: git-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
-      # This shard's measurement, for `test weights` to merge. Only a shard
+      # What this shard ran and how long each package took: the aggregate job
+      # holds it against the plan, and `test weights` merges it. Only a shard
       # that passed hands one on, as only a run that passed is kept.
       - &timings-upload
-        name: hand this shard's package durations to the merge
+        name: hand on what this shard ran
         uses: actions/upload-artifact@v7
         with:
           name: test-timings-${{ github.job }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/test-timings.tsv
           if-no-files-found: error
-          retention-days: 1
+          overwrite: true
+          retention-days: 30
       - *gobuild-prune
       - *gobuild-save
 
@@ -599,22 +607,50 @@ jobs:
   # carries its shard, so a rule naming a leg would stop matching the day the
   # count changed. `!cancelled()` rather than the default, under which a failed
   # shard would SKIP this job, and a skipped required check counts as passed.
+  #
+  # It passes when the plan and every shard passed AND what the shards ran,
+  # read from their timings, is the plan's whole half with each package once.
+  # The plan proved the deal; this proves every runner ran it.
   race:
     name: test (race)
     needs: [plan, test]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    env:
+      HALF: parallel
+      LEGS: test
+      PLAN_RESULT: ${{ needs.plan.result }}
+      LEGS_RESULT: ${{ needs.test.result }}
     steps:
-      - name: the plan and every shard passed
-        env:
-          PLAN: ${{ needs.plan.result }}
-          SHARDS: ${{ needs.test.result }}
+      - &legs-passed
+        name: the plan and every shard passed
         run: |
-          echo "test plan: $PLAN; the race shards: $SHARDS"
-          if [ "$PLAN" != success ] || [ "$SHARDS" != success ]; then
-            echo "::error::the race suite did not pass: see the failed job above"
+          echo "test plan: $PLAN_RESULT; the $HALF half's shards: $LEGS_RESULT"
+          if [ "$PLAN_RESULT" != success ] || [ "$LEGS_RESULT" != success ]; then
+            echo "::error::the $HALF half did not pass: see the failed job above"
             exit 1
           fi
+      - *plan-download
+      - &timings-download
+        name: collect what every shard ran
+        uses: actions/download-artifact@v8
+        with:
+          pattern: test-timings-${{ env.LEGS }}-*
+          path: ${{ runner.temp }}/timings
+      # skipgate times every package that passed or had no test files, so on a
+      # green run each shard's timings name every package it ran.
+      - &legs-covered
+        name: every package of the half ran in exactly one shard
+        shell: bash
+        run: |
+          set -u
+          cut -f1 "$RUNNER_TEMP"/timings/*/test-timings.tsv | sort > "$RUNNER_TEMP/ran.txt"
+          twice="$(uniq -d "$RUNNER_TEMP/ran.txt")"
+          if [ -n "$twice" ]; then
+            echo "::error::run by two shards:"; echo "$twice"; exit 1
+          fi
+          diff "$RUNNER_TEMP/plan/$HALF.txt" "$RUNNER_TEMP/ran.txt"
+          echo "the $HALF half: $(wc -l < "$RUNNER_TEMP/ran.txt") packages ran, each in exactly one shard"
 
   # THE NEXT RUN'S WEIGHTS: every shard's timings, merged by the partition's
   # own strict reader, which refuses a package two shards timed. On every run,
@@ -645,7 +681,8 @@ jobs:
           name: test-weights
           path: ${{ runner.temp }}/test-weights.tsv
           if-no-files-found: error
-          retention-days: 7
+          overwrite: true
+          retention-days: 30
       - name: save the package durations
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6

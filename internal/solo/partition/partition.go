@@ -159,10 +159,11 @@ func partition(pkgs []pkg) (parallel, solo []string) {
 //
 // The rule can be tightened or loosened freely, because ci.yml keys the
 // measurement it keeps on a hash of this package's source and
-// internal/skipgate's: a CI run whose reader or writer differs from the ones
-// that produced a saved file never restores it. Keyed on anything less, a
-// tighter rule here would refuse the saved file on every later run, and no run
-// could save one it accepts — only a run whose half passed saves at all.
+// internal/skipgate's. A file this code wrote that it refuses fails CI; one
+// older code wrote is offered only while this code has none, and a refusal
+// drops it for a deal by count. Keyed on anything less, a tighter rule here
+// would refuse the saved file on every later run, and no run could save one
+// it accepts, since only a run whose half passed saves at all.
 //
 // Pure over a reader so the refusals can be stated directly.
 func readWeights(r io.Reader, name string) (map[string]float64, error) {

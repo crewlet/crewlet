@@ -367,9 +367,10 @@ func flush(out *os.File, buffered map[string][]string, pkg string) int {
 // the millisecond, which is test2json's own precision.
 //
 // Its shape is internal/solo/partition's to read, strictly, and it outlives
-// this run: ci.yml keeps it as the next run's weights. Change it freely — that
-// cache is keyed on a hash of this package's source and the partition's, so no
-// run ever restores a file a different writer produced.
+// this run: ci.yml merges the shards' files into the next run's weights.
+// Change it freely: that cache is keyed on a hash of this package's source and
+// the partition's, and a file a different writer produced is offered only
+// while the new code has none, and dropped if the reader refuses it.
 func writeTimings(w io.Writer, r report) error {
 	var timings strings.Builder
 	for _, p := range slices.Sorted(maps.Keys(r.finished)) {
