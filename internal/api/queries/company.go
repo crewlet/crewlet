@@ -373,6 +373,16 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		}
 		add("cloudflare", in.Cloudflare.Enabled, nil, detail)
 	}
+	if in.Scaleway != nil {
+		// PROVISIONING ALONE, like Cloudflare's: nothing arrives from
+		// Scaleway, so there is no delivery secret. The organization is
+		// what the row names.
+		var org string
+		if in.Scaleway.Provisioning != nil {
+			org = in.Scaleway.Provisioning.OrganizationID
+		}
+		add("scaleway", in.Scaleway.Enabled, nil, map[string]any{"organization_id": org})
+	}
 	if in.Expo != nil {
 		// PROVISIONING ONLY, like atlassian below: the provisioner token
 		// creates agents' robots and no delivery arrives, so there is no

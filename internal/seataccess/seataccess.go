@@ -83,6 +83,7 @@ const (
 	LaneCloudflare   Lane = "cloudflare"
 	LaneExpo         Lane = "expo"
 	LaneDigitalOcean Lane = "digitalocean"
+	LaneScaleway     Lane = "scaleway"
 	LaneGoogleCloud  Lane = "google_cloud"
 )
 
@@ -92,7 +93,7 @@ const (
 func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
-		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneGoogleCloud,
+		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneScaleway, LaneGoogleCloud,
 	}
 }
 
@@ -215,6 +216,8 @@ type Desired struct {
 	//     as read.
 	//   - expo: `viewer`, `runner`, `developer` or `release_manager`, an
 	//     unset level reading as viewer.
+	//   - scaleway: `read`, `operate` or `administer`, an unset level
+	//     reading as read.
 	//   - google_cloud: `viewer`, `operator` or `administer`, an unset level
 	//     reading as viewer.
 	Level string `json:"level,omitempty"`

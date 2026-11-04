@@ -197,6 +197,7 @@ export const INTEGRATION_TOOLS = {
   cloudflare: ["cloudflare"],
   expo: ["expo"],
   digitalocean: ["digitalocean"],
+  scaleway: ["scaleway"],
   google_cloud: ["google_cloud"],
 } as const;
 

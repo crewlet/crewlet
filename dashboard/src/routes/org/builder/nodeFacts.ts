@@ -198,6 +198,7 @@ export type Tool =
   | "cloudflare"
   | "expo"
   | "digitalocean"
+  | "scaleway"
   | "google_cloud";
 
 /** How each tool is named on screen. */
@@ -213,6 +214,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   cloudflare: "Cloudflare",
   expo: "Expo",
   digitalocean: "DigitalOcean",
+  scaleway: "Scaleway",
   google_cloud: "Google Cloud",
 };
 
@@ -458,6 +460,9 @@ const VENDOR_LANES = {
  * NOTHING FOR DIGITALOCEAN: a seat's token is all it has there, and Crewlet
  * revokes it itself once the seat is off or gone, so nothing is left to
  * decommission.
+ *
+ * NOTHING FOR SCALEWAY: a seat's IAM application, policy and API key are all it
+ * has there, and the engine deletes them once the seat is off or gone.
  *
  * GOOGLE CLOUD'S SERVICE ACCOUNT STAYS: the engine disables it when the seat
  * goes, and deletes it only when somebody removes it on the Agents tab.

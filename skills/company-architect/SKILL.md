@@ -7,7 +7,7 @@ description: >
   when someone wants to set up, design, extend, or restructure a Crewlet
   AI agent company, add or remove a seat or team, wire in an integration
   (Jira, Confluence, Mattermost, Slack, GitLab, GitHub, Datadog,
-  Cloudflare, Expo, DigitalOcean, Google Cloud, the code sandbox), or
+  Cloudflare, Expo, DigitalOcean, Scaleway, Google Cloud, the code sandbox), or
   when they hand you a company.yaml to review, fix, or explain.
 ---
 
@@ -362,8 +362,10 @@ the vendor's own terms (a Datadog role id, GitLab's `access_level`,
 Mattermost's `roles` and `channels`, Cloudflare's `read`, `operate` or
 `configure` level, Expo's `viewer`, `runner`, `developer` or
 `release_manager` level, DigitalOcean's `read`, `operate` or `administer`
-level, Google Cloud's `viewer`, `operator` or `administer` level with the
-`projects` it applies on, and so on), or on the integration's
+level, Scaleway's `read`, `operate` or `administer` level
+with the `projects` it applies on, Google Cloud's `viewer`, `operator` or
+`administer` level with the `projects` it applies on, and so on), or on the
+integration's
 Agents tab. The engine creates the account and seals its token under a name
 it derives for the seat, `<KIND>_<FIELD>_<HANDLE>` (for example
 `MATTERMOST_BOT_TOKEN_CEO`), and binds it to the seat's tools itself. Do not

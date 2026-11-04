@@ -90,6 +90,9 @@ func seatFields(kind string) []seatField {
 		// until Crewlet's revoke of it at DigitalOcean succeeds, and read by
 		// no tool.
 		return []seatField{{"TOKEN", true}, {"RETIRED_TOKEN", false}}
+	case "scaleway":
+		// The secret key first, as the credential; the access key names it.
+		return []seatField{{"SECRET_KEY", true}, {"ACCESS_KEY", true}}
 	case "google_cloud":
 		// The access token the engine issues at use for an hour, never sealed.
 		return []seatField{{"ACCESS_TOKEN", true}}

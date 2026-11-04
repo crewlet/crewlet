@@ -2,6 +2,7 @@ package setup
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -45,6 +46,21 @@ const (
 	// ShapeGoogleProvider is a workload identity provider's full resource
 	// name, as config holds it.
 	ShapeGoogleProvider Shape = "google_workload_provider"
+
+	// ShapeUUID is a vendor identifier or secret written as a UUID, such as
+	// a Scaleway Organization ID or secret key: 32 hexadecimal digits in
+	// groups of 8, 4, 4, 4 and 12, joined by hyphens.
+	ShapeUUID Shape = "uuid"
+
+	// ShapeScalewayAccessKey is a Scaleway API key's access key: SCW
+	// followed by 17 capital letters or digits.
+	ShapeScalewayAccessKey Shape = "scaleway_access_key"
+)
+
+// The patterns the identifier shapes hold a value to.
+var (
+	uuidShape              = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	scalewayAccessKeyShape = regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
 )
 
 // Multiline reports a shape whose values span lines, which its own rule
@@ -63,6 +79,18 @@ func (s Shape) Problem(noun, value string) string {
 				"on Save.", noun)
 		}
 		return ""
+	case ShapeUUID:
+		if uuidShape.MatchString(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not a UUID: it is 32 hexadecimal digits in groups of 8, 4, 4, 4 "+
+			"and 12, joined by hyphens. Paste only the value, from the page that shows it.", noun)
+	case ShapeScalewayAccessKey:
+		if scalewayAccessKeyShape.MatchString(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not a Scaleway access key: it is SCW followed by 17 capital "+
+			"letters or digits, 20 characters in all. Paste the access key shown beside the secret key.", noun)
 	case ShapeGoogleServiceAccount:
 		if _, ok := config.GoogleCloudServiceAccount(value); ok {
 			return ""
@@ -109,16 +137,18 @@ func opaqueTokenRune(r rune) bool {
 // bits of entropy, URL-safe and safe to paste into a third-party app's header
 // field, which is where a shared token ends up.
 //
-// A VENDOR-ISSUED IDENTIFIER IS NEVER MINTED: a service account or a provider
-// Crewlet made up would name nothing at Google.
+// A VENDOR-ISSUED IDENTIFIER IS NEVER MINTED: a value of [ShapeUUID],
+// [ShapeScalewayAccessKey], [ShapeGoogleServiceAccount] or [ShapeGoogleProvider]
+// names something the vendor made, and one Crewlet made up would name nothing.
 func (s Shape) Mint(token func() string) (string, error) {
 	switch s {
 	case ShapeSigningKey:
 		return whsec.Mint()
 	case ShapeES256Key:
 		return mintES256()
-	case ShapeGoogleServiceAccount, ShapeGoogleProvider:
+	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider:
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
+	default:
+		return token(), nil
 	}
-	return token(), nil
 }

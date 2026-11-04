@@ -112,8 +112,9 @@ type steerCase struct {
 }
 
 // pull is what a run's harness does with its bridge before its script: its hooks
-// and its plugin, played by a case.
-type pull func(ctx context.Context, session *mcp.ClientSession, row func() sandbox.PendingRun)
+// and its plugin, played by a case — over the run's session, the notes route
+// its launch hands it beside the session's endpoint, and a read of its record.
+type pull func(ctx context.Context, session *mcp.ClientSession, notes string, row func() sandbox.PendingRun)
 
 func newSteerCase(t *testing.T, before pull) *steerCase {
 	t.Helper()
@@ -141,7 +142,7 @@ func newSteerCaseOn(t *testing.T, model *reviewWatch, before pull) *steerCase {
 			if err != nil {
 				return sandbox.Result{Error: "connecting to the bridge: " + err.Error()}
 			}
-			before(ctx, session, func() sandbox.PendingRun {
+			before(ctx, session, mcpbridge.SteerURL(endpoint), func() sandbox.PendingRun {
 				// THE CASE'S ONE TURN: every case here parks run-1.
 				row, _, _ := e.sandbox.Load().pending.Get(ctx, "run-1")
 				return row
@@ -176,6 +177,17 @@ func (c *steerCase) steered() []*events.Event {
 	return out
 }
 
+// records is every record of what became of a note the case's queue has
+// carried, in the order it carried them.
+func (c *steerCase) records() []types.AgentTurnSteered {
+	var out []types.AgentTurnSteered
+	for _, ev := range c.steered() {
+		rec, _ := events.DataAs[*types.AgentTurnSteered](ev)
+		out = append(out, *rec)
+	}
+	return out
+}
+
 // awaitSteered waits until the queue has carried n records of what became of a
 // note, and answers them.
 func (c *steerCase) awaitSteered(t *testing.T, n int) []types.AgentTurnSteered {
@@ -184,15 +196,35 @@ func (c *steerCase) awaitSteered(t *testing.T, n int) []types.AgentTurnSteered {
 	for len(c.steered()) < n && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	var out []types.AgentTurnSteered
-	for _, ev := range c.steered() {
-		rec, _ := events.DataAs[*types.AgentTurnSteered](ev)
-		out = append(out, *rec)
-	}
+	out := c.records()
 	if len(out) < n {
 		t.Fatalf("%d records of a note were published, want %d", len(out), n)
 	}
 	return out
+}
+
+// steeringOver is every record of a note the queue carried for runID's turn
+// once the turn's steering is over: the n the case expects carried — each
+// published off the step that read its note — and the run's record gone with
+// its turn. Every step that could record a note of the run again runs before
+// the record goes: a later hook of the run, which answers what it took; the
+// review, which reads what the run left waiting; and the ending, which records
+// every note still waiting as expired and then deletes the record. So the
+// records carried then are all the turn has, however late a duplicate among
+// them came.
+//
+// NOT A NAP AFTER THE FIRST RECORD, which counted only what arrived inside
+// it: a duplicate from a step that ran later — an ending off the resume's
+// frame, as an engine with an executor log runs it — went uncounted.
+func (c *steerCase) steeringOver(t *testing.T, runID string, n int) []types.AgentTurnSteered {
+	t.Helper()
+	c.awaitSteered(t, n)
+	pending := c.e.sandbox.Load().pending
+	eventually(t, "the run's record to go with its turn", func() bool {
+		_, found, err := pending.Get(t.Context(), runID)
+		return err == nil && !found
+	})
+	return c.records()
 }
 
 // takeAt is one steer_take a Claude Code hook makes, answered.
@@ -271,7 +303,7 @@ func TestSteerTakeAnswersTheHookWithTheNote(t *testing.T) {
 	t.Parallel()
 	var answer string
 	var takeErr error
-	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ func() sandbox.PendingRun) {
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ string, _ func() sandbox.PendingRun) {
 		answer, takeErr = batchTake(ctx, s)
 	})
 	parkOnARun(t, c.e, c.rig, "run-1")
@@ -302,7 +334,7 @@ func TestSteerTakeAnswersTheHookWithTheNote(t *testing.T) {
 func TestATakenNoteIsRecordedDeliveredOnce(t *testing.T) {
 	t.Parallel()
 	var again string
-	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ func() sandbox.PendingRun) {
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ string, _ func() sandbox.PendingRun) {
 		if _, err := batchTake(ctx, s); err != nil {
 			return
 		}
@@ -316,10 +348,9 @@ func TestATakenNoteIsRecordedDeliveredOnce(t *testing.T) {
 	if again != "" {
 		t.Errorf("the run's finish took the note again: %q", again)
 	}
-	c.awaitSteered(t, 1)
-	time.Sleep(200 * time.Millisecond)
-	if got := c.steered(); len(got) != 1 {
-		t.Errorf("%d records of the note were published, want one", len(got))
+	if all := c.steeringOver(t, "run-1", 1); len(all) != 1 || all[0].Outcome != types.SteerDelivered ||
+		all[0].Boundary != types.SteerBoundaryToolBatch {
+		t.Errorf("the note was recorded %+v, want delivered once, at the batch that took it", all)
 	}
 }
 
@@ -328,7 +359,7 @@ func TestATakenNoteIsRecordedDeliveredOnce(t *testing.T) {
 // work against the note the work was steered by.
 func TestTheReviewerOpensWithANoteTheRunTook(t *testing.T) {
 	t.Parallel()
-	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ func() sandbox.PendingRun) {
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ string, _ func() sandbox.PendingRun) {
 		_, _ = batchTake(ctx, s)
 	})
 	parkOnARun(t, c.e, c.rig, "run-1")
@@ -349,12 +380,24 @@ func TestTheReviewerOpensWithANoteTheRunTook(t *testing.T) {
 // did not fill in: a note handed to a delegated loop binds that piece of work
 // alone and is lost with it. Both leave the note waiting, for the main agent's
 // next boundary or — as here, where it has none — the reviewer.
+//
+// ASKED ONCE THE NOTE IS IN THE BRIDGE'S VIEW, which a main agent's batch is
+// answered from ([awaitInView]). The note is filed before the run plays and
+// the view follows the record by a moment: a take made before the view held
+// it answered nothing whether or not a subagent's batch takes notes.
+//
+// Mutation: answer a subagent's batch as the main agent's, and a1's takes the
+// note.
 func TestASubagentsBatchTakesNothing(t *testing.T) {
 	t.Parallel()
 	var answers []string
 	var waiting []string
-	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, row func() sandbox.PendingRun) {
-		time.Sleep(200 * time.Millisecond)
+	var viewed error
+	client := httpxtest.Pool(t)
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, notes string, row func() sandbox.PendingRun) {
+		if viewed = awaitInView(ctx, client, notes, "req-1"); viewed != nil {
+			return
+		}
 		for _, agent := range []string{"a1", "${agent_id}"} {
 			got, _, _ := takeAt(ctx, s, map[string]any{"event": "PostToolBatch", "agent": agent})
 			answers = append(answers, got)
@@ -369,6 +412,9 @@ func TestASubagentsBatchTakesNothing(t *testing.T) {
 	c.file(t, "run-1", "req-1", "use staging")
 	if err := c.rig.collect(t, "run-1"); err != nil {
 		t.Fatalf("collect: %v", err)
+	}
+	if viewed != nil {
+		t.Fatalf("the premise: %v", viewed)
 	}
 	for _, got := range answers {
 		if got != "" {
@@ -388,7 +434,7 @@ func TestASubagentsBatchTakesNothing(t *testing.T) {
 func TestSteerTakeIsNeverListed(t *testing.T) {
 	t.Parallel()
 	var listed []string
-	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ func() sandbox.PendingRun) {
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ string, _ func() sandbox.PendingRun) {
 		tools, err := s.ListTools(ctx, nil)
 		if err != nil {
 			return
@@ -438,7 +484,7 @@ func TestANoteTheRunNeverPulledIsReadByTheReviewer(t *testing.T) {
 func TestARunIsSteerableAfterItsLaunchingNodeRestarts(t *testing.T) {
 	t.Parallel()
 	var answer string
-	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ func() sandbox.PendingRun) {
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ string, _ func() sandbox.PendingRun) {
 		answer, _, _ = takeAt(ctx, s, map[string]any{"event": "Stop", "agent": ""})
 	})
 	endpoint := parkOnARun(t, c.e, c.rig, "run-1")
@@ -983,34 +1029,26 @@ func TestAnOpenCodeRunsNoteIsReadAtItsNextStepByItsJob(t *testing.T) {
 		seen.read.Phase != string(types.PhaseExecute) {
 		t.Errorf("the record holds the note read %+v, want read at boundary step by job %s", seen.read, launch)
 	}
-	var delivered []types.AgentTurnSteered
-	for _, rec := range c.awaitSteered(t, 1) {
-		if rec.Outcome == types.SteerDelivered {
-			delivered = append(delivered, rec)
-		}
-	}
-	time.Sleep(200 * time.Millisecond)
-	if all := c.steered(); len(all) != 1 {
-		t.Errorf("%d records of the note were published, want one", len(all))
-	}
-	if len(delivered) != 1 || delivered[0].Boundary != types.SteerBoundaryStep || delivered[0].LaunchID != launch {
-		t.Errorf("the note was recorded %+v, want delivered once at a step of job %s", delivered, launch)
+	if all := c.steeringOver(t, "run-1", 1); len(all) != 1 || all[0].Outcome != types.SteerDelivered ||
+		all[0].Boundary != types.SteerBoundaryStep || all[0].LaunchID != launch {
+		t.Errorf("the note was recorded %+v, want delivered once at a step of job %s", all, launch)
 	}
 }
 
-// pollAndConfirm is a run's notes plugin, once: a poll of the route its launch
-// handed it, and a read of every note the poll answered.
-func pollAndConfirm(ctx context.Context, client *http.Client, route string, seen *polledNote) error {
+// pollNotes is one poll of a run's notes route: the notes waiting in its
+// inbox's view past the cursor after, which the bridge holds the poll for
+// until one waits — a peek, which records nothing read.
+func pollNotes(ctx context.Context, client *http.Client, route string, after int) ([]mcpbridge.SteerNote, error) {
 	if route == "" {
-		return errors.New("the run was handed no notes route")
+		return nil, errors.New("the run was handed no notes route")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, route+"/notes?after=0", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/notes?after=%d", route, after), nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	res, err := client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var body struct {
 		Notes []mcpbridge.SteerNote `json:"notes"`
@@ -1018,14 +1056,46 @@ func pollAndConfirm(ctx context.Context, client *http.Client, route string, seen
 	err = json.NewDecoder(res.Body).Decode(&body)
 	_ = res.Body.Close()
 	if err != nil {
-		return fmt.Errorf("the poll's answer (%d): %w", res.StatusCode, err)
+		return nil, fmt.Errorf("the poll's answer (%d): %w", res.StatusCode, err)
 	}
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("the poll answered %d", res.StatusCode)
+		return nil, fmt.Errorf("the poll answered %d", res.StatusCode)
 	}
-	seen.notes = body.Notes
-	ids := make([]string, 0, len(body.Notes))
-	for _, n := range body.Notes {
+	return body.Notes, nil
+}
+
+// awaitInView waits, within the bound a case gives every wait, until the view
+// a run's main agent's batch is answered from holds the note id: the run's
+// inbox's view of its record, which its notes route is answered from too, so
+// a poll of the route that answers the note is the view holding it — and,
+// being a peek, leaves the note waiting for the step the case is about.
+func awaitInView(ctx context.Context, client *http.Client, route, id string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for after := 0; ; {
+		notes, err := pollNotes(ctx, client, route, after)
+		if err != nil {
+			return fmt.Errorf("the run's view never held note %s: %w", id, err)
+		}
+		for _, n := range notes {
+			if n.ID == id {
+				return nil
+			}
+			after = max(after, n.Seq)
+		}
+	}
+}
+
+// pollAndConfirm is a run's notes plugin, once: a poll of the route its launch
+// handed it, and a read of every note the poll answered.
+func pollAndConfirm(ctx context.Context, client *http.Client, route string, seen *polledNote) error {
+	notes, err := pollNotes(ctx, client, route, 0)
+	if err != nil {
+		return err
+	}
+	seen.notes = notes
+	ids := make([]string, 0, len(notes))
+	for _, n := range notes {
 		ids = append(ids, n.ID)
 	}
 	raw, _ := json.Marshal(map[string]any{"ids": ids})
@@ -1046,8 +1116,15 @@ func pollAndConfirm(ctx context.Context, client *http.Client, route string, seen
 }
 
 // watchedFor is a run store that tells a case when every watch of a run's notes
-// open on it has handed its follower a view holding one note: the moment the
-// follower's view — what the tool loop's Waiting reads — has it too.
+// open on it has handed its follower a view holding one note, and the follower
+// has taken it: the moment the follower's view — what the tool loop's Waiting
+// reads — has it too.
+//
+// TAKEN, NOT JUST HANDED OVER: a follower opens a view's notes and stores it
+// between two receives, so the same view is handed to it again, and that send
+// completes only once the first is its view. Marked as the first send
+// completed, the case went on while the follower was still opening the note,
+// and a review that asked Waiting in that gap read no note.
 type watchedFor struct {
 	sandbox.PendingStore
 	note string
@@ -1084,6 +1161,11 @@ func (w *watchedFor) WatchNotes(ctx context.Context, turnID string) (<-chan sand
 			if slices.ContainsFunc(view.Steer.Notes, func(n sandbox.RunNote) bool {
 				return n.ID == w.note && n.Waiting()
 			}) {
+				select {
+				case out <- view:
+				case <-ctx.Done():
+					return
+				}
 				w.mu.Lock()
 				if _, open := w.active[id]; open {
 					w.active[id] = true

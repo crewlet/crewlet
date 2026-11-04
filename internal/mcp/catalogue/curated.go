@@ -34,14 +34,28 @@ var (
 	googleCloudKeys = []SeatKey{{Field: "ACCESS_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
 	// glab reads GITLAB_TOKEN, the community GitLab servers
 	// GITLAB_PERSONAL_ACCESS_TOKEN: one integration, two spellings.
-	glabKeys          = []SeatKey{{Field: "TOKEN", Env: "GITLAB_TOKEN", Header: "Private-Token"}}
-	gitlabServerKeys  = []SeatKey{{Field: "TOKEN", Env: "GITLAB_PERSONAL_ACCESS_TOKEN", Header: "Private-Token"}}
-	slackKeys         = []SeatKey{{Field: "BOT_TOKEN", Env: "SLACK_MCP_XOXB_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
-	mattermostKeys    = []SeatKey{{Field: "BOT_TOKEN", Env: "MATTERMOST_TOKEN"}}
+	glabKeys         = []SeatKey{{Field: "TOKEN", Env: "GITLAB_TOKEN", Header: "Private-Token"}}
+	gitlabServerKeys = []SeatKey{{Field: "TOKEN", Env: "GITLAB_PERSONAL_ACCESS_TOKEN", Header: "Private-Token"}}
+	slackKeys        = []SeatKey{{Field: "BOT_TOKEN", Env: "SLACK_MCP_XOXB_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
+	mattermostKeys   = []SeatKey{{Field: "BOT_TOKEN", Env: "MATTERMOST_TOKEN"}}
+	// The scw CLI's own server reads the agent's API key as the CLI does:
+	// the secret, and the access key that names it.
+	scalewayKeys      = []SeatKey{{Field: "SECRET_KEY", Env: "SCW_SECRET_KEY"}, {Field: "ACCESS_KEY", Env: "SCW_ACCESS_KEY"}}
 	mcpAtlassianKeys  = []SeatKey{{Field: "TOKEN", Env: "JIRA_API_TOKEN"}, {Field: "EMAIL", Env: "JIRA_USERNAME"}, {Field: "TOKEN", Env: "CONFLUENCE_API_TOKEN"}, {Field: "EMAIL", Env: "CONFLUENCE_USERNAME"}}
 	tavilyReads       = []string{"tavily_search", "tavily_extract", "tavily_crawl", "tavily_map", "tavily_research"}
 	readsTheOpenWorld = Hints{ReadOnly: yes(), OpenWorld: yes()}
 )
+
+// scalewayNamespaces are the scw CLI's namespaces for the products a Scaleway
+// agent level grants (internal/scaleway's level table): projects and the audit
+// trail, servers and disks, buckets, networking, DNS, databases, the registry,
+// Cockpit and Kubernetes.
+const scalewayNamespaces = "account,audit-trail,block,cockpit,dns,instance,ipam,k8s,lb,object,rdb,redis," +
+	"registry,vpc,vpc-gw"
+
+// scalewayCLIRelease is the scw release the entry was read at, the one
+// internal/scaleway pins (TestTheScalewayEntryNamesThePinnedCLI).
+const scalewayCLIRelease = "2.65.2"
 
 func yes() *bool { v := true; return &v }
 
@@ -274,6 +288,34 @@ var curated = sync.OnceValue(func() []Entry {
 				{match: glabServe, keys: glabKeys},
 				{match: launches("server-gitlab", "gitlab-mcp"), keys: gitlabServerKeys},
 			},
+		},
+		{
+			// THE PRODUCTS THE AGENT LEVELS REACH, and no other: a command
+			// for anything else is refused by the agent's policy anyway, and
+			// unlisted it costs the agent no tool description.
+			ID: "scaleway", Name: "scaleway", Title: "Scaleway", Vendor: "scaleway",
+			Description: "Servers, storage, networks, DNS, databases, Kubernetes and the registry, through " +
+				"the scw CLI's own server, one per agent.",
+			Transport: TransportStdio, Command: "scw",
+			Args: []string{"mcp", "server", "serve", "namespaces=" + scalewayNamespaces},
+			Env: []Input{
+				{Name: "SCW_SECRET_KEY", Required: true, Secret: true, FromIntegration: true,
+					Description: "Each agent's own API key's secret, which the Scaleway integration hands it."},
+				{Name: "SCW_ACCESS_KEY", Required: true, FromIntegration: true,
+					Description: "The access key naming that API key, which the Scaleway integration hands it."},
+				{Name: "SCW_DEFAULT_ORGANIZATION_ID", Format: "00000000-0000-0000-0000-000000000000",
+					Description: "The Organization the agents' applications are in, the same for every agent."},
+				{Name: "SCW_DISABLE_CHECK_VERSION", Value: "true",
+					Description: "Keeps the CLI's update notice out of the agents' tool results."},
+			},
+			Auth:        []AuthMethod{AuthIntegration},
+			Integration: "scaleway",
+			Prerequisite: "scw " + scalewayCLIRelease + " is installed on every engine host that runs " +
+				"agent seats. Each agent names the project in a command that needs one, since its " +
+				"policy reaches only its own projects.",
+			Docs:      "https://github.com/scaleway/scaleway-cli/blob/v" + scalewayCLIRelease + "/docs/commands/mcp.md",
+			ReadAt:    "2026-11-03",
+			recognise: []recognition{{match: scwServe, keys: scalewayKeys}},
 		},
 		{
 			ID: "slack", Name: "slack", Title: "Slack", Vendor: "slack",

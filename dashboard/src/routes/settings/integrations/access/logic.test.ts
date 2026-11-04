@@ -15,6 +15,7 @@ import {
   GITHUB_LANE,
   MATTERMOST_LANE,
   NEUTRAL_LANE,
+  SCALEWAY_LANE,
   datadogAnswer,
   digitaloceanAnswer,
   digitaloceanWaitingAnswer,
@@ -23,6 +24,7 @@ import {
   neutralAnswer,
   offLane,
   onLane,
+  scalewayAnswer,
 } from "./fixtures.ts";
 import {
   accessHold,
@@ -690,6 +692,26 @@ test("a DigitalOcean agent's tool names the MCP server, then doctl with its vari
   expect(toolWords(DIGITALOCEAN_LANE, { ...sre, tool: "no_server" })).toBe(
     "Not set up: no digitalocean tool server is declared, and its sandbox env does not set DIGITALOCEAN_ACCESS_TOKEN",
   );
+});
+
+// SCALEWAY'S LEVELS ARE CREWLET'S OWN SETS of Scaleway permission sets, named
+// in the tab, with Administer marked as the administration grant it is; its
+// tool reads as both routes, and an off seat says what turning it on creates.
+test("a Scaleway seat reads its level, its tool by both routes and what turning it on does", () => {
+  const sre = scalewayAnswer().seats.find((s) => s.handle === "sre")!.lanes.scaleway!;
+  expect(accessWords(SCALEWAY_LANE, sre.observed)).toBe("Operate");
+  expect(SCALEWAY_LANE.levels.find((l) => l.id === "administer")?.administers).toBe(true);
+  expect(toolWords(SCALEWAY_LANE, sre)).toBe(
+    "Live, the Scaleway MCP server, or scw in its box, as SCW_SECRET_KEY and SCW_ACCESS_KEY",
+  );
+  expect(toolWords(SCALEWAY_LANE, { ...sre, tool: "no_server" })).toBe(
+    "Not set up: no scaleway tool server is declared, and its sandbox env does not set SCW_SECRET_KEY and SCW_ACCESS_KEY",
+  );
+  expect(scopeWords(SCALEWAY_LANE, sre.desired.scope)).toBe("gophrase-prod");
+  expect(offSentence(SCALEWAY_LANE, offLane("read"))).toBe(
+    "Off. Turning it on creates a Scaleway IAM application for the agent, with a policy holding the chosen permission sets on its projects and its own API key.",
+  );
+  expect(availableActions(SCALEWAY_LANE, sre, false, false)).toEqual(["rotate"]);
 });
 
 // A LANE WHOSE ENTRIES A PERSON PREPARES AT THE VENDOR points an empty list at

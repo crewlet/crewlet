@@ -1815,14 +1815,19 @@ const (
 	// Merged again with it, main's +6,031 bytes came to 6,032 bytes on the
 	// merged tree, taking it from 5486.9 KiB (5,618,606 bytes) to 5492.8 KiB
 	// (5,624,638 bytes). It moved by main's own 6 KiB, from 5487 KiB: 5493 KiB.
+	// The Scaleway integration (its catalogue entry, story and Agents tab
+	// words, its tool named server first as DigitalOcean's is, and the org
+	// builder's Scaleway facts), merged onto that tree, took it from 5492.8 KiB
+	// (5,624,638 bytes) to 5494.6 KiB (5,626,424 bytes, +1,786 bytes). The
+	// initial load did not grow. It moved up to the measured size's next KiB:
+	// 5495 KiB, 456 bytes clear.
 	// Google Cloud (its catalogue entry, its Agents tab words with the link
 	// to preparing a project, the issued period and the note on gcloud, and
 	// the org builder's leftover service account) and the kit's move to
-	// 0.93.0 (the Google Cloud mark) took it from 5,618,606 bytes to
-	// 5,621,039 bytes (+2,433 bytes). Merged with main's DigitalOcean, the
-	// same +2,433 bytes took it from 5,624,638 bytes to 5,627,071 bytes
-	// (5495.2 KiB). The measured size's next KiB: 5496 KiB.
-	treeBudget = 5<<20 + 376<<10
+	// 0.93.0 (the Google Cloud mark), merged onto that tree, took it from
+	// 5494.6 KiB (5,626,424 bytes) to 5496.9 KiB (5,628,857 bytes, +2,433
+	// bytes, as on every tree before). The measured size's next KiB: 5497 KiB.
+	treeBudget = 5<<20 + 377<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

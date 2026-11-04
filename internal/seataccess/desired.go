@@ -124,6 +124,12 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 			return Desired{}, false
 		}
 		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault()}
+	case LaneScaleway:
+		b := in.Scaleway
+		if b == nil {
+			return Desired{}, false
+		}
+		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault()}
 	case LaneGoogleCloud:
 		b := in.GoogleCloud
 		if b == nil {
@@ -214,6 +220,11 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 			in.DigitalOcean = &config.RoleDigitalOcean{}
 		}
 		in.DigitalOcean.Enabled, in.DigitalOcean.Level = &on, d.Level
+	case LaneScaleway:
+		if in.Scaleway == nil {
+			in.Scaleway = &config.RoleScaleway{}
+		}
+		in.Scaleway.Enabled, in.Scaleway.Level, in.Scaleway.Projects = &on, d.Level, d.Scope
 	case LaneGoogleCloud:
 		if in.GoogleCloud == nil {
 			in.GoogleCloud = &config.RoleGoogleCloud{}

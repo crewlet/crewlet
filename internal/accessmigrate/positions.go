@@ -89,6 +89,7 @@ var desiredKeys = map[seataccess.Lane][]string{
 	seataccess.LaneCloudflare:   {"enabled", "level"},
 	seataccess.LaneExpo:         {"enabled", "level"},
 	seataccess.LaneDigitalOcean: {"enabled", "level"},
+	seataccess.LaneScaleway:     {"enabled", "level", "projects"},
 	seataccess.LaneGoogleCloud:  {"enabled", "level", "projects"},
 }
 
