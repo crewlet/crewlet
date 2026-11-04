@@ -229,7 +229,7 @@ func loggingRig(t *testing.T) (*coordRig, *sessionWrites) {
 	t.Helper()
 	rig := newCoordRig(t)
 	writes := &sessionWrites{}
-	rig.coordinator.sessions, rig.coordinator.keep = writes, &sessionKeep{}
+	rig.coordinator.sessions, rig.coordinator.keep = writes, &sessionKeep{now: func() time.Time { return rig.now }}
 	rig.coordinator.sessionRetry, rig.coordinator.recordBudget = time.Millisecond, 200*time.Millisecond
 	rig.coordinator.captureTick = time.Millisecond
 	rig.coordinator.spoolDir = t.TempDir()

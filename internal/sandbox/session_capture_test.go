@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -525,22 +526,29 @@ func (s *lostAnswers) StampCapture(ctx context.Context, turnID string, stamp Ses
 // and nothing kept. So the store answers a stamp the row already holds as
 // taken: the take goes on under its own place, and its session is kept.
 //
+// IN A SYNCTEST BUBBLE, so the ask again is held to the rig's record budget on
+// the bubble's clock, which only the asks' own waits advance: on the wall clock
+// a starved runner spent the budget before the second ask, and it was refused.
+//
 // Mutation: answer a reservation the row already holds as not taken, and the
 // take keeps nothing and leaves its place begun.
 func TestATakesOwnReservationItsAnswerLostIsItsOwn(t *testing.T) {
 	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	rig.coordinator.pending = &lostAnswers{PendingStore: rig.coordinator.pending}
-	spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID), rig.runner,
-		readCapture(BoxReadCollect, Result{}, false))
-	if spooled == nil {
-		t.Fatal("a take whose reservation the store applied and whose answer was lost spooled nothing, " +
-			"want it gone on under its own place")
-	}
-	rig.coordinator.keepLater(spooled)
-	rig.awaitKeeps()
-	if c := rig.get("t1").Capture; c == nil || c.State != CaptureLanded || c.CaptureSeq != spooled.stamp.CaptureSeq {
-		t.Fatalf("the take's place stands %+v, want its capture landed", c)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		rig, _, _ := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		rig.coordinator.pending = &lostAnswers{PendingStore: rig.coordinator.pending}
+		spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID), rig.runner,
+			readCapture(BoxReadCollect, Result{}, false))
+		if spooled == nil {
+			t.Fatal("a take whose reservation the store applied and whose answer was lost spooled nothing, " +
+				"want it gone on under its own place")
+		}
+		rig.coordinator.keepLater(spooled)
+		rig.awaitKeeps()
+		if c := rig.get("t1").Capture; c == nil || c.State != CaptureLanded ||
+			c.CaptureSeq != spooled.stamp.CaptureSeq {
+			t.Fatalf("the take's place stands %+v, want its capture landed", c)
+		}
+	})
 }
