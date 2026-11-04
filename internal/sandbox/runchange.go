@@ -53,7 +53,8 @@ func (c RunChange) problem() string {
 // its title, "" for the subject of the commit the run delivered its branch
 // at, and whether it opens as a draft. The title is held to the code host's
 // rule at the launch that resolves it and again by the open's decide; this
-// package holds it to valid UTF-8 alone, which the run's row's JSON needs.
+// package holds it to valid UTF-8, which the run's row's JSON needs, and to
+// [MaxChangeTitleBytes], which the row's budget needs (rowbytes.go).
 type OpenChange struct {
 	Target string `json:"target"`
 	Title  string `json:"title,omitempty"`
@@ -70,9 +71,23 @@ func (o OpenChange) problem(branch string) string {
 		return fmt.Sprintf("proposes %s into itself", o.Target)
 	case !utf8.ValidString(o.Title):
 		return "names a title that is not valid UTF-8"
+	case len(o.Title) > MaxChangeTitleBytes:
+		return fmt.Sprintf("names a title of %d bytes, past the %d a change's title may have", len(o.Title),
+			MaxChangeTitleBytes)
 	}
 	return ""
 }
+
+// MaxChangeTitleBytes bounds the title an executor asks a change to open with
+// ([OpenChange.Title]): the code host's own bound on a change's title
+// (internal/code's MaxChangeTitleBytes), which the launch resolving the ask
+// holds it to and this package imports nothing of — the engine's
+// TestARunsChangeTitleIsBoundAsTheCodeHostBoundsIt holds the two equal. HERE
+// TOO, because the title rides the run's row in each of its repositories
+// ([PendingRun.Repos]), which the row's budget counts at this bound, and a
+// grant that reaches the row ([PendingStore.GrantRepo]) is held to it by the
+// store itself rather than by whatever resolved it.
+const MaxChangeTitleBytes = 256
 
 // branchRoot is where a repository's branches are, as a ref names them.
 const branchRoot = "refs/heads/"

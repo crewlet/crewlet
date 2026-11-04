@@ -303,16 +303,36 @@ func Answered(calls []ledger.Call, s Surface, reply Reply) bool {
 // all read this, and must: what one of them refuses another must not accept,
 // or a model is told one thing at submission and judged by another.
 // [Result.Delivered] deliberately does NOT — see its own doc.
+//
+// AND THE CALLS A RECORD DID NOT KEEP, by name and outcome ([ledger.Called]):
+// an earlier round's elided middle, and the current round's where the caller
+// hands it ([Work.Record]). A reply posted from the middle of a long run
+// reached its person as surely as one its record kept, and a check that read
+// the kept calls alone refuted it and sent the round back to post it again.
 func Record(earlier []ledger.Iteration, current []ledger.Call) []ledger.Call {
 	n := len(current)
 	for _, it := range earlier {
-		n += len(it.Calls)
+		n += len(it.Calls) + len(it.Elided)
 	}
 	out := make([]ledger.Call, 0, n)
 	for _, it := range earlier {
 		out = append(out, it.Calls...)
+		out = append(out, ledger.Called(it.Elided)...)
 	}
 	return append(out, current...)
+}
+
+// Record is [Record] for this round: the closed rounds, then every call this
+// round made ([Work.Called]).
+func (w Work) Record(earlier []ledger.Iteration) []ledger.Call {
+	return Record(earlier, w.Called())
+}
+
+// Called is every call this round made as a delivery check reads it: the
+// calls its record kept, then its elided middle by name and outcome
+// ([ledger.Called]).
+func (w Work) Called() []ledger.Call {
+	return append(slices.Clip(w.Calls), ledger.Called(w.Elided)...)
 }
 
 // Remedy is the sentence a delivery refusal ends with: how to deliver where
@@ -450,7 +470,7 @@ type Verdict struct {
 // it ALSO owed a further delivery (a correction the first answer needs) is a
 // judgement about content, which is the reviewer's.
 func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
-	record := Record(earlier, w.Calls)
+	record := w.Record(earlier)
 	// TWO PREDICATES, TWO QUESTIONS, and they are deliberately not one
 	// variable. `acted` asks whether anything at all reached outside the
 	// engine, which is what makes ending a turn as "nobody was asking"
@@ -539,7 +559,7 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 // when the reviewer approves the third.
 func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
 ) (override bool, correction string) {
-	record := Record(earlier, w.Calls)
+	record := w.Record(earlier)
 	if reply.Kind != ReplyTool || DeliveredTo(record, s, reply) {
 		return false, ""
 	}

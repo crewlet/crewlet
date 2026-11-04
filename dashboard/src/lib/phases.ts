@@ -36,6 +36,7 @@ import type {
   TurnStage,
 } from "~/protocol/index.ts";
 import { fmtBytes, fmtExact, plural, tsKey } from "./format.ts";
+import type { DroppedCalls } from "./dropped.ts";
 import { decodeSections } from "./promptmap.ts";
 import type { Tone } from "~/ui/primitives.tsx";
 import type { InvocationOutcome } from "~/contract/stops.ts";
@@ -69,6 +70,12 @@ export interface ToolCall {
    *  so its running row and its answered one are one row. "" where nothing
    *  named the call. */
   callId: string;
+  /** An executor's call held for a person's approval, and the call they
+   *  approved (`held`, `approved`): both with their arguments sealed, never
+   *  on a record, so `args` is not what they sent; and the held one is the
+   *  run's question, never a failure. Absent on every other call. */
+  held?: boolean;
+  approved?: boolean;
 }
 
 /**
@@ -301,6 +308,15 @@ export interface PhaseRecord {
    */
   deliveredRefsElided: number;
   /**
+   * The calls a collected executor's run made that its run's record did not
+   * keep — a long run's dropped middle — and those calls by tool. `tools`
+   * lists only the kept ones, and the run's own record is gone once it ends,
+   * so this is where a reader of the turn learns what the rest were. Zero and
+   * empty on every other phase, and on a run that kept every call.
+   */
+  callsElided: number;
+  elidedCalls: DroppedCalls[];
+  /**
    * The refs a launch moved on the engine's own code host, as ITS PUSH RECORD
    * says — the engine's account, where `deliveredRefs` are the launch's own —
    * each with the live change it heads once the launch was collected
@@ -460,6 +476,19 @@ function str(v: unknown): string {
   }
 }
 
+/** A record's `elided_calls`, kept to the entries that are what they say. */
+function droppedCalls(v: unknown): DroppedCalls[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
+    .map((e) => ({
+      ...(typeof e.name === "string" && e.name ? { name: e.name } : {}),
+      calls: num(e.calls),
+      failed: num(e.failed),
+    }))
+    .filter((e) => e.calls > 0);
+}
+
 function num(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
@@ -475,7 +504,12 @@ export function toolCalls(raw: unknown): ToolCall[] {
       round: num(rec.round),
       args: str(rec.arguments),
       result: str(rec.result),
-      failed: rec.success === false || Boolean(rec.error),
+      // A HELD CALL IS RECORDED FAILED, since nothing it asked for happened,
+      // and is no failure: it is the run's question for a person, as an ask
+      // is, and the call they let be made follows it marked approved.
+      failed: (rec.success === false || Boolean(rec.error)) && rec.held !== true,
+      ...(rec.held === true ? { held: true } : {}),
+      ...(rec.approved === true ? { approved: true } : {}),
       // How long the call took, and who answered it: the tool loop times
       // every call it runs, the bridge every call an executor run makes
       // over it, and the surface names the origin that served it. Absent
@@ -788,6 +822,8 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     sandboxId: "",
     deliveredRefs: [],
     deliveredRefsElided: 0,
+    callsElided: 0,
+    elidedCalls: [],
     pushedRefs: [],
     pushedRefsElided: 0,
     pushedRefsUnread: "",
@@ -893,6 +929,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // ABSENT ON A WHOLE RECORD — the engine omits a count of zero — which
     // reads as nothing left out, which is what such a record is.
     deliveredRefsElided: num(p.delivered_refs_elided),
+    // THE CALLS THE RUN'S RECORD DID NOT KEEP, absent the same way.
+    callsElided: num(p.calls_elided),
+    elidedCalls: droppedCalls(p.elided_calls),
     pushedRefs: pushedRefs(p.pushed_refs),
     pushedRefsElided: num(p.pushed_refs_elided),
     pushedRefsUnread: String(p.pushed_refs_unread ?? ""),
@@ -998,6 +1037,10 @@ function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseReco
     sandboxId: String(p.sandbox_id ?? ""),
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
     deliveredRefsElided: num(p.delivered_refs_elided),
+    // A LAUNCH'S RECORD lists no calls: they are its round's, on the
+    // executor's record that collected it.
+    callsElided: 0,
+    elidedCalls: [],
     // THE LAUNCH'S PUSHES ARE ON ITS OWN RECORD: one that parks on a question
     // is resumed by an answer, which collects nothing, so they are here or
     // nowhere.

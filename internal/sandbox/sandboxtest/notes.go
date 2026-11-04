@@ -906,12 +906,13 @@ func testNotesSurviveEveryWriteThatIsNotTheirs(t *testing.T, s sandbox.PendingSt
 // A KEY A LATER BUILD ADDS INSIDE A SECTION SURVIVES EVERY WRITE THIS BUILD
 // MAKES. The record is rewritten whole by every node that touches it, so a
 // field a newer build adds to the notes section, to one note, to where a note
-// was read, to a bridged call or to the job's own record is gone the moment
-// this build writes the record back — unless every level that can grow keeps
-// what it does not know. And the log beside the record ([sandbox.BridgeLog])
-// is rewritten whole by every append, so the same holds at its top and in each
-// of its calls. Seeded at each of those six levels at once, as a newer build
-// would write them, and read back off the raw record and the raw log after
+// was read, to a bridged call, to the identity of a call the log dropped or to
+// the job's own record is gone the moment this build writes the record back —
+// unless every level that can grow keeps what it does not know. And the log
+// beside the record ([sandbox.BridgeLog]) is rewritten whole by every append,
+// so the same holds at its top, in each of its calls and in each identity it
+// keeps. Seeded at each of those seven levels at once, as a newer build would
+// write them, and read back off the raw record and the raw log after
 // every kind of write this build makes: a status write, a lease, a bridged
 // call, a filing, a take, a pull, a claim and its release, a park, and a
 // relaunch's reset that carries the round on — which replaces the job's record
@@ -944,6 +945,7 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		"a note":            `"high"`,
 		"a note's read":     `"hook"`,
 		"a bridged call":    `{"span":"s-1"}`,
+		"a dropped call":    `{"span":"s-3"}`,
 		"the log":           `{"kept":"all"}`,
 		"the job's record":  `{"span":"s-2"}`,
 	}
@@ -970,6 +972,11 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		}
 		log["retention"] = json.RawMessage(seeded["the log"])
 		log["calls"].([]any)[0].(map[string]any)["trace"] = json.RawMessage(seeded["a bridged call"])
+		// A DROPPED CALL'S IDENTITY as a later build writes one: the log's
+		// count says one call was dropped, and its tally names it.
+		log["elided"] = 1
+		log["elided_calls"] = []any{map[string]any{"name": "read_page", "digest": "d1", "calls": 1,
+			"trace": json.RawMessage(seeded["a dropped call"])}}
 		return json.Marshal(log)
 	}); err != nil || !ok {
 		t.Fatalf("seed the newer build's keys in the log: %v %v", ok, err)
@@ -1011,6 +1018,10 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 				Name  string          `json:"name"`
 				Trace json.RawMessage `json:"trace"`
 			} `json:"calls"`
+			Dropped []struct {
+				Name  string          `json:"name"`
+				Trace json.RawMessage `json:"trace"`
+			} `json:"elided_calls"`
 		}
 		if err := json.Unmarshal(logged.Value, &log); err != nil {
 			t.Fatalf("%s: %v", step, err)
@@ -1028,6 +1039,9 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		got["the log"] = string(log.Retention)
 		if len(log.Calls) > 0 && log.Calls[0].Name == "read_page" {
 			got["a bridged call"] = string(log.Calls[0].Trace)
+		}
+		if len(log.Dropped) > 0 && log.Dropped[0].Name == "read_page" {
+			got["a dropped call"] = string(log.Dropped[0].Trace)
 		}
 		got["the job's record"] = string(row.Job.Trace)
 		for level, want := range seeded {

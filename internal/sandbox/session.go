@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -481,6 +482,59 @@ type SessionCapture struct {
 	// Extra is every key of the capture this build does not know, kept
 	// verbatim and written back by every write of the record (wirekeys.go).
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// ErrCaptureUnbounded is a capture stamp carrying a field past the bound the
+// row holds it to ([SessionCapture.Bounded]), refused by
+// [PendingStore.StampCapture] before anything is written.
+var ErrCaptureUnbounded = errors.New("sandbox: a capture stamp carries a field past its bound")
+
+// Bounded reports why c is past what a run's row carries of a capture, nil
+// where it is within it: each text a box describes its session by — the
+// harness, the release that wrote it, its session id — the paths the box
+// names, and why a capture did not land, each within the bound the executor
+// log holds the same field to (internal/executorkeep), and the open places
+// within [maxOpenPlaces].
+//
+// WHAT A BOX SAYS OF ITS SESSION IS THE BOX'S OWN DOING: a file its run's own
+// agent can write, read up to the size a box's file read takes. Nothing else
+// bounds it before the row, and the log's own check runs only after the stamp
+// has landed — on a row that, with a release of megabytes on it twice over
+// (the place and the kept capture), took no later write that adds a byte: no
+// bridged call, no owed end, no stop's ending, and so never its delete.
+// Refused here, the row is never asked to carry it; the reader that parses the
+// box's record (internal/sandbox/executor) reads such a release as none.
+func (c SessionCapture) Bounded() error {
+	for _, f := range []struct {
+		field, value string
+		max          int
+	}{
+		{"launch_id", c.Launch, executorkeep.TurnIDMaxBytes},
+		{"reason", c.Reason, executorkeep.UnkeptReasonMaxBytes},
+		{"harness", c.Harness, executorkeep.HarnessMaxBytes},
+		{"harness_version", c.HarnessVersion, executorkeep.HarnessVersionMaxBytes},
+		{"session_id", c.SessionID, executorkeep.SessionIDMaxBytes},
+		{"home", c.Home, executorkeep.PathMaxBytes},
+		{"workspace", c.Workspace, executorkeep.PathMaxBytes},
+	} {
+		if len(f.value) > f.max {
+			return fmt.Errorf("sandbox: its %s is %d bytes, past the %d it may be: %w", f.field,
+				len(f.value), f.max, ErrCaptureUnbounded)
+		}
+	}
+	if len(c.BridgeOpen) > maxOpenPlaces {
+		return fmt.Errorf("sandbox: it names %d open places, past the %d it may: %w", len(c.BridgeOpen),
+			maxOpenPlaces, ErrCaptureUnbounded)
+	}
+	return nil
+}
+
+// stampReason is why a capture came out as it did, as its stamp carries it:
+// redacted, and held to the bound the executor log holds the same words to
+// ([SessionCapture.Bounded]) — an error's text is the engine's and has no
+// bound of its own.
+func stampReason(why string) string {
+	return textcut.Within(redact.Secrets(why), executorkeep.UnkeptReasonMaxBytes)
 }
 
 // newerThan reports whether c's place is after o's.
@@ -1328,7 +1382,7 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 
 	last := calls.LastSeq()
 	stamp := SessionCapture{LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current),
-		Launch: run.LaunchID, State: CaptureRefused, Reason: redact.Secrets(why), Final: at.final,
+		Launch: run.LaunchID, State: CaptureRefused, Reason: stampReason(why), Final: at.final,
 		Interrupted: at.cutOff, BridgeSeq: last, BridgeOpen: openPlaces(calls, last),
 		NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC()}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
@@ -1346,7 +1400,7 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run PendingRun, stamp SessionCapture,
 	state CaptureState, why string) *SessionKept {
 
-	stamp.State, stamp.Reason = state, redact.Secrets(why)
+	stamp.State, stamp.Reason = state, stampReason(why)
 	c.stampSettled(ctx, by, run.TurnID, stamp)
 	switch state {
 	case CaptureLanded:
@@ -1410,7 +1464,7 @@ func (c *Coordinator) abandonPlace(ctx context.Context, by time.Time, run Pendin
 
 	refused := stamp
 	refused.State = CaptureRefused
-	refused.Reason = redact.Secrets(fmt.Sprintf("the take's time ran out before the store answered the "+
+	refused.Reason = stampReason(fmt.Sprintf("the take's time ran out before the store answered the "+
 		"reservation of its place on the run's row, so nothing was taken under it: %v", cause))
 	took, _, err := c.askStamp(ctx, by, run.TurnID, refused)
 	if took {
@@ -1682,6 +1736,7 @@ func (c *Coordinator) settleCapture(ctx context.Context, run PendingRun, last Se
 			"%s an object may be named in", objstore.RecordWithin)
 	} else {
 		last.State, last.Reason = c.recordCapture(ctx, run, last)
+		last.Reason = stampReason(last.Reason)
 	}
 	c.stampSettled(ctx, time.Time{}, run.TurnID, last)
 	return last
@@ -1829,10 +1884,18 @@ func turnEndOf(run PendingRun, ending executorkeep.Ending) TurnEnd {
 // one a drain is cancelling, and an end that frame could not owe was recorded
 // at once instead — before the turn's captures settled, and without what they
 // came to.
+//
+// FITTED TO THE EXECUTOR LOG'S BOUNDS BEFORE IT RIDES THE ROW
+// ([executorkeep.Ending.Fit]): its prose is a model's and a guard's — a
+// reviewer's completed work, a failure's text — which nothing bounds before
+// here, and the row's budget measures an owed end as this writes it, every
+// field at its bound escaped at its worst (rowbytes.go,
+// TestTheWholeRowFitsItsBudget). The log fits it the same way when it records
+// it, so what the row owes is what the log will hold.
 func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executorkeep.Ending) (bool, error) {
-	raw, err := json.Marshal(ending)
+	raw, err := owedEnd(turnID, ending)
 	if err != nil {
-		return false, fmt.Errorf("sandbox: encoding the end of turn %s: %w", turnID, err)
+		return false, err
 	}
 	ctx, cancel := detached(ctx)
 	defer cancel()
@@ -1843,13 +1906,32 @@ func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executor
 	return len(owing.OwedEnd) > 0 || owing.EndRecorded, nil
 }
 
+// owedEnd is ending as the run's row owes it ([PendingRun.OwedEnd]): fitted to
+// the executor log's bounds, and refused where even fitted it is outside them
+// ([executorkeep.Ending.Within]) — an engine word past its bound, which the
+// log refuses rather than cuts, an outcome it does not know, an unkept capture
+// placed nowhere — so the row never carries an end the log cannot record, nor
+// one past what its budget measured.
+func owedEnd(turnID string, ending executorkeep.Ending) (json.RawMessage, error) {
+	fitted := ending.Fit()
+	if !fitted.Within() {
+		return nil, fmt.Errorf("sandbox: the end of turn %s is not one the executor log records: %w", turnID,
+			fitted.Validate())
+	}
+	raw, err := json.Marshal(fitted)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: encoding the end of turn %s: %w", turnID, err)
+	}
+	return raw, nil
+}
+
 // oweEnd is [Coordinator.OweEnd] for an ending's own step: the row as it stands
 // after the write, owing the end it decided or one decided before it, or
 // having recorded one already.
 func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executorkeep.Ending) (PendingRun, error) {
-	raw, err := json.Marshal(ending)
+	raw, err := owedEnd(run.TurnID, ending)
 	if err != nil {
-		return PendingRun{}, fmt.Errorf("sandbox: encoding the end of turn %s: %w", run.TurnID, err)
+		return PendingRun{}, err
 	}
 	owing, _, err := c.pending.OweEnd(ctx, run.TurnID, raw)
 	if err != nil {

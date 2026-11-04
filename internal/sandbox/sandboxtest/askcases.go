@@ -264,8 +264,8 @@ func testAnInvalidAskIsAnError(t *testing.T, s sandbox.PendingStore) {
 }
 
 // AN ANSWER CUTS THE ROUND WHERE THE ASKING JOB STOPPED. The job that
-// continues one which asked is opened after every call the row holds then, and
-// the row records that place ([sandbox.BridgeLog.AnsweredThrough]): the
+// continues one which asked is opened after every call the log holds then, and
+// the log records that place ([sandbox.BridgeLog.AnsweredThrough]): the
 // collection reports no submission from before it, made without the answer. A
 // job carried on after a loss keeps the cut, which the answer made and the loss
 // did not move; a new round has none.

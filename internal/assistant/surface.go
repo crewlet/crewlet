@@ -141,6 +141,10 @@ func (s *surface) Detached(name string) bool {
 // steps in the order they run, so nothing is fixed here.
 func (s *surface) Admit(string, map[string]any) toolloop.Admitted { return s.Execute }
 
+// DigestOf is no identity: the turn keeps no call log a later segment is
+// seeded from, so a call's record has none to carry.
+func (s *surface) DigestOf(string, map[string]any) string { return "" }
+
 // Execute carries out one call.
 func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
 	tool, offered := s.byName[call.Name]

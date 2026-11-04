@@ -405,6 +405,31 @@ describe("the round ledger", () => {
     expect(toolCalls([{ name: "a", success: true, result: "ok" }])[0]?.failed).toBe(false);
   });
 
+  test("a sealed call is read as the one it is, and a held call is no failure", () => {
+    // An executor's call held for a person's approval is recorded failed —
+    // nothing it asked for happened — and is the run's question, never a
+    // tool that broke; the call they approved follows it. Both carry `{}` as
+    // their arguments only because no record keeps them in the clear, and
+    // say which they are. Mutation: read `held` as a failure, or drop either
+    // mark, and the card draws the question as a broken call and both as
+    // calls made with nothing.
+    const [held, approved, plain] = toolCalls([
+      {
+        name: "gh_delete_repo",
+        arguments: "{}",
+        result: "held",
+        success: false,
+        error: "held",
+        held: true,
+      },
+      { name: "gh_delete_repo", arguments: "{}", result: "", success: true, approved: true },
+      { name: "read_file", arguments: "{}", result: "", success: true },
+    ]);
+    expect(held).toMatchObject({ held: true, failed: false });
+    expect(approved).toMatchObject({ approved: true, failed: false });
+    expect([plain?.held, plain?.approved]).toEqual([undefined, undefined]);
+  });
+
   test("a call the engine timed and attributed is read as it was written", () => {
     // The row the tool loop and the surface now write: when, how long, and
     // who answered.
@@ -834,6 +859,43 @@ describe("what a launch's record left out", () => {
     expect(deliveredLine({ deliveredRefs: [], deliveredRefsElided: 7 })).toBe(
       "+7 more its report names",
     );
+  });
+});
+
+// WHAT A COLLECTED RUN'S RECORD DID NOT KEEP IS READ OFF ITS PHASE RECORD. The
+// executor's record lists the calls its run's record kept, a long run's head
+// and tail, and says how many more the run made and by tool; a reader that
+// took the list alone would read the kept calls as everything the run did.
+//
+// Mutation: leave the count or the tools off the parsed record, and the card
+// draws a long run as the calls it happened to keep.
+describe("what a collected run's record did not keep", () => {
+  test("is read off the record, the entries that are not counts left out", () => {
+    const record = fromPhaseEvent(
+      phaseEvent({
+        sandbox_id: "box-1",
+        calls_elided: 63,
+        elided_calls: [
+          { name: "comment_on_work_item", calls: 1 },
+          { name: "read_file", calls: 59, failed: 2 },
+          { calls: 3 },
+          { name: "noise", calls: 0 },
+          "not an entry",
+        ],
+      }),
+    )!;
+    expect(record.callsElided).toBe(63);
+    expect(record.elidedCalls).toEqual([
+      { name: "comment_on_work_item", calls: 1, failed: 0 },
+      { name: "read_file", calls: 59, failed: 2 },
+      { calls: 3, failed: 0 },
+    ]);
+  });
+
+  test("a record that kept every call says none", () => {
+    const record = fromPhaseEvent(phaseEvent({ sandbox_id: "box-1" }))!;
+    expect(record.callsElided).toBe(0);
+    expect(record.elidedCalls).toEqual([]);
   });
 });
 

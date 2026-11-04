@@ -382,6 +382,44 @@ func TestAnEarlierRoundsDeliveryStillAnswersTheTurn(t *testing.T) {
 	}
 }
 
+// A REPLY FROM THE DROPPED MIDDLE OF A LONG RUN STILL ANSWERS THE TURN. A run's
+// record keeps its calls' head and tail and only the identities of its middle
+// (internal/sandbox's MaxBridgeCalls); a comment posted there reached the
+// person waiting as surely as one the record kept, so every check reads the
+// identities as calls by name and outcome — the round's own and a closed
+// round's — and none of them sends the round back to post it again.
+//
+// Mutation: read the kept calls alone, in the round or in a closed one, and
+// the reply is refuted and the reviewer's done overturned.
+func TestAReplyFromTheDroppedMiddleOfALongRunStillAnswersTheTurn(t *testing.T) {
+	t.Parallel()
+	s := trackerSurface()
+	asked := turn.ToolReply("work")
+	dropped := []ledger.Elided{{Name: "get_work_item", Digest: "a", Calls: 80},
+		{Name: "comment_on_work_item", Digest: "b", Calls: 2, Failed: 1}}
+	round := turn.Work{Outcome: turn.OutcomeDelivered, Summary: "answered on the item",
+		Deliveries: []string{"comment_on_work_item"}, Calls: []ledger.Call{{Name: "get_work_item"}},
+		Elided: dropped}
+	if v := turn.Check(round, nil, asked, s); v.Correction != "" || v.Skip {
+		t.Errorf("Check = %+v, want the round passed: its record's middle holds the reply", v)
+	}
+	if override, correction := turn.OverrideDone(round, nil, asked, s); override {
+		t.Errorf("the reviewer's done was overturned on a reply from the middle: %q", correction)
+	}
+	closed := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{{Name: "get_work_item"}}, Elided: dropped}}
+	reread := turn.Work{Outcome: turn.OutcomeDelivered, Summary: "re-read the item",
+		Deliveries: []string{"comment_on_work_item"}, Calls: []ledger.Call{{Name: "get_work_item"}}}
+	if v := turn.Check(reread, closed, asked, s); v.Correction != "" {
+		t.Errorf("Check = %+v, want the reply a closed round's middle holds to answer the turn", v)
+	}
+	// AND ONLY A SUCCESS: a middle whose every comment failed answered nobody.
+	failed := round
+	failed.Elided = []ledger.Elided{{Name: "comment_on_work_item", Digest: "b", Calls: 2, Failed: 2}}
+	if v := turn.Check(failed, nil, asked, s); v.Correction == "" {
+		t.Error("a middle whose every comment failed passed the check")
+	}
+}
+
 // "NOTHING EXTERNAL HAPPENED" IS A FACT ABOUT THE TURN. A round that reports
 // no_action after an earlier one posted would otherwise end the turn as a skip,
 // recorded as one that touched nothing.

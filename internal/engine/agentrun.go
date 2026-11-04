@@ -419,7 +419,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	var (
 		opened   bool
 		recorded string
-		// bridgeFrom is the last call the row held as the job's session
+		// bridgeFrom is the last call the log held as the job's session
 		// opened, which the job's calls are numbered after.
 		bridgeFrom int
 	)
@@ -456,7 +456,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// session where the launch runs it in the asking run's box — see
 		// [runner.Asked] — or a ROUND CARRIED ON after its job was lost with
 		// its host, in a session of its own ([runner.Lost]). Either keeps the
-		// round's calls on the row.
+		// round's calls in the log.
 		Continue: sandboxContinuation(req.Continue),
 		// AND THE SESSION IT CONTINUES in whatever box the launch gets — the
 		// turn's kept capture, or the session its conversation's last turn
@@ -663,7 +663,7 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 // run taken over while it works ([Engine.reopenAgentRun]), whose box already
 // holds the endpoint and is never handed the one minted here.
 //
-// THE SESSION NUMBERS ITS CALLS AFTER THE ONES THE ROW HOLDS
+// THE SESSION NUMBERS ITS CALLS AFTER THE ONES THE LOG HOLDS
 // ([sandbox.OpenedJob.LastSeq]): a recovery's after its own job's, and a job
 // continuing one that asked a person after the asking job's, so the round's
 // calls keep the one order its collection reads them in.

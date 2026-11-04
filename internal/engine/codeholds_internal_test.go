@@ -363,3 +363,20 @@ func TestATurnHoldsWhatItsRowMay(t *testing.T) {
 		t.Fatalf("a turn may hold %d keys and its row carry %d", turnctx.MaxHolds, sandbox.MaxCodeHolds)
 	}
 }
+
+// A RUN'S CHANGE TITLE IS BOUND AS THE CODE HOST BOUNDS IT. An executor's ask to
+// open a change rides its run's row with its title, which the sandbox holds to
+// a bound of its own because it imports nothing of the code host — so the two
+// must be one figure: a sandbox bound under the code host's refuses a title
+// the code host would open, and one over it lets the row carry more than its
+// budget counts.
+//
+// Mutation: set the sandbox's bound to anything but the code host's, and this
+// goes red.
+func TestARunsChangeTitleIsBoundAsTheCodeHostBoundsIt(t *testing.T) {
+	t.Parallel()
+	if sandbox.MaxChangeTitleBytes != code.MaxChangeTitleBytes {
+		t.Fatalf("a run's row holds a change title to %d bytes and the code host to %d",
+			sandbox.MaxChangeTitleBytes, code.MaxChangeTitleBytes)
+	}
+}
