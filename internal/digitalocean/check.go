@@ -7,11 +7,18 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // tokenPattern is a personal access token: dop_v1_ and 64 hexadecimal digits.
 // DigitalOcean's OAuth access and refresh tokens begin doo_v1_ and dor_v1_.
-var tokenPattern = regexp.MustCompile(`^dop_v1_[0-9a-f]{64}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary and pays every package's init (cmd/crewlet's hookinit_test.go),
+// and a bounded repeat compiles to a program holding every count.
+// It was about 21 KB, this package's whole init.
+var tokenPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^dop_v1_[0-9a-f]{64}$`)
+})
 
 // CheckInput is one pasted token and what it must prove for its seat.
 type CheckInput struct {
@@ -105,7 +112,7 @@ func Check(ctx context.Context, c *Client, in CheckInput) (Checked, error) {
 // formatRefusal is why value is not a personal access token, or nil.
 func formatRefusal(value string) *Refusal {
 	switch {
-	case tokenPattern.MatchString(value):
+	case tokenPattern().MatchString(value):
 		return nil
 	case strings.HasPrefix(value, "doo_v1_"), strings.HasPrefix(value, "dor_v1_"):
 		return &Refusal{Detail: "This is an OAuth token, which expires within hours or days.",
