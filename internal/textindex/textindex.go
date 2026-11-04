@@ -415,7 +415,11 @@ func (p Profile) Score(idf float64, posting Posting, c Corpus) float64 {
 // alternative (the document's opening) shows an agent the page's preamble
 // rather than the sentence that made it a hit, and a snippet that does not
 // contain the search term reads as a wrong result even when the ranking is
-// right.
+// right. A WHOLE TERM, as [Find] finds one through the one tokenizer, which is
+// how a search decided the hit: centred on the first place the term occurred
+// as a piece of a longer word, a snippet showed "redeployment" for a hit on
+// "deploy" — and not the sentence holding the word, where that sentence was
+// further on than the window reached.
 //
 // Cut on a RUNE boundary and, where one is near, on a word boundary. Bytes
 // rather than runes for the limit itself: this is a budget against a prompt,
@@ -429,7 +433,7 @@ func Snippet(body string, terms []string, limit int) string {
 		return body
 	}
 	start := 0
-	if at := firstTermIndex(body, terms); at > 0 {
+	if at, _ := Find(body, terms); at > 0 {
 		// A third of the window before the match, so the term lands with
 		// its own lead-in rather than at the very start of the snippet.
 		start = at - limit/3
@@ -448,18 +452,6 @@ func Snippet(body string, terms []string, limit int) string {
 		end--
 	}
 	return trimToWord(body[start:end], start > 0, true)
-}
-
-// firstTermIndex finds where the earliest query term appears, or -1.
-func firstTermIndex(body string, terms []string) int {
-	lower := strings.ToLower(body)
-	best := -1
-	for _, term := range terms {
-		if at := strings.Index(lower, term); at >= 0 && (best < 0 || at < best) {
-			best = at
-		}
-	}
-	return best
 }
 
 // trimToWord drops a partial word at each cut end and marks the elision.
