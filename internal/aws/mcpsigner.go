@@ -22,7 +22,9 @@ import (
 const mcpService = "aws-mcp"
 
 // mcpHost is an AWS MCP Server endpoint's host; its Region is the signing one.
-var mcpHost = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^aws-mcp\.([a-z0-9-]+)\.api\.aws$`) })
+var mcpHost = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^aws-mcp\.([a-z0-9-]+)\.api\.aws$`)
+})
 
 // mcpEndpointRegion reports a Region AWS runs its MCP Server in, as read live; from any
 // other home Region the server at us-east-1 is used.

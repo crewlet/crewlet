@@ -34,7 +34,9 @@ const (
 
 // cnPattern keeps a CN inside what STS accepts as a source identity behind
 // Roles Anywhere's "CN=" prefix (61 characters) and inside the tag pattern.
-var cnPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^crewlet-[a-z0-9-]{1,53}$`) })
+var cnPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^crewlet-[a-z0-9-]{1,53}$`)
+})
 
 // LeafKind picks the leaf's key type, and so its signing algorithm.
 type LeafKind int

@@ -180,7 +180,9 @@ func awsMCPHost(l Launch) bool {
 	return l.Transport == TransportHTTP && awsMCP().MatchString(HostOf(l.URL))
 }
 
-var awsMCP = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^aws-mcp\.[a-z0-9-]+\.api\.aws$`) })
+var awsMCP = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^aws-mcp\.[a-z0-9-]+\.api\.aws$`)
+})
 
 // either recognises what a or b does.
 func either(a, b func(Launch) bool) func(Launch) bool {

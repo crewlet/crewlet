@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/whsec"
@@ -38,6 +39,11 @@ const (
 	// tokens with, PKCS#8 in PEM, which spans several lines. A vendor is
 	// shown only its public half ([ES256JWKS]). See es256.go.
 	ShapeES256Key Shape = "es256_key"
+	// ShapeCertificateAuthority is a certificate authority the engine signs
+	// short-lived client certificates with: a P-256 key, then its
+	// self-signed certificate, both PEM ([GenerateCertificateAuthority]).
+	// Only ever minted, never pasted.
+	ShapeCertificateAuthority Shape = "certificate_authority"
 
 	// ShapeUUID is a vendor identifier or secret written as a UUID, such as
 	// a Scaleway Organization ID or secret key: 32 hexadecimal digits in
@@ -50,15 +56,16 @@ const (
 )
 
 // The patterns the identifier shapes hold a value to.
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go);
+// their bounded repeats compile to programs holding every count, about 25 KB.
 var (
-	uuidShape              = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	scalewayAccessKeyShape = regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
-
-	// ShapeCertificateAuthority is a certificate authority the engine signs
-	// short-lived client certificates with: a P-256 key, then its
-	// self-signed certificate, both PEM ([GenerateCertificateAuthority]).
-	// Only ever minted, never pasted.
-	ShapeCertificateAuthority Shape = "certificate_authority"
+	uuidShape = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	})
+	scalewayAccessKeyShape = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
+	})
 )
 
 // Multiline reports a shape whose values span lines, which its own rule
@@ -86,13 +93,13 @@ func (s Shape) Problem(noun, value string) string {
 		}
 		return ""
 	case ShapeUUID:
-		if uuidShape.MatchString(value) {
+		if uuidShape().MatchString(value) {
 			return ""
 		}
 		return fmt.Sprintf("This %s is not a UUID: it is 32 hexadecimal digits in groups of 8, 4, 4, 4 "+
 			"and 12, joined by hyphens. Paste only the value, from the page that shows it.", noun)
 	case ShapeScalewayAccessKey:
-		if scalewayAccessKeyShape.MatchString(value) {
+		if scalewayAccessKeyShape().MatchString(value) {
 			return ""
 		}
 		return fmt.Sprintf("This %s is not a Scaleway access key: it is SCW followed by 17 capital "+

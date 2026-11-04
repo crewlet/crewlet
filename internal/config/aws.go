@@ -140,8 +140,12 @@ func (c AWSConnection) String() string {
 var (
 	// awsSlug keeps every derived name inside IAM's 64-character role name,
 	// and an agent's certificate name inside Roles Anywhere's 61 characters.
-	awsSlug   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$`) })
-	awsRegion = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z]{2}(-gov)?-[a-z]+-\d$`) })
+	awsSlug = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$`)
+	})
+	awsRegion = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z]{2}(-gov)?-[a-z]+-\d$`)
+	})
 
 	awsAnchor = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^arn:(aws[a-z-]*):rolesanywhere:([a-z0-9-]+):(\d{12}):trust-anchor/[0-9a-f-]{36}$`)

@@ -39,10 +39,10 @@ func Probe(httpClient *http.Client) setup.Probe {
 		switch {
 		case secret == "":
 			return setup.Verdict{}, setup.Unusable("Enter the provisioner secret key to test it.")
-		case !accessKeyPattern.MatchString(access):
+		case !accessKeyPattern().MatchString(access):
 			return setup.Verdict{}, setup.Unusable("Enter the provisioner key's access key, SCW followed " +
 				"by 17 capital letters or digits: the secret key is checked as that key.")
-		case !uuidPattern.MatchString(org):
+		case !uuidPattern().MatchString(org):
 			return setup.Verdict{}, setup.Unusable("Enter the Organization ID, a UUID from the " +
 				"Organization settings: the key is checked against it.")
 		}

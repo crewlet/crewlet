@@ -32,7 +32,9 @@ const (
 
 // caName keeps a certificate authority's name inside what a vendor's tag
 // and condition patterns accept.
-var caName = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^crewlet-[a-z0-9-]{1,53}$`) })
+var caName = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^crewlet-[a-z0-9-]{1,53}$`)
+})
 
 // CertificateAuthorityName names a new certificate authority; the suffix
 // tells two of them apart while a trust anchor holds both.
