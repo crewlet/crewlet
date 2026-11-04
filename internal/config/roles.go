@@ -447,13 +447,14 @@ type RoleIntegrations struct {
 	Cloudflare   *RoleCloudflare   `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"This seat's own Cloudflare account API token: whether it is on and its level."`
 	Expo         *RoleExpo         `yaml:"expo,omitempty" json:"expo,omitempty" desc:"This seat's own Expo robot user: whether it is on and its level."`
 	DigitalOcean *RoleDigitalOcean `yaml:"digitalocean,omitempty" json:"digitalocean,omitempty" desc:"This seat's own DigitalOcean personal access token: whether it is on and its level."`
+	Scaleway     *RoleScaleway     `yaml:"scaleway,omitempty" json:"scaleway,omitempty" desc:"This seat's own Scaleway IAM application: whether it is on, its level and its projects."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
 	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
 		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil &&
-		r.Cloudflare == nil && r.Expo == nil && r.DigitalOcean == nil
+		r.Cloudflare == nil && r.Expo == nil && r.DigitalOcean == nil && r.Scaleway == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.

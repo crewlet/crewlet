@@ -1815,6 +1815,12 @@ const (
 	// Merged again with it, main's +6,031 bytes came to 6,032 bytes on the
 	// merged tree, taking it from 5486.9 KiB (5,618,606 bytes) to 5492.8 KiB
 	// (5,624,638 bytes). It moved by main's own 6 KiB, from 5487 KiB: 5493 KiB.
+	// The Scaleway integration (its catalogue entry, story and Agents tab
+	// words, its tool named server first as DigitalOcean's is, and the org
+	// builder's Scaleway facts), merged onto that tree, took it from 5492.8 KiB
+	// (5,624,638 bytes) to 5494.6 KiB (5,626,424 bytes, +1,786 bytes). The
+	// initial load did not grow. It moved up to the measured size's next KiB:
+	// 5495 KiB, 456 bytes clear.
 	// A bridged call the run's log keeps in part drawn as such on a run's page
 	// (its "partly kept" tag, and over its arguments and its result how much
 	// the call sent and answered), a long log's dropped middle said by tool in
@@ -1824,13 +1830,13 @@ const (
 	// a collected executor's record did not keep counted in the turn's Tool
 	// calls fact, said on the Tools tab and counted by a call's span and the
 	// executors board's rail, with their failures in its failure tag, took it
-	// from 5492.8 KiB (5,624,638 bytes) to 5495.8 KiB (5,627,648 bytes; +2.9
+	// from 5494.6 KiB (5,626,424 bytes) to 5497.5 KiB (5,629,434 bytes; +2.9
 	// KiB, 3010 bytes): the Executors chunk +804 bytes, the shared chunk the
 	// wording landed in +794, the live chunk +518, the settled chunk +496 and
 	// the phases chunk +398; every other chunk kept its size. The initial load
 	// did not grow: its files are the same bytes but for the chunk names they
-	// list. 5496 KiB.
-	treeBudget = 5<<20 + 376<<10
+	// list. 5498 KiB.
+	treeBudget = 5<<20 + 378<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

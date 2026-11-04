@@ -974,6 +974,8 @@ func LaneName(lane Lane) string {
 		return "Expo"
 	case LaneDigitalOcean:
 		return "DigitalOcean"
+	case LaneScaleway:
+		return "Scaleway"
 	default:
 		return string(lane)
 	}
