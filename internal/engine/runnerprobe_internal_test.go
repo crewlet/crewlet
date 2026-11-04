@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -54,34 +55,35 @@ func TestEveryCellIsAnsweredAndOnlyADeclaredOneIsProbed(t *testing.T) {
 // THE HEARTBEAT CARRIES THE LATEST PROBE, and an apply asks for a new one: a
 // revision that declares a cell is answered for at once, not five minutes
 // later.
+//
+// IN A SYNCTEST BUBBLE: synctest.Wait returns once the probe loop is blocked
+// again, which it is only after storing its answer. A signal sent from inside
+// the probe came before that store, and the beat was read as nil (CI run
+// 41766528494).
+//
+// Mutation: drop the store, or the kick's probe, and the beat carries no
+// answer or the boot probe's.
 func TestTheHeartbeatCarriesTheLatestProbeAndAnApplyProbesAgain(t *testing.T) {
 	t.Parallel()
-	e := &Engine{}
-	probed := make(chan struct{}, 8)
-	answers := []coord.RunnerState{coord.RunnerUnconfigured, coord.RunnerReady}
-	calls := 0
-	e.runners.probe = func(context.Context) *coord.RunnerStatus {
-		state := answers[min(calls, len(answers)-1)]
-		calls++
-		defer func() { probed <- struct{}{} }()
-		return &coord.RunnerStatus{Direct: coord.RunnerCell{State: state}}
-	}
-	e.startRunnerProbe(t.Context())
-	t.Cleanup(e.stopRunnerProbe)
-	<-probed
-	if got := beatOf(t, e).Runners; got == nil || got.Direct.State != coord.RunnerUnconfigured {
-		t.Fatalf("the beat carries %+v, want the boot probe's answer", got)
-	}
-	e.kickRunnerProbe()
-	<-probed
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if got := beatOf(t, e).Runners; got != nil && got.Direct.State == coord.RunnerReady {
-			return
+	synctest.Test(t, func(t *testing.T) {
+		e := &Engine{}
+		answers := []coord.RunnerState{coord.RunnerUnconfigured, coord.RunnerReady}
+		calls := 0
+		e.runners.probe = func(context.Context) *coord.RunnerStatus {
+			state := answers[min(calls, len(answers)-1)]
+			calls++
+			return &coord.RunnerStatus{Direct: coord.RunnerCell{State: state}}
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("an apply's probe never reached the heartbeat")
+		e.startRunnerProbe(t.Context())
+		t.Cleanup(e.stopRunnerProbe)
+		synctest.Wait()
+		if got := beatOf(t, e).Runners; got == nil || got.Direct.State != coord.RunnerUnconfigured {
+			t.Fatalf("the beat carries %+v, want the boot probe's answer", got)
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		e.kickRunnerProbe()
+		synctest.Wait()
+		if got := beatOf(t, e).Runners; got == nil || got.Direct.State != coord.RunnerReady {
+			t.Fatalf("the beat carries %+v after an apply's probe, want its answer", got)
+		}
+	})
 }
