@@ -713,7 +713,7 @@ test-solo: require-node git ## the packages that need a runner to themselves (ci
 #
 # The same flags as the gates bar -race (GOTESTRUN), and the same prebuild for
 # the solo half, compiled without it.
-test-norace: require-node git ## the full suite without -race (faster; not a gate)
+test-norace: require-node git ## the full suite without -race, or TEST_SHARD of each half (faster; not a gate)
 	@$(GIT_ENV) status=0; \
 	echo "==> parallel partition"; \
 	$(GO) test $(GOTESTRUN) $(PARALLEL_PKGS) || status=1; \

@@ -605,8 +605,9 @@ jobs:
 
   # THE CHECK `main`'s RULESET REQUIRES, by its exact name. A matrix leg's name
   # carries its shard, so a rule naming a leg would stop matching the day the
-  # count changed. `!cancelled()` rather than the default, under which a failed
-  # shard would SKIP this job, and a skipped required check counts as passed.
+  # count changed. `always()`, because a skipped required check counts as
+  # passed: under the default a failed shard skips this job, and under
+  # `!cancelled()` a cancelled run does. This one runs and fails instead.
   #
   # It passes when the plan and every shard passed AND what the shards ran,
   # read from their timings, is the plan's whole half with each package once.
@@ -614,7 +615,7 @@ jobs:
   race:
     name: test (race)
     needs: [plan, test]
-    if: ${{ !cancelled() }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     env:
       HALF: parallel
