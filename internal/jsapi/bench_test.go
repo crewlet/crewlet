@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // BenchmarkASubjectListing measures what a stream's LEADER takes to answer a
@@ -88,6 +89,7 @@ func subjectStream(b *testing.B, n int) *jsapi.Leader {
 	srv, err := server.NewServer(&server.Options{
 		ServerName: "jsapi-bench", JetStream: true, DontListen: true,
 		StoreDir: b.TempDir(), NoLog: true, NoSigs: true,
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		b.Fatal(err)

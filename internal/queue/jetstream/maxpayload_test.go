@@ -131,7 +131,10 @@ func TestALimitTheSigningInAccountStatesIsTheOneRead(t *testing.T) {
 			body := fmt.Sprintf(`host: 127.0.0.1
 port: -1
 max_payload: %s
-jetstream { store_dir: %q }
+jetstream {
+  store_dir: %q
+  max_file_store: %d
+}
 accounts {
   ENGINE {
     jetstream: enabled
@@ -139,8 +142,8 @@ accounts {
     limits { max_payload: %s }
   }
 }
-`, natsSize(queue.MaxPayloadBytes), filepath.Join(dir, "store"), password,
-				natsSize(tc.account))
+`, natsSize(queue.MaxPayloadBytes), filepath.Join(dir, "store"), brokertest.StoreMaxBytes,
+				password, natsSize(tc.account))
 			if err := os.WriteFile(conf, []byte(body), 0o600); err != nil {
 				t.Fatalf("write the server's configuration: %v", err)
 			}

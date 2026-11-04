@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -44,12 +45,13 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 func natsBroker(t *testing.T, domain string) (*server.Server, *nats.Conn) {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{
-		ServerName:      "backup-test",
-		JetStream:       true,
-		JetStreamDomain: domain,
-		Port:            -1,
-		DontListen:      true,
-		StoreDir:        t.TempDir(),
+		ServerName:        "backup-test",
+		JetStream:         true,
+		JetStreamDomain:   domain,
+		Port:              -1,
+		DontListen:        true,
+		StoreDir:          t.TempDir(),
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
 		// THE TRANSPORT'S CEILING, as a real node's broker sets it, so a
 		// record at the ceiling is one a case can append.
 		MaxPayload: queue.MaxPayloadBytes,

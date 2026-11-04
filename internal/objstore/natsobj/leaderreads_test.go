@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // accountBucket is the bucket on a broker with no JetStream domain, through
@@ -35,10 +36,11 @@ func accountBucketAt(t *testing.T, cfg natsobj.Config,
 
 	t.Helper()
 	srv, err := server.NewServer(&server.Options{
-		ServerName: "natsobj-leader-test",
-		JetStream:  true,
-		DontListen: true,
-		StoreDir:   t.TempDir(),
+		ServerName:        "natsobj-leader-test",
+		JetStream:         true,
+		DontListen:        true,
+		StoreDir:          t.TempDir(),
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("configure the broker: %v", err)
