@@ -20,6 +20,12 @@ import "github.com/crewlet/crewlet/internal/redact"
 // key as its surface names it, the harness's name and its release, which the
 // sandbox holds to digits and dots, instants, ordinals and the object's name.
 //
+// OVER WORDS THE WRITE ALREADY REDACTED, and redacted again here: a record
+// keeps somebody's words redacted before they are cut to its bounds
+// (executorkeep.Excerpt), since a credential the bound runs across, cut first,
+// leaves a head no rule recognises; a reader redacts them again, which a rule
+// added since the record was written reaches.
+//
 // A COPY: the ending is the row's own pointer, so it is copied before its
 // prose is replaced, and the row this is called on keeps what it was read
 // with.
