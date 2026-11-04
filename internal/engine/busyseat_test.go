@@ -139,11 +139,12 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 		},
 		NoteDeferred: func(string) {},
 	}
+	mail := watchAcks(q, fixtureInbox("swe"))
 	if err := q.Subscribe(ctx, fixtureInbox("swe"), fixtureInboxGroup("swe"),
-		func(ctx context.Context, ev *events.Event) queue.Result {
+		mail.handler(fixtureInbox("swe"), func(ctx context.Context, ev *events.Event) queue.Result {
 			dispatched.Add(1)
 			return d.Dispatch(ctx, "swe", []*events.Event{ev})
-		}); err != nil {
+		})); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
@@ -175,7 +176,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 			t.Fatalf("Publish: %v", err)
 		}
 	}
-	settle()
+	heldWith(t, q, fixtureInbox("swe"), fixtureInboxGroup("swe"), 2)
 	if n := dispatched.Load(); n != 0 {
 		t.Fatalf("the busy seat was handed %d deliveries while its job ran: its inbox is not held", n)
 	}
@@ -204,7 +205,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 	eventually(t, "the mail that waited to be worked", func() bool {
 		return len(ordinary.ran()) == 2
 	})
-	settle()
+	mail.settled(t, fixtureInbox("swe"))
 	ran := ordinary.ran()
 	if len(ran) != 2 || !strings.Contains(strings.Join(ran, "\n"), "is it done yet?") ||
 		!strings.Contains(strings.Join(ran, "\n"), "also, the docs") {
