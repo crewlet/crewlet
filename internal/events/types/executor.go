@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/kept"
 )
 
 // The executor in its box. Every agent seat's executor is its harness's own
@@ -770,12 +771,23 @@ const (
 	// question before it delivers, so one arriving here names a question
 	// that is not the one the answer was checked against.
 	AnswerUnoffered AnswerOutcome = "unoffered"
+
+	// AnswerTooLarge is a chat reply to the question too large for the
+	// run's record to carry as its answer ([ExecutorAnswered.AnswerBytes]
+	// past [ExecutorAnswered.AnswerMaxBytes]): not recorded, and gone on to
+	// its seat as the ordinary message it is, the question still waiting.
+	// THIS RECORD IS HOW ITS AUTHOR LEARNS IT, and the only way: the
+	// dashboard draws it on the turn's page and in the activity feed, and
+	// nothing is posted in the conversation they replied in — so a person
+	// who reads only that takes the run to have their reply, and the next
+	// thing they say there may be taken for the answer.
+	AnswerTooLarge AnswerOutcome = "too_large"
 )
 
-// Valid reports whether o is one of the five outcomes.
+// Valid reports whether o is one of the six outcomes.
 func (o AnswerOutcome) Valid() bool {
 	switch o {
-	case AnswerResumed, AnswerNotAwaiting, AnswerGone, AnswerDeclined, AnswerUnoffered:
+	case AnswerResumed, AnswerNotAwaiting, AnswerGone, AnswerDeclined, AnswerUnoffered, AnswerTooLarge:
 		return true
 	}
 	return false
@@ -834,9 +846,16 @@ type ExecutorAnswered struct {
 
 	// Choice is the option the person chose, by id, and Answer their own
 	// words, redacted; either may be empty, never both on an answer by
-	// turn.
+	// turn. Empty on a reply [AnswerTooLarge], whose words are the very thing
+	// no record of the run could carry.
 	Choice string `json:"choice,omitempty"`
 	Answer string `json:"answer,omitempty"`
+
+	// AnswerBytes is what a reply [AnswerTooLarge] weighs as the run's record
+	// would hold it, and AnswerMaxBytes what an answer may weigh there: the
+	// two figures the record gives its reader. Absent on every other outcome.
+	AnswerBytes    int `json:"answer_bytes,omitempty"`
+	AnswerMaxBytes int `json:"answer_max_bytes,omitempty"`
 }
 
 // EventType is the "executor_answered" wire type.
@@ -862,6 +881,10 @@ func (e ExecutorAnswered) SummaryFor(actor string) string {
 		return lead(actor, "was answered, but its executor could not carry on with the answer")
 	case AnswerUnoffered:
 		return lead(actor, "was answered with a choice its executor's question does not offer")
+	case AnswerTooLarge:
+		return lead(actor, fmt.Sprintf("was answered with a reply of %s, past the %s its executor's "+
+			"record can carry as an answer; the question is still waiting for a shorter one",
+			kept.Size(e.AnswerBytes), kept.Size(e.AnswerMaxBytes)))
 	}
 	return lead(actor, "was answered")
 }

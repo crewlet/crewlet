@@ -689,6 +689,36 @@ func TestReviewJudgesAgainstTheToolLogVerbatim(t *testing.T) {
 	}
 }
 
+// A REVIEWER IS TOLD WHAT THE RUN'S RECORD DROPPED. A long run's record keeps its
+// middle only as identities (internal/sandbox's MaxBridgeCalls and
+// bridge_elided_calls), so the calls a reviewer reads verbatim are not the
+// whole run: the log ends with the line that says how many calls it does not
+// show and, by tool, what they were and how many failed.
+//
+// Mutation: hand the reviewer the kept calls alone (reviewLog without its
+// ledger.FormatElided line), and it judges an elision as the run.
+func TestAReviewerIsToldWhatTheRunsRecordDropped(t *testing.T) {
+	t.Parallel()
+	r, prov, _ := fixture(t, &scriptedProvider{
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+	})
+	w := turn.Work{
+		Outcome: turn.OutcomeDelivered, Summary: "post it", Text: "posted",
+		Calls:  []ledger.Call{{Name: "slack_post", Args: map[string]any{"text": "the weekly summary"}}},
+		Elided: []ledger.Elided{{Name: "read_file", Digest: "ab", Calls: 120, Failed: 3}, {Calls: 6}},
+	}
+	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	system := prov.requestsFor("review")[0].Messages[0].Content
+	for _, want := range []string{"the weekly summary", "+126 further call(s)", "read_file ×120 (3 failed)",
+		"6 to tools the record did not keep either"} {
+		if !strings.Contains(system, want) {
+			t.Errorf("the reviewer's log does not say %q:\n%s", want, system)
+		}
+	}
+}
+
 // An empty log renders as "(none)" rather than being omitted: a missing
 // heading reads as "log unavailable", not "no calls were made".
 func TestAnEmptyToolLogStillLeavesATrace(t *testing.T) {

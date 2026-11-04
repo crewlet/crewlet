@@ -233,10 +233,10 @@ type Session struct {
 	Launch string
 
 	// LastSeq is the place, in its run's order, of the last call the run's
-	// row records from before this opening — zero for a round's first job,
-	// and the highest [Call.Seq] the row records for a job opened again
+	// log records from before this opening — zero for a round's first job,
+	// and the highest [Call.Seq] the log records for a job opened again
 	// after a recovery, or for a job continuing one that asked a person,
-	// whose calls the row keeps as the same round's. This opening numbers
+	// whose calls the log keeps as the same round's. This opening numbers
 	// its calls after it, so the order a resume reads the run's calls in
 	// runs on across the recovery or the question rather than starting again
 	// at one beside the calls before it.
@@ -350,6 +350,11 @@ type Surface interface {
 	// Admit fixes one call's place in the run's call log and returns it,
 	// to be run once ([toolloop.Surface.Admit]).
 	Admit(name string, args map[string]any) toolloop.Admitted
+	// DigestOf is the identity a call is admitted under in the run's call
+	// log ([tools.Surface.DigestOf]), which the record of the call carries
+	// ([Call.Digest]); empty for a surface that keeps no call log a later
+	// segment is seeded from.
+	DigestOf(name string, args map[string]any) string
 }
 
 // Caller is who a session's every call is decided as.
@@ -389,6 +394,27 @@ type Ledger interface {
 	// happened, so failing the call would tell a harness to retry
 	// work that has been done.
 	Append(ctx context.Context, runID string, call Call) error
+
+	// Settle carries into the run's log whatever calls the ledger still
+	// owes it — ones whose own append did not land, which it carries on a
+	// later call's — before it returns, under a context and a bound of its
+	// own, and reports whether it carried any. The run's collection asks for
+	// it through [Bridge.Settle] before the job's calls are read for its
+	// resume, since a job's last call has no later call of its own.
+	Settle(ctx context.Context, runID string) bool
+
+	// End is Settle as the session's opening ENDS ([Bridge.Close], a
+	// relaunch's opening replacing it, [Bridge.ReleaseSeat]): no call of the
+	// session comes after that to carry what it owes, and a session that
+	// ended with calls owed would leave them off the run's record even where
+	// the store answers a second later. AND IT IS THE SESSION'S LAST CARRY OF
+	// ITS OWN, made once a Settle still out as the opening ends is done —
+	// taking up what that one could not land — and returning only after it:
+	// a call still in flight as the opening ends records itself after it, and
+	// one whose record then fails is on no record unless a later call of the
+	// session carries it — which the ledger says of it, rather than promise a
+	// carry that is not coming.
+	End(ctx context.Context, runID string) bool
 }
 
 // Call is one finished bridged call, as the ledger records it.
@@ -424,6 +450,26 @@ type Call struct {
 	// recorded as the run's question rather than made
 	// ([toolloop.ToolResult.Held], ADR-0077): the call that ends the job.
 	Held bool
+
+	// Digest is the identity the call was ADMITTED under in the run's call
+	// log ([tools.Surface.DigestOf]), taken under the lock that orders the
+	// admission, before anything records it; empty for a call never admitted
+	// (made after the run's tools closed, or whose arguments did not parse).
+	// The record of the call carries it so a later segment seeds the log by
+	// the identity it counted, whatever that record keeps of the arguments.
+	//
+	// AND EMPTY FOR A HELD CALL, whose arguments are not logged (Args): a
+	// digest of them in the clear beside the tool's name would confirm a
+	// guess at what their seal hides (ADR-0077). The record counts such a
+	// call as one of its tool whose arguments are not known.
+	Digest string
+
+	// Absorbed is the calls the run's call log took in from the call's OWN
+	// WORK — a `delegate`'s workers — by identity
+	// ([toolloop.ToolResult.Absorbed]): recorded with the call, because no
+	// call of the run's record is one of them and a later segment's log must
+	// count them all the same.
+	Absorbed []toolloop.Called
 }
 
 // Bridge holds the live sessions and the signer that admits them.
@@ -560,6 +606,13 @@ func New(opts Options) (*Bridge, error) {
 	// route's credential, and the one session whose call's Host is judged
 	// — one held to this host's loopback — is judged in the routing in
 	// front of this handler ([loopbackRefusal]). See the package doc.
+	//
+	// A REQUEST'S BODY IS HELD TO WHAT THE RELAY CARRIES ([httprelay.MaxBody]):
+	// a call that lands on a node other than its seat's holder is relayed
+	// there whole, and one past that is refused before it is sent, so a
+	// larger body would be a call served on one node and refused on another.
+	// Stated here rather than left to the SDK's own default, which happens
+	// to be the same figure today and answers to nothing of the engine's.
 	b.streamable = mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		sub, ok := b.parse(r.PathValue("token"))
 		if !ok {
@@ -577,7 +630,7 @@ func New(opts Options) (*Bridge, error) {
 			return nil
 		}
 		return ep.server.MCP()
-	}, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true})
+	}, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true, MaxRequestBodyBytes: httprelay.MaxBody})
 	return b, nil
 }
 
@@ -921,6 +974,10 @@ func (b *Bridge) routeOf(s *Session) (route, error) {
 // engine cleans up on the completion path, on the failure path and on the
 // boot-recovery sweep, and each of those has to be safe to run over a run the
 // others already finished.
+//
+// AND IT RETURNS ONCE THE SESSION'S LEDGER HAS CARRIED WHAT IT OWES
+// ([Ledger.End]), bounded by the ledger: the paths that end a run go on to
+// read its record, or to delete it.
 func (b *Bridge) Close(runID string) {
 	if b == nil {
 		return
@@ -933,6 +990,28 @@ func (b *Bridge) Close(runID string) {
 	}
 	b.mu.Unlock()
 	opened.end()
+}
+
+// Settle asks the session serving job `launch` of a run to carry into the run's
+// log whatever calls it still owes ([Ledger.Settle]), and reports whether it
+// carried any. For the run's collection, which asks before the job's calls are
+// read for its resume: the job is over, so no call of its own will carry them,
+// and its session has not ended yet — a run's session lives until its run
+// settles or its next job replaces it, both after the calls are read.
+//
+// THE JOB'S OWN SESSION, or nothing: a run whose opening on this node serves
+// another job — its next one — or none at all owes this job nothing here.
+func (b *Bridge) Settle(ctx context.Context, runID, launch string) bool {
+	if b == nil {
+		return false
+	}
+	b.mu.RLock()
+	opened := b.runs[runID]
+	b.mu.RUnlock()
+	if opened == nil || opened.id != launch || opened.session.Ledger == nil {
+		return false
+	}
+	return opened.session.Ledger.Settle(ctx, runID)
 }
 
 // Live reports how many sessions are open. For the health surface and for a
@@ -1168,9 +1247,15 @@ func (b *Bridge) ReleaseSeat(seat uuid.UUID) {
 		}
 	}
 	b.mu.Unlock()
+	// SIDE BY SIDE: each ending waits on its ledger's carry of what it owes
+	// ([Ledger.End]), which a store in an outage holds to the ledger's
+	// bound, and a seat leaving this node waits on the slowest of them rather
+	// than on their sum.
+	var ended sync.WaitGroup
 	for _, opened := range released {
-		opened.end()
+		ended.Go(opened.end)
 	}
+	ended.Wait()
 }
 
 // Reachable reports whether a box's call can reach a session this node opens:
@@ -1485,11 +1570,22 @@ func (o *binding) end() { o.endKeeping(nil) }
 
 // endKeeping is [binding.end], closing the opening's note inbox unless it is
 // keep — the inbox an opening replacing this one serves too.
+//
+// AND IT ENDS THE SESSION'S LEDGER ([Ledger.End]), which carries what it owes,
+// before it returns, once, by the call that ended it: no call of the opening
+// comes after its end to carry what the ledger owes, and every path that ends
+// one — the run's settle, a stop, a relaunch's opening, the seat leaving this
+// node — goes on to read the run's record, delete it, or hand the run to a node
+// whose ledger owes it nothing. Last, once the opening refuses every new call
+// and its box's sessions are closed, so nothing it owes is still to come but
+// what a call already in flight records itself — which the ledger, told the
+// session ended, says is on no record where it does not land.
 func (o *binding) endKeeping(keep SteerInbox) {
 	if o == nil {
 		return
 	}
 	o.mu.Lock()
+	first := !o.ended
 	o.ended = true
 	inbox := o.steer
 	o.steer = nil
@@ -1503,6 +1599,9 @@ func (o *binding) endKeeping(keep SteerInbox) {
 				log.Debug("mcp_bridge_session_close", "error", err)
 			}
 		}
+	}
+	if first && o.session.Ledger != nil {
+		o.session.Ledger.End(o.ctx, o.session.RunID)
 	}
 }
 
@@ -1622,8 +1721,10 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		return refused(out)
 	}
 	// ITS PLACE IN THE RUN'S CALL LOG, fixed here, under the lock that
-	// orders admissions — see [tools.Surface.Admit].
+	// orders admissions — see [tools.Surface.Admit] — and the identity it is
+	// counted by there, which the record of the call carries.
 	admitted := s.Surface.Admit(in.Name, args)
+	digest := s.Surface.DigestOf(in.Name, args)
 	o.mu.Unlock()
 
 	started := time.Now()
@@ -1635,7 +1736,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 			"seat", s.Handle, "tool", in.Name, "panic", broke.Value, "stack", broke.Stack)
 		o.stop(broke)
 		res = toolloop.ToolResult{Output: failedInsideNote, Failed: true,
-			Cause: tools.RefusalInternalError}
+			Cause: tools.RefusalInternalError, Absorbed: res.Absorbed}
 	case err != nil:
 		// The surface returns an error only for a call that could not run
 		// at all — nothing was recorded on it, and nothing is here: the
@@ -1666,7 +1767,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 			"run_id", s.RunID, "seat", s.Handle, "tool", in.Name)
 		res = toolloop.ToolResult{Output: suspendNote, Failed: true,
 			Cause: tools.RefusalForbidden, Origin: res.Origin, Server: res.Server,
-			Source: res.Source}
+			Source: res.Source, Absorbed: res.Absorbed}
 	}
 
 	// AND AGAIN ONCE THE TOOL HAS RETURNED. Its answer is delivered — it
@@ -1679,14 +1780,18 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	if res.Held {
 		// A HELD CALL'S ARGUMENTS ARE NOT LOGGED: they ride the run's row
 		// sealed beside its question (ADR-0077), and the call log is
-		// read in the clear by everybody who reads the seat's trail.
-		recorded = nil
+		// read in the clear by everybody who reads the seat's trail. NOR
+		// THEIR DIGEST, which would let anyone reading the record confirm
+		// a guess at them: the record counts the call as one of its tool
+		// whose arguments are not known.
+		recorded, digest = nil, ""
 	}
 	o.record(Call{
 		Call: tools.Call{Name: in.Name, Args: recorded, Output: res.Output, Failed: res.Failed,
 			Cause: res.Cause},
 		Seq: seq, StartedAt: started.UTC(), Duration: took,
 		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
+		Digest: digest, Absorbed: res.Absorbed,
 	})
 	return toolsession.Result{Output: res.Output, Failed: res.Failed}
 }
@@ -1697,7 +1802,11 @@ func (o *binding) execute(admitted toolloop.Admitted, name string, args map[stri
 ) (res toolloop.ToolResult, broke *turn.PanicError, err error) {
 	defer func() {
 		if broke = turn.Recovered(recover()); broke != nil {
+			// WHAT THE CALL'S OWN WORK HAD RECORDED by the time it broke, which
+			// the run's log holds all the same, kept for the call's record
+			// ([toolloop.CallPanic]); the panic logged as the call raised it.
 			res, err = toolloop.ToolResult{}, nil
+			broke.Value, res.Absorbed = toolloop.PanicValue(broke.Value)
 		}
 	}()
 	// THE SESSION'S JOB rides the call, so a tool that writes the run's own
@@ -1793,12 +1902,16 @@ var errNoSeat = errors.New("mcpbridge: this run's tool surface is bound to no " 
 
 // record appends one finished call to the durable ledger.
 //
-// BEST EFFORT, and the reason is that the alternative is worse. The tool has
-// already run and its effect has already happened, so failing the call would
-// tell a harness to retry work that is done — the duplicate-post failure
-// the whole delivery machinery exists to prevent. A lost ledger row costs the
-// reviewer one line of evidence after a restart; a duplicated side effect
-// costs somebody two identical messages.
+// NEVER FAILED BACK TO THE BOX, and the reason is that the alternative is
+// worse. The tool has already run and its effect has already happened, so
+// failing the call would tell a harness to retry work that is done — the
+// duplicate-post failure the whole delivery machinery exists to prevent. The
+// ledger does what it can before the answer goes back — the engine's tries the
+// append again, and owes a call it still could not record to the session's
+// later appends and its carries ([Ledger.Settle], [Ledger.End]), whole — and an
+// error it reports here is logged: a call no record holds costs the reviewer a
+// line of evidence and a resumed segment's call log a count, where a duplicated
+// side effect costs somebody two identical messages.
 //
 // Under the run's context rather than the request's, so a box that hangs up
 // does not take the row with it.

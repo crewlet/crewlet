@@ -82,6 +82,7 @@ import { AnswerRunButton } from "~/components/writes.tsx";
 import { LiveOutput } from "./trace/Waterfall.tsx";
 import {
   elapsedMs,
+  fmtBytes,
   fmtDateTime,
   fmtDuration,
   fmtCount,
@@ -93,6 +94,8 @@ import {
 import { useNow } from "~/lib/clock.ts";
 import { andList } from "~/lib/words.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
+import { droppedWords } from "~/lib/dropped.ts";
+import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
 import type {
   BridgeCall,
   EventRecord,
@@ -433,7 +436,7 @@ function endingLine(ending: ExecutorEnding): string {
  * is it doing"; two hundred tool calls with their arguments and results is the
  * page's job, and `Open ↗` is one click away.
  */
-function BridgeSummary({ run }: { run: ExecutorRow }) {
+export function BridgeSummary({ run }: { run: ExecutorRow }) {
   // NOT KNOWN IS NOT NONE — see [BridgeLog]: absent is a log this reader was
   // not sent, and an empty one is an executor that has called nothing, said so.
   if (run.bridge_calls === undefined) return null;
@@ -446,15 +449,32 @@ function BridgeSummary({ run }: { run: ExecutorRow }) {
       </section>
     );
   }
-  const failures = calls.filter(callFailed).length;
   const last = calls[calls.length - 1];
+  // EVERY CALL THE RUN MADE, the ones its record dropped from the middle
+  // included: the rail's count is the run's, and the log below says which it
+  // does not list. AND EVERY FAILURE AMONG THEM, the dropped ones' off the
+  // tally the record keeps of them, so the rail's two numbers count one set of
+  // calls. That tally cannot tell a held call from one that failed — both are
+  // recorded failed — so a held call dropped from the middle counts as a
+  // failure here where a listed one does not: the rail errs towards a look.
+  const elided = run.bridge_calls_elided ?? 0;
+  const failures =
+    calls.filter(callFailed).length +
+    (run.bridge_elided_calls ?? []).reduce((n, dropped) => n + (dropped.failed ?? 0), 0);
   return (
     <section className="col gap-2">
       <div className="t-label">Tool calls</div>
       <div className="row gap-2 wrap">
-        <span className="t-cell">{plural(calls.length, "call")} through the MCP bridge</span>
+        <span className="t-cell">
+          {plural(calls.length + elided, "call")} through the MCP bridge
+        </span>
         {failures > 0 && <Tag variant="danger">{plural(failures, "failure")}</Tag>}
       </div>
+      {elided > 0 && (
+        <span className="t-caption">
+          {plural(elided, "call")} from the middle {elided === 1 ? "isn’t" : "aren’t"} listed
+        </span>
+      )}
       {last && (
         <span className="t-caption">
           Last: <InlineCode>{last.name}</InlineCode> · {fmtTime(last.at)}
@@ -1250,9 +1270,11 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
           // SAID OUT LOUD. The engine bounds the log at 200 and drops the
           // MIDDLE rather than the start, because how an executor began and how
           // it ended are what explain it — and a log that silently skips is a
-          // log that lies about what it did.
+          // log that lies about what it did. WHAT they were, too, by tool, off
+          // the identities the engine keeps of every call it drops.
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             {plural(elided, "call")} from the middle {elided === 1 ? "isn’t" : "aren’t"} shown.
+            {droppedWords(run.bridge_elided_calls ?? [])}
           </Callout>
         )}
         <div className="list">
@@ -1266,6 +1288,14 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
 }
 
 /**
+ * Whether the run's record keeps less than a call sent or answered: read off
+ * the sizes the engine states beside a cut payload, never off its marker.
+ */
+function callCut(call: BridgeCall): boolean {
+  return Boolean(call.args_bytes) || Boolean(call.output_bytes);
+}
+
+/**
  * What an executor with an empty bridge log is said to have done: nothing YET
  * while its launch may still be working, and nothing at all once it has stopped.
  */
@@ -1274,24 +1304,6 @@ function noCallsWords(run: ExecutorRow): string {
     ? "No calls through the MCP bridge yet"
     : "Made no calls through the MCP bridge, not even its submission";
 }
-
-/**
- * What a call a person approved ([BridgeCall.approved]) is said to have sent
- * and returned. Neither is on its record: the resume made the call off the
- * arguments the run held sealed, and handed its result to the job that carried
- * the work on sealed too, so "(none)" and "(nothing returned)" would say a call
- * that sent and returned both did neither.
- */
-const SEALED_ARGUMENTS = "(sealed with the approval, not kept on the record)";
-const SEALED_RESULT = "(handed to the run sealed, not kept on the record)";
-
-/**
- * What a call the run held for a person's approval ([BridgeCall.held]) is said
- * to have sent: its arguments ride the run's row sealed beside its question,
- * for whoever may approve it, and are never on the record, so "(none)" would
- * say a call that named them named nothing.
- */
-const HELD_ARGUMENTS = "(sealed beside the run's question, for whoever may approve it)";
 
 /**
  * Whether a bridged call failed. A HELD call is recorded failed, since nothing
@@ -1329,6 +1341,16 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
     <div className="col gap-2">
       <div className="col gap-1">
         <div className="t-label">Arguments</div>
+        {/* A CUT READS AS ONE: the engine keeps a call's arguments and its
+            answer to their share of the run's record, and says so beside each
+            in a size this reads, so a left-out value is never read as what the
+            call sent. */}
+        {call.args_bytes ? (
+          <span className="t-caption">
+            Partly kept: the call sent {fmtBytes(call.args_bytes)}, and each value the run&rsquo;s
+            record doesn&rsquo;t keep is marked &ldquo;not kept&rdquo; where it was.
+          </span>
+        ) : null}
         {/* `plain` DROPS THE HEADER, which is the opposite of what the word
             meant on the block this replaced — there it turned wrapping off,
             which is `wrap` here. The header goes because the disclosure above
@@ -1356,6 +1378,12 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
       </div>
       <div className="col gap-1">
         <div className="t-label">{callFailed(call) ? "Error" : "Result"}</div>
+        {call.output_bytes ? (
+          <span className="t-caption">
+            The opening of {fmtBytes(call.output_bytes)}: the rest isn&rsquo;t kept on the
+            run&rsquo;s record.
+          </span>
+        ) : null}
         <CodeBlock
           plain
           focusWhenScrollable
@@ -1382,6 +1410,7 @@ function BridgeCallRow({ call }: { call: BridgeCall }) {
           {call.held && <Tag variant="warning">held for approval</Tag>}
           {call.approved && <Tag variant="info">approved</Tag>}
           {callFailed(call) && <Tag variant="danger">failed</Tag>}
+          {callCut(call) && <Tag variant="neutral">partly kept</Tag>}
           <span className="spacer" />
           <span className="t-caption">{fmtTime(call.at)}</span>
         </span>

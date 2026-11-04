@@ -32,6 +32,7 @@ func (*probeSurface) ToolDefs() []llm.ToolDef {
 		Parameters: map[string]any{"type": "object"}}}
 }
 func (*probeSurface) AnnotationsOf(string) crewletmcp.Annotations { return crewletmcp.Annotations{} }
+func (*probeSurface) DigestOf(string, map[string]any) string      { return "" }
 func (p *probeSurface) Admit(string, map[string]any) toolloop.Admitted {
 	return func(ctx context.Context, _ llm.ToolCall) (toolloop.ToolResult, error) {
 		p.calls.Add(1)

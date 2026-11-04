@@ -869,7 +869,11 @@ export function turnFacts(
   const input = work.reduce((n, p) => n + p.inputTokens, 0);
   const output = work.reduce((n, p) => n + p.outputTokens, 0);
   const cached = work.reduce((n, p) => n + p.cacheReadTokens, 0);
-  const calls = view.own.reduce((n, p) => n + p.tools.length, 0);
+  // EVERY CALL THE TURN'S PHASES MADE: the ones their records list, and the
+  // ones a collected executor's record counts without listing — a long run's
+  // dropped middle — which its round's own count, on the Timeline, includes.
+  const dropped = view.own.reduce((n, p) => n + p.callsElided, 0);
+  const calls = view.own.reduce((n, p) => n + p.tools.length, 0) + dropped;
   const trigger = view.trigger;
   const began = view.startedAt || from;
   return [
@@ -921,7 +925,14 @@ export function turnFacts(
           ? `${fmtCount(cached)} of ${fmtCount(input)} input read from cache`
           : undefined,
     },
-    { label: "Tool calls", value: counted ? calls : "" },
+    {
+      label: "Tool calls",
+      value: counted ? calls : "",
+      note:
+        counted && dropped > 0
+          ? `${fmtCount(dropped)} not listed: the executor’s record didn’t keep them`
+          : undefined,
+    },
     { label: "Workers", value: view.workerCount > 0 ? view.workerCount : "" },
     { label: "Node", value: view.nodes.join(", ") },
     {
@@ -1678,7 +1689,10 @@ export function TurnScreen({ turnId }: { turnId: string }) {
     [events, phases, clock, running, view.parked],
   );
   const marks = useMemo(() => steerMarks(events, turnId), [events, turnId]);
-  const calls = phases.reduce((n, p) => n + p.tools.length, 0);
+  // EVERY CALL, the dropped middle of a collected executor's run included, as
+  // the header counts it; the Tools tab lists the ones the records kept and
+  // says how many more there were.
+  const calls = phases.reduce((n, p) => n + p.tools.length + p.callsElided, 0);
 
   // A PARKED TURN'S LIVE WORK IS ITS EXECUTOR, and the Transcript draws it.
   // Its launch is the waterfall's own OPEN launch span — the one derivation

@@ -169,6 +169,14 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 					"is not charged; its round is carried on all the same")
 		}
 	}
+	// WHAT ITS SESSION STILL OWED THE JOB'S LOG, carried before the round is
+	// carried on from it ([CoordinatorOptions.Settle]), with what those calls
+	// cost on the job's record: the next job's launch is what ends that
+	// session, by which time the log and the record hold the next job and
+	// take nothing of this one's.
+	if c.settle != nil && c.settle(ctx, run.TurnID, run.LaunchID) {
+		run = c.rereadSpend(ctx, run)
+	}
 	// WHAT IT PUSHED, read whether or not its box answered: the push record
 	// is the code host's, never the box's, so a job lost with its box still
 	// has its pushes on the record, and its report says what each became

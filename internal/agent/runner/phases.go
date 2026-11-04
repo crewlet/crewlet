@@ -341,19 +341,33 @@ type Resume struct {
 	Answer string
 
 	// Bridged is what the run called over the MCP bridge, read from the
-	// run's own durable row, in the order the row holds them — each carries
-	// its place in the order the bridge admitted them ([BridgedCall.Seq]),
-	// which is the order the resume records them in — and no round, which
-	// is this package's to state ([runRound]).
+	// run's own durable log, kept beside its row, in the order the log holds
+	// them — each carries its place in the order the bridge admitted them
+	// ([BridgedCall.Seq]), which is the order the resume records them in — and
+	// no round, which is this package's to state ([runRound]).
 	//
-	// It is the whole record of the phase, and it has to come from the row
+	// It is the whole record of the phase, and it has to come from the log
 	// rather than from memory: the process resuming may not be the one that
 	// launched, so its surface is fresh and has executed nothing.
 	Bridged []BridgedCall
 
+	// Elided is the round's calls the log does not list, by identity
+	// (sandbox.BridgeLog.Unlisted): a long run's dropped middle. Calls of the
+	// round all the same, which the turn's call log is seeded with beside
+	// Bridged ([seedCalls]), the delivery checks count, and the round's record
+	// carries on ([turn.Work.Elided]).
+	Elided []ledger.Elided
+
+	// Absorbed is the calls the run's call log took in from the round's own
+	// calls' work — a delegated worker's under a bridged `delegate` — by
+	// identity (sandbox.BridgeLog.Absorbed): seeded into the turn's call log
+	// beside the round's calls ([seedCalls]) and carried on by the round's
+	// record ([turn.Work.Absorbed]), and read by nothing else.
+	Absorbed []ledger.Elided
+
 	// Answered is the place ([BridgedCall.Seq]) of the last call the round
 	// made before a person's answer carried it on, and zero where no answer
-	// has: off the run's row (sandbox.BridgeLog.AnsweredThrough). Only a
+	// has: off the run's log (sandbox.BridgeLog.AnsweredThrough). Only a
 	// submission made after it is the round's ([sinceAnswer]).
 	Answered int
 
@@ -408,7 +422,7 @@ func (r Resume) parked() execstate.State {
 }
 
 // BridgedCall is one call an executor run made over the MCP bridge, as the
-// run's durable row recorded it: the call the turn's record reads, and when it
+// run's durable log recorded it: the call the turn's record reads, and when it
 // ran, for how long and who answered — what the phase record's execution for
 // it states.
 //
@@ -446,6 +460,22 @@ type BridgedCall struct {
 	// [toolloop.Execution]).
 	Source  string
 	Refusal mcp.Refusal
+
+	// ArgsBytes and OutputBytes are the size of the call's whole arguments
+	// and whole output where the run's record kept less than them
+	// (sandbox.BridgeCall.ArgsBytes), and zero where it kept them whole. What
+	// a reader that ACTS on a payload decides by: the collection never
+	// replays a submission its record did not keep whole
+	// ([replaySubmission]). A reader that only shows the payload reads the
+	// marker in its text.
+	ArgsBytes, OutputBytes int
+
+	// Held is a call the run held for a person's approval, recorded failed
+	// though nothing failed — it is the run's question for a person — and
+	// Approved the call they let be made (sandbox.BridgeCall): the two calls
+	// whose arguments every record withholds ([ledger.Call.Withheld]), which
+	// the execute phase's record says in place of them.
+	Held, Approved bool
 }
 
 // bridgedLedger is an executor run's calls as the turn's record reads them:
@@ -787,6 +817,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		Decision: payload.Outcome, Rescued: !submitted,
 		Run:       w.run,
 		RunSteers: w.res.RunSteers,
+		RunElided: w.res.RunElided,
 		// EVERYTHING IT HELD, and no catalogue beside it: an executor holds
 		// every tool it can reach from its launch, so nothing was left for
 		// it to discover. Its MCP servers that run in its box are not on the
@@ -849,7 +880,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		Evidence:          w.Evidence,
 		OpenQuestions:     w.OpenQuestions,
 		Produced:          reviewArtifact(w),
-		ToolLog:           ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: r.cfg.SkipNames}),
+		ToolLog:           reviewLog(w, r.cfg.SkipNames),
 		Delivered:         prompts.DeliveredRefs(w.Refs, w.RefsElided),
 		EarlierIterations: r.priorWork(ctx, history),
 		OffersA2A:         offersA2A,
@@ -1576,6 +1607,12 @@ type phaseResult struct {
 	// its notes at its rounds, which its Result records; an executor's
 	// reads are on its record instead ([Runner.resumeAgentRun]).
 	RunSteers []types.PhaseSteer
+
+	// RunElided is the calls a collected executor's run made that its
+	// record did not keep, by identity ([Resume.Elided]): said on the
+	// phase's record by tool, since the calls it lists are only the kept
+	// ones ([types.AgentPhaseCompleted.ElidedCalls]).
+	RunElided []ledger.Elided
 }
 
 // surfaceWith builds a phase surface, registering the phase's submission tool
@@ -1902,6 +1939,20 @@ func (r *Runner) taskFor(notes string) string {
 		return r.cfg.Task
 	}
 	return r.cfg.Task + "\n\nThe previous round was reviewed. What to do differently:\n" + notes
+}
+
+// reviewLog is the round's calls as its reviewer reads them, verbatim
+// ([ledger.FormatCalls] with no budget), and then what the run's record did
+// not keep of them, said rather than hidden ([ledger.FormatElided]): a
+// reviewer handed a long run's record with its middle silently gone judges an
+// elision and calls it the run. A value the record left out reads as left out
+// in the line it stands in.
+func reviewLog(w turn.Work, skip []string) string {
+	text := ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: skip})
+	if elided := ledger.FormatElided(w.Elided, skip); elided != "" {
+		text += "\n" + elided
+	}
+	return text
 }
 
 // calls converts a surface's record into ledger calls.

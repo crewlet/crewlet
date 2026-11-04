@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -466,8 +467,9 @@ func TestTheBoardNamesTheJobEachRunHolds(t *testing.T) {
 }
 
 // THE THREE FACTS A PARKED RUN HAS AND THE BOARD COULD NOT SHOW: who is
-// waiting on it, what it called through the bridge, and the identifiers that
-// find it in somebody else's system.
+// waiting on it, what it called through the bridge — what its record kept of
+// each call, and by tool what it dropped from a long log's middle — and the
+// identifiers that find it in somebody else's system.
 //
 // `reply` is persisted precisely because the resumed turn does not see its
 // trigger; `bridge_calls` is the ONLY copy of a bridged run's tool log, since
@@ -484,19 +486,25 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 		DelegationChain: []string{"agent-pm", "agent-swe"},
 	})
 	// THE LOG BESIDE THE ROW, through the appends a box's calls make: the
-	// first call, then past the bound, so four are cut from the middle.
+	// first call, a commit of a megabyte the log keeps part of, then reads
+	// past the bound, so four are cut from the middle.
 	seeded, _, err := store.Get(context.Background(), "t-1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	launch := seeded.LaunchID
+	commit := `{"content":"` + strings.Repeat("a", 1<<20) + `"}`
 	for i := range sandbox.MaxBridgeCalls + 4 {
-		name := "get_work_item"
-		if i > 0 {
-			name = fmt.Sprintf("read_page_%03d", i)
+		call := sandbox.BridgeCall{Name: "read_file", Args: `{"id":"ENG-1"}`, Digest: "d2", At: called}
+		switch i {
+		case 0:
+			call = sandbox.BridgeCall{Name: "get_work_item", Args: `{"id":"ENG-1"}`, At: called}
+		case 1:
+			call = sandbox.BridgeCall{Name: "code_commit_files", Args: commit,
+				Output: strings.Repeat("o", 70<<10), Digest: "d1", At: called}
 		}
 		if _, err := store.AppendBridgeCall(context.Background(), "t-1", sandbox.BridgeAppend{Launch: launch,
-			Call: sandbox.BridgeCall{Name: name, Args: `{"id":"ENG-1"}`, At: called}}); err != nil {
+			Call: call}); err != nil {
 			t.Fatalf("AppendBridgeCall: %v", err)
 		}
 	}
@@ -515,6 +523,22 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
 	if !ok || len(calls) != sandbox.MaxBridgeCalls || calls[0].Name != "get_work_item" {
 		t.Fatalf("bridge_calls = %#v, want the run's own tool log", row["bridge_calls"])
+	}
+	// WHAT THE RECORD KEPT OF A CALL, on the wire: the sizes a reader decides
+	// "partly kept" by, and the call's identity.
+	wire, err := json.Marshal(calls[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{fmt.Sprintf(`"args_bytes":%d`, len(commit)), `"output_bytes":71680`,
+		`"digest":"d1"`} {
+		if !strings.Contains(string(wire), key) {
+			t.Errorf("the partly kept call is served as %s, want %s in it", wire, key)
+		}
+	}
+	dropped, ok := row["bridge_elided_calls"].([]sandbox.ElidedCall)
+	if !ok || len(dropped) != 1 || dropped[0].Name != "read_file" || dropped[0].Calls != 4 {
+		t.Errorf("bridge_elided_calls = %#v, want the dropped calls by tool", row["bridge_elided_calls"])
 	}
 	chain, ok := row["delegation_chain"].([]string)
 	if !ok || !slices.Equal(chain, []string{"agent-pm", "agent-swe"}) {
@@ -732,7 +756,7 @@ func TestARunsLogIsReadOnlyForAReaderShownItsCalls(t *testing.T) {
 func TestAnExecutorRowsBodyIsItsSeatsTrail(t *testing.T) {
 	t.Parallel()
 	body := []string{"task_description", "question", "question_context", "decision",
-		"reply", "bridge_calls"}
+		"reply", "bridge_calls", "bridge_elided_calls"}
 	for _, c := range []struct {
 		name     string
 		ctx      context.Context
@@ -791,7 +815,7 @@ func TestAParkedQuestionReachesItsAudience(t *testing.T) {
 			"question with its context and its options", asked["question"],
 			asked["question_context"], asked["decision"])
 	}
-	for _, key := range []string{"task_description", "reply", "bridge_calls"} {
+	for _, key := range []string{"task_description", "reply", "bridge_calls", "bridge_elided_calls"} {
 		if _, shown := asked[key]; shown {
 			t.Errorf("the person asked was shown the run's %s, which is its seat's trail", key)
 		}

@@ -18,7 +18,8 @@ import type { PhaseRecord } from "~/lib/phases.ts";
 import { buildWaterfall } from "~/lib/waterfall.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { EventRecord, ExecutorTailAnswer } from "~/protocol/index.ts";
-import { phaseRecord } from "~/test/phaseRecord.ts";
+import { phaseRecord, toolCall } from "~/test/phaseRecord.ts";
+import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
 import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
 import { withDerived } from "~/test/org.ts";
@@ -754,5 +755,77 @@ describe("a live tail's announcements", () => {
         false,
       ),
     ).toBe("The executor is no longer running.");
+  });
+});
+
+/**
+ * A CALL'S DETAIL COUNTS THE CALLS ITS ROUND MADE THAT NO RECORD LISTS. A
+ * collected executor's record keeps its run's head and tail and counts the
+ * middle it dropped, all of it the record's one round; a call's detail says how
+ * many calls its round asked for, as the round's own Model detail counts them.
+ *
+ * Mutation: count the listed calls alone, and one call of a round of sixty-three
+ * reads as the round's only call.
+ */
+describe("a call's detail", () => {
+  test("counts the calls its round made that no record lists", () => {
+    const record = phaseRecord({
+      key: "turn-1|execute|1",
+      startedAt: iso(0),
+      durationMs: 50_000,
+      narration: [{ round: 1, content: "Reading the code.", declined: false }],
+      tools: [toolCall({ name: "read_file", round: 1, startedAt: iso(2_000), durationMs: 10 })],
+      callsElided: 62,
+    });
+    mount([], RUNNING, { phases: [record], selected: "turn-1|execute|1.r1.t0" });
+    expect(screen.getByText(/this round asked for 63 calls/)).toBeTruthy();
+  });
+});
+
+/**
+ * A SEALED CALL'S DETAIL SAYS ITS ARGUMENTS ARE SEALED. An executor's call held
+ * for a person's approval, and the call they approved, carry `{}` on the
+ * execute record only because their arguments ride the run's row sealed, and
+ * the approved one's result went to the run sealed: the span's detail says
+ * so, in the words the execute card and the executors board use, rather than
+ * drawing a call made with nothing that returned nothing.
+ *
+ * Mutation: draw a sealed call's `{}` and its empty result, and the approved
+ * deletion reads as a call made with no arguments that returned nothing.
+ */
+describe("a sealed call's detail", () => {
+  const record = phaseRecord({
+    key: "turn-1|execute|1",
+    startedAt: iso(0),
+    durationMs: 50_000,
+    narration: [{ round: 1, content: "Deleting the repository.", declined: false }],
+    tools: [
+      toolCall({
+        name: "gh_delete_repo",
+        round: 1,
+        startedAt: iso(2_000),
+        durationMs: 10,
+        held: true,
+        result: "held for a person",
+      }),
+      toolCall({
+        name: "gh_delete_repo",
+        round: 1,
+        startedAt: iso(3_000),
+        durationMs: 10,
+        approved: true,
+      }),
+    ],
+  });
+
+  test("a held call's arguments are sealed beside the run's question", () => {
+    mount([], RUNNING, { phases: [record], selected: "turn-1|execute|1.r1.t0" });
+    expect(screen.getByRole("region", { name: "Input" }).textContent).toBe(HELD_ARGUMENTS);
+  });
+
+  test("an approved call's arguments and result are sealed", () => {
+    mount([], RUNNING, { phases: [record], selected: "turn-1|execute|1.r1.t1" });
+    expect(screen.getByRole("region", { name: "Input" }).textContent).toBe(SEALED_ARGUMENTS);
+    expect(screen.getByRole("region", { name: "Output" }).textContent).toBe(SEALED_RESULT);
   });
 });

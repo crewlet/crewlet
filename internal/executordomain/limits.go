@@ -8,8 +8,9 @@ import "time"
 // bound written twice is one the two sides disagree about, and the side that
 // lost would be a record the log refuses `record_too_large` after the turn
 // already ended. The bounds the sandbox stops at too — a session's archive and
-// its sealed object, and an ending's fields — are internal/executorkeep's, the
-// leaf both read (its package doc says why).
+// its sealed object, an ending's fields, and what a capture's stamp names of
+// its box — are internal/executorkeep's, the leaf both read (its package doc
+// says why).
 const (
 	// ConversationKeyMaxBytes bounds a conversation's key: a surface's own
 	// identity for a thread, an issue or a channel (a GitHub issue's
@@ -21,22 +22,6 @@ const (
 	// WorkKeyMaxBytes bounds a turn's work key: internal/workkey's
 	// thirty-two hex digits, with room for the whole SHA-256 should it widen.
 	WorkKeyMaxBytes = 64
-
-	// TurnIDMaxBytes bounds a turn's id: a run id is a UUIDv7, thirty-six
-	// bytes, and the bound refuses anything that is plainly not one.
-	TurnIDMaxBytes = 64
-
-	// HarnessMaxBytes bounds the harness's name as the box reported it. Its
-	// version's bound and the session id's are internal/executorkeep's
-	// (HarnessVersionMaxBytes, SessionIDMaxBytes), because the sandbox holds
-	// what a box names to them before a launch's record carries it.
-	HarnessMaxBytes = 32
-
-	// PathMaxBytes bounds the writer box's home and workspace paths, which a
-	// resumed launch maps onto its own box. The engine lays a box out under
-	// paths of a few dozen bytes; a kibibyte bounds a seat's own image
-	// moving them without admitting a path no box would mount.
-	PathMaxBytes = 1024
 
 	// AskExcerptMaxBytes bounds what the turn was asked, as a list and a
 	// search show it: the first kibibyte, cut on a rune boundary.

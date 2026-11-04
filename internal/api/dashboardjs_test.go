@@ -1821,24 +1821,22 @@ const (
 	// (5,624,638 bytes) to 5494.6 KiB (5,626,424 bytes, +1,786 bytes). The
 	// initial load did not grow. It moved up to the measured size's next KiB:
 	// 5495 KiB, 456 bytes clear.
-	// A schedule's next fire continuing the session its last fire left — the
-	// Sessions view's words for the launch that continues a fire's session
-	// (`continued_by: next_fire`), a schedule's conversation key printed with
-	// its parts decoded by a conversation label that moved out of
-	// lib/format.ts, which the shell loads first, into lib/conversationKey.ts,
-	// which only the screens that print a key load, and a fire's turn naming
-	// its schedule's conversation as one on the Turn page's rail and a phase
-	// card's footer, saying whether a key is the external conversation the
-	// turn served or the schedule the turn was a fire of — took it from 5494.6
-	// KiB (5,626,424 bytes) to 5495.2 KiB (5,627,052 bytes), +628 bytes: the
-	// phases chunk the phase card and the Memory tab share +457, the agents
-	// chunk +233, the live and settled chunks that print a key +32 and +30,
-	// and 14 across the chunks whose imports the bundler renamed, less the 138
-	// the label took out of the shared chunk the shell loads. The initial load
-	// (the entry, what the page preloads and the page itself) is 134 bytes
-	// lighter raw. 172 bytes past 5495 KiB, it moved to the measured size's
-	// next KiB: 5496 KiB.
-	treeBudget = 5<<20 + 376<<10
+	// A bridged call the run's log keeps in part drawn as such on a run's page
+	// (its "partly kept" tag, and over its arguments and its result how much
+	// the call sent and answered), a long log's dropped middle said by tool in
+	// its callout, a collected run's dropped calls said by tool on its execute
+	// card, a sealed call drawn as one wherever the turn page draws a call (the
+	// execute card, a call's span and the Tools tab's outcome), and the calls
+	// a collected executor's record did not keep counted in the turn's Tool
+	// calls fact, said on the Tools tab and counted by a call's span and the
+	// executors board's rail, with their failures in its failure tag, took it
+	// from 5494.6 KiB (5,626,424 bytes) to 5497.5 KiB (5,629,434 bytes; +2.9
+	// KiB, 3010 bytes): the Executors chunk +804 bytes, the shared chunk the
+	// wording landed in +794, the live chunk +518, the settled chunk +496 and
+	// the phases chunk +398; every other chunk kept its size. The initial load
+	// did not grow: its files are the same bytes but for the chunk names they
+	// list. 5498 KiB.
+	treeBudget = 5<<20 + 378<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

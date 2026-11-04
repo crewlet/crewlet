@@ -179,6 +179,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, noteCases...)
 	cases = append(cases, askCases...)
 	cases = append(cases, heldCases...)
+	cases = append(cases, bytesCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -196,6 +197,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARunRowCarriesItsRepositoriesAndFloor", testARunRowCarriesItsRepositoriesAndFloor},
 	}
 	raw = append(raw, noteRawCases...)
+	raw = append(raw, bytesRawCases...)
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -3012,7 +3014,7 @@ func testManyBridgedWritersAllLand(t *testing.T, s sandbox.PendingStore) {
 		}
 	}
 	if !slices.Equal(names, want) {
-		t.Fatalf("the row holds %d calls after %d concurrent appends, want every one exactly once: %v",
+		t.Fatalf("the log holds %d calls after %d concurrent appends, want every one exactly once: %v",
 			len(names), len(want), names)
 	}
 	if got.Owner != "node-b" || got.OwnerEpoch != each {
