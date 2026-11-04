@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -552,5 +554,86 @@ func TestAnEvictionPassesTheTruncationFenceAndTheReserveTogether(t *testing.T) {
 	if after.Bytes <= soft || after.Bytes > smallLogBytes {
 		t.Fatalf("with the eviction landed the log holds %d bytes, want it in "+
 			"the reserve between %d and %d", after.Bytes, soft, smallLogBytes)
+	}
+}
+
+// A WRITE WHOSE LOG'S USAGE CANNOT BE READ IS REFUSED BEFORE ITS APPEND, as a
+// refusal that clears on this node and names no record.
+//
+// The admission reads the log's usage before every ordinary append, and a
+// broker whose meta group has no leader answers that read 503, err_code 10008.
+// Untyped, a committer took the failure for an unknown outcome and never asked
+// the repository's runner-up, for a push nothing had appended.
+//
+// Mutation: return the reading's error wrapped plain and the type check goes
+// red; admit after the append and the append count does.
+func TestAWriteWhoseLogUsageCannotBeReadIsRefusedBeforeItsAppend(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.applier.auto = true
+	leaderless := &jetstream.APIError{Code: 503, ErrorCode: 10008,
+		Description: "JetStream system temporarily unavailable"}
+	var answers atomic.Bool
+	reserve, err := statelog.NewReserve(probeDomain{}.Stream(),
+		func(ctx context.Context) (statelog.Usage, error) {
+			if !answers.Load() {
+				return statelog.Usage{}, fmt.Errorf("jetstream: read %q's state: %w",
+					probeStream, leaderless)
+			}
+			stats, err := h.log.Stats(ctx)
+			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
+		})
+	if err != nil {
+		t.Fatalf("NewReserve: %v", err)
+	}
+	deps := h.deps
+	deps.Admission = reserve
+	if h.pub, err = statelog.NewPublisher(deps); err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	before, err := h.log.Stats(t.Context())
+	if err != nil {
+		t.Fatalf("read the log: %v", err)
+	}
+	appended := h.appends.appends.Load()
+	subject := statelog.Subject{Kind: "object", ID: "o1"}
+
+	res, err := h.write(subject, "op-1", "body")
+	var refusal *statelog.Unavailable
+	switch {
+	case !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonUsageUnknown:
+		t.Fatalf("a write whose log's usage could not be read answered %+v, %v; want "+
+			"a %s refusal", res, err, statelog.ReasonUsageUnknown)
+	case refusal.Landed() || !refusal.Position.IsZero() || !res.Position.IsZero():
+		t.Errorf("the refusal names %v (landed %v), want no record: nothing was appended",
+			refusal.Position, refusal.Landed())
+	case !refusal.Reason.Retryable() || statelog.RetryAfter(err, time.Second) == 0:
+		t.Errorf("the refusal is not retryable, and it clears when the usage reads again")
+	case !errors.Is(err, leaderless):
+		t.Errorf("the refusal %v lost the broker's answer it was concluded from", err)
+	case strings.Contains(refusal.Detail, "10008") || !strings.Contains(refusal.Detail, probeStream):
+		t.Errorf("the detail %q, which every surface sends its caller, carries the broker's "+
+			"own words or does not name the log", refusal.Detail)
+	case refusal.OpID != "op-1":
+		t.Errorf("the refusal names operation %q, want op-1", refusal.OpID)
+	}
+	if got := h.appends.appends.Load(); got != appended {
+		t.Errorf("the refused write reached the broker %d times, want none: the "+
+			"admission refuses before the append", got-appended)
+	}
+	after, err := h.log.Stats(t.Context())
+	if err != nil {
+		t.Fatalf("read the log: %v", err)
+	}
+	if after.LastSeq != before.LastSeq {
+		t.Errorf("the log ends at %d after the refusal, want it unmoved at %d",
+			after.LastSeq, before.LastSeq)
+	}
+
+	// THE SAME WRITE ONCE THE USAGE READS AGAIN lands under the same id.
+	answers.Store(true)
+	if res, err := h.write(subject, "op-1", "body"); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the write once the usage reads again answered %+v, %v; want applied", res, err)
 	}
 }

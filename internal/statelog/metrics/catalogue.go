@@ -149,7 +149,10 @@ func Catalogue() []Instrument {
 				"the log and must adopt a snapshot — another node writes " +
 				"meanwhile), `floor_unknown` (the domain's floor or the log's " +
 				"ends could not be read — clears when coordination answers, or " +
-				"once a floor row that does not read as its floor is removed). " +
+				"once a floor row that does not read as its floor is removed), " +
+				"`usage_unknown` (the log's usage could not be read before an " +
+				"ordinary append, so nothing was appended; clears when the broker " +
+				"answers again, typically once an election ends). " +
 				"The log: " +
 				"`log_full` (at its ceiling — raise it or unblock the trim), " +
 				"`record_too_large` (the record is larger than the broker takes " +

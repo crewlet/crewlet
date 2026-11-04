@@ -297,6 +297,15 @@ const (
 	// duplicate delivery, which is.
 	ReasonFloorUnknown Reason = "floor_unknown"
 
+	// ReasonUsageUnknown says the log's usage could not be read before an
+	// ordinary append, so the reserve above its ordinary ceiling could not
+	// be checked ([Reserve.Admit]). The third value, and it BLOCKS:
+	// admitting blind could spend the room the gate records land in.
+	// Nothing was appended, and it clears when the usage reads again, as
+	// it does once a broker election ends (a meta group with no leader
+	// answers JetStream's 503, err_code 10008).
+	ReasonUsageUnknown Reason = "usage_unknown"
+
 	// ReasonDeleted — this object carries a permanent deletion marker.
 	// It stays deleted; a guarding row's absence below the trim floor is
 	// not permission to recreate it. A fact about the OBJECT, the same for
@@ -417,10 +426,10 @@ const (
 func Reasons() []Reason {
 	return []Reason{
 		ReasonEvicted, ReasonEvictionUnknown, ReasonDeferred, ReasonBehind,
-		ReasonBelowFloor, ReasonFloorUnknown, ReasonDeleted, ReasonAbandoned,
-		ReasonOvertaken, ReasonLogFull, ReasonRecordTooLarge, ReasonBrokerRefused,
-		ReasonSkew, ReasonOpReused, ReasonLogTruncated, ReasonWrongStream,
-		ReasonSuperseded,
+		ReasonBelowFloor, ReasonFloorUnknown, ReasonUsageUnknown, ReasonDeleted,
+		ReasonAbandoned, ReasonOvertaken, ReasonLogFull, ReasonRecordTooLarge,
+		ReasonBrokerRefused, ReasonSkew, ReasonOpReused, ReasonLogTruncated,
+		ReasonWrongStream, ReasonSuperseded,
 	}
 }
 
@@ -433,10 +442,10 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 // reason: a node that is behind catches up, while an evicted node, a deleted
 // object or a full log refuses the same write however long the caller waits.
 //
-// FOUR CLEAR ON THEIR OWN, each by its own constant's words: a node BEHIND the
+// FIVE CLEAR ON THEIR OWN, each by its own constant's words: a node BEHIND the
 // caller's previous write applies it, a node BELOW the trim floor catches up
-// or adopts a snapshot, and a floor or an eviction state that could not be
-// read is read again. [ReasonDeferred] is deliberately not one of them:
+// or adopts a snapshot, and a floor, an eviction state or a log's usage that
+// could not be read is read again. [ReasonDeferred] is deliberately not one of them:
 // ANOTHER node can serve the write, and this one cannot until it is upgraded —
 // so "come back here" is the wrong instruction however soon it is given. Nor
 // is any refusal whose remedy is a NEW operation or an operator's gesture —
@@ -450,7 +459,8 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 // not to — or the reverse — is contradicting itself about that node.
 func (r Reason) Retryable() bool {
 	switch r {
-	case ReasonBehind, ReasonBelowFloor, ReasonFloorUnknown, ReasonEvictionUnknown:
+	case ReasonBehind, ReasonBelowFloor, ReasonFloorUnknown, ReasonEvictionUnknown,
+		ReasonUsageUnknown:
 		return true
 	}
 	return false
