@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"reflect"
 	"slices"
 	"time"
@@ -102,6 +103,20 @@ type Spec struct {
 	// the source is the grant, and the token it holds now is not part of
 	// what the server was started from.
 	Bearer BearerSource
+	// Signer, for an HTTP server that authenticates each request by its
+	// content (AWS's Signature Version 4), prepares and signs every request
+	// sent to the configured origin, with a credential that never leaves the
+	// engine; nil for every other server. COMPARED BY IDENTITY, as Bearer is.
+	Signer RequestSigner
+}
+
+// RequestSigner signs each request to a server that authenticates a request by
+// its content rather than by a token it carries. Sign answers the body to send,
+// which it may add to before signing (AWS's MCP Server reads the Region from
+// each message's metadata), with req's headers signed in place. An error is the
+// request's: nothing is sent.
+type RequestSigner interface {
+	Sign(ctx context.Context, req *http.Request, body []byte) ([]byte, error)
 }
 
 // BearerSource answers the access token an HTTP server signed in to with OAuth
@@ -165,10 +180,11 @@ func (s Spec) requestTimeout() time.Duration {
 // comparison would read the token it holds now, which renews on its own and
 // is not what the server was started from, while a new grant is a new source.
 func (s Spec) equal(other Spec) bool {
-	if s.Bearer != other.Bearer {
+	if s.Bearer != other.Bearer || s.Signer != other.Signer {
 		return false
 	}
 	s.Bearer, other.Bearer = nil, nil
+	s.Signer, other.Signer = nil, nil
 	return reflect.DeepEqual(s, other)
 }
 

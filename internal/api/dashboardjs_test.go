@@ -1836,7 +1836,11 @@ const (
 	// the phases chunk +398; every other chunk kept its size. The initial load
 	// did not grow: its files are the same bytes but for the chunk names they
 	// list. 5498 KiB.
-	treeBudget = 5<<20 + 378<<10
+	// AWS (its catalogue entry and story, the Agents tab's words and the org
+	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
+	// tile's cloud glyph) took it from 5497.5 KiB (5,629,434 bytes) to 5499.5
+	// KiB (5,631,527 bytes, +2,093 bytes). 5500 KiB.
+	treeBudget = 5<<20 + 380<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

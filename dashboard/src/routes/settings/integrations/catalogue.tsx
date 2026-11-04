@@ -161,6 +161,7 @@ const SURFACE_NAMES: Record<string, string> = {
   expo: "Expo",
   digitalocean: "DigitalOcean",
   scaleway: "Scaleway",
+  aws: "AWS",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -253,6 +254,14 @@ export const CATALOG: Entry[] = [
     vendor: "digitalocean",
     surfaces: surfacesOf("digitalocean"),
     doc: "digitalocean",
+  },
+  {
+    key: "aws",
+    name: "AWS",
+    description: "EC2, ECS, EKS, Lambda, RDS, S3 and CloudWatch, an IAM role per agent.",
+    vendor: "aws",
+    surfaces: surfacesOf("aws"),
+    doc: "aws",
   },
 ];
 

@@ -135,6 +135,7 @@ var issuerCases = []struct {
 		return issuerRig{e: appEngine(t, c), c: c, kind: integration.KindGitHub,
 			ready: "builder", waiting: "planner", says: "403"}
 	}},
+	{"aws", awsRig},
 	{"a second issuer", func(t *testing.T, refused bool) issuerRig {
 		// GITHUB OFF, so the fake is the only issuer that issues anything.
 		c := appCompany(t, "https://github.example.com", false)
@@ -200,8 +201,8 @@ func TestEveryIssuerMeetsTheContract(t *testing.T) {
 				if value == "" || !ok || issued.Token != value {
 					t.Fatalf("the seat's own variable resolved to %q and the source reports %v", value, ok)
 				}
-				now := time.Now()
-				if issued.ExpiresAt.Sub(issued.RenewAt) < toolTokenLife || issued.ExpiresAt.Before(now.Add(runTokenLife)) ||
+				now, lives := time.Now(), livesOf(issuer)
+				if issued.ExpiresAt.Sub(issued.RenewAt) < lives.renewBefore || issued.ExpiresAt.Before(now.Add(lives.run())) ||
 					!issued.RenewAt.After(now) {
 					t.Errorf("an issue expiring %v and renewed %v does not serve the lives the paths ask",
 						issued.ExpiresAt.Sub(now), issued.RenewAt.Sub(now))

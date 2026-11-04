@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
@@ -46,6 +47,7 @@ func TestEveryVendorReportsARefusalStatus(t *testing.T) {
 		"cloudflare": cloudflare.Status,
 		"expo":       expo.Status,
 		"scaleway":   scaleway.Status,
+		"aws":        aws.Status,
 	}
 	for name, status := range accessors {
 		// A non-API error is 0, which Reject leaves alone: a dial timeout
@@ -83,6 +85,7 @@ func TestEveryVendorReadsItsOwnRefusal(t *testing.T) {
 		"cloudflare": {cloudflare.Status, &cloudflare.APIError{Status: 401}},
 		"expo":       {expo.Status, &expo.APIError{Status: 401}},
 		"scaleway":   {scaleway.Status, &scaleway.APIError{Status: 401}},
+		"aws":        {aws.Status, &aws.APIError{Status: 401}},
 	}
 	for name, tc := range refusals {
 		if got := tc.status(tc.err); got != 401 {

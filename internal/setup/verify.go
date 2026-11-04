@@ -120,6 +120,12 @@ type Check struct {
 	// (`integrations.cloudflare.provisioning.zones`), carried for the one
 	// probe that reads it: a document field with no form field of its own.
 	Zones []string
+
+	// Regions is the AWS Region list the company declared
+	// (`integrations.aws.provisioning.regions`), carried for the one probe
+	// that renders the stack's boundary from it: a document field with no
+	// form field of its own. Empty is the home Region and us-east-1.
+	Regions []string
 }
 
 // Secret is the credential under check, for a probe that must keep it out

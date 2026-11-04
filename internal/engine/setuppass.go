@@ -91,6 +91,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&scalewayPass{engine: e},
 		&expoPass{engine: e},
 		&digitaloceanPass{engine: e},
+		&awsPass{engine: e},
 		&atlassianPass{engine: e},
 	}
 }

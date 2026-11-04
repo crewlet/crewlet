@@ -202,7 +202,10 @@ func TestTheCuratedTableCannotBeChangedThroughACopy(t *testing.T) {
 }
 
 // key is one seat credential as the binding table it replaces spelled it.
-type key struct{ field, env, header, prefix string }
+type key struct {
+	field, env, header, prefix string
+	sign                       bool
+}
 
 // replaced is the binding table recognition replaces (SeatToolBindings in
 // internal/config, before this package held it), integration by integration
@@ -211,23 +214,24 @@ var replaced = []struct {
 	vendor, server string
 	keys           []key
 }{
-	{"datadog", "datadog", []key{{"APP_KEY", "DD_APPLICATION_KEY", "DD_APPLICATION_KEY", ""}}},
-	{"github", "github", []key{{"APP_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "Authorization", "Bearer "}}},
-	{"gitlab", "gitlab", []key{{"TOKEN", "GITLAB_TOKEN", "Private-Token", ""}}},
-	{"gitlab", "gitlab", []key{{"TOKEN", "GITLAB_PERSONAL_ACCESS_TOKEN", "Private-Token", ""}}},
-	{"slack", "slack", []key{{"BOT_TOKEN", "SLACK_MCP_XOXB_TOKEN", "Authorization", "Bearer "}}},
-	{"mattermost", "mattermost", []key{{"BOT_TOKEN", "MATTERMOST_TOKEN", "", ""}}},
-	{"atlassian", "atlassian", []key{{"TOKEN", "JIRA_API_TOKEN", "", ""}, {"EMAIL", "JIRA_USERNAME", "", ""},
-		{"TOKEN", "CONFLUENCE_API_TOKEN", "", ""}, {"EMAIL", "CONFLUENCE_USERNAME", "", ""}}},
-	{"cloudflare", "cloudflare", []key{{"API_TOKEN", "", "Authorization", "Bearer "}}},
-	{"digitalocean", "digitalocean", []key{{"TOKEN", "", "Authorization", "Bearer "}}},
-	{"scaleway", "scaleway", []key{{"SECRET_KEY", "SCW_SECRET_KEY", "", ""}, {"ACCESS_KEY", "SCW_ACCESS_KEY", "", ""}}},
+	{"datadog", "datadog", []key{{"APP_KEY", "DD_APPLICATION_KEY", "DD_APPLICATION_KEY", "", false}}},
+	{"github", "github", []key{{"APP_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "Authorization", "Bearer ", false}}},
+	{"gitlab", "gitlab", []key{{"TOKEN", "GITLAB_TOKEN", "Private-Token", "", false}}},
+	{"gitlab", "gitlab", []key{{"TOKEN", "GITLAB_PERSONAL_ACCESS_TOKEN", "Private-Token", "", false}}},
+	{"slack", "slack", []key{{"BOT_TOKEN", "SLACK_MCP_XOXB_TOKEN", "Authorization", "Bearer ", false}}},
+	{"mattermost", "mattermost", []key{{"BOT_TOKEN", "MATTERMOST_TOKEN", "", "", false}}},
+	{"atlassian", "atlassian", []key{{"TOKEN", "JIRA_API_TOKEN", "", "", false}, {"EMAIL", "JIRA_USERNAME", "", "", false},
+		{"TOKEN", "CONFLUENCE_API_TOKEN", "", "", false}, {"EMAIL", "CONFLUENCE_USERNAME", "", "", false}}},
+	{"cloudflare", "cloudflare", []key{{"API_TOKEN", "", "Authorization", "Bearer ", false}}},
+	{"digitalocean", "digitalocean", []key{{"TOKEN", "", "Authorization", "Bearer ", false}}},
+	{"scaleway", "scaleway", []key{{"SECRET_KEY", "SCW_SECRET_KEY", "", "", false}, {"ACCESS_KEY", "SCW_ACCESS_KEY", "", "", false}}},
+	{"aws", "aws", []key{{"CREDENTIALS", "", "", "", true}}},
 }
 
 func keysOf(in []catalogue.SeatKey) []key {
 	out := make([]key, 0, len(in))
 	for _, k := range in {
-		out = append(out, key{k.Field, k.Env, k.Header, k.Prefix})
+		out = append(out, key{k.Field, k.Env, k.Header, k.Prefix, k.Sign})
 	}
 	return out
 }
@@ -292,6 +296,10 @@ func TestRecognitionMatchesTheSeatBindingsItReplaces(t *testing.T) {
 		{"scw serving MCP", stdio("scw", "mcp", "server", "serve"), "scaleway", bound(9)},
 		{"scw by its path", stdio("/usr/local/bin/scw", "mcp", "server", "serve", "namespaces=instance"), "scaleway", bound(9)},
 		{"scw doing something else", stdio("scw", "instance", "server", "list"), "", nil},
+		{"AWS's server in us-east-1", remote("https://aws-mcp.us-east-1.api.aws/mcp"), "aws", bound(10)},
+		{"AWS's server in eu-west-1", remote("https://aws-mcp.eu-west-1.api.aws/mcp"), "aws", bound(10)},
+		{"another AWS endpoint under api.aws", remote("https://sts.us-east-1.api.aws/"), "", nil},
+		{"a lookalike of AWS's server", remote("https://aws-mcp.us-east-1.api.aws.example.net/mcp"), "", nil},
 		{"a server nobody recognises", stdio("uvx", "some-server==1.0.0"), "", nil},
 		{"an address nobody recognises", remote("https://mcp.example.com/"), "", nil},
 		{"an address that does not parse", remote("://mcp.datadoghq.com"), "", nil},
