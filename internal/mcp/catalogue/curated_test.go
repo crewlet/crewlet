@@ -224,6 +224,7 @@ var replaced = []struct {
 		{"TOKEN", "CONFLUENCE_API_TOKEN", "", "", false}, {"EMAIL", "CONFLUENCE_USERNAME", "", "", false}}},
 	{"cloudflare", "cloudflare", []key{{"API_TOKEN", "", "Authorization", "Bearer ", false}}},
 	{"digitalocean", "digitalocean", []key{{"TOKEN", "", "Authorization", "Bearer ", false}}},
+	{"scaleway", "scaleway", []key{{"SECRET_KEY", "SCW_SECRET_KEY", "", "", false}, {"ACCESS_KEY", "SCW_ACCESS_KEY", "", "", false}}},
 	{"aws", "aws", []key{{"CREDENTIALS", "", "", "", true}}},
 }
 
@@ -292,8 +293,11 @@ func TestRecognitionMatchesTheSeatBindingsItReplaces(t *testing.T) {
 		{"DigitalOcean's API itself", remote("https://api.digitalocean.com/v2/"), "", nil},
 		{"a lookalike of DigitalOcean's router", remote("https://mcp.digitalocean.com.example.net/mcp"), "", nil},
 		{"DigitalOcean's host spelled on stdio", stdio("curl", "https://mcp.digitalocean.com/mcp"), "", nil},
-		{"AWS's server in us-east-1", remote("https://aws-mcp.us-east-1.api.aws/mcp"), "aws", bound(9)},
-		{"AWS's server in eu-west-1", remote("https://aws-mcp.eu-west-1.api.aws/mcp"), "aws", bound(9)},
+		{"scw serving MCP", stdio("scw", "mcp", "server", "serve"), "scaleway", bound(9)},
+		{"scw by its path", stdio("/usr/local/bin/scw", "mcp", "server", "serve", "namespaces=instance"), "scaleway", bound(9)},
+		{"scw doing something else", stdio("scw", "instance", "server", "list"), "", nil},
+		{"AWS's server in us-east-1", remote("https://aws-mcp.us-east-1.api.aws/mcp"), "aws", bound(10)},
+		{"AWS's server in eu-west-1", remote("https://aws-mcp.eu-west-1.api.aws/mcp"), "aws", bound(10)},
 		{"another AWS endpoint under api.aws", remote("https://sts.us-east-1.api.aws/"), "", nil},
 		{"a lookalike of AWS's server", remote("https://aws-mcp.us-east-1.api.aws.example.net/mcp"), "", nil},
 		{"a server nobody recognises", stdio("uvx", "some-server==1.0.0"), "", nil},

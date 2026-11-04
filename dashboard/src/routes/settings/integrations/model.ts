@@ -127,6 +127,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Create one account API token at Cloudflare for Crewlet to mint the agents' tokens from. It needs every permission an agent can be given.",
   },
+  scaleway: {
+    does: [
+      "Read servers, storage, networks, DNS and databases in the projects you choose",
+      "Restart servers and change firewalls, IPs, load balancers and private networks, where you allow it",
+      "Use the Scaleway CLI or MCP server as themselves, with their own API key",
+    ],
+    identity:
+      "Crewlet makes a Scaleway IAM application for each agent, with its own policy and API key.",
+    byHand:
+      "Create an IAM application for Crewlet with an API key, and a policy giving it IAMApplicationManager, IAMPolicyManager and ProjectReadOnly on your Organization. That key is equivalent to an Organization administrator for IAM applications and policies, so give it a short expiry and rotate it.",
+  },
   expo: {
     does: [
       "Read EAS builds, their logs and submissions",

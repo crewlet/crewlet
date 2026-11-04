@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
 )
@@ -44,6 +45,7 @@ func SetupProbes() map[integration.Kind]setup.Probe {
 		integration.KindGitLab:       gitlab.Probe(nil),
 		integration.KindJira:         jira.Probe(nil),
 		integration.KindMattermost:   mattermost.Probe(nil, nil),
+		integration.KindScaleway:     scaleway.Probe(nil),
 		integration.KindSlack:        slack.Probe(nil),
 	}
 }

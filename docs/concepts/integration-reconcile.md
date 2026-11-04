@@ -167,6 +167,7 @@ flowchart LR
 | GitLab | `{username_prefix}-{handle}`, and the token name `crewlet-<handle>` | — |
 | Datadog | the account address, `crewlet-<handle>@{email_domain}` | — |
 | Cloudflare | the account API token's name, `crewlet-<company>-<handle>` with the company name slugified, beside the token ID the engine records when it mints it | Nothing |
+| Scaleway | the IAM application's name, `crewlet-<company>-<handle>` with the company name slugified, which its policy shares, beside the application ID the engine records when it makes it | Nothing |
 | Expo | the robot user's name, `crewlet-<company>-<handle>`, which a person gives the robot at Expo, beside the robot ID the engine records from the first token pasted for the seat | Nothing |
 | DigitalOcean | the personal access token's name, `crewlet-<company>-<handle>-<level>`, which a person gives the token in the control panel, beside a keyed fingerprint of the token and its team's ID, which the engine records from the token pasted for the seat | Nothing |
 | AWS | the IAM role's name, `crewlet-<short name>-<seat>` under the path `/crewlet/<short name>/seat/`, beside the role ID the engine records when it creates the role; a role of that name the engine has no record of is refused, never adopted | Nothing |

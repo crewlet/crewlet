@@ -145,6 +145,11 @@ func glabServe(l Launch) bool {
 	return l.Transport == TransportStdio && path.Base(l.Command) == "glab" && slices.Contains(l.Args, "mcp")
 }
 
+// scwServe recognises Scaleway's own CLI serving MCP: `scw mcp server serve`.
+func scwServe(l Launch) bool {
+	return l.Transport == TransportStdio && path.Base(l.Command) == "scw" && slices.Contains(l.Args, "mcp")
+}
+
 // hostIs recognises a remote server at exactly host.
 func hostIs(host string) func(Launch) bool {
 	return func(l Launch) bool { return l.Transport == TransportHTTP && HostOf(l.URL) == host }

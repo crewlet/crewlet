@@ -79,15 +79,22 @@ const answer: IntegrationsAnswer = {
       label: "Connected",
       reason: "",
     },
-    ...["slack", "mattermost", "github", "cloudflare", "expo", "digitalocean", "aws"].map(
-      (key) => ({
-        key,
-        surfaces: [key],
-        state: "not_in_use" as const,
-        label: "Not in use",
-        reason: "",
-      }),
-    ),
+    ...[
+      "slack",
+      "mattermost",
+      "github",
+      "cloudflare",
+      "expo",
+      "digitalocean",
+      "scaleway",
+      "aws",
+    ].map((key) => ({
+      key,
+      surfaces: [key],
+      state: "not_in_use" as const,
+      label: "Not in use",
+      reason: "",
+    })),
   ],
   traffic_known: true,
   traffic_since: null,
@@ -128,6 +135,7 @@ const listing = {
       "cloudflare",
       "expo",
       "digitalocean",
+      "scaleway",
       "aws",
     ].map((k) => tool(k)),
   ],
@@ -288,7 +296,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
     ["Code", ["GitHub", "GitLab"]],
     ["Observability", ["Datadog"]],
-    ["Cloud and Infrastructure", ["AWS", "Cloudflare", "DigitalOcean"]],
+    ["Cloud and Infrastructure", ["AWS", "Cloudflare", "DigitalOcean", "Scaleway"]],
     ["Mobile apps", ["Expo"]],
   ]);
 });

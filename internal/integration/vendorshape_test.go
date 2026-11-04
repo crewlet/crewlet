@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/scaleway"
 )
 
 // EVERY VENDOR READS A REFUSAL THE SAME WAY.
@@ -45,6 +46,7 @@ func TestEveryVendorReportsARefusalStatus(t *testing.T) {
 		"datadog":    datadog.Status,
 		"cloudflare": cloudflare.Status,
 		"expo":       expo.Status,
+		"scaleway":   scaleway.Status,
 		"aws":        aws.Status,
 	}
 	for name, status := range accessors {
@@ -82,6 +84,7 @@ func TestEveryVendorReadsItsOwnRefusal(t *testing.T) {
 		"datadog":    {datadog.Status, &datadog.APIError{Status: 401}},
 		"cloudflare": {cloudflare.Status, &cloudflare.APIError{Status: 401}},
 		"expo":       {expo.Status, &expo.APIError{Status: 401}},
+		"scaleway":   {scaleway.Status, &scaleway.APIError{Status: 401}},
 		"aws":        {aws.Status, &aws.APIError{Status: 401}},
 	}
 	for name, tc := range refusals {

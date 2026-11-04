@@ -35,6 +35,7 @@ import {
   neutralAnswer,
   offLane,
   onLane,
+  scalewayAnswer,
   seat,
 } from "./fixtures.ts";
 import { laneWords, OPERATOR_MANAGED } from "./words.ts";
@@ -1287,6 +1288,76 @@ test("an agent's details read an issued token, the engine's wait and the files C
     ),
   ).toBeTruthy();
   expect(facts.getByText("VENDOR_TOKEN_FILE and .config/crewlet/token")).toBeTruthy();
+});
+
+// A SCALEWAY SEAT IS AN IAM APPLICATION: the details name it, its level under
+// Scaleway's word for what it holds, the key it is sealed in, its tool by both
+// routes, and the settings Crewlet puts in its box.
+test("a Scaleway seat's details name its application, its permission sets, its key and its tools", () => {
+  draw(scalewayAnswer());
+  details("SRE", "Scaleway");
+  const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on Scaleway"]')!);
+  expect(facts.getByText("crewlet-gophrase-sre")).toBeTruthy();
+  expect(facts.getByText("Permission sets")).toBeTruthy();
+  expect(facts.getByText("Operate")).toBeTruthy();
+  expect(facts.getByText("SCALEWAY_SECRET_KEY_SRE")).toBeTruthy();
+  expect(
+    facts.getByText(
+      "Live, the Scaleway MCP server, or scw in its box, as SCW_SECRET_KEY and SCW_ACCESS_KEY",
+    ),
+  ).toBeTruthy();
+  expect(
+    facts.getByText(
+      "SCW_DEFAULT_ORGANIZATION_ID, SCW_DEFAULT_PROJECT_ID and SCW_DISABLE_CHECK_VERSION",
+    ),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Rotate credential" })).toBeTruthy();
+});
+
+// A SEAT'S PROJECTS ARE PICKED BY NAME, stored by ID: the picker reads the
+// project's name, never its UUID.
+test("a Scaleway seat's projects read by name", () => {
+  draw(scalewayAnswer());
+  const picker = document.querySelector<HTMLElement>(`[aria-label="SRE's Scaleway projects"]`)!;
+  expect(picker.textContent).toContain("gophrase-prod");
+  expect(picker.textContent).not.toContain("11111111");
+});
+
+// NO PROJECT REACHES NOTHING: turning a Scaleway agent on with none holds the
+// review, in the engine's words, and says under its row what to choose.
+test("a Scaleway agent turned on with no project is held at the review", () => {
+  draw(scalewayAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Scaleway" }));
+  expect(
+    screen.getByText("Not in any project yet, so it can reach nothing. Choose its projects."),
+  ).toBeTruthy();
+  const review = screen.getByRole("button", { name: "Review changes" });
+  expect(review.getAttribute("aria-disabled")).toBe("true");
+});
+
+// A SCALEWAY AGENT WITH NO TOOL is told both routes, the server first, then its
+// own two box lines, never the settings Crewlet supplies.
+test("a Scaleway agent with no tool is told the server or its own two box lines", () => {
+  draw(scalewayAnswer({ tool: "no_server" }));
+  const advice = screen.getByText(/SRE has an account at Scaleway and nothing to use it with/);
+  expect(advice.textContent).toContain("the company declares no scaleway tool server");
+  expect(advice.textContent).toContain(
+    'SCW_SECRET_KEY: "${SCALEWAY_SECRET_KEY_SRE}" and SCW_ACCESS_KEY: "${SCALEWAY_ACCESS_KEY_SRE}"',
+  );
+  expect(advice.textContent).not.toMatch(/SCW_DEFAULT/);
+});
+
+// TURNING A SCALEWAY AGENT OFF deletes its key at once, then its policy and
+// application, and the review says so before the save.
+test("turning a Scaleway seat off says the key goes at once, then its policy and application", async () => {
+  draw(scalewayAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "SRE on Scaleway" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      "Crewlet deletes the agent's API key, so it stops working at once, then its policy and IAM application. Turning it back on creates new ones.",
+    ),
+  ).toBeTruthy();
 });
 
 // AN AWS SEAT IS AN IAM ROLE WITH CREDENTIALS NOBODY HOLDS: the details name

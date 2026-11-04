@@ -22,6 +22,8 @@ func ScopeKey(lane Lane, entry string) string {
 		return config.JiraProjectKey(entry)
 	case LaneConfluence:
 		return config.ConfluenceSpaceKey(entry)
+	case LaneScaleway:
+		return config.ScalewayID(entry)
 	default:
 		return strings.TrimSpace(entry)
 	}

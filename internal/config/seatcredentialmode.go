@@ -47,6 +47,8 @@ const (
 //     token mints each agent's account API token.
 //   - expo: an enabled block with `provisioning`, whose Admin token creates
 //     each agent's robot user.
+//   - scaleway: an enabled block with `provisioning`, whose provisioner key
+//     makes each agent's IAM application, policy and API key.
 //   - aws: an enabled block with `provisioning`, whose provisioner role creates
 //     each agent's IAM role and whose broker issues its session.
 //   - slack: the sealed app-configuration token
@@ -83,6 +85,8 @@ func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMo
 		engine = in.Expo != nil && in.Expo.Enabled && in.Expo.Provisioning != nil
 	case "digitalocean":
 		engine = in.DigitalOcean != nil && in.DigitalOcean.Enabled && in.DigitalOcean.Provisioning != nil
+	case "scaleway":
+		engine = in.Scaleway != nil && in.Scaleway.Enabled && in.Scaleway.Provisioning != nil
 	case "aws":
 		engine = in.AWS != nil && in.AWS.Enabled && in.AWS.Provisioning != nil
 	}

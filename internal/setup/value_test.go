@@ -78,3 +78,35 @@ func TestAFieldJudgesItsValue(t *testing.T) {
 		}
 	}
 }
+
+// A VENDOR-ISSUED IDENTIFIER IS HELD TO ITS SHAPE AND NEVER MINTED: a
+// Scaleway Organization ID or secret key is a UUID, an access key SCW and 17
+// capital letters or digits, and a value Crewlet made up would name nothing.
+func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		shape setup.Shape
+		value string
+		ok    bool
+	}{
+		{setup.ShapeUUID, "11111111-2222-4333-8444-555555555555", true},
+		{setup.ShapeUUID, "11111111-2222-4333-8444-55555555555", false},
+		{setup.ShapeUUID, "11111111222243338444555555555555", false},
+		{setup.ShapeScalewayAccessKey, "SCWABCDEFGHIJ0123456", true},
+		{setup.ShapeScalewayAccessKey, "SCWABCDEFGHIJ012345", false},
+		{setup.ShapeScalewayAccessKey, "scwabcdefghij0123456", false},
+	} {
+		problem := tc.shape.Problem("access key", tc.value)
+		if (problem == "") != tc.ok {
+			t.Errorf("%s %q: problem %q", tc.shape, tc.value, problem)
+		}
+		if problem != "" && strings.Contains(problem, tc.value) {
+			t.Errorf("%s: the refusal quotes the value", tc.shape)
+		}
+	}
+	for _, shape := range []setup.Shape{setup.ShapeUUID, setup.ShapeScalewayAccessKey} {
+		if value, err := shape.Mint(func() string { return "minted" }); err == nil || value != "" {
+			t.Errorf("%s minted %q", shape, value)
+		}
+	}
+}

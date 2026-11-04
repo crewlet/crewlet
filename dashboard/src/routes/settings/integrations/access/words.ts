@@ -242,6 +242,25 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Crewlet rolls the token to a new value and seals it. Anything still using the old value stops working.",
     tool: "Cloudflare MCP server, one per agent",
   },
+  scaleway: {
+    name: "Scaleway",
+    access: "Permission sets",
+    turnOn:
+      "Turning it on creates a Scaleway IAM application for the agent, with a policy holding the chosen permission sets on its projects and its own API key.",
+    off: "Crewlet deletes the agent's API key, so it stops working at once, then its policy and IAM application. Turning it back on creates new ones.",
+    remove:
+      "The agent's application is already deleted at Scaleway, so removing only stops Crewlet tracking it.",
+    rotate:
+      "Crewlet creates a new API key for the application, seals it, then deletes the old one. Anything still using the old key stops working.",
+    scope: {
+      noun: "Projects",
+      singular: "project",
+      empty: "No project",
+      emptyOn: "Not in any project yet, so it can reach nothing. Choose its projects.",
+      none: "No projects in the organization",
+    },
+    tool: "the Scaleway MCP server, or scw in its box",
+  },
   expo: {
     name: "Expo",
     access: "Role at Expo",
