@@ -23,13 +23,17 @@ const awsConnection = "arn:aws:rolesanywhere:us-east-2:123456789012:trust-anchor
 	"arn:aws:rolesanywhere:us-east-2:123456789012:profile/10010203-0405-4607-8809-0a0b0c0d0e0f," +
 	"arn:aws:iam::123456789012:role/crewlet/acme/crewlet-acme-broker"
 
-// toServer sends every request, whatever AWS host it names, to a fake.
-type toServer struct{ to *url.URL }
+// toServer sends every request, whatever AWS host it names, to a fake,
+// through the fake's own client transport.
+type toServer struct {
+	to   *url.URL
+	base http.RoundTripper
+}
 
 func (r toServer) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
 	req.URL.Scheme, req.URL.Host = r.to.Scheme, r.to.Host
-	return http.DefaultTransport.RoundTrip(req)
+	return r.base.RoundTrip(req)
 }
 
 // awsRig is the AWS issuer on a company where builder's seat is on and
@@ -114,7 +118,7 @@ roles:
 		t.Fatal(err)
 	}
 	e := &Engine{environ: config.MapSource{"AWS_CERTIFICATE_AUTHORITY": bundle}}
-	e.awsIssuer.HTTP = &http.Client{Transport: toServer{to: to}}
+	e.awsIssuer.HTTP = &http.Client{Transport: toServer{to: to, base: srv.Client().Transport}}
 	e.epoch.current.Store(c)
 	return issuerRig{e: e, c: c, kind: integration.KindAWS, ready: "builder", waiting: "planner",
 		says: "Untrusted certificate"}

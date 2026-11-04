@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // Launch is what recognition reads of a configured server: its transport and
@@ -176,10 +177,10 @@ func hostUnder(domains ...string) func(Launch) bool {
 // awsMCPHost recognises AWS's MCP Server in any Region it runs in:
 // aws-mcp.<Region>.api.aws, and no other host under api.aws.
 func awsMCPHost(l Launch) bool {
-	return l.Transport == TransportHTTP && awsMCP.MatchString(HostOf(l.URL))
+	return l.Transport == TransportHTTP && awsMCP().MatchString(HostOf(l.URL))
 }
 
-var awsMCP = regexp.MustCompile(`^aws-mcp\.[a-z0-9-]+\.api\.aws$`)
+var awsMCP = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^aws-mcp\.[a-z0-9-]+\.api\.aws$`) })
 
 // either recognises what a or b does.
 func either(a, b func(Launch) bool) func(Launch) bool {

@@ -174,7 +174,7 @@ func TestIdentitiesAreSplit(t *testing.T) {
 	for _, co := range []Company{"probe", "acme", Company(strings.Repeat("c", 20))} {
 		for _, slug := range []string{"sre", "provisioner", strings.Repeat("h", 27)} {
 			seat := seatCN(co, slug)
-			if !cnPattern.MatchString(seat) || seat == named(provisionerCN, co) || !matches(named(seatCNPrefix, co)+"*", seat) {
+			if !cnPattern().MatchString(seat) || seat == named(provisionerCN, co) || !matches(named(seatCNPrefix, co)+"*", seat) {
 				t.Fatalf("seat CN %q", seat)
 			}
 		}

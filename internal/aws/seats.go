@@ -52,7 +52,7 @@ func (c Company) SeatRoleName(slug string) string { return named("crewlet-{compa
 // the seat path the engine did not make.
 func (c Company) slugOf(roleName string) (string, bool) {
 	slug, ok := strings.CutPrefix(roleName, named("crewlet-{company}-", c))
-	return slug, ok && slug != "" && cnPattern.MatchString(seatCN(c, slug))
+	return slug, ok && slug != "" && cnPattern().MatchString(seatCN(c, slug))
 }
 
 // Access is what a seat role's managed policies grant.
@@ -313,13 +313,13 @@ func (c *Client) Apply(ctx context.Context, roleName string, ch Change) error {
 	in := awssdk.String(roleName)
 	if ch.Attach {
 		if _, err := c.IAM.AttachRolePolicy(ctx, &iam.AttachRolePolicyInput{RoleName: in, PolicyArn: awssdk.String(ch.PolicyARN)}); err != nil {
-			return fmt.Errorf("aws: attach %s to %s: %w", c.conn.PolicyName(ch.PolicyARN), roleName, err)
+			return fmt.Errorf("aws: attaching %s to %s: %w", c.conn.PolicyName(ch.PolicyARN), roleName, err)
 		}
 		return nil
 	}
 	_, err := c.IAM.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{RoleName: in, PolicyArn: awssdk.String(ch.PolicyARN)})
 	if err != nil && !hasCode(err, "NoSuchEntity") {
-		return fmt.Errorf("aws: detach %s from %s: %w", c.conn.PolicyName(ch.PolicyARN), roleName, err)
+		return fmt.Errorf("aws: detaching %s from %s: %w", c.conn.PolicyName(ch.PolicyARN), roleName, err)
 	}
 	return nil
 }

@@ -45,8 +45,8 @@ func RenderStack(p StackParams) ([]byte, error) {
 	if !strings.Contains(p.CAPEM, "BEGIN CERTIFICATE") || hasPEMPrivateKey(p.CAPEM) {
 		return nil, fmt.Errorf("the CA certificate is not PEM")
 	}
-	if !cnPattern.MatchString(p.IssuerCN) {
-		return nil, fmt.Errorf("issuer CN %q must match %s", p.IssuerCN, cnPattern)
+	if !cnPattern().MatchString(p.IssuerCN) {
+		return nil, fmt.Errorf("issuer CN %q must match %s", p.IssuerCN, cnPattern())
 	}
 	if len(p.Regions) == 0 {
 		return nil, fmt.Errorf("name at least one allowed region")

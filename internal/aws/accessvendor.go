@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // AWS's half of per-seat access. The seat's account is its IAM role, recorded
@@ -69,23 +70,27 @@ func settling() *seataccess.Settling {
 	return &seataccess.Settling{Reason: "AWS is still applying the change", Until: time.Now().Add(settleFor)}
 }
 
-// levelInfo is how the Agents tab names each level.
-var levelInfo = map[string]struct{ name, note string }{
-	config.AWSLevelRead: {"Read", "Reads resource settings, metrics and the contents of CloudWatch Logs, which " +
-		"hold whatever your workloads print. It reads no stored objects, items, parameter values or secrets."},
-	config.AWSLevelOperate: {"Operate", "Read, plus starting, stopping, rebooting and scaling what exists, " +
-		"invoking functions, invalidating the CDN, editing alarms and reading and writing S3 objects."},
-	config.AWSLevelAdminister: {"Administer", "Operate, plus managing those services whole. It can create " +
-		"access that outlives the agent's session: instance key pairs, user data on instances, database " +
-		"users, and bucket and key policies."},
+// levelInfo is how the Agents tab names a level, and its note.
+func levelInfo(level string) (name, note string) {
+	switch level {
+	case config.AWSLevelRead:
+		return "Read", "Reads resource settings, metrics and the contents of CloudWatch Logs, which " +
+			"hold whatever your workloads print. It reads no stored objects, items, parameter values or secrets."
+	case config.AWSLevelOperate:
+		return "Operate", "Read, plus starting, stopping, rebooting and scaling what exists, " +
+			"invoking functions, invalidating the CDN, editing alarms and reading and writing S3 objects."
+	case config.AWSLevelAdminister:
+		return "Administer", "Operate, plus managing those services whole. It can create " +
+			"access that outlives the agent's session: instance key pairs, user data on instances, database " +
+			"users, and bucket and key policies."
+	}
+	return level, ""
 }
 
 // LevelName is a level's name as the Agents tab shows it.
 func LevelName(level string) string {
-	if info, ok := levelInfo[level]; ok {
-		return info.name
-	}
-	return level
+	name, _ := levelInfo(level)
+	return name
 }
 
 // leftBehind is the caveat on a step that takes Administer away.
@@ -203,7 +208,8 @@ type accessSession struct {
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
 	var levels []seataccess.Level
 	for _, id := range config.AWSLevels() {
-		levels = append(levels, seataccess.Level{ID: id, Name: levelInfo[id].name, Note: levelInfo[id].note,
+		name, note := levelInfo(id)
+		levels = append(levels, seataccess.Level{ID: id, Name: name, Note: note,
 			Administers: id == config.AWSLevelAdminister})
 	}
 	return seataccess.Options{Lane: lane, Levels: levels, ActionURL: s.rolesURL()}, nil
@@ -400,7 +406,7 @@ func (s *accessSession) foreign(role SeatRole) *seataccess.Refusal {
 		}
 	case len(held) > 0:
 		return &seataccess.Refusal{
-			Said:   "AWS: " + role.Name + " also holds " + strings.Join(held, " and ") + ", which no level grants",
+			Said:   "AWS: " + role.Name + " also holds " + words.And(held) + ", which no level grants",
 			Remedy: "Remove them from the role in IAM; Crewlet's provisioner may only attach and detach its own levels",
 			Actor:  seataccess.ByYou, ActionURL: s.roleURL(role.Name),
 		}

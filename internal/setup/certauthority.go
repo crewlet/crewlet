@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,7 +32,7 @@ const (
 
 // caName keeps a certificate authority's name inside what a vendor's tag
 // and condition patterns accept.
-var caName = regexp.MustCompile(`^crewlet-[a-z0-9-]{1,53}$`)
+var caName = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^crewlet-[a-z0-9-]{1,53}$`) })
 
 // CertificateAuthorityName names a new certificate authority; the suffix
 // tells two of them apart while a trust anchor holds both.
@@ -45,8 +46,8 @@ func CertificateAuthorityName() string {
 // trust anchor rules (X.509v3, CA:true, Certificate Sign, SHA-256) and returns
 // the bundle to seal: the key's PEM, then the certificate's.
 func GenerateCertificateAuthority(name string, now time.Time) (string, error) {
-	if !caName.MatchString(name) {
-		return "", fmt.Errorf("setup: certificate authority name %q must match %s", name, caName)
+	if !caName().MatchString(name) {
+		return "", fmt.Errorf("setup: certificate authority name %q must match %s", name, caName())
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

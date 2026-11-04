@@ -33,7 +33,7 @@ func TestASignedServersRequestsAreSignedOnItsOwnOrigin(t *testing.T) {
 	}))
 	defer srv.Close()
 	signer := &fakeSigner{}
-	ident := &httpIdentity{base: http.DefaultTransport, signer: signer, origin: originOf(srv.URL), server: "aws"}
+	ident := &httpIdentity{base: srv.Client().Transport, signer: signer, origin: originOf(srv.URL), server: "aws"}
 	v := "2025-06-18"
 	ident.setProtocolVersion(v)
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", strings.NewReader(`{"jsonrpc":"2.0"}`))

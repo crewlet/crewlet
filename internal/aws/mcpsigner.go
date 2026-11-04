@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sigv4"
@@ -21,17 +22,23 @@ import (
 const mcpService = "aws-mcp"
 
 // mcpHost is an AWS MCP Server endpoint's host; its Region is the signing one.
-var mcpHost = regexp.MustCompile(`^aws-mcp\.([a-z0-9-]+)\.api\.aws$`)
+var mcpHost = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^aws-mcp\.([a-z0-9-]+)\.api\.aws$`) })
 
-// mcpEndpointRegions are where AWS runs its MCP Server, as read live; from any
+// mcpEndpointRegion reports a Region AWS runs its MCP Server in, as read live; from any
 // other home Region the server at us-east-1 is used.
-var mcpEndpointRegions = map[string]bool{"us-east-1": true, "us-west-2": true, "ap-southeast-1": true,
-	"ap-southeast-2": true, "ap-northeast-1": true, "eu-central-1": true, "eu-west-1": true, "eu-west-2": true}
+func mcpEndpointRegion(region string) bool {
+	switch region {
+	case "us-east-1", "us-west-2", "ap-southeast-1", "ap-southeast-2", "ap-northeast-1", "eu-central-1", "eu-west-1",
+		"eu-west-2":
+		return true
+	}
+	return false
+}
 
 // MCPEndpoint is the AWS MCP Server an agent working in home reaches.
 func MCPEndpoint(home string) string {
 	region := home
-	if !mcpEndpointRegions[region] {
+	if !mcpEndpointRegion(region) {
 		region = "us-east-1"
 	}
 	return "https://aws-mcp." + region + ".api.aws/mcp"
@@ -66,7 +73,7 @@ func NewMCPSigner(session, home string) (MCPSigner, error) {
 // Sign adds the agent's Region to the message's metadata and signs the
 // request over every header it carries.
 func (s MCPSigner) Sign(_ context.Context, req *http.Request, body []byte) ([]byte, error) {
-	m := mcpHost.FindStringSubmatch(req.URL.Hostname())
+	m := mcpHost().FindStringSubmatch(req.URL.Hostname())
 	if m == nil {
 		return nil, errors.New("aws: requests are signed for AWS's MCP Server alone")
 	}

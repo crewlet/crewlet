@@ -103,7 +103,7 @@ func TestTheMintedCertificateAuthoritySignsLeaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ca.Cert.IsCA || !cnPattern.MatchString(ca.Cert.Subject.CommonName) || hasPEMPrivateKey(ca.CertificatePEM()) {
+	if !ca.Cert.IsCA || !cnPattern().MatchString(ca.Cert.Subject.CommonName) || hasPEMPrivateKey(ca.CertificatePEM()) {
 		t.Fatalf("%+v", ca.Cert.Subject)
 	}
 	leaf, _, err := ca.Leaf(seatCN("acme", SeatSlug("sre")), ca.Cert.NotBefore.Add(time.Hour), LeafECDSA)

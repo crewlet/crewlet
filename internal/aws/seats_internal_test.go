@@ -37,8 +37,8 @@ func TestASeatsNameFitsAWSAndIsItsOwn(t *testing.T) {
 		if n := len(company.SeatRoleName(slug)); n > 64 {
 			t.Errorf("%q: role name is %d characters", handle, n)
 		}
-		if cn := seatCN(company, slug); !cnPattern.MatchString(cn) {
-			t.Errorf("%q: certificate name %q is outside %s", handle, cn, cnPattern)
+		if cn := seatCN(company, slug); !cnPattern().MatchString(cn) {
+			t.Errorf("%q: certificate name %q is outside %s", handle, cn, cnPattern())
 		}
 		if got, ok := company.slugOf(company.SeatRoleName(slug)); !ok || got != slug {
 			t.Errorf("%q: the role name does not read back as its slug", handle)

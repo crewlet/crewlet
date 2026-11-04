@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/setup"
@@ -33,7 +34,7 @@ const (
 
 // cnPattern keeps a CN inside what STS accepts as a source identity behind
 // Roles Anywhere's "CN=" prefix (61 characters) and inside the tag pattern.
-var cnPattern = regexp.MustCompile(`^crewlet-[a-z0-9-]{1,53}$`)
+var cnPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^crewlet-[a-z0-9-]{1,53}$`) })
 
 // LeafKind picks the leaf's key type, and so its signing algorithm.
 type LeafKind int
@@ -72,8 +73,8 @@ func (ca *CA) CertificatePEM() string {
 // Leaf mints an end-entity certificate for one CreateSession: CA:false,
 // Digital Signature, and the CN that becomes the session's source identity.
 func (ca *CA) Leaf(cn string, now time.Time, kind LeafKind) (*x509.Certificate, crypto.Signer, error) {
-	if !cnPattern.MatchString(cn) {
-		return nil, nil, fmt.Errorf("aws: leaf common name %q must match %s", cn, cnPattern)
+	if !cnPattern().MatchString(cn) {
+		return nil, nil, fmt.Errorf("aws: leaf common name %q must match %s", cn, cnPattern())
 	}
 	var key crypto.Signer
 	var err error

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/words"
@@ -139,20 +140,26 @@ func (c AWSConnection) String() string {
 var (
 	// awsSlug keeps every derived name inside IAM's 64-character role name,
 	// and an agent's certificate name inside Roles Anywhere's 61 characters.
-	awsSlug   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$`)
-	awsRegion = regexp.MustCompile(`^[a-z]{2}(-gov)?-[a-z]+-\d$`)
+	awsSlug   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$`) })
+	awsRegion = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z]{2}(-gov)?-[a-z]+-\d$`) })
 
-	awsAnchor  = regexp.MustCompile(`^arn:(aws[a-z-]*):rolesanywhere:([a-z0-9-]+):(\d{12}):trust-anchor/[0-9a-f-]{36}$`)
-	awsProfile = regexp.MustCompile(`^arn:(aws[a-z-]*):rolesanywhere:([a-z0-9-]+):(\d{12}):profile/[0-9a-f-]{36}$`)
+	awsAnchor = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^arn:(aws[a-z-]*):rolesanywhere:([a-z0-9-]+):(\d{12}):trust-anchor/[0-9a-f-]{36}$`)
+	})
+	awsProfile = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^arn:(aws[a-z-]*):rolesanywhere:([a-z0-9-]+):(\d{12}):profile/[0-9a-f-]{36}$`)
+	})
 	// The slug is read from the role ARN, path and name both.
-	awsRole = regexp.MustCompile(`^arn:(aws[a-z-]*):iam::(\d{12}):role/crewlet/([a-z0-9-]+)/crewlet-([a-z0-9-]+)-(provisioner|broker)$`)
+	awsRole = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^arn:(aws[a-z-]*):iam::(\d{12}):role/crewlet/([a-z0-9-]+)/crewlet-([a-z0-9-]+)-(provisioner|broker)$`)
+	})
 )
 
 // AWSSlug reports whether slug can name a company's Crewlet objects in AWS.
-func AWSSlug(slug string) bool { return awsSlug.MatchString(slug) }
+func AWSSlug(slug string) bool { return awsSlug().MatchString(slug) }
 
 // AWSRegion reports whether name is an AWS Region code.
-func AWSRegion(name string) bool { return awsRegion.MatchString(name) }
+func AWSRegion(name string) bool { return awsRegion().MatchString(name) }
 
 // ParseAWSConnection checks that value is one company's stack output: the
 // trust anchor, the provisioner's profile and role, the seats' profile and the
@@ -169,11 +176,11 @@ func ParseAWSConnection(slug, homeRegion, value string) (AWSConnection, error) {
 	}
 	c := AWSConnection{TrustAnchorARN: parts[0], ProvisionerProfileARN: parts[1], ProvisionerRoleARN: parts[2],
 		SeatProfileARN: parts[3], BrokerRoleARN: parts[4]}
-	a := awsAnchor.FindStringSubmatch(c.TrustAnchorARN)
-	pp := awsProfile.FindStringSubmatch(c.ProvisionerProfileARN)
-	sp := awsProfile.FindStringSubmatch(c.SeatProfileARN)
-	r := awsRole.FindStringSubmatch(c.ProvisionerRoleARN)
-	b := awsRole.FindStringSubmatch(c.BrokerRoleARN)
+	a := awsAnchor().FindStringSubmatch(c.TrustAnchorARN)
+	pp := awsProfile().FindStringSubmatch(c.ProvisionerProfileARN)
+	sp := awsProfile().FindStringSubmatch(c.SeatProfileARN)
+	r := awsRole().FindStringSubmatch(c.ProvisionerRoleARN)
+	b := awsRole().FindStringSubmatch(c.BrokerRoleARN)
 	switch {
 	case a == nil:
 		return AWSConnection{}, errors.New("its first ARN is not a Roles Anywhere trust anchor")
