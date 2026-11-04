@@ -38,9 +38,10 @@ import (
 //     request. A package that needs more builds it at first use
 //     (sync.OnceValue), as the password blocklist does (140 KB) and the code
 //     cache's file-name patterns do (215 KB).
-//   - hookInitBytes, 1.5 MiB, for the module: about 1.44 MB today, 1.48
-//     under the race detector in a local build and about 1.52 in CI's race
-//     job, which has measured 0.07 MB over the plain build. It was 1.1 MB
+//   - hookInitBytes, 1.5 MiB, for the module: about 1.45 MB today in the
+//     plain build. CI's race job has measured between 0.07 and 0.13 MB over
+//     the plain build: two trees within 1.3 KB of each other plain measured
+//     1.62 and 1.66 MB there. It was 1.1 MB
 //     before the artifact packages and the larger redaction tables were
 //     linked beside the code host, and the brand and the drawing allowlist
 //     came in with their tables built at first use; it had reached 1.62 under
@@ -53,11 +54,14 @@ import (
 //     left 1.31 MB. The code host's own growth since took it to 1.44, and
 //     main's Cloudflare validation then compiled its account and zone patterns
 //     at init — 100 KB in config, 13 in cloudflare — for 1.56 MB, 1.63 in
-//     CI's race job, until those too were built at first use. So a second
-//     webhooks-sized global anywhere fails it, while a toolchain's change to
-//     what a compiled pattern allocates, within the 50 KB left in CI's race
-//     job, does not; growth past that is built at first use rather than
-//     bought with a larger bound.
+//     CI's race job, until those too were built at first use. Main's Scaleway
+//     and DigitalOcean checks then compiled their identifier and token
+//     patterns at init — 24 KB in config, 24 in scaleway, 24 in setup, 19 in
+//     digitalocean — for 1.53 MB, 1.62 in CI's race job, until those too were
+//     built at first use, which left 1.45. So a second webhooks-sized global
+//     anywhere fails it, while a toolchain's change to what a compiled
+//     pattern allocates does not; growth past that is built at first use
+//     rather than bought with a larger bound.
 const (
 	hookInitPackageBytes = 256 << 10
 	hookInitBytes        = 3 << 19
