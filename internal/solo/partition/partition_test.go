@@ -276,3 +276,190 @@ func TestAWeightsFileIsReadStrictly(t *testing.T) {
 		})
 	}
 }
+
+// EVERY PACKAGE OF A HALF IS DEALT TO EXACTLY ONE SHARD, whatever the weights.
+//
+// Halves of 1 to 60 packages into every shard count up to the half's size,
+// under no weights, equal ones, zeros, a skewed spread and one package that
+// outweighs the rest together. No shard is left empty, and no shard carries
+// more than an even split plus the longest package (the deal's bound).
+func TestEveryPackageIsDealtToExactlyOneShard(t *testing.T) {
+	t.Parallel()
+
+	spreads := map[string]func(i int) float64{
+		"no weights": nil,
+		"all equal":  func(int) float64 { return 7 },
+		"all zero":   func(int) float64 { return 0 },
+		"some zero":  func(i int) float64 { return float64(i % 3 * (i * 13 % 97)) },
+		"skewed":     func(i int) float64 { return float64((i*37)%101) * float64(i%5+1) },
+		"one giant": func(i int) float64 {
+			if i == 3 {
+				return 1735
+			}
+			return float64(i%9 + 1)
+		},
+	}
+	for name, spread := range spreads {
+		for size := 1; size <= 60; size++ {
+			half := make([]string, size)
+			var measured map[string]float64
+			if spread != nil {
+				measured = map[string]float64{}
+			}
+			for i := range half {
+				// Distinct for every i below 1000, and out of path order.
+				half[i] = fmt.Sprintf("x/p%03d", i*7919%1000)
+				if spread != nil {
+					measured[half[i]] = spread(i)
+				}
+			}
+			weights, _ := weigh(half, measured)
+			var total, longest float64
+			for _, p := range half {
+				total += weights[p]
+				longest = max(longest, weights[p])
+			}
+			for n := 1; n <= size; n++ {
+				shards := deal(half, weights, n)
+				if err := dealtOnce(half, shards); err != nil {
+					t.Fatalf("%s, %d packages into %d shards: %v", name, size, n, err)
+				}
+				got := slices.Concat(shards...)
+				slices.Sort(got)
+				want := slices.Sorted(slices.Values(half))
+				if !slices.Equal(got, want) {
+					t.Fatalf("%s, %d packages into %d shards: the shards hold %v, the half %v", name, size, n, got, want)
+				}
+				for i, s := range shards {
+					var load float64
+					for _, p := range s {
+						load += weights[p]
+					}
+					if bound := total/float64(n) + longest; load > bound+1e-9 {
+						t.Errorf("%s, %d into %d: shard %d carries %v, over an even split plus the longest, %v",
+							name, size, n, i+1, load, bound)
+					}
+				}
+			}
+		}
+	}
+}
+
+// THE CHECK BEHIND EVERY DEAL REFUSES each way a deal can lose or double a
+// package, so a regression in deal cannot print a short shard and pass.
+func TestTheDealCheckRefusesALostADoubledOrAnEmptyShard(t *testing.T) {
+	t.Parallel()
+
+	half := []string{"x/a", "x/b", "x/c"}
+	for name, c := range map[string]struct {
+		shards [][]string
+		says   string
+	}{
+		"a lost package":    {[][]string{{"x/a"}, {"x/b"}}, "x/c is in no shard"},
+		"a doubled package": {[][]string{{"x/a", "x/b"}, {"x/b", "x/c"}}, "x/b is in shards 1 and 2"},
+		"an empty shard":    {[][]string{{"x/a", "x/b", "x/c"}, {}}, "shard 2/2 is empty"},
+		"a stranger":        {[][]string{{"x/a", "x/b"}, {"x/c", "x/z"}}, "the shards hold 4 packages, the half 3"},
+	} {
+		if err := dealtOnce(half, c.shards); err == nil || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s: dealtOnce = %v, want an error saying %q", name, err, c.says)
+		}
+	}
+	if err := dealtOnce(half, [][]string{{"x/c"}, {"x/a", "x/b"}}); err != nil {
+		t.Errorf("a whole deal was refused: %v", err)
+	}
+}
+
+// THE LONGEST PACKAGES GET SHARDS OF THEIR OWN, and each shard runs longest
+// first, so the package that sets the wall time starts at once with the least
+// beside it.
+func TestTheDealSpreadsTheLongestAndEachShardRunsLongestFirst(t *testing.T) {
+	t.Parallel()
+
+	half := []string{"x/api", "x/chatlet", "x/code", "x/engine", "x/host", "x/search", "x/tiny", "x/worklet"}
+	measured := map[string]float64{
+		"x/api": 133, "x/chatlet": 244, "x/code": 432, "x/engine": 1200,
+		"x/host": 1735, "x/search": 393, "x/tiny": 1, "x/worklet": 337,
+	}
+	want := [][]string{
+		{"x/host"},
+		{"x/engine"},
+		{"x/code", "x/chatlet", "x/api"},
+		{"x/search", "x/worklet", "x/tiny"},
+	}
+	for range 100 {
+		weights, _ := weigh(half, maps.Clone(measured))
+		if got := deal(half, weights, 4); !slices.EqualFunc(got, want, slices.Equal) {
+			t.Fatalf("deal = %v, want %v", got, want)
+		}
+	}
+}
+
+// WITHOUT WEIGHTS THE DEAL IS ROUND-ROBIN over go list's order: a split by
+// package count, which is what a run with no measurement gets.
+func TestWithoutWeightsTheDealIsRoundRobin(t *testing.T) {
+	t.Parallel()
+
+	half := []string{"x/z", "x/m", "x/a", "x/m/b", "x/q", "x/c", "x/d"}
+	weights, _ := weigh(half, nil)
+	want := [][]string{{"x/z", "x/m/b", "x/d"}, {"x/m", "x/q"}, {"x/a", "x/c"}}
+	if got := deal(half, weights, 3); !slices.EqualFunc(got, want, slices.Equal) {
+		t.Errorf("deal = %v, want %v", got, want)
+	}
+	if got := deal(half, weights, 1); !slices.EqualFunc(got, [][]string{half}, slices.Equal) {
+		t.Errorf("one shard = %v, want the half as listed, %v", got, half)
+	}
+}
+
+// -shard reads I/N with 1 <= I <= N, and nothing else.
+func TestTheShardFlagReadsIOfN(t *testing.T) {
+	t.Parallel()
+
+	for in, want := range map[string]shard{"": {1, 1}, "1/1": {1, 1}, "2/4": {2, 4}, "4/4": {4, 4}} {
+		if got, err := parseShard(in); err != nil || got != want {
+			t.Errorf("parseShard(%q) = %v, %v, want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"0/4", "5/4", "4", "/4", "1/", "1/0", "-1/2", "a/b", "1/2/3", " 1/2", "1 /2"} {
+		if got, err := parseShard(in); err == nil {
+			t.Errorf("parseShard(%q) = %v, want a refusal", in, got)
+		}
+	}
+}
+
+// MERGE JOINS N RUNNERS' TIMINGS into one file the strict reader accepts, and
+// refuses a package two runners timed or a file it would refuse as weights.
+func TestMergeJoinsDisjointTimingsAndRefusesOverlap(t *testing.T) {
+	t.Parallel()
+
+	got, err := merge([]timings{
+		{"shard-2.tsv", []byte("x/b\t2.000\nx/d\t0.000\n")},
+		{"shard-1.tsv", []byte("x/a\t1.500\n\nx/c\t3.250\n")},
+	})
+	if err != nil {
+		t.Fatalf("disjoint timings were refused: %v", err)
+	}
+	if want := "x/a\t1.500\nx/b\t2.000\nx/c\t3.250\nx/d\t0.000\n"; string(got) != want {
+		t.Errorf("merged\n%q\nwant\n%q", got, want)
+	}
+	if _, err := readWeights(strings.NewReader(string(got)), "merged"); err != nil {
+		t.Errorf("the merged file is not one the reader accepts: %v", err)
+	}
+
+	for name, c := range map[string]struct {
+		inputs []timings
+		says   string
+	}{
+		"a package two runners timed": {
+			[]timings{{"one.tsv", []byte("x/a\t1\nx/b\t2\n")}, {"two.tsv", []byte("x/b\t2\n")}},
+			"x/b is timed by both one.tsv and two.tsv",
+		},
+		"a line the reader refuses": {
+			[]timings{{"one.tsv", []byte("x/a\t1\n")}, {"two.tsv", []byte("x/b 2\n")}},
+			"two.tsv:1",
+		},
+	} {
+		if _, err := merge(c.inputs); err == nil || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s: merge = %v, want an error saying %q", name, err, c.says)
+		}
+	}
+}

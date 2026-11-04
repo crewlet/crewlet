@@ -118,14 +118,17 @@ jobs:
       # The job's id and its matrix leg name the cache, so every job and every
       # leg keeps its own: a -race build, a cgo-free darwin/arm64 build and
       # the linter's export data share almost nothing. The newest entry main
-      # saved for this job is what a miss on this commit's key restores.
+      # saved for this leg is what a miss on this commit's key restores, and
+      # a leg main has never saved (a new shard) takes its job's newest.
       - &gobuild-restore
         name: restore this job's build cache
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.GOCACHE }}
           key: gobuild-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ github.sha }}
-          restore-keys: gobuild-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-
+          restore-keys: |
+            gobuild-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-
+            gobuild-${{ runner.os }}-${{ github.job }}-
       # Every module the build AND the tests need, so the cache saved below is
       # whole: without this a test-only module (jsonschema) was fetched again
       # by every test job of every run.
@@ -355,70 +358,164 @@ jobs:
             exit 1
           fi
 
-  # ONE RUNNER PER HALF, and the two halves (below) are not split further.
-  # They were, for one pull request: each half cut into two shards by measured
-  # duration, on four runners. GitHub Actions has no native way to split one
-  # job across runners (its only fan-out is `strategy.matrix`), so that took a
-  # job to cut the shards, matrix legs named for their shard (`test (race)
-  # 1/2`), and an aggregate job for `main`'s ruleset to require in their
-  # place: a rule matches a check by its exact name, so one naming a leg would
-  # have stopped matching the day the shard count changed, and a required check
-  # that never reports blocks every pull request. Against that, its first run
-  # (37900112073) put the parallel half at 1,144 package-seconds with
-  # internal/engine (193s) its longest, which put the split's gain over one
-  # runner at about a minute and a half a run once the caches and the
-  # measurements below are warm: an estimate from that run's logs, not a
-  # measurement. Not worth the machinery while the slower half's job ends a
-  # minute or two after lint's and the dashboard's.
+  # EACH HALF RUNS ON SEVERAL RUNNERS AT ONCE, its packages dealt by measured
+  # duration (`go doc ./internal/solo/partition`). GitHub Actions' only fan-out
+  # is `strategy.matrix`, so a half is four jobs: `test plan` deals it once,
+  # the matrix legs run a shard each, an aggregate job carries the name
+  # `main`'s ruleset requires, and `test weights` keeps the next run's
+  # measurement. One runner per half was right while the parallel half was
+  # 1,144 package-seconds (37900112073) and wrong at 8,905 (41745668479),
+  # where `test (race)` took 44 minutes and set every pull request's wait.
   #
-  # THE LONGEST PACKAGES START FIRST in `test (race)`, which needs no second
-  # runner. `go test` starts package runs in command-line order and go list's
-  # is alphabetical, which started internal/search, internal/store and
-  # internal/worklet last of their half; `go doc ./internal/solo/partition` has
-  # the measurement. So the job restores the package durations main's last
-  # passing run of it measured, hands them to the partition as TEST_WEIGHTS,
-  # and on main keeps its own run's as the next one's. With none (the first
-  # run, or an entry evicted after a week unread) the file is empty and the
-  # half runs in go list's order: slower, and exactly as complete, since a
-  # weight decides when a package starts and never whether it runs. The
-  # `end-to-end gates` job takes no weights: its half runs at -p 1, where
-  # cmd/go's one worker links and runs every test binary in turn, so the half
-  # takes their sum in any order.
+  # THE SHARD COUNTS are one line each, `RACE_SHARDS` and `SOLO_SHARDS` below,
+  # and every leg, name and proof follows them. Four for the parallel half,
+  # because it cannot end before its longest package, internal/code/host
+  # (1,735 of the 8,905 seconds), and at four that package's shard carries
+  # about 490 package-seconds beside it, which the runner's three other
+  # workers finish in minutes. Three would put 1,233 beside it; five or six
+  # would save at most those minutes for one or two more runners, each paying
+  # about a minute of setup (checkout, the Go caches, the pinned gits, node)
+  # before its first test.
+  #
+  # Two for the solo half, whose shards run at -p 1 and so take the SUM of
+  # their packages. internal/code/codecluster alone is 738 to 861 of its 1,266
+  # to 1,527 seconds (main's runs 41714027577 to 41745668479), so two shards
+  # put it on one runner and the other nine on the other, and a third would
+  # leave codecluster's shard the floor and buy nothing. Each shard is a runner
+  # of its own, so no two of these packages ever share a machine: sharding
+  # takes contention away rather than adding any (`go doc ./internal/solo`).
+  #
+  # THE PLAN DEALS ONCE, for every runner. The partition is a function of the
+  # commit and the weights file, and a weights file restored by each shard
+  # could differ between them: a main run that saves a new one between two
+  # shards' restores would hand them different deals, losing or doubling a
+  # package. So the plan restores it, proves every package of each half lands
+  # in exactly one shard, and passes that one file to every shard.
   #
   # A MEASUREMENT IS KEYED ON THE CODE THAT WROTE IT AND THE CODE THAT READS
-  # IT, because a prefix restore otherwise hands every run the newest entry
-  # whatever its shape, and that can wedge CI for good. internal/solo/partition
-  # reads the file strictly and refuses a line internal/skipgate did not write;
-  # a refusal fails the job; and only a main run whose job passed saves a
-  # replacement. So a change to either side of the format — a new column, a
-  # tighter reader — would leave every later run, on every pull request and on
-  # main, restoring a file it refuses, with nothing able to save one it
-  # accepts, and the eviction that would end it never comes, since the entry is
-  # read on every run. Keyed on a hash of both packages' sources, a change to
-  # either starts from no measurement — the bootstrap above, which runs
-  # complete — and an entry a later change cannot read is never offered to it.
-  # That holds for a bug too: a file the same code wrote and cannot read is
-  # retired by the change that fixes the code. A change to either package, test
-  # files and the skip allowlist included, runs in go list's order on every run
-  # of the pull request that makes it, since only main saves, and on every run
-  # after its merge until a run on main passes and saves a measurement under
-  # the new key. That is still cheaper than a key that misses the one edit
-  # that mattered.
-  test:
-    name: test (race)
+  # IT: a hash of internal/skipgate and internal/solo/partition. The reader is
+  # strict, and a refusal of a file this code wrote fails the plan, as a
+  # defect in the writer or the reader. When this code has no measurement yet
+  # (the pull request that changes either package, and main until its first
+  # passing run after the merge), the plan offers the newest one older code
+  # wrote, and a file the reader refuses is dropped with a warning and the run
+  # deals by package count. So a format change can never wedge CI, and a
+  # change to either package still deals by real durations.
+  plan:
+    name: test plan
     runs-on: ubuntu-latest
+    env:
+      RACE_SHARDS: 4
+      SOLO_SHARDS: 2
+    outputs:
+      race: ${{ steps.legs.outputs.race }}
+      solo: ${{ steps.legs.outputs.solo }}
+      weights-key: ${{ steps.key.outputs.prefix }}
     steps:
       - uses: actions/checkout@v7
       - *setup-go
       - *go-caches
       - *gomod-restore
       - *gobuild-restore
+      # Named once, here, for the restore below and for `test weights`' save.
+      - name: name the measurement's cache key
+        id: key
+        run: echo "prefix=test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-" >> "$GITHUB_OUTPUT"
       - name: restore the package durations main last measured
+        id: weights
         uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/test-weights.tsv
-          key: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-${{ github.sha }}
-          restore-keys: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-
+          key: ${{ steps.key.outputs.prefix }}${{ github.sha }}
+          restore-keys: |
+            ${{ steps.key.outputs.prefix }}
+            test-weights-
+      # The weights live in the runner's temp directory, never in the checkout,
+      # which the suite's own gates read as this repository's tree. An empty
+      # file is what a cache miss leaves: a deal by package count. `merge` of
+      # one file is the strict reader alone, with no `go list` to fail instead.
+      - name: hold the measurement to the partition's reader
+        env:
+          CURRENT: ${{ steps.key.outputs.prefix }}
+          MATCHED: ${{ steps.weights.outputs.cache-matched-key }}
+        run: |
+          weights="$RUNNER_TEMP/test-weights.tsv"
+          touch "$weights"
+          echo "restored: ${MATCHED:-nothing}"
+          if ! go run ./internal/solo/partition merge "$weights" > /dev/null; then
+            case "$MATCHED" in
+              "$CURRENT"*) echo "::error::this code refuses a measurement this code wrote"; exit 1 ;;
+            esac
+            echo "::warning::$MATCHED was written by other code and this reader refuses it: this run deals by package count"
+            : > "$weights"
+          fi
+      # What the shards will run, run here first: each shard's own invocation,
+      # whose union must be the whole half, each package once. A package lost
+      # from every shard, or dealt to two, is a line `diff` prints. The whole
+      # half's list goes to the aggregate job, which holds what ran against it.
+      - name: every package in exactly one shard
+        shell: bash
+        run: |
+          set -u
+          mkdir -p "$RUNNER_TEMP/plan"
+          cp "$RUNNER_TEMP/test-weights.tsv" "$RUNNER_TEMP/plan/"
+          partition() { go run ./internal/solo/partition -weights "$RUNNER_TEMP/plan/test-weights.tsv" "$@"; }
+          prove() {
+            local half="$1" n="$2" dir="$RUNNER_TEMP/deal-$1"
+            mkdir -p "$dir"
+            partition "$half" | sort > "$RUNNER_TEMP/plan/$half.txt"
+            for i in $(seq 1 "$n"); do
+              partition -shard "$i/$n" "$half" > "$dir/$i"
+              echo "::group::the $half half, shard $i/$n: $(wc -l < "$dir/$i") packages"
+              cat "$dir/$i"
+              echo "::endgroup::"
+            done
+            seq -f "$dir/%g" 1 "$n" | xargs cat | sort | diff "$RUNNER_TEMP/plan/$half.txt" -
+            echo "the $half half: $(wc -l < "$RUNNER_TEMP/plan/$half.txt") packages, each in exactly one of $n shards"
+          }
+          prove parallel "$RACE_SHARDS"
+          prove solo "$SOLO_SHARDS"
+      - name: name the matrix legs
+        id: legs
+        run: |
+          echo "race=[$(seq -s, 1 "$RACE_SHARDS")]" >> "$GITHUB_OUTPUT"
+          echo "solo=[$(seq -s, 1 "$SOLO_SHARDS")]" >> "$GITHUB_OUTPUT"
+      # Kept for the thirty days a run can be re-run in, and overwritten by a
+      # re-run of this job: a shard re-run alone must deal from this same file.
+      - name: hand the shards the weights they deal by
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-plan
+          path: ${{ runner.temp }}/plan
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+      - *gobuild-prune
+      - *gobuild-save
+
+  # ONE SHARD OF THE PARALLEL HALF per leg, as the plan dealt it. fail-fast is
+  # off so a failure in one shard still reports every other's, as the single
+  # job did.
+  test:
+    name: test (race) ${{ matrix.shard }}/${{ strategy.job-total }}
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.race) }}
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      - *go-caches
+      - *gomod-restore
+      - *gobuild-restore
+      - &plan-download
+        name: the weights the plan dealt by
+        uses: actions/download-artifact@v8
+        with:
+          name: test-plan
+          path: ${{ runner.temp }}/plan
       # THE PINNED GITS. `make test` runs the suite on the gits
       # scripts/git-pin.env pins, which scripts/git.sh builds into
       # CREWLET_GIT_CACHE (the Makefile's `##@ The pinned gits` says why the
@@ -435,8 +532,8 @@ jobs:
       # not use (git.sh names each build by version and recipe, so it would
       # build beside them anyway). A pull request that changes either builds the
       # three gits, about four minutes, on every run until main saves them. Only
-      # this job, `end-to-end gates` and `git recipe (macOS)` run git, so only
-      # they carry the steps.
+      # these shards, `end-to-end gates` and `git recipe (macOS)` run git, so
+      # only they carry the steps.
       - &git-cache-dir
         name: name the pinned gits' cache directory
         run: echo "CREWLET_GIT_CACHE=$HOME/.cache/crewlet/git" >> "$GITHUB_ENV"
@@ -470,8 +567,8 @@ jobs:
       # same command CI runs, or it is a lie" was therefore held by hand —
       # by nothing, since internal/version/makefile_test.go was dropped. The
       # test jobs call `make` so that for them it is true by construction:
-      # TEST_WEIGHTS and TEST_TIMINGS are the Makefile's own knobs, and left
-      # unset they are what `make test` runs on a laptop.
+      # TEST_SHARD, TEST_WEIGHTS and TEST_TIMINGS are the Makefile's own knobs,
+      # and left unset they are what `make test` runs on a laptop.
       #
       # The race detector is not optional: the engine's concurrency model is
       # real parallelism, so every "atomic because single-threaded" assumption
@@ -481,8 +578,8 @@ jobs:
       # PACKAGE.
       #
       # THE PACKAGES THAT RUN ALONE ARE EXCLUDED, and run in the `end-to-end
-      # gates` job below. Not a coverage cut — CI runs both and `make check`
-      # depends on both targets — a CONTENTION cut, and which packages those
+      # gates` shards below. Not a coverage cut (CI runs both and `make check`
+      # depends on both targets) but a CONTENTION cut, and which packages those
       # are is COMPUTED from a marker import rather than named here: `go doc
       # ./internal/solo` carries the measurement and the reason, and
       # internal/solo's roster guard fails the build when a package that
@@ -491,55 +588,149 @@ jobs:
       # This step was a `go list ./... | grep -v '/internal/e2e…'` filter, and
       # it named ONE package while THREE others stood up multi-member clusters
       # inside this job.
-      #
-      # The weights and the timings live in the runner's temp directory, never
-      # in the checkout, which the suite's own gates read as this repository's
-      # tree. An empty weights file is what a cache miss leaves: go list's
-      # order.
-      - name: the suite, minus the packages that run alone
-        run: |
-          touch "$RUNNER_TEMP/test-weights.tsv"
-          make test TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_TIMINGS="$RUNNER_TEMP/test-timings.tsv"
+      - name: this shard of the suite, minus the packages that run alone
+        env:
+          TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: make test TEST_SHARD="$TEST_SHARD" TEST_WEIGHTS="$RUNNER_TEMP/plan/test-weights.tsv" TEST_TIMINGS="$RUNNER_TEMP/test-timings.tsv"
       # On main only, and only a miss, as every cache here; after the make step,
-      # which built what the restore did not bring. Both test jobs save the
-      # same key, and the second to finish is told the key is taken: a warning,
-      # never a failure.
+      # which built what the restore did not bring. The first leg of a job is
+      # the one saver of its key, so no two shards race to reserve it.
       - &git-save
         name: save the pinned gits
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.git.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.git.outputs.cache-hit != 'true' && strategy.job-index == 0
         uses: actions/cache/save@v6
         with:
           path: ${{ env.CREWLET_GIT_CACHE }}
           key: git-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
-      # What this run measured, kept as the next run's weights: on main only,
-      # like every cache here, and only from a job that passed. Moved onto the
-      # restored file's path because a cache entry is matched on its path as
-      # well as its key.
-      - name: keep this run's package durations for the next run
-        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: mv "$RUNNER_TEMP/test-timings.tsv" "$RUNNER_TEMP/test-weights.tsv"
-      - name: save the package durations
-        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@v6
+      # What this shard ran and how long each package took: the aggregate job
+      # holds it against the plan, and `test weights` merges it. Only a shard
+      # that passed hands one on, as only a run that passed is kept.
+      - &timings-upload
+        name: hand on what this shard ran
+        uses: actions/upload-artifact@v7
         with:
-          path: ${{ runner.temp }}/test-weights.tsv
-          key: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-${{ github.sha }}
+          name: test-timings-${{ github.job }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/test-timings.tsv
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
       - *gobuild-prune
       - *gobuild-save
 
-  gates:
-    name: end-to-end gates
+  # THE CHECK `main`'s RULESET REQUIRES, by its exact name. A matrix leg's name
+  # carries its shard, so a rule naming a leg would stop matching the day the
+  # count changed. `always()`, because a skipped required check counts as
+  # passed and under the default a failed shard skips this job: this one runs
+  # and fails on any result but success, however GitHub reports the others.
+  #
+  # It passes when the plan and every shard passed AND what the shards ran,
+  # read from their timings, is the plan's whole half with each package once.
+  # The plan proved the deal; this proves every runner ran it.
+  race:
+    name: test (race)
+    needs: [plan, test]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
+    env:
+      HALF: parallel
+      LEGS: test
+      PLAN_RESULT: ${{ needs.plan.result }}
+      LEGS_RESULT: ${{ needs.test.result }}
+    steps:
+      - &legs-passed
+        name: the plan and every shard passed
+        run: |
+          echo "test plan: $PLAN_RESULT; the $HALF half's shards: $LEGS_RESULT"
+          if [ "$PLAN_RESULT" != success ] || [ "$LEGS_RESULT" != success ]; then
+            echo "::error::the $HALF half did not pass: see the failed job above"
+            exit 1
+          fi
+      - *plan-download
+      - &timings-download
+        name: collect what every shard ran
+        uses: actions/download-artifact@v8
+        with:
+          pattern: test-timings-${{ env.LEGS }}-*
+          path: ${{ runner.temp }}/timings
+      # skipgate times every package that passed or had no test files, so on a
+      # green run each shard's timings name every package it ran.
+      - &legs-covered
+        name: every package of the half ran in exactly one shard
+        shell: bash
+        run: |
+          set -u
+          cut -f1 "$RUNNER_TEMP"/timings/*/test-timings.tsv | sort > "$RUNNER_TEMP/ran.txt"
+          twice="$(uniq -d "$RUNNER_TEMP/ran.txt")"
+          if [ -n "$twice" ]; then
+            echo "::error::run by two shards:"; echo "$twice"; exit 1
+          fi
+          diff "$RUNNER_TEMP/plan/$HALF.txt" "$RUNNER_TEMP/ran.txt"
+          echo "the $HALF half: $(wc -l < "$RUNNER_TEMP/ran.txt") packages ran, each in exactly one shard"
+
+  # THE NEXT RUN'S WEIGHTS: every shard's timings, both halves in one file (the
+  # partition weighs a half by its own packages alone), merged by the
+  # partition's own strict reader, which refuses a package two shards timed.
+  # On every run whose shards all passed, so a pull request proves the merge
+  # main relies on; saved on main only, by this one job, so no two jobs race
+  # for the key. The merged file is also an artifact, `test-weights`, the one
+  # copy of CI's measurement a person can download (`gh run download <run> -n
+  # test-weights`).
+  weights:
+    name: test weights
+    needs: [plan, test, gates]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      - *go-caches
+      - *gobuild-restore
+      - name: collect every shard's package durations
+        uses: actions/download-artifact@v8
+        with:
+          pattern: test-timings-*
+          path: ${{ runner.temp }}/timings
+      - name: merge them into one measurement
+        run: |
+          go run ./internal/solo/partition merge "$RUNNER_TEMP"/timings/*/test-timings.tsv > "$RUNNER_TEMP/test-weights.tsv"
+          echo "$(wc -l < "$RUNNER_TEMP/test-weights.tsv") packages timed"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: test-weights
+          path: ${{ runner.temp }}/test-weights.tsv
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+      - name: save the package durations
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/test-weights.tsv
+          key: ${{ needs.plan.outputs.weights-key }}${{ github.sha }}
+      - *gobuild-prune
+      - *gobuild-save
+
+  # ONE SHARD OF THE SOLO HALF per leg, as the plan dealt it, with fail-fast
+  # off for the reason the race shards give.
+  gates:
+    name: end-to-end gates ${{ matrix.shard }}/${{ strategy.job-total }}
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.solo) }}
     steps:
       - uses: actions/checkout@v7
       - *setup-go
       - *go-caches
       - *gomod-restore
       - *gobuild-restore
-      # THE PACKAGES THAT RUN ALONE — `make test-solo`, which is every package
-      # importing internal/solo, run at -p 1 so their brokers do not contend
-      # with each other either. Which packages those are is computed, never
-      # written here: `go doc ./internal/solo`.
+      - *plan-download
+      # THE PACKAGES THAT RUN ALONE, `make test-solo`: every package importing
+      # internal/solo, run at -p 1 so their brokers do not contend with each
+      # other either. Which packages those are is computed, never written here:
+      # `go doc ./internal/solo`. A shard is a runner of its own, so no two of
+      # them ever share a machine.
       #
       # internal/e2e is why this job installs node: it runs a real engine, a
       # real broker and the real API, then replays the frames its socket
@@ -557,15 +748,37 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-      # The pinned gits, as in `test (race)` above, whose comment says why.
+      # The pinned gits, as in the race shards above, whose comment says why.
+      # Restored here and never saved: the first race shard is their one saver.
       - *git-cache-dir
       - *git-restore
       - *git-deps
-      - name: the packages that run alone
-        run: make test-solo
-      - *git-save
+      - name: this shard of the packages that run alone
+        env:
+          TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: make test-solo TEST_SHARD="$TEST_SHARD" TEST_WEIGHTS="$RUNNER_TEMP/plan/test-weights.tsv" TEST_TIMINGS="$RUNNER_TEMP/test-timings.tsv"
+      - *timings-upload
       - *gobuild-prune
       - *gobuild-save
+
+  # THE CHECK `main`'s RULESET REQUIRES for the solo half, by its exact name:
+  # the `test (race)` aggregate's steps over this half's plan and shards, and
+  # `always()` for the reason given there.
+  e2e:
+    name: end-to-end gates
+    needs: [plan, gates]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    env:
+      HALF: solo
+      LEGS: gates
+      PLAN_RESULT: ${{ needs.plan.result }}
+      LEGS_RESULT: ${{ needs.gates.result }}
+    steps:
+      - *legs-passed
+      - *plan-download
+      - *timings-download
+      - *legs-covered
 
   # THE RECIPE'S macOS BRANCH, on every pull request: scripts/git.sh builds the
   # three pinned gits there with shasum, sysctl's core count and the SDK's
@@ -577,7 +790,7 @@ jobs:
   # so a failure here is theirs before it is anybody's: it is fixed, never
   # skipped. Whether the job is a REQUIRED check is a repository setting.
   #
-  # The pinned gits' cache steps are `test (race)`'s, whose key already
+  # The pinned gits' cache steps are the race shards', whose key already
   # carries the runner's OS and architecture, and there is no install step:
   # Xcode's command line tools, on the image, supply the compiler, libcurl and
   # zlib. The BUILD cache is every Go job's, under this job's own key: what it
