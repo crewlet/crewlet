@@ -91,6 +91,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/authz"
+	awsint "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
@@ -108,6 +109,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -1019,6 +1021,23 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.DigitalOcean
 		summary = digitalocean.Summary()
 		reqs = digitalocean.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindScaleway:
+		// NO ROSTER HERE, as for Expo: each agent's application is listed
+		// on the integration's Agents tab from the access ledger, and its
+		// key reaches the agent through the engine's own sealed names.
+		block := company.Integrations.Scaleway
+		summary = scaleway.Summary()
+		reqs = scaleway.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindAWS:
+		// NO ROSTER HERE either: each agent's role is listed on the
+		// integration's Agents tab from the access ledger.
+		block := company.Integrations.AWS
+		summary = awsint.Summary()
+		reqs = awsint.Requirements(block, company.Name, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

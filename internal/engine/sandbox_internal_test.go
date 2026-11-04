@@ -18,7 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
@@ -973,6 +975,58 @@ func TestAResumedRunCarriesEveryFieldTheLoopGatesOn(t *testing.T) {
 	// fired a second time.
 	if len(got.History) != 1 || got.History[0].Intent != "before the box" {
 		t.Errorf("History = %+v, want the ledger the suspend handed out", got.History)
+	}
+}
+
+// A PARK PAST ITS SHARE OF THE RUN'S ROW IS REFUSED BY NAME, before the store is
+// asked. What gives way in a parked state is its closed rounds' payloads
+// (execstate.EncodeWithin), and what is left past [sandbox.ExecuteStateBytes]
+// is the turn's own context — here an ask of three MiB, a trigger's own words —
+// which no resume can do without and no row can carry. So the run is ended as
+// a suspension nothing recorded, and the park answers that nothing can resume
+// it, with no error: nothing was sent that may have landed.
+//
+// Mutation: encode the state whole (execstate.Encode), and the store's own
+// refusal reads as a write that may have landed; skip both refusals, and three
+// MiB land on a row whose every later write the broker would refuse.
+func TestAParkPastItsShareOfTheRowIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	e, _ := starting(t, refusingModels(t))
+	rigRuns(t, e, nil)
+	company := e.Company()
+	seat := company.Org.AgentSeatByHandle("swe")
+	r, err := company.RunnerFor(t.Context(), "swe", nil, RunnerInput{
+		Reply: turn.NoReply(), Launcher: launcherStub{}, Sessions: e.sessions,
+		Turn: runner.Turn{RunID: "run-code", Context: &turnctx.Turn{RunID: "run-code", Seat: seat,
+			Org: company.Org}},
+	})
+	if err != nil {
+		t.Fatalf("RunnerFor: %v", err)
+	}
+	res, err := turn.Run(t.Context(), r, company.TurnSettings(time.Time{}),
+		turn.Input{RunID: "run-code", Reply: turn.NoReply()})
+	if err != nil || !res.Suspended {
+		t.Fatalf("turn.Run = %+v, %v; the turn did not park", res, err)
+	}
+	pending := e.sandbox.Load().pending
+	// THE ROW THE LAUNCH WOULD HAVE OPENED, which the stub opened none of.
+	if _, err := pending.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "run-code", AgentHandle: "swe", Role: "SWE",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	resumable, err := e.persistSuspension(t.Context(), r, "run-code", turnTelemetry{
+		written: &turnctx.Written{}, ask: strings.Repeat("a", 3<<20),
+	}, segmentCharge{})
+	if err != nil || resumable {
+		t.Fatalf("persistSuspension = %v, %v; want the park refused by name, nothing sent", resumable, err)
+	}
+	row, found, err := pending.Get(t.Context(), "run-code")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if found && (row.Status == sandbox.StatusRunning || len(row.ExecuteState) > 0) {
+		t.Errorf("the refused park left the run %s with %d bytes of state", row.Status, len(row.ExecuteState))
 	}
 }
 

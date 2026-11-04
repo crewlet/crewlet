@@ -67,6 +67,10 @@ func (l *probeLedger) Append(_ context.Context, _ string, c mcpbridge.Call) erro
 	return nil
 }
 
+// Settle owes nothing: every append above lands.
+func (l *probeLedger) Settle(context.Context, string) bool { return false }
+func (l *probeLedger) End(context.Context, string) bool    { return false }
+
 // probeBridge serves a real tool bridge over HTTP with one run's session open,
 // its inbox inbox, and answers the run's endpoint.
 func probeBridge(t *testing.T, inbox mcpbridge.SteerInbox, ledger mcpbridge.Ledger) string {

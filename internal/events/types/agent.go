@@ -127,6 +127,14 @@ type PromptSection struct {
 // server that was not running), absent on a success and on a third-party
 // server's own failure.
 //
+// `held` marks an executor run's call held for a person's approval — recorded
+// failed, `success: false`, since nothing it asked for happened, and no
+// failure: the run's question for a person — and `approved` the call they let
+// be made. Both WITHHOLD their arguments, which ride the run's record sealed
+// and are never on a record in the clear: `arguments` on either is `{}`, and a
+// reader says they are sealed rather than that the call sent none. Absent on
+// every other call.
+//
 // Deliberately an open map rather than a struct, and the one place in this
 // catalogue that stays loose. Its consumers pass it through verbatim, precisely
 // because a hand-maintained field list is how a failed tool call got deleted on
@@ -967,6 +975,15 @@ type AgentPhaseCompleted struct {
 	// Zero on a record that lists them all.
 	DeliveredRefs       []string `json:"delivered_refs,omitempty"`
 	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
+	// CallsElided is how many calls a collected executor's run made over its
+	// bridge that its run's record did not keep — a long run's dropped
+	// middle — and ElidedCalls those calls by tool, with how many of each
+	// failed. ToolExecutions lists only the calls the record kept, and this
+	// record outlives the run's: once the run's row is gone, what it dropped
+	// is said here or nowhere. Counted in its round's tool_calls. Absent on
+	// every other phase, and on a run whose record kept every call.
+	CallsElided int           `json:"calls_elided,omitempty"`
+	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
 	// PushedRefs are the refs the collected run moved on the engine's own
 	// code host, as its push record says — the code host's rows written
 	// under the run's launch, read when the launch was collected, one entry
@@ -1008,6 +1025,21 @@ type AgentPhaseCompleted struct {
 	// store tags a channel id for A2A events alone, so no query could ask
 	// for one thread's phases.
 	ConversationKey string `json:"conversation_key"`
+}
+
+// ElidedCalls is one tool's calls a collected executor's record did not keep
+// ([AgentPhaseCompleted.ElidedCalls]): how many, and how many of them failed.
+// Name is empty for calls whose tool the record did not keep either — a long
+// run whose dropped middle outgrew what its record keeps of it, or a record an
+// older engine kept, which counted its drops and named none.
+//
+// BY TOOL, never by what each call asked for: the record is a person's
+// account of the run, and the identities the engine keeps of each call are its
+// own business, for counting a later call's repeats.
+type ElidedCalls struct {
+	Name   string `json:"name,omitempty"`
+	Calls  int    `json:"calls"`
+	Failed int    `json:"failed,omitempty"`
 }
 
 // EventType is the "agent_phase_completed" wire type.

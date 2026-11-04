@@ -83,6 +83,7 @@ func newHTTPTransport(spec Spec, log *slog.Logger, d dialing) (sdk.Transport, *h
 		base:    base,
 		headers: maps.Clone(spec.Headers),
 		bearer:  spec.Bearer,
+		signer:  spec.Signer,
 		origin:  originOf(spec.URL),
 		server:  spec.Name,
 		log:     log,
@@ -193,6 +194,10 @@ type httpIdentity struct {
 	// ([Spec.Bearer]), nil for any other: set per request, on a request to
 	// the configured origin alone, as the headers are.
 	bearer BearerSource
+	// signer signs each request of a server authenticated by request content
+	// ([Spec.Signer]), nil for any other: on a request to the configured
+	// origin alone, as the headers are.
+	signer RequestSigner
 	// origin is the configured address's: the one origin a request is sent
 	// the configured headers to.
 	origin origin
@@ -267,6 +272,17 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Header.Get(protocolVersionHeader) == "" {
 		if v := h.protocolVersion.Load(); v != nil {
 			req.Header.Set(protocolVersionHeader, *v)
+		}
+	}
+	// SIGNED LAST, over every header and the body as sent: a header set
+	// after the signature would invalidate it.
+	if h.signer != nil && configured {
+		if err := h.sign(ctx, req); err != nil {
+			if cancel != nil {
+				cancel()
+			}
+			h.failed.Store(&answerFailure{class: cmp.Or(ClassOf(err), FailCredentialRejected)})
+			return nil, err
 		}
 	}
 	resp, sent, err := h.send(ctx, req, configured)
@@ -361,6 +377,27 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 // what it answers; a second refusal is the server's answer, classed as any
 // 401 is. A token the source cannot give classes the server
 // [FailNeedsSignIn] (or what its error says) and sends nothing.
+// sign hands the request and its body to the signer, and sends the body it
+// answers.
+func (h *httpIdentity) sign(ctx context.Context, req *http.Request) error {
+	var body []byte
+	if req.Body != nil && req.Body != http.NoBody {
+		var err error
+		if body, err = io.ReadAll(req.Body); err != nil {
+			return err
+		}
+		_ = req.Body.Close()
+	}
+	signed, err := h.signer.Sign(ctx, req, body)
+	if err != nil {
+		return err
+	}
+	req.Body = io.NopCloser(bytes.NewReader(signed))
+	req.ContentLength = int64(len(signed))
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(signed)), nil }
+	return nil
+}
+
 func (h *httpIdentity) send(ctx context.Context, req *http.Request, configured bool) (
 	*http.Response, string, error) {
 

@@ -9,6 +9,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
+// ErrNoScalewayLevel refuses keeping a Scaleway policy that is no level's: a
+// seat names a level, and none of them grants what the policy grants.
+var ErrNoScalewayLevel = errors.New("the agent's policy grants what no Scaleway level grants: " +
+	"save the level it should hold here, and Crewlet sets its policy to that")
+
 // ErrNoCloudflareLevel refuses keeping a Cloudflare token whose policy is no
 // level's: a seat names a level, and none of them holds what it holds.
 var ErrNoCloudflareLevel = errors.New("the token's permissions are not those of any Cloudflare level: " +
@@ -24,6 +29,11 @@ var ErrNoExpoLevel = errors.New("the robot's Expo permissions match no level: " 
 // needs a token made with a level's scopes.
 var ErrNoDigitalOceanLevel = errors.New("the token's DigitalOcean scopes match no level: " +
 	"choose the level it should hold here, and paste a token made with that level's scopes")
+
+// ErrNoAWSLevel refuses keeping an IAM role's policies when they are no
+// level's: a seat names a level, and none of them is what it holds.
+var ErrNoAWSLevel = errors.New("the role's AWS policies match no level: " +
+	"save the level it should hold here, and Crewlet attaches that level's policies")
 
 // ErrSeveralRoles refuses keeping a Datadog account's roles when it holds more
 // than one: a seat names one role, and keeping one of several would take the
@@ -71,6 +81,16 @@ func KeptAccess(lane Lane, want Desired, have Observed) (Desired, error) {
 	case LaneDigitalOcean:
 		if !slices.Contains(config.DigitalOceanLevels(), have.Level) {
 			return Desired{}, ErrNoDigitalOceanLevel
+		}
+		kept.Level = have.Level
+	case LaneScaleway:
+		if !slices.Contains(config.ScalewayLevels(), have.Level) {
+			return Desired{}, ErrNoScalewayLevel
+		}
+		kept.Level = have.Level
+	case LaneAWS:
+		if !slices.Contains(config.AWSLevels(), have.Level) {
+			return Desired{}, ErrNoAWSLevel
 		}
 		kept.Level = have.Level
 	default:

@@ -373,6 +373,16 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		}
 		add("cloudflare", in.Cloudflare.Enabled, nil, detail)
 	}
+	if in.Scaleway != nil {
+		// PROVISIONING ALONE, like Cloudflare's: nothing arrives from
+		// Scaleway, so there is no delivery secret. The organization is
+		// what the row names.
+		var org string
+		if in.Scaleway.Provisioning != nil {
+			org = in.Scaleway.Provisioning.OrganizationID
+		}
+		add("scaleway", in.Scaleway.Enabled, nil, map[string]any{"organization_id": org})
+	}
 	if in.Expo != nil {
 		// PROVISIONING ONLY, like atlassian below: the provisioner token
 		// creates agents' robots and no delivery arrives, so there is no
@@ -393,6 +403,15 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			team = in.DigitalOcean.Provisioning.Team
 		}
 		add("digitalocean", in.DigitalOcean.Enabled, nil, map[string]any{"team": team})
+	}
+	if in.AWS != nil {
+		// NOTHING INBOUND: the row names the stack, by its short name and
+		// home Region, which every name in the account carries.
+		var slug, region string
+		if in.AWS.Provisioning != nil {
+			slug, region = in.AWS.Provisioning.Slug, in.AWS.Provisioning.HomeRegion
+		}
+		add("aws", in.AWS.Enabled, nil, map[string]any{"slug": slug, "home_region": region})
 	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product. Jira and Confluence are

@@ -127,6 +127,44 @@ type seatIssuer interface {
 	words() issuedWords
 }
 
+// issuedLives is how long an issuer's credential lasts and how long before its
+// end the holder asks again. An issuer declares its own ([lifeDeclarer]); the
+// rest take [defaultLives], the hour GitHub's and Google's tokens last.
+type issuedLives struct {
+	lifetime, renewBefore time.Duration
+}
+
+// defaultLives is an hour-long credential renewed with ten minutes left: the
+// lives the shared paths have always asked ([toolTokenLife], [runTokenLife]).
+var defaultLives = issuedLives{lifetime: time.Hour, renewBefore: 10 * time.Minute}
+
+// lifeDeclarer is an issuer whose credential lasts other than an hour.
+type lifeDeclarer interface {
+	lives() issuedLives
+}
+
+// livesOf is issuer's lives: its own where it declares them, else the default.
+func livesOf(issuer seatIssuer) issuedLives {
+	if d, ok := issuer.(lifeDeclarer); ok {
+		return d.lives()
+	}
+	return defaultLives
+}
+
+// run is what a launch is promised: all but the renewal margin.
+func (l issuedLives) run() time.Duration { return l.lifetime - l.renewBefore }
+
+// ask is the life to issue for, where a shared path asked for life in the
+// default lives' terms: a launch's ask ([runTokenLife]) is the issuer's run,
+// and a tool's or a refresh's ([toolTokenLife]) at most its renewal margin.
+// The default lives answer every ask unchanged.
+func (l issuedLives) ask(life time.Duration) time.Duration {
+	if life > defaultLives.renewBefore {
+		return min(life, l.run())
+	}
+	return min(life, l.renewBefore)
+}
+
 // issueFunc issues one seat's credential good for at least life after the
 // call, from the issuer's own process-wide cache while what it holds is.
 type issueFunc func(ctx context.Context, life time.Duration) (issuedToken, error)
@@ -191,7 +229,7 @@ func (e *Engine) seatIssuers() []seatIssuer {
 	if e.issuers != nil {
 		return e.issuers
 	}
-	return []seatIssuer{githubSeatIssuer{issuer: &e.githubIssuer}}
+	return []seatIssuer{githubSeatIssuer{issuer: &e.githubIssuer}, awsSeatIssuer{issuer: &e.awsIssuer}}
 }
 
 // seatToken answers one variable an integration issues one seat, issued at
@@ -229,7 +267,7 @@ func (s *seatToken) Lookup(name string) (string, bool) {
 		return "", false
 	}
 	s.once.Do(func() {
-		s.token, s.err = s.issue(s.ctx, s.life)
+		s.token, s.err = s.issue(s.ctx, livesOf(s.issuer).ask(s.life))
 	})
 	if s.err != nil {
 		return "", false

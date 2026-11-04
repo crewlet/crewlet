@@ -102,7 +102,7 @@ func TestARecoveredRunsBoxIsServedFromItsParkedTurn(t *testing.T) {
 	}
 	logged := rig.calls(t, "run-restart")
 	if n := len(logged.Calls); n != 1 || logged.Calls[0].Name != runner.SubmitWorkTool {
-		t.Fatalf("the row holds %d bridged calls (%+v), want the submission made after the recovery",
+		t.Fatalf("the log holds %d bridged calls (%+v), want the submission made after the recovery",
 			n, logged.Calls)
 	}
 }

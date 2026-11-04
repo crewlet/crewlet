@@ -957,7 +957,7 @@ person it is put to. The body is a call's `trigger`, `prompt`,
 `prompt_messages`, `response`, `tool_executions`, `round_narration`,
 `partial_round` and the `arguments` of each `running_calls` entry, an `llm_history` entry's
 `payload`, and an executor's `task_description`, `question`,
-`question_context`, `decision`, `held_call`, `held_arguments`, `reply` and `bridge_calls` (`held_call` also
+`question_context`, `decision`, `held_call`, `held_arguments`, `reply`, `bridge_calls` and `bridge_elided_calls` (`held_call` also
 to the person the question is put to, `held_arguments` never). A status reader receives the rest with **`body_withheld:
 true`** and the body's version counters at zero, so a client never marks the
 call stale and asks for a body it will not be sent. A work item a call or a
@@ -4190,7 +4190,7 @@ link, so the dashboard asks the begin route above for one and submits a form.
 
 Every integration the engine manages an account or a credential per agent on
 (Slack, Mattermost, Atlassian for Jira and Confluence, GitHub, GitLab, Datadog,
-Cloudflare, Expo and DigitalOcean) has an Agents tab, and these routes are what it reads and
+Cloudflare, Expo, DigitalOcean, Scaleway and AWS) has an Agents tab, and these routes are what it reads and
 writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
@@ -4198,7 +4198,11 @@ Datadog role id, a GitLab access level, a Jira project role id; Cloudflare's
 `read`, `operate` or `configure`, each a fixed set of permission groups;
 Expo's `viewer`, `runner`, `developer` or `release_manager`, each a fixed set
 of Expo permissions; DigitalOcean's `read`, `operate` or `administer`, each a
-fixed set of DigitalOcean token scopes), GitHub's permissions, and the scope it is narrowed to.
+fixed set of DigitalOcean token scopes; Scaleway's `read`, `operate` or `administer`, each a fixed
+set of permission sets; AWS's `read`, `operate` or `administer`, each a set of
+Crewlet's customer managed policies), GitHub's permissions, and the scope it is narrowed to
+(Scaleway's is the project IDs its policy grants the level on, and must name
+at least one while the agent is on).
 A lane is the block's key:
 `atlassian` has two, `jira` and `confluence`, over one account per agent, and
 every other integration has one named after itself. Jira and Confluence asked
@@ -4245,11 +4249,15 @@ sentence in the engine's words, where it waits on the vendor applying a grant
 the last sync wrote (a new account not yet grantable, a grant not yet in
 effect): that sync ended `ok`, since nobody owes a step, and the tool reads as
 it otherwise would once the vendor's stated wait ends. A lane whose tool is a CLI in the agent's own box
-(Expo's EAS CLI, DigitalOcean's doctl) also carries `box`, what that box holds for it: in `env`, the
+(Expo's EAS CLI, DigitalOcean's doctl, Scaleway's scw, AWS's CLI) also carries `box`, what that box holds for it: in `env`, the
 exact `sandbox.env` lines the seat needs, each variable set to the seat's own
 sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
 settings the engine supplies itself, as configured (`"by": "crewlet"`):
 `{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "by": "you"}]}`.
+Scaleway's lists `SCW_ACCESS_KEY` and `SCW_SECRET_KEY` by you, then
+`SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_PROJECT_ID` and
+`SCW_DISABLE_CHECK_VERSION` by Crewlet, which a line of the seat's own under
+the same name overrides.
 While the seat's lane is on, `files` lists the files the engine writes into the
 box itself, by path under the box's home, each with its reference as
 configured and never its value, and `rewritten` where the completion poll keeps
@@ -6829,7 +6837,7 @@ never saw. What it became is read off the executor's own row in
 every attempt to resume the executor with it failed and it was let go of (the
 executor waits on its question again, and you answer it again), or a new
 `launch_id` if the executor moved past the question first. It is also announced on the event stream
-as `executor_answered` (`resumed`, `not_awaiting`, `gone`, `declined` or `unoffered`),
+as `executor_answered` (`resumed`, `not_awaiting`, `gone`, `declined`, `unoffered`, or `too_large` for a chat reply too large to be recorded as the answer),
 naming who answered: their name, its kind and the credential. A node that stops
 on the way to the resume leaves the recorded answer for the seat's next holder
 rather than losing it. An `unknown` outcome is a delivery the broker never
@@ -12318,6 +12326,31 @@ ride the run's row sealed beside its question, and with `failed: true`, since
 nothing it asked for happened: it is the run's question, not a failure, and
 the executors board draws it so.
 
+A call's `args` and `output` are what the run's log keeps of them, which is
+held to the call's share of the log ([what a run's record and its log
+keep](../concepts/code-sandbox.md#what-a-runs-record-and-its-log-keep)): past it, the
+arguments keep their shape with their largest values left out, each replaced
+by a string marker such as `(1.0 MiB not kept on the run's record, digest
+1a2b3c4d)`, and the output keeps its opening followed by `…` and how much more
+was not kept. `args_bytes` and `output_bytes` are set only on such a call, to
+the size in bytes of the whole arguments and the whole output, and absent where
+the log keeps the call whole: decide "partly kept" by them, never by
+reading a marker. `digest` is the call's identity, the SHA-256 of its whole
+arguments as the run counts its calls, absent on a call no tool admitted (one
+refused after the run's tools closed, or whose arguments did not parse) and on
+a `held` or `approved` call, whose arguments ride the record sealed and are
+never digested in the clear.
+`bridge_calls_elided` counts the calls of the round the log does not list —
+dropped from the middle of a long run's log; a call whose own append reached
+the log only with a later one is listed, once, as the call it is — and
+`bridge_elided_calls` says what
+they were: one entry per tool and argument digest, `{name, digest, calls,
+failed}`, sent to whom the run's body is sent and always an array beside
+`bridge_calls`. An entry with no `digest` counts calls to its tool whose
+arguments' identity was not kept, and one with no `name` calls whose tool was
+not kept either — which is also how calls an older engine dropped, keeping a
+count and no entries, are served.
+
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed
 for as a snapshot), not which box it is. `paused_at` is the answer the
@@ -12836,7 +12869,7 @@ trace anywhere except the provider's own delivery UI.
 
 `tools` is **one roll-up per tool** this build serves (`slack`, `mattermost`,
 `atlassian` for the organization, Confluence, Jira and the Forge relay,
-`github`, `gitlab`, `datadog`, `cloudflare`, `expo`, `digitalocean`), whether or not the company configured it, so a
+`github`, `gitlab`, `datadog`, `cloudflare`, `expo`, `digitalocean`, `scaleway`, `aws`), whether or not the company configured it, so a
 reader never invents a state for a missing one. `state` is `attention` (a
 person has to act), `not_connected` (configured and not working yet, with
 nobody owing anything — or this node could not read the status),

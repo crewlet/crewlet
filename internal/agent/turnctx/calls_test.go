@@ -173,6 +173,60 @@ func TestASeededLogCountsTheCallsBeforeTheSeed(t *testing.T) {
 	}
 }
 
+// A SEEDED CALL IS COUNTED BY THE IDENTITY ITS RECORD CARRIES, NEVER BY WHAT ITS
+// RECORD KEPT. A run's tool log keeps a call's arguments in part past its
+// share, so a call seeded from them is another call; seeded by its digest it is
+// the call it was, and a repeat of it after the seed keeps its count.
+//
+// Mutation: record a seeded call by its arguments whatever its digest, and the
+// repeat counts the cut copy as a different call.
+func TestASeededCallIsCountedByItsIdentity(t *testing.T) {
+	t.Parallel()
+	whole := map[string]any{"status": "draft", "note": "a long note"}
+	cut := map[string]any{"status": "draft", "note": "(1.0 MiB not kept on the run's record, digest 0)"}
+	log := turnctx.NewCallLog()
+	log.Seed(turnctx.SeededCall{Tool: "update", Args: toolargs.Of(nil, cut), Digest: turnctx.ArgsDigest(whole)})
+	if got := log.Ordinal("update", whole); got != 0 {
+		t.Errorf("the repeat of a seeded call counts %d different calls before it, want 0", got)
+	}
+	if got := log.Ordinal("update", map[string]any{"status": "done"}); got != 1 {
+		t.Errorf("another call counts %d before it, want the seeded one", got)
+	}
+}
+
+// A CALL WHOSE IDENTITY WAS NOT KEPT IS AN OVER-COUNT, NEVER AN UNDER-COUNT.
+// Past what a record's tally of dropped calls holds, a call keeps its tool and
+// loses its arguments' digest (an unknown call of the tool), and past that
+// loses its tool too: the first counts against every later call to the tool,
+// a repeat of whatever it was included, and the second against every later
+// call of every tool — so no count derived after it is lower than the run's
+// own, which is what would hand a later call an earlier one's operation id.
+//
+// Mutation: record an unknown call by the arguments it carries (none), and a
+// later call made with none is taken for its repeat; drop SeedUnknown, and a
+// call of another tool counts nothing the record dropped.
+func TestACallWhoseIdentityWasNotKeptIsAnOverCount(t *testing.T) {
+	t.Parallel()
+	a := map[string]any{"status": "draft"}
+	log := turnctx.NewCallLog()
+	log.Seed(turnctx.SeededCall{Tool: "update", Unknown: true})
+	for _, args := range []map[string]any{a, {}} {
+		if got := log.Ordinal("update", args); got != 1 {
+			t.Errorf("a call with %v after an unknown call of its tool counts %d, want 1", args, got)
+		}
+	}
+	if got := log.Ordinal("join", a); got != 0 {
+		t.Errorf("a call of another tool counts %d for an unknown call of update, want 0", got)
+	}
+	log.SeedUnknown(3)
+	if got := log.Ordinal("join", a); got != 3 {
+		t.Errorf("a call after three calls whose tool is unknown counts %d, want 3", got)
+	}
+	if got := log.Fork().Ordinal("update", a); got != 4 {
+		t.Errorf("a fork counts %d, want the run's 4", got)
+	}
+}
+
 // A WORKER COUNTS FROM THE RUN AND ITS OWN CALLS, NEVER A SIBLING'S — and its
 // calls reach the run once it is absorbed.
 func TestAForkCountsItsOwnCallsAndIsAbsorbed(t *testing.T) {
@@ -274,5 +328,34 @@ func TestWithCallsDerivesATurn(t *testing.T) {
 	}
 	if child.RunID != parent.RunID || child.WorkKey != parent.WorkKey {
 		t.Fatal("the derived turn lost the run it belongs to")
+	}
+}
+
+// A FORK'S OWN CALLS ARE THE ONES MADE ON IT. A call admitted on a fork may do
+// work of its own that the run's log takes in once it returns — a `delegate`'s
+// workers — and a record that keeps the call keeps that work beside it, which
+// is the fork's own calls and never the run's calls it was forked with; a fork
+// nothing was made on, and a nil log, have none.
+//
+// Mutation: hand back the whole fork, and the record counts the run's earlier
+// calls a second time; hand back nothing, and a worker's call is on no record.
+func TestAForksOwnCallsAreTheOnesMadeOnIt(t *testing.T) {
+	t.Parallel()
+	run := turnctx.NewCallLog()
+	run.Record("join_channel", toolargs.Of(nil, map[string]any{"channel": "R"}))
+	admitted := run.Admit("delegate", toolargs.Of(nil, map[string]any{"task": "tidy"}))
+	worker := admitted.Fork()
+	worker.Record("leave_channel", toolargs.Of(nil, map[string]any{"channel": "R"}))
+	admitted.Absorb(worker)
+	want := []turnctx.Called{{Tool: "leave_channel", Digest: turnctx.ArgsDigest(map[string]any{"channel": "R"})}}
+	if got := admitted.Own(); !slices.Equal(got, want) {
+		t.Errorf("the admitted call's own calls are %+v, want its worker's %+v", got, want)
+	}
+	if got := run.Fork().Own(); got != nil {
+		t.Errorf("a fork nothing was made on hands back %+v, want none", got)
+	}
+	var none *turnctx.CallLog
+	if got := none.Own(); got != nil {
+		t.Errorf("a nil log hands back %+v", got)
 	}
 }

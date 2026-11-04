@@ -54,6 +54,16 @@
 // a row the other parked reads none of the block it does not know, and its
 // turn's prompts carry no account of the conversation's earlier turns rather
 // than a wrong one.
+//
+// AND IT IS HELD TO A SHARE OF ITS RUN'S ROW, which is one value in the
+// coordination store and so one broker message: [EncodeWithin] condenses the
+// closed rounds past it — their payloads first, then their intents past their
+// opening, then their tallies' digests, then their calls folded into those
+// tallies by identity and then by tool, the names of their read tools with
+// them, then their review prose — never a call's tool or outcome, and its
+// identity only past the last fold, an over-count of its tool; and it refuses
+// a state still past the share, saying whether the turn's own context or its
+// closed rounds are what will not fit ([TooLargeError]). See within.go.
 package execstate
 
 import (

@@ -74,6 +74,10 @@ func (c *Company) SeatAccessConnected(kind string) bool {
 		return in.Expo != nil
 	case "digitalocean":
 		return in.DigitalOcean != nil
+	case "scaleway":
+		return in.Scaleway != nil
+	case "aws":
+		return in.AWS != nil
 	}
 	return false
 }

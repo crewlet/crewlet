@@ -3,8 +3,10 @@ package catalogue
 import (
 	"net/url"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // Launch is what recognition reads of a configured server: its transport and
@@ -28,6 +30,10 @@ type SeatKey struct {
 	Env    string
 	Header string
 	Prefix string
+	// Sign is a credential sent nowhere: the engine signs each request to
+	// the remote server with it ([mcp.RequestSigner]), so a server it binds
+	// is never handed to a box. Env, Header and Prefix are empty.
+	Sign bool
 }
 
 // Binding is a recognised server's declaration of the seat credential it
@@ -140,6 +146,11 @@ func glabServe(l Launch) bool {
 	return l.Transport == TransportStdio && path.Base(l.Command) == "glab" && slices.Contains(l.Args, "mcp")
 }
 
+// scwServe recognises Scaleway's own CLI serving MCP: `scw mcp server serve`.
+func scwServe(l Launch) bool {
+	return l.Transport == TransportStdio && path.Base(l.Command) == "scw" && slices.Contains(l.Args, "mcp")
+}
+
 // hostIs recognises a remote server at exactly host.
 func hostIs(host string) func(Launch) bool {
 	return func(l Launch) bool { return l.Transport == TransportHTTP && HostOf(l.URL) == host }
@@ -162,6 +173,16 @@ func hostUnder(domains ...string) func(Launch) bool {
 		})
 	}
 }
+
+// awsMCPHost recognises AWS's MCP Server in any Region it runs in:
+// aws-mcp.<Region>.api.aws, and no other host under api.aws.
+func awsMCPHost(l Launch) bool {
+	return l.Transport == TransportHTTP && awsMCP().MatchString(HostOf(l.URL))
+}
+
+var awsMCP = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^aws-mcp\.[a-z0-9-]+\.api\.aws$`)
+})
 
 // either recognises what a or b does.
 func either(a, b func(Launch) bool) func(Launch) bool {

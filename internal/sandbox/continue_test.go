@@ -108,17 +108,17 @@ func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 	}
 }
 
-// A CARRIED-ON JOB NUMBERS ITS CALLS AFTER THE ASKING JOB'S. The row keeps the
+// A CARRIED-ON JOB NUMBERS ITS CALLS AFTER THE ASKING JOB'S. The log keeps the
 // asking job's calls as the round's, and the collection that closes the round
 // reads the round's calls in the order the run made them, by their place
 // ([BridgeCall.Seq]): numbered from one again, the carried-on job's calls were
 // sorted in among the asking job's, its record, its reviewer's log and its
 // last submission with them. So the launch tells what serves the new job
-// where the row's calls end — the highest place, not the last call's, since a
+// where the log's calls end — the highest place, not the last call's, since a
 // call made first can finish last — and a job that starts a new round, whose
-// log the row starts afresh, is told zero.
+// log starts afresh, is told zero.
 //
-// Mutation: tell Opened zero, or the place of the last call in the row's
+// Mutation: tell Opened zero, or the place of the last call in the log's
 // list, and this goes red.
 func TestACarriedOnJobIsNumberedAfterTheAskingJobsCalls(t *testing.T) {
 	t.Parallel()

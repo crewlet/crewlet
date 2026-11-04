@@ -127,6 +127,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Create one account API token at Cloudflare for Crewlet to mint the agents' tokens from. It needs every permission an agent can be given.",
   },
+  scaleway: {
+    does: [
+      "Read servers, storage, networks, DNS and databases in the projects you choose",
+      "Restart servers and change firewalls, IPs, load balancers and private networks, where you allow it",
+      "Use the Scaleway CLI or MCP server as themselves, with their own API key",
+    ],
+    identity:
+      "Crewlet makes a Scaleway IAM application for each agent, with its own policy and API key.",
+    byHand:
+      "Create an IAM application for Crewlet with an API key, and a policy giving it IAMApplicationManager, IAMPolicyManager and ProjectReadOnly on your Organization. That key is equivalent to an Organization administrator for IAM applications and policies, so give it a short expiry and rotate it.",
+  },
   expo: {
     does: [
       "Read EAS builds, their logs and submissions",
@@ -147,6 +158,17 @@ export const STORIES: Record<string, ToolStory> = {
       "Each agent gets its own DigitalOcean token, so you can cut off one agent without touching the others.",
     byHand:
       "Create a personal access token for each agent in DigitalOcean's control panel, with the scopes Crewlet lists, and paste it here. DigitalOcean has no API to create one.",
+  },
+  aws: {
+    does: [
+      "Read EC2, ECS, EKS, Lambda, RDS, S3 and CloudWatch, log contents included, in the Regions you allow",
+      "Restart and scale instances and services, and manage alarms, where you allow it",
+      "Use the AWS MCP Server and the AWS CLI as themselves, with no access key to keep",
+    ],
+    identity:
+      "Crewlet makes an IAM role for each agent, limited by a permissions boundary, so CloudTrail names the agent for every call.",
+    byHand:
+      "Run the setup block the form gives you in AWS CloudShell. It creates one CloudFormation stack with Crewlet's sign-in, its provisioner role, the boundary and the level policies, and prints the line you paste back.",
   },
 };
 

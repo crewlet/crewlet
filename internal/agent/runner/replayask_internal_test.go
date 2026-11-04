@@ -58,7 +58,7 @@ func TestASubmissionBeforeTheAnswerIsNotReplayed(t *testing.T) {
 					return workPayload{Summary: summary}, nil
 				})
 			since := bridgedLedger(sinceAnswer(tc.calls, tc.answered))
-			replaySubmission(t.Context(), tool, since)
+			replaySubmission(t.Context(), tool, sinceAnswer(tc.calls, tc.answered))
 			got, replayed := tool.Value()
 			if replayed != (tc.want != "") || got.Summary != tc.want {
 				t.Fatalf("replayed %q (submitted %v), want %q", got.Summary, replayed, tc.want)

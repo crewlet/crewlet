@@ -313,15 +313,17 @@ type Seat struct {
 	// third-party app needs one.
 	Email string
 
-	// EmailVar is the variable this seat's account ADDRESS is written into,
-	// for an app that assigns the address rather than taking one.
+	// AlsoVars are the other variables the same pass seals for this seat
+	// that its tool reads beside the credential, which a launch waits on as
+	// it waits on TokenVar.
 	//
-	// Atlassian is why. It names a service account itself, and its product
-	// APIs authenticate that account as Basic base64(address:token) — so a
-	// seat holding only the token is refused, and the address is not
-	// something anybody can write down in advance because Atlassian invents
-	// it at creation time.
-	EmailVar string
+	// Atlassian's is why it exists. It names a service account itself, and
+	// its product APIs authenticate that account as Basic
+	// base64(address:token), so a seat holding only the token is refused,
+	// and the address is not something anybody can write down in advance
+	// because Atlassian invents it at creation time. Scaleway's is its API
+	// key's access key, which the scw CLI refuses to run without.
+	AlsoVars []string
 
 	// AccessLevel is the membership level the company's settings give THIS
 	// seat at an app that grades its members — GitLab's `developer` or

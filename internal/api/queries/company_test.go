@@ -2516,6 +2516,8 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.Cloudflare = &config.Cloudflare{Enabled: true}
 	cfg.Integrations.Expo = &config.Expo{Enabled: true}
 	cfg.Integrations.DigitalOcean = &config.DigitalOcean{Enabled: true}
+	cfg.Integrations.Scaleway = &config.Scaleway{Enabled: true}
+	cfg.Integrations.AWS = &config.AWS{Enabled: true}
 
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, cfg),

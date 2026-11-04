@@ -41,7 +41,7 @@ import (
 // `mcp_servers` entry declares it.
 type SeatCredential struct {
 	// Kind is the integration whose seat credential it is.
-	Kind string `yaml:"kind" json:"kind" js:"required;enum=atlassian|cloudflare|datadog|digitalocean|expo|github|gitlab|mattermost|slack" desc:"Integration whose per-seat credential this server reads."`
+	Kind string `yaml:"kind" json:"kind" js:"required;enum=atlassian|cloudflare|datadog|digitalocean|expo|github|gitlab|mattermost|scaleway|slack" desc:"Integration whose per-seat credential this server reads."`
 
 	// Field is which of the integration's seat credentials: TOKEN or EMAIL
 	// for Atlassian; empty is the integration's credential itself.
@@ -59,10 +59,10 @@ type SeatCredential struct {
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty" desc:"Text before the value, e.g. \"Bearer \"."`
 }
 
-// seatCredentialFields is each integration's per-seat fields a seat's tool
-// server may read, the credential itself first ([seatFields]). GitHub's is the
+// SeatToolFields is each integration's per-seat fields a seat's tool server
+// may read, the credential itself first ([seatFields]). GitHub's is the
 // installation token the engine issues at use, never sealed.
-func seatCredentialFields(kind string) []string {
+func SeatToolFields(kind string) []string {
 	var out []string
 	for _, f := range seatFields(kind) {
 		if f.tool {
@@ -75,7 +75,7 @@ func seatCredentialFields(kind string) []string {
 // SeatCredentialKinds is every integration a server can read a seat
 // credential of.
 func SeatCredentialKinds() []string {
-	return []string{"atlassian", "cloudflare", "datadog", "digitalocean", "expo", "github", "gitlab", "mattermost", "slack"}
+	return []string{"atlassian", "cloudflare", "datadog", "digitalocean", "expo", "github", "gitlab", "mattermost", "scaleway", "slack"}
 }
 
 // SeatCredentialKind is the integration a seat block's lane belongs to:
@@ -107,6 +107,9 @@ func (m *MCPServer) Launch() catalogue.Launch {
 // under on its own transport.
 type BoundSeatKey struct {
 	Kind, Field, Key, Prefix string
+	// Sign is a credential the engine signs each request with and sends
+	// nowhere: Key and Prefix are empty, and no seat's block holds it.
+	Sign bool
 }
 
 // SeatBindings is every seat credential this per-seat server reads: what it
@@ -121,7 +124,7 @@ func (m *MCPServer) SeatBindings() []BoundSeatKey {
 		for _, d := range m.SeatCredentials {
 			field := d.Field
 			if field == "" {
-				if fields := seatCredentialFields(d.Kind); len(fields) > 0 {
+				if fields := SeatToolFields(d.Kind); len(fields) > 0 {
 					field = fields[0]
 				}
 			}
@@ -134,6 +137,12 @@ func (m *MCPServer) SeatBindings() []BoundSeatKey {
 		return nil
 	}
 	for _, k := range keys {
+		if k.Sign {
+			if m.Kind() == TransportHTTP {
+				out = append(out, BoundSeatKey{Kind: kind, Field: k.Field, Sign: true})
+			}
+			continue
+		}
 		key, prefix := k.Env, ""
 		if m.Kind() == TransportHTTP {
 			key, prefix = k.Header, k.Prefix
@@ -143,6 +152,17 @@ func (m *MCPServer) SeatBindings() []BoundSeatKey {
 		}
 	}
 	return out
+}
+
+// SignedBinding is the seat credential this per-seat server's requests are
+// signed with, and false for a server that is handed its credential instead.
+func (m *MCPServer) SignedBinding() (BoundSeatKey, bool) {
+	for _, k := range m.SeatBindings() {
+		if k.Sign {
+			return k, true
+		}
+	}
+	return BoundSeatKey{}, false
 }
 
 // validateSeatCredentials checks a server's declared seat credentials.
@@ -162,7 +182,7 @@ func (m *MCPServer) validateSeatCredentials(p *problems, base Path) {
 	}
 	for i, d := range m.SeatCredentials {
 		here := idx(base, i)
-		fields := seatCredentialFields(d.Kind)
+		fields := SeatToolFields(d.Kind)
 		switch {
 		case fields == nil:
 			p.add(at(here, "kind"), ErrUnknownValue, "%q is not an integration with a per-seat "+
@@ -284,7 +304,7 @@ func (c *Company) bindSeatTools(o *org.Organization) {
 			// key to value: what the server reads, and what it is handed.
 			bound := map[string]string{}
 			for _, k := range server.SeatBindings() {
-				if !role.seatOnAt(k.Kind) {
+				if k.Sign || !role.seatOnAt(k.Kind) {
 					continue
 				}
 				if ref, ok := c.boundRef(&role.Integrations, seat.Handle(), k); ok {

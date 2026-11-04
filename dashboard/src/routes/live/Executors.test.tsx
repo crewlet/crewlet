@@ -28,7 +28,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { overflowing } from "~/testing.tsx";
-import { BridgeLog, ExecutorScreen } from "./Executors.tsx";
+import { BridgeLog, BridgeSummary, ExecutorScreen } from "./Executors.tsx";
 import type { ExecutorRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
@@ -124,6 +124,47 @@ test("an elided middle is said out loud, never left to be inferred", () => {
     />,
   );
   expect(screen.getByText("47 calls from the middle aren’t shown.")).toBeTruthy();
+});
+
+test("the rail counts every call the run made, the dropped middle included", () => {
+  // The rail's count is the run's, and the log the page opens says which of
+  // them it does not list. Mutation: count the listed calls alone, and the
+  // rail says one call of a run that made forty-eight.
+  render(
+    <BridgeSummary
+      run={run({
+        bridge_calls: [{ name: "read_file", at: "2026-06-15T12:01:00Z" }],
+        bridge_calls_elided: 47,
+      })}
+    />,
+  );
+  expect(screen.getByText("48 calls through the MCP bridge")).toBeTruthy();
+  expect(screen.getByText("47 calls from the middle aren’t listed")).toBeTruthy();
+});
+
+test("the rail's failures are the dropped middle's too, as its count is", () => {
+  // The rail's call count is every call the run made, so its failure tag is
+  // every failure among them: the listed calls' and the ones the record's
+  // tally keeps of the calls it dropped. Mutation: count the listed calls'
+  // failures alone, and the rail says one failure of a run whose dropped
+  // middle failed twelve more times, beside a count that includes them.
+  render(
+    <BridgeSummary
+      run={run({
+        bridge_calls: [
+          { name: "read_file", at: "2026-06-15T12:01:00Z", failed: true },
+          { name: "post_message", at: "2026-06-15T12:09:00Z" },
+        ],
+        bridge_calls_elided: 47,
+        bridge_elided_calls: [
+          { name: "read_file", digest: "ab", calls: 35, failed: 12 },
+          { name: "post_message", calls: 12 },
+        ],
+      })}
+    />,
+  );
+  expect(screen.getByText("49 calls through the MCP bridge")).toBeTruthy();
+  expect(screen.getByText("13 failures")).toBeTruthy();
 });
 
 test("a run that made no calls says so", () => {
@@ -309,6 +350,84 @@ test("a call held for a person's approval is marked so, never as a failure", () 
     "(sealed beside the run's question, for whoever may approve it)",
   );
   expect(result?.textContent).toContain("was NOT called");
+});
+
+// A CUT READS AS ONE. The engine keeps a call's arguments and its answer to
+// their share of the run's record, leaving out a value past it and keeping an
+// answer's opening, and states the whole's size beside each: the screen marks
+// the call partly kept and says, over each block, how much the call sent or
+// answered, read off those sizes and never off the marker in the text — a call
+// kept whole whose own words quote one reads as kept whole.
+//
+// Mutation: drop the tag, or either caption, and a left-out value reads as
+// what the call sent; read the cut off the marker, and a message that quotes
+// one reads as partly kept.
+test("a call the run's record keeps in part reads as partly kept", () => {
+  const container = overflowing(
+    <Router>
+      <BridgeLog
+        run={run({
+          bridge_calls: [
+            {
+              name: "code_commit_files",
+              args: '{"content":"(1.0 MiB not kept on the run\'s record, digest 1a2b3c4d)","path":"a.go"}',
+              args_bytes: 1 << 20,
+              output: "committed\u2026\n(60 KiB of 64 KiB not kept on the run's record)",
+              output_bytes: 64 << 10,
+              at: "2026-06-15T12:04:00Z",
+            },
+            {
+              name: "read_file",
+              args: '{"path":"a.go"}',
+              output: "package a",
+              at: "2026-06-15T12:05:00Z",
+            },
+            {
+              name: "post_message",
+              args: '{"text":"the log said (1.0 MiB not kept on the run\'s record, digest 1a2b3c4d)"}',
+              output: "posted, not kept on the run's record either",
+              at: "2026-06-15T12:06:00Z",
+            },
+          ],
+        })}
+      />
+    </Router>,
+    "height",
+    openFirstCall,
+  );
+  expect(screen.getAllByText("partly kept")).toHaveLength(1);
+  expect(container.textContent).toContain("Partly kept: the call sent 1.0 MiB");
+  expect(container.textContent).toContain("The opening of 64 KiB: the rest isn’t kept");
+});
+
+// WHAT A LOG DROPPED IS SAID BY TOOL. The engine keeps every call it drops from
+// a long log's middle as an identity, its tool and how many calls and failures
+// it had: the count bound costs the reader the calls, never which tools the run
+// called how often.
+//
+// Mutation: leave the identities out of the callout, and the reader is told
+// only how many calls are gone.
+test("an elided middle says by tool what it dropped", () => {
+  render(
+    <BridgeLog
+      run={run({
+        bridge_calls: [{ name: "read_file", at: "2026-06-15T12:01:00Z" }],
+        bridge_calls_elided: 126,
+        bridge_elided_calls: [
+          { name: "read_file", digest: "a", calls: 100 },
+          { name: "read_file", digest: "b", calls: 20, failed: 3 },
+          { name: "post_message", digest: "c", calls: 1 },
+          { calls: 5 },
+        ],
+      })}
+    />,
+  );
+  expect(
+    screen.getByText(
+      "126 calls from the middle aren’t shown. By tool: post_message once, read_file 120 times " +
+        "(3 failed) and 5 calls to tools the record didn’t keep.",
+    ),
+  ).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------

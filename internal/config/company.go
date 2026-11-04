@@ -1208,6 +1208,10 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.Expo != nil
 	case "digitalocean":
 		return in.DigitalOcean != nil
+	case "scaleway":
+		return in.Scaleway != nil
+	case "aws":
+		return in.AWS != nil
 	case "atlassian":
 		return in.Atlassian != nil
 	default:

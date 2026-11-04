@@ -142,6 +142,11 @@ func (s *Surface) WithGuard(g Guard) *Surface {
 // episodes. Every one of them is an authorization decision, and every one of
 // them would be forgeable if the seat arrived in the model's arguments.
 //
+// AND THE ONE WHOSE WORK IS THE CALL'S OWN: `delegate`, whose workers count
+// their calls on the log of the turn it is called as — the call's own, where
+// the surface admitted it on one ([Surface.Admit]) — so the run's record can
+// keep their calls with the call that made them.
+//
 // Optional, and checked at the one frame that holds both halves. A plain
 // Callable — every MCP tool, every discovery meta-tool — is unaffected and
 // knows nothing about turns.
@@ -377,6 +382,18 @@ func (s *Surface) ArgsOf(name string, raw map[string]any) toolargs.Args {
 	return s.universe.ArgsOf(name, raw)
 }
 
+// DigestOf is the identity a call to name with raw arguments is admitted
+// under in its run's call log: [turnctx.ArgsDigest] of the canonical arguments
+// ([Surface.ArgsOf]), the value [Surface.Admit] records.
+//
+// ONE RULE, called beside the admission by a caller that records the call
+// somewhere the log is later seeded from — a bridged run's tool log — so the
+// record carries the identity the log counted, whatever it keeps of the
+// arguments.
+func (s *Surface) DigestOf(name string, raw map[string]any) string {
+	return turnctx.ArgsDigest(s.ArgsOf(name, raw).Map())
+}
+
 // Admit records a call in its run's call log NOW, in the order calls arrive,
 // for a caller that runs calls side by side — see [turnctx.CallLog.Admit] for
 // why a count read against the order calls RETURN in is one a re-run does not
@@ -394,6 +411,16 @@ func (s *Surface) ArgsOf(name string, raw map[string]any) toolargs.Args {
 //
 // The admitted call runs with the arguments admitted here, in their canonical
 // form; the call it is handed is read for nothing but its name.
+//
+// AND WHAT THE CALL'S OWN WORK RECORDED rides its result
+// ([toolloop.ToolResult.Absorbed]), the calls the run's log absorbs from it
+// as it returns, for a caller that records the call where a later segment's
+// log is seeded from.
+//
+// EVEN WHERE THE CALL PANICS: what its work recorded by then is in the run's log
+// all the same, so the panic is raised again carrying it
+// ([toolloop.CallPanic]), for the caller that recovers it to record beside the
+// call that broke. A call whose work recorded nothing panics as it did.
 func (s *Surface) Admit(name string, raw map[string]any) toolloop.Admitted {
 	args := s.ArgsOf(name, raw)
 	calls := s.turn.CallLog().Admit(name, args)
@@ -403,8 +430,33 @@ func (s *Surface) Admit(name string, raw map[string]any) toolloop.Admitted {
 			turn = s.turn.WithCalls(calls)
 			defer s.turn.CallLog().Absorb(calls)
 		}
-		return s.execute(ctx, name, args, turn, true, false)
+		defer func() {
+			// RECOVERED ONLY WHERE THERE IS SOMETHING TO CARRY, so every
+			// other panic reaches its recovery untouched.
+			if own := ownWork(calls); len(own) > 0 {
+				if v := recover(); v != nil {
+					panic(&toolloop.CallPanic{Value: v, Absorbed: own})
+				}
+			}
+		}()
+		res, err := s.execute(ctx, name, args, turn, true, false)
+		res.Absorbed = ownWork(calls)
+		return res, err
 	}
+}
+
+// ownWork is what an admitted call's own work recorded on its log
+// ([turnctx.CallLog.Own]), as a call's result hands it on.
+func ownWork(calls *turnctx.CallLog) []toolloop.Called {
+	own := calls.Own()
+	if len(own) == 0 {
+		return nil
+	}
+	out := make([]toolloop.Called, 0, len(own))
+	for _, c := range own {
+		out = append(out, toolloop.Called{Tool: c.Tool, Digest: c.Digest})
+	}
+	return out
 }
 
 // execute is [Surface.Execute] as turn — the surface's own, or a view of it

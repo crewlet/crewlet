@@ -246,41 +246,46 @@ budgets are longer, and the shared case has not been re-measured under them;
 and does not show.
 
 So those packages run in `make test-solo` and in CI's `end-to-end gates`
-job, and `make test` leaves them out. A contention split, not a coverage one
-— `make check` depends on both targets. `make test-solo` runs its packages
+shards, and `make test` leaves them out. A contention split, not a coverage
+one: `make check` depends on both targets. `make test-solo` runs its packages
 one binary at a time (`-p 1`) and compiles them first at full parallelism,
 since `-p 1` would otherwise compile the whole dependency tree one package at
 a time too.
 
-**In CI each half is one job**, `test (race)` and `end-to-end gates`, each on
-a runner of its own. `end-to-end gates` is plain `make test-solo`; `test (race)`
-is `make test` with two variables set, and a local run can do the same:
+**In CI each half runs on several runners at once.** A `test plan` job deals
+each half into shards by measured duration and proves that every package
+lands in exactly one. Each `test (race) I/N` leg runs `make test` on its
+shard and each `end-to-end gates I/N` leg runs `make test-solo` on its own,
+still at `-p 1`: a shard is a separate machine, so no two packages that run
+alone ever share one. The jobs named `test (race)` and `end-to-end gates`,
+the checks `main` requires, pass only when the plan and every shard of their
+half did. A local run can do what a shard does:
 
 ```bash
-make test TEST_TIMINGS=/tmp/test-timings.tsv   # write how long each package took
-make test TEST_WEIGHTS=/tmp/test-timings.tsv   # start the longest first by that
+make test TEST_TIMINGS=/tmp/test-timings.tsv                 # write how long each package took
+make test TEST_WEIGHTS=/tmp/test-timings.tsv                 # start the longest first by that
+make test TEST_WEIGHTS=/tmp/test-timings.tsv TEST_SHARD=2/4  # run the second of four shards
 ```
 
 `TEST_WEIGHTS` starts the longest packages first: `go test` starts package runs
 in the order it is handed them, and alphabetical order started the three
-longest last. It must name a file that exists — `internal/solo/partition`
-refuses one it cannot open rather than guess — and an empty file is `go list`'s
-order, which is what CI runs before `main` has measured anything. CI's own
-weights are the timings of the job's last passing run on `main`, kept in the
-Actions cache, which nothing outside a workflow can download; a local run
-takes them from a run of its own, as above. Neither variable changes which
-packages are in a half, and left unset — the default — `make test` is the
-whole half in `go list` order, as it always was. `make test-solo` takes
-neither: it runs at `-p 1`, where its binaries take the same time in any
-order.
+longest last. With `TEST_SHARD=I/N` the same weights deal the half across N
+shards, longest first, each package to the shard carrying the least so far;
+without weights the deal is by package count. The file must exist
+(`internal/solo/partition` refuses one it cannot open rather than guess), and
+an empty file is `go list`'s order. CI's weights are the shards' timings from
+the last passing run on `main`, merged by `go run ./internal/solo/partition
+merge`. The Actions cache keeps them for CI, and each run also publishes them
+as its `test-weights` artifact, which a local run can download with `gh run
+download <run-id> -n test-weights`. None of the three variables changes which
+packages are in a half, and left unset, the default, `make test` is the whole
+half in `go list` order, as it always was. `make test-solo` takes the same
+three: at `-p 1` its order changes nothing, but a shard of it takes the sum of
+its packages, so the deal is its whole wall time.
 
 Both paths live outside the checkout, as they do in CI: the suite's own gates
 read the checkout as this repository's tree, and neither path is ignored by
 git, so a file left there is one `git add -A` away from a commit.
-
-A half is not split across more runners: GitHub Actions has no native way to
-split one job, and the comment above `ci.yml`'s `test` job says what doing it
-by hand cost and bought.
 
 **Which packages those are is computed, not listed.** A package declares it by
 importing `internal/solo` from its `TestMain`, and `internal/solo`'s roster
@@ -426,7 +431,7 @@ What follows are the prerequisites that legitimately vary by machine.
   `opencode_skills_test.go` drives the skill-load plugin through
   `opencode_skills_probe.mjs`, against a stand-in of the bridge's skill route.
   That package is in the parallel half, so `make test`
-  requires node too and CI's `test (race)` job installs it, and its skips have
+  requires node too and CI's race shards install it, and its skips have
   no allowlist entry either. They need no npm either: the plugins import
   nothing.
 
@@ -590,14 +595,14 @@ What follows are the prerequisites that legitimately vary by machine.
   not make you do it; see [A dashboard bump brings its own
   bundle](#a-dashboard-bump-brings-its-own-bundle).
 
-  **Which node.** CI installs `latest` — the newest Node release, resolved by
-  setup-node when the job runs — in the `dashboard` job, the `test (race)` and
-  `gates` jobs and
+  **Which node.** CI installs `latest` (the newest Node release, resolved by
+  setup-node when the job runs) in the `dashboard` job, the race shards, the
+  `end-to-end gates` shards and
   [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)'s
   `build` job. The last must always answer this the same way as `dashboard`,
-  because it rebuilds the bundle that job diffs. `test (race)` and `gates` need
-  not match either: what they run under plain node is a committed file — the
-  plugin, the built bundle — not a fresh build.
+  because it rebuilds the bundle that job diffs. The two sets of shards need
+  not match either: what they run under plain node is a committed file (the
+  plugin, the built bundle), not a fresh build.
 
   **Nothing in this repository names a node version**, and that is a decision
   rather than an oversight. A pin earns its keep by being maintained, and
@@ -1177,9 +1182,13 @@ The checks to require are the jobs of `ci.yml` a pull request runs: `build +
 vet`, `sign-off`, `dashboard`, `test (race)`, `end-to-end gates`,
 `golangci-lint` and the four `cross-compile the release targets` legs. A rule
 matches a check by its exact name, and a matrix leg's name carries its matrix
-values — `cross-compile the release targets (linux, amd64)` — so each leg is
+values (`cross-compile the release targets (linux, amd64)`), so each leg is
 required by that full name; a check the rule names that never reports blocks
 every pull request, and renaming a job is therefore a change to the rule too.
+The test shards are the exception: `test (race)` and `end-to-end gates` are
+aggregate jobs over the `test (race) I/N` and `end-to-end gates I/N` legs, so
+the rule names the aggregates and never a shard, whose name changes with the
+shard count.
 
 The job runs only when Dependabot is both the pull request's author *and* the
 actor that triggered the run. That second condition is what stops the workflow

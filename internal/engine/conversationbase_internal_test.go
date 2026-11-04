@@ -43,11 +43,11 @@ func TestAFrozenReadFitsItsBound(t *testing.T) {
 	}
 	head := executordomain.Session{Handle: "swe", Turn: turn(0), Object: object(),
 		ContentKey:     strings.Repeat(worst, executordomain.ContentKeyMaxBytes),
-		Harness:        strings.Repeat(worst, executordomain.HarnessMaxBytes),
+		Harness:        strings.Repeat(worst, executorkeep.HarnessMaxBytes),
 		HarnessVersion: strings.Repeat(worst, executorkeep.HarnessVersionMaxBytes),
 		SessionID:      strings.Repeat(worst, executorkeep.SessionIDMaxBytes),
-		Home:           strings.Repeat(worst, executordomain.PathMaxBytes),
-		Workspace:      strings.Repeat(worst, executordomain.PathMaxBytes),
+		Home:           strings.Repeat(worst, executorkeep.PathMaxBytes),
+		Workspace:      strings.Repeat(worst, executorkeep.PathMaxBytes),
 		ContextTokens:  1 << 40, Interrupted: true, ArchiveFormat: 1 << 20,
 		EndedAt: time.Now().UTC(), Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}
 	var endings []executordomain.Session
