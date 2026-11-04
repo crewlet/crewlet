@@ -111,7 +111,19 @@ type Page struct {
 	// Next is the cursor the page after this one is read from, "" where none
 	// follows.
 	Next string
+
+	// Reread says the session's object failed and the page is answered from
+	// the turn's row read again, at [ReadAgain]'s level: Read is that read.
+	Reread bool
 }
+
+// ReadAgain is the level a read whose object failed reads its turn's row again
+// at: `linearizable`, whatever the first read's. The row is the authority on
+// whether the session is still kept, and a copy of the log behind it would
+// still name the object a release took; and the read is made only where an
+// object failed, so the barrier it costs the executor log is paid on a
+// failure alone.
+func ReadAgain() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
 
 // The ways a read is answered with no page. Each is a fact a surface says
 // differently, which is why they are apart: the sentence after the sentinel
@@ -134,6 +146,26 @@ var (
 const howRowsGo = "with the end of a later turn of its conversation that was handed it, past the " +
 	"retention, or with the seat"
 
+// nothingMore is what a reader is told of a session released while it was
+// read: the pages already read stand, and the rest is gone with its object.
+const nothingMore = "nothing more of its transcript can be read"
+
+// noSession is the turn of ask, of which the seat keeps no row: said as the
+// ways a row goes, the first of them the one a reader following a conversation
+// meets — an end absorbs every turn its read handed out, deleting their rows,
+// and an absorbed row leaves no word of the turn that took it. Where the
+// session was being read — a later page, or the row read again after its
+// object failed — its row went while it was, and that is said.
+func noSession(ask Ask, reading bool) error {
+	if reading {
+		return fmt.Errorf("%w: %s keeps no executor session of the turn %s any more: its row went "+
+			"while the session was read, %s, and %s", ErrNoSession, ask.Handle, ask.Turn, howRowsGo,
+			nothingMore)
+	}
+	return fmt.Errorf("%w: %s keeps no executor session of the turn %s: the turn may have recorded "+
+		"none, or its row went: %s", ErrNoSession, ask.Handle, ask.Turn, howRowsGo)
+}
+
 // Read reads a page of the session of the seat's turn ask names: the turn's
 // row at ask's level, and the transcript its object holds from ask's cursor on,
 // held to the bounds every person's read is held to
@@ -147,16 +179,31 @@ const howRowsGo = "with the end of a later turn of its conversation that was han
 // a store that did not answer ([ErrUnavailable]) are no page; a caller that
 // left is returned as it left, and a refusal of the log's own — a turn id that
 // is none — as the log said it.
+//
+// A SESSION RELEASED WHILE IT IS READ IS SAID AS RELEASED. A read holds
+// nothing: the session a page reads can go between the read of its row and
+// the end of its object's stream — absorbed by a later turn's end, released by
+// the seat's budget, past the retention, or captured again — and its object
+// with it once the collector passes. So an object that fails, as it opens or
+// as it streams, has the turn's row read once more, at [ReadAgain]'s level,
+// and the page says what the row says now: no row is [ErrNoSession] saying the
+// row went while the session was read; a row naming no object is
+// [TranscriptNone] in the domain's reason and that nothing more can be read;
+// a row naming a newer capture is read from it on a first page, and refuses a
+// later page's cursor as a session captured again. Only where the row still
+// names the object is the failure the store's or the archive's own — missing,
+// unreadable, or a store that did not answer — since the store reports a
+// collected object and bytes that are not the sealed ones alike as unreadable,
+// and a release read as either was said as a loss or as corruption it is not.
+// The row is read again once: a newer capture that fails too is said as it
+// fails. And a later page whose row went, or names no object, before its read
+// began is said the same way, the pages before it standing.
 func Read(ctx context.Context, ask Ask, src Source) (Page, error) {
+	reading := ask.Cursor != ""
 	read, err := src.Rows.Session(ctx, ask.Handle, ask.Turn, ask.Fresh)
 	switch {
 	case errors.Is(err, executordomain.ErrNotFound):
-		// A ROW THAT WENT is said as the ways one goes, the first of them the
-		// one a reader following a conversation meets: an end absorbs every
-		// turn its read handed out, deleting their rows, and an absorbed row
-		// leaves no word of the turn that took it.
-		return Page{}, fmt.Errorf("%w: %s keeps no executor session of the turn %s: the turn may have "+
-			"recorded none, or its row went: %s", ErrNoSession, ask.Handle, ask.Turn, howRowsGo)
+		return Page{}, noSession(ask, reading)
 	case err != nil:
 		return Page{}, err
 	}
@@ -164,13 +211,55 @@ func Read(ctx context.Context, ask Ask, src Source) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	return readPage(ctx, read, from, src.Objects)
+	page, failed := readPage(ctx, read, from, reading, src.Objects)
+	if failed == nil || !releasable(failed) {
+		return unread(page, failed)
+	}
+	again, err := src.Rows.Session(ctx, ask.Handle, ask.Turn, ReadAgain())
+	switch {
+	case errors.Is(err, executordomain.ErrNotFound):
+		return Page{}, noSession(ask, true)
+	case err != nil && ctx.Err() != nil:
+		return Page{}, ctx.Err()
+	case err != nil:
+		// UNKNOWN, NEVER A LOSS: the object failed and the row could not be
+		// asked whether it still names it, so the failure may be a release
+		// as much as a loss; the caller asks again.
+		// The object's failure is said, never wrapped: wrapped, it would class
+		// the page as the loss this cannot tell it from.
+		return Page{}, fmt.Errorf("%w: %s's session of the turn %s did not read (%v), and its row "+
+			"could not be read again to say whether it is still kept: %w", ErrUnavailable, ask.Handle,
+			ask.Turn, failed, err)
+	case again.Session.HasObject() && again.Session.Object.Key == read.Session.Object.Key:
+		// STILL NAMED: the failure is the store's or the archive's own.
+		page.Read, page.Reread = again, true
+		return unread(page, failed)
+	}
+	if from, err = ordinalOf(ask.Cursor, again.Session); err != nil {
+		return Page{}, err
+	}
+	page, failed = readPage(ctx, again, from, true, src.Objects)
+	page.Reread = true
+	return unread(page, failed)
+}
+
+// releasable reports a failure of a session's object that a release of its
+// row could explain: the object gone or not opening, or the store failing as
+// it was opened or read — never a caller that left, an archive that read
+// whole and is malformed, or one this build does not read, which no release
+// makes.
+func releasable(failed error) bool {
+	var malformed *executor.MalformedArchiveError
+	return !errors.Is(failed, context.Canceled) && !errors.Is(failed, context.DeadlineExceeded) &&
+		!errors.As(failed, &malformed) && !errors.Is(failed, executor.ErrUnsupportedArchive)
 }
 
 // readPage reads the page of read's transcript from the entry from on: its
-// object opened and read through the runner's own format knowledge, or what
-// kept it from being read.
-func readPage(ctx context.Context, read executordomain.SessionRead, from int,
+// object opened and read through the runner's own format knowledge — or the
+// page saying why it holds no entries, or what kept the object from being read
+// ([unread] says it). reading says the session was being read before this
+// page: a row naming no object then names none any more.
+func readPage(ctx context.Context, read executordomain.SessionRead, from int, reading bool,
 	objects Objects) (Page, error) {
 
 	row := read.Session
@@ -179,6 +268,9 @@ func readPage(ctx context.Context, read executordomain.SessionRead, from int,
 	if !row.HasObject() {
 		// REDACTED: why a capture was not kept quotes what refused it.
 		page.State, page.Why = TranscriptNone, redact.Secrets(row.NotKept())
+		if reading {
+			page.Why += "; " + nothingMore
+		}
 		return page, nil
 	}
 	if ok, why := executor.Carries(row.Harness, row.ArchiveFormat); !ok {
@@ -192,7 +284,7 @@ func readPage(ctx context.Context, read executordomain.SessionRead, from int,
 	open := func(ctx context.Context) (io.ReadCloser, error) { return objects.Open(ctx, row) }
 	transcript, err := executor.ReadTranscript(ctx, row.Harness, row.ArchiveFormat, open, from)
 	if err != nil {
-		return unread(page, err)
+		return page, err
 	}
 	page.State, page.Transcript = TranscriptRead, transcript
 	if transcript.More() {
@@ -201,11 +293,16 @@ func readPage(ctx context.Context, read executordomain.SessionRead, from int,
 	return page, nil
 }
 
-// unread is what kept a session's object from being read, as page says it:
-// gone, sealed out of reach, malformed or of a format this build does not read
-// are each a state of the page; a caller that left is returned as it left;
-// anything else is a store that did not answer, which a caller retries.
+// unread is page as what kept its session's object from being read says it,
+// and page itself where nothing did (err nil): gone, sealed out of reach,
+// malformed or of a format this build does not read are each a state of the
+// page; a caller that left is returned as it left; anything else is a store
+// that did not answer, which a caller retries. Said of an object the turn's
+// row still names ([Read]).
 func unread(page Page, err error) (Page, error) {
+	if err == nil {
+		return page, nil
+	}
 	row := page.Read.Session
 	var malformed *executor.MalformedArchiveError
 	switch {
@@ -215,8 +312,7 @@ func unread(page Page, err error) (Page, error) {
 	// domain's unreadable, and a reader acts on the two differently.
 	case errors.Is(err, objstore.ErrNotFound):
 		page.State, page.Why = TranscriptMissing, "the object store no longer holds this "+
-			"session's object: the row named it, and the collector, a retention or a newer "+
-			"capture of the turn took it since"
+			"session's object, which the turn's row still names"
 	case errors.Is(err, executordomain.ErrUnreadable):
 		page.State, page.Why = TranscriptUnreadable, "this session's object does not open: it "+
 			"is sealed under a key this fleet's keyring no longer holds, or its bytes are "+

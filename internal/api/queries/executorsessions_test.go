@@ -772,6 +772,82 @@ func TestASessionWhoseObjectCannotBeReadIsAnsweredAsSuch(t *testing.T) {
 	}
 }
 
+// releasingSessions is the executor log's reads of a seat's sessions, its
+// first read of a turn's row answered as the rows stubSessions holds and every
+// read after it as then — nil for a turn with no row — each level a read of a
+// row asked recorded.
+type releasingSessions struct {
+	stubSessions
+	then   *executordomain.Session
+	levels []statelog.ReadLevel
+}
+
+func (s *releasingSessions) Session(ctx context.Context, handle, turn string,
+	fresh statelog.Freshness) (executordomain.SessionRead, error) {
+
+	s.levels = append(s.levels, fresh.Level)
+	switch {
+	case len(s.levels) == 1:
+		return s.stubSessions.Session(ctx, handle, turn, fresh)
+	case s.then == nil:
+		return executordomain.SessionRead{}, fmt.Errorf("%w: %s's turn %s", executordomain.ErrNotFound,
+			handle, turn)
+	}
+	return executordomain.SessionRead{Session: *s.then, Position: stubAt, Complete: true}, nil
+}
+
+// A SESSION RELEASED WHILE A PERSON READS IT IS SAID AS RELEASED, never as an
+// object that does not open. Between the read of a session's row and the read
+// of its object the seat's budget can release it, or a later turn's end absorb
+// it, and the collector take the object: the answer reads the row once more
+// and says what it says now — none, in the domain's reason, that nothing more
+// can be read, and the row as it is now, read at `linearizable`, which the
+// answer says; or no session any more, `not_found` — whatever level the
+// person's read asked.
+//
+// Mutation: answer from the session's failure without reading its row again,
+// or say the level the person asked rather than the one the row was read
+// again at, and a check goes red.
+func TestASessionReleasedWhileAPersonReadsItIsSaidAsReleased(t *testing.T) {
+	t.Parallel()
+	store, backend := sessionObjectStore(t)
+	row := sealedSession(t, store, "ana", gzipText(t, openCodeExport("fix the flake")))
+	if err := backend.Delete(t.Context(), row.Object.Key.Name()); err != nil {
+		t.Fatal(err)
+	}
+	released := row
+	released.Object = objstore.Object{}
+	asked := statelog.DefaultReadLevel(statelog.SurfaceDashboard)
+	reads := &releasingSessions{stubSessions: stubSessions{rows: []executordomain.Session{row}},
+		then: &released}
+	s := sessionSources(t, &stubSessions{}, store)
+	s.ExecutorSessions = reads
+	got, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": row.Turn})
+	if err != nil {
+		t.Fatalf("a session the budget released while it was read answered %v, want an answer saying so", err)
+	}
+	answer := got.(queries.SessionAnswer)
+	if answer.State != executorread.TranscriptNone || !strings.Contains(answer.Why, "budget released") ||
+		!strings.Contains(answer.Why, "nothing more") || answer.Session.Kept {
+		t.Errorf("a session the budget released while it was read reads %s %q, kept %v; want none, saying "+
+			"the budget released it and nothing more can be read", answer.State, answer.Why, answer.Session.Kept)
+	}
+	if answer.ReadLevel != statelog.ReadLinearizable ||
+		!slices.Equal(reads.levels, []statelog.ReadLevel{asked, statelog.ReadLinearizable}) {
+		t.Errorf("the row was read at %v and the answer says %q, want %q then linearizable, said",
+			reads.levels, answer.ReadLevel, asked)
+	}
+
+	absorbed := &releasingSessions{stubSessions: stubSessions{rows: []executordomain.Session{row}}}
+	s.ExecutorSessions = absorbed
+	_, err = askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": row.Turn})
+	if !errors.Is(err, queries.ErrNotFound) || !strings.Contains(err.Error(), "any more") ||
+		!strings.Contains(err.Error(), "nothing more") {
+		t.Errorf("a session absorbed while it was read answered %v, want not found, saying its row went "+
+			"while it was read", err)
+	}
+}
+
 // storedObject is the bytes the backend holds under name, read past every
 // check, under the deadline every backend read takes.
 func storedObject(t *testing.T, backend *memobj.Backend, name string) []byte {

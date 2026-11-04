@@ -27,6 +27,24 @@
 // repeat entries with nothing saying so. Such a cursor is refused
 // ([ErrCursor]), saying to read the transcript again from its start.
 //
+// # A read holds nothing, so a release is said as one
+//
+// Reading a session writes no record and keeps no session past what the seat's
+// budget and the retention give it: a hold taken by a read would be a write
+// every reader originates, and it would keep the budget from releasing the
+// reader's own next capture. So the session a page reads can go between the
+// read of its row and the end of its object's stream — a later turn's end
+// absorbs it, the seat's budget releases it, the retention deletes it, or its
+// turn captures it again — and the collector takes the object once no row
+// names it. Read alone, a collected object is one the store no longer holds,
+// and one taken while it streams one whose bytes are not the sealed ones
+// (executordomain.ErrUnreadable), so the failure alone would say a release as a
+// loss, or as corruption. Instead a read whose object fails reads the turn's
+// row once more, at `linearizable` ([ReadAgain]), and the page says what the
+// row says now ([Read]); only where the row still names the object is the
+// failure the store's or the archive's own. What the read already handed out
+// stands: every byte of it came from a chunk that authenticated.
+//
 // # Why a package of its own
 //
 // The read needs the log's row — its object, the reason it names none, and the

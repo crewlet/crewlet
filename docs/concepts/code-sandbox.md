@@ -1603,6 +1603,8 @@ was handed its session, and that kept a session of its own, ends, its end
 absorbs the turns its read handed out, and their rows are gone from the list —
 as are rows past the retention, and a removed seat's. A session read by its turn
 after its row went is `404 not_found`, saying it may have gone any of these ways.
+**Reading a session holds nothing**, so a session can go while it is read, and
+is said as released rather than as a loss: see below.
 
 **A row that keeps no session says why**, one of three: nothing of the turn's
 session was captured (yet, while it runs); its newest capture was not kept —
@@ -1745,6 +1747,23 @@ An object the store no longer holds, one that does not open under the fleet's
 keyring, an archive that is not one its format describes and one this build
 does not read are each said as such, in the engine's own words, beside the
 turn's ending, which the row still holds.
+
+**A session released while it is read is said as released.** A read writes
+nothing and keeps no session past what the seat's budget and the retention
+give it — a hold taken by a read would be a write every reader makes, and it
+would keep the budget from releasing the reader's own next capture — so between
+the read of a session's row and the end of its object's stream a later turn's
+end can absorb it, the budget release it, the retention delete it or its turn
+capture it again, and the collector take the object. Read alone, that object
+is missing, or, taken while it streams, one whose bytes do not open. So a read
+whose object fails reads the turn's row once more, at `linearizable`, and says
+what the row says now: no row, that the row went while the session was read
+and nothing more of it can be read; a row naming no object, its reason and the
+same; a row naming a newer capture, that capture read from its start on a first
+page, and a later page's cursor refused as one captured again. Only where the
+row still names the object is the failure the store's or the archive's own, and
+the row is read again once. What the read already handed out stands: every byte
+of it came from a chunk that authenticated.
 
 **A node decodes two transcripts at a time.** One read can hold a line of the
 harness's record at its 32 MiB bound, as much again while the buffer gathering

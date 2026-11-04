@@ -316,7 +316,9 @@ type SessionAnswer struct {
 	// ReadLevel is the level the row was read at, Position where, and
 	// Complete the read's own word that no record the answering copy could
 	// not decode is missing from it — as every answer of a state-log domain
-	// says beside its rows.
+	// says beside its rows. A row read again because the session's object
+	// failed was read at `linearizable` ([executorread.ReadAgain]), and the
+	// answer says so.
 	ReadLevel statelog.ReadLevel `json:"read_level"`
 	Position  statelog.Position  `json:"position"`
 	Complete  bool               `json:"complete"`
@@ -594,14 +596,20 @@ func (s Sources) executorSession(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, sessionRefusal(err)
 	}
-	read := page.Read
+	// THE ROW THE PAGE WAS ANSWERED FROM, at the level it was read at: the
+	// caller's, or — where the session's object failed and the reader read
+	// the turn's row again to say whether it is still kept — that read's.
+	read, level := page.Read, fresh
+	if page.Reread {
+		level = executorread.ReadAgain()
+	}
 	shown := sessionRowOf(read.Session)
 	if cursor == "" {
 		// THE FIRST PAGE DECIDES IT, once — see the file comment — on the
 		// head the row's own read named.
 		now := s.clock()
 		run, unread := s.liveRun(ctx, read.Session)
-		c := s.relaunchRow(ctx, read.Session, read.Head, run, unread, fresh, now)
+		c := s.relaunchRow(ctx, read.Session, read.Head, run, unread, level, now)
 		shown.ContinuedBy, shown.Continuable, shown.ContinuesIn, shown.NotContinuable = c.decide(
 			s.relaunchTargets(ctx, seat, []rowContinuity{c})[0], now)
 	} else {
@@ -611,7 +619,7 @@ func (s Sources) executorSession(ctx context.Context, p Params) (any, error) {
 		Handle: seat.Handle, Session: shown, State: page.State, Why: page.Why,
 		Entries: page.Transcript.Entries, From: page.Transcript.From, Cut: page.Transcript.Cut,
 		Next: page.Next, Bounds: executor.TranscriptReadBounds(),
-		ReadLevel: fresh.Level, Position: read.Position, Complete: read.Complete,
+		ReadLevel: level.Level, Position: read.Position, Complete: read.Complete,
 	}, nil
 }
 

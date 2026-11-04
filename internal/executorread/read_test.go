@@ -154,7 +154,8 @@ func read(t *testing.T, rows executorread.Rows, objects executorread.Objects,
 // EVERY READER OF A SESSION SAYS ITS STATE IN ONE SET OF WORDS. A session the
 // row names and the read cannot show is an answer whose state names why and
 // whose sentence is the engine's own, the row beside it: an object the store
-// no longer holds is missing, one whose bytes are not the ones sealed is
+// no longer holds, which the turn's row read again still names, is missing,
+// one whose bytes are not the ones sealed is
 // unreadable, one that opened and is no archive is malformed in the runner's
 // reason, a harness this build does not read is unsupported in the reason it
 // gives, and a row naming no object is none in the domain's own reason,
@@ -197,8 +198,7 @@ func TestEveryReaderOfASessionSaysItsStateInOneSetOfWords(t *testing.T) {
 		why   string
 	}{
 		{"an object the store no longer holds", missing, executorread.TranscriptMissing,
-			"the object store no longer holds this session's object: the row named it, and the collector, " +
-				"a retention or a newer capture of the turn took it since"},
+			"the object store no longer holds this session's object, which the turn's row still names"},
 		{"an object whose bytes were tampered with", tampered, executorread.TranscriptUnreadable,
 			"this session's object does not open: it is sealed under a key this fleet's keyring no longer " +
 				"holds, or its bytes are not the ones sealed for this turn"},
