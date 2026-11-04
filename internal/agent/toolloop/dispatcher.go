@@ -192,6 +192,9 @@ type callRec struct {
 	refused bool
 	// admitted marks a call the dispatcher let run.
 	admitted bool
+	// gated marks an admitted call past the gate's recheck: it runs, whatever
+	// end the run takes after ([dispatcher.recheck]).
+	gated bool
 	// waiting marks an admitted call its harness run is still waiting on — not
 	// yet settled, and not answered "still running" ([dispatcher.awaitedLocked]).
 	waiting bool
@@ -859,11 +862,14 @@ func (d *dispatcher) admit(r *run, in toolsession.Call) (*callRec, string) {
 }
 
 // recheck is admit's verdict again, for a call that waited for the gate: the
-// phase may have ended, or finished, in the meantime.
+// phase may have ended, or finished, in the meantime. A call it passes is gated,
+// and an end decided beside it may be taken now.
 func (d *dispatcher) recheck(c *callRec) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.state == stateOpen && (d.pend != stateFinished || !c.exclusive) {
+		c.gated = true
+		d.endIfCompleteLocked()
 		return ""
 	}
 	why := notRun(c.recorded())
@@ -1266,12 +1272,19 @@ func (d *dispatcher) decideLocked(st dstate, round int) {
 
 // endIfCompleteLocked takes the decided end once nothing more of the response
 // that decided it is to come: every call the record shows the harness making to the
-// host has reached it. A harness asks its model again only once every call of the
-// response is answered, so the call that completes the response is the one
-// whose answer is withheld.
+// host has reached it, every ordinary one admitted is past the gate, where it runs
+// whatever the end, and every exclusive one has its answer, since a finish or a
+// park outranks the end. Taken sooner, it turned away calls the response had paid
+// for. A harness asks its model again only once every call of the response is
+// answered, so every answer given after the end is withheld.
 func (d *dispatcher) endIfCompleteLocked() {
 	if d.pend == stateOpen || d.state != stateOpen {
 		return
+	}
+	for _, c := range d.calls[d.invCalls:] {
+		if c.round == d.pendRound && c.waiting && (c.exclusive || !c.gated) {
+			return
+		}
 	}
 	if r := d.currentRunLocked(); r != nil && r.opts.ObservesRequests {
 		if t := d.turnOfRoundLocked(d.pendRound); t != nil && t.awaiting(-1, nil) {
