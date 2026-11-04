@@ -715,8 +715,14 @@ func TestARepairRoundSweepsNoAdoptedPack(t *testing.T) {
 func TestADerivedFileDamagedAgainAfterItsRepairWaitsItsTurn(t *testing.T) {
 	t.Parallel()
 	r := newReportedCopy(t, nil)
+	// THE GRAPH AS REPORTED, read before the report: the report queues the
+	// round that drops it, and that round runs on its own goroutine, so a
+	// graph read after the report may already be gone (CI run 41729197183:
+	// `lstat : no such file or directory`) — or already rewritten, the very
+	// file the case waits to see replaced.
+	graph := stat(t, r.graph())
 	cache.Report(r.c, derivedReport(r.s.Dir, gitproc.PartCommitGraph, time.Now()))
-	r.rewritten(t, "the commit-graph", r.graph, stat(t, r.graph()))
+	r.rewritten(t, "the commit-graph", r.graph, graph)
 
 	for range 2 {
 		cache.Report(r.c, derivedReport(r.s.Dir, gitproc.PartCommitGraph, time.Now()))
