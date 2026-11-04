@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // Policy is an allow policy as Google reads and writes it. AuditConfigs ride
@@ -104,16 +105,23 @@ func revoke(pol *Policy, who string, roles []string) bool {
 // a single hasOnly over string constants and nothing joined to it. A condition
 // with more in it (`|| true`) could grant anything, so it is never read as a
 // level's list.
+//
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var (
-	levelCondition = regexp.MustCompile(`^api\.getAttribute\(\s*'iam\.googleapis\.com/modifiedGrantsByRole'\s*,\s*\[\s*\]\s*\)` +
-		`\.hasOnly\(\s*\[([^\]]*)\]\s*\)$`)
-	listedRole = regexp.MustCompile(`^(?:'([^'\\]+)'|"([^"\\]+)")$`)
+	levelCondition = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^api\.getAttribute\(\s*'iam\.googleapis\.com/modifiedGrantsByRole'\s*,\s*\[\s*\]\s*\)` +
+			`\.hasOnly\(\s*\[([^\]]*)\]\s*\)$`)
+	})
+	listedRole = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^(?:'([^'\\]+)'|"([^"\\]+)")$`)
+	})
 )
 
 // conditionRoles is the roles a level condition lists, sorted, and false for
 // an expression of any other shape.
 func conditionRoles(expression string) ([]string, bool) {
-	m := levelCondition.FindStringSubmatch(strings.TrimSpace(expression))
+	m := levelCondition().FindStringSubmatch(strings.TrimSpace(expression))
 	if m == nil {
 		return nil, false
 	}
@@ -123,7 +131,7 @@ func conditionRoles(expression string) ([]string, bool) {
 		if item == "" {
 			continue
 		}
-		q := listedRole.FindStringSubmatch(item)
+		q := listedRole().FindStringSubmatch(item)
 		if q == nil {
 			return nil, false
 		}

@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/words"
@@ -81,19 +82,30 @@ func (r *RoleGoogleCloud) LevelOrDefault() string {
 // The shapes Google gives a project ID (6 to 30 lowercase letters, digits and
 // hyphens, from a letter, or a legacy domain-scoped `example.com:id`), a
 // service account's email, and a workload identity provider's resource name.
+//
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+// Each bounded repeat compiles to a program holding every count.
 var (
-	googleProjectID      = regexp.MustCompile(`^([a-z0-9][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
-	googleServiceAccount = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]@([a-z][a-z0-9-]{4,28}[a-z0-9])\.iam\.gserviceaccount\.com$`)
-	googleProvider       = regexp.MustCompile(`^projects/[0-9]{1,20}/locations/global/workloadIdentityPools/[a-z0-9-]{4,32}/providers/[a-z0-9-]{4,32}$`)
+	googleProjectID = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^([a-z0-9][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+	})
+	googleServiceAccount = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]@([a-z][a-z0-9-]{4,28}[a-z0-9])\.iam\.gserviceaccount\.com$`)
+	})
+	googleProvider = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(
+			`^projects/[0-9]{1,20}/locations/global/workloadIdentityPools/[a-z0-9-]{4,32}/providers/[a-z0-9-]{4,32}$`)
+	})
 )
 
 // GoogleCloudProjectID reports whether id is a Google Cloud project ID.
-func GoogleCloudProjectID(id string) bool { return googleProjectID.MatchString(id) }
+func GoogleCloudProjectID(id string) bool { return googleProjectID().MatchString(id) }
 
 // GoogleCloudServiceAccount is the project a service account's email names,
 // and false for a value that is no service account's email.
 func GoogleCloudServiceAccount(email string) (string, bool) {
-	m := googleServiceAccount.FindStringSubmatch(strings.TrimSpace(email))
+	m := googleServiceAccount().FindStringSubmatch(strings.TrimSpace(email))
 	if m == nil {
 		return "", false
 	}
@@ -103,7 +115,7 @@ func GoogleCloudServiceAccount(email string) (string, bool) {
 // GoogleCloudProvider reports whether name is a workload identity provider's
 // full resource name.
 func GoogleCloudProvider(name string) bool {
-	return googleProvider.MatchString(strings.TrimSpace(name))
+	return googleProvider().MatchString(strings.TrimSpace(name))
 }
 
 func (g *GoogleCloud) validate(path Path) error {

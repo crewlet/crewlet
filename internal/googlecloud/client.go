@@ -144,10 +144,15 @@ func gone(err error) bool { return Status(err) == http.StatusNotFound }
 
 // tokenLike is anything shaped like an OAuth access token or a JWT, which a
 // refusal's text is never allowed to carry on.
-var tokenLike = regexp.MustCompile(`ya29\.[A-Za-z0-9_\-.]+|eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*`)
+//
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var tokenLike = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`ya29\.[A-Za-z0-9_\-.]+|eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*`)
+})
 
 // redact is s with every token-shaped run replaced.
-func redact(s string) string { return tokenLike.ReplaceAllString(s, "[redacted]") }
+func redact(s string) string { return tokenLike().ReplaceAllString(s, "[redacted]") }
 
 // accountNotYet reports Google refusing a binding because email's account is
 // not visible to the policy yet: the 400 a new account answers on another

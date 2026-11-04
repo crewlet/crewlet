@@ -50,8 +50,8 @@ func HeldBy(pol Policy, who string) ([]string, []string) {
 }
 
 // Never and CredentialRule are the two patterns the level table is held to.
-func Never(permission string) bool          { return never.MatchString(permission) }
-func CredentialRule(permission string) bool { return credential.MatchString(permission) }
+func Never(permission string) bool          { return never().MatchString(permission) }
+func CredentialRule(permission string) bool { return credential().MatchString(permission) }
 
 // Barred is what a level's role holds that the level may not.
 func Barred(level string, permissions []string) []string { return barred(level, permissions) }

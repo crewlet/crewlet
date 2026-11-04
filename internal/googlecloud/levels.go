@@ -3,6 +3,7 @@ package googlecloud
 import (
 	"regexp"
 	"slices"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/words"
@@ -111,7 +112,13 @@ var customRolePerms = []string{
 // never is what no level may hold, Administer included: acting as or minting
 // for another identity, granting on the project or an account, reading a
 // secret store, running as a workload's identity, and billing.
-var never = regexp.MustCompile(`^(` +
+//
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var never = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(neverPattern) })
+
+// neverPattern is never's source.
+const neverPattern = `^(` +
 	`iam\.serviceAccounts\.(actAs|getAccessToken|getOpenIdToken|signBlob|signJwt|implicitDelegation|setIamPolicy)` +
 	`|iam\.serviceAccountKeys\.create|iam\.roles\.(create|update)` +
 	`|resourcemanager\.(projects|folders|organizations)\.setIamPolicy` +
@@ -120,15 +127,19 @@ var never = regexp.MustCompile(`^(` +
 	`|container\.(secrets\.(get|list)|serviceAccounts\.createToken|pods\.(create|exec|attach|portForward))` +
 	`|container\.(deployments|statefulSets|daemonSets|replicaSets|jobs|cronJobs|replicationControllers|podTemplates)\.(create|update)` +
 	`|billing\..*` +
-	`)$`)
+	`)$`
 
 // credential is what Viewer and Operator may not hold either: access on what
 // the agent manages that outlives its token, which only Administer may create.
-var credential = regexp.MustCompile(`^(` +
+// It is compiled at first use, as never is.
+var credential = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(credentialPattern) })
+
+// credentialPattern is credential's source.
+const credentialPattern = `^(` +
 	`.*\.setIamPolicy` +
 	`|compute\.instances\.(setMetadata|setServiceAccount)|compute\.projects\.setCommonInstanceMetadata` +
 	`|container\.clusters\.getCredentials|cloudsql\.(users\.(create|update)|sslCerts\.create)` +
-	`)$`)
+	`)$`
 
 // Levels is every seat level, least access first.
 func Levels() []string { return config.GoogleCloudLevels() }
@@ -227,7 +238,7 @@ func predefinedRoles() map[string]string {
 func barred(levelID string, permissions []string) []string {
 	var out []string
 	for _, p := range permissions {
-		if never.MatchString(p) || (levelID != config.GoogleCloudLevelAdminister && credential.MatchString(p)) {
+		if never().MatchString(p) || (levelID != config.GoogleCloudLevelAdminister && credential().MatchString(p)) {
 			out = append(out, p)
 		}
 	}
