@@ -106,9 +106,9 @@ const Idle = 12 * time.Hour
 // twenty times. It costs no store write at all — the deadline is in the
 // signature — so the only cost being managed here is the header.
 //
-// EVERY RE-ISSUE MOVES THE COOKIE'S BYTES, so nothing keys a cache on them: what
-// a browser's cache keeps is scoped to who it is signed in as by [Begin] and
-// [End], and a re-issue ([Continue]) leaves it alone.
+// EVERY RE-ISSUE MOVES THE COOKIE'S BYTES, so nothing keys a cache on them:
+// what a browser keeps is keyed on who it was answered for, and a re-issue
+// ([Issue]) leaves it alone.
 const ReissueAfter = 5 * time.Minute
 
 // CookieBaseName is the bearer's name without the `__Host-` prefix.
@@ -153,84 +153,61 @@ func HostPrefixed(externalURL string) bool {
 	return err != nil || parsed.Scheme != "http"
 }
 
-// Begin hands a browser a session that may be somebody else's than the one it
-// held — a sign-in, by any way in: a password, an invitation's redemption, a
-// Tier A token's exchange — as the bearer's cookie, and empties the browser's
-// HTTP cache for this origin.
+// Issue hands a browser the bearer's cookie: a sign-in by any way in, a
+// re-issue that moves the idle deadline ([Validation.Reissue]), and the session
+// a step-up, an enrolment or a password change opens in place of the one
+// presented.
 //
-// # What a browser's cache keeps is who it is signed in as
-//
-// An answer read by object id is kept by the browser that asked for it, for up
-// to a year (internal/api/httpjson's Immutable), under a cache key that holds
-// the `Authorization` header and NOT this cookie. The cookie cannot be in it:
-// its bytes move at every re-issue ([ReissueAfter], [Continue]), so a key
-// holding them stopped matching five minutes after an answer was kept, and the
-// browser asked the node again for every page a person went back to — the
-// read, on the repository's home git node, that the cache exists to save. So
-// what a browser keeps is scoped to who it is signed in as from the other
-// side: every response that may change who that is — this one, and every one
-// that ends a session ([End]) — carries `Clear-Site-Data: "cache"`, and the
-// next person to sign in on a browser is never answered from what the last one
-// was sent. A response that carries the same person's session on ([Continue])
-// leaves the cache alone.
-//
-// IT COSTS the browser everything else it kept from this origin — the
-// dashboard's own bundle among it, fetched again once — at each sign-in and
-// sign-out, and Chrome's own tracker records that emptying a large cache this
-// way can hold the response for seconds (crbug.com/40233601). Both are paid
-// once a session, at its two ends, where keying the cache on the cookie paid,
-// after every re-issue, a read on the node for each kept answer asked again.
-//
-// A BROWSER HONOURS IT ONLY IN A SECURE CONTEXT — https, or a loopback address
-// — and only where it implements the directive: Chrome from 65, Safari from
-// 17, and Firefox from 63 to 93 and again from 138. Chrome's tracker also
-// records that a tab open before it may still be answered from what it kept
-// until the tab is reloaded (crbug.com/364634040). Wherever it is not
-// honoured, what a person was answered stays in the browser after their
-// session, until the browser evicts it, as anything a browser keeps does. That
-// is why an answer may be kept only where it is the same for every caller who
-// may ask it (internal/api/queries' Immutable): the next person to sign in
-// there is served nothing they would not be answered themselves.
-func Begin(w http.ResponseWriter, externalURL, bearer string, expires time.Time) {
-	w.Header().Set(clearSiteData, clearCache)
-	http.SetCookie(w, bearerCookie(externalURL, bearer, expires))
-}
-
-// Continue hands a browser the bearer that carries on the session it holds
-// FOR THE SAME PERSON — a re-issue's, the idle deadline moved
-// ([Validation.Reissue]), and the session a step-up, an enrolment or a
-// password change opens in place of the one that person presented — and
-// leaves the browser's cache as it was.
-//
-// IT EMPTIES NOTHING, which is the whole difference from [Begin]: who the
-// browser is signed in as has not changed, so nothing it kept is somebody
-// else's answer. A re-issue comes every [ReissueAfter] of use, so emptying the
-// cache on one would drop every answer the browser kept five minutes after
-// keeping it — the cost keeping the cookie out of the cache key exists to
-// remove — and a confirmation would cost the person every answer they kept,
-// and a wait while Chrome empties the cache, to prove who they already were.
-func Continue(w http.ResponseWriter, externalURL, bearer string, expires time.Time) {
+// IT LEAVES THE BROWSER'S CACHE ALONE. What a browser keeps is keyed on who it
+// was answered for (internal/api/httpjson's Immutable varies on the bearer and
+// the dashboard's reader), never on the cookie, whose bytes move at every
+// re-issue ([ReissueAfter]). Emptying the cache here held the response while
+// the browser scanned its whole cache for this origin (crbug.com/40233601).
+func Issue(w http.ResponseWriter, externalURL, bearer string, expires time.Time) {
 	http.SetCookie(w, bearerCookie(externalURL, bearer, expires))
 }
 
 // End ends the session in a browser under every name a bearer can be held
-// under — a sign-out, a session the guard refused, a gesture that found its
-// person removed — and empties the browser's HTTP cache as [Begin] does, so
-// nothing the ended session was answered is served from the browser after it.
+// under, and does nothing else: a session the guard refused, a gesture that
+// found its person removed, a password changed elsewhere.
+//
+// NO Clear-Site-Data, because the guard calls this on any route a refused
+// cookie reaches: the dashboard's document, each of its scripts, /health and
+// the socket's handshake. Chrome holds every such response until it has
+// emptied this origin's HTTP cache, and a tab presenting an expired cookie
+// never finished loading.
 func End(w http.ResponseWriter, externalURL string) {
-	w.Header().Set(clearSiteData, clearCache)
 	for _, deleted := range deletions(externalURL) {
 		http.SetCookie(w, deleted)
 	}
 }
 
-// clearSiteData and clearCache are how [Begin] and [End] empty a browser's
-// HTTP cache — `"cache"` and nothing else, the one store of the browser's that
-// holds what a node answered. Never `"cookies"`, which would race the cookie
-// [Begin] sets beside it and reach every other host under the registrable
-// domain; never `"storage"` or `"*"`, which would take what the dashboard
-// keeps in the browser's own storage — its preferences, and each reader's
-// under a key of their own — none of it an answer a node sent.
+// SignOut is [End] for a person's own sign-out of this browser, which also
+// empties the browser's HTTP cache for this origin.
+//
+// ONLY HERE, because an answer kept from a request that names no reader (a
+// tab that opened an API route itself, with no Authorization and no reader
+// header) is keyed for whoever uses the browser next, signed in or not. The
+// sign-out is the one gesture where the person asks the browser to stop
+// holding their access, and it is one response, held once, at their request.
+// An expiry adds nothing a session left signed in does not already expose.
+//
+// A BROWSER HONOURS IT ONLY IN A SECURE CONTEXT (https, or a loopback address)
+// and only where it implements the directive: Chrome from 65, Safari from 17,
+// and Firefox from 63 to 93 and again from 138. Where it is not honoured, a
+// kept answer stays until the browser evicts it, which is why an answer may
+// be kept only where it is the same for every caller who may ask it
+// (internal/api/queries' Immutable).
+func SignOut(w http.ResponseWriter, externalURL string) {
+	w.Header().Set(clearSiteData, clearCache)
+	End(w, externalURL)
+}
+
+// clearSiteData and clearCache are how [SignOut] empties a browser's HTTP
+// cache: `"cache"` alone, the one store holding what a node answered. Never
+// `"cookies"`, which reaches every other host under the registrable domain,
+// and never `"storage"` or `"*"`, which take what the dashboard keeps in the
+// browser's own storage, none of it an answer a node sent.
 const (
 	clearSiteData = "Clear-Site-Data"
 	clearCache    = `"cache"`
@@ -246,8 +223,7 @@ const (
 // `Domain` attribute is the third thing the prefix requires. Written at each
 // call site they drift, and every one of them drifts SILENTLY — the sign-in
 // still works. UNEXPORTED, with [deletion] and [deletions], so a cookie is set
-// only through [Begin], [Continue] and [End], each of which also decides what
-// the browser's cache keeps.
+// only through [Issue], [End] and [SignOut].
 //
 // THE EXPIRY IS THE ABSOLUTE DEADLINE, never the idle one. A browser that
 // dropped the cookie at the idle deadline would sign somebody out at exactly
@@ -286,7 +262,7 @@ func deletion(externalURL string) *http.Cookie {
 // a node ISSUES, but a browser keeps whatever it was issued: a deployment that
 // corrected its URL from http to https has every signed-in browser still
 // holding the bare name. Everything that ENDS a bearer therefore reaches both
-// — [Held] and [End] — while only the issued name AUTHENTICATES, which is
+// ([Held] and [End]) while only the issued name AUTHENTICATES, which is
 // [Presented]'s rule.
 var CookieNames = []string{HostCookieName, CookieBaseName}
 

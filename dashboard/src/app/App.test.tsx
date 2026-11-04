@@ -116,6 +116,15 @@ beforeAll(async () => {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  // EVERY REQUEST IS HELD unless a case stubs its own, the frame's session
+  // read among them, as `test/codeScreens.tsx` holds it. Left to the real
+  // network it failed with status 0 on a schedule the machine chose, and with
+  // the viewer still out that is the frame's "the engine hasn't answered"
+  // (`SessionUnanswered`) in place of the screen under test.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise<Response>(() => {})),
+  );
   location.hash = "#/";
 });
 
@@ -573,7 +582,8 @@ describe("a section, for a reader holding none of its grants", () => {
       </ClientContext.Provider>,
     );
     // Everything the frame asked has been answered (the viewer read never
-    // is), and nothing more was asked: a section that was going to ask has.
+    // is, nor the session read the suite holds), and nothing more was asked:
+    // a section that was going to ask has.
     await settled(() => asked.length);
     expect(screen.getByText("Checking your access to Nodes")).toBeDefined();
     expect(asked).not.toContain("fleet");

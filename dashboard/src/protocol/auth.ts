@@ -14,7 +14,11 @@
  */
 
 import type { EngineHealth } from "../contract/health.ts";
-import { INVITE_SECRET_HEADER, RESET_SECRET_HEADER } from "../contract/identity.ts";
+import {
+  INVITE_SECRET_HEADER,
+  RESET_SECRET_HEADER,
+  SESSION_READ_TIMEOUT_MS,
+} from "../contract/identity.ts";
 import type { ResetView } from "../contract/identity.ts";
 import { pathSegment, rest } from "./rest.ts";
 import type {
@@ -149,10 +153,18 @@ export const auth = {
    * `reader_changed` asks for both take its answer (`lib/session.ts`), and a
    * read refused for naming the last reader would leave the tab nothing to be
    * handed over with.
+   *
+   * WITHIN `SESSION_READ_TIMEOUT_MS`, so a tab learns that the engine has not
+   * answered well before the request default (see that constant).
    */
   session: async (signal?: AbortSignal): Promise<SessionAnswer> =>
-    (await rest.request("GET", "/auth/session", { signal, forReader: false }))
-      .body as SessionAnswer,
+    (
+      await rest.request("GET", "/auth/session", {
+        signal,
+        forReader: false,
+        timeoutMs: SESSION_READ_TIMEOUT_MS,
+      })
+    ).body as SessionAnswer,
 
   /**
    * The same read, made FOR THE TAB'S READER — what the keepalive asks
@@ -161,7 +173,9 @@ export const auth = {
    * under it: refused `reader_changed`, it is handed to whoever the session
    * is now, within two keepalive intervals of the sign-in that moved it.
    */
-  keepAlive: async (): Promise<SessionAnswer> => (await rest.get("/auth/session")) as SessionAnswer,
+  keepAlive: async (): Promise<SessionAnswer> =>
+    (await rest.request("GET", "/auth/session", { timeoutMs: SESSION_READ_TIMEOUT_MS }))
+      .body as SessionAnswer,
 
   /**
    * End this browser's session. The engine clears the cookie whatever its

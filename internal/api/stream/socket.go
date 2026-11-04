@@ -1132,8 +1132,16 @@ func (w *watching) recheck(ctx context.Context) {
 }
 
 // runQuery answers one question onto the client's own queue.
+//
+// A QUESTION WHOSE SOCKET CLOSED WHILE IT RAN IS DROPPED: nobody is left to
+// answer, and the read failing on that cancellation is no fault of the node's.
+// Read off ctx rather than err, so a question's own deadline still logs.
 func runQuery(ctx context.Context, client *Client, query Query, req request) {
 	data, err := query(ctx, req.What, req.Params)
+	if ctx.Err() != nil {
+		log.DebugContext(ctx, "stream_query_dropped", "what", req.What, "error", err)
+		return
+	}
 	var refused *RefusedError
 	var revision *RevisionError
 	switch {

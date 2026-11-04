@@ -9,7 +9,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -89,6 +89,14 @@ beforeAll(async () => {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  // EVERY REQUEST IS HELD, the frame's session read among them, as
+  // `test/codeScreens.tsx` holds it: these cases are about a screen's chunk,
+  // and a read that reached the network failed at once and drew the frame's
+  // "the engine hasn't answered" in place of the screen under test.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise<Response>(() => {})),
+  );
   Element.prototype.scrollIntoView = () => {};
   localStorage.clear();
   resetStarsForTest();
@@ -97,6 +105,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup();
+  vi.unstubAllGlobals();
   for (const u of undo.reverse()) u();
   undo = [];
   location.hash = "#/";
