@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -566,64 +567,70 @@ func TestAJobTakenOnceItHadEndedIsNotTakenAgain(t *testing.T) {
 // TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives); here,
 // every attempt carries the one place.
 //
+// IN A SYNCTEST BUBBLE, so the asks again are counted against the rig's record
+// budget on the bubble's clock, which only their own waits advance: on the wall
+// clock a starved runner could spend the budget inside the first ask.
+//
 // Mutation: stamp the place anew per attempt, skip the end's ask, or keep the
 // last launch's place for the next, and the places below stop matching or
 // collide.
 func TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	rig.launchKept(t, "t1")
-	session := rig.runner.Session
-	writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
+	synctest.Test(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
 
-	asked := writes.captured()
-	if len(asked) < 2 {
-		t.Fatalf("the capture was asked %d times, want it asked again", len(asked))
-	}
-	for _, again := range asked[1:] {
-		if again.operation() != asked[0].operation() {
-			t.Fatalf("asked again under %s, want the first attempt's %s", again.operation(), asked[0].operation())
+		asked := writes.captured()
+		if len(asked) < 2 {
+			t.Fatalf("the capture was asked %d times, want it asked again", len(asked))
 		}
-	}
-	if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureUnresolved || run.Kept != nil {
-		t.Fatalf("the row holds %+v, kept %+v, want the capture unresolved and nothing kept",
-			run.Capture, run.Kept)
-	}
+		for _, again := range asked[1:] {
+			if again.operation() != asked[0].operation() {
+				t.Fatalf("asked again under %s, want the first attempt's %s", again.operation(), asked[0].operation())
+			}
+		}
+		if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureUnresolved || run.Kept != nil {
+			t.Fatalf("the row holds %+v, kept %+v, want the capture unresolved and nothing kept",
+				run.Capture, run.Kept)
+		}
 
-	writes.answer(nil)
-	ctx := t.Context()
-	if owed, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
-		Outcome: executorkeep.OutcomeCompleted}); err != nil || !owed {
-		t.Fatalf("OweEnd = %v, %v", owed, err)
-	}
-	if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
-		t.Fatalf("publishEnd: %v", err)
-	}
-	all := writes.captured()
-	if last := all[len(all)-1]; last.operation() != asked[0].operation() {
-		t.Fatalf("the end asked the capture under %s, want its own %s", last.operation(), asked[0].operation())
-	}
-	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeCompleted || ends[0].Ending.Unkept != nil {
-		t.Fatalf("ends %+v, want the turn's one end after its capture landed, naming nothing unkept", ends)
-	}
-	if run := rig.get("t1"); run.Kept == nil || run.Kept.State != CaptureLanded || len(run.OwedEnd) != 0 {
-		t.Fatalf("the row keeps %+v and owes %s, want the capture the end's ask landed and the end "+
-			"cleared", run.Kept, run.OwedEnd)
-	}
+		writes.answer(nil)
+		ctx := t.Context()
+		if owed, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
+			Outcome: executorkeep.OutcomeCompleted}); err != nil || !owed {
+			t.Fatalf("OweEnd = %v, %v", owed, err)
+		}
+		if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
+			t.Fatalf("publishEnd: %v", err)
+		}
+		all := writes.captured()
+		if last := all[len(all)-1]; last.operation() != asked[0].operation() {
+			t.Fatalf("the end asked the capture under %s, want its own %s", last.operation(), asked[0].operation())
+		}
+		ends := writes.endedRecords()
+		if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeCompleted || ends[0].Ending.Unkept != nil {
+			t.Fatalf("ends %+v, want the turn's one end after its capture landed, naming nothing unkept", ends)
+		}
+		if run := rig.get("t1"); run.Kept == nil || run.Kept.State != CaptureLanded || len(run.OwedEnd) != 0 {
+			t.Fatalf("the row keeps %+v and owes %s, want the capture the end's ask landed and the end "+
+				"cleared", run.Kept, run.OwedEnd)
+		}
 
-	// THE NEXT LAUNCH'S CAPTURE IS ANOTHER OPERATION.
-	if _, err := rig.pending.BeginLaunch(ctx, PendingRun{TurnID: "t1", AgentHandle: "swe",
-		AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
-	next := capturedRecord{CaptureRecord: CaptureRecord{Handle: "swe", Turn: "t1", Stamp: SessionCapture{
-		Minted: asked[0].Stamp.Minted, Launch: rig.get("t1").LaunchID, CaptureSeq: 1}}}
-	if next.operation() == asked[0].operation() {
-		t.Fatal("the next launch's first capture derives the operation the last launch's did")
-	}
+		// THE NEXT LAUNCH'S CAPTURE IS ANOTHER OPERATION.
+		if _, err := rig.pending.BeginLaunch(ctx, PendingRun{TurnID: "t1", AgentHandle: "swe",
+			AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
+		next := capturedRecord{CaptureRecord: CaptureRecord{Handle: "swe", Turn: "t1", Stamp: SessionCapture{
+			Minted: asked[0].Stamp.Minted, Launch: rig.get("t1").LaunchID, CaptureSeq: 1}}}
+		if next.operation() == asked[0].operation() {
+			t.Fatal("the next launch's first capture derives the operation the last launch's did")
+		}
+	})
 }
 
 // AN UPLOAD THE STORE REFUSES IS RECORDED AS REFUSED, with why, and THE TURN'S
