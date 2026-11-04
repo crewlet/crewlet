@@ -125,6 +125,9 @@ func (w *sessionWrites) calls() []string {
 type sessionKeep struct {
 	mu     sync.Mutex
 	policy SessionPolicy
+	// now is the rig's clock, which a spool's key is minted on: the
+	// coordinator ages the key against that clock ([objstore.RecordWithin]).
+	now    func() time.Time
 	putErr error
 	// sealErr, when set, fails every seal once its archive has streamed into
 	// the spool: a spool left half written.
@@ -175,7 +178,7 @@ func (k *sessionKeep) Seal(_, _ string, archive io.Reader, dst io.Writer) (execu
 	if sealErr != nil {
 		return executorkeep.SealedSpool{}, sealErr
 	}
-	return executorkeep.SealedSpool{Key: objstore.KeyAt(time.Now()), ContentKey: "k1", Size: n}, nil
+	return executorkeep.SealedSpool{Key: objstore.KeyAt(k.now()), ContentKey: "k1", Size: n}, nil
 }
 
 func (k *sessionKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool,
@@ -222,7 +225,8 @@ func keepingRig(t *testing.T) (*coordRig, *sessionWrites, *sessionKeep) {
 	t.Helper()
 	rig := newCoordRig(t)
 	writes := &sessionWrites{}
-	keep := &sessionKeep{policy: SessionPolicy{Keep: true, SeatBudget: 64 << 20}}
+	keep := &sessionKeep{policy: SessionPolicy{Keep: true, SeatBudget: 64 << 20},
+		now: func() time.Time { return rig.now }}
 	rig.coordinator.sessions, rig.coordinator.keep = writes, keep
 	rig.coordinator.sessionRetry, rig.coordinator.recordBudget = time.Millisecond, 200*time.Millisecond
 	rig.coordinator.captureTick = time.Millisecond
