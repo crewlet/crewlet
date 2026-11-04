@@ -177,6 +177,17 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	created.Round, created.AnsweredJob = run.LaunchID, ""
 	created.Steer = RunSteer{Seat: bytes.Clone(run.Steer.Seat)}
 	openNotes(&created.Steer, run, run.LaunchID, now)
+	// A TRIGGER'S WORDS, HELD TO THEIR SHARE OF THE ROW ([MaxRunTitleBytes]):
+	// what a person reads the run by, twice, and the question of the
+	// colleague its turn answers, which nothing else bounds below the
+	// broker's payload. Here, in the write that creates the row, because the
+	// identity fields are never written again: a relaunch keeps the row's.
+	created.TaskDescription, created.Label = keptTitle(run.TaskDescription), keptTitle(run.Label)
+	if ask := run.ColleagueAsk; ask != nil {
+		held := *ask
+		held.Question = keptTitle(ask.Question)
+		created.ColleagueAsk = &held
+	}
 	raw, err := encodeRun(created)
 	if err != nil {
 		return PendingRun{}, err
@@ -500,9 +511,11 @@ func (l BridgeLog) opened(launch string, o logOpening) BridgeLog {
 // the cut that opening owed. A log of another round is started afresh.
 //
 // AND WHAT A NEW ROUND TAKES OUT OF THE LOG IS FOLDED INTO THE TURN'S EARLIER
-// CALLS IN THE SAME WRITE ([BridgeLog.PriorCalls]): by name and outcome, which
-// is all the run's own ending needs to know whether an earlier round delivered
-// the turn's reply. One compare-and-swap, so a crash never leaves a round's
+// CALLS IN THE SAME WRITE ([BridgeLog.PriorCalls]): by name and outcome — the
+// calls the log kept and the identities of the ones it dropped — which is all
+// the run's own ending needs to know whether an earlier round delivered the
+// turn's reply. The new round's log keeps neither tally of the old one's: both
+// are that round's. One compare-and-swap, so a crash never leaves a round's
 // calls gone from the log and missing from the fold. The call a person approved
 // that the log is owed ([OwedCall]) is appended first, in the same write, so it
 // is kept with its round or folded with it.
@@ -621,6 +634,10 @@ func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture Se
 			"every capture is placed from (1, 1) in one of %s", turnID, capture.LaunchSeq,
 			capture.CaptureSeq, capture.State, words.Or(CaptureStates))
 	}
+	// HELD TO ITS BOUNDS before it reaches the row: see [SessionCapture.Bounded].
+	if err := capture.Bounded(); err != nil {
+		return false, fmt.Errorf("sandbox: a capture of run %s: %w", turnID, err)
+	}
 	// SET ON EVERY ASK OF decide, which runs again on a lost race: the last
 	// one is the row the answer is about — where the last attempt found one
 	// at all, which a record removed under an earlier attempt's decision is
@@ -677,23 +694,40 @@ func (s *CoordStore) ClearEnd(ctx context.Context, turnID string, owed json.RawM
 	return cleared, err
 }
 
-// foldPriorCalls is the turn's earlier successful calls, by name, with calls'
-// successful ones added, and whether any of what they came from was elided
-// ([BridgeLog.PriorCalls]).
+// foldPriorCalls is the turn's earlier successful calls, by name, with the
+// successful ones of l's round added — the calls the log kept and the
+// identities of the ones it dropped — and whether any call of the turn's is
+// not accounted for by name ([BridgeLog.PriorCalls]).
 //
 // A SET OF NAMES, sorted, never a log: whether a round delivered is whether a
 // call to a delivering tool succeeded, which a name and an outcome answer, and
 // a set is bounded by the seat's catalogue rather than by how many calls a
-// turn makes.
-func foldPriorCalls(prior []string, calls []BridgeCall, elided bool) ([]string, bool) {
-	names := slices.Clone(prior)
-	for _, call := range calls {
-		if !call.Failed && call.Name != "" && !slices.Contains(names, call.Name) {
-			names = append(names, call.Name)
+// turn makes — and held to [MaxPriorCalls] all the same, past which it says
+// its record is incomplete rather than grow.
+func foldPriorCalls(l BridgeLog) ([]string, bool) {
+	names := slices.Clone(l.PriorCalls)
+	incomplete := l.PriorCallsElided || !l.ElisionKnown()
+	add := func(name string) {
+		switch {
+		case name == "" || slices.Contains(names, name):
+		case len(names) >= MaxPriorCalls:
+			incomplete = true
+		default:
+			names = append(names, name)
+		}
+	}
+	for _, call := range l.Calls {
+		if !call.Failed {
+			add(call.Name)
+		}
+	}
+	for _, e := range l.Unlisted() {
+		if e.Calls > e.Failed {
+			add(e.Name)
 		}
 	}
 	slices.Sort(names)
-	return names, elided
+	return names, incomplete
 }
 
 // ClaimForResume flips a run holding the tail's launch, in one of the tail's
@@ -825,7 +859,13 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 	}
 	_, _, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		run.Status = StatusAwaiting
-		run.AudienceHandles = append([]string(nil), q.Answerers.Handles...)
+		// THE FIRST OF THEM, held to [MaxAudienceHandles], in the order the
+		// resolution names them — a `team` audience its unit's lead and then
+		// its people in the chart's order, the fallback its lead chain
+		// nearest first — so past the bound a unit keeps its lead and its
+		// first members, and a chain its nearest leads.
+		run.AudienceHandles = slices.Clone(q.Answerers.Handles[:min(len(q.Answerers.Handles),
+			MaxAudienceHandles)])
 		run.AudienceFallback = q.Answerers.Fallback
 		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens
 		run.ParkedCacheReadTokens, run.ParkedCacheWriteTokens = q.CacheReadTokens, q.CacheWriteTokens
@@ -861,6 +901,11 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 	}
 	if answer.RecordedAt.IsZero() {
 		answer.RecordedAt = s.clock()
+	}
+	// HELD TO ITS SHARE OF THE ROW, as written and as its decline would owe
+	// it, before anything is written: see [MaxAnswerBytes].
+	if err := answerFits(turnID, answer); err != nil {
+		return PendingRun{}, false, err
 	}
 	ownedBy := int64(0)
 	recorded, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
@@ -1049,11 +1094,14 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 // approvedCall is the call a person approved as its round's log keeps it
 // ([HeldCall.Call]): answered as made says, named the held call's tool and
 // id, stamped with the instant its result was recorded, marked approved, and
-// with no arguments and no output, which ride the row sealed.
+// with no arguments, no digest of them and no output, which ride the row
+// sealed ([BridgeCall.Withheld]) — every other field held to a call's share
+// ([keptCall]), as the log holds it and as the row carries it, on the held
+// call and on to the reset that owes it to the log ([OwedCall]).
 func approvedCall(made BridgeCall, held HeldCall) BridgeCall {
 	made.Name, made.Approved, made.At, made.HeldID = held.Tool, true, held.MadeAt, held.ID
-	made.Args, made.Output, made.Held, made.Seq = "", "", false, 0
-	return made
+	made.Args, made.Output, made.Held, made.Seq, made.Digest = "", "", false, 0, ""
+	return keptCall(made, MaxBridgeArgsBytes)
 }
 
 // OweHandBack lets go of the recorded answer a run whose ending is decided still
@@ -1563,29 +1611,67 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 	if a.Launch == "" {
 		return false, nil
 	}
-	call := a.Call
-	if call.At.IsZero() {
-		call.At = s.clock()
+	stamped := func(call BridgeCall) BridgeCall {
+		if call.At.IsZero() {
+			call.At = s.clock()
+		}
+		return call
 	}
+	// SET ON EVERY ASK OF decide, which runs again on a lost race: whether the
+	// log as the last attempt read it is open for the job the append names,
+	// and whether that attempt had anything to write.
+	held, wrote := false, false
 	_, won, err := s.runs.MutateSandboxRunPart(ctx, turnID, coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
+		held, wrote = false, false
 		if !found {
 			return nil, nil
 		}
-		var held BridgeLog
-		if err := json.Unmarshal(current.Value, &held); err != nil {
+		var logged BridgeLog
+		if err := json.Unmarshal(current.Value, &logged); err != nil {
 			return nil, fmt.Errorf("sandbox: decode the log of run %s: %w", turnID, err)
 		}
-		if held.Launch != a.Launch {
+		if held = logged.Launch == a.Launch; !held {
 			return nil, nil
 		}
-		held.Calls, held.Elided = appendBounded(held.Calls, held.Elided, call)
-		return json.Marshal(held)
+		// WHAT THE SESSION OWED FIRST, in the order it was owed: each call
+		// the log does not list yet, listed with what its own work absorbed
+		// — and one it lists already, which landed after all and lost its
+		// answer, skipped with what it absorbed, which landed beside it.
+		for _, owed := range a.Owed {
+			if logged.lists(owed.Call) {
+				continue
+			}
+			// HELD TO THE LOG'S BUDGET, as the call this append names is
+			// ([BridgeLog.appendCall]).
+			logged.appendCall(stamped(owed.Call), owed.Absorbed)
+			wrote = true
+		}
+		// AND THE CALL ITSELF, where the append names one and the log does
+		// not hold it already: an append ASKED AGAIN — one that landed and
+		// whose answer was lost, which its session tries again — writes
+		// nothing, the call and what it carried being in the log once.
+		if a.Call.Name != "" && !logged.lists(a.Call) {
+			logged.appendCall(stamped(a.Call), a.Absorbed)
+			wrote = true
+		}
+		if !wrote {
+			return nil, nil
+		}
+		return json.Marshal(logged)
 	})
-	if err != nil || !won {
+	switch {
+	case err != nil:
 		return false, err
+	case !held, wrote && !won:
+		// NO LOG OPEN FOR THE JOB, or one the run's end removed under the
+		// write that landed in it, which the store undid: a run that is
+		// gone, or a job that is over.
+		return false, nil
 	}
 	// Onto THIS job's record, and only while the row holds it: a spend the
-	// row's next job would pay as its own is dropped with the job.
+	// row's next job would pay as its own is dropped with the job. Written
+	// whether or not this append moved the log: one asked again finds its
+	// calls there and may be the first whose spend reaches the record.
 	_, _, err = s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		if a.Launch != run.LaunchID {
 			return false
@@ -1662,6 +1748,13 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 	if err := ask.Validate(); err != nil {
 		return "", fmt.Errorf("sandbox: recording the question run %s asked: %w", turnID, err)
 	}
+	if ask.Held != nil {
+		// HELD TO ITS SHARE OF THE ROW before anything is written: see
+		// [MaxHeldArgsBytes].
+		if err := HeldArgsFit(ask.Held.Arguments); err != nil {
+			return "", fmt.Errorf("sandbox: recording the call run %s held: %w", turnID, err)
+		}
+	}
 	ask = ask.Redacted()
 	// WHY NOT, as the decision that last ran saw it. Never "recorded": only
 	// the store's own answer says a write landed, and a decision that agreed
@@ -1704,7 +1797,9 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 	return refusal, nil
 }
 
-// appendBounded adds one call and drops from the MIDDLE past the cap.
+// appendBounded adds one call and drops from the MIDDLE past the cap,
+// answering the calls it dropped so their identities are kept
+// ([BridgeLog.appendCall]).
 //
 // The start and the end are what explain a run (how it set about the work and
 // how it finished), so a log truncated to its last N loses the half a reader
@@ -1719,10 +1814,10 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 // head, never the one just made; and only a log with no ordinary call left
 // there gives up the oldest of the others, so the log stays at its cap
 // whatever the run calls.
-func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int) {
+func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int, []BridgeCall) {
 	calls = append(calls, next)
 	if len(calls) <= MaxBridgeCalls {
-		return calls, elided
+		return calls, elided, nil
 	}
 	head := MaxBridgeCalls / 2
 	drop := len(calls) - MaxBridgeCalls
@@ -1738,18 +1833,21 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 	dropAny := drop - dropOrdinary
 	kept := make([]BridgeCall, 0, MaxBridgeCalls)
 	kept = append(kept, calls[:head]...)
+	var dropped []BridgeCall
 	for _, call := range candidates {
 		switch {
 		case !call.Ends() && dropOrdinary > 0:
 			dropOrdinary--
+			dropped = append(dropped, call)
 		case call.Ends() && dropAny > 0:
 			dropAny--
+			dropped = append(dropped, call)
 		default:
 			kept = append(kept, call)
 		}
 	}
 	kept = append(kept, next)
-	return kept, elided + drop
+	return kept, elided + drop, dropped
 }
 
 // MarkSuspended writes the parked turn's state and opens the run to the
@@ -1758,6 +1856,10 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 // THROUGH THE LIVE WRITE, so a run whose ending was decided under its launch is
 // told [ErrRunEnding] rather than a plain false: see the contract.
 func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspension Suspension) (bool, error) {
+	if n := len(suspension.State); n > ExecuteStateBytes {
+		return false, fmt.Errorf("sandbox: the parked state of run %s is %d bytes, and its share of "+
+			"the row is %d: %w", turnID, n, ExecuteStateBytes, ErrStateTooLarge)
+	}
 	_, won, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusLaunching {
 			return false

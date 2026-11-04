@@ -957,7 +957,7 @@ person it is put to. The body is a call's `trigger`, `prompt`,
 `prompt_messages`, `response`, `tool_executions`, `round_narration`,
 `partial_round` and the `arguments` of each `running_calls` entry, an `llm_history` entry's
 `payload`, and an executor's `task_description`, `question`,
-`question_context`, `decision`, `held_call`, `held_arguments`, `reply` and `bridge_calls` (`held_call` also
+`question_context`, `decision`, `held_call`, `held_arguments`, `reply`, `bridge_calls` and `bridge_elided_calls` (`held_call` also
 to the person the question is put to, `held_arguments` never). A status reader receives the rest with **`body_withheld:
 true`** and the body's version counters at zero, so a client never marks the
 call stale and asks for a body it will not be sent. A work item a call or a
@@ -6836,7 +6836,7 @@ never saw. What it became is read off the executor's own row in
 every attempt to resume the executor with it failed and it was let go of (the
 executor waits on its question again, and you answer it again), or a new
 `launch_id` if the executor moved past the question first. It is also announced on the event stream
-as `executor_answered` (`resumed`, `not_awaiting`, `gone`, `declined` or `unoffered`),
+as `executor_answered` (`resumed`, `not_awaiting`, `gone`, `declined`, `unoffered`, or `too_large` for a chat reply too large to be recorded as the answer),
 naming who answered: their name, its kind and the credential. A node that stops
 on the way to the resume leaves the recorded answer for the seat's next holder
 rather than losing it. An `unknown` outcome is a delivery the broker never
@@ -12324,6 +12324,31 @@ for that approval comes before it, marked `held: true`, with no `args`, which
 ride the run's row sealed beside its question, and with `failed: true`, since
 nothing it asked for happened: it is the run's question, not a failure, and
 the executors board draws it so.
+
+A call's `args` and `output` are what the run's log keeps of them, which is
+held to the call's share of the log ([what a run's record and its log
+keep](../concepts/code-sandbox.md#what-a-runs-record-and-its-log-keep)): past it, the
+arguments keep their shape with their largest values left out, each replaced
+by a string marker such as `(1.0 MiB not kept on the run's record, digest
+1a2b3c4d)`, and the output keeps its opening followed by `…` and how much more
+was not kept. `args_bytes` and `output_bytes` are set only on such a call, to
+the size in bytes of the whole arguments and the whole output, and absent where
+the log keeps the call whole: decide "partly kept" by them, never by
+reading a marker. `digest` is the call's identity, the SHA-256 of its whole
+arguments as the run counts its calls, absent on a call no tool admitted (one
+refused after the run's tools closed, or whose arguments did not parse) and on
+a `held` or `approved` call, whose arguments ride the record sealed and are
+never digested in the clear.
+`bridge_calls_elided` counts the calls of the round the log does not list —
+dropped from the middle of a long run's log; a call whose own append reached
+the log only with a later one is listed, once, as the call it is — and
+`bridge_elided_calls` says what
+they were: one entry per tool and argument digest, `{name, digest, calls,
+failed}`, sent to whom the run's body is sent and always an array beside
+`bridge_calls`. An entry with no `digest` counts calls to its tool whose
+arguments' identity was not kept, and one with no `name` calls whose tool was
+not kept either — which is also how calls an older engine dropped, keeping a
+count and no entries, are served.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed

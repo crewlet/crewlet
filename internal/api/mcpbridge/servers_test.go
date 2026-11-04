@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -49,7 +50,14 @@ func serversSurface(t *testing.T) *tools.Surface {
 
 func newServersFixture(t *testing.T) *serversFixture {
 	t.Helper()
-	f := &serversFixture{ledger: &ledger{}, surface: serversSurface(t)}
+	return openServers(t, serversSurface(t))
+}
+
+// openServers opens a job's session over surface, its servers' endpoints
+// beneath it, as [newServersFixture] does.
+func openServers(t *testing.T, surface *tools.Surface) *serversFixture {
+	t.Helper()
+	f := &serversFixture{ledger: &ledger{}, surface: surface}
 
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
@@ -163,5 +171,45 @@ func TestAServerTheOpeningDoesNotServeIsNoEndpoint(t *testing.T) {
 	if err == nil {
 		_ = sess.Close()
 		t.Fatal("a server the opening does not serve answered as an MCP server")
+	}
+}
+
+// holdingHolder holds every call it is handed, as an executor's holder records
+// a call to a tool at Needs approval as its run's question.
+type holdingHolder struct{}
+
+func (holdingHolder) Hold(context.Context, *turnctx.Turn, tools.HeldCall) (tools.Result, bool) {
+	return tools.Result{Output: "put to a person"}, true
+}
+
+// A HELD CALL IS RECORDED WITHOUT ITS ARGUMENTS OR THEIR DIGEST. A call to a
+// tool at Needs approval is the run's question: its arguments ride the run's row
+// sealed beside it (ADR-0077), and the call log is read in the clear by
+// everybody who reads the seat's trail — so a digest of them there, beside the
+// tool's name, would let any reader confirm a guess at what the seal hides. The
+// record says the call was held, which every later reader counts by, and keeps
+// neither.
+//
+// Mutation: record a held call's digest, or its arguments, and both are on the
+// run's record in the clear.
+func TestAHeldCallIsRecordedWithoutItsArgumentsOrTheirDigest(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	if err := reg.RegisterWith(&stubTool{name: "close_issue"}, tools.Origin("tracker"), tools.Annotations{},
+		func(e *tools.Entry) { e.NeedsApproval = true }); err != nil {
+		t.Fatal(err)
+	}
+	f := openServers(t, tools.NewSurface("execute", reg.Snapshot(), []string{"close_issue"}).
+		ForTurn(seatTurn()).WithHolder(holdingHolder{}))
+	sess := dial(t, mcpbridge.ServerURL(f.endpoint, "tracker"))
+
+	callTool(t, sess, "close_issue", map[string]any{"id": 7})
+	rows := f.ledger.rows()
+	if len(rows) != 1 {
+		t.Fatalf("%d rows, want 1: %+v", len(rows), rows)
+	}
+	if row := rows[0]; !row.Held || row.Args != nil || row.Digest != "" {
+		t.Errorf("the held call is recorded as held %v with arguments %v and identity %q, want it held "+
+			"with neither", row.Held, row.Args, row.Digest)
 	}
 }

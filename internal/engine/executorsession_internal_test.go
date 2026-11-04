@@ -286,11 +286,14 @@ func TestALostTurnEndsAsLostOnTheExecutorLog(t *testing.T) {
 // that replied in an earlier round and was stopped in a later one replied, and
 // one whose calls were elided from the log, the kept ones showing none, or
 // whose log the ending could not read, is not known to have — never "did not
-// reply" off half a log, or none.
+// reply" off half a log, or none. Unless the log kept the dropped calls'
+// identities: a reply among them replied, and a tally of other tools is a
+// turn known not to have.
 //
 // Mutation: read the current round's calls alone, answer an elided log with a
 // definite no, or read an unread log as an empty one, and the turn's end says
-// a reply that went out did not.
+// a reply that went out did not; ignore the identities, and a reply from the
+// middle of a long run is unknown.
 func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 	t.Parallel()
 	e, _ := loggingEngine(t)
@@ -319,6 +322,19 @@ func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 		colleagueAnswer{})
 	if unread.Delivered || !unread.DeliveryUnknown {
 		t.Fatalf("a log the ending could not read ended %+v, want whether it replied not known", unread)
+	}
+	// THE ROUND'S TALLY of the calls its log dropped, by identity.
+	round := []sandbox.BridgeCall{{Name: "read_file", Seq: 1}}
+	tallied := e.runEnding(company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Calls: round, Elided: 4,
+		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 3},
+			{Name: "vendor_post", Digest: "b", Calls: 1}}}}, colleagueAnswer{})
+	if !tallied.Delivered || tallied.DeliveryUnknown {
+		t.Fatalf("a log whose dropped calls hold the reply ended %+v, want its reply delivered", tallied)
+	}
+	reads := e.runEnding(company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Calls: round, Elided: 4,
+		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 4}}}}, colleagueAnswer{})
+	if reads.Delivered || reads.DeliveryUnknown {
+		t.Fatalf("a log whose dropped calls are all reads ended %+v, want it known not to have replied", reads)
 	}
 }
 
@@ -407,6 +423,22 @@ func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
 	if err := commit.Record(ctx, sandbox.HeldResult{Output: "posted"}, toolloop.ToolResult{Output: "posted",
 		Origin: tools.Origin("vendor"), Server: "vendor", Source: tools.Origin("vendor")}); err != nil {
 		t.Fatalf("Record: %v", err)
+	}
+	// NEITHER ITS ARGUMENTS NOR THEIR DIGEST RIDE ITS RECORD: they are sealed
+	// on the held call, and a digest in the clear would confirm a guess at
+	// them. The record says the call's identity is withheld, which a later
+	// segment's call log counts as a call of its tool whose arguments are not
+	// known.
+	recorded, _, err := store.Get(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("reading the run the call was approved on: %v", err)
+	}
+	if logged, err := store.BridgeLog(ctx, recorded); err != nil || len(logged.Calls) == 0 {
+		t.Fatalf("the approved call's record = %+v (%v)", logged.Calls, err)
+	} else if made := logged.Calls[len(logged.Calls)-1]; made.Digest != "" || made.Args != "" ||
+		!made.Approved || !made.Withheld() {
+		t.Fatalf("the approved call is recorded as %+v, want it approved with its arguments and their "+
+			"digest withheld", made)
 	}
 	// THE JOB THAT CARRIES THE WORK ON opens, the held call cleared with the
 	// question it was.

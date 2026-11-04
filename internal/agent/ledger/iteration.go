@@ -30,6 +30,28 @@ type Call struct {
 	// "error:" is not a failure, and a phase that reads it as one loops
 	// trying to fix something that worked.
 	Failed bool
+
+	// Digest is the call's identity as its run's call log admitted it — the
+	// digest of its whole canonical arguments (internal/agent/turnctx's
+	// ArgsDigest) — and empty where none was recorded: a call nothing
+	// admitted, or one a build before it recorded.
+	//
+	// CARRIED BESIDE ARGS BECAUSE ARGS MAY NOT BE WHOLE. An executor run's
+	// calls are recorded in a log bounded in bytes, beside its row, which keeps
+	// a value past its share as a marker (internal/kept), and a parked turn's
+	// closed rounds are condensed the same way to fit theirs; a later segment
+	// that seeds its call log from the arguments it holds would take the call
+	// for another, and derive another operation's id. Seeded by this, it
+	// cannot.
+	Digest string `json:"Digest,omitempty"`
+
+	// Withheld is a call whose arguments, and with them their digest, every
+	// record withholds: a call held for a person's approval and the one they
+	// approved, whose arguments ride the run's row sealed (ADR-0077). Args
+	// and Digest are both empty on it, and a later segment's call log counts
+	// it as a call of its tool whose arguments are not known — never as the
+	// tool called with none, which it was not.
+	Withheld bool `json:"Withheld,omitempty"`
 }
 
 // FormatOptions controls how a run of calls renders.
@@ -91,7 +113,8 @@ func visible(calls []Call, opts FormatOptions) []Call {
 // FormatCalls renders an evidence-only summary of tool calls.
 //
 // Each line is `- name(args) → success | error: text`, with a trailing
-// "(read)" when the tool is positively annotated read-only.
+// "(read)" when the tool is positively annotated read-only. A call whose
+// arguments every record withholds says so in their place ([Call.Withheld]).
 //
 // No calls — or none that survive Skip — renders "(none)" rather than an empty
 // string, so a reader sees an explicit "no action taken" signal rather than an
@@ -122,7 +145,15 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 			marker = " (read)"
 			readsShown++
 		}
-		lines = append(lines, "- "+call.Name+"("+renderArgs(call.Args, opts)+") → "+outcome+marker)
+		args := renderArgs(call.Args, opts)
+		if call.Withheld {
+			// SAID, never drawn as `()`: a call whose arguments every record
+			// withholds made a call with arguments, and `tool()` reads as
+			// the tool called with none — a different call, and a repeat a
+			// reader takes for a retry of nothing.
+			args = withheldArgs
+		}
+		lines = append(lines, "- "+call.Name+"("+args+") → "+outcome+marker)
 	}
 	if dropped := readsIn(calls, opts) - readsShown; dropped > 0 {
 		// Only READS are ever omitted, and they are re-runnable by
@@ -131,10 +162,20 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 		lines = append(lines, "- (+"+itoa(dropped)+" further read call(s) omitted)")
 	}
 	if len(lines) == 0 {
-		return "(none)"
+		return noCalls
 	}
 	return strings.Join(lines, "\n")
 }
+
+// withheldArgs is what [FormatCalls] renders in place of the arguments of a
+// call whose arguments every record withholds ([Call.Withheld]). ONE WORDING
+// FOR BOTH such calls, which a [Call] does not tell apart: the one the run
+// held, whose arguments wait sealed for a person's approval, and the one the
+// person approved, made off those sealed arguments.
+const withheldArgs = "arguments sealed for a person's approval, kept on no record"
+
+// noCalls is what [FormatCalls] renders for a run of calls that shows none.
+const noCalls = "(none)"
 
 // readsIn counts the read calls a render would show without a cap.
 func readsIn(calls []Call, opts FormatOptions) int {
@@ -171,8 +212,23 @@ type Iteration struct {
 	// Intent is what the round set out to do, in the executor's own words.
 	Intent string `json:"intent,omitempty"`
 
-	// Calls is everything the round invoked, engine-recorded.
+	// Calls is everything the round invoked, engine-recorded — every call
+	// its run's record kept.
 	Calls []Call `json:"tool_calls,omitempty"`
+
+	// Elided is the round's calls its run's record did not keep, by identity
+	// ([Elided]): carried with the round so the turn's later segments still
+	// count them — a resumed call log seeds them, and a delivery check reads
+	// them as calls of the turn ([Called]) — where the calls themselves are
+	// gone.
+	Elided []Elided `json:"elided_calls,omitempty"`
+
+	// Absorbed is the calls the run's call log took in from the round's own
+	// calls' work — a delegated worker's under a `delegate` — by identity
+	// ([Elided], Failed unset): carried with the round so a later segment's
+	// call log seeds them, and read by nothing else, since the round did not
+	// make them — no delivery check counts a worker's call as the turn's.
+	Absorbed []Elided `json:"absorbed_calls,omitempty"`
 
 	// Reads are the names among the calls above that MCP annotations
 	// positively mark read-only. Carried per-record rather than looked up
@@ -229,7 +285,16 @@ func RenderIterations(records []Iteration, skip []string, fitted Fitted) string 
 		}
 		opts := Format(skip, rec.Reads)
 		opts.Fitted = fitted
-		lines = append(lines, "Called:", FormatCalls(rec.Calls, opts))
+		lines = append(lines, "Called:")
+		// "(none)" ONLY FOR A ROUND THAT CALLED NOTHING: one whose record
+		// keeps its calls as a tally alone — a parked turn's closed round
+		// condensed that far — called what its tally line says.
+		if len(rec.Calls) > 0 || Count(rec.Elided) == 0 {
+			lines = append(lines, FormatCalls(rec.Calls, opts))
+		}
+		if elided := FormatElided(rec.Elided, skip); elided != "" {
+			lines = append(lines, elided)
+		}
 		if rec.Text != "" {
 			// FITTED at render, whole in the record. See
 			// RenderedArtifactLimit: this text is a whole tool loop's

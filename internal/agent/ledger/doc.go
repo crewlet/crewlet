@@ -33,6 +33,17 @@
 // re-running exactly those. Telling a model "do not repeat" a jira_get_issue
 // would push it to fabricate the data instead.
 //
+// A RECORD BOUNDED IN SIZE STILL ACCOUNTS FOR EVERY CALL. An executor run's
+// calls come back from the log kept beside its row, which keeps each call's
+// payloads to a share and a long run's middle only as a tally
+// (internal/sandbox, rowbytes.go), so a call carries the identity its run
+// counted it by ([Call.Digest]) — or says its arguments, and so its identity,
+// are withheld ([Call.Withheld]) — and a round the identities of the calls its
+// record dropped ([Iteration.Elided]) and of the ones its calls' own work made
+// ([Iteration.Absorbed]): what a later segment's call log is seeded by, what a
+// delivery check reads as calls ([Called], the dropped ones alone), and what a
+// reader is told it is not shown ([FormatElided]).
+//
 // The package imports nothing from crewlet but internal/plainjson, a leaf
 // over the standard library that holds the one rule for JSON read as text, so
 // it still drags nothing behind it. The turn loop, the runner and the parked

@@ -67,6 +67,25 @@ const (
 	// leaf both read, because the sandbox links no state log.
 	HarnessVersionMaxBytes = 64
 	SessionIDMaxBytes      = 128
+
+	// TurnIDMaxBytes bounds a turn's id: a run id is a UUIDv7, thirty-six
+	// bytes, and the bound refuses anything that is plainly not one.
+	//
+	// HarnessMaxBytes bounds the harness's name as the box reported it.
+	//
+	// PathMaxBytes bounds the writer box's home and workspace paths, which a
+	// resumed launch maps onto its own box. The engine lays a box out under
+	// paths of a few dozen bytes; a kibibyte bounds a seat's own image
+	// moving them without admitting a path no box would mount.
+	//
+	// HERE, BESIDE THE VERSION'S AND THE SESSION ID'S, for their reason: the
+	// executor log refuses a row past any of them, and the sandbox holds a
+	// capture's stamp on a run's row to the same bounds before the row
+	// carries it (sandbox.SessionCapture.Bounded) — the launch it was taken
+	// in, the harness, and the paths the box names.
+	TurnIDMaxBytes  = 64
+	HarnessMaxBytes = 32
+	PathMaxBytes    = 1024
 )
 
 // SealedMaxBytes is the largest object a session is stored as: an archive of

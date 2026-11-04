@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -80,6 +81,10 @@ type ledger struct {
 	mu    sync.Mutex
 	calls []mcpbridge.Call
 	err   error
+	// settled counts the times the ledger was asked to carry what it owes
+	// for the run's collection ([mcpbridge.Ledger.Settle]), and ended the
+	// times its session's end asked ([mcpbridge.Ledger.End]).
+	settled, ended int
 }
 
 func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
@@ -90,6 +95,34 @@ func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
 	}
 	l.calls = append(l.calls, c)
 	return nil
+}
+
+func (l *ledger) Settle(context.Context, string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.settled++
+	return false
+}
+
+func (l *ledger) End(context.Context, string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ended++
+	return false
+}
+
+// settles is how many times the run's collection asked the ledger to carry
+// what it owes, and ends how many times its session's end did.
+func (l *ledger) settles() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.settled
+}
+
+func (l *ledger) ends() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ended
 }
 
 func (l *ledger) rows() []mcpbridge.Call {
@@ -711,6 +744,147 @@ func TestEveryBridgedCallIsRecordedWhereAResumeCanReadIt(t *testing.T) {
 	}
 }
 
+// A RECORDED CALL CARRIES THE IDENTITY IT WAS ADMITTED UNDER. The run's call
+// log counts a call by the digest of its canonical arguments, and the record
+// a later segment seeds that log from keeps a call's arguments only in part
+// past its share of the run's tool log — so the record carries the digest the
+// admission counted, taken here before anything is cut: the canonical form's,
+// whatever spelling the model sent. The call is sent in a spelling the surface
+// rewrites — a null its schema does not declare, which the canonical form
+// drops — so the canonical digest and the digest of what was sent differ, and
+// a record of the one is not a record of the other.
+//
+// Mutation: record no digest, or one of the arguments as sent, and the
+// differently spelt call is seeded as another: a repeat spelt "Draft" after
+// "draft", counted as a different call, writes twice.
+func TestARecordedCallCarriesTheIdentityItWasAdmittedUnder(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	sess := dial(t, f.open(t))
+
+	sent := map[string]any{"text": "two", "id": nil}
+	callTool(t, sess, "post_message", sent)
+	rows := f.ledger.rows()
+	if len(rows) != 1 {
+		t.Fatalf("%d rows, want 1: %+v", len(rows), rows)
+	}
+	want := turnctx.ArgsDigest(f.surface.ArgsOf("post_message", sent).Map())
+	asSent := turnctx.ArgsDigest(sent)
+	if want == asSent {
+		t.Fatal("the spelling sent is canonical already, so the case tells the two digests apart nowhere")
+	}
+	if rows[0].Digest == "" || rows[0].Digest != want {
+		t.Errorf("the recorded call carries identity %q, want the admission's %q (the arguments as sent "+
+			"digest to %q)", rows[0].Digest, want, asSent)
+	}
+}
+
+// workingTool is a call whose own work makes calls of the run's, as a
+// `delegate`'s workers do: on a fork of the call's own log, absorbed back.
+type workingTool struct{}
+
+func (workingTool) Name() string               { return "delegate" }
+func (workingTool) Description() string        { return "runs workers" }
+func (workingTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (workingTool) Call(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{Output: "no turn"}, nil
+}
+
+func (workingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[string]any) (tools.Result, error) {
+	worker := turn.CallLog().Fork()
+	worker.Record("leave_channel", toolargs.Of(nil, map[string]any{"channel": "R"}))
+	turn.CallLog().Absorb(worker)
+	return tools.Result{Output: "the workers are done"}, nil
+}
+
+// WHAT A CALL'S OWN WORK RECORDED RIDES ITS RECORD. A bridged `delegate` runs
+// its workers on forks of the run's call log, which takes their calls in as the
+// call returns; no call of the run's record is a worker's, so the record of the
+// `delegate` carries their identities, and a later segment seeded from it counts
+// a worker's call between two of the run's own as the run did.
+//
+// Mutation: record the call without what its work added, and a resumed run's
+// log is short of the worker's calls.
+func TestWhatACallsOwnWorkRecordedRidesItsRecord(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	reg := tools.NewRegistry()
+	if err := reg.Register(workingTool{}, tools.OriginBuiltin); err != nil {
+		t.Fatal(err)
+	}
+	turn := seatTurn()
+	turn.Calls = turnctx.NewCallLog()
+	f.surface = tools.NewSurface("execute", reg.Snapshot(), []string{"delegate"}).ForTurn(turn)
+	f.session.Surface = f.surface
+	sess := dial(t, f.open(t))
+
+	callTool(t, sess, "delegate", map[string]any{})
+	rows := f.ledger.rows()
+	want := toolloop.Called{Tool: "leave_channel", Digest: turnctx.ArgsDigest(map[string]any{"channel": "R"})}
+	if len(rows) != 1 || len(rows[0].Absorbed) != 1 || rows[0].Absorbed[0] != want {
+		t.Fatalf("the delegate's record is %+v, want it carrying the worker's call %+v", rows, want)
+	}
+}
+
+// breakingTool is a call whose own work makes a call of the run's, on the
+// call's own log, and then breaks, as a `delegate` whose fan-out panicked
+// after a worker's call would.
+type breakingTool struct{ workingTool }
+
+func (breakingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[string]any) (tools.Result, error) {
+	worker := turn.CallLog().Fork()
+	worker.Record("leave_channel", toolargs.Of(nil, map[string]any{"channel": "R"}))
+	turn.CallLog().Absorb(worker)
+	panic("the fan-out broke")
+}
+
+// AND IT RIDES THE RECORD OF A CALL THE BRIDGE ANSWERED IN ITS PLACE. A call
+// that panicked, and one whose tool asked to park a loop the box's harness does
+// not have, are recorded with an answer of the bridge's own; the run's log took
+// in what their own work recorded all the same, so their record carries it, or
+// a later segment's log is short of a worker's call the run's own counted.
+//
+// Mutation: answer a panicked or a parking call with a result that drops what
+// the call's work absorbed — or let the surface lose it to the panic — and the
+// record carries none of it.
+func TestWhatACallsOwnWorkRecordedRidesTheRecordTheBridgeAnswersInItsPlace(t *testing.T) {
+	t.Parallel()
+	want := toolloop.Called{Tool: "leave_channel", Digest: turnctx.ArgsDigest(map[string]any{"channel": "R"})}
+	for name, tc := range map[string]struct {
+		tool  tools.Callable
+		parks bool
+	}{
+		"a call that panicked":     {tool: breakingTool{}},
+		"a call that asks to park": {tool: workingTool{}, parks: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			reg := tools.NewRegistry()
+			if err := reg.Register(tc.tool, tools.OriginBuiltin); err != nil {
+				t.Fatal(err)
+			}
+			turn := seatTurn()
+			turn.Calls = turnctx.NewCallLog()
+			f.surface = tools.NewSurface("execute", reg.Snapshot(), []string{"delegate"}).ForTurn(turn)
+			f.session.Surface = f.surface
+			if tc.parks {
+				f.session.Surface = parking{Surface: f.surface, parks: map[string]bool{"delegate": true}}
+				f.session.Caller = actingSeat{f.surface}
+			}
+			sess := dial(t, f.open(t))
+
+			if res := callTool(t, sess, "delegate", map[string]any{}); !res.IsError {
+				t.Fatalf("the bridge answered %s, want the call refused in its place", text(res))
+			}
+			rows := f.ledger.rows()
+			if len(rows) != 1 || len(rows[0].Absorbed) != 1 || rows[0].Absorbed[0] != want {
+				t.Fatalf("the delegate's record is %+v, want it carrying the worker's call %+v", rows, want)
+			}
+		})
+	}
+}
+
 // A LOST LEDGER ROW COSTS ONE LINE OF EVIDENCE. Failing the call instead would
 // tell a harness to retry work that has already happened — the
 // duplicate-side-effect failure the whole delivery machinery exists to stop.
@@ -802,6 +976,67 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 	if res := callTool(t, dial(t, url), "read_page", map[string]any{}); res.IsError {
 		t.Errorf("the relaunched run cannot dispatch: %s", text(res))
 	}
+}
+
+// EVERY WAY A SESSION ENDS CARRIES WHAT ITS LEDGER OWES, ONCE. A call whose
+// record did not land is carried by a later call of its session, and no call
+// comes after the session's end: so the run's close, the relaunch's opening that
+// replaces it and the seat leaving this node each end the session's ledger,
+// which carries what it still owes before they return; and an end that finds
+// the opening ended already — a close of a run closed before, or the same
+// opening ended once more — asks again for nothing. The run's collection asks
+// the job's own session to carry too, without ending it; a job the run's
+// opening does not serve is asked for nothing.
+//
+// Mutation: end an opening without ending its ledger, and a session that ends
+// owing calls leaves them off the run's record; end it as the collection's ask
+// does, and a call whose record fails after the end is promised a carry that
+// never comes; end the ledger on every end of its opening, and an opening
+// ended twice makes its last carry twice.
+func TestEveryWayASessionEndsCarriesWhatItsLedgerOwesOnce(t *testing.T) {
+	t.Parallel()
+	for name, end := range map[string]func(*fixture){
+		"closed": func(f *fixture) {
+			f.bridge.Close("run-1")
+			f.bridge.Close("run-1")
+		},
+		"replaced by its relaunch": func(f *fixture) {
+			f.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "run-1", Launch: "job-2", Handle: "dev",
+				Role: "Engineer", Surface: f.surface, Ledger: &ledger{}})
+		},
+		"released with its seat": func(f *fixture) {
+			f.bridge.ReleaseSeat(seat())
+			f.bridge.Close("run-1")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			f.open(t)
+			end(f)
+			// THE SAME OPENING ENDED ONCE MORE, which no path of the bridge
+			// does, and which its end has to survive.
+			mcpbridge.EndOpening(f.session)
+			if n, asked := f.ledger.ends(), f.ledger.settles(); n != 1 || asked != 0 {
+				t.Errorf("the ended session's ledger was ended %d times and asked as a collection %d times, "+
+					"want ended once", n, asked)
+			}
+		})
+	}
+	t.Run("asked by its collection", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		f.open(t)
+		f.bridge.Settle(t.Context(), "run-1", "job-2")
+		if n := f.ledger.settles(); n != 0 {
+			t.Errorf("an ask for a job the opening does not serve reached its ledger %d times", n)
+		}
+		f.bridge.Settle(t.Context(), "run-1", "job-1")
+		if n := f.ledger.settles(); n != 1 || f.ledger.ends() != 0 || f.bridge.Live() != 1 {
+			t.Errorf("the job's own ask reached its ledger %d times, ended it %d times and left %d sessions "+
+				"live, want once, never, and the session open", n, f.ledger.ends(), f.bridge.Live())
+		}
+	})
 }
 
 // AND ITS TOKEN STOPS WORKING. Closing the transport only ends a connection

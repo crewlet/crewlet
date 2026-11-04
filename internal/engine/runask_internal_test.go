@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -65,5 +67,30 @@ func TestAResumeIsCutWhereTheAnswerCutTheRound(t *testing.T) {
 	if got.Answered != 2 || len(got.Bridged) != 3 {
 		t.Fatalf("the resume is cut at %d over %d calls, want 2 over the log's 3",
 			got.Answered, len(got.Bridged))
+	}
+}
+
+// A RESUME IS SEEDED WITH WHAT ITS LOG COUNTS WITHOUT LISTING. A long run's log
+// keeps its calls' head and tail and tallies the middle it dropped and the
+// calls its calls' own work made; the resume is handed both, which the turn's
+// call log is seeded with beside the listed calls and its delivery checks read
+// — and a count the tally does not account for, a drop by a build without
+// tallies, as calls of no known tool.
+//
+// Mutation: hand the resume the log's listed calls alone, and the resumed
+// round's seed is short of every call the log dropped and every worker's call.
+func TestAResumeIsSeededWithWhatItsLogCountsWithoutListing(t *testing.T) {
+	t.Parallel()
+	got := runnerResume(resumeInput{Bridged: sandbox.BridgeLog{
+		Calls:         []sandbox.BridgeCall{{Name: "read_file", Seq: 1}},
+		Elided:        63,
+		ElidedCalls:   []sandbox.ElidedCall{{Name: "post_message", Digest: "d", Calls: 60, Failed: 1}},
+		AbsorbedCalls: []sandbox.ElidedCall{{Name: "leave_channel", Digest: "w", Calls: 2}},
+	}}, nil, nil)
+	wantElided := []ledger.Elided{{Calls: 3}, {Name: "post_message", Digest: "d", Calls: 60, Failed: 1}}
+	wantAbsorbed := []ledger.Elided{{Name: "leave_channel", Digest: "w", Calls: 2}}
+	if !slices.Equal(got.Elided, wantElided) || !slices.Equal(got.Absorbed, wantAbsorbed) {
+		t.Errorf("the resume is handed %+v dropped and %+v absorbed, want %+v and %+v", got.Elided,
+			got.Absorbed, wantElided, wantAbsorbed)
 	}
 }

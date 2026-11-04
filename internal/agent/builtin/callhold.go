@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -90,6 +91,19 @@ func (h *CallHold) Hold(ctx context.Context, turn *turnctx.Turn, call tools.Held
 		return nodeFailure(ctx, call.Name, err, call.Name+" was not called, and nothing was "+
 			"asked: its arguments could not be sealed", "Call it again."), false
 	}
+	if sandbox.HeldArgsFit(sealed) != nil {
+		// PAST WHAT THE RUN'S ROW CARRIES OF A HELD CALL (sandbox's
+		// MaxHeldArgsBytes): a call held for approval never reaches its
+		// server, so nothing else bounds its arguments, and the row that
+		// carries them is one broker message. Refused while the run can
+		// still act on it, with the size named — never recorded and refused
+		// at the broker, which no call made again would get past.
+		return refused(tools.RefusalInvalid, fmt.Sprintf("%s was not called, and nothing was asked: "+
+			"a call that waits for a person's approval may carry at most %d KiB of arguments, "+
+			"sealed, and this one carries %d KiB. Split it into smaller calls, or shorten what it "+
+			"carries, and call again.", call.Name, sandbox.MaxHeldArgsBytes>>10,
+			sealedKiB(sealed))), false
+	}
 	held.Arguments = sealed
 	seat := turn.Handle()
 	question := fmt.Sprintf("May %s call %s on the %s MCP server?", seat, call.Name, held.Server)
@@ -139,6 +153,10 @@ func (h *CallHold) Hold(ctx context.Context, turn *turnctx.Turn, call tools.Held
 		"if this machine is gone by then, a fresh run is told the call, the answer and the " +
 		"result."}, true
 }
+
+// sealedKiB is what sealed arguments weigh on a run's row, in whole KiB rounded
+// up, as a refusal names them.
+func sealedKiB(sealed string) int { return (kept.Quoted(sealed) + 1<<10 - 1) >> 10 }
 
 // heldTool is an MCP server's tool as a held call names it: its server, the
 // server's own name for it and its definition (internal/mcp's Tool).

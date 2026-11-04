@@ -5,9 +5,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // ordinalTool reads the run's call count the way a write deriving its
@@ -97,5 +99,53 @@ func TestACallCountsTheCallsStillInFlightBeforeIt(t *testing.T) {
 	}
 	if got := tool.counts["done"]; got != 1 {
 		t.Errorf("the in-flight call counted %d, want the 1 call before it and not the one after", got)
+	}
+}
+
+// delegatingTool stands for a call whose OWN WORK makes calls of the run's — a
+// `delegate`, whose workers each count their calls on a fork of the call's own
+// log, absorbed back once the wave is done.
+type delegatingTool struct{}
+
+func (delegatingTool) Name() string               { return "delegate" }
+func (delegatingTool) Description() string        { return "runs workers" }
+func (delegatingTool) Parameters() map[string]any { return nil }
+func (delegatingTool) Call(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{Output: "no turn"}, nil
+}
+
+func (delegatingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[string]any) (tools.Result, error) {
+	worker := turn.CallLog().Fork()
+	worker.Record("leave_channel", toolargs.Of(nil, map[string]any{"channel": "R"}))
+	turn.CallLog().Absorb(worker)
+	return tools.Result{Output: "the workers are done"}, nil
+}
+
+// AN ADMITTED CALL HANDS BACK WHAT ITS OWN WORK RECORDED. A `delegate` made
+// over the bridge runs its workers on forks of the run's call log, and the log
+// takes their calls in once the call returns — so a later call of the run
+// counts a worker's call between two of its own. A record a later segment's
+// log is seeded from holds the call and not its workers', so the call's result
+// says what its work added, for the caller that records the call to record
+// with it; and the run's own log holds the same calls.
+//
+// Mutation: leave the absorbed calls off the result, and a bridged run's
+// record never hears of a worker's call.
+func TestAnAdmittedCallHandsBackWhatItsOwnWorkRecorded(t *testing.T) {
+	t.Parallel()
+	r := tools.NewRegistry()
+	mustRegister(t, r, delegatingTool{}, tools.OriginBuiltin)
+	turn := &turnctx.Turn{Calls: turnctx.NewCallLog()}
+	s := tools.NewSurface("execute", r.Snapshot(), []string{"delegate"}).ForTurn(turn)
+	res, err := s.Admit("delegate", map[string]any{})(t.Context(), llm.ToolCall{Name: "delegate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := toolloop.Called{Tool: "leave_channel", Digest: turnctx.ArgsDigest(map[string]any{"channel": "R"})}
+	if len(res.Absorbed) != 1 || res.Absorbed[0] != want {
+		t.Fatalf("the call's result carries %+v of its work, want the worker's %+v", res.Absorbed, want)
+	}
+	if n := turn.CallLog().Ordinal("leave_channel", map[string]any{"channel": "S"}); n != 1 {
+		t.Errorf("the run's own log counts %d of the worker's calls, want 1", n)
 	}
 }

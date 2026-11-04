@@ -80,6 +80,7 @@ type DeepSurface interface {
 	ToolDefs() []llm.ToolDef
 	AnnotationsOf(name string) mcp.Annotations
 	Admit(name string, args map[string]any) toolloop.Admitted
+	DigestOf(name string, args map[string]any) string
 }
 
 // DeepProgress is one live reading of a run.

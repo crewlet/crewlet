@@ -2,10 +2,12 @@ package runner
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/events"
@@ -159,4 +161,78 @@ func TestAWorkerRecordCarriesItsPromptOutlinesOnlyWhenTheyTile(t *testing.T) {
 		return
 	}
 	t.Fatal("no subagent phase was published")
+}
+
+// A COLLECTED RUN'S RECORD SAYS WHAT ITS RUN'S RECORD DID NOT KEEP. The
+// execute phase's record lists the calls the run's log kept — a long run's
+// head and tail — and outlives the log: once the run is gone, that record is
+// the turn's account of what its executor did. So the dropped calls are counted
+// in its round's calls and said by tool, how many and how many failed, the
+// calls whose tool was not kept either last.
+//
+// Mutation: leave the dropped calls off the record, or out of the round's
+// count, and a long run reads as the two hundred calls its log kept.
+func TestACollectedRunsRecordSaysWhatItsRunsRecordDidNotKeep(t *testing.T) {
+	t.Parallel()
+	pub := &collector{}
+	var mu sync.Mutex
+	e := emitter{pub: pub, turn: Turn{RunID: "tn-1", AgentID: "agent-1"}, role: "Dev", tally: &Spend{}, mu: &mu}
+	at := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	dropped := []ledger.Elided{
+		{Name: "read_file", Digest: "a", Calls: 40},
+		{Name: "read_file", Digest: "b", Calls: 19, Failed: 2},
+		{Name: "comment_on_work_item", Digest: "c", Calls: 1},
+		{Calls: 3},
+	}
+	res := agentRunResult("done", []BridgedCall{{Call: ledger.Call{Name: "read_file"}, Seq: 1}}, dropped,
+		RunRecord{Harness: "claude-code", SandboxID: "box-1"}, at, at.Add(time.Hour))
+	e.completed(context.Background(), phaseRecord{Phase: "execute", Iteration: 1, Result: res.Result,
+		Run: RunRecord{Harness: "claude-code", SandboxID: "box-1"}, RunElided: res.RunElided})
+	if len(pub.events) != 1 {
+		t.Fatalf("published %d records, want the execute phase's", len(pub.events))
+	}
+	done, ok := pub.events[0].Data.(*types.AgentPhaseCompleted)
+	if !ok {
+		t.Fatalf("published %T", pub.events[0].Data)
+	}
+	want := []types.ElidedCalls{{Name: "comment_on_work_item", Calls: 1}, {Name: "read_file", Calls: 59, Failed: 2},
+		{Calls: 3}}
+	if done.CallsElided != 63 || !slices.Equal(done.ElidedCalls, want) {
+		t.Errorf("the record says %d calls were dropped, %+v; want 63, %+v", done.CallsElided,
+			done.ElidedCalls, want)
+	}
+	if len(done.Rounds) != 1 || done.Rounds[0].ToolCalls != 64 {
+		t.Errorf("the round counts %+v calls, want the one kept and the 63 dropped", done.Rounds)
+	}
+}
+
+// A HELD CALL AND AN APPROVED ONE ARE RECORDED AS THE CALLS THEY ARE. The two
+// calls whose arguments every record withholds — a call held for a person's
+// approval and the one they let be made — carry `{}` as their arguments on the
+// execute phase's record only because none is kept in the clear, and the held
+// one is recorded failed only because nothing it asked for happened: so the
+// record says which each is, and a reader draws its arguments as sealed and
+// the held call as the run's question, never a call made with nothing or a
+// tool that broke.
+//
+// Mutation: build the execution without the marks, or write the row without
+// them, and the turn's execute card draws `{}` for both and the held call as
+// failed.
+func TestAHeldCallAndAnApprovedOneAreRecordedAsTheCallsTheyAre(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	res := agentRunResult("done", []BridgedCall{
+		{Call: ledger.Call{Name: "gh_delete_repo", Failed: true, Withheld: true}, Seq: 1, Held: true},
+		{Call: ledger.Call{Name: "gh_delete_repo", Withheld: true}, Seq: 2, Approved: true},
+		{Call: ledger.Call{Name: "read_file"}, Seq: 3},
+	}, nil, RunRecord{Harness: "claude-code"}, at, at.Add(time.Hour))
+	rows := toolExecutions(res.Result.Executions)
+	if len(rows) != 3 {
+		t.Fatalf("%d rows, want the three calls", len(rows))
+	}
+	if rows[0]["held"] != true || rows[0]["approved"] != nil || rows[1]["approved"] != true ||
+		rows[1]["held"] != nil || rows[2]["held"] != nil || rows[2]["approved"] != nil {
+		t.Errorf("the rows mark %v, %v and %v; want the held call held, the approved one approved, the "+
+			"third neither", rows[0], rows[1], rows[2])
+	}
 }

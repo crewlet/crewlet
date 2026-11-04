@@ -14,6 +14,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
+import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -72,6 +73,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     transcriptElidedBytes: 0,
     deliveredRefs: [],
     deliveredRefsElided: 0,
+    callsElided: 0,
+    elidedCalls: [],
     pushedRefs: [],
     pushedRefsElided: 0,
     pushedRefsUnread: "",
@@ -612,6 +615,41 @@ describe("an executor round's launches", () => {
     render(<PhaseCard record={phase({ key: "turn-1|review|1", phase: "review" })} />);
     expect(screen.queryByText("sandbox")).toBeNull();
     expect(screen.queryByText("claude-code")).toBeNull();
+  });
+
+  // A COLLECTED RUN'S CALLS ITS RECORD DID NOT KEEP ARE SAID, by tool, under
+  // the ones it did: the card outlives the run's own record, and a long run's
+  // record kept only the head and tail of its calls. A run that kept every call
+  // says nothing more.
+  //
+  // Mutation: drop the line, or its tools, and a long run reads as the calls
+  // its record happened to keep.
+  test("says the calls a collected run's record did not keep", () => {
+    render(
+      <PhaseCard
+        record={phase({
+          harness: "claude-code",
+          sandboxId: "box-7",
+          callsElided: 63,
+          elidedCalls: [
+            { name: "comment_on_work_item", calls: 1 },
+            { name: "read_file", calls: 59, failed: 2 },
+            { calls: 3 },
+          ],
+        })}
+        defaultOpen
+      />,
+    );
+    expect(
+      screen.getByText(
+        /^63 more calls the run made aren’t listed: its record didn’t keep them\. By tool: comment_on_work_item once, read_file 59 times \(2 failed\) and 3 calls to tools the record didn’t keep\.$/,
+      ),
+    ).toBeDefined();
+    cleanup();
+    render(
+      <PhaseCard record={phase({ harness: "claude-code", sandboxId: "box-7" })} defaultOpen />,
+    );
+    expect(screen.queryByText(/more calls? the run made/)).toBeNull();
   });
 
   // THE COUNT IS NOT THE KEPT PART PRESENTED AS THE WHOLE. A long run's
@@ -1341,6 +1379,68 @@ describe("a round the harness's turn cap ended", () => {
     expect(first!.querySelector(".round-note")).toBeNull();
     expect(second!.querySelector(".round-note.caution")?.textContent).toMatch(
       /harness’s own turn cap ended its run here, with the model still working/,
+    );
+  });
+});
+
+/**
+ * A SEALED CALL IS DRAWN AS THE ONE IT IS.
+ *
+ * An executor's call held for a person's approval, and the call they approved,
+ * keep their arguments sealed on the run's row and on no record: the execute
+ * record carries `{}` for both, and the held one recorded failed, since nothing
+ * it asked for happened. Drawn as they arrive, the approved deletion read as a
+ * call made with no arguments and an empty result, and the held one as a tool
+ * that broke. The card says, as the executors board does, that the arguments
+ * are sealed, that the approved call's result went to the run sealed, and that
+ * the held call is held for approval.
+ *
+ * Mutation: draw a sealed call's `{}`, or tag the held call failed, and the
+ * card says what the run never did.
+ */
+describe("a sealed call", () => {
+  const sealed = (over: Partial<PhaseRecord["tools"][number]>) =>
+    phase({
+      roundsUsed: 1,
+      narration: [{ round: 1, content: "Working.", declined: false }],
+      tools: [
+        {
+          name: "gh_delete_repo",
+          round: 1,
+          args: "{}",
+          result: "",
+          failed: false,
+          durationMs: 0,
+          origin: "mcp:github",
+          server: "github",
+          startedAt: "",
+          callId: "",
+          ...over,
+        },
+      ],
+    });
+
+  test("held for approval says so, with its arguments sealed beside the question", () => {
+    render(<PhaseCard record={sealed({ held: true, result: "held for a person" })} defaultOpen />);
+    const row = screen.getByRole("button", { name: /^gh_delete_repo/ });
+    expect(row.textContent).toContain("held for approval");
+    expect(row.textContent).not.toContain("failed");
+    fireEvent.click(row);
+    expect(screen.getByRole("region", { name: "gh_delete_repo · arguments" }).textContent).toBe(
+      HELD_ARGUMENTS,
+    );
+  });
+
+  test("approved says so, with its arguments and its result sealed", () => {
+    render(<PhaseCard record={sealed({ approved: true })} defaultOpen />);
+    const row = screen.getByRole("button", { name: /^gh_delete_repo/ });
+    expect(row.textContent).toContain("approved");
+    fireEvent.click(row);
+    expect(screen.getByRole("region", { name: "gh_delete_repo · arguments" }).textContent).toBe(
+      SEALED_ARGUMENTS,
+    );
+    expect(screen.getByRole("region", { name: "gh_delete_repo · result" }).textContent).toBe(
+      SEALED_RESULT,
     );
   });
 });

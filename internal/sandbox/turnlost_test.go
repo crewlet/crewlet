@@ -30,6 +30,8 @@ type lostSpy struct {
 
 type lostCall struct {
 	run PendingRun
+	// calls is the turn's calls as the ending read them for the turn's end.
+	calls RunCalls
 	// recorded is whether the run's record still existed: a step made after
 	// the delete is lost to a crash between the two.
 	recorded bool
@@ -46,12 +48,12 @@ func watchLosses(rig *coordRig) *lostSpy {
 	return spy
 }
 
-func (s *lostSpy) lost(ctx context.Context, run PendingRun, _ RunCalls) executorkeep.Ending {
+func (s *lostSpy) lost(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending {
 	_, recorded, _ := s.rig.pending.Get(ctx, run.TurnID)
 	announced := len(s.rig.announcements())
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.calls = append(s.calls, lostCall{run: run, recorded: recorded, announced: announced})
+	s.calls = append(s.calls, lostCall{run: run, calls: calls, recorded: recorded, announced: announced})
 	return executorkeep.Ending{Outcome: executorkeep.OutcomeLost}
 }
 

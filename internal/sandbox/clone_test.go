@@ -160,6 +160,31 @@ func TestARunRepoIsHeldToItsPurpose(t *testing.T) {
 	}
 }
 
+// A CHANGE'S TITLE IS HELD TO ITS BOUND ON THE ROW. An executor's ask to open a
+// change rides its run's row in each repository it is given, and the row's
+// budget counts its title at [sandbox.MaxChangeTitleBytes] (rowbytes.go): so
+// the grammar every writer of a repository holds it to — the launch, and a
+// grant the job's box asks for — takes a title at the bound, in the bytes that
+// escape the most, and refuses one a byte past it, naming the bound.
+//
+// Mutation: drop the title's bound from the grammar — the long title is taken,
+// red.
+func TestAChangeTitleIsHeldToItsBoundOnTheRow(t *testing.T) {
+	t.Parallel()
+	asking := func(title string) sandbox.RunRepo {
+		r := cloned()
+		r.Open = &sandbox.OpenChange{Target: "refs/heads/main", Title: title}
+		return r
+	}
+	if err := asking(strings.Repeat("<", sandbox.MaxChangeTitleBytes)).ValidateFor(sandbox.CloneCoding); err != nil {
+		t.Errorf("a title at its bound was refused: %v", err)
+	}
+	err := asking(strings.Repeat("<", sandbox.MaxChangeTitleBytes+1)).ValidateFor(sandbox.CloneCoding)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprint(sandbox.MaxChangeTitleBytes)) {
+		t.Errorf("a title a byte past its bound = %v, want it refused naming the bound", err)
+	}
+}
+
 // fill names every path of paths a directory of its own.
 func fill(paths []string) {
 	for i := range paths {

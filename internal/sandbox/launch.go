@@ -581,7 +581,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// previous job's box keeps that box's host until the attach below
 		// names this node with this job's box ([BoxRef.Node]).
 		LaunchNode: c.node,
-		// The round carried on, whose earlier calls the row keeps — see
+		// The round carried on, whose earlier calls the log keeps — see
 		// [PendingRun.Continues].
 		Continues: req.Continue != nil,
 		// The model and the entry the launch's own record is filed under;
