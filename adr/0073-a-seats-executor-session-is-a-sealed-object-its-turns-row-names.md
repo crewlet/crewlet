@@ -463,8 +463,9 @@ reasons — nothing captured, its newest capture not kept, the seat's budget —
 an unkept capture's own reason redacted; and a live turn that has kept nothing
 says a relaunch continues the base it was handed, where its row still holds it.
 
-**A hundred and twenty linearizable reads per seat-day**: the dispatch's head
-read, the base's row at a first launch that continues it, and two reads of the
-turn's row at each relaunch, at the reference company's thirty turns a seat a
-day and a mean of one relaunch a turn — the barrier term the log's ceiling
-carries and `census_drift` holds it to.
+**A hundred and fifty linearizable reads per seat-day**: the dispatch's head
+read, the base's row at a first launch that continues it, two reads of the
+turn's row at each relaunch, and one of the executor's own reads of the seat's
+sessions (the next amendment), at the reference company's thirty turns a seat a
+day, a mean of one relaunch a turn and one session call a turn — the barrier
+term the log's ceiling carries and `census_drift` holds it to.

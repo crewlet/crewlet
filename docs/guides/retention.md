@@ -2654,16 +2654,19 @@ barriers it would have had to hold against a 512 MiB ceiling, and which
 Ask Crewlet's log declares **none** as well: no seat reads it, and a
 person reads their own conversation through the node their own writes waited
 on, so its one barrier is the collector's pin below, counted as the engine's
-own. The executor log declares **120**: a turn's dispatch reads it at the
+own. The executor log declares **150**: a turn's dispatch reads it at the
 seat's level once, for the head of the conversation it continues; its first
 launch, where it continues the session that head left, reads that session's
 row once more, to take it up only while it still names what the read froze;
-and each relaunch (a send-back, an answered question) reads the turn's own row
-twice — as its runner asks which session it continues and as its launch takes
-that one up — at a mean of one relaunch a turn over the census's thirty turns a
-seat a day. So its ceiling, `stream.executor_log_max_bytes`, carries a barrier
-term of 120 × 100 × 365 × 140 B, about 613 MB a year at the reference company,
-beside the about 32 MB a day its begins, captures and endings write.
+each relaunch (a send-back, an answered question, a lost job carried on) reads
+the turn's own row twice — as its runner asks which session it continues and
+as its launch takes that one up — at a mean of one relaunch a turn; and the
+seat's executor reads its own sessions through `list_sessions` and
+`read_session`, each call one read, at a mean of one call a turn — five reads
+a turn over the census's thirty turns a seat a day. So its ceiling,
+`stream.executor_log_max_bytes`, carries a barrier term of
+150 × 100 × 365 × 140 B, about 767 MB a year at the reference company, beside
+the about 32 MB a day its begins, captures and endings write.
 
 The [`census_drift`](../reference/alarms.md) alarm holds every log to its own
 census: its domain's rate per agent seat (a company with none is counted as
