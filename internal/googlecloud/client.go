@@ -247,9 +247,11 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}, nil
 }
 
-// Provisioner is the provisioner's email, and IdentityProject the project the
-// agents' accounts are made in.
-func (c *Client) Provisioner() string     { return c.provisioner }
+// Provisioner is the provisioner's email.
+func (c *Client) Provisioner() string { return c.provisioner }
+
+// IdentityProject is the project the agents' accounts are made in: the
+// provisioner's own, which holds nothing else.
 func (c *Client) IdentityProject() string { return c.identity }
 
 // member is a service account as a policy binding names it.
@@ -567,11 +569,13 @@ func (c *Client) CreateServiceAccount(ctx context.Context, id, displayName, desc
 	return sa, err
 }
 
-// DisableServiceAccount and EnableServiceAccount turn an account off and on.
+// DisableServiceAccount turns an account off: Google refuses every token it
+// holds from then on.
 func (c *Client) DisableServiceAccount(ctx context.Context, account string) error {
 	return c.call(ctx, http.MethodPost, c.accountURL(account)+":disable", map[string]any{}, nil)
 }
 
+// EnableServiceAccount turns an account back on, with its roles as they were.
 func (c *Client) EnableServiceAccount(ctx context.Context, account string) error {
 	return c.call(ctx, http.MethodPost, c.accountURL(account)+":enable", map[string]any{}, nil)
 }

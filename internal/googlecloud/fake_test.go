@@ -437,10 +437,20 @@ func (f *fakeGoogle) verify(token string) (jwtClaims, bool) {
 // code under test, so a kid the engine got wrong is refused.
 func thumbprint(pub *ecdsa.PublicKey) string {
 	enc := base64.RawURLEncoding.EncodeToString
-	canonical := `{"crv":"P-256","kty":"EC","x":"` + enc(pub.X.FillBytes(make([]byte, 32))) +
-		`","y":"` + enc(pub.Y.FillBytes(make([]byte, 32))) + `"}`
+	x, y := coordinates(pub)
+	canonical := `{"crv":"P-256","kty":"EC","x":"` + enc(x) + `","y":"` + enc(y) + `"}`
 	sum := sha256.Sum256([]byte(canonical))
 	return enc(sum[:])
+}
+
+// coordinates are pub's X and Y, 32 big-endian bytes each, read off its
+// uncompressed encoding (0x04, X, then Y), or none for a key that has none.
+func coordinates(pub *ecdsa.PublicKey) (x, y []byte) {
+	raw, err := pub.Bytes()
+	if err != nil || len(raw) != 65 {
+		return nil, nil
+	}
+	return raw[1:33], raw[33:]
 }
 
 // impersonate is generateAccessToken: the federated subject may become the

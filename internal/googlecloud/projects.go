@@ -60,16 +60,6 @@ func (d discovery) offered() ([]string, map[string]string) {
 	return ids, names
 }
 
-// project is the setup of one of the company's projects, and false where it
-// is none of the company's.
-func (d discovery) project(id string) (projectSetup, bool) {
-	i := slices.IndexFunc(d, func(p projectSetup) bool { return p.ID == id })
-	if i < 0 {
-		return projectSetup{}, false
-	}
-	return d[i], true
-}
-
 // discover reads the company's projects. A project whose policy cannot be read
 // is named with that, since its setup cannot be told.
 func discover(ctx context.Context, c *Client) (discovery, error) {
@@ -114,11 +104,14 @@ func discover(ctx context.Context, c *Client) (discovery, error) {
 func setupOf(ctx context.Context, c *Client, p Project) (*projectSetup, error) {
 	out := &projectSetup{ID: p.ProjectID, Name: p.DisplayName, Parent: p.Parent}
 	pol, err := c.ProjectPolicy(ctx, p.ProjectID)
-	switch {
-	case isStage(err):
+	if isStage(err) {
 		return nil, err
-	case err != nil:
-		out.Problems = append(out.Problems, "its policy cannot be read ("+err.Error()+")")
+	}
+	if problem := unreadable("its policy", err); problem != "" {
+		// THE PROJECT'S PROBLEM, NOT THE DISCOVERY'S: its setup cannot be
+		// told, so it is listed with why rather than ending every project's
+		// discovery.
+		out.Problems = append(out.Problems, problem)
 		return out, nil
 	}
 	cont := containmentOf(pol, member(c.Provisioner()))
@@ -130,8 +123,8 @@ func setupOf(ctx context.Context, c *Client, p Project) (*projectSetup, error) {
 	case isStage(err):
 		return nil, err
 	case err != nil:
-		out.Problems = append(out.Problems, "crewletOperator cannot be read: grant the provisioner Role Viewer "+
-			"on the project ("+err.Error()+")")
+		out.Problems = append(out.Problems, unreadable("crewletOperator", err)+
+			": grant the provisioner Role Viewer on the project")
 	case !found:
 		out.Problems = append(out.Problems, "it has no crewletOperator role: run the Prepare a project block")
 	default:
@@ -140,6 +133,15 @@ func setupOf(ctx context.Context, c *Client, p Project) (*projectSetup, error) {
 		}
 	}
 	return out, nil
+}
+
+// unreadable is why what a project holds cannot be read, as one of its
+// problems, and empty where err is nil.
+func unreadable(what string, err error) string {
+	if err == nil {
+		return ""
+	}
+	return what + " cannot be read (" + err.Error() + ")"
 }
 
 // isStage reports a failure to reach Google as the provisioner at all, which

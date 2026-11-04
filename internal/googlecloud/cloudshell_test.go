@@ -86,8 +86,9 @@ func TestTheBlockCarriesThePublicHalfAlone(t *testing.T) {
 	}
 	jwk := set.Keys[0]
 	x, _ := base64.RawURLEncoding.DecodeString(jwk["x"])
-	if _, private := jwk["d"]; private || jwk["alg"] != "ES256" ||
-		!slices.Equal(x, key.PublicKey.X.FillBytes(make([]byte, 32))) {
+	if want, _ := coordinates(&key.PublicKey); want == nil {
+		t.Fatal("the federation key has no public point")
+	} else if _, private := jwk["d"]; private || jwk["alg"] != "ES256" || !slices.Equal(x, want) {
 		t.Fatalf("the JWKS key %v is not the federation key's public half", jwk)
 	}
 	if jwk["kid"] != thumbprint(&key.PublicKey) {
