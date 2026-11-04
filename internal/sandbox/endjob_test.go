@@ -457,31 +457,50 @@ func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 	}
 }
 
-// A STOP'S OR A LOSS'S READ IS GIVEN ITS JOB'S END ON TOP OF THE TAKE: its ask
-// waits a collection's budget and the end's, counted at the host's share as
-// the take is, so a host's take after an end at its bound is given its whole
-// budget all the same; and a collection, which ends nothing, waits what it
-// waited.
+// A READ THAT MAY END ITS JOB IS GIVEN THE END ON TOP OF THE TAKE: a stop's and
+// a loss's always end the job first, and a collection's ends one its turn's cap
+// passed while it still worked — which its host decides on its own clock as it
+// reads, so every collection of a turn with a cap is given the end, whether or
+// not the cap has passed yet. Each such ask waits the take's budget and the
+// end's, counted at the host's share as the take is, so a host's take after an
+// end at its bound is given its whole budget all the same; and a collection of
+// a turn with no cap, which ends nothing, waits what it waited.
 //
 // Mutation: one budget for every read, and the take after an end at its bound
-// is cut short of its own.
-func TestAStopOrLossReadIsGivenItsJobsEndOnTopOfTheTake(t *testing.T) {
+// is cut short of its own; read the budget off the read alone, and a capped
+// collection's take after the end its host makes is cut short too.
+func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	t.Parallel()
-	if got := BoxReadBudget(BoxReadCollect); got != 460*time.Second {
-		t.Errorf("a collection's read waits %v, want the 460s it waited", got)
+	uncapped := PendingRun{TurnID: "t1"}
+	if got := BoxReadBudget(uncapped, BoxReadCollect); got != 460*time.Second {
+		t.Errorf("a collection's read of a turn with no cap waits %v, want the 460s it waited", got)
 	}
-	endBudget := JobEndBudget
-	end := time.Duration(float64(endBudget) / BoxReadAnswerShare)
-	for _, read := range []BoxRead{BoxReadStop, BoxReadLoss} {
-		over := BoxReadBudget(read) - BoxReadBudget(BoxReadCollect)
+	end := time.Duration(float64(JobEndBudget) / BoxReadAnswerShare)
+	// A CAP STILL AHEAD on the asker's clock, and one already passed: the
+	// host reads the deadline against its own.
+	ahead := PendingRun{TurnID: "t1", Deadline: time.Now().Add(time.Hour).UTC()}
+	passed := PendingRun{TurnID: "t1", Deadline: time.Now().Add(-time.Hour).UTC()}
+	for name, ask := range map[string]struct {
+		run  PendingRun
+		read BoxRead
+	}{
+		"a stop's":                            {uncapped, BoxReadStop},
+		"a loss's":                            {uncapped, BoxReadLoss},
+		"a collection's, its cap still ahead": {ahead, BoxReadCollect},
+		"a collection's, its cap passed":      {passed, BoxReadCollect},
+		"a stop's, its turn capped":           {ahead, BoxReadStop},
+		"a loss's, its turn's cap passed":     {passed, BoxReadLoss},
+	} {
+		over := BoxReadBudget(ask.run, ask.read) - BoxReadBudget(uncapped, BoxReadCollect)
 		if diff := over - end; diff < -time.Nanosecond || diff > time.Nanosecond {
-			t.Errorf("a %s read waits %v beyond a collection's, want the end's %v at the host's share", read, over, end)
+			t.Errorf("%s read waits %v beyond an uncapped collection's, want the end's %v at the host's share",
+				name, over, end)
 		}
 	}
 
 	// THE HOST'S READ, ITS JOB'S END SPENT AT ITS BOUND and the read's own
 	// poll beside it, still hands its take the take's whole budget.
-	share := time.Duration(float64(BoxReadBudget(BoxReadStop)) * BoxReadAnswerShare)
+	share := time.Duration(float64(BoxReadBudget(passed, BoxReadCollect)) * BoxReadAnswerShare)
 	spent := JobEndBudget + time.Duration(float64(pollBound)*BoxReadAnswerShare)
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))
 	defer cancel()
