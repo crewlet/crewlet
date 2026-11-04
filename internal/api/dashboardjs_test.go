@@ -1868,7 +1868,12 @@ const (
 	// KiB (5,634,510 bytes) to 5503.0 KiB (5,635,097 bytes, +587 bytes):
 	// the entry +485 and the chunk the session reads share +102. 25 bytes
 	// past 5503 KiB, the measured size's next KiB: 5504 KiB.
-	treeBudget = 5<<20 + 384<<10
+	// The kit's move to 0.95.0 (Timeline's agent hues and compact density,
+	// and a reference chip that breaks inside its name) took it from 5503.0
+	// KiB (5,635,097 bytes) to 5505.5 KiB (5,637,626 bytes, +2,529 bytes):
+	// the stylesheet +1,801 and the kit's shared chunks +728. The measured
+	// size's next KiB: 5506 KiB.
+	treeBudget = 5<<20 + 386<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
