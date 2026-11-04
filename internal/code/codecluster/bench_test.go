@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/objstore"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -405,7 +406,8 @@ func room(t target, made, batch int, mix *compactionMix) bool {
 func soloChain(b *testing.B) (*codetest.DataNode, func(b *testing.B, n int) []string) {
 	b.Helper()
 	dir := b.TempDir()
-	q, err := js.Open(b.Context(), js.Config{StoreDir: filepath.Join(dir, "stream"), SyncAlways: true})
+	q, err := js.Open(b.Context(), js.Config{StoreDir: filepath.Join(dir, "stream"),
+		StoreMaxBytes: brokertest.StoreMaxBytes, SyncAlways: true})
 	if err != nil {
 		b.Fatalf("open the broker: %v", err)
 	}

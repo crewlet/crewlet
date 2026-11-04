@@ -63,7 +63,7 @@ var goPackages = map[string]bool{
 	"sourcetree": true, "sqlledger": true,
 	"statelog": true, "statelogtest": true, "static": true, "steer": true,
 	"steersourcetest": true, "store": true, "storetest": true, "stream": true, "structured": true,
-	"subagent": true, "svgsafe": true, "textcut": true, "textindex": true, "tokens": true,
+	"subagent": true, "svgsafe": true, "testbinary": true, "textcut": true, "textindex": true, "tokens": true,
 	"toolloop": true, "toolname": true, "toolnametest": true, "tools": true,
 	"toolsession": true, "toolsessiontest": true,
 	"topics": true, "tracing": true, "turn": true, "turnctx": true, "types": true,

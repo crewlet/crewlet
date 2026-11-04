@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -173,7 +174,8 @@ func bootSizedCodeNode(t *testing.T, roles []string, memory int64) *Engine {
 	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
+	brokertest.CodeCacheIn(&b.Git)
 	b.Node.Roles = roles
 	PinGitLanes(&b)
 	SeedStore(t, &b)

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -36,7 +37,8 @@ func TestCodeHoldsReadsRowsAndEverySeatHolder(t *testing.T) {
 	t.Parallel()
 	boot := testBootstrap(t)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.CodeCacheIn(&boot.Git)
 	SeedStore(t, &boot)
 	company, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {

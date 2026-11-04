@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
@@ -59,7 +60,7 @@ func stallingMember(t *testing.T) (objstore.Backend, time.Duration, time.Duratio
 func stallingLeaf(t *testing.T) (objstore.Backend, time.Duration, time.Duration, func() func()) {
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
 		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
-		FleetAuth: linkFleetAuth()})
+		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: linkFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}

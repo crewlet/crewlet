@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // A STORE RECOVERY LONGER THAN THE LISTENER BUDGET STILL BOOTS.
@@ -68,7 +70,8 @@ func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		srv, err := StartServer(t.Context(), Config{StoreDir: store, start: timing})
+		srv, err := StartServer(t.Context(), Config{StoreDir: store, StoreMaxBytes: brokertest.StoreMaxBytes,
+			start: timing})
 		done <- outcome{srv, err}
 	}()
 
@@ -98,7 +101,7 @@ func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
 // on it has something to recover.
 func seedAStream(t *testing.T, dir string) {
 	t.Helper()
-	srv, err := StartServer(t.Context(), Config{StoreDir: dir})
+	srv, err := StartServer(t.Context(), Config{StoreDir: dir, StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

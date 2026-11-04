@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/queuetest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
@@ -51,7 +52,7 @@ func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	// A MEMBER THAT SERVES LEAVES PERSISTS — it is refused otherwise — and
 	// the leaf creates what it is first to use in the file store to match.
 	if memberCfg.StoreDir == "" {
-		memberCfg.StoreDir = t.TempDir()
+		memberCfg.StoreDir, memberCfg.StoreMaxBytes = t.TempDir(), brokertest.StoreMaxBytes
 	}
 	member := startTestServer(t, memberCfg)
 
@@ -161,7 +162,7 @@ func TestAMemberOnAnyLeafPortSaysWhichItBound(t *testing.T) {
 	t.Parallel()
 	member, err := StartServer(t.Context(), testTimings(Config{ServerName: "member",
 		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: t.TempDir(),
-		FleetAuth: testFleetAuth()}))
+		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: testFleetAuth()}))
 	if err != nil {
 		t.Fatalf("start a member on any leaf port: %v", err)
 	}
@@ -208,7 +209,7 @@ func TestATakenLeafPortIsNamedAsTheLeafPort(t *testing.T) {
 
 	member, err := StartServer(t.Context(), testTimings(Config{ServerName: "member",
 		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir(),
-		FleetAuth: testFleetAuth()}))
+		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: testFleetAuth()}))
 	if err == nil {
 		member.Shutdown()
 		t.Fatalf("a member started on leaf port %d, which something else holds", port)
@@ -278,7 +279,7 @@ func TestALeafReportsItsLinkGoingDown(t *testing.T) {
 	// is: started on a port found free a moment earlier, this case lost it
 	// whenever anything else on the machine took it first.
 	memberCfg.LeafPort = AnyPort
-	memberCfg.StoreDir = t.TempDir()
+	memberCfg.StoreDir, memberCfg.StoreMaxBytes = t.TempDir(), brokertest.StoreMaxBytes
 	member, err := StartServer(t.Context(), memberCfg)
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
@@ -354,7 +355,7 @@ func TestALeafLinksOnlyWithAKeyItsMemberHolds(t *testing.T) {
 
 	member := startTestServer(t, testTimings(Config{ServerName: "member",
 		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: t.TempDir(),
-		FleetAuth: ring("k2", k1, k2)}))
+		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: ring("k2", k1, k2)}))
 	var mu sync.Mutex
 	refused := map[PeerRefusal]uint64{}
 	member.OnPeerRefused(func(r PeerRefusal, n uint64) {

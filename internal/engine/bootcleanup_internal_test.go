@@ -227,7 +227,8 @@ func TestAFailedBootWithdrawsItsCodeHostsStatus(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.CodeCacheIn(&b.Git)
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(bootCleanupCompany + "code:\n  native: true\n"))
 	if err != nil {

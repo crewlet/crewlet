@@ -2,6 +2,8 @@ package jetstream
 
 import (
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // A BROKER'S CLAIM ON ITS VOLUME IS ITS LIMIT LESS WHAT IT STORES, AND ONLY A
@@ -64,7 +66,7 @@ func TestAVolumeClaimIsWhatTheBrokerMayStillWrite(t *testing.T) {
 	}
 	// AN EXTERNAL QUEUE IS ONE WITH NO EMBEDDED SERVER, the field VolumeClaim
 	// branches on; nothing is put back, the queue being this case's own.
-	external := newQueueWith(t, Config{StoreDir: t.TempDir()})
+	external := newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
 	server := external.embedded
 	external.embedded = nil
 	claim, found, err := external.VolumeClaim()

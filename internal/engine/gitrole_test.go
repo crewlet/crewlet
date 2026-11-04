@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -23,7 +24,8 @@ import (
 func TestTheFleetRoleCheckAsksTheCurrentCompanyForGit(t *testing.T) {
 	t.Parallel()
 	p := planeFor(t, newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.CodeCacheIn(&b.Git)
 		b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
 	})}))
 	host := p.engine.Node().Host()

@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
@@ -595,7 +596,7 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 // DialOwned the queue's loss and the owned rows do.
 func TestEveryConnectionANodeDependsOnIsWatched(t *testing.T) {
 	t.Parallel()
-	embedded, err := StartServer(t.Context(), Config{StoreDir: t.TempDir()})
+	embedded, err := StartServer(t.Context(), Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("StartServer: %v", err)
 	}
