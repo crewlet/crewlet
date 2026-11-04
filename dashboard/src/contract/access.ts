@@ -232,7 +232,16 @@ interface AccessRetired {
 }
 
 type AccessOp =
-  "create" | "enable" | "level" | "scope" | "mint" | "disable" | "remove" | "rotate" | "retire";
+  | "create"
+  | "enable"
+  | "level"
+  | "scope"
+  | "mint"
+  | "disable"
+  | "revoke"
+  | "remove"
+  | "rotate"
+  | "retire";
 
 type AccessVerb =
   | "create"
