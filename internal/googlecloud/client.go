@@ -263,13 +263,15 @@ func (c *Client) IdentityProject() string { return c.identity }
 func member(email string) string { return "serviceAccount:" + email }
 
 // provisionerTokens is the provisioner's token, one per process and identity,
-// renewed with provisionerRenew to spare.
+// renewed with provisionerRenew to spare. Its map is made at the first
+// client's first token, never at init, which the code host's push hook pays
+// (cmd/crewlet's hookinit_test.go).
 //
 //nolint:gochecknoglobals // a process-wide credential cache, guarded per entry
-var provisionerTokens = struct {
+var provisionerTokens struct {
 	sync.Mutex
 	held map[string]*heldToken
-}{held: map[string]*heldToken{}}
+}
 
 // heldToken is one cached token. Its mutex is held across a mint, so callers
 // racing for an expired token wait on one exchange rather than each making one.
@@ -293,6 +295,9 @@ func (c *Client) held() *heldToken {
 	defer provisionerTokens.Unlock()
 	h, ok := provisionerTokens.held[id]
 	if !ok {
+		if provisionerTokens.held == nil {
+			provisionerTokens.held = map[string]*heldToken{}
+		}
 		h = &heldToken{}
 		provisionerTokens.held[id] = h
 	}

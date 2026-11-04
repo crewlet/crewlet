@@ -76,20 +76,25 @@ const (
 // and Google documents a grant as typically applied in 2 and up to 7 minutes.
 const GrantSettle = 10 * time.Minute
 
-// settleWindows is how long a seat's tool waits after each kind of write.
-// A new account and any other change read back within the read-back bound; a
-// grant is waited out for [GrantSettle], since the token waits on it.
-//
-//nolint:gochecknoglobals // an immutable table, not state
-var settleWindows = map[string]time.Duration{
-	ReasonCreating: observeBudget,
-	ReasonGranting: GrantSettle,
-	ReasonApplying: observeBudget,
+// settleWindow is how long a seat's tool waits after each kind of write, and
+// nothing for a reason this build does not know. A new account and any other
+// change read back within the read-back bound; a grant is waited out for
+// [GrantSettle], since the token waits on it. A switch rather than a table,
+// which the code host's push hook would build at init (cmd/crewlet's
+// hookinit_test.go).
+func settleWindow(reason string) time.Duration {
+	switch reason {
+	case ReasonGranting:
+		return GrantSettle
+	case ReasonCreating, ReasonApplying:
+		return observeBudget
+	}
+	return 0
 }
 
 // settleFor is what a seat's tool waits on after a write for reason at at.
 func settleFor(reason string, at time.Time) *seataccess.Settling {
-	return &seataccess.Settling{Reason: reason, Until: at.Add(settleWindows[reason])}
+	return &seataccess.Settling{Reason: reason, Until: at.Add(settleWindow(reason))}
 }
 
 // writtenAt is when the write a recorded settling waits on was made. A
@@ -99,7 +104,7 @@ func writtenAt(s *seataccess.Settling) time.Time {
 	if s == nil {
 		return time.Time{}
 	}
-	return s.Until.Add(-settleWindows[s.Reason])
+	return s.Until.Add(-settleWindow(s.Reason))
 }
 
 // reason is what a seat waits on while this read settles.
