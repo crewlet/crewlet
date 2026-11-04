@@ -5,6 +5,8 @@
 //	go run ./internal/solo/partition parallel   # everything that shares a runner
 //	go run ./internal/solo/partition solo       # everything that needs one to itself
 //	go run ./internal/solo/partition -weights test-weights.tsv parallel
+//	go run ./internal/solo/partition -weights test-weights.tsv -shard 2/4 parallel
+//	go run ./internal/solo/partition merge shard-1.tsv shard-2.tsv > test-weights.tsv
 //
 // The rule is one line: a package is solo iff its tests import
 // [github.com/crewlet/crewlet/internal/solo], whose doc says why that is the
@@ -39,13 +41,36 @@
 // mid-queue rather than first or last; a file naming none of the half weighs
 // every package alike, which is go list's order, and says so on stderr.
 //
-// The Makefile weighs the PARALLEL half only. The solo half runs at -p 1,
-// where cmd/go's one worker links and runs every test binary in turn, so it
-// takes their sum in any order and a weight could not end it sooner.
+// Order matters to the parallel half only. The solo half runs at -p 1, where
+// cmd/go's one worker links and runs every test binary in turn, so it takes
+// their sum in any order and a weight could not end it sooner.
 //
-// There is no flag that prints part of a half. Each half runs whole on one
-// runner, and ci.yml's `test` job says what dealing it across several cost
-// and bought when that was tried.
+// # Shards: weights decide WHICH RUNNER, never WHETHER
+//
+// `-shard I/N` prints the I-th of N shards of a half, so that ci.yml can run
+// one half on N runners at once. The half is dealt longest first, each package
+// to the shard carrying the least weight so far (ties to the lower shard): the
+// longest-processing-time rule, under which no shard carries more than an even
+// split plus the longest single package. Without weights every package weighs
+// one and the deal is round-robin over go list's order, a split by count.
+//
+// Membership is still the half's, exactly. Every invocation deals all N shards
+// and prints nothing unless each package of the half is in exactly one, and
+// each shard prints longest first, so the order rule above holds per runner.
+// For the solo half the weights decide the whole wall time: at -p 1 a shard
+// takes the sum of its packages.
+//
+// Every runner must deal from the SAME weights file, or two runners can
+// disagree about a package: ci.yml restores the measurement once, in the job
+// that plans the shards, and hands every shard that one file.
+//
+// # Merge: one weights file from N runners
+//
+// `merge FILE...` joins the -timings files a sharded run's runners wrote into
+// one weights file, each read by the strict reader -weights uses. A package
+// two files name is refused, because the deal gives each package to one shard
+// and two timings of it mean two runners ran it. Lines are written as read,
+// sorted by import path as internal/skipgate writes them.
 package main
 
 import (
@@ -56,6 +81,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -235,6 +261,116 @@ func order(half []string, weights map[string]float64) []string {
 	return out
 }
 
+// shard names one of N shards of a half, numbered from 1 as `-shard I/N` reads.
+type shard struct{ index, count int }
+
+// parseShard reads `-shard I/N`; empty is the whole half, shard 1 of 1.
+func parseShard(s string) (shard, error) {
+	if s == "" {
+		return shard{1, 1}, nil
+	}
+	i, n, ok := strings.Cut(s, "/")
+	index, errI := strconv.Atoi(i)
+	count, errN := strconv.Atoi(n)
+	if !ok || errI != nil || errN != nil || count < 1 || index < 1 || index > count {
+		return shard{}, fmt.Errorf("-shard %q is not I/N with 1 <= I <= N (it is the TEST_SHARD make variable)", s)
+	}
+	return shard{index, count}, nil
+}
+
+// deal splits a half into n shards by the longest-processing-time rule.
+//
+// Packages go out in [order]'s sequence, each to the least loaded shard, so
+// each shard is itself longest first. A tie in load goes to the shard with
+// fewer packages, so zero-weight packages spread rather than pile onto shard 1,
+// then to the lower index, so the answer depends on the list and weights alone.
+func deal(half []string, weights map[string]float64, n int) [][]string {
+	shards := make([][]string, n)
+	loads := make([]float64, n)
+	for _, p := range order(half, weights) {
+		least := 0
+		for i := 1; i < n; i++ {
+			if loads[i] < loads[least] || (loads[i] == loads[least] && len(shards[i]) < len(shards[least])) {
+				least = i
+			}
+		}
+		shards[least] = append(shards[least], p)
+		loads[least] += weights[p]
+	}
+	return shards
+}
+
+// dealtOnce reports a package of the half that is in no shard or in two, or a
+// shard left empty, which would run nothing and pass.
+func dealtOnce(half []string, shards [][]string) error {
+	seen := make(map[string]int, len(half))
+	for i, s := range shards {
+		if len(s) == 0 {
+			return fmt.Errorf("shard %d/%d is empty: %d packages cannot fill %d shards", i+1, len(shards), len(half), len(shards))
+		}
+		for _, p := range s {
+			if prev, dup := seen[p]; dup {
+				return fmt.Errorf("%s is in shards %d and %d", p, prev, i+1)
+			}
+			seen[p] = i + 1
+		}
+	}
+	for _, p := range half {
+		if _, ok := seen[p]; !ok {
+			return fmt.Errorf("%s is in no shard", p)
+		}
+	}
+	if len(seen) != len(half) {
+		return fmt.Errorf("the shards hold %d packages, the half %d", len(seen), len(half))
+	}
+	return nil
+}
+
+// timings is one -timings file, by the name its errors cite.
+type timings struct {
+	name string
+	data []byte
+}
+
+// merge joins -timings files into one weights file, refusing a package two of
+// them name.
+//
+// Each input is held to [readWeights] whole and its lines are kept as read, so
+// the output is exactly what internal/skipgate wrote, sorted by import path.
+func merge(inputs []timings) ([]byte, error) {
+	from := map[string]string{}
+	var lines []string
+	for _, in := range inputs {
+		weights, err := readWeights(bytes.NewReader(in.data), in.name)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range slices.Sorted(maps.Keys(weights)) {
+			if other, dup := from[p]; dup {
+				return nil, fmt.Errorf("%s is timed by both %s and %s: two runners ran it, "+
+					"so their shards were not dealt from one partition", p, other, in.name)
+			}
+			from[p] = in.name
+		}
+		for line := range strings.Lines(string(in.data)) {
+			if line = strings.TrimSuffix(line, "\n"); line != "" {
+				lines = append(lines, line)
+			}
+		}
+	}
+	slices.SortFunc(lines, func(a, b string) int {
+		pa, _, _ := strings.Cut(a, "\t")
+		pb, _, _ := strings.Cut(b, "\t")
+		return strings.Compare(pa, pb)
+	})
+	var out bytes.Buffer
+	for _, line := range lines {
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	return out.Bytes(), nil
+}
+
 // list runs `go list -json` over the module and decodes the stream.
 //
 // NEVER with -e. That flag turns a broken package into a record with an Error
@@ -281,21 +417,58 @@ func loadWeights(path string) (map[string]float64, error) {
 	return readWeights(f, path)
 }
 
+// runMerge is `partition merge FILE...`: the merged file goes to stdout.
+func runMerge(paths []string) int {
+	inputs := make([]timings, 0, len(paths))
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "partition merge: %v\n", err)
+			return 1
+		}
+		inputs = append(inputs, timings{name: p, data: data})
+	}
+	out, err := merge(inputs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "partition merge: %v\n", err)
+		return 1
+	}
+	if _, err := os.Stdout.Write(out); err != nil {
+		fmt.Fprintf(os.Stderr, "partition merge: write: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 func main() {
 	fs := flag.NewFlagSet("partition", flag.ContinueOnError)
 	weightsPath := fs.String("weights", "", "measured `file` of importpath<TAB>seconds: print the longest first")
+	shardFlag := fs.String("shard", "", "print shard `I/N` of the half, dealt by weight across N runners")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: %s [-weights FILE] parallel|solo\n", os.Args[0])
+		fmt.Fprintf(fs.Output(), "usage: %s [-weights FILE] [-shard I/N] parallel|solo\n", os.Args[0])
+		fmt.Fprintf(fs.Output(), "       %s merge FILE...\n", os.Args[0])
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
+	}
+	if fs.Arg(0) == "merge" {
+		if fs.NArg() < 2 || *weightsPath != "" || *shardFlag != "" {
+			fs.Usage()
+			os.Exit(2)
+		}
+		os.Exit(runMerge(fs.Args()[1:]))
 	}
 	if fs.NArg() != 1 || (fs.Arg(0) != "parallel" && fs.Arg(0) != "solo") {
 		fs.Usage()
 		os.Exit(2)
 	}
 	which := fs.Arg(0)
+	want, err := parseShard(*shardFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	measured, err := loadWeights(*weightsPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -345,7 +518,26 @@ func main() {
 			"each weighs the half's median\n", unmeasured, len(half), which, *weightsPath)
 	}
 
-	for _, p := range order(half, weights) {
+	// Every shard is dealt and checked, whichever one is printed: the other
+	// runners deal the same file, so a package lost here is lost there too.
+	shards := deal(half, weights, want.count)
+	if err := dealtOnce(half, shards); err != nil {
+		fmt.Fprintf(os.Stderr, "partition: the %s half cannot be dealt into %d shards: %v\n", which, want.count, err)
+		os.Exit(1)
+	}
+	mine := shards[want.index-1]
+	if want.count > 1 {
+		var total, share float64
+		for _, p := range half {
+			total += weights[p]
+		}
+		for _, p := range mine {
+			share += weights[p]
+		}
+		fmt.Fprintf(os.Stderr, "partition: shard %d/%d of the %s half: %d of %d packages, weighing %.0f of %.0f\n",
+			want.index, want.count, which, len(mine), len(half), share, total)
+	}
+	for _, p := range mine {
 		fmt.Println(p)
 	}
 }
