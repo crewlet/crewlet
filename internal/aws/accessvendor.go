@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -476,12 +477,16 @@ func (s *accessSession) refused(err error) error {
 	return err
 }
 
-// rolesURL is the IAM console's role list; roleURL one role's page.
+// rolesURL is the IAM console; roleURL one seat role's page, through the
+// console's ARN resolver.
 func (s *accessSession) rolesURL() string {
-	return consoleURL(s.client.conn.Partition) + "/iam/home#/roles"
+	return consoleURL(s.client.conn.Partition) + "/iam/home"
 }
 
-func (s *accessSession) roleURL(name string) string { return s.rolesURL() + "/details/" + name }
+func (s *accessSession) roleURL(name string) string {
+	arn := s.client.conn.resolve("arn:{partition}:iam::{account}:role"+seatPath) + name
+	return consoleURL(s.client.conn.Partition) + "/go/view?arn=" + url.QueryEscape(arn)
+}
 
 // consoleURL is the AWS console of a partition.
 func consoleURL(partition string) string {

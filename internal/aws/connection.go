@@ -49,8 +49,8 @@ func NewConnection(p *config.AWSProvisioning) (*Connection, error) {
 }
 
 // vars is the connection's values for the policy documents' tokens.
-func (c *Connection) vars() vars {
-	return vars{company: c.Company, partition: c.Partition, account: c.Account, anchor: c.TrustAnchorARN}
+func (conn *Connection) vars() vars {
+	return vars{company: conn.Company, partition: conn.Partition, account: conn.Account, anchor: conn.TrustAnchorARN}
 }
 
 // iamRegion is where the partition's IAM, a global service, signs.

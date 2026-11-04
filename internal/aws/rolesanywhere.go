@@ -72,17 +72,17 @@ func newRolesAnywhere(hc *http.Client, region string) rolesAnywhere {
 	}
 }
 
-// createSession mints a leaf for cn and exchanges it, through profile, for
-// role's credentials. The session's source identity is "CN=" + cn.
-func (r rolesAnywhere) createSession(ctx context.Context, ca *CA, cn string, kind LeafKind, profile, role, anchor string, seconds int32) (session, error) {
+// createSession mints an ECDSA leaf for cn and exchanges it, through
+// profile, for an hour of role's credentials. The session's source identity is "CN=" + cn.
+func (r rolesAnywhere) createSession(ctx context.Context, ca *CA, cn string, profile, role, anchor string) (session, error) {
 	body, err := json.Marshal(map[string]any{
-		"durationSeconds": seconds, "profileArn": profile, "roleArn": role, "trustAnchorArn": anchor,
+		"durationSeconds": sessionSeconds, "profileArn": profile, "roleArn": role, "trustAnchorArn": anchor,
 	})
 	if err != nil {
 		return session{}, err
 	}
 	for attempt := 1; ; attempt++ {
-		s, err := r.once(ctx, ca, cn, kind, body)
+		s, err := r.once(ctx, ca, cn, body)
 		var api *APIError
 		if err == nil || !errors.As(err, &api) || !api.transient() || attempt == maxAttempts {
 			return s, err
@@ -96,9 +96,9 @@ func (r rolesAnywhere) createSession(ctx context.Context, ca *CA, cn string, kin
 }
 
 // once signs and sends one attempt; each attempt gets a fresh leaf and date.
-func (r rolesAnywhere) once(ctx context.Context, ca *CA, cn string, kind LeafKind, body []byte) (session, error) {
+func (r rolesAnywhere) once(ctx context.Context, ca *CA, cn string, body []byte) (session, error) {
 	now := r.now().UTC()
-	leaf, key, err := ca.Leaf(cn, now, kind)
+	leaf, key, err := ca.Leaf(cn, now, LeafECDSA)
 	if err != nil {
 		return session{}, err
 	}

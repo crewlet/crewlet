@@ -39,8 +39,11 @@ const (
 	DateFormat = "20060102T150405Z"
 	dayFormat  = "20060102"
 
-	AlgHMAC      = "AWS4-HMAC-SHA256"
-	AlgX509RSA   = "AWS4-X509-RSA-SHA256"
+	// AlgHMAC signs with an access key's secret.
+	AlgHMAC = "AWS4-HMAC-SHA256"
+	// AlgX509RSA signs with an X.509 certificate's RSA key (Roles Anywhere).
+	AlgX509RSA = "AWS4-X509-RSA-SHA256"
+	// AlgX509ECDSA signs with an X.509 certificate's ECDSA key (Roles Anywhere).
 	AlgX509ECDSA = "AWS4-X509-ECDSA-SHA256"
 
 	// HeaderX509 carries the signing certificate as base64 DER; it must be signed.

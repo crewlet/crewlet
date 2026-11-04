@@ -162,8 +162,9 @@ func TestRolesAnywhereRefusalsAreReadAndNotRetried(t *testing.T) {
 	defer srv.Close()
 	ra := newRolesAnywhere(srv.Client(), "us-east-2")
 	ra.endpoint = func(string) string { return srv.URL }
-	_, err := ra.createSession(context.Background(), conn.CA, "crewlet-acme-provisioner", LeafECDSA, testProvProfile, testProv, testAnchor, 3600)
-	if api, ok := err.(*APIError); !ok || api.Code != "AccessDeniedException" || api.Message != "Unable to assume role" || calls.Load() != 1 {
+	_, err := ra.createSession(context.Background(), conn.CA, "crewlet-acme-provisioner", testProvProfile, testProv, testAnchor)
+	var api *APIError
+	if !errors.As(err, &api) || api.Code != "AccessDeniedException" || api.Message != "Unable to assume role" || calls.Load() != 1 {
 		t.Fatalf("err %v after %d calls", err, calls.Load())
 	}
 	if !(&APIError{Status: 400, Code: "ThrottlingException"}).transient() || (&APIError{Status: 403, Code: "AccessDeniedException"}).transient() {

@@ -1824,7 +1824,7 @@ const (
 	// AWS (its catalogue entry and story, the Agents tab's words and the org
 	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
 	// tile's cloud glyph) took it from 5494.6 KiB (5,626,424 bytes) to 5496.6
-	// KiB (5,628,540 bytes, +2,116 bytes). 5497 KiB.
+	// KiB (5,628,516 bytes, +2,092 bytes). 5497 KiB.
 	treeBudget = 5<<20 + 377<<10
 )
 

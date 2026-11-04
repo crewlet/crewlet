@@ -154,7 +154,7 @@ func (c *Client) checkOwnRole(ctx context.Context, name string, trust, owned obj
 func (c *Client) checkSplit(ctx context.Context) []string {
 	var out []string
 	try := func(sentence, cn, profile, role string) {
-		if _, err := c.ra.createSession(ctx, c.conn.CA, cn, LeafECDSA, profile, role, c.conn.TrustAnchorARN, sessionSeconds); err == nil {
+		if _, err := c.ra.createSession(ctx, c.conn.CA, cn, profile, role, c.conn.TrustAnchorARN); err == nil {
 			out = append(out, sentence)
 		}
 	}

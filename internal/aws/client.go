@@ -61,8 +61,8 @@ func newClient(conn *Connection, hc *http.Client, base string) *Client {
 		c.ra.endpoint = func(string) string { return base }
 	}
 	provisioner := awssdk.NewCredentialsCache(awssdk.CredentialsProviderFunc(func(ctx context.Context) (awssdk.Credentials, error) {
-		s, err := c.ra.createSession(ctx, conn.CA, named(provisionerCN, conn.Company), LeafECDSA,
-			conn.ProvisionerProfileARN, conn.ProvisionerRoleARN, conn.TrustAnchorARN, sessionSeconds)
+		s, err := c.ra.createSession(ctx, conn.CA, named(provisionerCN, conn.Company),
+			conn.ProvisionerProfileARN, conn.ProvisionerRoleARN, conn.TrustAnchorARN)
 		return s.creds, err
 	}), func(o *awssdk.CredentialsCacheOptions) { o.ExpiryWindow = renewBefore })
 	c.IAM = iam.New(iam.Options{
@@ -93,8 +93,8 @@ func retryer() awssdk.Retryer {
 // which pins it, admits nothing else.
 func (c *Client) SeatSession(ctx context.Context, slug, seatRoleARN string, seconds int32) (awssdk.Credentials, string, error) {
 	cn := seatCN(c.conn.Company, slug)
-	broker, err := c.ra.createSession(ctx, c.conn.CA, cn, LeafECDSA,
-		c.conn.SeatProfileARN, c.conn.BrokerRoleARN, c.conn.TrustAnchorARN, sessionSeconds)
+	broker, err := c.ra.createSession(ctx, c.conn.CA, cn,
+		c.conn.SeatProfileARN, c.conn.BrokerRoleARN, c.conn.TrustAnchorARN)
 	if err != nil {
 		return awssdk.Credentials{}, "", fmt.Errorf("aws: the broker for %s: %w", slug, err)
 	}

@@ -38,9 +38,11 @@ var cnPattern = regexp.MustCompile(`^crewlet-[a-z0-9-]{1,53}$`)
 // LeafKind picks the leaf's key type, and so its signing algorithm.
 type LeafKind int
 
+// The leaf kinds: ECDSA is what the engine signs with; RSA, which the live
+// probe also proved, is kept for a CA a vendor requires RSA leaves under.
 const (
-	LeafECDSA LeafKind = iota // AWS4-X509-ECDSA-SHA256, what the engine signs with
-	LeafRSA                   // AWS4-X509-RSA-SHA256, which the live probe also proved
+	LeafECDSA LeafKind = iota // AWS4-X509-ECDSA-SHA256
+	LeafRSA                   // AWS4-X509-RSA-SHA256
 )
 
 // CA is the company's certificate authority, parsed from its sealed bundle.
