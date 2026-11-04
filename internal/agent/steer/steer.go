@@ -98,10 +98,12 @@ const MaxPendingNotes = 5
 // TEN: two boxes' worth. A person who has sent one turn ten notes is having a
 // conversation with it, which belongs on the work item for the reason five
 // unread notes do. It also bounds the run's record, which every bridged call
-// the run makes rewrites whole: a sealed note is at most about 11 KiB (2,000
-// four-byte runes, its sender and the seal's frame, base64-encoded), so a turn's
-// notes add at most about 110 KiB to it, and an ordinary note a few hundred
-// bytes.
+// the run makes rewrites whole: a note's words are sealed as JSON whose encoder
+// writes `<`, `>` and `&` as six bytes each, so a note of 2,000 of them seals to
+// about 12.5 KiB with its sender and the seal's frame — the record holds every
+// seal to 16 KiB (internal/sandbox's MaxNoteSealedBytes) — and the record writes
+// the seal as base64, a third more: a turn's notes add at most ten of those
+// bounds to it, about 213 KiB, and an ordinary note a few hundred bytes.
 const MaxTurnNotes = 10
 
 // MaxNoteRunes bounds one note.

@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/words"
@@ -75,10 +76,18 @@ func (r *RoleScaleway) LevelOrDefault() string {
 }
 
 // scalewayUUID is the shape Scaleway gives an organization and a project ID.
-var scalewayUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go);
+// its bounded repeats compile to a program holding every count, about 18 KB.
+var scalewayUUID = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+})
 
-// scalewayAccessKey is the shape of an API key's access key.
-var scalewayAccessKey = regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
+// scalewayAccessKey is the shape of an API key's access key, compiled at
+// first use for the same reason.
+var scalewayAccessKey = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
+})
 
 // ScalewayID is an organization or project ID as Scaleway matches it: trimmed
 // and lowercased.
@@ -104,7 +113,7 @@ func (s *Scaleway) validate(path Path) error {
 				"console's Organization settings")
 	case envref.Has(org):
 		// Resolved and checked where the client is built.
-	case !scalewayUUID.MatchString(ScalewayID(org)):
+	case !scalewayUUID().MatchString(ScalewayID(org)):
 		p.add(at(path, "provisioning.organization_id"), ErrUnknownValue,
 			"%q is not a Scaleway Organization ID, which is a UUID", prov.OrganizationID)
 	}
@@ -116,7 +125,7 @@ func (s *Scaleway) validate(path Path) error {
 				"application's API key")
 	case envref.Has(access):
 		// Resolved and checked where the client is built.
-	case !scalewayAccessKey.MatchString(access):
+	case !scalewayAccessKey().MatchString(access):
 		p.add(at(path, "provisioning.access_key"), ErrUnknownValue,
 			"%q is not a Scaleway access key, which is SCW followed by 17 capital letters "+
 				"or digits", prov.AccessKey)
@@ -147,7 +156,7 @@ func (c *Company) checkScaleway(p *problems, path Path, b *RoleScaleway) {
 		case id == "":
 			p.add(idx(at(path, "projects"), i), ErrMissing,
 				"a project ID is empty; remove the entry or give the project's ID")
-		case !scalewayUUID.MatchString(id):
+		case !scalewayUUID().MatchString(id):
 			p.add(idx(at(path, "projects"), i), ErrUnknownValue,
 				"%q is not a Scaleway project ID, which is a UUID", project)
 		case seen[id]:

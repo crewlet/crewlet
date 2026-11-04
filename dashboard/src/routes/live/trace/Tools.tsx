@@ -22,7 +22,8 @@
 import { Tag, InlineCode } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { type DataGridColumn } from "@crewlethq/ui";
-import { fmtDuration } from "~/lib/format.ts";
+import { fmtDuration, plural } from "~/lib/format.ts";
+import { droppedWords } from "~/lib/dropped.ts";
 import { callMeasured, phaseLabel, type Waterfall } from "~/lib/waterfall.ts";
 import type { PhaseRecord, ToolCall } from "~/lib/phases.ts";
 
@@ -81,11 +82,13 @@ const COLUMNS: DataGridColumn<Row>[] = [
   {
     key: "outcome",
     header: "Outcome",
+    // A HELD CALL IS NO FAILURE AND RETURNED NOTHING: it is the run's question
+    // for a person, recorded until they approve it, as the execute card says.
     cell: (r) =>
       r.call.failed ? (
         <Tag variant="danger">failed</Tag>
       ) : (
-        <span className="t-caption">returned</span>
+        <span className="t-caption">{r.call.held ? "held for approval" : "returned"}</span>
       ),
     sortValue: (r) => (r.call.failed ? 0 : 1),
   },
@@ -118,15 +121,29 @@ export function ToolsTab({
       order: order++,
     })),
   );
+  // THE CALLS NO RECORD LISTS, said above the ones that are: a collected
+  // executor's record keeps its run's head and tail and counts the middle it
+  // dropped, by tool, and a tab that listed two hundred rows of a run that
+  // made more would read as the whole run.
+  const dropped = phases.reduce((n, p) => n + p.callsElided, 0);
   return (
-    <DataGrid
-      name="tools"
-      rows={rows}
-      columns={COLUMNS}
-      rowKey={(r) => r.key}
-      isFailed={(r) => r.call.failed}
-      onRowActivate={(r) => onOpen(target(r))}
-      empty={{ title: "This turn called no tool", icon: "wrench" }}
-    />
+    <div className="col gap-2">
+      {dropped > 0 && (
+        <span className="t-caption">
+          {plural(dropped, "more call")} {dropped === 1 ? "isn’t" : "aren’t"} listed: the executor’s
+          record didn’t keep {dropped === 1 ? "it" : "them"}.
+          {droppedWords(phases.flatMap((p) => p.elidedCalls))}
+        </span>
+      )}
+      <DataGrid
+        name="tools"
+        rows={rows}
+        columns={COLUMNS}
+        rowKey={(r) => r.key}
+        isFailed={(r) => r.call.failed}
+        onRowActivate={(r) => onOpen(target(r))}
+        empty={{ title: "This turn called no tool", icon: "wrench" }}
+      />
+    </div>
   );
 }

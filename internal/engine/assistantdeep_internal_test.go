@@ -103,6 +103,7 @@ func (*whoSurface) ToolDefs() []llm.ToolDef {
 		Parameters: map[string]any{"type": "object"}}}
 }
 func (*whoSurface) AnnotationsOf(string) crewletmcp.Annotations { return crewletmcp.Annotations{} }
+func (*whoSurface) DigestOf(string, map[string]any) string      { return "" }
 func (w *whoSurface) Admit(string, map[string]any) toolloop.Admitted {
 	return func(ctx context.Context, _ llm.ToolCall) (toolloop.ToolResult, error) {
 		w.calls.Add(1)

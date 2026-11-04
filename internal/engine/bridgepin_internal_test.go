@@ -322,7 +322,7 @@ func TestALaunchHandsItsHarnessItsSkillsAndHearsTheirLoads(t *testing.T) {
 }
 
 // A RUN CARRIED ON AFTER A PERSON'S ANSWER NUMBERS ITS CALLS AFTER THE ASKING
-// RUN'S. The row keeps the asking job's calls as the round's, and the
+// RUN'S. The log keeps the asking job's calls as the round's, and the
 // collection that closes the round reads them by their place: a continuation
 // whose bridge session counted from one again put its first call beside the
 // asking run's first, and every reader of the round — its record, the log its

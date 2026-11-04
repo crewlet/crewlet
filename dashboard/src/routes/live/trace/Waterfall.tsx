@@ -77,6 +77,7 @@ import {
 } from "~/lib/format.ts";
 import { deliveredLine, outcomeWords, rounds, type PhaseRecord } from "~/lib/phases.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
+import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
 import { useLiveTail, type LiveView } from "~/lib/useLiveTail.ts";
 import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { STEER_BOUNDARIES } from "~/contract/steer.ts";
@@ -669,12 +670,25 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
   const round = rounds(record.tools, record.narration, null, record.runningCalls).find(
     (r) => r.round === span.round,
   );
-  // Asked for: the calls that answered and the ones still running alike.
-  const asked = (round?.tools.length ?? 0) + (round?.running.length ?? 0);
+  // Asked for: the calls that answered and the ones still running alike — and
+  // the calls a collected executor's record counts without listing, which are
+  // its one round's too, as its Model detail counts them.
+  const asked = (round?.tools.length ?? 0) + (round?.running.length ?? 0) + record.callsElided;
   const why = round?.content.trim() ?? "";
   // THE CALL THIS SPAN IS, by its own index: a round runs its calls side by
   // side, so its round alone no longer says which one is running.
   const running = !call && span.runningIndex >= 0 ? record.runningCalls[span.runningIndex] : null;
+  // A SEALED CALL'S `{}` IS NOT WHAT IT SENT: a call held for a person's
+  // approval, and the one they approved, keep their arguments sealed on the
+  // run's row and on no record, and the approved one's result went to the run
+  // sealed. Said as the execute card and the executors board say it, never
+  // drawn as a call made with nothing that returned nothing.
+  const input = call?.approved
+    ? SEALED_ARGUMENTS
+    : call?.held
+      ? HELD_ARGUMENTS
+      : call?.args || running?.arguments || "";
+  const output = call?.result || (call?.approved ? SEALED_RESULT : "");
   return (
     <>
       <Facts
@@ -704,22 +718,22 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
           <span className="t-caption">Round {span.round} said nothing before this call.</span>
         )}
       </div>
-      {(call?.args || running?.arguments) && <span className="t-label">Input</span>}
+      {input && <span className="t-label">Input</span>}
       {/* HALF THE RECORD CEILING EACH, derived from the one the shell declares
           (`--record-ceiling`, frame.css) rather than restated: Input and
           Output are read as a pair, so both fit on one screen together. */}
-      {(call?.args || running?.arguments) && (
+      {input && (
         <CodeBlock
           plain
           selectable
           copyable={false}
           maxHeight="calc(var(--record-ceiling) / 2)"
           label="Input"
-          code={call?.args || running?.arguments || ""}
+          code={input}
         />
       )}
       {call ? (
-        call.result ? (
+        output ? (
           <>
             <span className="t-label">Output</span>
             <CodeBlock
@@ -728,7 +742,7 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
               copyable={false}
               maxHeight="calc(var(--record-ceiling) / 2)"
               label="Output"
-              code={call.result}
+              code={output}
             />
           </>
         ) : (

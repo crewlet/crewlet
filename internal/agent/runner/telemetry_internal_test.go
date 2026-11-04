@@ -268,7 +268,7 @@ func TestATurnsMCPCallsAreCountedOncePerOutcome(t *testing.T) {
 		Call: ledger.Call{Name: "github_search"}, StartedAt: at.Add(time.Hour),
 		Duration: 70 * time.Millisecond, Origin: mcp.Origin("github"), Server: "github",
 		Source: mcp.Origin("github"),
-	}}, RunRecord{}, at, at.Add(2*time.Hour))
+	}}, nil, RunRecord{}, at, at.Add(2*time.Hour))
 	s.record(phaseRecord{Phase: phase.Execute, Result: bridged.Result})
 
 	want := []types.ToolTally{

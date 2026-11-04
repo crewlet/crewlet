@@ -1821,13 +1821,28 @@ const (
 	// (5,624,638 bytes) to 5494.6 KiB (5,626,424 bytes, +1,786 bytes). The
 	// initial load did not grow. It moved up to the measured size's next KiB:
 	// 5495 KiB, 456 bytes clear.
+	// A bridged call the run's log keeps in part drawn as such on a run's page
+	// (its "partly kept" tag, and over its arguments and its result how much
+	// the call sent and answered), a long log's dropped middle said by tool in
+	// its callout, a collected run's dropped calls said by tool on its execute
+	// card, a sealed call drawn as one wherever the turn page draws a call (the
+	// execute card, a call's span and the Tools tab's outcome), and the calls
+	// a collected executor's record did not keep counted in the turn's Tool
+	// calls fact, said on the Tools tab and counted by a call's span and the
+	// executors board's rail, with their failures in its failure tag, took it
+	// from 5494.6 KiB (5,626,424 bytes) to 5497.5 KiB (5,629,434 bytes; +2.9
+	// KiB, 3010 bytes): the Executors chunk +804 bytes, the shared chunk the
+	// wording landed in +794, the live chunk +518, the settled chunk +496 and
+	// the phases chunk +398; every other chunk kept its size. The initial load
+	// did not grow: its files are the same bytes but for the chunk names they
+	// list. 5498 KiB.
 	// Google Cloud (its catalogue entry, its Agents tab words with the link
 	// to preparing a project, the issued period and the note on gcloud, and
 	// the org builder's leftover service account) and the kit's move to
 	// 0.93.0 (the Google Cloud mark), merged onto that tree, took it from
-	// 5494.6 KiB (5,626,424 bytes) to 5496.9 KiB (5,628,857 bytes, +2,433
-	// bytes, as on every tree before). The measured size's next KiB: 5497 KiB.
-	treeBudget = 5<<20 + 377<<10
+	// 5497.5 KiB (5,629,434 bytes) to 5499.9 KiB (5,631,868 bytes, +2,434
+	// bytes, as on every tree before). The measured size's next KiB: 5500 KiB.
+	treeBudget = 5<<20 + 380<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

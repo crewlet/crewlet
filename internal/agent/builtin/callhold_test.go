@@ -115,3 +115,35 @@ func TestACallIsHeldOnlyForAJobThatCanParkOnIt(t *testing.T) {
 		t.Fatal("a holder was built without its desk or its seal")
 	}
 }
+
+// A CALL TOO LARGE TO HOLD IS REFUSED BEFORE ANYTHING IS ASKED, ITS SIZE NAMED. A
+// call held for approval never reaches its server, so nothing but the run's row
+// bounds what it carries, and the row carries its arguments sealed — a
+// megabyte file of markup three and a half times over. The holder refuses such
+// a call while the run can still split or shorten it, saying how large it is
+// and how large one may be, and records no question; a call within the share is
+// held as ever.
+//
+// Mutation: hold the call whatever it carries, and the store refuses the
+// question, which the run is told to make again, refused every time.
+func TestACallTooLargeToHoldIsRefusedBeforeAnythingIsAsked(t *testing.T) {
+	t.Parallel()
+	desk := &askDesk{outcome: sandbox.AskRecorded}
+	hold := builtin.NewCallHold(desk, callSeal(t))
+	turn := &turnctx.Turn{RunID: "run-1"}
+	ctx := turnctx.WithJob(t.Context(), "launch-1")
+	entry := tools.Entry{Tool: trackerTool{}, Origin: tools.Origin("tracker"), NeedsApproval: true}
+	got, held := hold.Hold(ctx, turn, tools.HeldCall{Name: "tr_close_issue", Entry: entry,
+		Args: map[string]any{"id": "7", "attachment": strings.Repeat("<p>", 1<<20/3)}})
+	if held || !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+		!strings.Contains(got.Output, "at most 256 KiB") || !strings.Contains(got.Output, "Split it") {
+		t.Fatalf("Hold = %+v, %v; want the call refused as invalid, its size and the bound named", got, held)
+	}
+	if len(desk.recorded) != 0 {
+		t.Fatalf("a call too large to hold put %d questions to a person", len(desk.recorded))
+	}
+	if _, held := hold.Hold(ctx, turn, tools.HeldCall{Name: "tr_close_issue", Entry: entry,
+		Args: map[string]any{"id": "7", "comment": "close it, it is a duplicate"}}); !held {
+		t.Fatal("a call within the share was not held")
+	}
+}
