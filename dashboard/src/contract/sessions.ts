@@ -155,7 +155,7 @@ export interface ExecutorSessionsAnswer {
   complete: boolean;
 }
 
-/** What reading a session's object came to (`queries.TranscriptStates`). */
+/** What reading a session's object came to (`executorread.TranscriptStates`). */
 export type TranscriptState =
   "read" | "none" | "missing" | "unreadable" | "malformed" | "unsupported";
 

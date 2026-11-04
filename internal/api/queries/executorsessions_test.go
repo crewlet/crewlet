@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/executorread"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
@@ -413,7 +414,7 @@ func TestASessionsTranscriptIsReadThroughItsSealedObject(t *testing.T) {
 		t.Fatalf("executor_session: %v", err)
 	}
 	first := got.(queries.SessionAnswer)
-	if first.State != queries.TranscriptRead || len(first.Entries) != executor.TranscriptMaxEntries ||
+	if first.State != executorread.TranscriptRead || len(first.Entries) != executor.TranscriptMaxEntries ||
 		first.Cut != executor.CutEntries || first.Next == "" || first.From != 0 {
 		t.Fatalf("the first page reads %s with %d entries, cut %q, next %q, want a page cut at %d",
 			first.State, len(first.Entries), first.Cut, first.Next, executor.TranscriptMaxEntries)
@@ -504,7 +505,7 @@ func TestALaterPageOfASessionTheBudgetReleasedSaysSo(t *testing.T) {
 			err, queries.RefusalDetail(err))
 	}
 	answer := got.(queries.SessionAnswer)
-	if answer.State != queries.TranscriptNone || !strings.Contains(answer.Why, "budget released") ||
+	if answer.State != executorread.TranscriptNone || !strings.Contains(answer.Why, "budget released") ||
 		len(answer.Entries) != 0 || answer.Next != "" || answer.Session.Kept {
 		t.Errorf("a later page of a released session reads %s (%q) with %d entries, next %q, kept %v; "+
 			"want none, saying the budget released it", answer.State, answer.Why, len(answer.Entries),
@@ -541,7 +542,7 @@ func TestAnArchiveThatIsNotItsFormatIsSaidInTheEnginesWords(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		answer := got.(queries.SessionAnswer)
-		if answer.State != queries.TranscriptMalformed {
+		if answer.State != executorread.TranscriptMalformed {
 			t.Errorf("%s reads %s (%q), want malformed", name, answer.State, answer.Why)
 		}
 		_, readErr := executor.ReadTranscript(t.Context(), executor.OpenCodeName,
@@ -735,17 +736,17 @@ func TestASessionWhoseObjectCannotBeReadIsAnsweredAsSuch(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		row   executordomain.Session
-		state queries.TranscriptState
+		state executorread.TranscriptState
 		says  string
 	}{
-		{"an object the store no longer holds", missing, queries.TranscriptMissing, "no longer holds"},
-		{"an object whose bytes were tampered with", tampered, queries.TranscriptUnreadable,
+		{"an object the store no longer holds", missing, executorread.TranscriptMissing, "no longer holds"},
+		{"an object whose bytes were tampered with", tampered, executorread.TranscriptUnreadable,
 			"does not open"},
-		{"an object that is no archive", malformed, queries.TranscriptMalformed,
+		{"an object that is no archive", malformed, executorread.TranscriptMalformed,
 			"not an archive of its harness's format"},
-		{"a harness this build does not read", unsupported, queries.TranscriptUnsupported, `"codex"`},
-		{"a turn that captured nothing", nothing, queries.TranscriptNone, "nothing of this turn's"},
-		{"a session the budget released", released, queries.TranscriptNone, "budget released"},
+		{"a harness this build does not read", unsupported, executorread.TranscriptUnsupported, `"codex"`},
+		{"a turn that captured nothing", nothing, executorread.TranscriptNone, "nothing of this turn's"},
+		{"a session the budget released", released, executorread.TranscriptNone, "budget released"},
 	} {
 		got, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": c.row.Turn})
 		if err != nil {

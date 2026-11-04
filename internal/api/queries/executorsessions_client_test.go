@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/executorread"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -131,7 +132,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	holdShape(t, "LogPosition", positions, false)
 
 	for name, engine := range map[string][]string{
-		"TranscriptState":     stringsOf(queries.TranscriptStates),
+		"TranscriptState":     stringsOf(executorread.TranscriptStates),
 		"TranscriptEntryKind": stringsOf(executor.EntryKinds),
 		"TranscriptCut":       stringsOf(executor.TranscriptCuts),
 		"SessionOutcome":      stringsOf(executorkeep.Outcomes),
