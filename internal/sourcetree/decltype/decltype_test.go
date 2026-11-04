@@ -107,6 +107,188 @@ func TestTheWalkTypesAKnownTree(t *testing.T) {
 // probeCall is a probe as the fixture spells it: a statement of its own.
 var probeCall = regexp.MustCompile(`(?m)^\t+(want|sel)\(`)
 
+// A WORLD THAT READS TESTS READS A FILE AS ITS TESTS COMPILE IT: an
+// in-package test file in its package beside every other in-package test file
+// of it — a helper another declares, a type, a method one declares on the
+// package's own type — and an external test file in a package of its own,
+// beside every other external test file, importing the package with what its
+// in-package tests export to it. A test file this platform does not build is
+// read against the scope it would join and adds nothing to it, and a package
+// that is only imported is read without its tests, as its importers compile
+// against it. A world that reads no tests reads every test file against the
+// package alone, so it types none of what another test file declares. Each
+// probe carries both verdicts: want(EXPR, "with tests", "without") and
+// sel(EXPR, "Name", "with tests", "without").
+func TestAWorldThatReadsTestsReadsAFileAsItsTestsCompileIt(t *testing.T) {
+	t.Parallel()
+	root := writeTree(t, testsFixture)
+	for _, mode := range []struct {
+		name  string
+		world func() *decltype.World
+		// verdict is which of a probe's verdicts is this world's; files is
+		// how many files package p holds once its files have been asked
+		// for, and read how many packages the walk has read by then.
+		verdict, files, read int
+	}{
+		{"with tests", func() *decltype.World { return decltype.NewWithTests(root, fixtureModule, nil) }, 0, 4, 3},
+		{"without", func() *decltype.World { return decltype.New(root, fixtureModule, nil) }, 1, 1, 2},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+			w := mode.world()
+			probes, spelled := 0, 0
+			for _, name := range slices.Sorted(mapKeys(testsFixture)) {
+				// Package q is only imported: none of its files is asked for.
+				if !strings.HasPrefix(name, "p/") {
+					continue
+				}
+				spelled += len(probeCall.FindAllString(testsFixture[name], -1))
+				f := w.FileAt(filepath.Join(root, filepath.FromSlash(name)))
+				if f == nil {
+					t.Fatalf("could not read %s: %v", name, w.Errors())
+				}
+				ast.Inspect(f.AST, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					fn, ok := call.Fun.(*ast.Ident)
+					if !ok || (fn.Name != "want" && fn.Name != "sel") {
+						return true
+					}
+					probes++
+					where := name + ":" + strconv.Itoa(w.FileSet().Position(call.Pos()).Line)
+					var got, want string
+					switch fn.Name {
+					case "want":
+						got, want = render(w, w.TypeOf(call.Args[0], f)), literal(t, call.Args[1+mode.verdict])
+					case "sel":
+						got = renderSelection(w, w.Select(w.TypeOf(call.Args[0], f), literal(t, call.Args[1])))
+						want = literal(t, call.Args[2+mode.verdict])
+					}
+					if got != want {
+						t.Errorf("%s: %s typed %q, want %q", where, types(call.Args[0]), got, want)
+					}
+					return true
+				})
+			}
+			if probes != spelled || probes < 12 {
+				t.Errorf("answered %d probe(s), and the fixture spells %d", probes, spelled)
+			}
+			if errs := w.Errors(); len(errs) > 0 {
+				t.Errorf("read errors: %v", errs)
+			}
+			p := w.Load(fixtureModule + "/p")
+			if p == nil {
+				t.Fatal("the fixture's package p was not read")
+			}
+			if got := len(p.Files()); got != mode.files {
+				t.Errorf("package p holds %d file(s), want %d", got, mode.files)
+			}
+			if slices.Contains(p.TypeNames(), "OnlyOnPlan9InATest") {
+				t.Error("a type declared only in a test file built on another platform joined the package's scope")
+			}
+			if q := w.Load(fixtureModule + "/q"); q == nil || slices.Contains(q.TypeNames(), "OnlyInQsTests") {
+				t.Errorf("package q, which is only imported, was read with its tests (or not at all): %v", q)
+			}
+			if got := w.Read(); got != mode.read {
+				t.Errorf("read %d package(s), want %d", got, mode.read)
+			}
+		})
+	}
+}
+
+// testsFixture is the tree TestAWorldThatReadsTestsReadsAFileAsItsTestsCompileIt
+// reads, as module example.com/m: package p with its in-package and external
+// tests, and package q, which p's tests only import.
+var testsFixture = map[string]string{
+	"p/p.go": `package p
+
+type Opts struct{ StoreDir string }
+
+type T struct{ inner Opts }
+`,
+	"p/helpers_test.go": `package p
+
+func want(v any, withTests, without string)       {}
+func sel(v any, name, withTests, without string) {}
+
+func helper() *Opts { return nil }
+
+type fake struct{ N int }
+
+func (T) fromATest() *fake { return nil }
+`,
+	"p/use_test.go": `package p
+
+import "example.com/m/q"
+
+func _() {
+	want(helper(), "example.com/m/p.Opts", "unknown")
+	want(fake{}, "example.com/m/p.fake", "unresolved")
+	want(T{}.fromATest(), "example.com/m/p.fake", "unknown")
+	sel(T{}, "fromATest", "method example.com/m/p.T", "absent")
+	sel(helper(), "StoreDir", "field example.com/m/p.Opts: string", "undetermined")
+	want(q.Q{}, "example.com/m/q.Q", "example.com/m/q.Q")
+}
+`,
+	"p/export_test.go": `package p
+
+// Exported is what the package's in-package tests export to its external
+// ones.
+var Exported = helper
+`,
+	"p/plan9_test.go": `//go:build plan9
+
+package p
+
+type OnlyOnPlan9InATest struct{}
+
+func _() {
+	want(helper(), "example.com/m/p.Opts", "unknown")
+}
+`,
+	"p/ext_test.go": `package p_test
+
+import "example.com/m/p"
+
+func want(v any, withTests, without string)       {}
+func sel(v any, name, withTests, without string) {}
+
+type local struct{ O *p.Opts }
+
+func extHelper() *p.Opts { return nil }
+`,
+	"p/ext_use_test.go": `package p_test
+
+import "example.com/m/p"
+
+func _() {
+	want(extHelper(), "example.com/m/p.Opts", "unknown")
+	want(p.Exported(), "example.com/m/p.Opts", "unknown")
+	want(local{}, "example.com/m/p_test.local", "unresolved")
+	sel(local{}, "O", "field example.com/m/p_test.local: example.com/m/p.Opts", "undetermined")
+	sel(p.Exported(), "StoreDir", "field example.com/m/p.Opts: string", "undetermined")
+}
+`,
+	"p/xplan9_test.go": `//go:build plan9
+
+package p_test
+
+func _() {
+	want(extHelper(), "example.com/m/p.Opts", "unknown")
+}
+`,
+	"q/q.go": `package q
+
+type Q struct{}
+`,
+	"q/q_test.go": `package q
+
+type OnlyInQsTests struct{}
+`,
+}
+
 // THE ONE IMPORT-NAME RULE, every form of it: the last element; the one
 // before a major version; less a gopkg.in version; less ".go" and "go-".
 func TestImportNameIsTheNameAnUnnamedImportIsUsedBy(t *testing.T) {
