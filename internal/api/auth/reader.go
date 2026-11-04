@@ -10,56 +10,17 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// ReaderHeader names the principal a request is made FOR: the id the
-// dashboard's tab recorded as who it is read by (`GET /auth/session`'s
-// `person`), sent beside the session cookie on every request the tab makes on
-// that person's behalf.
-//
-// # Why a request has to say who it is for
-//
-// A browser holds ONE session cookie and every tab of it shares that cookie,
-// while each tab holds a screen drawn for one person: their company, their
-// draft, the toast offering to retry their change. When somebody signs in as
-// somebody else in another tab, the cookie under every other tab moves, and
-// the sign-in's close of the session those tabs were opened with — what
-// closes their sockets `4401` and hands them over — is BEST EFFORT: a sign-in
-// is never refused over the close of somebody's other session. Where it does
-// not land, a window left open beside the one that signed in keeps the last
-// person's screen and socket, and every request it sends goes out under the
-// new cookie. A press there was a change made as the new person from a screen
-// drawn for the last one, and a retry of the last person's change sent their
-// operation key as the new person's — whom the operation key's scope then
-// treats as a write of theirs (internal/api/opkey).
-//
-// So the request names its reader, and a guarded route serves it only to that
-// principal: anybody else is `409 reader_changed`, written HERE, before any
-// handler runs, so nothing was read on their behalf, nothing was written and
-// no operation key was scoped. The dashboard hands the tab to whoever the
-// session is now on that answer, exactly as a sign-in by them in this tab
-// would (ADR-0024: one call is made by one principal, and it is the one the
-// screen was drawn for).
-//
-// # What it is not
-//
-// NOT A CREDENTIAL, and it widens nothing: it can only refuse a request its
-// credential would have been served. A request that names no reader — every
-// script, the command line, an assistant, the dashboard's own read of who the
-// session is and its token exchange, whose whole point is to learn or change
-// who that is — is decided exactly as it always was. And an unguarded route
-// never reads it: a sign-in names no reader and needs none.
-const ReaderHeader = "X-Crewlet-Reader"
-
 // ReaderParam is the query parameter a WebSocket UPGRADE names its reader in,
-// read only where the request carries no [ReaderHeader].
+// read only where the request carries no [httpjson.ReaderHeader].
 //
 // # Why the socket's handshake needs a second spelling
 //
 // A browser sets no header on a WebSocket handshake — it is the one request a
-// tab makes that cannot carry [ReaderHeader]. Without it, a socket that
-// dropped for an unrelated reason and dialled again under a cookie a sign-in
-// in another tab had moved was served as the new person, and the tab drew
-// their company until its next REST request or session keepalive was refused,
-// up to two keepalive intervals later. Named in the handshake's URL, the dial
+// tab makes that cannot carry [httpjson.ReaderHeader]. Without it, a socket
+// that dropped for an unrelated reason and dialled again under a cookie a
+// sign-in in another tab had moved was served as the new person, and the tab
+// drew their company until its next REST request or session keepalive was
+// refused, up to two keepalive intervals later. Named in the handshake's URL, the dial
 // is refused `409 reader_changed` HERE, before the stream handler runs and
 // before any frame of anybody's company is written; the browser reports the
 // refused handshake as 1006, and the dashboard's refusal probe — a plain GET
@@ -93,11 +54,11 @@ func WebSocketUpgrade(r *http.Request) bool {
 	return false
 }
 
-// namedReader is the reader a request names: its [ReaderHeader], or — on a
-// WebSocket upgrade that carries no header — its [ReaderParam]. Empty is a
+// namedReader is the reader a request names: its [httpjson.ReaderHeader], or,
+// on a WebSocket upgrade that carries no header, its [ReaderParam]. Empty is a
 // request that names nobody.
 func namedReader(r *http.Request) string {
-	if named := r.Header.Get(ReaderHeader); named != "" {
+	if named := r.Header.Get(httpjson.ReaderHeader); named != "" {
 		return named
 	}
 	if WebSocketUpgrade(r) {
@@ -107,7 +68,43 @@ func namedReader(r *http.Request) string {
 }
 
 // readerMoved reports whether a request names a reader ([namedReader]) who is
-// not the principal its credential resolved to.
+// not the principal its credential resolved to. The reader is the id a
+// dashboard tab recorded as who it is read by (`GET /auth/session`'s
+// `person`), sent in [httpjson.ReaderHeader] on every request it makes on that
+// person's behalf.
+//
+// # Why a request has to say who it is for
+//
+// A browser holds ONE session cookie and every tab of it shares that cookie,
+// while each tab holds a screen drawn for one person: their company, their
+// draft, the toast offering to retry their change. When somebody signs in as
+// somebody else in another tab, the cookie under every other tab moves, and
+// the sign-in's close of the session those tabs were opened with (what
+// closes their sockets `4401` and hands them over) is BEST EFFORT: a sign-in
+// is never refused over the close of somebody's other session. Where it does
+// not land, a window left open beside the one that signed in keeps the last
+// person's screen and socket, and every request it sends goes out under the
+// new cookie. A press there was a change made as the new person from a screen
+// drawn for the last one, and a retry of the last person's change sent their
+// operation key as the new person's, whom the operation key's scope then
+// treats as a write of theirs (internal/api/opkey).
+//
+// So the request names its reader, and a guarded route serves it only to that
+// principal: anybody else is `409 reader_changed`, written HERE, before any
+// handler runs, so nothing was read on their behalf, nothing was written and
+// no operation key was scoped. The dashboard hands the tab to whoever the
+// session is now on that answer, exactly as a sign-in by them in this tab
+// would (ADR-0024: one call is made by one principal, and it is the one the
+// screen was drawn for).
+//
+// # What it is not
+//
+// NOT A CREDENTIAL, and it widens nothing: it can only refuse a request its
+// credential would have been served. A request that names no reader (every
+// script, the command line, an assistant, the dashboard's own read of who the
+// session is and its token exchange, whose whole point is to learn or change
+// who that is) is decided exactly as it always was. And an unguarded route
+// never reads it: a sign-in names no reader and needs none.
 //
 // A VALUE THAT IS NOT A PRINCIPAL ID NAMES NOBODY THE CREDENTIAL IS, and is
 // refused for that reason rather than ignored: the only sender is a tab
@@ -130,7 +127,7 @@ func readerMoved(r *http.Request, p iam.Principal) bool {
 func refuseMovedReader(w http.ResponseWriter) {
 	httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeReaderChanged,
 		httpjson.Detail{"detail": "the request names the reader it was made " +
-			"for in " + ReaderHeader + " (on a WebSocket handshake, in its `" +
+			"for in " + httpjson.ReaderHeader + " (on a WebSocket handshake, in its `" +
 			ReaderParam + "` parameter), and the credential it carries is " +
 			"somebody else's, so nothing was done. Ask " + PathAuthSession +
 			" who the credential is now, and make the request again for them"})

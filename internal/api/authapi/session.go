@@ -268,7 +268,7 @@ func (s *Service) stepUpDue(p iam.Principal) bool {
 // more, and its session is closed here rather than left live behind a cookie
 // the sign-out merely forgot.
 func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
-	s.clearSession(w)
+	s.signOut(w)
 	s.endEveryHeld(r)
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
 }
@@ -400,7 +400,7 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return
 	}
-	s.clearSession(w)
+	s.signOut(w)
 
 	// THE CALLER'S OWN SUBJECT, which for a Tier A token is its login: the
 	// epoch under it is what every session exchanged from that token is
@@ -477,11 +477,16 @@ func (s *Service) presentedSession(r *http.Request) session.Validation {
 }
 
 // clearSession ends the session in the browser under every name a bearer can
-// be held under, and empties the browser's cache with it, so nothing the
-// session was answered is served to whoever signs in there next — see
-// [session.End].
+// be held under ([session.End]).
 func (s *Service) clearSession(w http.ResponseWriter) {
 	session.End(w, s.boot.API.ExternalBase())
+}
+
+// signOut is [Service.clearSession] for a person's own sign-out of this
+// browser, which also empties its HTTP cache ([session.SignOut] says why only
+// there).
+func (s *Service) signOut(w http.ResponseWriter) {
+	session.SignOut(w, s.boot.API.ExternalBase())
 }
 
 // LogoutOne ends ONE named session, which is how somebody signs out of a
@@ -614,14 +619,14 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "ended"})
 }
 
-// clearIfPresented clears this request's cookie when it names the lineage a
-// named sign-out ended, so a person who ends the session they are using is not
-// left looking at a signed-in page.
+// clearIfPresented signs this browser out when the request's cookie names the
+// lineage a named sign-out ended, so a person who ends the session they are
+// using is not left looking at a signed-in page.
 func (s *Service) clearIfPresented(w http.ResponseWriter, r *http.Request, lineage string) {
 	for _, cookie := range session.Held(r, s.boot.API.ExternalBase()) {
 		held := s.signer.Validate(r.Context(), s.directoryFor(), cookie)
 		if lineage == held.Bearer.Lineage.String() {
-			s.clearSession(w)
+			s.signOut(w)
 			return
 		}
 	}

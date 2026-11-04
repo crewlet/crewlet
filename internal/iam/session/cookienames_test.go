@@ -103,7 +103,7 @@ func TestEndingABearerClearsItUnderEveryName(t *testing.T) {
 		// one this deployment sets and the one that deletes it never drift
 		// apart.
 		set := httptest.NewRecorder()
-		session.Begin(set, external, "v3.value", time.Date(2026, 3, 2, 17, 0, 0, 0, time.UTC))
+		session.Issue(set, external, "v3.value", time.Date(2026, 3, 2, 17, 0, 0, 0, time.UTC))
 		want, got := set.Result().Cookies()[0], clears[0]
 		if got.Name != want.Name || got.Secure != want.Secure ||
 			got.HttpOnly != want.HttpOnly || got.SameSite != want.SameSite ||

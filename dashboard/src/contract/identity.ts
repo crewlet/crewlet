@@ -227,7 +227,7 @@ export const RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
 /**
  * The header every request a tab makes FOR ITS READER carries that reader in —
  * the principal id the tab recorded (`lib/reader.ts`) — beside the session
- * cookie: `auth.ReaderHeader`, held by
+ * cookie: `httpjson.ReaderHeader`, held by
  * `internal/api/auth.TestTheDashboardNamesItsReaderInTheGuardsHeader`.
  *
  * The engine serves such a request only to that principal and refuses anybody

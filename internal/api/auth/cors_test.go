@@ -198,7 +198,7 @@ func TestAPermittedOriginMaySendWhatTheRoutesReadAndNothingBeyondIt(t *testing.T
 		t.Errorf("a permitted origin may send %v, want %v", got, want)
 	}
 	if got := allowed("x-crewlet-reader, x-invented"); slices.ContainsFunc(got, func(h string) bool {
-		return strings.EqualFold(h, auth.ReaderHeader) || strings.EqualFold(h, "x-invented")
+		return strings.EqualFold(h, httpjson.ReaderHeader) || strings.EqualFold(h, "x-invented")
 	}) {
 		t.Errorf("a permitted origin may send %v: the set is closed, and the reader is the "+
 			"same-origin dashboard's", got)

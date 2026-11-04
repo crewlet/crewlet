@@ -67,7 +67,7 @@ const CORSMaxAge = 10 * time.Minute
 // writes — so withholding the view's header would only stop it reading what
 // it is redeeming.
 //
-// THE READER IS NOT ([ReaderHeader]), and stays same-origin only: only the
+// THE READER IS NOT ([httpjson.ReaderHeader]), and stays same-origin only: only the
 // dashboard sends it, and the dashboard is served by this process,
 // same-origin, where no preflight is asked. A page on another origin has no
 // tab of the dashboard's to name the reader of, and offering it would hand

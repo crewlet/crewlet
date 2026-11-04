@@ -3,31 +3,27 @@ package authapi_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
-// A SIGN-IN OR A SIGN-OUT EMPTIES THE BROWSER'S CACHE, AND A STEP-UP KEEPS IT.
+// ONLY A PERSON'S OWN SIGN-OUT EMPTIES THE BROWSER'S CACHE.
 //
-// An answer read by object id is kept by the browser that asked for it under
-// a cache key that holds no cookie (internal/api/httpjson's Immutable): the
-// cookie's bytes move at every re-issue, which would miss every kept answer
-// five minutes later. So what a browser keeps is scoped to who it is signed in
-// as from this side: every route here whose answer may change who that is —
-// a sign-in, a Tier A token's exchange, a sign-out — sends
-// `Clear-Site-Data: "cache"` beside the cookie it sets or clears, and the next
-// person to sign in on the browser is never answered from what the last one
-// was sent. A step-up replaces the session the same person presented, so it
-// carries theirs on and empties nothing: a confirmation would otherwise cost
-// the person every answer their browser kept.
+// An answer read by object id is kept under a key naming who it is for
+// (internal/api/httpjson's Immutable), so a sign-in, a Tier A token's exchange
+// and a step-up set their cookie and leave the cache alone: Chrome holds a
+// response that empties it until it has scanned this origin's whole cache. A
+// sign-out, a sign-out everywhere and a named sign-out of the session this
+// browser holds send `Clear-Site-Data: "cache"` beside the cookies they clear,
+// so what a tab that named no reader kept is not served to whoever uses the
+// browser next. A named sign-out of another session leaves this browser alone.
 //
-// Mutations: set the sign-in's cookie through session.Continue, the
-// exchange's likewise, or clear the sign-out's cookies without the header,
-// and that row is red; set the step-up's replacement through session.Begin
-// and its row is red.
-func TestASignInOrOutEmptiesTheBrowsersCacheAndAStepUpKeepsIt(t *testing.T) {
+// Mutations: sign a row out through clearSession and that row is red; send
+// the header from session.Issue and the first three rows are red.
+func TestOnlyASignOutEmptiesTheBrowsersCache(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
@@ -35,10 +31,12 @@ func TestASignInOrOutEmptiesTheBrowsersCacheAndAStepUpKeepsIt(t *testing.T) {
 		// empties is the Clear-Site-Data the response carries, SPELLED
 		// OUT: `"cache"` and nothing else, or none at all.
 		empties string
+		// cookies is whether the response sets or clears a cookie.
+		cookies bool
 	}{
 		{"a password sign-in", func(t *testing.T) *httptest.ResponseRecorder {
 			return newSignInRig(t).signIn(t, "jane.doe", password, appCode(t, clock))
-		}, `"cache"`},
+		}, "", true},
 		{"a Tier A token's exchange", func(t *testing.T) *httptest.ResponseRecorder {
 			r := newExchangeRig(t)
 			req := httptest.NewRequest(http.MethodPost, "/auth/token", nil)
@@ -46,17 +44,44 @@ func TestASignInOrOutEmptiesTheBrowsersCacheAndAStepUpKeepsIt(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r.handler.ServeHTTP(rec, req)
 			return rec
-		}, `"cache"`},
+		}, "", true},
+		{"a step-up", func(t *testing.T) *httptest.ResponseRecorder {
+			return newStepUpRig(t, session.RowValid).stepUp(t)
+		}, "", true},
 		{"a sign-out", func(t *testing.T) *httptest.ResponseRecorder {
 			mux := http.NewServeMux()
 			surface(t).Routes(mux)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/logout", nil))
 			return rec
-		}, `"cache"`},
-		{"a step-up", func(t *testing.T) *httptest.ResponseRecorder {
-			return newStepUpRig(t, session.RowValid).stepUp(t)
-		}, ""},
+		}, `"cache"`, true},
+		{"a sign-out everywhere", func(t *testing.T) *httptest.ResponseRecorder {
+			return newSignInRig(t).asPerson(http.MethodPost, "/auth/logout/all", "")
+		}, `"cache"`, true},
+		{"a named sign-out of this browser's session", func(t *testing.T) *httptest.ResponseRecorder {
+			r := newExchangeRig(t)
+			held, _ := r.exchange(boundValue)
+			lineages := r.estate.lineages()
+			if held == nil || len(lineages) != 1 {
+				t.Fatalf("the bound token opened %v: this row holds nothing", lineages)
+			}
+			return namedSignOut(r, held, lineages[0])
+		}, `"cache"`, true},
+		{"a named sign-out of another session", func(t *testing.T) *httptest.ResponseRecorder {
+			r := newExchangeRig(t)
+			held, _ := r.exchange(boundValue)
+			opened := r.estate.lineages()
+			if other, _ := r.exchange(boundValue); held == nil || other == nil {
+				t.Fatal("the bound token did not exchange: this row holds nothing")
+			}
+			for _, lineage := range r.estate.lineages() {
+				if !slices.Contains(opened, lineage) {
+					return namedSignOut(r, held, lineage)
+				}
+			}
+			t.Fatal("the second exchange opened no session of its own")
+			return nil
+		}, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -64,14 +89,22 @@ func TestASignInOrOutEmptiesTheBrowsersCacheAndAStepUpKeepsIt(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("answered %d (%s), want 200: this row holds nothing", rec.Code, rec.Body)
 			}
-			// THE COOKIE MOVES BESIDE IT, set or cleared, so the row is
-			// about a response that changes what the browser holds.
-			if len(rec.Result().Cookies()) == 0 {
-				t.Fatalf("set no cookie: this row holds the header beside nothing")
+			if got := len(rec.Result().Cookies()) != 0; got != tc.cookies {
+				t.Fatalf("set or cleared a cookie: %v, want %v", got, tc.cookies)
 			}
 			if got := strings.Join(rec.Header().Values("Clear-Site-Data"), ", "); got != tc.empties {
 				t.Errorf("carried Clear-Site-Data %q, want %q", got, tc.empties)
 			}
 		})
 	}
+}
+
+// namedSignOut posts a named sign-out of lineage from the browser holding
+// cookie.
+func namedSignOut(r *exchangeRig, cookie *http.Cookie, lineage string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/logout/"+lineage, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	r.handler.ServeHTTP(rec, req)
+	return rec
 }

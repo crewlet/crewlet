@@ -556,10 +556,10 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// announcing it once per lineage took a remembered set the size
 		// of every session ever noticed.
 		//
-		// AND THE BROWSER'S CACHE GOES WITH IT ([session.End]): what
-		// the ended session was answered by object id is kept under a
-		// key that holds no cookie, so nothing but emptying it keeps it
-		// from whoever the browser is signed in as next.
+		// THE COOKIE ALONE ([session.End]), never the browser's cache:
+		// this runs on every route the cookie reaches, the dashboard's
+		// document and scripts among them, and Chrome holds a response
+		// that empties its cache until it has scanned all of it.
 		log.InfoContext(r.Context(), "api_session_refused",
 			"row", string(v.Row), "detail", v.Detail)
 		session.End(w, s.external)
@@ -693,13 +693,10 @@ func (s *Sessions) awaitStart(ctx context.Context, directory session.Directory,
 	return validate(ctx, directory, cookie)
 }
 
-// reissue sets the cookie a served validation re-issued, if it re-issued one
-// — through [session.Continue], which keeps the browser's cache: the browser
-// is signed in as the person it was, and emptying the cache at every re-issue
-// would drop each answer it kept five minutes after keeping it.
+// reissue sets the cookie a served validation re-issued, if it re-issued one.
 func (s *Sessions) reissue(w http.ResponseWriter, v session.Validation) {
 	if v.Reissue != "" {
-		session.Continue(w, s.external, v.Reissue, v.Bearer.AbsoluteExpiresAt)
+		session.Issue(w, s.external, v.Reissue, v.Bearer.AbsoluteExpiresAt)
 	}
 }
 
