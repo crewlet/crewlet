@@ -60,8 +60,10 @@
 // T is declared in the expression's own file, another of its package's or an
 // imported package; a call by the results its function, method, interface
 // method or function value declares, a conversion and a composite literal by
-// their type, a builtin by its own rule; an element by its collection; a
-// comma-ok's second value as a bool; a basic literal by its default type.
+// their type — one whose type its collection's literal elides by the element,
+// the value or the key that literal's type gives it — a builtin by its own
+// rule; an element by its collection; a comma-ok's second value as a bool; a
+// basic literal by its default type.
 // Pointers are transparent, as a selector makes them. GENERICS ARE FOLLOWED,
 // because every seam of the estate router is one
 // (`call[A, R any](…, o op[A, R], …) (R, error)`): a generic type's
@@ -96,9 +98,8 @@
 // Not seen: a dot import; a value reached through reflection, an encoding (a
 // value marshalled and decoded as another type) or an interface whose
 // dynamic type the walk cannot follow; a type switch's variable and a value
-// of a type parameter nothing binds, which are unknown; an element of a
-// composite literal whose type is elided; a constant repeating the
-// specification before it (const ( a T = iota; b )), which is unknown; a
+// of a type parameter nothing binds, which are unknown; a constant repeating
+// the specification before it (const ( a T = iota; b )), which is unknown; a
 // method expression's receiver parameter, which its type as the method value
 // leaves out; an untyped constant's type where it is not its default type;
 // and a method

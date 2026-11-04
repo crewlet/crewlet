@@ -5,9 +5,11 @@ package decltype_test
 // type of EXPR — a declared type by its full import path and name, a literal
 // by its shape ("[]T", "map[K]V", "chan T", "func", "struct", "interface"),
 // "unread <package>", "param" (a type parameter nothing binds),
-// "unresolved" or "unknown" — and sel(EXPR, "Name",
-// "verdict") for what the selector resolves to. Pointers are transparent, as
-// a selector makes them, so *T reads as T.
+// "unresolved" or "unknown" — sel(EXPR, "Name",
+// "verdict") for what the selector resolves to, and elided(EXPR, "verdict",
+// …) for the type of each literal in EXPR whose type its collection elides, in
+// the order the source spells them. Pointers are transparent, as a selector
+// makes them, so *T reads as T.
 var fixture = map[string]string{
 	"a/a.go": `package a
 
@@ -25,6 +27,7 @@ import (
 
 func want(v any, verdict string)       {}
 func sel(v any, name, verdict string) {}
+func elided(v any, verdicts ...string) {}
 
 type Inner struct {
 	N    int
@@ -171,6 +174,16 @@ func values(o Outer) {
 	want(&Inner{}, "example.com/m/a.Inner")
 	want([]string{"a"}, "[]string")
 	want(map[string]int{}, "map[string]int")
+	elided([]Inner{{N: 1}}, "example.com/m/a.Inner")
+	elided([]*Inner{{N: 1}}, "example.com/m/a.Inner")
+	elided([2]Inner{{}, {N: 2}}, "example.com/m/a.Inner", "example.com/m/a.Inner")
+	elided(map[Inner]Outer{{N: 1}: {Name: "o"}}, "example.com/m/a.Inner", "example.com/m/a.Outer")
+	elided([][]Inner{{{N: 1}}}, "[]example.com/m/a.Inner", "example.com/m/a.Inner")
+	elided([]lib.Conn{{Addr: "x"}}, "ext.example/lib/v2.Conn")
+	elided([]yaml.Node{{}}, "gopkg.in/yaml.v3.Node")
+	elided(yaml.Nodes{{}}, "unread gopkg.in/yaml.v3")
+	elided(yaml.Index{{}: 1}, "unread gopkg.in/yaml.v3")
+	elided(struct{ L []Inner }{L: []Inner{{}}}, "example.com/m/a.Inner")
 	want(func() {}, "func")
 	want(new(Inner), "example.com/m/a.Inner")
 	want(make(chan b.Item), "chan example.com/m/b.Item")

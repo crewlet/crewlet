@@ -18,15 +18,17 @@ import (
 // THE WALK, ON A TREE WHOSE VERDICT IS KNOWN. Every expression a gate types
 // is spelled in the fixture as a probe carrying its own verdict —
 // want(EXPR, "verdict") for a value's type, sel(EXPR, "Name", "verdict") for
-// what a selector resolves to — so the table is the fixture, and a probe the
-// walk answers differently names itself. The shapes: locals of every kind
+// what a selector resolves to, elided(EXPR, "verdict", …) for each literal in
+// EXPR whose type its collection elides — so the table is the fixture, and a
+// probe the walk answers differently names itself. The shapes: locals of every kind
 // (parameters, variadics, :=, var, range clauses over every collection and
 // an iterator, comma-ok), package values in another file and another
 // package, fields and methods promoted through embedding and through an
 // interface embedding one of another package, method values, method
 // expressions on a type this file, another file of its package, another
 // package and an unread one declares, calls of function-typed fields,
-// conversions, composite literals, elements, basic
+// conversions, composite literals — one whose collection's literal elides
+// its type, as an element, a value or a key, included — elements, basic
 // literals, comparisons, generics bound by instantiation, explicit
 // arguments, inference and a generic receiver, and the type parameters
 // nothing binds — a function's, and a generic method's receiver's, which the
@@ -53,7 +55,7 @@ func TestTheWalkTypesAKnownTree(t *testing.T) {
 				return true
 			}
 			fn, ok := call.Fun.(*ast.Ident)
-			if !ok || (fn.Name != "want" && fn.Name != "sel") {
+			if !ok || (fn.Name != "want" && fn.Name != "sel" && fn.Name != "elided") {
 				return true
 			}
 			probes++
@@ -66,6 +68,20 @@ func TestTheWalkTypesAKnownTree(t *testing.T) {
 			case "sel":
 				got = renderSelection(w, w.Select(w.TypeOf(call.Args[0], f), literal(t, call.Args[1])))
 				want = literal(t, call.Args[2])
+			case "elided":
+				// Every literal in the probe whose type its collection
+				// elides, in the order the source spells them.
+				var gots, wants []string
+				ast.Inspect(call.Args[0], func(n ast.Node) bool {
+					if lit, ok := n.(*ast.CompositeLit); ok && lit.Type == nil {
+						gots = append(gots, render(w, w.TypeOf(lit, f)))
+					}
+					return true
+				})
+				for _, v := range call.Args[1:] {
+					wants = append(wants, literal(t, v))
+				}
+				got, want = strings.Join(gots, ", "), strings.Join(wants, ", ")
 			}
 			if got != want {
 				t.Errorf("%s: %s typed %q, want %q", where, types(call.Args[0]), got, want)
@@ -105,7 +121,7 @@ func TestTheWalkTypesAKnownTree(t *testing.T) {
 }
 
 // probeCall is a probe as the fixture spells it: a statement of its own.
-var probeCall = regexp.MustCompile(`(?m)^\t+(want|sel)\(`)
+var probeCall = regexp.MustCompile(`(?m)^\t+(want|sel|elided)\(`)
 
 // A WORLD THAT READS TESTS READS A FILE AS ITS TESTS COMPILE IT: an
 // in-package test file in its package beside every other in-package test file

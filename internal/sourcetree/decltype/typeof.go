@@ -92,6 +92,9 @@ func (w *World) TypeOf(e ast.Expr, f *File) Type {
 	case *ast.TypeAssertExpr:
 		return Spelled(x.Type, f)
 	case *ast.CompositeLit:
+		if x.Type == nil {
+			return w.elided(x, f)
+		}
 		return Spelled(x.Type, f)
 	case *ast.FuncLit:
 		return Spelled(x.Type, f)
@@ -251,6 +254,43 @@ func (w *World) multi(e ast.Expr, i int, f *File) Type {
 			return w.TypeOf(x, f)
 		}
 		return w.basic("bool")
+	}
+	return Type{}
+}
+
+// elided is the type of a composite literal whose type the literal of its
+// collection elides: that collection's element — a slice's or an array's, a
+// map's value — or the map's key, where the literal is one.
+func (w *World) elided(lit *ast.CompositeLit, f *File) Type {
+	s, ok := f.slot(lit)
+	if !ok {
+		return Type{}
+	}
+	outer := w.TypeOf(s.in, f)
+	if s.key {
+		return w.key(outer)
+	}
+	return w.elem(outer)
+}
+
+// key is the type of a key of t, a map — unread for a type the walk does not
+// read.
+func (w *World) key(t Type) Type {
+	if _, unread := t.Unread(); unread {
+		return t
+	}
+	lit, _, how, out := w.under(t)
+	switch how {
+	case Outside:
+		if out.Package == "" {
+			return Type{}
+		}
+		return unreadFrom(out.Package)
+	case Unresolved:
+		return Type{}
+	}
+	if m, ok := lit.expr.(*ast.MapType); ok {
+		return lit.In(m.Key)
 	}
 	return Type{}
 }

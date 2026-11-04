@@ -164,6 +164,45 @@ type File struct {
 	// import path. A blank import names nothing, and a dot import is not
 	// followed (the coverage boundary).
 	imports map[string]string
+	// slots is where each composite literal whose type is elided sits, read
+	// from the whole file the first time one is typed ([File.slot]).
+	slots map[*ast.CompositeLit]slot
+}
+
+// slot is where a composite literal whose type is elided sits: in the literal
+// of its collection, as an element or a value there, or as a map's key.
+type slot struct {
+	in  *ast.CompositeLit
+	key bool
+}
+
+// slot is where the composite literal lit, whose type is elided, sits in the
+// file; false for one that sits in no literal, which the parser does not
+// produce.
+func (f *File) slot(lit *ast.CompositeLit) (slot, bool) {
+	if f.slots == nil {
+		f.slots = map[*ast.CompositeLit]slot{}
+		ast.Inspect(f.AST, func(n ast.Node) bool {
+			outer, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			for _, e := range outer.Elts {
+				if kv, ok := e.(*ast.KeyValueExpr); ok {
+					if c, ok := kv.Key.(*ast.CompositeLit); ok && c.Type == nil {
+						f.slots[c] = slot{in: outer, key: true}
+					}
+					e = kv.Value
+				}
+				if c, ok := e.(*ast.CompositeLit); ok && c.Type == nil {
+					f.slots[c] = slot{in: outer}
+				}
+			}
+			return true
+		})
+	}
+	s, ok := f.slots[lit]
+	return s, ok
 }
 
 // Import is the import path a file-scope name names, when it names one.
