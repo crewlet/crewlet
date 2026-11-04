@@ -519,6 +519,12 @@ type Engine struct {
 	// node is on ([Engine.cacheVolume]).
 	cacheDisk *cacheVolume
 
+	// sizedByTheMachine is the reason [SizedByTheMachine] put on the context
+	// New was given, kept for the same reason: "" — every engine outside a
+	// test whose subject is a figure the machine derives — holds a test's
+	// code host to declared ones ([Engine.undeclaredCodeCache]).
+	sizedByTheMachine string
+
 	// gitMemory is Options.gitMemory, kept for the same reason: zero — every
 	// engine New builds outside this package's tests — has the git pool read
 	// the node's own memory ([Engine.buildCodeHost]).
@@ -1797,6 +1803,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		sandboxPollInterval: opts.SandboxPollInterval,
 		gitHookArgv:         slices.Clone(opts.GitHook),
 		cacheDisk:           opts.cacheDisk,
+		sizedByTheMachine:   sizedByTheMachine(ctx),
 		gitMemory:           opts.gitMemory,
 		compactorEstate:     opts.compactorEstate,
 		homeSeams:           opts.homeSeams,

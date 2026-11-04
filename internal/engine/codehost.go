@@ -253,6 +253,12 @@ func (e *Engine) gitHook() ([]string, error) {
 func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.Bootstrap,
 	codeLog *runningLog) (codeHostParts, error) {
 
+	// 0. A TEST'S CODE HOST IS SIZED BY ITS CASE, before anything is built
+	// for it ([ErrUndeclaredCodeCache]).
+	if err := e.undeclaredCodeCache(boot); err != nil {
+		return codeHostParts{}, err
+	}
+
 	// 1. THE DIRECTORY, prepared BEFORE git's HOME exists, since it names it.
 	// Absolute: a store path written relative resolves against the working
 	// directory the store itself is opened from.

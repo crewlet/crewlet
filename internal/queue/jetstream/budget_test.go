@@ -17,10 +17,12 @@ import (
 )
 
 // fileQueue opens an embedded broker with a file store, which is the one a
-// deployment runs and the one whose cap is taken from a volume.
+// deployment runs and the one whose cap is taken from a volume — for a case
+// whose subject is that cap, so it is opened under [SizedByTheDisk].
 func fileQueue(t *testing.T) *Queue {
 	t.Helper()
-	q, err := Open(t.Context(), Config{StoreDir: t.TempDir()})
+	q, err := Open(SizedByTheDisk(t.Context(), "the case is about the cap a file store takes from its volume"),
+		Config{StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

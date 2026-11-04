@@ -709,23 +709,29 @@ for nothing it asserts. Only a test whose subject is migration — the schema
 cases, `Pending`, an adoption, a fresh-file boot — opens a fresh file with
 `store.OpenNode`.
 
-A test broker that reserves a fixed amount declares its size rather than take
-it from the runner's disk: a node fixture gives its stream a directory through
-`brokertest.StoreIn`, which sets `stream.store_max_bytes` to
-`brokertest.StoreMaxBytes` with it, a broker opened directly with a store
-directory sets `StoreMaxBytes: brokertest.StoreMaxBytes`, and an external one
-comes from `externaltest.Start`, whose account states the same limit. Left
-unset, an embedded broker's limit is three quarters of the free space on a
-volume every package beside it shares, and a fresh node reserves several
-gibibytes of it at boot, so a case passes on a roomy runner and fails on a
-fuller one whatever the change. Only a case whose subject is the derived
-limit, or a refusal below the floor, states a size of its own; one that
-reserves nothing, or only what the broker reports it has left, needs none.
+A test broker declares its size rather than take it from the runner's disk:
+a node fixture gives its stream a directory through `brokertest.StoreIn`,
+which sets `stream.store_max_bytes` to `brokertest.StoreMaxBytes` with it, a
+broker opened directly with a store directory sets `StoreMaxBytes:
+brokertest.StoreMaxBytes`, and an external one comes from
+`externaltest.Start`, whose account states the same limit. Left unset, an
+embedded broker's limit is three quarters of the free space on a volume
+every package beside it shares, and a fresh node reserves several gibibytes
+of it at boot, so a case passes on a roomy runner and fails on a fuller one
+whatever the change. So a test binary refuses to start an embedded broker
+with a store directory and no limit (`jetstream.ErrUndeclaredSize`), however
+the case reached it — an engine's boot, a queue opened directly, a Tier A
+file it wrote. Only a case whose subject is the derived limit leaves it
+unset, and it starts the broker under `jetstream.SizedByTheDisk` (an engine
+under `engine.SizedByTheMachine`) saying why; one about a refusal below the
+floor states a size of its own.
 A node fixture that declares its broker this way declares its code cache
 beside it with `brokertest.CodeCacheIn`, which sets `git.cache_max_bytes` and
 `git.max_transfers`. Left unset, the cache's budget is derived from the room
 the declared broker leaves on the runner's disk, so a node on a smaller
-runner refuses to host code.
+runner refuses to host code, and a test binary's node refuses to build a code
+host with either unset (`engine.ErrUndeclaredCodeCache`) unless the case
+stands in for the cache's volume or boots under `engine.SizedByTheMachine`.
 
 A case that starts an engine never runs below `internal/engine`'s
 `startedLeaseTTL`, which is `config.MinLeaseTTL` and the floor `engine.New`

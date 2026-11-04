@@ -827,6 +827,11 @@ func routeURLs(peers []string, username, password string) ([]*url.URL, error) {
 }
 
 func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
+	// A TEST'S BROKER DECLARES ITS SIZE, before anything is built for it
+	// ([ErrUndeclaredSize]).
+	if err := undeclaredSize(ctx, cfg); err != nil {
+		return nil, err
+	}
 	// THE AUTHENTICATOR, with this start's own keys: the engine's on every
 	// server, and the system account's for a clustered member — the one rule
 	// [embeddedOptions] reads for `clustered`, which refuses a leaf that
