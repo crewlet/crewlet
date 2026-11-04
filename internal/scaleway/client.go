@@ -51,9 +51,8 @@ const (
 
 // The shapes Scaleway gives an organization, project and key identifier.
 // Compiled at first use, not at init: the code host's push hook is this
-// binary and pays every package's init (cmd/crewlet's hookinit_test.go),
-// and a bounded repeat compiles to a program holding every count.
-// The two of them were this package's whole init, about 26 KB.
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go);
+// their bounded repeats compile to programs holding every count, about 25 KB.
 var (
 	uuidPattern = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)

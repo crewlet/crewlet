@@ -77,15 +77,14 @@ func (r *RoleScaleway) LevelOrDefault() string {
 
 // scalewayUUID is the shape Scaleway gives an organization and a project ID.
 // Compiled at first use, not at init: the code host's push hook is this
-// binary and pays every package's init (cmd/crewlet's hookinit_test.go),
-// and a bounded repeat compiles to a program holding every count.
-// The two of them were about 24 KB of this package's init.
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go);
+// its bounded repeats compile to a program holding every count, about 18 KB.
 var scalewayUUID = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 })
 
 // scalewayAccessKey is the shape of an API key's access key, compiled at
-// first use for [scalewayUUID]'s reason.
+// first use for the same reason.
 var scalewayAccessKey = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
 })

@@ -51,9 +51,8 @@ const (
 
 // The patterns the identifier shapes hold a value to.
 // Compiled at first use, not at init: the code host's push hook is this
-// binary and pays every package's init (cmd/crewlet's hookinit_test.go),
-// and a bounded repeat compiles to a program holding every count.
-// The two of them were about 28 KB of this package's init.
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go);
+// their bounded repeats compile to programs holding every count, about 25 KB.
 var (
 	uuidShape = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)

@@ -47,7 +47,7 @@ import (
 //     request. A package that needs more builds it at first use
 //     (sync.OnceValue), as the password blocklist does (140 KB) and the code
 //     cache's file-name patterns do (215 KB).
-//   - hookInitBytes, 1.5 MiB, for the module: about 1.42 MB today under the
+//   - hookInitBytes, 1.5 MiB, for the module: about 1.43 MB today under the
 //     race detector, the least of hookInitRuns starts. It was 1.1 MB
 //     before the artifact packages and the larger redaction tables were
 //     linked beside the code host, and the brand and the drawing allowlist
@@ -61,18 +61,22 @@ import (
 //     left 1.31 MB. The code host's own growth since took it to 1.44, and
 //     main's Cloudflare validation then compiled its account and zone patterns
 //     at init — 100 KB in config, 13 in cloudflare — for 1.56 MB, 1.63 in
-//     CI's race job, until those too were built at first use. Main's
-//     DigitalOcean and Scaleway integrations then compiled their token, UUID
-//     and access-key shapes at init — about 100 KB across digitalocean,
-//     scaleway, config and setup — and the MCP sign-in page still rendered
-//     and matched its policy at init, which the race detector's pools moved
-//     by up to 74 KB from one start to the next: 1.58 MB and 1.62 in CI's
-//     race job, past this bound. Built at first use, and charged the least of
-//     several starts, the module came back to 1.42 MB under the race
-//     detector. So a second webhooks-sized global anywhere fails it, while a
-//     toolchain's change to what a compiled pattern allocates, within the
-//     150 KB left, does not; growth past that is built at first use rather
-//     than bought with a larger bound.
+//     CI's race job, until those too were built at first use. Main's Scaleway
+//     and DigitalOcean checks then compiled their identifier and token
+//     patterns at init — 24 KB in config, 24 in scaleway, 24 in setup, 19 in
+//     digitalocean — for 1.53 MB, 1.62 in CI's race job, until those too were
+//     built at first use, which left 1.45 in the plain build. CI's race job
+//     still measured 0.07 to 0.13 MB over that — two trees within 1.3 KB of
+//     each other measured 1.62 and 1.66 MB there — and most of what moved
+//     from one start to the next was the MCP sign-in page, still rendered and
+//     matched against its policy at init, whose matchers the race detector's
+//     pools dropped at random: up to 74 KB between two starts of one build.
+//     Built at its first request, and each package charged the least of
+//     several starts, the module came to 1.43 MB under the race detector. So
+//     a second webhooks-sized global anywhere fails it, while a toolchain's
+//     change to what a compiled pattern allocates, within the 140 KB left,
+//     does not; growth past that is built at first use rather than bought
+//     with a larger bound.
 const (
 	hookInitPackageBytes = 256 << 10
 	hookInitBytes        = 3 << 19
