@@ -1691,6 +1691,12 @@ func txOn(ctx context.Context,
 		return rollback(ctx, tx), err
 	}
 	if err := tx.Commit(); err != nil {
+		// A CONTEXT THAT ENDED is the cause: database/sql rolls the
+		// transaction back when it does, and the commit then reports only
+		// sql.ErrTxDone, which no caller can tell from a fault.
+		if cause := ctx.Err(); cause != nil {
+			return false, fmt.Errorf("store: commit: %w", cause)
+		}
 		return false, fmt.Errorf("store: commit: %w", err)
 	}
 	return true, nil
