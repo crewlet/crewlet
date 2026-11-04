@@ -19,6 +19,8 @@ import { useSyncExternalStore } from "react";
 const TICK_MS = 1000;
 
 let now = Date.now();
+/** Whether this synchronous pass has re-read a stopped clock already. */
+let decided = false;
 const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | 0 = 0;
 
@@ -82,12 +84,19 @@ export function useNow(): number {
  *
  * So a read while stopped re-reads the wall clock — but only when it has
  * moved by a tick or more (either way: a clock set back is as stale as one
- * left behind). Within a tick the value is the same number, which is what
- * `useSyncExternalStore` requires of two reads in one render, and it is no
- * staler than a running clock ever is.
+ * left behind), which leaves it no staler than a running clock ever is.
+ *
+ * AND ONLY ONCE PER SYNCHRONOUS PASS. React reads a snapshot twice in a row
+ * and warns where the two differ, and two reads either side of a tick did:
+ * the first a millisecond short of it, the second past it. So the first read
+ * of a pass decides, and a microtask lets the next pass decide again.
  */
 function read(): number {
-  if (!timer) {
+  if (!timer && !decided) {
+    decided = true;
+    queueMicrotask(() => {
+      decided = false;
+    });
     const t = Date.now();
     if (Math.abs(t - now) >= TICK_MS) now = t;
   }
