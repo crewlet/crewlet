@@ -6,6 +6,7 @@ import (
 	"errors"
 	"html/template"
 	"net/http"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
@@ -70,10 +71,25 @@ const (
 	maxMCPDescription = 1 << 10
 )
 
-// mcpOAuthPage is the page a person lands on after consenting at a vendor.
-// html/template for [slackOAuthPage]'s reason: every value it renders is
-// escaped for where it lands, and none is anything the query carried.
-var mcpOAuthPage = template.Must(template.New("mcp-oauth").Parse(`<!doctype html>
+// mcpOAuthPage is the page a person lands on after consenting at a vendor,
+// and its Content-Security-Policy: its one inline style, by hash, and no
+// script at all. html/template for [slackOAuthPage]'s reason: every value it
+// renders is escaped for where it lands, and none is anything the query
+// carried.
+//
+// BUILT AT THE FIRST REQUEST THAT RENDERS IT, for [githubAppPage]'s reason:
+// every push's proc-receive hook is this binary, and runs every package's
+// init. Built at init it was this package's largest cost there, and its
+// least steady: the policy matches the rendered page against patterns whose
+// matchers come from a pool the race detector empties at random, so the same
+// build allocated 59 KB, 96 KB or 133 KB here from one start to the next.
+var mcpOAuthPage = sync.OnceValues(func() (*template.Template, string) {
+	page := template.Must(template.New("mcp-oauth").Parse(mcpOAuthTemplate))
+	return page, pagepolicy.MustForTemplate(page, mcpOAuthView{})
+})
+
+// mcpOAuthTemplate is the page's text.
+const mcpOAuthTemplate = `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8">
@@ -95,11 +111,7 @@ var mcpOAuthPage = template.Must(template.New("mcp-oauth").Parse(`<!doctype html
     {{end}}
   </body>
 </html>
-`))
-
-// mcpOAuthPolicy is the page's Content-Security-Policy: its one inline style,
-// by hash, and no script at all.
-var mcpOAuthPolicy = pagepolicy.MustForTemplate(mcpOAuthPage, mcpOAuthView{})
+`
 
 type mcpOAuthView struct {
 	// Server is the server signed in to, from the signed state; "" for a
@@ -156,9 +168,10 @@ func (r *Receiver) mcpOAuthLanding(w http.ResponseWriter, req *http.Request) {
 	// NO REFERRER, so the next page the person opens is not told the
 	// address the code and the state arrived in.
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	pagepolicy.Set(w.Header(), mcpOAuthPolicy)
+	page, policy := mcpOAuthPage()
+	pagepolicy.Set(w.Header(), policy)
 	w.WriteHeader(status)
-	if err := mcpOAuthPage.Execute(w, view); err != nil {
+	if err := page.Execute(w, view); err != nil {
 		log.Warn("mcp_oauth_page_failed", "error", err)
 	}
 }
