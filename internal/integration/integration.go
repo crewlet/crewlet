@@ -91,6 +91,10 @@ const (
 	// build, ingests nothing.
 	KindCloudflare Kind = "cloudflare"
 
+	// KindScaleway provisions one IAM application, policy and API key per
+	// agent and, in this build, ingests nothing.
+	KindScaleway Kind = "scaleway"
+
 	// KindExpo provisions one robot user per agent and, in this build,
 	// ingests nothing.
 	KindExpo Kind = "expo"
@@ -113,7 +117,7 @@ const (
 // listing does not reshuffle between two reads of the same fleet.
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
-	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean, KindAtlassian,
+	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean, KindScaleway, KindAtlassian,
 }
 
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
@@ -141,7 +145,7 @@ var ConvergeOrder = []Kind{
 	// THE ACCOUNTS FIRST, then the products that authenticate as them.
 	KindAtlassian, KindJira, KindConfluence,
 	KindSlack, KindMattermost,
-	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
+	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean, KindScaleway,
 }
 
 // Valid reports whether k is a surface this build knows.
@@ -236,8 +240,10 @@ func (k Kind) Ingress() Ingress {
 // account, beside a second badge saying the key had not resolved. Both were
 // answers to questions this surface is not asked.
 //
-// Cloudflare and Expo are the same in this build: their agents' tokens and
-// robots are provisioned, and nothing they send is routed to a seat.
+// Cloudflare, Expo, DigitalOcean and Scaleway are the same in this build: each
+// agent's credential there is minted or pasted, and nothing they send is
+// routed to a seat.
 func (k Kind) Ingests() bool {
-	return k != KindAtlassian && k != KindCloudflare && k != KindExpo && k != KindDigitalOcean
+	return k != KindAtlassian && k != KindCloudflare && k != KindExpo && k != KindDigitalOcean &&
+		k != KindScaleway
 }

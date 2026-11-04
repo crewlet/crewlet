@@ -33,7 +33,7 @@ func SeatAccessOn(enabled *bool) bool { return enabled != nil && *enabled }
 // SeatAccessLanes is every per-seat block, by its key under
 // `roles[].integrations`.
 func SeatAccessLanes() []string {
-	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo", "digitalocean"}
+	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo", "digitalocean", "scaleway"}
 }
 
 // SeatScope is the key and the entries of r's scope at lane: the containers
@@ -62,6 +62,10 @@ func (r *Role) SeatScope(lane string) (string, []string) {
 		if in.GitHub != nil {
 			return "repos", in.GitHub.Repos
 		}
+	case "scaleway":
+		if in.Scaleway != nil {
+			return "projects", in.Scaleway.Projects
+		}
 	}
 	return "", nil
 }
@@ -72,9 +76,9 @@ func (r *Role) SeatScope(lane string) (string, []string) {
 // holds the two equal.
 func SeatScopeRequired(lane string) bool { return slices.Contains(scopeRequiredLanes, lane) }
 
-// scopeRequiredLanes is every lane whose agents must name a scope entry. None
-// yet.
-var scopeRequiredLanes []string
+// scopeRequiredLanes is every lane whose agents must name a scope entry:
+// Scaleway's, whose policy names its projects and grants nothing without one.
+var scopeRequiredLanes = []string{"scaleway"}
 
 // checkScopeChosen refuses an agent turned on at lane with no scope entry
 // where required says the lane needs one.
@@ -133,6 +137,10 @@ func (r *Role) seatEnabled(lane string) (*bool, bool) {
 	case "digitalocean":
 		if in.DigitalOcean != nil {
 			return in.DigitalOcean.Enabled, true
+		}
+	case "scaleway":
+		if in.Scaleway != nil {
+			return in.Scaleway.Enabled, true
 		}
 	}
 	return nil, false

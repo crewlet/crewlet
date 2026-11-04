@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/scaleway"
 )
 
 // EVERY VENDOR READS A REFUSAL THE SAME WAY.
@@ -44,6 +45,7 @@ func TestEveryVendorReportsARefusalStatus(t *testing.T) {
 		"datadog":    datadog.Status,
 		"cloudflare": cloudflare.Status,
 		"expo":       expo.Status,
+		"scaleway":   scaleway.Status,
 	}
 	for name, status := range accessors {
 		// A non-API error is 0, which Reject leaves alone: a dial timeout
@@ -80,6 +82,7 @@ func TestEveryVendorReadsItsOwnRefusal(t *testing.T) {
 		"datadog":    {datadog.Status, &datadog.APIError{Status: 401}},
 		"cloudflare": {cloudflare.Status, &cloudflare.APIError{Status: 401}},
 		"expo":       {expo.Status, &expo.APIError{Status: 401}},
+		"scaleway":   {scaleway.Status, &scaleway.APIError{Status: 401}},
 	}
 	for name, tc := range refusals {
 		if got := tc.status(tc.err); got != 401 {

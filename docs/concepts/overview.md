@@ -283,12 +283,12 @@ internal/
 ├── mcp/                  # MCP client and child-process supervision
 ├── tools/                # The registry, and the per-phase tool surfaces
 ├── notify/               # The backend-neutral notification spine
-├── mattermost/ slack/    # The nine third-party apps: client, parser,
+├── mattermost/ slack/    # The eleven third-party apps: client, parser,
 │   jira/ confluence/     #   transport, prompt, provisioning reconcile — each
 │   gitlab/ github/       #   contributing only what is genuinely its own,
 │   datadog/ atlassian/   #   which is why Jira has no transport and why
-│   cloudflare/           #   Datadog routes on a monitor's TAGS: an alert is
-│                         #   addressed to nobody
+│   cloudflare/ expo/     #   Datadog routes on a monitor's TAGS: an alert is
+│   scaleway/             #   addressed to nobody
 ├── integration/          # The app-neutral reconcile spine: the finding
 │                         #   vocabulary every pass reports in, the cadence
 │                         #   derived from who has to act, the fleet singleton
