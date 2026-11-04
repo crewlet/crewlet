@@ -49,14 +49,18 @@ func TestTheDigestIsPOSIXCksums(t *testing.T) {
 
 // A TRANSCRIPT LINE STAYS JSON, AND LOSES EVERY SECRET IN IT. A value the engine
 // named; a key's lines inside one string, which only the decoded string has as
-// lines; and a string or a number under a credential's own key — all gone, the
-// line still one JSON value. A line that is not JSON — a torn last line — is
-// scrubbed and redacted as text, the engine's value taken out in the form a
-// JSON string escapes it in, which is the only form a torn line holds it in.
+// lines; a string or a number under a credential's own key; and a cloud
+// session a run obtained by itself, as a tool's result holds it — its key id
+// by its shape, its secret and its token by their keys, and a Google access
+// token by its shape — all gone, the line still one JSON value. A line that is
+// not JSON — a torn last line — is scrubbed and redacted as text, the engine's
+// value taken out in the form a JSON string escapes it in, which is the only
+// form a torn line holds it in.
 //
 // Mutation: redact the raw line alone, the strings alone, write a key as it
 // came, keep a number under a credential's key, take out only a value's raw
-// form, or rewrite a line of two values as one, and a case here goes red.
+// form, rewrite a line of two values as one, or drop a session token's words
+// from a credential's, and a case here goes red.
 //
 // AND A KEY IS A STRING LIKE ANY OTHER: a tool's structured result can name a
 // member by anything, a secret included.
@@ -84,6 +88,20 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 			line: `{"env":{"` + shapedKey + `":"set"}}`, gone: []string{shapedKey}},
 		"a number under a credential's key": {
 			line: `{"input":{"db_password":73519046284}}`, gone: []string{"73519046284"}},
+		"an AWS session under its keys": {
+			line: `{"toolUseResult":{"Credentials":{"AccessKeyId":"ASIAEXAMPLESESSION01",` +
+				`"SecretAccessKey":"secret-access-key-filler-0123456789",` +
+				`"SessionToken":"session-token-filler-0123456789abcdef","Expiration":"2026-11-04T12:00:00Z"}}}`,
+			gone: []string{"ASIAEXAMPLESESSION01", "secret-access-key-filler", "session-token-filler"}},
+		"a session's token in a credentials file's spelling": {
+			line: `{"input":{"aws_session_token":"session-token-filler-0123456789abcdef"}}`,
+			gone: []string{"session-token-filler"}},
+		"a session's token as a request's header": {
+			line: `{"headers":{"X-Amz-Security-Token":"session-token-filler-0123456789abcdef"}}`,
+			gone: []string{"session-token-filler"}},
+		"a Google access token in a tool's output": {
+			line: `{"stdout":"ya29.c.c0ASRK0GaBcDeFgHiJkLmNoPqRsTuVwXyZ-_12\n"}`,
+			gone: []string{"ASRK0GaBcDeFgHiJkLmNoPqRsTuVwXyZ"}},
 	} {
 		got := rewriteLine(tc.line, s, testBounds)
 		if !json.Valid([]byte(got)) {
@@ -129,6 +147,46 @@ func TestTheScrubTakesOutCredentialsNotWords(t *testing.T) {
 	got := s.apply("yes: inner-secret-value-tail and inner-secret")
 	if want := "yes: " + scrubMarker + " and " + scrubMarker; got != want {
 		t.Errorf("scrubbed to %q, want %q", got, want)
+	}
+}
+
+// A CREDENTIAL'S KEY IS READ HOWEVER ITS WORDS ARE JOINED, AND A TRANSCRIPT'S
+// OWN KEYS ARE NO CREDENTIAL'S. A cloud session's token sits under a key of its
+// own wherever it is written — `SessionToken` in what STS answers,
+// `sessionToken` in what Roles Anywhere does, `aws_session_token` in AWS's
+// credentials file, `X-Amz-Security-Token` as a request's header — and each
+// spelling is a credential's key, as an API key's is under a header's hyphens.
+// A harness counts its tokens and names its sessions under keys of its own,
+// and a session's expiry is no secret: none of those is one.
+//
+// Mutation: drop the session token's words, and its spellings are no
+// credential's; read the words in the key with its separators kept, and the
+// headers' and the credentials file's are not; read `token` anywhere in a key,
+// and every transcript's usage counts are.
+func TestACredentialsKeyIsReadHoweverItsWordsAreJoined(t *testing.T) {
+	t.Parallel()
+	for key, want := range map[string]bool{
+		"SessionToken":            true,
+		"sessionToken":            true,
+		"aws_session_token":       true,
+		"AWS_SESSION_TOKEN":       true,
+		"X-Amz-Security-Token":    true,
+		"AWS_SECURITY_TOKEN":      true,
+		"SecretAccessKey":         true,
+		"access_token":            true,
+		"x-api-key":               true,
+		"Private-Key":             true,
+		"token":                   true,
+		"sessionId":               false,
+		"session_id":              false,
+		"input_tokens":            false,
+		"cache_read_input_tokens": false,
+		"tokens":                  false,
+		"Expiration":              false,
+	} {
+		if got := credentialKey(key); got != want {
+			t.Errorf("credentialKey(%q) = %v, want %v", key, got, want)
+		}
 	}
 }
 

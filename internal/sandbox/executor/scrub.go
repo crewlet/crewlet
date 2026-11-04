@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -250,9 +251,25 @@ func jsonEscaped(s string) string {
 
 // credentialKey reports whether a JSON object's key names a credential, whose
 // string value is taken out whole however it is shaped: a login's tokens, a
-// tool call's password or API key. Read on the key's own words, lowercase: a
-// password's, as redact names them (redact.NamesPassword), `token` and `key`
-// exactly, or one of the words a credential's name carries.
+// tool call's password or API key, a cloud session's token. Read on the key's
+// own words, lowercase: a password's, as redact names them
+// (redact.NamesPassword), `token` and `key` exactly, or one of the words a
+// credential's name carries — an API key, the access token a login holds and
+// the token that refreshes it, a cloud session's token, which AWS names a
+// session token and a security token both, the authorization a request
+// carries, a private key, a secret and a credential itself.
+//
+// THE WORDS ARE READ WITH THE KEY'S SEPARATORS DROPPED, since each format
+// joins a name's words its own way and every spelling is the one key: a
+// session's token is `aws_session_token` in AWS's credentials file,
+// `SessionToken` in what STS answers, `sessionToken` in what Roles Anywhere
+// does, and `X-Amz-Security-Token` as a request's header. Spelled out per
+// separator, the words missed the one a header joins with: `x-api-key` was no
+// credential's key, and nor would the session's own header have been.
+//
+// NOT `token` OR `key` AT LARGE, which only the whole key is read as: a
+// transcript counts its tokens and names its sessions in keys of its own
+// (`input_tokens`, `sessionId`), and a value under one is no credential.
 func credentialKey(key string) bool {
 	if redact.NamesPassword(key) {
 		return true
@@ -261,9 +278,15 @@ func credentialKey(key string) bool {
 	if k == "token" || k == "key" {
 		return true
 	}
-	for _, word := range []string{"secret", "apikey", "api_key", "accesstoken", "access_token",
-		"refreshtoken", "refresh_token", "authorization", "private_key", "privatekey", "credential"} {
-		if strings.Contains(k, word) {
+	joined := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, k)
+	for _, word := range []string{"apikey", "accesstoken", "refreshtoken", "sessiontoken", "securitytoken",
+		"authorization", "privatekey", "secret", "credential"} {
+		if strings.Contains(joined, word) {
 			return true
 		}
 	}
