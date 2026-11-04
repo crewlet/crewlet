@@ -446,7 +446,7 @@ func TestAnUnenforcedDecisionSaysWhyAndStaysTrue(t *testing.T) {
 	}
 }
 
-// A NAMED TEST EXISTS.
+// A NAMED TEST EXISTS, IN THE PACKAGE THE RECORD NAMES.
 //
 // `Enforced-by: internal/store.TestOnlyTheApplierWritesTheReplicatedEstate` is
 // a claim about the tree, and a claim nobody checks is how the register's
@@ -454,6 +454,12 @@ func TestAnUnenforcedDecisionSaysWhyAndStaysTrue(t *testing.T) {
 // internal/textindex shipped a BM25 index. A renamed or deleted test leaves the
 // record asserting a gate that is not there — which is worse than `nothing`,
 // because it reads as covered.
+//
+// THE PACKAGE A NAME IS QUALIFIED BY IS PART OF THE CLAIM. A test that moves
+// with the code it holds still exists by its name, so a check of the name alone
+// passed ADR-0073 while it sent its reader to internal/sandbox for a test
+// internal/engine declares, and would have gone on passing, that test renamed,
+// for as long as any package declared one of its name.
 func TestEveryNamedGateExists(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -465,7 +471,7 @@ func TestEveryNamedGateExists(t *testing.T) {
 
 	for _, r := range load(t) {
 		for _, name := range namedTests(r.EnforcedBy()) {
-			if tests[name] {
+			if len(tests[name]) > 0 {
 				continue
 			}
 			t.Errorf("%s says it is enforced by %s and no such test exists in "+
@@ -473,6 +479,49 @@ func TestEveryNamedGateExists(t *testing.T) {
 				"it was deleted, in which case this decision is now enforced "+
 				"by nothing and the record has to say so.", r.File, name)
 		}
+		// A NAME NO PACKAGE DECLARES is the error above, said once.
+		for _, q := range qualifiedTests(r.EnforcedBy()) {
+			if dirs := tests[q.name]; len(dirs) > 0 && !slices.Contains(dirs, q.dir) {
+				t.Errorf("%s says it is enforced by %s.%s and %s declares no such "+
+					"test: it is declared in %s.\n\tQualify it by the package "+
+					"that declares it.", r.File, q.dir, q.name, q.dir,
+					strings.Join(dirs, ", "))
+			}
+		}
+	}
+}
+
+// qualifiedTest is a test an Enforced-by value names by the directory of its
+// package, as `internal/engine.TestAFrozenReadFitsItsBound` names it.
+type qualifiedTest struct{ dir, name string }
+
+// qualifiedTests pulls the `<package directory>.Test...` names out of an
+// Enforced-by value, each once. A bare name is not one of them: it says
+// nothing of its package, so [namedTests] alone holds it.
+func qualifiedTests(enforcedBy string) []qualifiedTest {
+	var out []qualifiedTest
+	for _, m := range qualifiedTestRE.FindAllStringSubmatch(enforcedBy, -1) {
+		if q := (qualifiedTest{dir: m[1], name: m[2]}); !slices.Contains(out, q) {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+var qualifiedTestRE = regexp.MustCompile(`([A-Za-z0-9_./-]+)\.(Test[A-Z][A-Za-z0-9_]*)`)
+
+// A QUALIFIED GATE IS READ AS ITS PACKAGE'S DIRECTORY AND ITS TEST, each
+// once, and a bare name as none: the package check holds every name a record
+// qualifies, nested packages and commands included, and assumes nothing of a
+// name it does not.
+func TestAQualifiedGateIsReadAsItsPackageAndItsTest(t *testing.T) {
+	t.Parallel()
+	got := qualifiedTests("`internal/engine.TestA`, `internal/sandbox/executor.TestB` and " +
+		"TestC, held by `cmd/crewlet.TestD`; `internal/engine.TestA` again, and Tested.")
+	want := []qualifiedTest{{dir: "internal/engine", name: "TestA"},
+		{dir: "internal/sandbox/executor", name: "TestB"}, {dir: "cmd/crewlet", name: "TestD"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("qualifiedTests read %v, want %v", got, want)
 	}
 }
 
@@ -494,7 +543,9 @@ func namedTests(enforcedBy string) []string {
 
 var testNameRE = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 
-// testFunctions is every Test function declared anywhere in the module.
+// testFunctions is every Test function declared anywhere in the module, with
+// the directories, relative to root and slash-separated, of the packages that
+// declare it: the spelling a record qualifies a name by.
 //
 // LINE BY LINE, rather than one multi-line expression over each file: a
 // `(?m)^` pattern has no literal prefix to jump to, so the regexp package
@@ -503,9 +554,9 @@ var testNameRE = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 // meant here, so the prefix is checked as a prefix and the expression runs
 // only on the lines that start with it; neither half can span a newline, so
 // the names found are the same.
-func testFunctions(t *testing.T, root string) map[string]bool {
+func testFunctions(t *testing.T, root string) map[string][]string {
 	t.Helper()
-	out := map[string]bool{}
+	out := map[string][]string{}
 	err := sourcetree.Walk(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -520,9 +571,14 @@ func testFunctions(t *testing.T, root string) map[string]bool {
 		if !strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
+		dir, err := filepath.Rel(root, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		dir = filepath.ToSlash(dir)
 		for _, line := range strings.Split(read(t, path), "\n") {
-			if name, ok := testDeclaredOn(line); ok {
-				out[name] = true
+			if name, ok := testDeclaredOn(line); ok && !slices.Contains(out[name], dir) {
+				out[name] = append(out[name], dir)
 			}
 		}
 		return nil

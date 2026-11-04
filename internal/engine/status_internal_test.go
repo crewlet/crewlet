@@ -486,14 +486,16 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 
 // A TURN NOBODY IS WATCHING A COMPOSER FOR RAISES NOTHING. A schedule tick, an
 // A2A ask, a sandbox completion and a work-item assignment all reach a seat the
-// same way and none of them stamps a transport — so there is no conversation to
-// raise an indicator in, and no person to read it.
+// same way and none of them stamps a transport — so there is no chat
+// conversation to raise an indicator in, and no person to read it.
 func TestANonChatTriggerRaisesNoIndicator(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
-	// The wake a schedule actually publishes, and the same shape a
-	// delegation and a tracker assignment arrive in.
+	// The wake a schedule publishes, its conversation's stamp aside — a key
+	// names no chat surface, and only a transport's stamp raises an indicator
+	// ([chatMetadataOf]) — and the same shape a delegation and a tracker
+	// assignment arrive in.
 	tick := events.New(types.TaskAssigned{
 		TaskID: "t-1", RoleName: "SWE", Description: "write the standup note",
 		Schedule: "standup",
@@ -504,7 +506,8 @@ func TestANonChatTriggerRaisesNoIndicator(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
 	}
-	// A scheduled fire has no conversation and nobody watching a composer.
+	// A scheduled fire's conversation is its schedule's, no chat surface's,
+	// and nobody is watching a composer.
 	e.raisedNothing(t, ws)
 }
 

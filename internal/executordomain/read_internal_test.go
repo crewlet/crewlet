@@ -74,6 +74,183 @@ func TestAHeadShowsEveryTurnNoEndedTurnWasShown(t *testing.T) {
 	}
 }
 
+// agreedHead is the head of handle's conversation as all three reads that name
+// one answer it — a launch's read ([Reader.Head]), a page of the seat
+// ([Page.Heads]) and a read of turn's own row ([SessionRead.Head]) — and fails
+// the case where they disagree: a person would read one session as the one
+// continued while the next turn continues another.
+func (e *estate) agreedHead(handle, conversationKey, turn string) string {
+	e.t.Helper()
+	var dispatch string
+	if h := e.head(handle, conversationKey); h.Session != nil {
+		dispatch = h.Session.Turn
+	}
+	page, err := e.reader().Sessions(e.t.Context(), handle, "", MaxPageSize, stale)
+	if err != nil {
+		e.t.Fatalf("read %s's page: %v", handle, err)
+	}
+	read, err := e.reader().Session(e.t.Context(), handle, turn, stale)
+	if err != nil {
+		e.t.Fatalf("read %s's turn %s: %v", handle, turn, err)
+	}
+	if page.Heads[conversationKey] != dispatch || read.Head != dispatch {
+		e.t.Fatalf("a launch's read names %q the head of %s, a page of the seat %q and a read of "+
+			"turn %s %q: the API must name the head the dispatch continues", dispatch,
+			conversationKey, page.Heads[conversationKey], turn, read.Head)
+	}
+	return dispatch
+}
+
+// A CONVERSATION'S HEAD IS THE TURN THAT READ IT LAST, never simply the one
+// that ended last: of the ended turns whose rows still name a session, the
+// newest READ first; among turns that read the conversation at one position,
+// the newest END; and a turn that read nothing (its read failed, its
+// read_through 0) after every turn that read, however late it ended. A turn
+// parked on a person's question frees its seat, so a turn that read the
+// conversation later runs beside it and ends first; the parked one, which read
+// the conversation before that turn did and continued none of what it left,
+// then ends after it — and is told and offered beside the head, never
+// continued, and absorbed by the next end. At every step the launch's read, a
+// page of the seat and a read of one row name the same head (agreedHead).
+// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued holds a schedule's
+// line of fires beside a parked one.
+//
+// Mutation: order the head by its end alone, by where its turn first wrote, or
+// by its read with the older end first among turns that read alike, or put a
+// turn that read nothing before the turns that read, and a check goes red;
+// answer a page's or a row's head in another order than a launch's read, and
+// the agreement goes red.
+func TestAConversationsHeadIsTheTurnThatReadItLast(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	const fires = "schedule/role/0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11/health-check"
+	earlier, parked, beside, next := newTurn(), newTurn(), newTurn(), newTurn()
+	e.capture(capturing("ana", fires, earlier, 1, 1, 100, budget))
+	e.end(ending("ana", fires, earlier, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+
+	// THE PARKED TURN reads the head, captures and waits on a person; THE
+	// TURN BESIDE IT reads after it, continues the same head and ends; and
+	// the parked one is answered and ends last.
+	first := e.head("ana", fires)
+	e.capture(launching(first, capturing("ana", fires, parked, 1, 1, 100, budget)))
+	second := e.head("ana", fires)
+	if second.Position.Seq <= first.Position.Seq {
+		t.Fatalf("the premise: the second read at %s is not past the first at %s",
+			second.Position, first.Position)
+	}
+	e.capture(launching(second, capturing("ana", fires, beside, 1, 1, 100, budget)))
+	e.end(ending("ana", fires, beside, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	e.end(ending("ana", fires, parked, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+
+	h := e.head("ana", fires)
+	if h.Session == nil || h.Session.Turn != beside {
+		t.Fatalf("the head is %+v, want the turn that read the conversation last, not the one "+
+			"that ended last", h.Session)
+	}
+	if !slices.Equal(turnsOf(h.Endings), []string{parked}) ||
+		!slices.Equal(turnsOf(h.Siblings), []string{parked}) {
+		t.Fatalf("the next turn is told %v and offered %v, want the parked turn told and offered "+
+			"beside the head", turnsOf(h.Endings), turnsOf(h.Siblings))
+	}
+	e.agreedHead("ana", fires, parked)
+	e.capture(launching(h, capturing("ana", fires, next, 1, 1, 100, budget)))
+	e.end(ending("ana", fires, next, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	for _, gone := range []string{beside, parked} {
+		if _, found := e.session("ana", gone); found {
+			t.Errorf("turn %s was handed to the next turn and survived its end", gone)
+		}
+	}
+
+	// TWO TURNS READ AT ONE POSITION: the one that ended last is the head.
+	now := e.head("ana", fires)
+	early, late := newTurn(), newTurn()
+	e.capture(launching(now, capturing("ana", fires, early, 1, 1, 100, budget)))
+	e.capture(launching(now, capturing("ana", fires, late, 1, 1, 100, budget)))
+	e.end(ending("ana", fires, early, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	e.end(ending("ana", fires, late, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	if tie := e.agreedHead("ana", fires, early); tie != late {
+		t.Fatalf("of two turns that read the conversation alike the head is %q, want %q, the one "+
+			"that ended last", tie, late)
+	}
+
+	// A TURN THAT READ NOTHING ends last, and the head stays the turn that read.
+	blind := newTurn()
+	e.capture(capturing("ana", fires, blind, 1, 1, 100, budget))
+	e.end(ending("ana", fires, blind, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	h = e.head("ana", fires)
+	if h.Session == nil || h.Session.Turn != late {
+		t.Fatalf("the head is %+v, want the turn that read the conversation, not one that read "+
+			"nothing and ended after it", h.Session)
+	}
+	e.agreedHead("ana", fires, blind)
+	if !slices.Contains(turnsOf(h.Siblings), blind) {
+		t.Errorf("the turn that read nothing is not offered beside the head: %v", turnsOf(h.Siblings))
+	}
+}
+
+// A FIRE THAT ENDS AFTER THE FIRES BESIDE IT IS TOLD, NOT CONTINUED. A fire is
+// never the answer to a question, so a schedule's next fires run beside one
+// parked on a person's question: F10 continues F09 and parks; F11 fires beside
+// it, continues F09 too and ends; F12 continues F11 and ends; and F10,
+// answered hours later, ends last of all. The schedule's line is F11 then F12,
+// so F13 continues F12 — as a launch's read, a page of the seat and a read of
+// F10's own row all name it (agreedHead), and F13's begin holds it as its base
+// — is told how F10 ended and is offered its session, and F13's end absorbs
+// both. It runs the shipped applier's and reader's own statements over a
+// migrated estate.
+//
+// Mutation: order headStatement by end_seq alone, as the head was ordered
+// before, and F13 is handed F10's session, which never saw F11 or F12: the
+// case goes red.
+func TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	const fires = "schedule/role/0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11/health-check"
+	f09, f10, f11, f12, f13 := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
+	e.capture(capturing("ana", fires, f09, 1, 1, 100, budget))
+	e.end(ending("ana", fires, f09, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+
+	// F10 CONTINUES F09 and parks on a person's question, its session kept.
+	e.capture(launching(e.head("ana", fires), capturing("ana", fires, f10, 1, 1, 100, budget)))
+	// F11 FIRES BESIDE IT, continues F09 too and ends, its end absorbing F09.
+	e.capture(launching(e.head("ana", fires), capturing("ana", fires, f11, 1, 1, 100, budget)))
+	e.end(ending("ana", fires, f11, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	// F12 CONTINUES F11 and ends, its end absorbing F11.
+	at12 := e.head("ana", fires)
+	if at12.Session == nil || at12.Session.Turn != f11 {
+		t.Fatalf("the premise: F12 is handed %+v, want F11's session", at12.Session)
+	}
+	e.capture(launching(at12, capturing("ana", fires, f12, 1, 1, 100, budget)))
+	e.end(ending("ana", fires, f12, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	// F10 IS ANSWERED and ends last of all.
+	e.end(ending("ana", fires, f10, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+
+	at13 := e.head("ana", fires)
+	if at13.Session == nil || at13.Session.Turn != f12 {
+		t.Fatalf("F13 is handed %+v, want F12's session, the newest in the schedule's line, not "+
+			"F10's, which ended last", at13.Session)
+	}
+	if !slices.Equal(turnsOf(at13.Endings), []string{f10}) ||
+		!slices.Equal(turnsOf(at13.Siblings), []string{f10}) {
+		t.Fatalf("F13 is told %v and offered %v, want F10 told and offered beside F12",
+			turnsOf(at13.Endings), turnsOf(at13.Siblings))
+	}
+	e.agreedHead("ana", fires, f10)
+
+	// F13'S FIRST LAUNCH HOLDS F12 as the base it continues, then captures.
+	e.begin(beginning(at13, "ana", fires, f13, ""))
+	if !e.holds("ana", f12) {
+		t.Fatal("F13's begin holds nothing, want F12's session, the head its read named")
+	}
+	e.capture(launching(at13, capturing("ana", fires, f13, 1, 1, 100, budget)))
+	e.end(ending("ana", fires, f13, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	for _, gone := range []string{f12, f10} {
+		if _, found := e.session("ana", gone); found {
+			t.Errorf("fire %s was handed to F13 and survived its end", gone)
+		}
+	}
+}
+
 // A HEAD BOUNDS WHAT IT HANDS OUT, AND WHAT IT LEAVES OUT STAYS: past
 // MaxEndings the oldest endings are counted rather than shown, past
 // MaxSiblings the oldest sessions beside the head are told rather than

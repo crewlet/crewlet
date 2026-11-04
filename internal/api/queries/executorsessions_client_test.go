@@ -10,8 +10,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -30,13 +32,16 @@ import (
 // has, read as the entry type itself encodes), and the bounds, and the log
 // position both answers carry — and a live row a relaunch would continue, which
 // alone says where, beside the head of a conversation, which the next turn
-// decides, a row whose first launch was handed a session, and one no launch
-// continues. And the six closed sets the screen names words for are the
-// engine's: the transcript's states, the entries' kinds, a page's cuts, an
-// ending's outcomes, where a launch continues a session and which launch.
+// decides, the newest fire of a schedule, which its next fire decides, a row
+// whose first launch was handed a session, and one no launch continues — every
+// launch the screen names words for sent by some row. And the six closed sets
+// the screen names words for are the engine's: the transcript's states, the
+// entries' kinds, a page's cuts, an ending's outcomes, where a launch continues
+// a session and which launch.
 //
-// Mutation: rename a JSON key on either answer, add one, or add a state or a
-// kind on one side only, and this names it.
+// Mutation: rename a JSON key on either answer, add one, add a state or a kind
+// on one side only, drop the schedule's row from the fixture, or respell the
+// schedule's prefix on one side, and this names it.
 func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionObjectStore(t)
@@ -64,12 +69,16 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	unkept.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed, DeliveredTo: "chatlet",
 		DeliveryUnknown: true, Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
 			Reason: "refused: past the seat's budget"}}
+	// A SCHEDULE'S NEWEST FIRE, which the schedule's next fire would continue.
+	fired := sealedSession(t, store, "ana", gzipText(t, openCodeExport("check the services")))
+	fired.ConversationKey = notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")
+	fired.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 4}
 	live := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), Harness: "codex"}
 	// A LIVE TURN A RELAUNCH WOULD CONTINUE, which alone sends where it would,
 	// on the conversation whose head its first launch was handed.
 	continued, continuedRun := liveSession(executor.ClaudeCodeName)
 	continued.ConversationKey, continued.BaseTurn = read.ConversationKey, read.Turn
-	reads := &stubSessions{rows: []executordomain.Session{read, missing, unkept, live, continued}}
+	reads := &stubSessions{rows: []executordomain.Session{read, missing, unkept, fired, live, continued}}
 	sources := sessionSources(t, reads, store)
 	sources.SessionRuns = &stubRuns{runs: []sandbox.PendingRun{continuedRun}}
 	sources.RelaunchTargets = targetOf(claudeTarget())
@@ -89,6 +98,12 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	holdShape(t, "ExecutorSessionsAnswer", []map[string]any{list, asMap(t, paged)}, false)
 	rows := rowsOf(t, list["sessions"])
 	holdShape(t, "ExecutorSessionRow", rows, false)
+	for _, by := range sandbox.ContinuedBys {
+		if !slices.ContainsFunc(rows, func(row map[string]any) bool { return row["continued_by"] == string(by) }) {
+			t.Errorf("no row of the page says `continued_by: %s`, so the screen's words for it are held to "+
+				"nothing sent", by)
+		}
+	}
 	var endings, unkepts []map[string]any
 	for _, row := range rows {
 		if ending, ok := row["ending"].(map[string]any); ok {
@@ -146,5 +161,15 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		if want := slices.Sorted(slices.Values(engine)); !slices.Equal(got, want) {
 			t.Errorf("the dashboard's %s is %v; the engine sends %v", name, got, want)
 		}
+	}
+	// AND A SCHEDULE'S KEY BY THE ENGINE'S OWN PREFIX, which a row prints
+	// decoded: under another, a fire's conversation would print escaped.
+	prefix, err := clientsource.Scalar(clientsource.Tree(t), "SCHEDULE_CONVERSATION_PREFIX")
+	if err != nil {
+		t.Fatalf("%v — this gate cannot run without the client's declaration", err)
+	}
+	if prefix != notify.SchedulePrefix {
+		t.Errorf("the dashboard knows a schedule's conversation by %q; the engine keys one %q", prefix,
+			notify.SchedulePrefix)
 	}
 }

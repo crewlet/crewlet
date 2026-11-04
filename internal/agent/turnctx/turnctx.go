@@ -92,8 +92,12 @@ type Turn struct {
 	// It is what a write must be idempotent against: a re-run posts the
 	// same comment and files the same tracker operation, and only a key
 	// that survives the re-run collapses them. EMPTY is legitimate and
-	// means "a turn with no ledgerable trigger" — a scheduled fire, a
-	// sub-agent — which has no cross-run duplicate to collapse.
+	// means "a turn with no ledgerable trigger" — a sub-agent — which has
+	// no cross-run duplicate to collapse. A scheduled fire is not one: it is
+	// a task assignment, a type the completion ledger records
+	// (internal/agent/inbox's ledgered set), so its key is derived from the
+	// fire like any other trigger's, and a merged run's from every fire it
+	// stands for.
 	WorkKey string
 
 	// WorkSince is when that unit of work BEGAN: the earliest instant at

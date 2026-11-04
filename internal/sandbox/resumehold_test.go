@@ -96,7 +96,7 @@ func TestAResumedRunKeepsItsSeatHeldThroughTheTurn(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	rig.coordinator.reconcileHold(t.Context(), "swe")
 	if !holds.holding("swe") {
 		t.Fatal("the premise: the running job holds the seat's inbox")
@@ -136,7 +136,7 @@ func TestAResumedTurnThatRelaunchesHoldsTheSeatOnce(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	// THE RESUMED TURN RELAUNCHES ITS EXECUTOR, through the coordinator, as
 	// the engine's launcher does: the relaunch counts the seat on the same row.
 	rig.resumer.during = func(ctx context.Context, run PendingRun) {
@@ -190,7 +190,7 @@ func TestEveryResumeExitLetsGoOfTheSeat(t *testing.T) {
 			t.Parallel()
 			rig := newCoordRig(t)
 			holds := rig.withHold()
-			launchScheduled(t, rig, "t1")
+			launchWithNoConversation(t, rig, "t1")
 			rig.resumer.failWith(tc.err)
 			rig.resumer.beforeTurn = tc.beforeTurn
 			rig.runner.Finish(Result{Success: true})
@@ -217,7 +217,7 @@ func TestEveryResumeExitLetsGoOfTheSeat(t *testing.T) {
 			t.Parallel()
 			rig := newCoordRig(t)
 			holds := rig.withHold()
-			launchScheduled(t, rig, "t1")
+			launchWithNoConversation(t, rig, "t1")
 			rig.coordinator.reconcileHold(t.Context(), "swe")
 			if beforeTurn {
 				rig.resumer.beforeBegin = func(context.Context) { panic("the resumer broke") }

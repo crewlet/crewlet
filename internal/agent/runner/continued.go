@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -107,10 +108,12 @@ func (r *Runner) keptSession(basis SessionBasis, lead string, bridged []BridgedC
 
 // baseSession is how a launch continues the session its conversation's last
 // turn left, nil where basis names none: the lead that says where this turn
-// begins and what the new box changes ([prompts.BuildNextTurn]), then fresh,
-// the launch's own fresh brief or reseed, whole. Only in a box of its own, so
-// its same-box brief is empty. The base's turn and home are the engine's record
-// of that session, defused under the launching segment's token.
+// begins and what the new box changes ([prompts.BuildNextTurn]) — in a
+// schedule's words where the turn's conversation is a schedule's, the session
+// its last fire's ([notify.Scheduled]) — then fresh, the launch's own fresh
+// brief or reseed, whole. Only in a box of its own, so its same-box brief is
+// empty. The base's turn and home are the engine's record of that session,
+// defused under the launching segment's token.
 func (r *Runner) baseSession(basis SessionBasis, fresh string) *SessionContinuation {
 	if !basis.ContinuesBase() {
 		return nil
@@ -121,6 +124,7 @@ func (r *Runner) baseSession(basis SessionBasis, fresh string) *SessionContinuat
 		BaseTurn: provenance.Neutralise(b, base.Turn), EndedAt: base.EndedAt,
 		Home: provenance.Neutralise(b, base.Home), Interrupted: base.Interrupted,
 		Checkout: r.checkoutName(),
+		Fire:     notify.Scheduled(r.cfg.Turn.ConversationKey),
 	})
 	return &SessionContinuation{Basis: basis, Replaced: lead + "\n\n" + strings.TrimSpace(fresh)}
 }

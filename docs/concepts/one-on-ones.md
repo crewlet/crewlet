@@ -156,8 +156,18 @@ residue lands in the right place on its own:
 So a 1:1 does not need its own memory machinery; it inherits the standard
 loop. The conversation itself stays private and ephemeral — the channel is a
 row that says who spoke to whom and that it is closed, never a transcript
-anyone can browse; only the *outcomes* — diary facts, Jira action items,
-Confluence policy — persist.
+anyone can browse; what persists of the exchange is its *outcomes* — diary
+facts, Jira action items, Confluence policy.
+
+**The report's own kickoff session carries over too.** A schedule is a
+conversation of each seat that runs it, so this week's `weekly-1on1` fire on a
+report's seat continues the session last week's fire left there — the report's
+preparation and the brief it sent — and is told how that fire ended, for as
+long as `turn_engine.conversation_session.retention_days` keeps it (thirty days
+by default, so a weekly 1:1 always does), and every request of its run pays for
+that context ([Each fire continues the last fire's session](scheduling.md#each-fire-continues-the-last-fires-session)).
+The manager's answering turn, and the turn its answer wakes the report with,
+are A2A wakes, which serve no conversation and continue nothing.
 
 ---
 

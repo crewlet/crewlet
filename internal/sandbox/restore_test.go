@@ -394,8 +394,8 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 // A RESTORED SESSION IS THE SEAT'S AND THE TURN'S OWN, and a sibling's end
 // changes nothing about it. The launch reads the row of the turn it launches
 // for, under the seat it launches as, and nothing else: a sibling turn of the
-// same conversation that ended since — the conversation's newest ended session,
-// which a later piece's next turn would take up — is never read, and the
+// same conversation that ended since — the conversation's head, whose session
+// its next turn would take up — is never read, and the
 // archive the run is handed is the object the turn's own row names. Read on
 // another node, at the level that sees a capture another node's keep recorded.
 //
@@ -996,7 +996,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			if tc.run != nil {
 				tc.run(&run)
 			}
-			got := ReadContinuityOf(row, "", &run, tc.target, now)
+			got := ReadContinuityOf(row, "", &run, tc.target, ContinuedByNextTurn, now)
 			by := ContinuedByRelaunch
 			if tc.ending {
 				by = ""

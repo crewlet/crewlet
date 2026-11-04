@@ -161,7 +161,7 @@ func TestAnAnswerUnderAKeyThisNodeDoesNotHoldIsToldApart(t *testing.T) {
 func TestARecordedAnswerCarriesItsWordsOnlyInsideItsSeal(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	rig.resumer.failWith(errors.New("the node lost the seat"))
 	given, ev := givenAgainst(t, rig, "t1")

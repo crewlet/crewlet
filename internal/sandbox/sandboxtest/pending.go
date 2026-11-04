@@ -2634,8 +2634,8 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 		sandbox.ConversationRef{}); ok {
 		t.Error("a message with no conversation matched a parked run")
 	}
-	// AND NEITHER DOES A RUN WITH NONE, which is what a schedule tick or an
-	// A2A wake launches: it stored no conversation any message could ever
+	// AND NEITHER DOES A RUN WITH NONE, which is what an A2A wake or a task
+	// assignment launches: it stored no conversation any message could ever
 	// reproduce, so every reply on every surface would otherwise be its
 	// answer.
 	keyless := run("t2")

@@ -2,6 +2,7 @@ package org
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,71 @@ func TestScheduleValidation(t *testing.T) {
 			}
 			if tc.mentions != "" && !strings.Contains(err.Error(), tc.mentions) {
 				t.Errorf("error does not mention %q: %v", tc.mentions, err)
+			}
+		})
+	}
+}
+
+// A SCHEDULE'S NAME IS BOUNDED AS ITS CONVERSATION'S KEY SPELLS IT, and
+// refused at its field past the bound. Every fire is filed on its runner
+// seat's executor log under a key that spells the raw name escaped as a URL
+// path segment is, and the log refuses a key past its own bound — so the name
+// is measured that way, never as it reads, as a query would escape it, or
+// trimmed: sixty-seven accented letters read short and escape past the bound,
+// a space is three bytes in a path and one in a query while a colon is one and
+// three, and a name padded with spaces keeps them in its key. And a Kubernetes
+// object name at its longest is admitted whatever the bound is set to:
+// crewlet-operator names a Schedule by its object and bounds it no tighter.
+//
+// Mutation: measure the name as it reads, as url.QueryEscape spells it, or
+// trimmed; report the refusal at another field; or lower ScheduleNameMaxBytes
+// below 253 — and a row goes red.
+func TestAScheduleNameIsBoundedAsItsKeySpellsIt(t *testing.T) {
+	t.Parallel()
+	at := ScheduleNameMaxBytes
+	// Two letters and spaces between them, at the bound once each space is
+	// three bytes, and a third of it in a query, where a space is one.
+	spaced := "a" + strings.Repeat(" ", (at-2)/3) + "b" + strings.Repeat("s", (at-2)%3)
+	// Forty spaces before the name, which its key keeps and a trim drops.
+	padded := strings.Repeat(" ", 40) + strings.Repeat("s", at-120)
+	// A DNS subdomain at its longest, 253 bytes: four labels a dot apart.
+	kubernetes := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." +
+		strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
+	if len(kubernetes) != 253 {
+		t.Fatalf("the premise: the Kubernetes name is %d bytes, want 253", len(kubernetes))
+	}
+	for name, tc := range map[string]struct {
+		name    string
+		refused bool
+	}{
+		"nothing escaped, at the bound":     {name: strings.Repeat("s", at)},
+		"nothing escaped, a byte past it":   {name: strings.Repeat("s", at+1), refused: true},
+		"every slash escaped, at the bound": {name: strings.Repeat("/", at/3) + strings.Repeat("s", at%3)},
+		"short to read, past the bound escaped": {
+			name: strings.Repeat("é", at/6+1), refused: true},
+		"spaces escaped, at the bound":     {name: spaced},
+		"spaces escaped, a byte past it":   {name: spaced + "s", refused: true},
+		"kept in a path, at the bound":     {name: strings.Repeat(":", at)},
+		"padded, at the bound":             {name: padded},
+		"padded, a byte past it":           {name: padded + "s", refused: true},
+		"a Kubernetes name at its longest": {name: kubernetes},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := Schedule{Name: tc.name, Cron: "0 9 * * 1-5", Task: "post the standup"}
+			var atName []fieldError
+			for _, f := range s.faults("unit \"Team\"") {
+				if len(f.field) == 1 && f.field[0] == "name" && errors.Is(f.err, ErrInvalidSchedule) {
+					atName = append(atName, f)
+				}
+			}
+			switch {
+			case tc.refused && (len(atName) != 1 ||
+				!strings.Contains(atName[0].err.Error(), fmt.Sprintf("limit is %d", at))):
+				t.Fatalf("a name past the bound once escaped was refused at its field %v, want once, "+
+					"saying the limit", atName)
+			case !tc.refused && len(atName) != 0:
+				t.Fatalf("a name within the bound once escaped was refused: %v", atName[0].err)
 			}
 		})
 	}

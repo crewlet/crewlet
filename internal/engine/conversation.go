@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -38,6 +39,13 @@ import (
 // (`turn_engine.conversation_session.enabled: false`), the one switch that turns
 // off everything a conversation carries between turns. Their ends are recorded
 // all the same: that is the turn's account, not its session.
+//
+// A SCHEDULE'S FIRE IS A TURN OF ONE: every fire of a schedule carries the
+// schedule's conversation (internal/notify's ScheduleConversation), so its
+// dispatch reads the head the schedule's last fire left on the seat and its
+// run continues that session, as any conversation's next turn does — told in
+// the schedule's words, the earlier fires and how they ended
+// ([notify.Scheduled]).
 
 // headReader is the one read a turn's dispatch makes of its conversation on the
 // executor log ([estate.ExecutorReads.Head]): the router's on every node, a
@@ -146,7 +154,7 @@ func (e *Engine) readConversation(ctx context.Context, company *Company, req Req
 				"executor starts a session of its own")
 		return &conversationRead{why: fmt.Sprintf("the turn's conversation could not be read: %v", err)}
 	}
-	endings, told := conversationEndings(head, req.Handle, boundary)
+	endings, told := conversationEndings(head, req.Handle, notify.Scheduled(req.ConversationKey), boundary)
 	return &conversationRead{endings: endings, told: told, base: sandbox.NewConversationBase(head.Kept(), told)}
 }
 
@@ -163,8 +171,11 @@ func keepsSessions(c *Company) bool {
 // conversationEndings renders how the conversation head reads ended, for the
 // seat, under b: the head and the conversation's other ended turns no ended
 // turn was shown, in the order they ended, and how many older ones the read
-// itself left out — and answers the turns it told.
-func conversationEndings(head executordomain.Head, seat string, b provenance.Boundary) (string, []string) {
+// itself left out — in a schedule's words where fires says the conversation is
+// a schedule's — and answers the turns it told.
+func conversationEndings(head executordomain.Head, seat string, fires bool,
+	b provenance.Boundary) (string, []string) {
+
 	turns := make([]prompts.TurnEnding, 0, len(head.Endings)+1)
 	var headTurn string
 	placed := head.Session == nil
@@ -181,12 +192,12 @@ func conversationEndings(head executordomain.Head, seat string, b provenance.Bou
 		turns = append(turns, turnEndingOf(*head.Session))
 	}
 	return prompts.BuildConversationEndings(b, prompts.ConversationEndings{
-		Seat: seat, Head: headTurn, Turns: turns, Omitted: head.EndingsOmitted,
+		Seat: seat, Head: headTurn, Turns: turns, Omitted: head.EndingsOmitted, Fires: fires,
 	})
 }
 
 // turnEndingOf is one ended turn's row as the block tells it: the engine's
-// account of how it ended (its [executordomain.Ending]), and what it was asked.
+// account of how it ended (its executorkeep.Ending), and what it was asked.
 func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
 	t := prompts.TurnEnding{Turn: s.Turn, EndedAt: s.EndedAt, Ask: s.AskExcerpt}
 	e := s.Ending

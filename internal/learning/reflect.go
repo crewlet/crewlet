@@ -71,8 +71,10 @@ func (t Turn) Seat() string {
 // [internal/workkey] exists to collapse. See ADR-0017.
 //
 // EMPTY IS AN ANSWER, and inventing a value for it is the failure this
-// shape avoids. A turn with no ledgerable trigger — a scheduled fire — has no
-// cross-run duplicate to collapse, and a guard armed with a run id in that
+// shape avoids. A turn with no ledgerable trigger — a sub-agent's, a sandbox
+// resume's — has no cross-run duplicate to collapse (a scheduled fire is not
+// one: it is a task assignment, which the completion ledger records, so its key
+// is its fire's), and a guard armed with a run id in that
 // slot is worse than one armed with nothing: [Counterparties.Record] keeps the
 // last KEYED unit of work precisely so an unkeyed observation cannot disarm
 // the next redelivery's dedupe, and a fabricated key walks straight through

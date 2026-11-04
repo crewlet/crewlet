@@ -8,9 +8,9 @@
  * EXACTLY WHAT `internal/api/queries` SENDS, held there by
  * `TestTheSessionsScreenReadsWhatTheAnswersSend` in both directions: every
  * member declared here is a key an answer carries, every key an answer carries
- * is declared, and the six unions are the engine's own closed sets — so a
- * screen keyed by them (`routes/agents/seat/Sessions.tsx`) has a word for
- * every value the engine sends.
+ * is declared, the six unions are the engine's own closed sets — so a screen
+ * keyed by them (`routes/agents/seat/Sessions.tsx`) has a word for every value
+ * the engine sends — and a schedule's key is known by the engine's own prefix.
  *
  * Every text a harness, a model or a person wrote — an entry's text, the ask's
  * excerpt, an ending's prose — reaches the client REDACTED: the engine runs its
@@ -18,6 +18,14 @@
  */
 
 import type { LogPosition } from "./positions.ts";
+
+/**
+ * What a schedule's conversation key starts with (`notify.SchedulePrefix`): a
+ * schedule is a conversation of each seat that runs it, keyed this, then the
+ * schedule's scope, the scope's id and its name, each escaped as a URL path
+ * segment (`notify.ScheduleConversation`) — which a row prints decoded.
+ */
+export const SCHEDULE_CONVERSATION_PREFIX = "schedule/";
 
 /** How a turn ended, in the engine's four words (`executorkeep.Outcomes`). */
 export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";
@@ -34,9 +42,12 @@ export type SessionContinuesIn = "any_box" | "parked_box";
  * Which launch would continue a turn's session (`sandbox.ContinuedBys`): a
  * relaunch of the turn, while it is live; or its conversation's next turn, once
  * it has ended — or is ending, its end not yet on the log — which continues only
- * the conversation's newest session.
+ * the conversation's head, the newest session in its line; or, for a turn of a
+ * schedule's conversation, the schedule's next fire, the same launch told in
+ * the schedule's words — a schedule is a conversation of each seat that runs
+ * it, every fire a turn of it.
  */
-export type SessionContinuedBy = "relaunch" | "next_turn";
+export type SessionContinuedBy = "relaunch" | "next_turn" | "next_fire";
 
 /**
  * A capture of a turn's session no row names (`executorkeep.Unkept`): its
@@ -104,15 +115,17 @@ export interface ExecutorSessionRow {
   object_bytes: number;
   /**
    * The ended turn whose session this turn's first launch was handed to
-   * continue: its conversation's newest as the turn's dispatch read it. Absent
-   * where the read named none, or the log held none for it. Whether a launch
-   * took it up is the turn's executor records' to say.
+   * continue: its conversation's head as the turn's dispatch read it, the one
+   * of its ended turns with a kept session that read it last. Absent where the
+   * read named none, or the log held none for it. Whether a launch took it up
+   * is the turn's executor records' to say.
    */
   base_turn?: string;
   /**
-   * Which launch `continuable` is about. Absent where no launch would ever
-   * continue the session — a turn that served no conversation — and on a
-   * transcript's later page.
+   * Which launch `continuable` is about: `next_fire` for an ended turn of a
+   * schedule's conversation, `next_turn` for any other's. Absent where no
+   * launch would ever continue the session — a turn that served no
+   * conversation — and on a transcript's later page.
    */
   continued_by?: SessionContinuedBy;
   /**
@@ -120,17 +133,18 @@ export interface ExecutorSessionRow {
    * know before a box is chosen: decided as the launch decides it, for the
    * member the node holding the seat would launch it on now — a relaunch of a
    * live turn on the turn's own revision; an ended turn's conversation's next
-   * turn, which continues only the conversation's newest session, on the
-   * revision live when it comes. Whether the box a launch gets takes the
-   * session up, and whether the seat's budget can carry it, are the launch's
-   * to find out. Null where it cannot be decided now — a run record or a log
-   * row that could not be read, a job still working or being collected, a
-   * capture still being kept, what the launch is launched on not to be said
-   * (every member of the seat's chain sitting out its plan, no node holding the
-   * seat, the node holding it not answering), a relaunch only the resume of
-   * its job's collection decides, a turn whose end is not on the log yet —
-   * which `not_continuable` then says: an unknown is never sent as a no. A
-   * transcript's later page leaves it null, its first page having said it.
+   * turn (a schedule's next fire), which continues only the conversation's
+   * head, the newest session in its line, on the revision live when it comes.
+   * Whether the box a launch gets takes the session up, and whether the seat's
+   * budget can carry it, are the launch's to find out. Null where it cannot be
+   * decided now — a run record or a log row that could not be read, a job still
+   * working or being collected, a capture still being kept, what the launch is
+   * launched on not to be said (every member of the seat's chain sitting out
+   * its plan, no node holding the seat, the node holding it not answering), a
+   * relaunch only the resume of its job's collection decides, a turn whose end
+   * is not on the log yet — which `not_continuable` then says: an unknown is
+   * never sent as a no. A transcript's later page leaves it null, its first
+   * page having said it.
    */
   continuable: boolean | null;
   /** Where the launch would continue it; present only where it would. */

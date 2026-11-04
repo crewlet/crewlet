@@ -24,9 +24,11 @@
 package notify
 
 import (
+	"net/url"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // THE TWO KEYS, AND WHICH QUESTION EACH ANSWERS.
@@ -69,6 +71,15 @@ import (
 // what the producer meant. Deriving either again at partition time would put
 // integration knowledge in the queue layer and give two places a chance to
 // answer differently.
+//
+// A SCHEDULE IS A CONVERSATION TOO, of each seat that runs it: the scheduler
+// stamps every fire with the schedule's conversation ([ScheduleConversation])
+// as both keys, so the fires that wait in a seat's inbox together run as one
+// turn and each fire's turn continues the session the schedule's last fire
+// left, as a conversation's next turn continues its last turn's. It is the one
+// conversation nobody can reply into ([Derived]): every fire of a schedule
+// carries it, so a fire read as a reply would be taken for the answer to the
+// question the last fire's run parked on.
 
 // PartitionField is the payload field a producer stamps the partition key
 // into.
@@ -154,14 +165,62 @@ const EventPrefix = "event:"
 // UNIQUE PER EVENT, which is what makes it correct rather than a placeholder:
 // an event that cannot name its conversation must never be merged with
 // another, and a shared fallback would merge every one of them. A task
-// assignment, a schedule tick and an A2A wake each become a partition of one,
-// which is exactly the pre-coalescing dispatch path.
+// assignment and an A2A wake each become a partition of one, which is exactly
+// the pre-coalescing dispatch path. A schedule's fire is not among them: it
+// names its schedule's conversation ([ScheduleConversation]), which every fire
+// of the schedule shares.
 //
-// IT SERVES BOTH KEYS, and must: [Derived] gates whether a turn is recorded
-// at all and whether a parked run is offered as answerable in chat, so an
-// event naming neither key has to be underivable under both readings or a row
-// gets written that no later message can read back.
+// IT SERVES BOTH KEYS, and must: [Derived] refuses it under either reading,
+// so a key minted for one event — by the broker's partition function, or by a
+// peer that wrote one onto a run — is never offered a person's reply as a
+// conversation they could be answering on, nor shown as a thread a reply in
+// chat could reach.
 func Fallback(eventID string) string { return EventPrefix + eventID }
+
+// SchedulePrefix namespaces a schedule's conversation ([ScheduleConversation]).
+//
+// A SLASH, NEVER A COLON, so no key a message derives can start with it: a
+// source's key is its source, a colon and the source's own local key
+// ([Namespaced]), and the per-event fallback is [EventPrefix]'s — which is what
+// lets a schedule's conversation be known by its prefix alone ([Scheduled]).
+const SchedulePrefix = "schedule/"
+
+// ScheduleConversation is the conversation every fire of one schedule is, of
+// each seat that runs it: the identity the scheduler stamps on a fire and the
+// inbox partition the fire shares with the schedule's other fires
+// (internal/schedule's FirePartition). The executor log keys a seat's sessions
+// on (seat, conversation), so each runner seat's fires are one conversation of
+// that seat — the next fire continues the session the last one left — and a
+// unit schedule fanned out to two seats is two conversations, one per seat.
+//
+// THE SCHEDULE'S WHOLE IDENTITY AND NOTHING ELSE: its scope (a role or a unit),
+// the scope's id (the seat's agent id, the unit's key) and its name. So a
+// schedule renamed, or moved between a role and a unit, starts a conversation
+// of its own, as does a role schedule whose company was renamed (the seat's
+// agent id derives from the company's name); a `lead` schedule whose unit
+// changes hands is the new lead's to start, on that seat's own log; and an edit
+// to its task, its cron, its zone or its timeout keeps it.
+//
+// ESCAPED, each part, so a separator in one part cannot merge two schedules: a
+// unit `Q3/Launch` with a schedule `review` is not a unit `Q3` with a schedule
+// `Launch/review`. The name is bounded as it is escaped here
+// (org.ScheduleNameMaxBytes), so every key fits the executor log's
+// (internal/executordomain's ConversationKeyMaxBytes), which refuses a longer
+// key rather than cut one.
+func ScheduleConversation(scope types.ScheduleScope, scopeID, name string) string {
+	return SchedulePrefix + url.PathEscape(string(scope)) + "/" + url.PathEscape(scopeID) + "/" +
+		url.PathEscape(name)
+}
+
+// Scheduled reports whether a conversation key is a schedule's
+// ([ScheduleConversation]): every turn of it is a fire, told in the schedule's
+// words — the fire that begins, the schedule's earlier fires and how they ended
+// — and nobody can reply into it ([Derived]).
+//
+// THE ONE PLACE A SCHEDULE'S KEY IS RECOGNISED, by its prefix. A package that
+// cannot import this one — internal/sandbox, which this package reaches through
+// internal/tracing — is told the answer by its caller.
+func Scheduled(key string) bool { return strings.HasPrefix(key, SchedulePrefix) }
 
 // Namespaced turns a third-party app's SOURCE-LOCAL key into a global one.
 //
@@ -215,9 +274,10 @@ func KeyOfAll(evs []*events.Event) string {
 // which answers a different question from different metadata.
 //
 // NEVER THE PARTITION. Every producer that stamps a partition stamps the
-// identity it refines beside it ([Prompt.ConversationIdentity]), so an event
-// naming no identity names no conversation at all — a schedule tick, an A2A
-// wake — and gets its own fallback.
+// identity it refines beside it ([Prompt.ConversationIdentity], and a
+// schedule's fire its [ScheduleConversation] as both), so an event naming no
+// identity names no conversation at all — an A2A wake, a task assignment — and
+// gets its own fallback.
 func ConversationIdentityOf(ev *events.Event) string {
 	if ev == nil {
 		return ""
@@ -252,14 +312,22 @@ func ConversationIdentityOfAll(evs []*events.Event) string {
 }
 
 // Derived reports whether a key names a real conversation somebody could reply
-// into, as opposed to the per-event fallback.
+// into, as opposed to the per-event fallback or a schedule's
+// ([ScheduleConversation]).
 //
-// The question a parked executor asks: a run started by a schedule tick or
-// an A2A wake stored a fallback key, which no inbound message can ever
-// reproduce, so telling somebody to "reply in the thread" would send them to a
-// thread that does not exist.
+// THE QUESTION BOTH OF A PARKED EXECUTOR'S ANSWER ROUTES ASK: whether a
+// delivery may be offered to a parked run as the reply to its question
+// (internal/engine's Dispatcher.answered), and whether a person reading the
+// runs board can answer a parked run in chat (internal/api/queries'
+// answerable_in_chat). A run an A2A wake or a task assignment started stored no
+// conversation, and a fallback key is one no inbound message can ever
+// reproduce. A schedule's is reproduced by every fire of the schedule and by
+// nothing anybody writes: offered as a reply, the next fire would be taken for
+// the answer to the question the last fire's run parked on, and telling
+// somebody to "reply in the thread" would send them to a thread that does not
+// exist.
 func Derived(key string) bool {
-	return key != "" && !strings.HasPrefix(key, EventPrefix)
+	return key != "" && !strings.HasPrefix(key, EventPrefix) && !Scheduled(key)
 }
 
 // Stamp writes both keys onto an event's payload.

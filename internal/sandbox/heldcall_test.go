@@ -87,7 +87,7 @@ func TestAChatReplyNeverAnswersAHeldCall(t *testing.T) {
 func TestAnApprovalAnswersNoQuestionThatIsNotAHeldCall(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	given, _ := givenAgainst(t, rig, "t1")
 	given.Answer, given.Approval = "go", "0190f3a8-0000-7000-8000-000000000001"

@@ -312,7 +312,7 @@ func TestARecountReadBeforeAnEndingsDeleteNeverOutlivesIt(t *testing.T) {
 	holds := rig.withHold()
 	stale := &listsThen{PendingStore: rig.coordinator.pending}
 	rig.coordinator.pending = stale
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	if !holds.holding("swe") {
 		t.Fatal("the premise: the running job holds the seat's inbox")
 	}
@@ -350,7 +350,7 @@ func TestARecountReadBeforeADeleteOfThisNodesReadsAgain(t *testing.T) {
 	holds := rig.withHold()
 	stale := &listsThen{PendingStore: rig.coordinator.pending}
 	rig.coordinator.pending = stale
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	run := rig.get("t1")
 	// THE RUN ENDS HERE, its record deleted, while the recount's listing is on
 	// its way back; nothing recounts the seat after the delete.
@@ -389,7 +389,7 @@ func TestARecountOlderThanOneWrittenBeforeItReadsAgain(t *testing.T) {
 	holds := rig.withHold()
 	stale := &listsThen{PendingStore: rig.coordinator.pending}
 	rig.coordinator.pending = stale
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	ctx := t.Context()
 	stale.arm(func() {
 		// ANOTHER NODE ENDS THE RUN, record and all, in the store alone...
